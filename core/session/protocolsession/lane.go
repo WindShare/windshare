@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 const (
@@ -175,7 +176,7 @@ func ParseLaneAccept(encoded []byte, hello LaneHello, senderPublicKey ed25519.Pu
 	}
 	body := encoded[:LaneAcceptBodyBytes]
 	digest := sha256.Sum256(body)
-	if !ed25519.Verify(senderPublicKey, append([]byte(laneAcceptDomain), digest[:]...), encoded[LaneAcceptBodyBytes:]) {
+	if !senderauth.Verify(senderPublicKey, append([]byte(laneAcceptDomain), digest[:]...), encoded[LaneAcceptBodyBytes:]) {
 		return nil, ErrLaneSignature
 	}
 	return bytes.Clone(body[5+sha256.Size:]), nil
@@ -235,7 +236,7 @@ func ParseLaneReject(encoded []byte, hello LaneHello, senderPublicKey ed25519.Pu
 	}
 	body := encoded[:LaneRejectBodyBytes]
 	digest := sha256.Sum256(body)
-	if !ed25519.Verify(senderPublicKey, append([]byte(laneRejectDomain), digest[:]...), encoded[LaneRejectBodyBytes:]) {
+	if !senderauth.Verify(senderPublicKey, append([]byte(laneRejectDomain), digest[:]...), encoded[LaneRejectBodyBytes:]) {
 		return LaneRejection{}, ErrLaneSignature
 	}
 	return LaneRejection{Code: code, RetryAfter: retry}, nil

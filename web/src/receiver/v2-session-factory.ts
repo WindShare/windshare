@@ -249,7 +249,7 @@ function requireSameDescriptor(expected: V2ShareDescriptor, candidate: V2ShareDe
     throw new V2StaleShareInstanceError('Relay redial returned another ShareInstance')
   }
   if (
-    !equalBytes(expected.senderPublicKey, candidate.senderPublicKey) ||
+    !equalBytes(expected.sender.publicKey, candidate.sender.publicKey) ||
     !equalBytes(expected.syntheticRoot, candidate.syntheticRoot) ||
     expected.chunkSize !== candidate.chunkSize ||
     expected.capabilities !== candidate.capabilities ||

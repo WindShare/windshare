@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { expect, it } from 'vitest'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { V2LaneSet } from '../../src/content/v2-broker'
@@ -44,7 +45,7 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
   const share: V2ShareDescriptor = {
     wireVersion: 2, suite: 2, shareInstance: identity(1), shareInstanceId: 'share',
     syntheticRoot: identity(2), syntheticRootId: 'root', chunkSize: 65536,
-    capabilities: 0n, senderPublicKey: new Uint8Array(32).fill(3),
+    capabilities: 0n, sender: createEd25519Verifier(new Uint8Array(32).fill(3)),
     createdAtSeconds: 1n, pathPolicy: V2_PATH_POLICY,
   }
   const fileId = identity(4)

@@ -1,3 +1,4 @@
+import type { Ed25519Observation } from '../crypto/ed25519'
 import type { V2CancellationTraceReason, V2OperationRequestTrace } from './v2-operation-diagnostics'
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
 import type {
@@ -188,7 +189,14 @@ export type V2LeaseRetirementTraceEvent = import('../content/scheduling/lease-re
   correlation: FailureCorrelation
 }>
 
+export type V2SenderVerificationTraceEvent = Ed25519Observation & Readonly<{
+  eventName: 'sender_verification'
+  shareId: string
+  correlation: FailureCorrelation
+}>
+
 export type V2ProtocolTraceEvent =
+  | V2SenderVerificationTraceEvent
   | V2LeaseRetirementTraceEvent
   | V2RequestSchedulingTraceEvent
   | V2ContentSchedulingTraceEvent

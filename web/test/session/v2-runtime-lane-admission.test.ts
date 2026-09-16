@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { FrameChannel } from '../../src/contracts/channel'
@@ -217,7 +218,7 @@ function runtimeFixture(
   const initialReader = initialChannel.frames.getReader()
   const descriptor = {
     shareInstance: b64ToBytes(lane.shareInstanceB64),
-    senderPublicKey: b64ToBytes(identityVector.senderPublicKeyB64),
+    sender: createEd25519Verifier(b64ToBytes(identityVector.senderPublicKeyB64)),
   } as V2ShareDescriptor
   const keys: V2SessionKeys = Object.freeze({
     protocolSessionId: vectorBytes(lane.protocolSessionIdB64),

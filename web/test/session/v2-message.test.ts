@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
 
 import { decodeV2PeerAnswer, decodeV2PeerCandidate } from '../../src/connectivity/v2-signaling-codec'
@@ -76,11 +77,11 @@ describe('v2 authenticated sender control schemas', () => {
 
     for (const accepted of [1, 30_000]) {
       const signed = await signedOpenResult(accepted)
-      await expect(verifyV2SenderControl(signed.message, binding, keys.publicKey)).resolves.toBeDefined()
+      await expect(verifyV2SenderControl(signed.message, binding, createEd25519Verifier(keys.publicKey))).resolves.toBeDefined()
     }
     for (const rejected of [0, 30_001]) {
       const signed = await signedOpenResult(rejected)
-      await expect(verifyV2SenderControl(signed.message, binding, keys.publicKey))
+      await expect(verifyV2SenderControl(signed.message, binding, createEd25519Verifier(keys.publicKey)))
         .rejects.toThrow(/revision retry delay/i)
     }
   })
@@ -192,17 +193,17 @@ describe('v2 authenticated sender control schemas', () => {
     const verifiedAnswer = await verifyV2SenderControl(
       answer.message,
       binding,
-      keys.publicKey,
+      createEd25519Verifier(keys.publicKey),
     )
     const verifiedCandidate = await verifyV2SenderControl(
       candidate.message,
       { ...binding, sequence: 1n },
-      keys.publicKey,
+      createEd25519Verifier(keys.publicKey),
     )
     const verifiedCatalog = await verifyV2SenderControl(
       catalog.message,
       { ...binding, sequence: 2n },
-      keys.publicKey,
+      createEd25519Verifier(keys.publicKey),
     )
 
     expect(verifiedAnswer).toEqual(answerBody)
@@ -226,14 +227,14 @@ describe('v2 authenticated sender control schemas', () => {
     })
 
     const signatureChanged = replaceSignedField(signed.message, 255, changedSignature(signed.signature))
-    await expect(verifyV2SenderControl(signatureChanged, binding, keys.publicKey)).rejects
+    await expect(verifyV2SenderControl(signatureChanged, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/signature/i)
     const bodyChanged = replaceSignedField(
       signed.message,
       1,
       [2, identity(8), identity(9), 1n, 'other-answer'],
     )
-    await expect(verifyV2SenderControl(bodyChanged, binding, keys.publicKey)).rejects
+    await expect(verifyV2SenderControl(bodyChanged, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/signature/i)
 
     const wrongSemanticType = await signSenderOperationControl({
@@ -243,21 +244,21 @@ describe('v2 authenticated sender control schemas', () => {
       binding,
       privateKey: keys.privateKey,
     })
-    await expect(verifyV2SenderControl(wrongSemanticType.message, binding, keys.publicKey)).rejects
+    await expect(verifyV2SenderControl(wrongSemanticType.message, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/bounded array|field count/i)
     const changedKind = encodeV2Message(
       V2_MESSAGE_KIND.peerCandidate,
       operationId,
       signed.message.body,
     )
-    await expect(verifyV2SenderControl(changedKind, binding, keys.publicKey)).rejects
+    await expect(verifyV2SenderControl(changedKind, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/signature/i)
     const changedOperation = encodeV2Message(
       V2_MESSAGE_KIND.peerAnswer,
       identity(13),
       signed.message.body,
     )
-    await expect(verifyV2SenderControl(changedOperation, binding, keys.publicKey)).rejects
+    await expect(verifyV2SenderControl(changedOperation, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/signature/i)
 
     const changedBindings: readonly V2ControlBinding[] = [
@@ -268,13 +269,13 @@ describe('v2 authenticated sender control schemas', () => {
       { ...binding, sequence: binding.sequence + 1n },
     ]
     for (const candidate of changedBindings) {
-      await expect(verifyV2SenderControl(signed.message, candidate, keys.publicKey)).rejects
+      await expect(verifyV2SenderControl(signed.message, candidate, createEd25519Verifier(keys.publicKey))).rejects
         .toThrow(/signature/i)
     }
     await expect(verifyV2SenderControl(
       signed.message,
       { ...binding, direction: 0 } as unknown as V2ControlBinding,
-      keys.publicKey,
+      createEd25519Verifier(keys.publicKey),
     )).rejects.toThrow(/delivery identity/i)
   })
 })

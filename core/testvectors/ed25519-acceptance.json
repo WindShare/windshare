@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "kind": "ed25519-acceptance",
+  "description": "Canonical prime-order sender identity; canonical non-small R; S < L; cofactorless equation. Node signs positives, algebraic adversarial vectors distinguish Noble cofactoring.",
+  "cases": [
+    {
+      "name": "valid-0",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "",
+      "signatureHex": "3f9f3147d0dd159f334cb800435ae49a2837adae5e6b2394906edc2cfed829785e3dd186eb2fed1319a0451917cb6617fcbe9382e0d1343eb5ffd4a9a2dd820c",
+      "accepted": true,
+      "keyAccepted": true
+    },
+    {
+      "name": "valid-1",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a",
+      "signatureHex": "03c917bb2267a3fd3d2729a84c2387b2a467fae0167375cfa593b7414534b1c30b4d6a0fc0b6042852246a12a3b6d6a1654ef52a6cd69c87afdd409f15c0eb01",
+      "accepted": true,
+      "keyAccepted": true
+    },
+    {
+      "name": "valid-97",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": true,
+      "keyAccepted": true
+    },
+    {
+      "name": "valid-160",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "490a5d9469aac6e49c3d6d7645118ee418d01eb68230205a989cbe0a31991c9845922bdf6f7d465a6ff7bd1feac7896da7a89b7c9d942f0e93d63668298c2e03",
+      "accepted": true,
+      "keyAccepted": true
+    },
+    {
+      "name": "valid-1024",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "3ef6b041807ce5e802016e8a6d7c83c718ef925429704891b4707c19de8ef8ad774ccab5d6aebbdd75fcc4463bfb13ee47779a4a7f998ac2d6c7d3d344b79b04",
+      "accepted": true,
+      "keyAccepted": true
+    },
+    {
+      "name": "tampered-signature",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84405",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "wrong-message",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "646966666572656e74",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "short-signature",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "long-signature",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b8440400",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "scalar-order",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "scalar-malleation",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc945ef390bed97aa36131c69728cb03b011d66bd6687e2f6efd506c7e208b84414",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "identity-key",
+      "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "58666666666666666666666666666666666666666666666666666666666666660100000000000000000000000000000000000000000000000000000000000000",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "zero-key",
+      "publicKeyHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "noncanonical-key",
+      "publicKeyHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "negative-zero-key",
+      "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000080",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "short-key",
+      "publicKeyHex": "52f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "long-key",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db1200",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "invalid-key-point",
+      "publicKeyHex": "0200000000000000000000000000000000000000000000000000000000000000",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "invalid-R-point",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "0200000000000000000000000000000000000000000000000000000000000000581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "noncanonical-R",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "negative-zero-R",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "0100000000000000000000000000000000000000000000000000000000000080581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "mixed-order-key",
+      "publicKeyHex": "66890059b239fe36489977917423b6fe0798223db825fb1dc74c350cb97460c7",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "e6efa7246ed5b08b382f2afafde82315e7ae68845c791c29e555272bac38cdc9581b44aed23498de3c7f71cfadb65cec1c66bd6687e2f6efd506c7e208b84404",
+      "accepted": false,
+      "keyAccepted": false
+    },
+    {
+      "name": "identity-R",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "0100000000000000000000000000000000000000000000000000000000000000282f39dfb7e30ed2dfb1c585fab97b1ea97014a236f73648a659f9313621ff05",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "small-order-R",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "0000000000000000000000000000000000000000000000000000000000000000c1c250dbcb8f80bf0b910e4d6bde38944b7d8892369d36043b4f768fd129610c",
+      "accepted": false,
+      "keyAccepted": true
+    },
+    {
+      "name": "mixed-order-R",
+      "publicKeyHex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "messageHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "signatureHex": "16030e0ff1d6226b8ad6ff918b288668c1c3e5e45269487f85479bb4a9fb11af32fa7fafc3380c5a7ca75c6e600fb46814764190001237c6fad8896d02a47a09",
+      "accepted": false,
+      "keyAccepted": true
+    }
+  ]
+}

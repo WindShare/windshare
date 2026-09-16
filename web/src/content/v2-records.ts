@@ -63,7 +63,7 @@ export async function openV2RevisionObject(
     const plaintext = await openSenderObject(
       binding,
       fileObjectKey,
-      descriptor.senderPublicKey,
+      descriptor.sender,
       object,
     )
     return decodeRevision(plaintext, descriptor, fileId)
@@ -106,7 +106,7 @@ export async function openV2BlockRecord(
     const plaintext = await openSenderObject(
       binding,
       segmentKey,
-      share.senderPublicKey,
+      share.sender,
       object,
     )
     return decodeBlock(plaintext, descriptor, localBlockIndex, dataLength)

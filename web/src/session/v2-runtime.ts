@@ -315,7 +315,7 @@ export class V2ReceiverSessionRuntime {
         const rejection = await verifyV2LaneReject(
           response,
           hello,
-          this.descriptor.senderPublicKey,
+          this.descriptor.sender,
         )
         this.#emitProtocolTrace(() => Object.freeze({
           eventName: 'lane_transition',
@@ -337,7 +337,7 @@ export class V2ReceiverSessionRuntime {
       if (response.byteLength !== V2_LANE_ACCEPT_BYTES) {
         throw new V2SessionRuntimeError('lane', 'Lane admission response has an invalid length')
       }
-      await verifyV2LaneAccept(response, hello, this.descriptor.senderPublicKey)
+      await verifyV2LaneAccept(response, hello, this.descriptor.sender)
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'lane_transition',
         transition: 'admission_accepted',

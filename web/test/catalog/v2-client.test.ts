@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -235,7 +236,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       syntheticRootId: 'vector-root',
       chunkSize: 1 << 20,
       capabilities: 0n,
-      senderPublicKey: bytes(identity.senderPublicKeyB64),
+      sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
       pathPolicy: V2_PATH_POLICY,
     })
@@ -358,7 +359,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       syntheticRootId: 'vector-root',
       chunkSize: 1 << 20,
       capabilities: 0n,
-      senderPublicKey: bytes(identity.senderPublicKeyB64),
+      sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
       pathPolicy: V2_PATH_POLICY,
     })
@@ -414,7 +415,7 @@ function catalogVectorFixture(): {
       syntheticRootId: 'vector-root',
       chunkSize: 1 << 20,
       capabilities: 0n,
-      senderPublicKey: bytes(identity.senderPublicKeyB64),
+      sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
       pathPolicy: V2_PATH_POLICY,
     }),

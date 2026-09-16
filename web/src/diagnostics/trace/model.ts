@@ -56,6 +56,7 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'preview_transition',
   'projection_transition',
   'authority_transition',
+  'sender_verification',
   'protocol_operation',
   'content_scheduling',
   'request_scheduling',
@@ -190,6 +191,14 @@ interface PeerAttemptSummaryV1 {
 }
 
 export interface TraceEventPayloadByNameV2 {
+  readonly sender_verification: Readonly<{
+    verifier_id: string
+    share_id: string
+    backend: 'native' | 'noble'
+    transition: 'selected' | 'fallback' | 'rejected' | 'failed'
+    reason: 'qualified' | 'unsupported' | 'qualification-failed' | 'timeout' | 'operation-failed'
+      | 'invalid-key' | 'invalid-signature' | 'backend-error'
+  }>
   readonly receiver_experience: ReceiverExperiencePayloadV1
   readonly join_transition: Readonly<{
     transition: 'started' | 'joined' | 'failed' | 'stale_replacement'

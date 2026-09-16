@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { V2ContentLaneAdmissionObservation } from '../../src/connectivity/v2-receiver-policy'
 import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
@@ -149,7 +150,7 @@ export function descriptor(seed = 1): V2ShareDescriptor {
     syntheticRootId: `root-${seed}`,
     chunkSize: 65_536,
     capabilities: 0n,
-    senderPublicKey: new Uint8Array(32).fill(seed + 2),
+    sender: createEd25519Verifier(new Uint8Array(32).fill(seed + 2)),
     createdAtSeconds: BigInt(seed),
     pathPolicy: V2_PATH_POLICY,
   })

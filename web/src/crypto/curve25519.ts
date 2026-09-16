@@ -2,7 +2,6 @@ import { copyBytes } from './bytes'
 import { type CryptoRuntime, defaultCryptoRuntime } from './webcrypto'
 
 export const CURVE25519_KEY_BYTES = 32
-export const ED25519_SIGNATURE_BYTES = 64
 
 export interface X25519KeyAgreement {
   readonly publicKey: Uint8Array<ArrayBuffer>
@@ -35,25 +34,6 @@ export async function createX25519KeyAgreement(
   // portable backend for injected randomness keeps deterministic tests honest
   // while production still prefers the browser's native implementation.
   return createPortableX25519KeyAgreement(options.randomBytes ?? secureRandomBytes)
-}
-
-export async function verifyEd25519Signature(
-  publicKey: Uint8Array,
-  message: Uint8Array,
-  signature: Uint8Array,
-): Promise<boolean> {
-  requireWidth(publicKey, CURVE25519_KEY_BYTES, 'Ed25519 public key')
-  requireWidth(signature, ED25519_SIGNATURE_BYTES, 'Ed25519 signature')
-  // WebKit can accept Ed25519 yet reject or stall on valid large signed objects.
-  // One RFC 8032 verifier keeps every message size aligned with Go; ZIP-215's
-  // additional encodings would make browser and sender authentication disagree.
-  const { ed25519 } = await loadNobleCurve25519()
-  return ed25519.verify(
-    copyBytes(signature),
-    copyBytes(message),
-    copyBytes(publicKey),
-    { zip215: false },
-  )
 }
 
 async function createNativeX25519KeyAgreement(
