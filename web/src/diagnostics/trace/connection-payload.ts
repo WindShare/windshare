@@ -1,6 +1,6 @@
 import type { FailureCorrelation } from '../incident/fact'
 import { projectCorrelationV1 } from '../export/correlation-v1'
-import { decimal } from '../export/trace-observation'
+import { decimal, durationMilliseconds } from '../export/trace-observation'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 import type { V2ConnectionRecoveryTraceEvent, V2ProtocolTraceSource, V2RelayHeartbeatTraceEvent } from '../../session/v2-diagnostics'
 import type { RelayHeartbeatTrace } from '../../transport/relay/heartbeat'
@@ -47,7 +47,7 @@ export function projectConnectionTrace(
     payload: {
       ...identity, connection_id: decimal(event.connectionId), relay_base: boundedText(event.relayBase), round: decimal(event.round), stage: event.stage,
       buffered_bytes: decimal(event.bufferedBytes),
-      elapsed_ms: Math.max(0, Math.ceil(event.elapsedMilliseconds)), timeout_ms: event.timeoutMilliseconds,
+      elapsed_ms: durationMilliseconds(Math.max(0, event.elapsedMilliseconds)), timeout_ms: event.timeoutMilliseconds,
     },
   }
   return {
@@ -55,7 +55,7 @@ export function projectConnectionTrace(
     payload: {
       ...identity, generation_id: decimal(event.generationId), attempt: decimal(event.attempt), phase: event.phase, transition: event.transition,
       ...(event.relayBase === undefined ? {} : { relay_base: boundedText(event.relayBase) }),
-      ...(event.delayMilliseconds === undefined ? {} : { delay_ms: event.delayMilliseconds }),
+      ...(event.delayMilliseconds === undefined ? {} : { delay_ms: durationMilliseconds(event.delayMilliseconds) }),
       ...(event.waitReason === undefined ? {} : { wait_reason: event.waitReason }),
       ...(event.failure === undefined ? {} : {
         failure_detail: formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT).slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
