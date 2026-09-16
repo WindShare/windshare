@@ -23,12 +23,11 @@ describe('authenticated share identity and selection draft', () => {
 
   it('scopes a folder by identity while preserving its authenticated hierarchy', () => {
     const child = { ...folder, path: ['Photos'], ancestry: [...root.ancestry, folder.idText] }
-    const current = page([photo], { directory: child })
-    const selection = scopeSelection(current)
+    const selection = scopeSelection(child)
     expect(selection.snapshot().canonicalRules).toMatchObject([{ kind: 'directory', selected: true }])
     expect(selection.selected(photo, child.ancestry)).toBe(true)
     expect(selection.selected(photo, root.ancestry)).toBe(false)
-    expect(projectDraft('scope', current, selection, null)).toMatchObject({
+    expect(projectDraft('scope', child, selection, null)).toMatchObject({
       scope: 'current-folder', label: 'Photos', empty: false,
     })
   })
@@ -37,11 +36,11 @@ describe('authenticated share identity and selection draft', () => {
     const selection = new V2SelectionPolicy(false)
     selection.set(folder, root.ancestry, true)
     selection.set(photo, [...root.ancestry, folder.idText], false)
-    expect(projectDraft('selection', page([]), selection, null)).toMatchObject({
+    expect(projectDraft('selection', root, selection, null)).toMatchObject({
       summary: '1 folder selected, excluding 1 item', empty: false,
     })
     selection.set(folder, root.ancestry, false)
-    expect(projectDraft('selection', page([photo]), selection, null)).toMatchObject({
+    expect(projectDraft('selection', root, selection, null)).toMatchObject({
       scope: 'selected', empty: true, summary: 'Select items to download',
     })
   })
