@@ -1,0 +1,45 @@
+.diagnostics-surface { color-scheme: light dark; color: var(--receiver-ink); font: 14px/1.5 system-ui, sans-serif; }
+.diagnostics-bar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
+  background: var(--receiver-wash);
+  border-bottom: 1px solid var(--receiver-rule);
+}
+.diagnostics-bar > span { flex: 1 1 200px; }
+.diagnostics-surface button,
+.diagnostics-entry {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--receiver-rule);
+  border-radius: 8px;
+  background: var(--receiver-paper);
+  color: var(--receiver-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.diagnostics-surface button:focus-visible,
+.diagnostics-entry:focus-visible { outline: 2px solid var(--receiver-accent); outline-offset: 3px; }
+.diagnostics-surface button:disabled { opacity: .6; cursor: wait; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.diagnostics-sheet section { margin-block: 24px; padding-top: 8px; border-top: 1px solid var(--receiver-rule); }
+.diagnostics-copy { display: grid; gap: 8px; }
+.diagnostics-copy textarea {
+  width: 100%;
+  min-height: 180px;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--receiver-paper);
+  color: var(--receiver-ink);
+  border: 1px solid var(--receiver-rule);
+}
+@media (max-width: 480px) {
+  .diagnostics-bar { gap: 4px 8px; }
+  .diagnostics-bar > span { flex-basis: 100%; }
+  .diagnostics-sheet.detail-sheet { width: 100%; }
+}

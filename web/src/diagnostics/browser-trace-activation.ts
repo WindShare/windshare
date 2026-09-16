@@ -6,16 +6,19 @@ type TraceActivationStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'
 
 export function createBrowserTraceActivationStore(
   storage: () => TraceActivationStorage,
+  pageUrl: string,
 ): TraceActivationStore {
-  // Resolve storage lazily: browsers may deny even the localStorage getter.
+  const scope = new URL(pageUrl).pathname
+  const key = `${TRACE_ACTIVATION_STORAGE_KEY}:${scope}`
+  // Each share and tab owns its deadline; storage denial must remain optional.
   return Object.freeze({
     readExpiry: () => {
-      const value = storage().getItem(TRACE_ACTIVATION_STORAGE_KEY)
+      const value = storage().getItem(key)
       return value === null ? undefined : Number(value)
     },
     writeExpiry: (expiresAtMilliseconds: number) => {
-      storage().setItem(TRACE_ACTIVATION_STORAGE_KEY, String(expiresAtMilliseconds))
+      storage().setItem(key, String(expiresAtMilliseconds))
     },
-    clear: () => storage().removeItem(TRACE_ACTIVATION_STORAGE_KEY),
+    clear: () => storage().removeItem(key),
   })
 }

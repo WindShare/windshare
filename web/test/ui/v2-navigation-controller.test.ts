@@ -389,6 +389,7 @@ describe('v2 receiver capability lifecycle', () => {
     expect(captured).toEqual({
       capabilityInput: completeUrl,
       pageUrl: 'https://receiver.invalid/s/share',
+      diagnosticsRequested: false,
     })
     expect(Object.isFrozen(captured)).toBe(true)
   })

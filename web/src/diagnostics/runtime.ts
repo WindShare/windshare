@@ -1,10 +1,15 @@
 import {
-  createDiagnosticBundleV2,
   projectDiagnosticsStatusV2,
   type DiagnosticBundleIdentityV2,
   type DiagnosticsStatusV2,
 } from './export/diagnostic-bundle-v2'
-import { encodeDiagnosticBundleNdjson } from './export/ndjson'
+import {
+  DiagnosticsEvidenceReader,
+  type DiagnosticsEvidenceInput,
+  type DiagnosticsEvidenceReadPort,
+  type DiagnosticsEvidenceSnapshot,
+} from './evidence'
+import type { TraceActivationSnapshot } from './trace/switch'
 import type { IncidentRecordV2 } from './export/incident-record-v2'
 import { projectDiagnosticsHealthV1 } from './export/projector'
 import { isDeeplyFrozen } from './export/json'
@@ -27,6 +32,7 @@ export interface DiagnosticsIncidentRuntimePort {
 }
 
 export interface DiagnosticsTraceRuntimePort {
+  activation(): TraceActivationSnapshot
   enable(): TraceCoreStatus
   disable(): TraceCoreStatus
   status(): TraceCoreStatus
@@ -49,6 +55,8 @@ export interface BrowserDiagnosticsRuntimeOptions {
 }
 
 export interface DiagnosticsRuntimePort {
+  readonly runtimeRunId: string
+  activation(): TraceActivationSnapshot
   enable(): DiagnosticsStatusV2
   disable(): DiagnosticsStatusV2
   status(): DiagnosticsStatusV2
@@ -60,8 +68,9 @@ export interface DiagnosticsRuntimePort {
 export const SYSTEM_DIAGNOSTICS_EXPORT_TIME_SOURCE: DiagnosticsExportTimeSource =
   Object.freeze({ captureTime: () => new Date().toISOString() })
 
-export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
+export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort, DiagnosticsEvidenceReadPort {
   readonly #identity: DiagnosticBundleIdentityV2
+  readonly #evidence: DiagnosticsEvidenceReader
   readonly #incident: DiagnosticsIncidentRuntimePort
   readonly #trace: DiagnosticsTraceRuntimePort
   readonly #timeSource: DiagnosticsExportTimeSource
@@ -73,7 +82,12 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
     this.#trace = options.trace
     this.#timeSource = options.timeSource ?? SYSTEM_DIAGNOSTICS_EXPORT_TIME_SOURCE
     this.#localOutputFailures = options.localOutputFailures
+    this.#evidence = new DiagnosticsEvidenceReader(this.#identity, () => this.#timeSource.captureTime())
   }
+
+  get runtimeRunId(): string { return this.#identity.runtimeRunId }
+
+  activation(): TraceActivationSnapshot { return this.#trace.activation() }
 
   enable(): DiagnosticsStatusV2 {
     return this.#statusFrom(this.#trace.enable())
@@ -98,6 +112,14 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
   }
 
   export(): string {
+    return this.#evidence.export(this.#readEvidenceInput())
+  }
+
+  readEvidence(): DiagnosticsEvidenceSnapshot {
+    return this.#evidence.read(this.#readEvidenceInput())
+  }
+
+  #readEvidenceInput(): DiagnosticsEvidenceInput {
     // JavaScript cannot interleave timers inside this synchronous read sequence;
     // each live port is therefore read exactly once before encoding begins.
     const incidents = this.#incident.history.snapshot()
@@ -107,19 +129,17 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
       this.#incident.health.incidentHealthSnapshot(),
     )
     const status = projectDiagnosticsStatusV2(traceStatus, healthAtExport)
-    const bundle = createDiagnosticBundleV2({
-      identity: this.#identity,
-      time: this.#timeSource.captureTime(),
+    return Object.freeze({
       incidents,
       localOutputFailures: this.#localOutputFailures?.snapshot() ?? [],
       status,
       healthAtExport,
       ...(traceCapture === undefined ? {} : { traceCapture }),
     })
-    return encodeDiagnosticBundleNdjson(bundle)
   }
 
   clear(): void {
+    this.#evidence.clear()
     try {
       this.#incident.clearRetainedIncidents()
     } catch {

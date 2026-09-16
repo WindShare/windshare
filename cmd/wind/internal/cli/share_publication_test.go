@@ -5,6 +5,9 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/link"
@@ -30,7 +33,7 @@ func TestCapabilityPublicationBuildsExactInvariantPayload(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, presentation := range []string{"tty-default", "tty-verbose", "redirected-default", "redirected-verbose"} {
-				payload, err := buildShareCapabilityPayload(capability, "https://windshare.example/app", test.split)
+				payload, err := buildShareCapabilityPayload(capability, shareLinkPresentation{frontURL: "https://windshare.example/app", splitKey: test.split})
 				if err != nil {
 					t.Fatalf("%s: build payload: %v", presentation, err)
 				}
@@ -39,6 +42,57 @@ func TestCapabilityPublicationBuildsExactInvariantPayload(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBrowserTraceLinkPreservesCapabilityAndRelayHints(t *testing.T) {
+	capability := testShareCapability(t)
+	capability.Relays = []string{"https://relay-a.example", "https://relay-b.example"}
+	for _, split := range []bool{false, true} {
+		payload, err := buildShareCapabilityPayload(capability, shareLinkPresentation{
+			frontURL: "https://windshare.example/app", splitKey: split, browserTrace: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+		linkText := strings.TrimPrefix(strings.TrimPrefix(lines[0], "Bare link: "), "Link: ")
+		page, err := url.Parse(linkText)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Query().Get(browserTraceQueryParameter) != browserTraceQueryEnabled {
+			t.Fatal("browser trace request is missing from the URL query")
+		}
+		if split {
+			if page.Fragment != "" {
+				t.Fatal("split-key URL includes credentials")
+			}
+			page.Fragment = strings.TrimPrefix(lines[1], "Key: ")
+		}
+		parsed, err := link.Parse(page.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(parsed, capability) {
+			t.Fatal("browser presentation changed capability identity or relay hints")
+		}
+	}
+}
+
+func TestBrowserTraceRequestIsIndependentOfSenderTrace(t *testing.T) {
+	app := &App{Stderr: io.Discard}
+	t.Cleanup(app.closeTerminalOutput)
+	request, outcome := app.parseShareRequest([]string{"root", "--browser-trace", "--split-key"})
+	if outcome != requestParseReady || !request.link.browserTrace || !request.link.splitKey {
+		t.Fatalf("unexpected request: %+v outcome: %v", request, outcome)
+	}
+	if request.observation.traceEnabled() {
+		t.Fatal("browser trace enabled sender trace")
+	}
+	request, outcome = app.parseShareRequest([]string{"root"})
+	if outcome != requestParseReady || request.link.browserTrace {
+		t.Fatal("ordinary links enable browser tracing")
 	}
 }
 

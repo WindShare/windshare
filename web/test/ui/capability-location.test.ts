@@ -52,6 +52,30 @@ describe('document capability intake', () => {
     expect(accepted).toHaveBeenCalledTimes(1)
   })
 
+  it('consumes diagnostic activation before connection without changing relay hints or keys', () => {
+    const input = 'https://receiver.invalid/s/share?r=https%3A%2F%2Fa.example&r=https%3A%2F%2Fb.example&trace=1#secret-key'
+    const port = locationPort(input)
+    const captured = captureV2Location(port)
+    expect(captured.diagnosticsRequested).toBe(true)
+    expect(captured.capabilityInput).toBe(input)
+    const sanitized = new URL(port.location.href)
+    expect(sanitized.searchParams.has('trace')).toBe(false)
+    expect(sanitized.searchParams.getAll('r')).toEqual(['https://a.example', 'https://b.example'])
+    expect(sanitized.hash).toBe('')
+    expect(captureV2Location(port).diagnosticsRequested).toBe(false)
+  })
+
+  it('preserves portal anchors while consuming an activation request', () => {
+    const port = locationPort('https://receiver.invalid/?trace=1#features')
+    expect(captureV2Location(port)).toMatchObject({ capabilityInput: null, diagnosticsRequested: true })
+    expect(port.location.href).toBe('https://receiver.invalid/#features')
+  })
+
+  it.each(['0', 'true', 'yes', ''])('does not enable capture for trace=%s', value => {
+    const port = locationPort('https://receiver.invalid/?trace=' + value)
+    expect(captureV2Location(port).diagnosticsRequested).toBe(false)
+  })
+
   it('keeps credential erasure authoritative when an observer fails', () => {
     const port = locationPort('https://receiver.invalid/s/share#invalid-key')
     const captured = captureV2Location(port, { onSecurityMilestone: () => { throw new Error('observer failed') } })

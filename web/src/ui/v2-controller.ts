@@ -77,6 +77,7 @@ export class V2ReceiverController {
   readonly #gateway: V2BrowserReceiverGateway
   readonly #receive: V2ReceiveCompositionPort
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
+  readonly #capabilityIntake: V2ReceiverControllerOptions['capabilityIntake']
   readonly #capabilityNavigation = new CapabilityNavigation(() =>
     this.#joinNavigation !== undefined || this.#snapshot.connection.kind === 'connected' ||
     this.#snapshot.connection.kind === 'reconnecting')
@@ -114,6 +115,7 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
     this.#capabilityLifecycle = new V2CapabilityInputLifecycle(options)
+    this.#capabilityIntake = options.capabilityIntake
     this.#outputs = new V2OutputPresentationController()
     this.#activeReceive = new ActiveReceiveCoordinator({
       outputs: this.#outputs,
@@ -261,13 +263,16 @@ export class V2ReceiverController {
   }
 
   openLocation(captured: V2CapturedLocation): void {
-    if (this.#disposed || captured.capabilityInput === null) return
-    this.#join(captured.capabilityInput, captured.pageUrl).catch(() => undefined)
+    if (this.#disposed) return
+    try { this.#capabilityIntake?.accept(captured) } catch {
+      // Optional presentation intent must not prevent a capability from joining.
+    }
+    if (captured.capabilityInput !== null) this.#join(captured.capabilityInput, captured.pageUrl).catch(() => undefined)
   }
 
   submitKey(input: string): void {
     if (this.#disposed || input.trim().length === 0) return
-    this.#join(input.trim()).catch(() => undefined)
+    this.openLocation({ capabilityInput: input.trim(), pageUrl: this.#pageUrl })
     // The form clears its password field in this same stack before join can reject.
     this.#capabilityLifecycle.notify('key-cleared')
   }

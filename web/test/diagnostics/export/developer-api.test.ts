@@ -13,10 +13,12 @@ import {
 } from './test-support'
 
 describe('windshareDiagnostics developer API', () => {
-  it('is a frozen facade over the six injected runtime operations', () => {
+  it('is a frozen facade over the injected runtime operations', () => {
     const status = projectDiagnosticsStatusV2(traceStatus(), diagnosticsHealthV1())
     const failure = incidentRecord('1')
     const runtime: DiagnosticsRuntimePort = {
+      runtimeRunId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      activation: vi.fn(() => ({ kind: 'off' } as const)),
       enable: vi.fn(() => status),
       disable: vi.fn(() => status),
       status: vi.fn(() => status),
@@ -26,6 +28,7 @@ describe('windshareDiagnostics developer API', () => {
     }
     const api = createWindShareDiagnostics(runtime)
 
+    expect(api.activation()).toEqual({ kind: 'off' })
     expect(api.enable()).toBe(status)
     expect(api.disable()).toBe(status)
     expect(api.status()).toBe(status)
@@ -33,6 +36,7 @@ describe('windshareDiagnostics developer API', () => {
     expect(api.export()).toBe('{"line_type":"bundle_header"}\n')
     expect(api.clear()).toBeUndefined()
     expect(Object.keys(api)).toEqual([
+      'activation',
       'enable',
       'disable',
       'status',
@@ -70,6 +74,8 @@ describe('windshareDiagnostics developer API', () => {
 function runtimePort(): DiagnosticsRuntimePort {
   const status = projectDiagnosticsStatusV2(traceStatus(), diagnosticsHealthV1())
   return {
+    runtimeRunId: 'AQAAAAAAAAAAAAAAAAAAAA',
+    activation: () => ({ kind: 'off' }),
     enable: () => status,
     disable: () => status,
     status: () => status,
