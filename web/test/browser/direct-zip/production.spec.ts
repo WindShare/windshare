@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
 import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 
@@ -8,16 +9,19 @@ for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpro
   'aborted-write-continue', 'automatic-checkpoint-spacing', 'activation-recovery'] as const) {
   test('production Direct ZIP composition: ' + mode, async ({ page }) => {
     await page.goto(BROWSER_CONTRACT_HOST_PATH)
+    const databaseName = 'direct-zip-production-' + crypto.randomUUID()
+    const display = { objectLabel: 'Selected invoices', createdAtMilliseconds: Date.UTC(2026, 0, 1) }
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/production-probe.ts'
       const probe = await import(path) as typeof import('./production-probe')
-      return probe.probeBrowserDirectZipProduction(input.databaseName, input.mode)
-    }, { databaseName: 'direct-zip-production-' + crypto.randomUUID(), mode })
+      return probe.probeBrowserDirectZipProduction(input.databaseName, input.mode, input.display)
+    }, { databaseName, mode, display })
     expect(result.directSupport).toBe('runtime-supported')
     if (mode === 'delete' || mode === 'delete-retry' || mode === 'unpromoted-delete') {
       expect(result.contents).toEqual([])
     } else {
       expect(result.lifecycle).toBe('published')
+      await assertTaskDisplay(page, result, databaseName, display)
       expect(result.signature).toEqual([0x50, 0x4b, 0x05, 0x06])
       expect(result.resumeOffset).toBe(mode === 'complete' || mode === 'bootstrap-recovery' ||
         mode === 'aborted-write-continue' || mode === 'automatic-checkpoint-spacing' ||
@@ -95,6 +99,33 @@ for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpro
       expect(result.archive).toEqual(result.recovery!.completedArchive)
     }
   })
+}
+
+async function assertTaskDisplay(
+  page: Page,
+  result: Awaited<ReturnType<typeof import('./production-probe').probeBrowserDirectZipProduction>>,
+  databaseName: string,
+  display: ReceiveOperationDisplay,
+) {
+  const { mode } = result
+  const expectedDisplay = { ...display, destinationLabel: databaseName }
+  expect(result.retainedTasks).toHaveLength(1)
+  expect(result.retainedTasks![0]).toMatchObject(expectedDisplay)
+  expect(result.startedAtMilliseconds).toBe(display.createdAtMilliseconds)
+  if (mode !== 'bootstrap-recovery' && mode !== 'activation-recovery') {
+    expect(result.activationDisplay).toEqual(expectedDisplay)
+  }
+  if (mode === 'complete' || mode === 'pause-resume' || mode === 'bootstrap-recovery') {
+    await page.reload()
+    const reloadedTasks = await page.evaluate(async name => {
+      const path = '/test/browser/direct-zip/production-probe.ts'
+      const probe = await import(path) as typeof import('./production-probe')
+      return probe.readProductionDirectZipTasks(name)
+    }, databaseName)
+    expect(reloadedTasks).toHaveLength(1)
+    expect(reloadedTasks[0]).toMatchObject({ ...expectedDisplay,
+      operationId: result.retainedTasks![0]!.operationId, stage: 'saved' })
+  }
 }
 
 function assertProgressNotifications(
