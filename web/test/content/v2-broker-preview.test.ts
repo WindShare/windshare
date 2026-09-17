@@ -9,6 +9,7 @@ import {
   type V2BlockRangeReader,
   type V2BlockRouteEligibility,
 } from '../../src/content/v2-broker'
+import type { V2BlockReadObserver } from '../../src/content/v2-lane-set'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
 
 const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
@@ -50,6 +51,7 @@ interface LaneCall {
   readonly demand: V2BlockDemand
   readonly signal: AbortSignal
   readonly resolve: (record: V2BlockRecord) => void
+  readonly onReceive?: (objectBytes: number) => void
 }
 
 class ImmediateRecordingLane implements V2BlockLane {
@@ -76,8 +78,9 @@ class ControlledLane implements V2BlockLane {
   readonly id = 1
   readonly calls: LaneCall[] = []
 
-  fetchBlock(demand: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
-    return new Promise((resolve) => this.calls.push({ demand, signal, resolve }))
+  fetchBlock(demand: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
+    return new Promise((resolve) => this.calls.push({ demand, signal, resolve,
+      ...(observer === undefined ? {} : { onReceive: observer.received }) }))
   }
 
   complete(callIndex: number): void {
@@ -105,6 +108,54 @@ async function turn(): Promise<void> {
 }
 
 describe('v2 preview/download block broker', () => {
+  it('counts shared receipt once per observer, excludes canceled readers and cache reuse', async () => {
+    const lane = new ControlledLane()
+    const broker = brokerWith(lane)
+    const demand = { descriptor: revision(), leaseId: identity(10), localBlockIndex: 0n }
+    const receive = vi.fn()
+    const canceledReceive = vi.fn()
+    const cancellation = new AbortController()
+    const reads = [
+      broker.readBlock(demand, { routes: ALL_ROUTES, onReceive: receive }),
+      broker.readBlock(demand, { routes: ALL_ROUTES, onReceive: receive }),
+      broker.readBlock(demand, { routes: ALL_ROUTES, onReceive: () => { throw new Error('observer failed') } }),
+    ]
+    const canceled = broker.readBlock(demand, {
+      routes: ALL_ROUTES, onReceive: canceledReceive, signal: cancellation.signal,
+    }).catch(error => error)
+    await turn()
+    expect(lane.calls).toHaveLength(1)
+    lane.calls[0]!.onReceive!(5)
+    expect(receive.mock.calls).toEqual([[5]])
+    cancellation.abort(new Error('reader left'))
+    lane.calls[0]!.onReceive!(7)
+    expect(receive.mock.calls).toEqual([[5], [7]])
+    expect(canceledReceive.mock.calls).toEqual([[5]])
+    lane.complete(0)
+    await Promise.all([...reads, canceled])
+    await broker.readBlock(demand, { routes: ALL_ROUTES, onReceive: receive })
+    expect(receive.mock.calls).toEqual([[5], [7]])
+    broker.close()
+  })
+
+  it('forwards range receipt before an authenticated slice is available', async () => {
+    const lane = new ControlledLane()
+    const broker = brokerWith(lane)
+    const receive = vi.fn()
+    const descriptor = revision(10n)
+    const range = broker.readRouteAuthorizedRange(descriptor, identity(10), byteRange(0n, 10n), {
+      routes: ALL_ROUTES, onReceive: receive,
+    })
+    const next = range.next()
+    await turn()
+    lane.calls[0]!.onReceive!(5)
+    expect(receive).toHaveBeenCalledWith(5)
+    lane.complete(0)
+    expect((await next).value?.data.byteLength).toBe(10)
+    await range.return(undefined)
+    broker.close()
+  })
+
   it('keeps raw route authority out of the scoped range-reader port', () => {
     expectTypeOf<V2BlockBroker>().not.toMatchTypeOf<V2BlockRangeReader>()
   })

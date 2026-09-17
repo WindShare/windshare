@@ -25,7 +25,13 @@ async function runCoverage(initialEnd: bigint, failCommit = false, fileCount = 1
   })
   const result = await transferJobFixture({
     catalog: catalog.catalog, selection, intent, plans,
-    revisions: readers.revisions, broker: readers.broker,
+    revisions: readers.revisions,
+    broker: {
+      readRange: async function* (descriptor, leaseId, range, request) {
+        request?.onReceive?.(Number(range.end - range.start))
+        yield* readers.broker.readRange(descriptor, leaseId, range, request)
+      },
+    },
     onProgress: value => { progress.push(value) },
   }).run()
   return { progress, result, output, finalizationPhases }
@@ -106,6 +112,7 @@ describe('native materialization progress', () => {
   it('includes retained ranges before reading and never adds completion twice', async () => {
     const { progress, result, finalizationPhases } = await runCoverage(2n)
     expect(result.worker.status).toBe('Succeeded')
+    expect(progress).toContainEqual(expect.objectContaining({ receivedObjectBytes: 2n, writtenBytes: 0n, materializedBytes: 2n }))
     expect(finalizationPhases.length).toBeGreaterThan(0)
     expect(finalizationPhases.every(phase => phase === 'finishing')).toBe(true)
     expect(progress).toEqual(expect.arrayContaining([

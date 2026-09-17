@@ -1,5 +1,6 @@
 import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
 import { LanePerformance } from './scheduling/performance'
+import type { BlockReceiveAdmission } from './scheduling/receive-window'
 import { LaneRequests, type RequestSchedulingObservation } from './scheduling/requests'
 import { ContentAllocation, orderedContentLanes, demandBytes, type ContentLane, type ContentWork } from './scheduling/selection'
 import { LaneRescues, rescueDue, type DispatchPurpose } from './scheduling/exploration'
@@ -17,9 +18,14 @@ export interface V2BlockDemand {
   readonly localBlockIndex: bigint
 }
 
+export interface V2BlockReadObserver {
+  received(objectBytes: number): void
+  admitted(admission: BlockReceiveAdmission): void
+}
+
 export interface V2BlockLane {
   readonly id: number
-  fetchBlock(demand: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord>
+  fetchBlock(demand: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord>
   close?(): void
 }
 
@@ -69,6 +75,7 @@ export class V2BlockDispatchSequenceAuthority {
 }
 
 export interface V2BlockSchedulingObservation extends V2BlockDispatchObservation {
+  readonly admission?: BlockReceiveAdmission
   readonly purpose: DispatchPurpose
   readonly expectedMilliseconds: number
   readonly pendingBytes: number
@@ -196,7 +203,7 @@ export class V2LaneSet {
       try {
         const winner = await raceContent(
           signal,
-          attemptSignal => this.#fetchAttempt(state, demand, attemptSignal, purpose),
+          attemptSignal => this.#fetchAttempt(state, demand, attemptSignal, purpose, work.onReceive),
           attemptSignal => {
             if (supplemented) return undefined
             const rescue = this.#rescue(work, attempted, started, estimate, attemptSignal)
@@ -232,7 +239,7 @@ export class V2LaneSet {
       !rescueDue(this.#now() - started, estimate, candidate.performance.estimateCompletionMilliseconds(demandBytes(work.demand))) ||
       !this.#rescues.acquire()) return undefined
     attempted.add(candidate)
-    return this.#fetchAttempt(candidate, work.demand, signal, 'rescue').finally(() => this.#rescues.release())
+    return this.#fetchAttempt(candidate, work.demand, signal, 'rescue', work.onReceive).finally(() => this.#rescues.release())
   }
 
   waitForLeaseIdle(leaseId: Uint8Array): Promise<void> {
@@ -244,6 +251,7 @@ export class V2LaneSet {
     demand: V2BlockDemand,
     signal: AbortSignal,
     purpose: DispatchPurpose,
+    onReceive?: (objectBytes: number) => void,
   ): Promise<FetchedBlock> {
     signal.throwIfAborted()
     const bytes = demandBytes(demand)
@@ -272,7 +280,15 @@ export class V2LaneSet {
     } catch { /* Scheduling observers cannot become transfer authority. */ }
     let successful = false
     try {
-      const record = await state.lane.fetchBlock(demand, signal)
+      const record = await state.lane.fetchBlock(demand, signal, {
+        received: bytes => onReceive?.(bytes),
+        admitted: admission => {
+          try {
+            this.#onBlockScheduled?.({ ...observation, purpose, expectedMilliseconds, admission,
+              pendingBytes: state.performance.pendingBytes, bytesPerSecond: state.performance.bytesPerSecond })
+          } catch { /* Admission evidence cannot redirect content. */ }
+        },
+      })
       successful = true
       state.failed = false
       return { state, observation, record }

@@ -54,7 +54,8 @@ export interface TaskProgressPresentation {
   readonly mode: 'indeterminate' | 'determinate'
   readonly percentage: number | null
   readonly sampleIdentity: string
-  readonly receivedBytes: bigint
+  readonly receivedObjectBytes: bigint
+  readonly writtenBytes: bigint
   readonly remainingBytes: bigint | null
   readonly status: string | null
   readonly label: string

@@ -58,7 +58,9 @@ it.each(['send', 'receive'] as const)('retries a physical %s failure on the heal
     else channel.failIncoming(physicalFailure)
     await completed
     expect(fetchPeer).toHaveBeenCalledOnce()
-    expect(fetchPeer).toHaveBeenCalledWith(demand, expect.any(AbortSignal))
+    expect(fetchPeer).toHaveBeenCalledWith(demand, expect.any(AbortSignal), {
+      received: expect.any(Function), admitted: expect.any(Function),
+    })
     expect(dispatched.mock.calls.map(([observation]) => observation.route))
       .toEqual(['application-relay', 'direct'])
     expect(runtime.isClosed).toBe(false)

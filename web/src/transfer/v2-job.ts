@@ -74,6 +74,7 @@ import {
 } from './output-session'
 import type { DirectZipIntent } from './direct-zip'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
+import { observeTransferContent } from './progress/content'
 import { createDirectZipProgressObservers, runDirectZipJob } from './v2-job-direct-zip'
 import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
@@ -136,7 +137,10 @@ export class TransferJob {
     this.#transferJobId = snapshotTransferJobId(options.transferJobId ?? createTransferJobId())
     this.#capacity = new V2RevisionCapacityCoordinator({
       revisions: options.revisions,
-      broker: options.broker,
+      broker: observeTransferContent(options.broker, {
+        received: bytes => this.#progress.receiveObjectBytes(bytes),
+        updated: () => this.#emitProgress(),
+      }),
     }, {
       ...options.revisionCapacity,
       onProgress: snapshot => {
