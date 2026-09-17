@@ -76,6 +76,7 @@ export function projectProtocolTraceEvent(
         active_operations: decimal(event.activeOperations),
         tracked_operations: decimal(event.trackedOperations),
       })
+    case 'retired_response_discarded':
     case 'response_received':
       return correlatedObservation(event.eventName, correlation, {
         transition: event.transition,

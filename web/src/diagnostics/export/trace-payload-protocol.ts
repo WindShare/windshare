@@ -116,6 +116,7 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
       member(payload.capacity, ['active', 'retained'], 'operation admission capacity')
       decimalFields(payload, ['active_operations', 'tracked_operations'], 'operation admission')
       return
+    case 'retired_response_discarded':
     case 'response_received':
       exactKeys(payload, ['transition', 'request_kind', 'response_kind'], [],
         'protocol response payload')
@@ -473,7 +474,7 @@ export function validateLeaseRetirement(payload: UnknownRecord): void {
     throw new TypeError('lease retirement failure detail is invalid')
   }
   if (payload.transition === 'abandoned') {
-    member(payload.reason, ['service_closed', 'deadline', 'remote_failure', 'barrier_failure'], 'lease retirement reason')
+    member(payload.reason, ['service_closed', 'deadline', 'remote_failure', 'barrier_failure', 'capacity'], 'lease retirement reason')
   }
 }
 

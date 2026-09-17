@@ -300,7 +300,7 @@ export interface TraceEventPayloadByNameV2 {
     | Readonly<{ transition: 'retrying'; failure_detail: string }>
     | Readonly<{
         transition: 'abandoned'
-        reason: 'service_closed' | 'deadline' | 'remote_failure' | 'barrier_failure'
+        reason: 'service_closed' | 'deadline' | 'remote_failure' | 'barrier_failure' | 'capacity'
         failure_detail: string
       }>
   )

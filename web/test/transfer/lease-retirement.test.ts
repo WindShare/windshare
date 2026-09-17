@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { wireFixture } from './lease-retirement-wire-fixture'
 import { V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
@@ -98,6 +98,11 @@ async function runDownload(scenario: Scenario) {
     expect(wire.runtime.isClosed).toBe(false)
     expect([...wire.relay.errors, ...wire.direct.errors]).toEqual([])
 
+    if (scenario === 'relay-loss') {
+      await vi.waitFor(() => expect(wire.retirements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ transition: 'released', attempt: 2 }),
+      ])))
+    }
     const evidence = {
       scenario, worker: result.worker, lifecycle: result.lifecycle, failureTrigger: result.failureTrigger,
       liveProtocolLanes: wire.runtime.laneIds(), siblingAborted, directProbeSucceeded: true,
