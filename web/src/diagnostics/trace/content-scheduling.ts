@@ -18,6 +18,7 @@ export function traceContentScheduling(
     route: fact.route, purpose: fact.purpose,
     expectedMilliseconds: fact.expectedMilliseconds,
     pendingBytes: fact.pendingBytes, bytesPerSecond: fact.bytesPerSecond,
+    ...(fact.admission === undefined ? {} : { admission: fact.admission }),
   })
 }
 
@@ -34,6 +35,12 @@ export function projectContentScheduling(event: V2ContentSchedulingTraceEvent): 
       expected_ms: durationMilliseconds(event.expectedMilliseconds),
       pending_bytes: String(event.pendingBytes),
       bytes_per_second: Math.round(event.bytesPerSecond),
+      ...(event.admission === undefined ? {} : { admission: Object.freeze({
+        waited_ms: durationMilliseconds(event.admission.waitedMilliseconds),
+        unfinished_bytes: String(event.admission.unfinishedBytes),
+        ahead_bytes: String(Math.round(event.admission.aheadBytes)),
+        bytes_per_second: Math.round(event.admission.bytesPerSecond),
+      }) }),
     }),
   })
 }

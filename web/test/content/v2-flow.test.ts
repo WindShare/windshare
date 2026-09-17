@@ -79,12 +79,13 @@ describe('v2 fragment inactivity accounting', () => {
     const fragments = fragmentRecord(operationId, object)
     const assembler = new V2FragmentAssembler(operationId, () => now)
 
-    await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted' })
+    await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: V2_FRAGMENT_PAYLOAD_BYTES })
     now += V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
-    await expect(assembler.accept(fragments[1]!)).resolves.toMatchObject({ status: 'accepted' })
+    await expect(assembler.accept(fragments[1]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: V2_FRAGMENT_PAYLOAD_BYTES })
     now += V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
     await expect(assembler.accept(fragments[2]!)).resolves.toMatchObject({
       status: 'complete',
+      receivedBytes: 1,
       object,
     })
   })

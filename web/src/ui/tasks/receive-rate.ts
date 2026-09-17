@@ -58,6 +58,31 @@ export class ReceiveRateSampler {
   }
 }
 
+export interface TransferReceipt {
+  readonly receivedObjectBytes: bigint
+  readonly writtenBytes: bigint
+}
+
+/** Traffic can advance before content is verified. Only useful writes support an ETA. */
+export class TransferRateSampler {
+  readonly #traffic: ReceiveRateSampler
+  readonly #writes: ReceiveRateSampler
+
+  constructor(at: number, receipt: TransferReceipt) {
+    this.#traffic = new ReceiveRateSampler(at, receipt.receivedObjectBytes)
+    this.#writes = new ReceiveRateSampler(at, receipt.writtenBytes)
+  }
+
+  sample(at: number, receipt: TransferReceipt, remaining: bigint | null): ReceiveRate | null {
+    const traffic = this.#traffic.sample(at, receipt.receivedObjectBytes, null)
+    const writes = this.#writes.sample(at, receipt.writtenBytes, remaining)
+    return traffic === null ? null : {
+      bytesPerSecond: traffic.bytesPerSecond,
+      remainingSeconds: traffic.bytesPerSecond > 0n ? writes?.remainingSeconds ?? null : null,
+    }
+  }
+}
+
 function byteRate(bytes: bigint, milliseconds: number): bigint {
   return bytes * BigInt(MILLISECONDS_PER_SECOND) / BigInt(Math.max(1, Math.round(milliseconds)))
 }

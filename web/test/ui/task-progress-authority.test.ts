@@ -14,6 +14,18 @@ const resumed = {
 }
 
 describe('task progress native authority', () => {
+  it('keeps incoming object traffic separate from output completion', () => {
+    const task = presentTask(taskFixture({ progress: {
+      ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredFiles: 1,
+      discoveredBytes: 8n * MIB, receivedObjectBytes: MIB,
+    } }))
+    expect(task.progress).toMatchObject({
+      percentage: 0, receivedObjectBytes: MIB, writtenBytes: 0n, remainingBytes: 8n * MIB,
+    })
+    expect(task.publication).toBe('unpublished')
+  })
+
+
   it('shows partially retained bytes after a paused task is persisted and reloaded', async () => {
     const record = await storedReceiveLifecycleState({
       kind: 'resumable-receive', payloadKind: 'file-set',
@@ -61,7 +73,7 @@ describe('task progress native authority', () => {
     expect(task.progress?.percentage).toBe(77)
     expect(task.progress?.label).toContain('77.0 MiB / 100.0 MiB received')
     expect(task.progress?.details).toContain('60.0 MiB written or reused in the ZIP.')
-    expect(task.progress?.receivedBytes).toBe(MIB)
+    expect(task.progress?.writtenBytes).toBe(MIB)
     expect(task.progress?.remainingBytes).toBe(23n * MIB)
     expect(task.progress?.details).toContain('32.0 MiB safe to resume after restart.')
   })

@@ -131,6 +131,7 @@ function receiverProgress(overrides: Partial<V2ReceiverProgress>): V2ReceiverPro
     materializedBytes: 512n,
     discoveredFiles: 2,
     discoveredBytes: 1_024n,
+    receivedObjectBytes: 512n,
     writtenBytes: 512n,
     completedFiles: 1,
     completedBytes: 512n,

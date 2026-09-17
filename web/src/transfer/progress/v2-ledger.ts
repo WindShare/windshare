@@ -5,6 +5,7 @@ import type { V2RevisionCapacityWaitSnapshot } from '../revision-capacity/public
 /** Separates received bytes from whole-file settlement and failure evidence. */
 export class V2TransferProgressLedger {
   #writtenBytes = 0n
+  #receivedObjectBytes = 0n
   #phase: 'receiving' | 'finishing' = 'receiving'
   #activeMaterializedBytes = 0n
   readonly #materializingFiles = new Map<string, bigint>()
@@ -24,6 +25,8 @@ export class V2TransferProgressLedger {
   get completedBytes(): bigint { return this.#completedBytes }
   get writtenBytes(): bigint { return this.#writtenBytes }
   get recoverableBytes(): bigint { return this.#recoverableBytes }
+
+  receiveObjectBytes(bytes: number): void { this.#receivedObjectBytes += BigInt(bytes) }
 
   acknowledgeWrite(bytes: bigint): void { this.#writtenBytes += bytes }
 
@@ -67,6 +70,7 @@ export class V2TransferProgressLedger {
     readonly measure: SelectionMeasure
     readonly phase: 'receiving' | 'finishing'
     readonly materializedBytes: bigint
+    readonly receivedObjectBytes: bigint
     readonly writtenBytes: bigint
     readonly recoverableBytes: bigint
     readonly completedFiles: number
@@ -84,6 +88,7 @@ export class V2TransferProgressLedger {
       measure,
       phase: this.#phase,
       materializedBytes: this.#completedBytes + this.#activeMaterializedBytes,
+      receivedObjectBytes: this.#receivedObjectBytes,
       writtenBytes: this.#writtenBytes,
       recoverableBytes: this.#recoverableBytes,
       completedFiles: this.#completedFiles,

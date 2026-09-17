@@ -37,6 +37,7 @@ export interface V2TransferProgressState {
   readonly phase: 'receiving' | 'finishing'
   /** Accepted output payload, including authenticated retained coverage; not restart durability. */
   readonly materializedBytes: bigint
+  readonly receivedObjectBytes: bigint
   readonly writtenBytes: bigint
   readonly recoverableBytes: bigint
   readonly completedFiles: number
@@ -96,6 +97,7 @@ export class V2TransferObservers {
         discoveredBytes: state.measure.discoveredBytes,
         phase: state.phase,
         materializedBytes: state.materializedBytes,
+        receivedObjectBytes: state.receivedObjectBytes,
         writtenBytes: state.writtenBytes,
         recoverableBytes: state.recoverableBytes,
         completedFiles: state.completedFiles,
@@ -136,6 +138,7 @@ export class V2TransferObservers {
       name: 'transfer_progress',
       discoveredFiles: BigInt(state.measure.discoveredFiles),
       discoveredBytes: state.measure.discoveredBytes,
+      receivedObjectBytes: state.receivedObjectBytes,
       writtenBytes: state.writtenBytes,
       completedFiles: BigInt(state.completedFiles),
       completedBytes: state.completedBytes,

@@ -46,8 +46,9 @@ export interface V2RevisionFailure {
 }
 
 export type V2FragmentAssemblyResult =
-  | Readonly<{ status: 'accepted' | 'duplicate' | 'tombstoned' }>
-  | Readonly<{ status: 'complete'; object: Uint8Array<ArrayBuffer> }>
+  | Readonly<{ status: 'duplicate' | 'tombstoned' }>
+  | Readonly<{ status: 'accepted'; receivedBytes: number }>
+  | Readonly<{ status: 'complete'; receivedBytes: number; object: Uint8Array<ArrayBuffer> }>
 
 export class V2FragmentInactivityError extends Error {
   constructor() {
@@ -103,7 +104,7 @@ export class V2FragmentAssembler {
     // Duplicate traffic is authenticated but does not earn more lifetime; this
     // prevents a replay loop from holding the bounded assembly budget forever.
     this.#lastProgressAt = now
-    if (this.#receivedFragments !== this.#count) return Object.freeze({ status: 'accepted' })
+    if (this.#receivedFragments !== this.#count) return Object.freeze({ status: 'accepted', receivedBytes: fragment.payload.byteLength })
     if (this.#received !== this.#totalLength) throw new V2CborError('Block fragments have a length gap')
     const object = new Uint8Array(this.#totalLength)
     let offset = 0
@@ -117,7 +118,7 @@ export class V2FragmentAssembler {
     if (recordId === undefined || !equalBytes(digest.subarray(0, 16), recordId)) {
       throw new V2CborError('Reassembled block record has the wrong identity')
     }
-    return Object.freeze({ status: 'complete', object })
+    return Object.freeze({ status: 'complete', receivedBytes: fragment.payload.byteLength, object })
   }
 
   cancel(): void {

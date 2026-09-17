@@ -314,6 +314,7 @@ export interface TraceEventPayloadByNameV2 {
     pending_requests: number
   }>
   readonly content_scheduling: Readonly<{
+    admission?: Readonly<{ waited_ms: number; unfinished_bytes: string; ahead_bytes: string; bytes_per_second: number }>
     dispatch_sequence: string
     file_id: string
     block_index: string

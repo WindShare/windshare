@@ -175,6 +175,7 @@ export type V2RelayHeartbeatTraceEvent = Readonly<{
 }>
 
 export type V2ContentSchedulingTraceEvent = Readonly<{
+  admission?: import('../content/scheduling/receive-window').BlockReceiveAdmission
   eventName: 'content_scheduling'
   correlation: FailureCorrelation
   dispatchSequence: number

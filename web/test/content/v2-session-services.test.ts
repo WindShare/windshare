@@ -506,7 +506,7 @@ describe('v2 session queued block responses', () => {
     vi.useFakeTimers()
     const operations = [
       delayedBlockOperation(71, [10_000, 10_000, 10_000], duplicate),
-      delayedBlockOperation(72, [35_000]),
+      delayedBlockOperation(72, [duplicate ? 35_000 : 10_000]),
     ]
     const cancelOperation = vi.fn(async () => undefined)
     const session = {
@@ -515,7 +515,8 @@ describe('v2 session queued block responses', () => {
     } as unknown as V2ReceiverSessionRuntime
     const lane = new V2SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),
       { leaseError: () => undefined } as never)
-    const demand = { descriptor: revision, leaseId: identity(6), localBlockIndex: 0n }
+    const descriptor = { ...revision, exactSize: 150_000n, geometry: new FileGeometry(150_000n, 150_000n) }
+    const demand = { descriptor, leaseId: identity(6), localBlockIndex: 0n }
     const first = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
     const queued = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
     await vi.advanceTimersByTimeAsync(20_000)
@@ -523,8 +524,10 @@ describe('v2 session queued block responses', () => {
     if (duplicate) {
       await vi.advanceTimersByTimeAsync(5_000)
       expect(await first).toMatchObject({ name: 'V2BlockInactivityTimeoutError', phase: 'receiving_fragments' })
+      // Unsent requests acquire their inactivity deadline only after admission.
+      await vi.advanceTimersByTimeAsync(15_000)
       expect(await queued).toMatchObject({
-        name: 'V2BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 1,
+        name: 'V2BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 0,
       })
     } else {
       await vi.advanceTimersByTimeAsync(15_000)

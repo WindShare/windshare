@@ -14,6 +14,8 @@ export interface ContentLane {
 export type ContentPriority = 'preview' | 'download' | 'prefetch'
 
 export interface ContentWork {
+  /** Newly assembled sealed-object bytes; not authenticated output or resumable coverage. */
+  readonly onReceive?: (objectBytes: number) => void
   readonly demand: V2BlockDemand
   readonly routes: V2BlockRouteEligibility
   readonly signal: AbortSignal

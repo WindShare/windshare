@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { ReceiveRateSampler } from '../../src/ui/tasks/receive-rate'
+import { ReceiveRateSampler, TransferRateSampler } from '../../src/ui/tasks/receive-rate'
 
 describe('receive rate and remaining time', () => {
+  it('shows real traffic before the first write without treating it as completed work or an ETA', () => {
+    const sampler = new TransferRateSampler(0, { receivedObjectBytes: 0n, writtenBytes: 0n })
+    for (let second = 1; second <= 8; second++) {
+      expect(sampler.sample(second * 1000, {
+        receivedObjectBytes: BigInt(second * 128 * 1024), writtenBytes: 0n,
+      }, 8n * 1024n * 1024n)).toEqual({ bytesPerSecond: 128n * 1024n, remainingSeconds: null })
+    }
+    // Replayed traffic remains activity but cannot establish useful completion speed.
+    for (let second = 9; second <= 15; second++) {
+      expect(sampler.sample(second * 1000, {
+        receivedObjectBytes: BigInt(second * 128 * 1024), writtenBytes: 0n,
+      }, 8n * 1024n * 1024n)?.remainingSeconds).toBeNull()
+    }
+    for (let second = 16; second <= 22; second++) {
+      const sample = sampler.sample(second * 1000, {
+        receivedObjectBytes: 15n * 128n * 1024n, writtenBytes: 0n,
+      }, null)
+      if (second === 22) expect(sample?.bytesPerSecond).toBe(0n)
+    }
+  })
+
+
   it('shows throughput while totals are unknown and estimates only after stable samples', () => {
     const sampler = new ReceiveRateSampler(0, 0n)
     expect(sampler.sample(1000, 100n, null)).toEqual({ bytesPerSecond: 100n, remainingSeconds: null })

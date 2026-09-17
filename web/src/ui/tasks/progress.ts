@@ -22,7 +22,8 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
     mode: percentage === null ? 'indeterminate' : 'determinate',
     percentage,
     sampleIdentity: progress?.transferJobId ?? '',
-    receivedBytes: progress?.writtenBytes ?? 0n,
+    receivedObjectBytes: progress?.receivedObjectBytes ?? 0n,
+    writtenBytes: progress?.writtenBytes ?? 0n,
     remainingBytes: exact && facts.completeness !== 'partial'
       ? maximum(0n, progress.discoveredBytes - materialized) : null,
     status: discoveryStatus(facts),
@@ -48,7 +49,7 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
   const state = facts.lifecycle
   if (facts.browserDelivery != null) return Object.freeze({
     mode: 'indeterminate', percentage: null,
-    sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
+    sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
     label: `${formatBytes(facts.browserDelivery.targetSavedBytes)} saved to folder`,
     details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle)),
   })
@@ -56,7 +57,7 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
   const retained = retainedReceiveBytes(state)
   return Object.freeze({
     mode: 'indeterminate', percentage: null,
-    sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
+    sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
     label: `${formatBytes(retained)} retained for continuation`,
     details: Object.freeze(state.payloadKind === 'direct-zip'
       ? [`Continuing may need up to ${formatBytes(state.committedArchiveLength)} of temporary destination space.`]

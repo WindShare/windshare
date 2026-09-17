@@ -36,14 +36,20 @@ const PRIORITY_WEIGHTS: Readonly<Record<V2BlockPriority, number>> = Object.freez
 })
 const PRIORITY_ORDER: readonly V2BlockPriority[] = ['preview', 'download', 'prefetch']
 
+interface ObservedBlockConsumer extends BlockConsumer {
+  readonly onReceive?: (objectBytes: number) => void
+  readonly signal?: AbortSignal
+}
+
 interface SharedBlockLoad {
   readonly controller: AbortController
   readonly demand: V2BlockDemand
   readonly signal: AbortSignal
-  readonly consumers: Set<BlockConsumer>
+  readonly consumers: Set<ObservedBlockConsumer>
   readonly distance: () => bigint
   readonly routes: SharedV2BlockRouteEligibility
   readonly sequence: number
+  readonly onReceive: (objectBytes: number) => void
   promise: Promise<V2BlockRecord>
   resolve: (record: V2BlockRecord) => void
   reject: (reason: unknown) => void
@@ -66,6 +72,8 @@ export interface V2BlockSlice {
 }
 
 export interface V2BlockRangeReaderOptions {
+  /** New sealed-object traffic, including retries; never output or resume coverage. */
+  readonly onReceive?: (objectBytes: number) => void
   readonly signal?: AbortSignal
   readonly maximumParallel?: number
   readonly priority?: V2BlockPriority
@@ -95,6 +103,7 @@ export interface V2BlockBrokerOptions {
 }
 
 export interface V2RouteAuthorizedBlockReadOptions {
+  readonly onReceive?: (objectBytes: number) => void
   readonly consumer?: BlockConsumer
   readonly routes: V2BlockRouteEligibility
   readonly signal?: AbortSignal
@@ -175,7 +184,11 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       this.#queued.add(load)
       queueMicrotask(() => this.#drainQueue())
     }
-    const consumer = { ...(options.consumer ?? IMMEDIATE_BLOCK_CONSUMER) }
+    const consumer: ObservedBlockConsumer = {
+      ...(options.consumer ?? IMMEDIATE_BLOCK_CONSUMER),
+      ...(options.onReceive === undefined ? {} : { onReceive: options.onReceive }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }
     load.consumers.add(consumer)
     const priority = options.priority ?? 'download'
     const releaseRoutes = load.routes.add(options.routes)
@@ -229,6 +242,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       },
       read: (localBlockIndex, consumer) => this.readBlock({ descriptor, leaseId, localBlockIndex }, {
         routes: options.routes, signal: controller.signal, priority: options.priority ?? 'download', consumer,
+        ...(options.onReceive === undefined ? {} : { onReceive: options.onReceive }),
       }),
     })
     try {
@@ -308,9 +322,16 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       reject = rejected
     })
     const controller = new AbortController()
-    const consumers = new Set<BlockConsumer>()
+    const consumers = new Set<ObservedBlockConsumer>()
     return {
       controller, signal: controller.signal, consumers,
+      onReceive: bytes => {
+        const observers = new Set([...consumers].filter(consumer => !consumer.signal?.aborted)
+          .map(consumer => consumer.onReceive))
+        for (const observe of observers) {
+          try { observe?.(bytes) } catch { /* Receipt observations cannot settle shared content. */ }
+        }
+      },
       distance: () => [...consumers].reduce((distance, consumer) => {
         const current = consumer.distance()
         return current < distance ? current : distance

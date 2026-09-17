@@ -496,7 +496,7 @@ function validateDownloadConnectivity(payload: UnknownRecord): void {
 
 export function validateTransferProgress(payload: UnknownRecord): void {
   const decimalKeys = [
-    'discovered_files', 'discovered_bytes', 'written_bytes', 'completed_files',
+    'discovered_files', 'discovered_bytes', 'received_object_bytes', 'written_bytes', 'completed_files',
     'completed_bytes', 'file_errors', 'selection_errors', 'failed_directories',
     'capacity_waiting_files', 'capacity_accumulated_wait_ms', 'capacity_wait_attempts',
   ] as const
