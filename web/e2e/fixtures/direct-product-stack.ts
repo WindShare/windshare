@@ -60,6 +60,7 @@ export class DirectProductStack {
   readonly #processes: DirectProcess[] = []
   readonly #proxies: RelayCutProxy[] = []
   readonly #senderTracePaths = new WeakMap<DirectShare, string>()
+  readonly #senders = new WeakMap<DirectShare, DirectProcess>()
   #rootDirectory: string | undefined
   #vite: ViteDevServer | undefined
   #binaries: DirectBinaryPaths | undefined
@@ -173,8 +174,16 @@ export class DirectProductStack {
     sender.consumeReadiness('stdout')
     this.#trace(operationId, 'ready')
     const share = Object.freeze({ bareLink, key: separateKey })
+    this.#senders.set(share, sender)
     if (senderTracePath !== undefined) this.#senderTracePaths.set(share, senderTracePath)
     return share
+  }
+
+  async stopSharing(share: DirectShare): Promise<void> {
+    const sender = this.#senders.get(share)
+    if (sender === undefined) throw new TypeError('Direct share does not belong to this stack')
+    await sender.stop(PROCESS_STOP_TIMEOUT_MILLISECONDS)
+    this.#trace(sender.operationId, 'stopped')
   }
 
   async senderTraceRecords(share: DirectShare): Promise<readonly unknown[]> {
