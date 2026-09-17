@@ -172,7 +172,7 @@ func TestBlockProtocolTraceRetainsUnownedCancellationAndDeadline(t *testing.T) {
 	for _, deadline := range []bool{false, true} {
 		name := "caller cancellation"
 		if deadline {
-			name = "fragment inactivity"
+			name = "first response inactivity"
 		}
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -188,7 +188,7 @@ func TestBlockProtocolTraceRetainsUnownedCancellationAndDeadline(t *testing.T) {
 				err := <-done
 				wantErr, wantCause := context.Canceled, ProtocolOperationCauseCanceled
 				if deadline {
-					wantErr, wantCause = contentflow.ErrFragmentInactivity, ProtocolOperationCauseDeadline
+					wantErr, wantCause = contentflow.ErrBlockResponseInactivity, ProtocolOperationCauseDeadline
 				}
 				events := fixture.recorder.snapshot()
 				if !errors.Is(err, wantErr) || len(events) != 1 ||

@@ -1,6 +1,6 @@
 import type { FrameChannel } from '../contracts/channel'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
-import type { V2ProtocolTraceSource } from './v2-diagnostics'
+import type { V2BlockWaitTrace, V2ProtocolTraceSource } from './v2-diagnostics'
 import type { V2MessageKind, V2SessionMessage } from './v2-message'
 
 export const V2_OPERATION_CANCEL_REASON = Object.freeze({
@@ -26,6 +26,7 @@ export class V2OperationCancellationError extends Error {
 
 export interface V2OperationCancellation {
   readonly protocolReason: V2OperationCancelReason
+  readonly blockWait?: V2BlockWaitTrace
   readonly cause: unknown
   readonly laneId?: number
 }

@@ -414,6 +414,7 @@ type receiverBlockLane struct {
 	opener                    RecordOpener
 	revisions                 *receiverRevisionClient
 	fragmentInactivityTimeout time.Duration
+	responses                 contentflow.BlockResponseQueue
 }
 
 type receiverBlockOperation struct {
@@ -507,11 +508,13 @@ func (operation *receiverBlockOperation) receive(
 	ctx context.Context,
 	demand transfer.BlockDemand,
 ) (records.BlockRecord, error) {
-	inactivityTimeout := operation.lane.blockFragmentInactivityTimeout()
-	progressDeadline := time.Now().Add(inactivityTimeout)
+	wait := operation.lane.responses.Begin(ctx, operation.lane.blockFragmentInactivityTimeout())
+	defer wait.Close()
 	var record records.BlockRecord
 	for {
-		message, err := operation.lane.awaitBlockMessage(ctx, operation.call, progressDeadline)
+		wait.Resume()
+		message, err := operation.lane.awaitBlockMessage(wait.Context(), operation.call)
+		wait.Suspend()
 		if err != nil {
 			return operation.receiveFailure(err)
 		}
@@ -526,7 +529,7 @@ func (operation *receiverBlockOperation) receive(
 			}
 			record = next
 			if progressed {
-				progressDeadline = time.Now().Add(inactivityTimeout)
+				wait.Progress()
 			}
 		case protocolsession.MessageOperationError:
 			return records.BlockRecord{}, blockRequestOperationError(message)
@@ -544,7 +547,7 @@ func (operation *receiverBlockOperation) receive(
 }
 
 func (operation *receiverBlockOperation) receiveFailure(cause error) (records.BlockRecord, error) {
-	if !errors.Is(cause, contentflow.ErrFragmentInactivity) {
+	if !errors.Is(cause, contentflow.ErrFragmentInactivity) && !errors.Is(cause, contentflow.ErrBlockResponseInactivity) {
 		return records.BlockRecord{}, cause
 	}
 	boundaryErr := blockFragmentInactivityBoundary(cause)
@@ -599,20 +602,17 @@ func (lane *receiverBlockLane) blockFragmentInactivityTimeout() time.Duration {
 func (lane *receiverBlockLane) awaitBlockMessage(
 	ctx context.Context,
 	call *operationCall,
-	progressDeadline time.Time,
 ) (protocolsession.Message, error) {
-	if err := ctx.Err(); err != nil {
-		return protocolsession.Message{}, err
+	var message protocolsession.Message
+	err := ctx.Err()
+	if err == nil {
+		message, err = lane.rpc.awaitCall(ctx, call, false)
 	}
-	remaining := time.Until(progressDeadline)
-	if remaining <= 0 {
-		return protocolsession.Message{}, contentflow.ErrFragmentInactivity
-	}
-	waitContext, cancel := context.WithTimeoutCause(ctx, remaining, contentflow.ErrFragmentInactivity)
-	message, err := lane.rpc.awaitCall(waitContext, call, false)
-	cancel()
-	if errors.Is(context.Cause(waitContext), contentflow.ErrFragmentInactivity) {
-		return protocolsession.Message{}, contentflow.ErrFragmentInactivity
+	if timeout, ok := errors.AsType[*contentflow.BlockWaitTimeout](context.Cause(ctx)); ok {
+		// The progress clock cancels a single wait context only on real expiry,
+		// so extending queue allowance never records a spurious RPC failure.
+		call.recordProtocolTraceFailure(timeout)
+		return protocolsession.Message{}, timeout
 	}
 	return message, err
 }
