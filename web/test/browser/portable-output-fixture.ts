@@ -20,6 +20,7 @@ import {
   createPortableHandoffPlan,
   createReceiveIntent,
   createSelectionSpec,
+  type ArtifactSpec,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 
@@ -73,6 +74,7 @@ interface PackagedBrowserSession {
   readonly directoryName: string
   readonly handle: FileSystemFileHandle
   readonly artifact: PackagedArtifact
+  readonly artifactSpec: ArtifactSpec
   readonly suggestedName: string
   readonly packageDigest: string
   readonly receiveIntentDigest: string
@@ -88,6 +90,7 @@ export interface PackagedBrowserRetryProof {
   readonly packageIdentityUnchanged: boolean
   readonly sourceFileFresh: boolean
   readonly immutableFileSource: boolean
+  readonly handoffMediaType: string
   readonly freshObjectUrl: boolean
 }
 
@@ -100,11 +103,16 @@ export async function preparePackagedFileRetries(
   if (packagedBrowserSession !== undefined) await cleanupPackagedFileRetries()
   const operationId = identity(20)
   const receiveIntentDigest = identity(21, 32)
+  const artifactSpec = await createOriginalFileArtifact({
+    fileId: identity(23),
+    sourcePath: `root/${suggestedName}`,
+    suggestedName,
+  })
   const artifact = await sealPackagedArtifact({
     operationId,
     receiveIntentDigest,
     sealedMaterializationDigest: identity(22, 32),
-    artifactSpecDigest: identity(23, 32),
+    artifactSpecDigest: artifactSpec.digest,
     packageOwnedObjectId: identity(24, 32),
     exactBytes: BigInt(bytes.length),
     artifactReceiptDigest: identity(25, 32),
@@ -113,7 +121,8 @@ export async function preparePackagedFileRetries(
   const root = await navigator.storage.getDirectory()
   const directoryName = `windshare-package-handoff-${operationId}`
   const directory = await root.getDirectoryHandle(directoryName, { create: true })
-  const handle = await directory.getFileHandle('sealed-package.bin', { create: true })
+  // Production storage names are opaque identities and carry no filename-derived MIME.
+  const handle = await directory.getFileHandle(identity(24, 32), { create: true })
   const writable = await handle.createWritable()
   await writable.write(Uint8Array.from(bytes))
   await writable.close()
@@ -122,6 +131,7 @@ export async function preparePackagedFileRetries(
     directoryName,
     handle,
     artifact,
+    artifactSpec,
     suggestedName,
     packageDigest: artifact.digest,
     receiveIntentDigest: artifact.receiveIntentDigest,
@@ -142,10 +152,12 @@ export async function handoffNextPackagedFileRetry(): Promise<PackagedBrowserRet
     session.suggestedName,
   )
   const windowPort = currentPortableHandoffWindow()
+  let handoffSource: Blob | undefined
   const trackedWindow: PortableHandoffWindow = {
     ...windowPort,
     URL: {
       createObjectURL: (source) => {
+        if (source instanceof window.Blob) handoffSource = source
         const objectUrl = window.URL.createObjectURL(source)
         session.objectUrls.push(objectUrl)
         return objectUrl
@@ -169,6 +181,7 @@ export async function handoffNextPackagedFileRetry(): Promise<PackagedBrowserRet
   })
   const started = await publisher.handoff({
     artifact: session.artifact,
+    artifactSpec: session.artifactSpec,
     attempt,
   })
   const source = session.files.at(-1)
@@ -181,7 +194,8 @@ export async function handoffNextPackagedFileRetry(): Promise<PackagedBrowserRet
       session.artifact.receiveIntentDigest === session.receiveIntentDigest,
     sourceFileFresh: source instanceof window.File &&
       (priorFile === undefined || source !== priorFile),
-    immutableFileSource: source instanceof window.File,
+    immutableFileSource: handoffSource instanceof window.File,
+    handoffMediaType: handoffSource?.type ?? '',
     freshObjectUrl: objectUrl !== undefined &&
       (priorObjectUrl === undefined || objectUrl !== priorObjectUrl),
   })

@@ -12,6 +12,7 @@ import {
   validateReceiveIntent,
   type ReceiveIntent,
 } from '../../transfer/intent'
+import { artifactDownloadMediaType } from './artifact-media-type'
 import {
   assertIssuedPortableArtifactAdmission,
   type PortableArtifactAdmission,
@@ -84,6 +85,7 @@ export type BrowserHandoffTraceEvent =
       packageDigestPresent: boolean
       packageDigest?: string
       objectUrlLeaseMilliseconds: number
+      sourceMediaType: string
     }>
   | Readonly<{
       name: 'receive.handoff.download_started'
@@ -295,9 +297,7 @@ export async function openPortableHandoff(input: Readonly<{
     operationId: intent.operationId,
     attemptId: input.attemptId,
     suggestedName,
-    mediaType: intent.artifact.kind === 'zip-archive'
-      ? 'application/zip'
-      : 'application/octet-stream',
+    mediaType: artifactDownloadMediaType(intent.artifact),
     publisher: input.publisher,
     assembly: input.assembly,
   })
@@ -614,6 +614,7 @@ function handoffStartedTrace(
     attemptId: request.context.attemptId,
     ...packageFields,
     objectUrlLeaseMilliseconds: request.objectUrlLeaseMilliseconds,
+    sourceMediaType: request.source.type,
   })
 }
 

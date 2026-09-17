@@ -5,10 +5,11 @@ This document lists those entry points and what they run.
 
 Production wiring is checked through behavior: `make e2e` exercises the real CLI processes, and the
 smoke test in `make browser` exercises the browser UI, preview, downloaded contents, and Chromium's
-retained downloads after reloading and going offline. Longer recovery and connectivity scenarios belong
-to `make long-go` and the weekly browser suites; unit and component contracts cover individual decisions
-and failure paths. Component contracts use the lightweight `test/browser/contract-host.html` page and
-load their own production modules; storage, reloads, and browser-process recovery stay real. Single-file
+retained ZIP and extensionless original-file downloads after reloading and going offline. Longer recovery
+and connectivity scenarios belong to `make long-go` and the weekly browser suites; unit and component
+contracts cover individual decisions and failure paths. Component contracts use the lightweight
+`test/browser/contract-host.html` page and load production modules; storage, reloads, and browser-process
+recovery stay real. Single-file
 reload contracts use production inventory and reopen authority with empty and partial checkpoints, and
 verify reuse of the retained object and committed bytes. Source invalidation checks preserve partial
 bytes across reload, forbid continuation, and verify cleanup; the smoke also verifies that the next

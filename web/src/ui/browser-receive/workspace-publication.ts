@@ -56,7 +56,12 @@ export async function handoffRetainedWorkspacePackage(
       ),
       File: windowPort.File,
     })
-    const started = await publisher.handoff({ artifact, attempt, ...(signal === undefined ? {} : { signal }) })
+    const started = await publisher.handoff({
+      artifact,
+      artifactSpec: operation.intent.artifact,
+      attempt,
+      ...(signal === undefined ? {} : { signal }),
+    })
     return (await operation.stages.recordHandoffStarted({
       package: artifact,
       attempt,
