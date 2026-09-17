@@ -14,6 +14,7 @@ var requiredReceiveVectorFiles = []string{
 	"artifact-choice-v1.json",
 	"directory-admission-v2.json",
 	"file-checkpoint-v2.json",
+	"name-collision-v1.json",
 	"receive-intent-v4.json",
 }
 
