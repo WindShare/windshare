@@ -21,6 +21,7 @@ import {
   type ReceiveOperationLeaseRecord,
 } from '../../../output/workspace/records'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
+import { receiveOperationDisplayFields } from '../../../output/workspace/operation-display'
 import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../output/workspace/state'
 import { storedReceiveLifecycleState } from '../../../output/workspace/state-codec'
 import {
@@ -155,6 +156,7 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
     if (input.action.route.kind !== 'direct-resumable-zip' ||
         input.action.choiceId !== this.#input.offered.choice.choiceId ||
         input.action.artifact.kind !== 'zip-archive') throw new TypeError('ZIP route choice changed')
+    const displayFields = receiveOperationDisplayFields(input.display, parent.name)
     const operationId = createOperationID()
     const storage = await openStorage(this.#window, operationId, this.#dependencies)
     const { repository, journal } = storage
@@ -202,7 +204,7 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
             const candidate = snapshotDirectZipReservationCandidate(draft, {
               targetRef, bindingDigest: bytes(binding.digest),
             })
-            envelope = { version: 1, frozen, candidate }
+            envelope = { version: 1, frozen, candidate, ...displayFields }
             const choice = await deriveArtifactChoiceIdentity(frozen.intent.artifact, frozen.intent.plan)
             const canonical = await createDirectZipBootstrapCandidateV1({
               operationId, candidateId: encodeBase64Url(draft.candidateId),
@@ -252,7 +254,7 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
       // Bootstrap preserves a recoverable checkpoint. Adoption needs the same
       // verified receiving transition as a retained operation before exposing pause.
       await operation.startLifecycleAction('continue')
-      return { kind: 'bound-operation', operation }
+      return { kind: 'bound-operation', operation, ...displayFields }
     } catch (cause) {
       if (operation !== undefined) {
         const runtime = operation
@@ -298,9 +300,10 @@ async function commitBootstrap(input: {
   })
   const operation = await createReceiveOperationV2({
     receiveIntent: intent, preClickRanking: input.candidate.preClickRanking,
+    ...receiveOperationDisplayFields(input.envelope.display),
   })
   const lifecycle = nextReceiveLifecycleState(initialReceiveLifecycleState({
-    startedAtMilliseconds: input.lease.acquiredAt,
+    startedAtMilliseconds: operation.display?.createdAtMilliseconds ?? input.lease.acquiredAt,
     operationId: intent.operationId, receiveIntentDigest: intent.digest,
   }), {
     kind: 'resumable-receive', payloadKind: 'direct-zip',

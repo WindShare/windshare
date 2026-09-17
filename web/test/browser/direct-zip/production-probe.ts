@@ -15,6 +15,9 @@ import { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-rece
 import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
 import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
+import { listBrowserRetainedOperations } from '../../../src/ui/browser-receive/retained'
+import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'
 import { observeProductionDirectZipProgress } from './production-progress-observation'
 import { prepareProductionDirectZipActivation } from './production-activation'
@@ -31,7 +34,8 @@ type ProductionMode = 'pause-resume' | 'complete' | 'delete' | 'delete-retry' | 
   'completion-journal-recovery' | 'completion-acknowledgement-recovery' | 'completion-continue' |
   'aborted-write-continue' | 'automatic-checkpoint-spacing' | 'activation-recovery'
 
-export async function probeBrowserDirectZipProduction(databaseName: string, mode: ProductionMode) {
+export async function probeBrowserDirectZipProduction(databaseName: string, mode: ProductionMode,
+  display: ReceiveOperationDisplay) {
   const root = await navigator.storage.getDirectory()
   const parent = await root.getDirectoryHandle(databaseName, { create: true })
   const originalPicker = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker')
@@ -58,9 +62,11 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
   const progress = observeProductionDirectZipProgress(BigInt(payload.byteLength))
   let active: V2BoundReceiveOperation | undefined
   try {
-    const activation = await prepareProductionDirectZipActivation(windowPort, receiver, directZip, signal)
+    const activation = await prepareProductionDirectZipActivation(windowPort, receiver, directZip, signal, display)
     const { environment, rootId } = activation
-    active = await resolveProductionActivation(await activation.commit(), mode, directZip, databaseName, openJournal)
+    const activated = await activation.commit()
+    const activationDisplay = activated.kind === 'bound-operation' ? activated.operation.display : undefined
+    active = await resolveProductionActivation(activated, mode, directZip, databaseName, openJournal)
     const intent = active.intent as DirectZipIntent
     progress.bind(active)
     progress.sample('initial', active)
@@ -100,11 +106,14 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     const file = await parent.getFileHandle(envelope.candidate.stableName)
     const saved = await file.getFile()
     const archive = new Uint8Array(await saved.arrayBuffer())
+    await active.detach()
     return { mode, lifecycle: lifecycle.kind, resumeOffset: resumeOffset.toString(),
       fileBytes: saved.size, signature: Array.from(archive.slice(-22, -18)),
       archive: Array.from(archive),
       finalization: { before: beforeFinalization, after: recovery?.before ?? fileSystem.snapshot() },
-      recovery, progress: progress.result(),
+      recovery, progress: progress.result(), activationDisplay,
+      retainedTasks: await readProductionDirectZipTasks(databaseName),
+      startedAtMilliseconds: active.lifecycle.timing?.startedAtMilliseconds,
       directSupport: environment.directZipSupport.kind }
   } finally {
     await active?.detach()
@@ -114,6 +123,15 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     else Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
     await root.removeEntry(databaseName, { recursive: true })
   }
+}
+
+export async function readProductionDirectZipTasks(databaseName: string) {
+  const inventory = await listBrowserRetainedOperations(window as BrowserReceiveWindow, {
+    openResumeSource: () => IndexedDbReceiveResumeSource.open(databaseName),
+  }, signal)
+  try {
+    return inventory.operations.map(operation => presentTask(retainedTaskFacts(operation)))
+  } finally { inventory.close() }
 }
 
 async function resolveProductionActivation(

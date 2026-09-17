@@ -14,6 +14,7 @@ import {
   type ReceiveOperationHandleRecord,
 } from '../../../output/workspace/records'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
+import type { ReceiveOperationDisplay } from '../../../output/workspace/operation-display'
 import type { BoundReceiveIntent } from '../../../output/planning'
 import { validateReceiveIntent, type AvailableDirectZipPolicyDigests } from '../../../transfer/intent'
 import { equalDirectZipOwnershipMarkersV1 } from '../../../output/direct-zip/format'
@@ -37,6 +38,8 @@ export interface BrowserDirectZipEnvelope {
   readonly version: 1
   readonly frozen: BoundReceiveIntent
   readonly candidate: DirectZipReservationCandidate<FileSystemDirectoryHandle>
+  // Bootstrap recovery must retain the original task identity before the operation record exists.
+  readonly display?: ReceiveOperationDisplay
   readonly binding?: BrowserDirectZipBinding
 }
 
