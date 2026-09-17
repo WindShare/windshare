@@ -63,6 +63,8 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
     const repeated = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
     await downloadAgain.click()
     await assertReplacementDownload(await repeated)
+    // The browser event can arrive before the retained action commits its outcome.
+    await expect(downloadAgain, 'The retained original-file download settles offline').toBeEnabled()
   } finally {
     await page.context().setOffline(false)
   }

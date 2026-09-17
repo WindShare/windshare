@@ -15,7 +15,7 @@ export async function assertRetainedDirectoryDownload(
   await page.goto('about:blank')
   await page.goto(navigationUrl)
   const action = page.getByRole('button', { name: 'Download this folder', exact: true })
-  await expect(action).toBeEnabled()
+  await expect(action, 'The fresh receiver document offers the folder download').toBeEnabled()
   const firstDownload = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
   await action.click()
   await assertDownload(await firstDownload)
@@ -43,15 +43,19 @@ export async function assertRetainedDirectoryDownload(
     const secondDownload = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
     await retry.click()
     await assertDownload(await secondDownload)
+    // Browser handoff precedes durable settlement. Navigation remains blocked
+    // until the retained action releases ownership and reloads its task.
+    await expect(retry, 'The retained download settles before reopening the share').toBeEnabled()
   } finally {
     await page.context().setOffline(false)
   }
 
   // Reopening the original capability must reconnect this same portal document.
   await page.keyboard.press('Escape')
+  await expect(downloads).toBeHidden()
   const timeOrigin = await page.evaluate(() => performance.timeOrigin)
   expect(await page.goto(navigationUrl)).toBeNull()
-  await expect(action).toBeEnabled()
+  await expect(action, 'Reopening the capability reconnects the existing portal document').toBeEnabled()
   await expect.poll(() => new URL(page.url()).hash).toBe('')
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
   await page.getByRole('button', { name: /^(?:Downloads|下载记录)/u }).click()
