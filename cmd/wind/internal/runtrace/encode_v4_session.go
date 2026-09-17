@@ -263,6 +263,10 @@ func (visitor *encodeVisitorV4) encodeProtocolOperation(
 		UsableLanesAtSettlement: fact.UsableLanesAtSettlement(),
 		Cause:                   cause,
 	}
+	if wait := fact.BlockWait(); wait.Phase != 0 {
+		phase, _ := wait.Phase.Name()
+		payload.BlockWait = &blockWaitV4{Phase: phase, WaitedMS: decimal(wait.WaitedMillis), QueueProgress: decimal(wait.QueueProgress)}
+	}
 	if scheduling := fact.RequestScheduling(); scheduling.ExpectedMillis != 0 {
 		payload.RequestScheduling = &requestSchedulingV4{
 			ExpectedMS:      decimal(scheduling.ExpectedMillis),

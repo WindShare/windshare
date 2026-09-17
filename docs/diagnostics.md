@@ -103,6 +103,7 @@ The same controls are available through `window.windshareDiagnostics`:
 - `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time, and timeout. Initial events can precede protocol-session identity.
 - `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`).
 - `lease_retirement`: Block lease cleanup and timeouts.
+- Block timeout `protocol_operation` events include `block_wait`: the receive phase, elapsed wait, and count of earlier-request fragments that extended queue allowance.
 
 ## Cross-Runtime Correlation
 

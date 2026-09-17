@@ -1,4 +1,5 @@
 import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
+import { BlockResponseQueue, V2BlockInactivityTimeoutError } from './scheduling/block-response-wait'
 import {
   LEASE_RETIREMENT_WAIT_MILLISECONDS, observeLeaseRetirement, retireRemoteLease,
   type LeaseRetirementObservation, type LeaseRetirementOwner,
@@ -32,7 +33,6 @@ import {
   encodeV2BlockRequest,
   encodeV2LeaseRequest,
   encodeV2OpenRequest,
-  V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS,
   V2_REVISION_CODE_QUOTA,
   V2_REVISION_CODE_LEASE_EXPIRED,
   V2_REVISION_CODE_INVALID_LEASE,
@@ -465,6 +465,7 @@ export class V2SessionBlockLane implements V2BlockLane {
   readonly #share: V2ShareDescriptor
   readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #revisions: V2RevisionService
+  readonly #responses = new BlockResponseQueue()
   readonly #lifetime = new AbortController()
 
   constructor(
@@ -511,14 +512,16 @@ export class V2SessionBlockLane implements V2BlockLane {
     signal: AbortSignal,
   ): Promise<V2BlockRecord> {
     let object: Uint8Array<ArrayBuffer> | undefined
-    let fragmentDeadline = Date.now() + V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
+    const wait = this.#responses.begin(signal)
     try {
       while (true) {
-        const message = await nextBlockMessage(operation, signal, fragmentDeadline)
+        wait.resume()
+        const message = await operation.next(wait.signal)
+        wait.suspend()
         if (message.kind === V2_MESSAGE_KIND.blockFragment) {
           const assembly = await assembler.accept(message.body)
           if (assembly.status === 'accepted' || assembly.status === 'complete') {
-            fragmentDeadline = Date.now() + V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
+            wait.progress()
           }
           if (assembly.status === 'complete') object = assembly.object
           continue
@@ -535,7 +538,10 @@ export class V2SessionBlockLane implements V2BlockLane {
         )
       }
     } catch (error) {
-      this.#failBlockReceive(operation, assembler, error)
+      this.#failBlockReceive(operation, assembler,
+        error instanceof V2FragmentInactivityError ? wait.inactivityError({ cause: error }) : error)
+    } finally {
+      wait.close()
     }
   }
 
@@ -548,11 +554,11 @@ export class V2SessionBlockLane implements V2BlockLane {
     this.#session.cancelOperation(
       operation,
       {
-        protocolReason: error instanceof V2FragmentInactivityTimeoutError ||
-          error instanceof V2FragmentInactivityError
+        protocolReason: error instanceof V2BlockInactivityTimeoutError
           ? V2_OPERATION_CANCEL_REASON.timeout
           : V2_OPERATION_CANCEL_REASON.laneRace,
         cause: error,
+        ...(error instanceof V2BlockInactivityTimeoutError ? { blockWait: error } : {}),
         laneId: this.id,
       },
     ).catch(() => undefined)
@@ -562,9 +568,6 @@ export class V2SessionBlockLane implements V2BlockLane {
         'Block sender object failed authentication',
         { cause: error },
       )
-    }
-    if (error instanceof V2FragmentInactivityError) {
-      throw new V2FragmentInactivityTimeoutError({ cause: error })
     }
     if (error instanceof V2CborError) {
       throw new V2BlockOperationError(
@@ -671,34 +674,5 @@ class V2IncompleteBlockDeliveryError extends V2SessionRuntimeError {
   constructor() {
     super('lane', 'Block completion arrived without its promised fragment record')
     this.name = 'V2IncompleteBlockDeliveryError'
-  }
-}
-
-class V2FragmentInactivityTimeoutError extends V2SessionRuntimeError {
-  constructor(options?: ErrorOptions) {
-    super('lane', 'Block fragment reassembly made no authenticated progress before timeout', options)
-    this.name = 'V2FragmentInactivityTimeoutError'
-  }
-}
-
-async function nextBlockMessage(
-  operation: V2SessionOperation,
-  signal: AbortSignal,
-  deadline: number | undefined,
-) {
-  if (deadline === undefined) return operation.next(signal)
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) throw new V2FragmentInactivityTimeoutError()
-  const timeout = new AbortController()
-  const linked = linkAbortSignals(signal, timeout.signal)
-  const timer = globalThis.setTimeout(
-    () => timeout.abort(new V2FragmentInactivityTimeoutError()),
-    remaining,
-  )
-  try {
-    return await operation.next(linked.signal)
-  } finally {
-    globalThis.clearTimeout(timer)
-    linked.close()
   }
 }

@@ -479,6 +479,7 @@ export class V2ReceiverSessionRuntime {
       eventName: 'protocol_operation',
       transition: 'cancelled',
       cancellationReason: cancellationTraceReason(cancellation.protocolReason),
+      ...(cancellation.blockWait === undefined ? {} : { blockWait: cancellation.blockWait }),
       ...(operation.requestTrace === undefined ? {} : { request: operation.requestTrace }),
       requestKind: protocolMessageKindV1(operation.requestKind),
       correlation: this.operationCorrelation(operation),

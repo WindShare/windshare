@@ -130,7 +130,12 @@ func projectProtocolOperation(context clievent.ProtocolObservationContext, value
 			return clievent.ProtocolObservationObserved{}, err
 		}
 	}
+	blockWait, err := projectBlockWait(value.BlockWait)
+	if err != nil {
+		return clievent.ProtocolObservationObserved{}, err
+	}
 	return clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{Command: context.Command, ObservedAt: context.ObservedAt, Role: context.Role, ProtocolSession: context.ProtocolSession, ProtocolOperation: context.ProtocolOperation, RequestKind: context.RequestKind, Stage: stage, ResponseKind: responseKind, HasResponse: value.HasResponse, Lane: lane, HasLane: value.HasLane, HasSend: value.HasSend, SendSettled: value.SendSettled, SendAdmitted: value.SendAdmitted, SendOutcome: outcome, ResponseCount: value.ResponseCount, DeadlineRemainingMillis: value.DeadlineRemainingMillis, HasDeadline: value.HasDeadline, OperationElapsedMillis: value.OperationElapsedMillis, UsableLanesAtSelection: value.UsableLanesAtSelection, UsableLanesAtSettlement: value.UsableLanesAtSettlement, Cause: cause,
+		BlockWait: blockWait,
 		RequestScheduling: clievent.RequestSchedulingSpec{
 			ExpectedMillis:      uint64(max(0, value.RequestScheduling.Expected.Milliseconds())),
 			ResponseMillis:      uint64(max(0, value.RequestScheduling.Response.Milliseconds())),
@@ -139,6 +144,22 @@ func projectProtocolOperation(context clievent.ProtocolObservationContext, value
 		},
 	})
 }
+func projectBlockWait(value contentflow.BlockWaitTimeout) (clievent.BlockWaitSpec, error) {
+	wait := clievent.BlockWaitSpec{
+		WaitedMillis: uint64(max(0, value.Waited.Milliseconds())), QueueProgress: value.QueueProgress,
+	}
+	switch value.Phase {
+	case "":
+	case contentflow.BlockAwaitingFirstFragment:
+		wait.Phase = clievent.BlockWaitAwaitingFirstFragment
+	case contentflow.BlockReceivingFragments:
+		wait.Phase = clievent.BlockWaitReceivingFragments
+	default:
+		return wait, rejectedProjection(ProjectionUnknownEnum, "block_wait", "known_phase")
+	}
+	return wait, nil
+}
+
 func projectProtocolErrorContent(value sessionruntime.ProtocolErrorContent) (clievent.ProtocolErrorContent, error) {
 	if value.IsZero() {
 		return clievent.ProtocolErrorContent{}, nil

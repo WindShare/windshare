@@ -148,8 +148,16 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
 function validateRetiredOperation(payload: UnknownRecord): void {
   const cancelled = payload.transition === 'cancelled'
   exactKeys(payload, ['transition', 'request_kind', ...(cancelled ? ['cancellation_reason'] : ['response_kind', 'settlement'])],
-    ['request', ...(cancelled ? [] : ['cancellation_reason', 'protocol_error'])], 'retired operation')
+    ['request', ...(cancelled ? ['block_wait'] : ['cancellation_reason', 'protocol_error'])], 'retired operation')
   member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'retired request kind')
+  if (payload.block_wait !== undefined) {
+    member(payload.request_kind, ['request_blocks'], 'block wait request kind')
+    member(payload.cancellation_reason, ['timeout'], 'block wait cancellation reason')
+    const wait = recordValue(payload.block_wait, 'block response wait')
+    exactKeys(wait, ['phase', 'waited_ms', 'queue_progress'], [], 'block response wait')
+    member(wait.phase, ['awaiting_first_fragment', 'receiving_fragments'], 'block response wait phase')
+    decimalFields(wait, ['waited_ms', 'queue_progress'], 'block response wait')
+  }
   if (payload.cancellation_reason !== undefined) {
     member(payload.cancellation_reason, ['user', 'superseded', 'output_abort', 'timeout', 'lane_race'], 'cancellation reason')
   }

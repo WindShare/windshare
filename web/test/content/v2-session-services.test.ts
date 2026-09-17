@@ -33,6 +33,7 @@ import {
 } from '../../src/session/v2-identities'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 import { fragmentRecord } from './v2-fragment-fixture'
+import { delayWithAbort } from '../../src/content/scheduling/deadlines'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
@@ -98,6 +99,25 @@ interface IdentityVector extends VectorCase {
 interface SenderObjectVector extends VectorCase {
   readonly domain: string
   readonly objectB64: string
+}
+
+function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): V2SessionOperation {
+  const id = identity(first)
+  const fragments = fragmentRecord(id, new Uint8Array(150_000))
+  let index = 0
+  return {
+    id, requestKind: V2_MESSAGE_KIND.requestBlocks, cancel: () => undefined,
+    next: async signal => {
+      const delay = delays[index] ?? 0
+      if (delay > 0) await delayWithAbort(delay, signal!)
+      signal?.throwIfAborted()
+      const body = fragments[duplicate ? 0 : index++]
+      if (duplicate) index += 1
+      return body === undefined
+        ? encodeV2Message(V2_MESSAGE_KIND.operationComplete, id, encodeV2Body(new Map([[0, 1], [1, 1]])))
+        : decodeV2Message(body)
+    },
+  }
 }
 
 function vectorBytes(encoded: string): Uint8Array<ArrayBuffer> {
@@ -368,7 +388,8 @@ describe('v2 session block lane deadlines', () => {
       localBlockIndex: 0n,
     }, new AbortController().signal)
     const rejected = expect(pending).rejects.toMatchObject({
-      name: 'V2FragmentInactivityTimeoutError',
+      name: 'V2BlockInactivityTimeoutError',
+      phase: 'awaiting_first_fragment',
       scope: 'lane',
     })
     await vi.advanceTimersByTimeAsync(15_000)
@@ -478,6 +499,48 @@ describe('v2 session block lane deadlines', () => {
     lane.close()
   })
 
+})
+
+describe('v2 session queued block responses', () => {
+  it.each([false, true])('accounts for queued responses using unique fragments (duplicates=%s)', async duplicate => {
+    vi.useFakeTimers()
+    const operations = [
+      delayedBlockOperation(71, [10_000, 10_000, 10_000], duplicate),
+      delayedBlockOperation(72, [35_000]),
+    ]
+    const cancelOperation = vi.fn(async () => undefined)
+    const session = {
+      beginOperation: async () => operations.shift()!,
+      cancelOperation,
+    } as unknown as V2ReceiverSessionRuntime
+    const lane = new V2SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),
+      { leaseError: () => undefined } as never)
+    const demand = { descriptor: revision, leaseId: identity(6), localBlockIndex: 0n }
+    const first = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
+    const queued = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(cancelOperation).not.toHaveBeenCalled()
+    if (duplicate) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(await first).toMatchObject({ name: 'V2BlockInactivityTimeoutError', phase: 'receiving_fragments' })
+      expect(await queued).toMatchObject({
+        name: 'V2BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 1,
+      })
+    } else {
+      await vi.advanceTimersByTimeAsync(15_000)
+      // Deliberately unsigned records reach object authentication after their
+      // valid fragment streams; queue policy must never bypass that boundary.
+      for (const result of await Promise.all([first, queued])) {
+        expect(result).toMatchObject({ name: 'V2BlockOperationError', code: 'object-auth' })
+      }
+    }
+    lane.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+})
+
+describe('v2 session block delivery and lease recovery', () => {
   it('retries a promised block whose fragments became ambiguous across a lane cut', async () => {
     let cancellations = 0
     const session = {
