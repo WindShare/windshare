@@ -133,7 +133,7 @@ test('receives and recovers downloads through the real sender and relay', async 
     await page.getByRole('dialog').getByRole('button', { name: 'Back to share', exact: true }).click()
     await expect(filePreview).toBeFocused()
     const artifactAction = page.getByRole('button', { name: 'Download this folder', exact: true })
-    await expect(artifactAction).toBeEnabled()
+    await expect(artifactAction, 'Closing the preview restores the folder download').toBeEnabled()
     await expect.poll(() => new URL(page.url()).hash).toBe('')
 
     const downloadStarted = page.waitForEvent('download', {
