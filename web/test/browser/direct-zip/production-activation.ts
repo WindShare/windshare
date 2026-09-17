@@ -14,6 +14,7 @@ import {
   observeBrowserDirectZipFeatureFacts, BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID,
 } from '../../../src/ui/browser-receive/direct-zip/support'
 import type { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-receive-composition'
+import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
 
 const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 
@@ -22,6 +23,7 @@ export async function prepareProductionDirectZipActivation(
   receiver: ReturnType<typeof createBrowserReceiveComposition>,
   directZip: ReturnType<typeof createBrowserDirectZipComposition>,
   signal: AbortSignal,
+  display?: ReceiveOperationDisplay,
 ) {
   const environment = await receiver.environment(signal)
   const source = await directZip.capabilities.read(signal)
@@ -55,7 +57,7 @@ export async function prepareProductionDirectZipActivation(
     kind: 'resolved-artifact-action', choiceId: choiceIdentity.id, choice, route, artifact,
     selectionDigest: selection.digest, resolvedArtifactDigest: artifact.digest,
   } as ResolvedArtifactAction
-  const presentation = receiver.startArtifactAuthority(offered, [choiceIdentity.id])
+  const presentation = receiver.startArtifactAuthority(offered, [choiceIdentity.id], undefined, display)
   await presentation.ready
   return {
     environment, rootId,
