@@ -792,11 +792,11 @@ export async function resultRootArtifact(): Promise<DirectoryTreeArtifact> {
   )
 }
 
-export async function singleFileArtifact(): Promise<DirectoryTreeArtifact> {
+export async function singleFileArtifact(name = 'report.bin'): Promise<DirectoryTreeArtifact> {
   return createSingleFileDirectoryTreeArtifact({
     fileId: identity(3),
-    sourcePath: 'report.bin',
-    outputName: 'report.bin',
+    sourcePath: name,
+    outputName: name,
   })
 }
 

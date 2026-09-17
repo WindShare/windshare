@@ -350,10 +350,24 @@ export function appendProtectedSuffix(baseInput: string, suffix: string): string
   }
   const maximumBaseBytes = MAX_RESULT_COMPONENT_BYTES - TEXT_ENCODER.encode(suffix).byteLength
   if (maximumBaseBytes <= 0) throw new TypeError('protected result-name suffix is too long')
-  const scalars = Array.from(base)
-  while (TEXT_ENCODER.encode(scalars.join('')).byteLength > maximumBaseBytes) scalars.pop()
-  if (scalars.length === 0) throw new TypeError('protected suffix consumed the complete result name')
-  return requireResultName(scalars.join('') + suffix)
+  const truncated = resultNamePrefix(base, maximumBaseBytes)
+  if (truncated.length === 0) throw new TypeError('protected suffix consumed the complete result name')
+  return requireResultName(truncated + suffix)
+}
+
+// Result names are already valid Unicode; truncation must not split a scalar.
+export function resultNamePrefix(value: string, maximumBytes: number): string {
+  if (maximumBytes <= 0) return ''
+  if (TEXT_ENCODER.encode(value).byteLength <= maximumBytes) return value
+  let bytes = 0
+  let end = 0
+  for (const scalar of value) {
+    const width = TEXT_ENCODER.encode(scalar).byteLength
+    if (bytes + width > maximumBytes) break
+    bytes += width
+    end += scalar.length
+  }
+  return value.slice(0, end)
 }
 
 export function requireResultName(value: string): string {

@@ -48,7 +48,9 @@ wind get --wait-timeout 2m <link>
 | Part of one directory | `<directory>-selection/...` |
 | Multiple roots | `windshare/...` |
 
-Existing files are not overwritten. A name collision creates a suffixed destination.
+Existing files are not overwritten. A name collision creates a suffixed destination. Names are shortened
+on Unicode character boundaries to fit the output limit; extensions are preserved unless they leave no
+room for a filename character and the collision suffix.
 
 | Mode | Behavior |
 |---|---|
