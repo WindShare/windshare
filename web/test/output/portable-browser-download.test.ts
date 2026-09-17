@@ -30,9 +30,12 @@ import {
   createPortableBinding,
   createPortableHandoffPlan,
   createReceiveIntent,
+  createSyntheticSelectionResultRoot,
+  createZipArchiveArtifact,
   createSelectionSpec,
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
+  type ArtifactSpec,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 
@@ -82,6 +85,7 @@ describe('explicit portable browser handoff', () => {
       attemptId: identity(9),
     })
     expect(request?.objectUrlLeaseMilliseconds).toBe(BROWSER_HANDOFF_OBJECT_URL_LEASE_MS)
+    expect(request?.source.type).toBe('application/octet-stream')
     expect(new Uint8Array(await request!.source.arrayBuffer())).toEqual(Uint8Array.of(1, 2, 3, 4))
     expect(snapshots.at(-2)).toEqual({
       bufferedBytes: 4,
@@ -414,7 +418,7 @@ describe('browser handoff publisher integration seam', () => {
 
 describe('immutable packaged File browser handoff', () => {
   it('releases the package reader without starting a browser download when cancellation arrives during the read', async () => {
-    const artifact = await packagedArtifact(1n)
+    const { artifact, artifactSpec } = await packagedArtifact(1n)
     const attempt = await packagedAttempt(artifact, 25, true)
     const controller = new AbortController()
     const release = vi.fn()
@@ -430,14 +434,14 @@ describe('immutable packaged File browser handoff', () => {
       browser: { handoffWithLease, handoff: vi.fn() },
       File: TestFile as unknown as typeof File,
     })
-    await expect(publisher.handoff({ artifact, attempt, signal: controller.signal }))
+    await expect(publisher.handoff({ artifact, artifactSpec, attempt, signal: controller.signal }))
       .rejects.toBeInstanceOf(BrowserHandoffNotStartedError)
     expect(handoffWithLease).not.toHaveBeenCalled()
     expect(release).toHaveBeenCalledOnce()
   })
 
   it('creates a fresh bounded URL for each attempt without changing package identity', async () => {
-    const artifact = await packagedArtifact(3n)
+    const { artifact, artifactSpec } = await packagedArtifact(3n)
     const firstAttempt = await packagedAttempt(artifact, 21, true)
     const secondAttempt = await packagedAttempt(artifact, 22, true)
     const files: TestFile[] = []
@@ -487,10 +491,12 @@ describe('immutable packaged File browser handoff', () => {
 
     const first = await publisher.handoff({
       artifact,
+      artifactSpec,
       attempt: firstAttempt,
     })
     const second = await publisher.handoff({
       artifact,
+      artifactSpec,
       attempt: secondAttempt,
     })
 
@@ -512,7 +518,13 @@ describe('immutable packaged File browser handoff', () => {
     })
     expect(files).toHaveLength(2)
     expect(files[0]).not.toBe(files[1])
-    expect(sources).toEqual(files)
+    for (const [index, source] of sources.entries()) {
+      expect(source).toBeInstanceOf(TestFile)
+      expect(source.type).toBe('application/octet-stream')
+      expect((source as TestFile).name).toBe('sealed-result.bin')
+      expect((source as TestFile).lastModified).toBe(files[index]!.lastModified)
+      expect(new Uint8Array(await source.arrayBuffer())).toEqual(Uint8Array.of(4, 5, 6))
+    }
     expect(new Set(objectUrls).size).toBe(2)
     expect(leaseDurations).toEqual([
       BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
@@ -527,8 +539,112 @@ describe('immutable packaged File browser handoff', () => {
     expect(revoked).toEqual(objectUrls)
   })
 
+  it.each(['original-file', 'zip-archive'] as const)(
+    'publishes %s metadata without reading payload bytes and retains the reader until URL release',
+    async (kind) => {
+      const specification = kind === 'zip-archive'
+        ? await createZipArchiveArtifact(createSyntheticSelectionResultRoot())
+        : await createOriginalFileArtifact({
+            fileId: identity(15), sourcePath: 'root/Makefile', suggestedName: 'Makefile',
+          })
+      const { artifact, artifactSpec } = await packagedArtifact(3n, specification)
+      const attempt = await packagedAttempt(artifact, 21, true, specification.suggestedName)
+      const constructedParts: BlobPart[][] = []
+      class MetadataFile extends TestFile {
+        constructor(parts: BlobPart[], name: string, options?: FilePropertyBag) {
+          super(parts, name, options)
+          constructedParts.push(parts)
+        }
+      }
+      const source = new MetadataFile([Uint8Array.of(1, 2, 3)], 'opaque-storage-object', {
+        type: 'text/plain', lastModified: 1234,
+      })
+      constructedParts.length = 0
+      const readBuffer = vi.spyOn(source, 'arrayBuffer')
+      const readText = vi.spyOn(source, 'text')
+      const readStream = vi.spyOn(source, 'stream')
+      const release = vi.fn()
+      const handoffWithLease = vi.fn((request: Parameters<BrowserHandoffPublisher['handoff']>[0]) => ({
+        result: { kind: 'download-started' as const, suggestedName: request.suggestedName },
+        urlLeaseStartedAt: 0,
+        urlLeaseEndsAt: BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
+      }))
+      const publisher = createPackagedArtifactHandoffPublisher({
+        packages: {
+          readPackagedArtifact: async () => source,
+          acquireReader: async () => ({ release }),
+        },
+        browser: { handoff: vi.fn(), handoffWithLease },
+        File: MetadataFile as unknown as typeof File,
+      })
+
+      await publisher.handoff({ artifact, artifactSpec, attempt })
+      const handedOff = handoffWithLease.mock.calls[0]![0]
+      expect(constructedParts).toHaveLength(1)
+      expect(constructedParts[0]).toHaveLength(1)
+      expect(constructedParts[0]![0]).toBe(source)
+      expect(handedOff.source.type).toBe(kind === 'zip-archive' ? 'application/zip' : 'application/octet-stream')
+      expect(new Uint8Array(await handedOff.source.arrayBuffer())).toEqual(Uint8Array.of(1, 2, 3))
+      expect(readBuffer).not.toHaveBeenCalled()
+      expect(readText).not.toHaveBeenCalled()
+      expect(readStream).not.toHaveBeenCalled()
+      expect(release).not.toHaveBeenCalled()
+      handedOff.onSourceReleased!()
+      expect(release).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('rejects a different artifact specification before acquiring its package reader', async () => {
+    const { artifact } = await packagedArtifact(1n)
+    const artifactSpec = await createZipArchiveArtifact(createSyntheticSelectionResultRoot())
+    const acquireReader = vi.fn()
+    const readPackagedArtifact = vi.fn()
+    const handoffWithLease = vi.fn()
+    const publisher = createPackagedArtifactHandoffPublisher({
+      packages: { acquireReader, readPackagedArtifact },
+      browser: { handoff: vi.fn(), handoffWithLease },
+      File: TestFile as unknown as typeof File,
+    })
+
+    await expect(publisher.handoff({
+      artifact, artifactSpec, attempt: await packagedAttempt(artifact, 21, true),
+    })).rejects.toThrow(/specification does not bind/u)
+    expect(acquireReader).not.toHaveBeenCalled()
+    expect(readPackagedArtifact).not.toHaveBeenCalled()
+    expect(handoffWithLease).not.toHaveBeenCalled()
+  })
+
+  it('releases the original reader if download metadata wrapping fails', async () => {
+    const { artifact, artifactSpec } = await packagedArtifact(1n)
+    let rejectConstruction = false
+    class FailingFile extends TestFile {
+      constructor(parts: BlobPart[], name: string, options?: FilePropertyBag) {
+        if (rejectConstruction) throw new Error('File metadata construction failed')
+        super(parts, name, options)
+      }
+    }
+    const source = new FailingFile([Uint8Array.of(1)], 'opaque-storage-object')
+    rejectConstruction = true
+    const release = vi.fn()
+    const handoffWithLease = vi.fn()
+    const publisher = createPackagedArtifactHandoffPublisher({
+      packages: {
+        readPackagedArtifact: async () => source,
+        acquireReader: async () => ({ release }),
+      },
+      browser: { handoff: vi.fn(), handoffWithLease },
+      File: FailingFile as unknown as typeof File,
+    })
+
+    await expect(publisher.handoff({
+      artifact, artifactSpec, attempt: await packagedAttempt(artifact, 21, true),
+    })).rejects.toThrow('File metadata construction failed')
+    expect(release).toHaveBeenCalledOnce()
+    expect(handoffWithLease).not.toHaveBeenCalled()
+  })
+
   it('suppresses only unsupported packaged File attempts and never falls back to a Blob', async () => {
-    const artifact = await packagedArtifact(1n)
+    const { artifact, artifactSpec } = await packagedArtifact(1n)
     const unsupportedAttempt = await packagedAttempt(artifact, 23, false)
     const supportedAttempt = await packagedAttempt(artifact, 24, true)
     const createObjectUrl = vi.fn(() => 'blob:must-not-start')
@@ -555,6 +671,7 @@ describe('immutable packaged File browser handoff', () => {
 
     await expect(unsupported.handoff({
       artifact,
+      artifactSpec,
       attempt: unsupportedAttempt,
     })).rejects.toMatchObject({ name: 'NotSupportedError' })
     expect(unsupportedRead).not.toHaveBeenCalled()
@@ -568,29 +685,37 @@ describe('immutable packaged File browser handoff', () => {
     })
     await expect(blobOnly.handoff({
       artifact,
+      artifactSpec,
       attempt: supportedAttempt,
     })).rejects.toMatchObject({ name: 'NotSupportedError' })
     expect(createObjectUrl).not.toHaveBeenCalled()
   })
 })
 
-async function packagedArtifact(exactBytes: bigint): Promise<PackagedArtifactV1> {
-  return sealPackagedArtifact({
+async function packagedArtifact(exactBytes: bigint, specification?: ArtifactSpec) {
+  const artifactSpec = specification ?? await createOriginalFileArtifact({
+    fileId: identity(15),
+    sourcePath: 'root/sealed-result.bin',
+    suggestedName: 'sealed-result.bin',
+  })
+  const artifact = await sealPackagedArtifact({
     operationId: identity(6),
     receiveIntentDigest: identity(13, 32),
     sealedMaterializationDigest: identity(14, 32),
-    artifactSpecDigest: identity(15, 32),
+    artifactSpecDigest: artifactSpec.digest,
     packageOwnedObjectId: identity(16, 32),
     exactBytes,
     artifactReceiptDigest: identity(17, 32),
     layoutDigest: identity(18, 32),
   })
+  return { artifact, artifactSpec }
 }
 
 async function packagedAttempt(
   artifact: PackagedArtifactV1,
   seed: number,
   packagedFileSupported: boolean,
+  suggestedName = 'sealed-result.bin',
 ): Promise<PublicationAttemptV1> {
   return createPublicationAttempt({
     publicationAttemptId: identity(seed),
@@ -599,7 +724,7 @@ async function packagedAttempt(
     packagedArtifactDigest: artifact.digest,
     route: {
       kind: 'handoff',
-      suggestedName: 'sealed-result.bin',
+      suggestedName,
       packagedFileSupported,
       objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
     },

@@ -47,7 +47,7 @@ test('retries one immutable OPFS package through fresh bounded File handoffs', a
     const fixturePath = '/test/browser/portable-output-fixture.ts'
     const fixture = await import(fixturePath) as typeof import('./portable-output-fixture')
     await fixture.preparePackagedFileRetries(suggestedName, bytes)
-  }, { bytes: [...PORTABLE_BYTES], suggestedName: 'packaged-retry.bin' })
+  }, { bytes: [...PORTABLE_BYTES], suggestedName: 'Makefile' })
 
   const proofs: Array<Awaited<ReturnType<
     typeof import('./portable-output-fixture').handoffNextPackagedFileRetry
@@ -61,7 +61,7 @@ test('retries one immutable OPFS package through fresh bounded File handoffs', a
         return fixture.handoffNextPackagedFileRetry()
       })
       const download = await downloadPromise
-      expect(download.suggestedFilename()).toBe('packaged-retry.bin')
+      expect(download.suggestedFilename()).toBe('Makefile')
       expect(await readDownload(download)).toEqual(Buffer.from(PORTABLE_BYTES))
       proofs.push(proof)
     }
@@ -77,13 +77,14 @@ test('retries one immutable OPFS package through fresh bounded File handoffs', a
   expect(proofs.every((proof) => proof.packageIdentityUnchanged)).toBe(true)
   expect(proofs.every((proof) => proof.sourceFileFresh)).toBe(true)
   expect(proofs.every((proof) => proof.immutableFileSource)).toBe(true)
+  expect(proofs.every((proof) => proof.handoffMediaType === 'application/octet-stream')).toBe(true)
   expect(proofs.every((proof) => proof.freshObjectUrl)).toBe(true)
   expect(proofs[0]!.packageDigest).toBe(proofs[1]!.packageDigest)
   expect(proofs[0]!.receiveIntentDigest).toBe(proofs[1]!.receiveIntentDigest)
   for (const proof of proofs) {
     expect(proof.started.result).toEqual({
       kind: 'download-started',
-      suggestedName: 'packaged-retry.bin',
+      suggestedName: 'Makefile',
     })
     expect(proof.started.urlLeaseEndsAt - proof.started.urlLeaseStartedAt).toBe(60_000)
   }

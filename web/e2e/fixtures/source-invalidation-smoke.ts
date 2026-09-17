@@ -1,8 +1,8 @@
 import { utimes, writeFile } from 'node:fs/promises'
-import { expect, type Page } from '@playwright/test'
+import { expect, type Download, type Page } from '@playwright/test'
 import { capabilityUrl, type DirectProductStack } from './direct-product-stack'
 
-const SOURCE_NAME = 'changed-source.bin'
+const SOURCE_NAME = 'Makefile'
 const ORIGINAL_BYTES = Uint8Array.of(1, 2, 3, 4, 5)
 const REPLACEMENT_BYTES = Uint8Array.of(5, 4, 3, 2, 1)
 const SOURCE_TIMESTAMP_ADVANCE_MILLISECONDS = 2_000
@@ -44,19 +44,36 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
   await expect(downloadFile).toBeEnabled()
   const downloadStarted = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
   await downloadFile.click()
-  const download = await downloadStarted
-  expect(download.suggestedFilename()).toBe(SOURCE_NAME)
-  const stream = await download.createReadStream()
-  if (stream === null) throw new Error('Replacement download stream is unavailable')
-  const chunks: Buffer[] = []
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-  expect([...Buffer.concat(chunks)]).toEqual([...REPLACEMENT_BYTES])
+  await assertReplacementDownload(await downloadStarted)
   await expect(task).not.toHaveAttribute('data-operation-id', invalidatedOperation!)
+  const completedOperation = await task.getAttribute('data-operation-id')
+  if (completedOperation === null) throw new Error('The replacement task has no operation identity')
 
   await page.reload()
   await page.getByRole('button', { name: /^(?:Downloads|下载记录)/u }).click()
   const retained = page.getByRole('dialog').locator(`[data-operation-id="${invalidatedOperation}"]`)
   await expect(retained.getByText('Source file changed', { exact: true })).toBeVisible()
   await expect(retained.getByRole('button', { name: /Continue/u })).toHaveCount(0)
+  const completed = page.getByRole('dialog').locator(`[data-operation-id="${completedOperation}"]`)
+  const downloadAgain = completed.getByRole('button', { name: 'Download again', exact: true })
+  await expect(downloadAgain).toBeEnabled()
+  // Reuse this existing reload to protect original-file names at retained handoff.
+  await page.context().setOffline(true)
+  try {
+    const repeated = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
+    await downloadAgain.click()
+    await assertReplacementDownload(await repeated)
+  } finally {
+    await page.context().setOffline(false)
+  }
   return trace
+}
+
+async function assertReplacementDownload(download: Download): Promise<void> {
+  expect(download.suggestedFilename()).toBe(SOURCE_NAME)
+  const stream = await download.createReadStream()
+  if (stream === null) throw new Error('Replacement download stream is unavailable')
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+  expect([...Buffer.concat(chunks)]).toEqual([...REPLACEMENT_BYTES])
 }
