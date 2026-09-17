@@ -1,4 +1,5 @@
 import type { NativeObjectFactory, NativeObjectIO, NativeReply, NativeRequest } from './contracts'
+import { NativeOutputInitializationError } from './errors'
 
 export const NATIVE_QUEUE_MAX_REQUESTS = 64
 export const NATIVE_QUEUE_MAX_BYTES = 8 * 1024 * 1024
@@ -125,13 +126,20 @@ export class NativeObjectWorkerClient implements NativeObjectIO {
     for (const waiting of this.#waiting.splice(0)) waiting.reject(error)
     this.#activeRequests = 0
     this.#pendingBytes = 0
+    this.#closed = true
     this.#worker.terminate()
   }
 }
 
 export const openNativeObject: NativeObjectFactory = async handle => {
-  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
-  const client = new NativeObjectWorkerClient(worker)
-  await client.open(handle)
-  return client
+  let client: NativeObjectWorkerClient | undefined
+  try {
+    const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+    client = new NativeObjectWorkerClient(worker)
+    await client.open(handle)
+    return client
+  } catch (error) {
+    await client?.close()
+    throw new NativeOutputInitializationError(error)
+  }
 }

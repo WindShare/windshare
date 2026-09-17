@@ -16,6 +16,7 @@ import {
   sourceFault,
 } from '../../src/transfer/fault'
 import { OriginCapacityDataError } from '../../src/output/origin-private/capacity/errors'
+import { NativeOutputInitializationError } from '../../src/output/origin-private/native-object/errors'
 import { V2TransferAdmissionFailureError } from '../../src/transfer/job/admission-error'
 import {
   V2FileOutputError,
@@ -23,6 +24,18 @@ import {
 } from '../../src/transfer/job/failures'
 
 describe('transfer failure classification', () => {
+  it('classifies worker startup failure as retryable output initialization, retaining its cause', () => {
+    const normalized = normalizeV2FileTransferFailure(
+      new NativeOutputInitializationError(new Error('Worker script could not be loaded')),
+    )
+    expect(normalized.kind).toBe('fault')
+    if (normalized.kind !== 'fault') return
+    expect(normalized.fault).toEqual(outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO))
+    expect(normalized.fact).toMatchObject({ stage: 'output_initialization', recoveryDisposition: 'retryable' })
+    expect(JSON.stringify(normalized.fact)).toContain('Worker script could not be loaded')
+    expect(normalizeV2FileTransferFailure(normalized.diagnostic)).toMatchObject({ fact: normalized.fact })
+  })
+
   it('produces product authority, one immutable fact/ref, and materialization semantics together', () => {
     const recorded: Parameters<
       NonNullable<IncidentScopeObserver['factRecorded']>

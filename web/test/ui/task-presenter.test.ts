@@ -23,6 +23,23 @@ function retained(actions: V2RetainedReceiveOperation['actions'] = ['continue', 
 }
 
 describe('shared task presenter', () => {
+  it('keeps failed startup retryable without claiming that source content is missing', () => {
+    const lifecycle: ReceiveLifecycleState = { operationId: 'startup', receiveIntentDigest: 'intent',
+      generation: 3n, kind: 'resumable-start', reason: 'failed' }
+    const active = activeTaskFacts({ output: { ...EMPTY_V2_OUTPUT_PRESENTATION, lifecycle },
+      progress: { ...EMPTY_V2_PROGRESS, discovery: 'failed' } })
+    expect(active?.completeness).toBe('incomplete')
+    expect(presentTask(active!).stage).toBe('needs-action')
+    const retainedOperation: V2RetainedReceiveOperation = { ...retained(['continue', 'discard']),
+      operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
+      lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'resume-start' }
+    const task = presentTask(retainedTaskFacts(retainedOperation, 'matching-share'))
+    expect(task).toMatchObject({ stage: 'needs-action', completeness: 'incomplete', publication: 'unpublished' })
+    expect(task.primaryAction).toMatchObject({ id: 'continue', destructive: false, disabledReason: null })
+    expect(task.destructiveActions.map(action => action.id)).toContain('discard')
+    expect(presentTask(retainedTaskFacts(retainedOperation, 'original-link-required')).primaryAction?.disabledReason).not.toBeNull()
+  })
+
   it('keeps open or failed discovery indeterminate and reports completed files separately', () => {
     const open = presentTask(TASK_FIXTURES['open-discovery']!)
     expect(open.progress).toMatchObject({ mode: 'indeterminate', percentage: null })

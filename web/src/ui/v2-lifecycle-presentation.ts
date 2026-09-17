@@ -300,6 +300,9 @@ function lifecycleCopy(
   switch (state.kind) {
     case 'intent-frozen':
       return copy('Ready to receive', 'The selected result and its save semantics are fixed.', 'neutral')
+    case 'resumable-start':
+      return copy(state.reason === 'paused' ? 'Paused before downloading' : 'Download could not start',
+        'The selected download is retained. Try again when you are ready.', 'warning')
     case 'preparing':
       return copy(
         'Checking selected content',
@@ -469,6 +472,9 @@ function lifecycleActions(
   planKind: MaterializationPlan['kind'],
 ): readonly LifecycleActionPresentation[] {
   switch (state.kind) {
+    case 'resumable-start':
+      return Object.freeze([action('continue', state.reason === 'paused' ? 'Continue' : 'Retry download'),
+        action('discard', 'Discard download', true)])
     case 'resumable-receive':
       if (state.payloadKind === 'direct-zip') {
         return Object.freeze([
@@ -587,7 +593,7 @@ function lifecycleOwnsWorkspaceData(state: ReceiveLifecycleState): boolean {
 }
 
 function lifecycleCategory(state: ReceiveLifecycleState): ReceiveLifecyclePresentation['category'] {
-  if (state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
+  if (state.kind === 'resumable-start' || state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
       state.kind === 'waiting-to-save' || state.kind === 'authorization-required' ||
       state.kind === 'target-verification-required' || state.kind === 'destination-space-required' ||
       (state.kind === 'download-started' && state.attemptKind === 'workspace')) return 'retained'

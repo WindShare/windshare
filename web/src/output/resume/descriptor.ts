@@ -3,6 +3,7 @@ import type { ReceiveLifecycleState } from '../workspace/state'
 export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 2 as const
 
 export type ReceiveOperationContinuation =
+  | 'resume-start'
   | 'resume-receive'
   | 'resume-direct-zip'
   | 'reauthorize-direct-zip'
@@ -69,6 +70,7 @@ function continuationFor(
   lifecycle: ReceiveLifecycleState,
 ): ReceiveOperationContinuation | undefined {
   switch (lifecycle.kind) {
+    case 'resumable-start': return 'resume-start'
     case 'source-invalidated': return 'cleanup-only'
     case 'receiving': return 'resume-receive'
     case 'resumable-receive': return lifecycle.payloadKind === 'direct-zip'

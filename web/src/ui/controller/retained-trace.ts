@@ -14,6 +14,7 @@ const ACTION_TRANSITIONS = Object.freeze({
 // Keep this exhaustive: a new recovery route must remain exportable through the
 // closed trace schema instead of disappearing when capture validates its payload.
 const CONTINUATIONS = Object.freeze({
+  'resume-start': 'resume_start',
   'resume-receive': 'resume_receive',
   'resume-direct-zip': 'resume_receive',
   'reauthorize-direct-zip': 'resume_receive',

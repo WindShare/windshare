@@ -96,6 +96,7 @@ export const FAILURE_STAGES = Object.freeze([
   'peer_recovery',
   'content_read',
   'output_reservation',
+  'output_initialization',
   'output_write',
   'output_commit',
   'checkpoint',
@@ -130,6 +131,7 @@ export type NativeFailureClass = (typeof NATIVE_FAILURE_CLASSES)[number]
 
 type ReceiveLifecycleKind = ReceiveLifecycleState['kind']
 type LifecycleFailureReason =
+  | Extract<ReceiveLifecycleState, { kind: 'resumable-start' }>['reason']
   | PartialDirectoryReason
   | RestartRequiredReason
   | NeedsAttentionReason
@@ -174,6 +176,7 @@ export type FailureFact<Kind extends FailureFactKind = FailureFactKind> =
 
 const lifecycleKinds = [
   'intent-frozen',
+  'resumable-start',
   'preparing',
   'receiving',
   'resumable-receive',
@@ -199,6 +202,7 @@ const lifecycleKinds = [
 ] as const satisfies readonly ReceiveLifecycleKind[]
 
 const lifecycleReasonsByKind = {
+  'resumable-start': ['paused', 'failed'],
   'partial-directory': ['failures', 'stopped'],
   'restart-required': [
     'direct-atomic-rolled-back',
@@ -504,6 +508,9 @@ function isLifecycleReason(
   kind: ReceiveLifecycleKind,
   reason: unknown,
 ): reason is LifecycleFailureReason | undefined {
+  if (kind === 'resumable-start') {
+    return isMember(lifecycleReasonsByKind[kind], reason)
+  }
   if (kind === 'partial-directory') {
     return isMember(lifecycleReasonsByKind[kind], reason)
   }

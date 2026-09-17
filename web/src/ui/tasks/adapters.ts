@@ -99,6 +99,7 @@ export function retainedTaskFacts(
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: V2ReceiverProgress | null): TaskCompleteness {
+  if (state.kind === 'resumable-start') return 'incomplete'
   if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
   if (state.kind === 'resumable-receive') return 'incomplete'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||

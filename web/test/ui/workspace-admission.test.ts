@@ -15,15 +15,15 @@ describe('workspace execution admission settlement', () => {
       current = states.restored
       return states.restored
     })
-    const discard = vi.fn(async () => Object.freeze({
-      lifecycle: discarded(states.receiving),
+    const retainStart = vi.fn(async () => Object.freeze({
+      lifecycle: nextReceiveLifecycleState(states.receiving, { kind: 'resumable-start', reason: 'failed' }),
       workspaceUsage: null,
     }))
     const recordUnknown = vi.fn(async () => needsAttention(states.receiving))
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: states.receiving.operationId,
       currentLifecycle: async () => current,
-      discard,
+      retainStart,
       recordUnknown,
       workspaceUsage,
     }, { kind: 'continuation', restore: () => restoreContinuation() })
@@ -33,15 +33,15 @@ describe('workspace execution admission settlement', () => {
       workspaceUsage: workspaceUsage(states.restored),
     })
     expect(restoreContinuation).toHaveBeenCalledOnce()
-    expect(discard).not.toHaveBeenCalled()
+    expect(retainStart).not.toHaveBeenCalled()
     expect(recordUnknown).not.toHaveBeenCalled()
   })
 
   it('records NeedsAttention instead of rolling back an admitted execution', async () => {
     const states = continuationStates()
     const restoreContinuation = vi.fn(async () => states.restored)
-    const discard = vi.fn(async () => Object.freeze({
-      lifecycle: discarded(states.receiving),
+    const retainStart = vi.fn(async () => Object.freeze({
+      lifecycle: nextReceiveLifecycleState(states.receiving, { kind: 'resumable-start', reason: 'failed' }),
       workspaceUsage: null,
     }))
     const attention = needsAttention(states.receiving)
@@ -49,7 +49,7 @@ describe('workspace execution admission settlement', () => {
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: states.receiving.operationId,
       currentLifecycle: async () => states.receiving,
-      discard,
+      retainStart,
       recordUnknown,
       workspaceUsage,
     }, { kind: 'continuation', restore: () => restoreContinuation() })
@@ -60,30 +60,35 @@ describe('workspace execution admission settlement', () => {
       workspaceUsage: workspaceUsage(attention),
     })
     expect(restoreContinuation).not.toHaveBeenCalled()
-    expect(discard).not.toHaveBeenCalled()
+    expect(retainStart).not.toHaveBeenCalled()
     expect(recordUnknown).toHaveBeenCalledOnce()
   })
 
-  it('discards a fresh operation that failed before execution admission', async () => {
+  it('retains failed startup once and admits a new attempt only on an explicit retry', async () => {
     const initial = initialReceiveLifecycleState({
       operationId: identity(1, 16),
       receiveIntentDigest: identity(2, 32),
     })
-    const terminal = discarded(initial)
-    const discard = vi.fn(async () => Object.freeze({ lifecycle: terminal, workspaceUsage: null }))
+    const retained = nextReceiveLifecycleState(initial, { kind: 'resumable-start', reason: 'failed' })
+    const retainStart = vi.fn(async () => Object.freeze({ lifecycle: retained, workspaceUsage: null }))
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: initial.operationId,
       currentLifecycle: async () => initial,
-      discard,
+      retainStart,
       recordUnknown: async () => needsAttention(initial),
       workspaceUsage,
     }, { kind: 'fresh' })
 
-    await expect(settlement.settle()).resolves.toEqual({
-      lifecycle: terminal,
+    const failure = new Error('output initialization failed')
+    await expect(settlement.settle(failure)).resolves.toEqual({
+      lifecycle: retained,
       workspaceUsage: null,
     })
-    expect(discard).toHaveBeenCalledOnce()
+    await settlement.settle(failure)
+    expect(retainStart).toHaveBeenCalledExactlyOnceWith(failure)
+    settlement.beginStart()
+    await settlement.settle(failure)
+    expect(retainStart).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -125,15 +130,6 @@ function continuationStates() {
     throw new Error('test restoration changed payload kind')
   }
   return Object.freeze({ fallback, receiving, restored })
-}
-
-function discarded(state: ReceiveLifecycleState) {
-  const terminal = nextReceiveLifecycleState(state, {
-    kind: 'discarded',
-    cleanupReceiptDigest: identity(7, 32),
-  })
-  if (terminal.kind !== 'discarded') throw new Error('test terminal changed kind')
-  return terminal
 }
 
 function needsAttention(state: ReceiveLifecycleState) {

@@ -113,6 +113,17 @@ export class WorkspaceStageRuntime {
   #emitReviewedTrace(event: WorkspaceStageTraceEvent): void {
     const trace = this.#diagnostics?.trace
     switch (event.name) {
+      case 'receive.start.interrupted':
+      case 'receive.start.retried': {
+        let transition: 'resumed' | 'paused' | 'admission_failed' = 'resumed'
+        if (event.name === 'receive.start.interrupted') {
+          transition = event.reason === 'paused' ? 'paused' : 'admission_failed'
+        }
+        emitOutputTrace(trace, () => outputTraceEvent('continuation', {
+          backend: 'origin_private', operation_id: event.operation_id, transition,
+        }))
+        return
+      }
       case 'receive.publication.started':
         emitOutputTrace(trace, () => outputTraceEvent('publication', {
           backend: 'origin_private',

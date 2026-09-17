@@ -25,6 +25,7 @@ import {
 import { WorkspacePublicationStages } from './stages/publication'
 import { WorkspaceProgressiveStages } from './stages/progressive'
 import { WorkspaceStageRuntime } from './stages/runtime'
+import { WorkspaceStartupStages } from './stages/startup'
 
 export * from './stages/contracts'
 
@@ -108,6 +109,7 @@ export class WorkspaceOperationStages {
   readonly #continuation: WorkspaceContinuationStages
   readonly #publication: WorkspacePublicationStages
   readonly progressive: WorkspaceProgressiveStages
+  readonly startup: WorkspaceStartupStages
 
   private constructor(runtime: WorkspaceStageRuntime) {
     this.#cleanup = new WorkspaceCleanupStages(runtime)
@@ -116,6 +118,7 @@ export class WorkspaceOperationStages {
     this.#continuation = new WorkspaceContinuationStages(runtime)
     this.#publication = new WorkspacePublicationStages(runtime)
     this.progressive = new WorkspaceProgressiveStages(runtime)
+    this.startup = new WorkspaceStartupStages(runtime)
   }
 
   static async open(input: {

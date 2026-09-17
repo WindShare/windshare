@@ -26,6 +26,7 @@ import {
   SourceRevisionChangedError,
 } from '../../output/persistent-tree/errors'
 import { OriginCapacityDataError } from '../../output/origin-private/capacity/errors'
+import { NativeOutputInitializationError } from '../../output/origin-private/native-object/errors'
 import { OutputTransactionContractError } from '../output-file-transaction'
 import {
   OutputDirectoryMutationError,
@@ -241,7 +242,7 @@ export function normalizeV2FileTransferFailure(
   }
   // Preserve bounded exception evidence when there is no protocol/domain fact.
   // Product recovery still follows the reviewed fault, never exception text.
-  if (classified === undefined || error instanceof OriginCapacityDataError) {
+  if (classified === undefined || error instanceof OriginCapacityDataError || error instanceof NativeOutputInitializationError) {
     return normalizedV2FileTransferClassification(Object.freeze({
       fault,
       fact: unclassifiedFailureFact({ stage, recoveryDisposition, error }),
@@ -481,6 +482,7 @@ function persistentFileTransferFault(input: unknown): Fault | undefined {
 }
 
 function outputTransferFault(error: unknown): Fault | undefined {
+  if (error instanceof NativeOutputInitializationError) return outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO)
   if (error instanceof OutputBudgetExceededError) {
     return outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget)
   }
@@ -510,6 +512,7 @@ function outputTransferFault(error: unknown): Fault | undefined {
 }
 
 function failureStage(error: unknown): FailureStage {
+  if (error instanceof NativeOutputInitializationError) return 'output_initialization'
   if (error instanceof OriginCapacityDataError) return 'output_reservation'
   if (error instanceof V2RemoteOperationError) return 'protocol_operation'
   if (
@@ -555,6 +558,7 @@ function recoveryDispositionFor(
   error: unknown,
   fault: Fault,
 ): RecoveryDisposition {
+  if (error instanceof NativeOutputInitializationError) return 'retryable'
   if (
     error instanceof V2RemoteOperationError && error.retryable ||
     error instanceof V2RevisionLeaseExpiredError
@@ -624,7 +628,7 @@ export function materializationFailureReason(
   if (input instanceof V2ClassifiedTransferFailureError) {
     return input.classification.materializationFailureReason
   }
-  if (input instanceof OriginCapacityDataError) return 'output-write-failed'
+  if (input instanceof OriginCapacityDataError || input instanceof NativeOutputInitializationError) return 'output-write-failed'
   if (input instanceof V2FileOutputError) return input.materializationFailureReason
   if (
     isFault(input) &&

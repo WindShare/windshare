@@ -308,6 +308,9 @@ export class PersistedReceiveOperationReopenAuthority {
     if (input.purpose === 'cleanup') {
       return Object.freeze({ lifecycle: input.snapshot.lifecycle })
     }
+    if (input.descriptor.continuation === 'resume-start') {
+      return this.#resumeStartup(input)
+    }
     if (input.target.kind === 'workspace' &&
         input.snapshot.operation.receiveIntent.artifact.kind === 'original-file' &&
         input.descriptor.continuation === 'resume-local-finalization' && input.purpose === 'continue') {
@@ -345,6 +348,17 @@ export class PersistedReceiveOperationReopenAuthority {
         (input.snapshot.lifecycle.kind === 'artifact-sealed' || input.snapshot.lifecycle.kind === 'handing-off')) {
       return this.#workspaceContinuation.recoverArtifact({ ...input, target: input.target })
     }
+    return Object.freeze({ lifecycle: input.snapshot.lifecycle })
+  }
+
+  #resumeStartup(input: Readonly<{
+    target: ReopenedReceiveTarget
+    snapshot: PersistedReopenSnapshot
+    purpose: PersistedReceiveOperationReopenPurpose
+  }>): ReopenLifecycleAuthority {
+    if (input.target.kind !== 'workspace' || input.snapshot.lifecycle.kind !== 'resumable-start' ||
+        input.purpose !== 'continue') throw new TypeError('Startup continuation requires an unstarted workspace')
+    // Output admission runs only after the new runtime owns the reopened task.
     return Object.freeze({ lifecycle: input.snapshot.lifecycle })
   }
 
