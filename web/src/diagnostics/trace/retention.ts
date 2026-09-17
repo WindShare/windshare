@@ -95,6 +95,7 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
         case 'cancelled':
         case 'authenticated_failure':
         case 'late_response_discarded':
+        case 'retired_response_discarded':
         case 'send_failed':
         case 'request_send_failed':
           return 'outcome'

@@ -37,7 +37,7 @@ export type ProtocolOperationPayloadV2 =
       tracked_operations: string
     }>
   | Readonly<{
-      transition: 'response_received'
+      transition: 'response_received' | 'retired_response_discarded'
       request_kind: ProtocolMessageKindV1
       response_kind: ProtocolMessageKindV1
     }>

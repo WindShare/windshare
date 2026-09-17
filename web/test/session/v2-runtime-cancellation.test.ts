@@ -13,6 +13,22 @@ afterEach(() => vi.useRealTimers())
 const BODY = encodeV2Body([])
 
 describe('request cancellation across send backpressure', () => {
+  it('snapshots the request before asynchronous admission can yield to its caller', async () => {
+    const { runtime, channel } = runtimeFixture()
+    try {
+      const body = encodeV2Body([1])
+      const original = body.slice()
+      const pending = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, body)
+      body.fill(0)
+      channel.unblock()
+      const operation = await pending
+      const sent = await openSent(channel)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.message.operationId).toEqual(operation.id)
+      expect(sent[0]!.message.body).toEqual(original)
+    } finally { await runtime.close() }
+  })
+
   it('withdraws an unsent request and does not send a CANCEL for an unknown peer operation', async () => {
     const { runtime, channel, events } = runtimeFixture()
     try {

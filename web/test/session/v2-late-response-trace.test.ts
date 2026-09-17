@@ -18,7 +18,7 @@ function fixture() {
     protocolSessionIdentity: createV2ProtocolSessionIdentity(id(1)),
     trace: { current: event => events.push(event) },
   })
-  const operation = router.create(id(2), V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(3), [7n]))
+  const operation = router.create(V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(3), [7n]))
   const rejected = encodeV2Message(V2_MESSAGE_KIND.operationError, operation.id, encodeV2Body(
     new Map<number, unknown>([[0, 1], [1, 3], [2, 0x3008], [3, false], [4, null], [5, 'Revision operation failed']]),
   ))
@@ -32,7 +32,7 @@ describe('retired block-request diagnostics', () => {
     expect(snapshotOperationRequest(V2_MESSAGE_KIND.requestBlocks, encodeV2Body([id(3), []]))).toBeUndefined()
     expect(snapshotOperationRequest(V2_MESSAGE_KIND.releaseLease, encodeV2Body([id(3)]))).toEqual({ leaseId: '03'.repeat(16) })
     const router = new V2OperationRouter(() => undefined)
-    const operation = router.create(id(2), V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(3), [7n]))
+    const operation = router.create(V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(3), [7n]))
     expect(operation.requestTrace).toBeUndefined()
     router.terminate(new Error('test cleanup'))
   })
@@ -43,7 +43,7 @@ describe('retired block-request diagnostics', () => {
       protocolSessionIdentity: createV2ProtocolSessionIdentity(id(1)),
       trace: { current: event => { events.push(event); throw new Error('observer failed') } },
     })
-    const operation = router.create(id(2), V2_MESSAGE_KIND.releaseLease, encodeV2Body([id(3)]))
+    const operation = router.create(V2_MESSAGE_KIND.releaseLease, encodeV2Body([id(3)]))
     const complete = encodeV2Message(V2_MESSAGE_KIND.operationComplete, operation.id, encodeV2Body([0]))
     await router.route(complete, 1, 0)
     await expect(operation.next()).resolves.toEqual(complete)
@@ -60,7 +60,7 @@ describe('retired block-request diagnostics', () => {
     const { events, terminal, router, operation, rejected } = fixture()
     const cause = new ContentRaceWon()
     operation.cancel(cause, V2_OPERATION_CANCEL_REASON.laneRace)
-    const live = router.create(id(4), V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(5), [0n]))
+    const live = router.create(V2_MESSAGE_KIND.requestBlocks, encodeV2BlockRequest(id(5), [0n]))
     await router.route(rejected, 1, 0)
     await router.route(rejected, 1, 0)
     expect(events.filter(event => event.eventName === 'protocol_operation' && event.transition === 'late_response_discarded')).toHaveLength(1)

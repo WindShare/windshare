@@ -31,10 +31,10 @@ it('verifies Go signed peer errors and confines delayed terminal codes after tom
   let now = 0
   let terminal = false
   const router = new V2OperationRouter(() => { terminal = true }, () => now)
-  router.create(operationId, V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, attempt, 1n, 'v=0'])).close()
+  router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, attempt, 1n, 'v=0'])).close()
   now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
   const currentId = new Uint8Array(16).fill(70)
-  const current = router.create(currentId, V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, currentId, 2n, 'v=0']))
+  const current = router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, currentId, 2n, 'v=0']))
   const message = await authenticated(item)
   expect(decodeV2OperationErrorControl(message.body)).toMatchObject({
    code: item.code, peerAttempt: { peerPathId: path, attemptId: attempt, attemptSequence: 1n },
@@ -42,7 +42,7 @@ it('verifies Go signed peer errors and confines delayed terminal codes after tom
   await expect(router.route(message, 9, 1)).resolves.toBeUndefined()
   expect(terminal).toBe(false)
   expect(router.active()).toEqual([current])
-  await expect(router.route(encodeV2Message(V2_MESSAGE_KIND.operationError, currentId, message.body)))
+  await expect(router.route(encodeV2Message(V2_MESSAGE_KIND.operationError, current.id, message.body)))
    .rejects.toMatchObject({ scope: 'session' })
  }
 })

@@ -1,4 +1,5 @@
 import { V2OperationTombstone, type V2ProtocolTraceContext } from './v2-operation-retirement'
+import { V2IssuedOperations } from './operations/issued-operations'
 import { encodeBase64Url } from '../crypto/bytes'
 import { cancellationTraceReason, snapshotOperationRequest, type V2CancellationTraceReason } from './v2-operation-diagnostics'
 import {
@@ -26,6 +27,7 @@ import {
 import {
   V2OperationContinuationAuthority,
   V2RetiredPeerContinuations,
+  requireV2OperationResponse,
 } from './v2-operation-continuation'
 import { type V2OperationCancelReason, type V2SessionOperation, V2SessionRuntimeError } from './v2-runtime-types'
 
@@ -284,6 +286,8 @@ export class V2OperationRouter {
   readonly #now: () => number
   readonly #tombstones = new Map<string, V2OperationTombstone>()
   readonly #retiredPeers = new V2RetiredPeerContinuations()
+  readonly #issued: V2IssuedOperations
+  readonly #compactedResponseTraced = new Set<V2MessageKind>()
   readonly #admission = new V2SessionQueueAdmission()
   readonly #diagnostics: V2ProtocolTraceContext | undefined
   readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
@@ -297,19 +301,21 @@ export class V2OperationRouter {
     onTerminal: (reason: unknown) => void,
     now: () => number = () => Date.now(),
     diagnostics?: V2ProtocolTraceContext,
+    randomBytes?: (length: number) => Uint8Array,
   ) {
+    this.#issued = new V2IssuedOperations(randomBytes)
     this.#onTerminal = onTerminal
     this.#now = now
     this.#diagnostics = diagnostics
   }
 
   async admit(
-    id: Uint8Array,
     requestKind: V2MessageKind,
     canonicalRequestBody: Uint8Array,
     signal?: AbortSignal,
   ): Promise<V2OperationQueue> {
-    const ownedId = id.slice()
+    signal?.throwIfAborted()
+    const ownedId = this.#issued.issue(requestKind)
     const ownedBody = canonicalRequestBody.slice()
     let waitingFor: 'active' | 'retained' | undefined
     try {
@@ -319,9 +325,8 @@ export class V2OperationRouter {
           throw new V2SessionRuntimeError('session', 'Protocol session is terminal')
         }
         this.#pruneTombstones()
-        this.#freshOperationKey(ownedId)
         if (this.#hasOperationCapacity()) {
-          const operation = this.create(ownedId, requestKind, ownedBody)
+          const operation = this.#create(ownedId, requestKind, ownedBody)
           if (waitingFor !== undefined) this.#traceAdmission(ownedId, requestKind, 'admission_ready')
           return operation
         }
@@ -340,7 +345,11 @@ export class V2OperationRouter {
     }
   }
 
-  create(
+  create(requestKind: V2MessageKind, canonicalRequestBody: Uint8Array): V2OperationQueue {
+    return this.#create(this.#issued.issue(requestKind), requestKind, canonicalRequestBody)
+  }
+
+  #create(
     id: Uint8Array,
     requestKind: V2MessageKind,
     canonicalRequestBody: Uint8Array,
@@ -349,7 +358,7 @@ export class V2OperationRouter {
       throw new V2SessionRuntimeError('session', 'Protocol session is terminal')
     }
     this.#pruneTombstones()
-    const key = this.#freshOperationKey(id)
+    const key = encodeBase64Url(id)
     if (this.#operations.size >= V2_MAXIMUM_ACTIVE_OPERATIONS) {
       throw new V2SessionRuntimeError('session', 'Active operation budget is exhausted')
     }
@@ -476,7 +485,28 @@ export class V2OperationRouter {
     const tombstone = this.#tombstones.get(key)
     if (tombstone === undefined) {
       if (this.#retiredPeers.drops(message)) return
-      throw new V2SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
+      const requestKind = message.operationId === undefined ? undefined : this.#issued.requestKind(message.operationId)
+      if (requestKind === undefined || requestKind === V2_MESSAGE_KIND.peerOffer) {
+        throw new V2SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
+      }
+      requireV2OperationResponse(requestKind, message)
+      // Active operations were checked first. Issued IDs absent from both maps
+      // are retired or abandoned admissions, never authority for new work.
+      const diagnostics = this.#diagnostics
+      // One observation per request kind bounds a stalled fragment burst.
+      if (diagnostics?.trace?.current !== undefined && !this.#compactedResponseTraced.has(requestKind)) {
+        this.#compactedResponseTraced.add(requestKind)
+        this.#emitTrace(() => ({
+          eventName: 'protocol_operation', transition: 'retired_response_discarded',
+          requestKind: protocolMessageKindV1(requestKind), responseKind: protocolMessageKindV1(message.kind),
+          correlation: {
+            protocolSessionId: diagnostics.protocolSessionIdentity,
+            protocolOperationId: createV2ProtocolOperationIdentity(message.operationId!),
+            ...(laneId === undefined || laneEpoch === undefined ? {} : { lane: { id: laneId, epoch: laneEpoch } }),
+          },
+        }))
+      }
+      return
     }
     await tombstone.accept(message)
     tombstone.traceResponse(message, this.#diagnostics, laneId, laneEpoch)
@@ -606,14 +636,6 @@ export class V2OperationRouter {
           }
         : { transition: stage }),
     }))
-  }
-
-  #freshOperationKey(id: Uint8Array): string {
-    const key = encodeBase64Url(id)
-    if (this.#operations.has(key) || this.#tombstones.has(key)) {
-      throw new V2SessionRuntimeError('operation', 'Operation ID was reused')
-    }
-    return key
   }
 
   #hasOperationCapacity(): boolean {

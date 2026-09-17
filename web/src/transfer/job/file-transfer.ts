@@ -446,8 +446,8 @@ async function releaseRevisionLease(
 ): Promise<NormalizedV2FileTransferFailure | undefined> {
   if (acquired === undefined) return undefined
   try {
-    // Lease ownership supplies its own bounded wait; the output mutation budget
-    // cannot promote an unconfirmed remote retirement into a file failure.
+    // Release waits for shared-read safety and hands reclamation to the session.
+    // Remote acknowledgments cannot delay already-settled output.
     await acquired.release()
     return undefined
   } catch (error) {

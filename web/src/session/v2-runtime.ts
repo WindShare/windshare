@@ -92,7 +92,6 @@ export class V2ReceiverSessionRuntime {
   readonly #operationLanes = new Map<V2OperationQueue, number>()
   readonly #operationSends = new Map<V2SessionOperation, V2OutboundSend>()
   readonly #laneListeners = new Set<(change: V2LaneChange) => void>()
-  readonly #randomBytes: (length: number) => Uint8Array
   readonly #connectivityCleanup: () => void | Promise<void>
   readonly #protocolTrace: V2ProtocolTraceSource | undefined
   #closed = false
@@ -117,8 +116,8 @@ export class V2ReceiverSessionRuntime {
         protocolSessionIdentity: this.protocolSessionIdentity,
         ...(options.protocolTrace === undefined ? {} : { trace: options.protocolTrace }),
       },
+      options.randomBytes,
     )
-    this.#randomBytes = options.randomBytes ?? secureRandomBytes
     this.#connectivityCleanup = options.connectivityCleanup ?? (() => undefined)
     this.#protocolTrace = options.protocolTrace
     this.#attach(options.initialChannel, reader, keys.initialLaneId, keys.initialLaneEpoch)
@@ -393,13 +392,12 @@ export class V2ReceiverSessionRuntime {
   ): Promise<V2SessionOperation> {
     this.#requireOpen()
     options.signal?.throwIfAborted()
-    if (!isReceiverRequestKind(kind)) {
-      throw new V2SessionRuntimeError('operation', 'Message kind cannot begin a receiver operation')
-    }
-    const id = nonzeroRandom(this.#randomBytes, 16)
-    const message = encodeV2Message(kind, id, canonicalBody)
-    const operation = await this.#router.admit(id, kind, canonicalBody, options.signal)
+    // Admission may wait; the wire request and continuation binding must own
+    // the same snapshot even if the caller subsequently reuses its buffer.
+    const requestBody = canonicalBody.slice()
+    const operation = await this.#router.admit(kind, requestBody, options.signal)
     try {
+      const message = encodeV2Message(kind, operation.id, requestBody)
       options.signal?.throwIfAborted()
       const lane = this.#selectLane(options.laneId)
       this.#operationLanes.set(operation, lane.id)
@@ -696,37 +694,10 @@ export class V2ReceiverSessionRuntime {
   }
 }
 
-function isReceiverRequestKind(kind: V2MessageKind): boolean {
-  return kind === V2_MESSAGE_KIND.listChildren ||
-    kind === V2_MESSAGE_KIND.openRevisions ||
-    kind === V2_MESSAGE_KIND.renewLease ||
-    kind === V2_MESSAGE_KIND.releaseLease ||
-    kind === V2_MESSAGE_KIND.requestBlocks ||
-    kind === V2_MESSAGE_KIND.laneAttach ||
-    kind === V2_MESSAGE_KIND.peerOffer
-}
-
 function isReceiverFollowupAllowed(request: V2MessageKind, followup: V2MessageKind): boolean {
   return request === V2_MESSAGE_KIND.peerOffer && followup === V2_MESSAGE_KIND.peerCandidate
 }
 
-
-function secureRandomBytes(length: number): Uint8Array<ArrayBuffer> {
-  const output = new Uint8Array(length)
-  globalThis.crypto.getRandomValues(output)
-  return output
-}
-
-function nonzeroRandom(
-  source: (length: number) => Uint8Array,
-  length: number,
-): Uint8Array<ArrayBuffer> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const value = source(length)
-    if (value.byteLength === length && value.some((item) => item !== 0)) return value.slice()
-  }
-  throw new V2SessionRuntimeError('session', 'Random identity source returned invalid bytes')
-}
 
 function abortCause(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('Operation aborted', 'AbortError')

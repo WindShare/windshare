@@ -17,6 +17,7 @@ export type V2ProtocolOperationTransition =
   | 'authenticated_failure'
   | 'cancelled'
   | 'late_response_discarded'
+  | 'retired_response_discarded'
   | 'settled'
   | 'admission_waiting'
   | 'admission_ready'
@@ -88,7 +89,7 @@ export type V2ProtocolOperationTraceEvent =
     }>
   | Readonly<{
       eventName: 'protocol_operation'
-      transition: 'response_received'
+      transition: 'response_received' | 'retired_response_discarded'
       requestKind: ProtocolMessageKindV1
       responseKind: ProtocolMessageKindV1
       correlation: FailureCorrelation

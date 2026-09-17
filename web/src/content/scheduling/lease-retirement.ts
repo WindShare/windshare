@@ -2,6 +2,9 @@ import { V2SessionRuntimeError } from '../../session/v2-runtime-types'
 import { delayWithAbort, operationDeadlineSignal } from './deadlines'
 
 export const LEASE_RETIREMENT_WAIT_MILLISECONDS = 30_000
+// Cleanup must leave operation capacity for reads even while a relay is stalled.
+export const MAXIMUM_ACTIVE_LEASE_RETIREMENTS = 16
+export const MAXIMUM_QUEUED_LEASE_RETIREMENTS = 256
 const RETRY_INITIAL_MILLISECONDS = 250
 const RETRY_MAXIMUM_MILLISECONDS = 2_000
 
@@ -13,7 +16,7 @@ export type LeaseRetirementObservation = Readonly<{
   | Readonly<{ transition: 'retrying'; failure: unknown }>
   | Readonly<{
       transition: 'abandoned'
-      reason: 'service_closed' | 'deadline' | 'remote_failure' | 'barrier_failure'
+      reason: 'service_closed' | 'deadline' | 'remote_failure' | 'barrier_failure' | 'capacity'
       failure: unknown
     }>
 )
@@ -21,6 +24,62 @@ export type LeaseRetirementObservation = Readonly<{
 export interface LeaseRetirementOwner {
   readonly signal: AbortSignal
   readonly observe?: (observation: LeaseRetirementObservation) => void
+}
+
+interface PendingLeaseRetirement {
+  readonly leaseId: string
+  readonly release: (signal: AbortSignal) => Promise<void>
+}
+
+/** The session owns remote reclamation after a consumer releases its local lease. */
+export class LeaseRetirementQueue {
+  readonly #owner: LeaseRetirementOwner
+  readonly #pending: PendingLeaseRetirement[] = []
+  readonly #active = new Set<Promise<void>>()
+
+  constructor(owner: LeaseRetirementOwner) {
+    this.#owner = owner
+    owner.signal.addEventListener('abort', () => {
+      for (const item of this.#pending.splice(0)) this.#abandon(item.leaseId, 'service_closed')
+    }, { once: true })
+  }
+
+  retire(leaseId: string, release: (signal: AbortSignal) => Promise<void>): void {
+    if (this.#owner.signal.aborted) {
+      this.#abandon(leaseId, 'service_closed')
+      return
+    }
+    if (this.#pending.length >= MAXIMUM_QUEUED_LEASE_RETIREMENTS) {
+      // Renewal has stopped before handoff. Sender TTL still reclaims a lease
+      // when cleanup capacity is exhausted; file settlement must remain local.
+      this.#abandon(leaseId, 'capacity')
+      return
+    }
+    this.#pending.push({ leaseId, release })
+    this.#pump()
+  }
+
+  #pump(): void {
+    while (!this.#owner.signal.aborted && this.#active.size < MAXIMUM_ACTIVE_LEASE_RETIREMENTS) {
+      const item = this.#pending.shift()
+      if (item === undefined) return
+      // Reserve the slot before injected I/O or observers can reenter admission.
+      const task = Promise.resolve().then(() => retireRemoteLease(item.leaseId, this.#owner, item.release)).finally(() => {
+        this.#active.delete(task)
+        this.#pump()
+      })
+      this.#active.add(task)
+    }
+  }
+
+  #abandon(leaseId: string, reason: 'service_closed' | 'capacity'): void {
+    observeLeaseRetirement(this.#owner, {
+      leaseId, attempt: 0, transition: 'abandoned', reason,
+      failure: reason === 'service_closed'
+        ? this.#owner.signal.reason
+        : new Error('Remote lease retirement queue is full'),
+    })
+  }
 }
 
 /** Remote resource reclamation cannot invalidate authenticated, committed output. */
