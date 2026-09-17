@@ -99,6 +99,12 @@ func buildCanonicalReceiveContractVectors(t *testing.T) []canonicalContractVecto
 	}
 	return []canonicalContractVectorFile{
 		{
+			Version:     1,
+			Kind:        "name-collision-v1",
+			Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.",
+			Cases:       buildNameCollisionVectorCases(t),
+		},
+		{
 			Version: 1,
 			Kind:    "artifact-choice-v1",
 			Description: "Stable ArtifactChoiceIdentityV1 tuples, including direct-resumable ZIP whose positive route " +

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -417,16 +416,12 @@ func CollisionName(operation OperationID, requestedName string, index uint32, fi
 			stem, extension = requestedName[:dot], requestedName[dot:]
 		}
 	}
-	maximumStemBytes := MaxResultComponentBytes - len([]byte(suffix)) - len([]byte(extension))
-	for len([]byte(stem)) > maximumStemBytes {
-		_, width := utf8.DecodeLastRuneInString(stem)
-		if width == 0 {
-			return "", ErrInvalidReceiveContract
-		}
-		stem = stem[:len(stem)-width]
-	}
+	maximumBaseBytes := MaxResultComponentBytes - len(suffix)
+	stem = resultNamePrefix(stem, maximumBaseBytes-len(extension))
 	if stem == "" {
-		return "", ErrInvalidReceiveContract
+		// Preserving the extension must not prevent a valid name from being
+		// downloaded again. If no complete stem scalar fits, shorten the full name.
+		stem, extension = resultNamePrefix(requestedName, maximumBaseBytes), ""
 	}
 	result := stem + suffix + extension
 	if canonicalComponent(result) != nil {

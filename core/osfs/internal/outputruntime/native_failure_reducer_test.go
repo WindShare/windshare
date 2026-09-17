@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/transfer"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -83,6 +84,36 @@ func TestReservationFailureReducersReleaseOnlyRetainedAdmissionAuthority(t *test
 			}
 			if authority.admission != nil || authority.stage != authorityStageBound {
 				t.Fatalf("%s failure retained admission", name)
+			}
+		})
+	}
+}
+
+func TestPreparedReservationFailureSeparatesContractRejectionFromOwnership(t *testing.T) {
+	invalid := errors.Join(destinationauthority.ErrInvalidReservation, receivecontract.ErrInvalidReceiveContract)
+	for _, test := range []struct {
+		name    string
+		cause   error
+		durable *checkpointstore.ActiveAdmission
+		code    transferfault.OutputCode
+	}{
+		{"invalid contract", invalid, nil, transferfault.OutputContract},
+		{"uncertain reservation", destinationauthority.ErrReservationIndeterminate, nil, transferfault.OutputOwnership},
+		{"invalid contract with uncertain reservation", errors.Join(invalid, destinationauthority.ErrReservationIndeterminate), nil, transferfault.OutputOwnership},
+		{"invalid contract with failed rollback", invalid, &checkpointstore.ActiveAdmission{}, transferfault.OutputOwnership},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authority := &Authority{
+				admission: &heldAdmission{durable: test.durable},
+				stage:     authorityStageLookupHeld,
+			}
+			err := authority.failPreparedAdmissionLocked(context.Background(), test.cause)
+			assertOutputRuntimeFault(t, err, test.code)
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("reservation failure lost its diagnostic cause: %v", err)
+			}
+			if authority.admission != nil || authority.stage != authorityStageBound {
+				t.Fatal("rejected reservation retained admission authority")
 			}
 		})
 	}

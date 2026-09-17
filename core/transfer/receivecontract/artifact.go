@@ -262,14 +262,7 @@ func AppendProtectedSuffix(base, suffix string) (string, error) {
 	if maximumBaseBytes <= 0 {
 		return "", ErrInvalidReceiveContract
 	}
-	truncated := base
-	for len([]byte(truncated)) > maximumBaseBytes {
-		_, width := utf8.DecodeLastRuneInString(truncated)
-		if width == 0 {
-			return "", ErrInvalidReceiveContract
-		}
-		truncated = truncated[:len(truncated)-width]
-	}
+	truncated := resultNamePrefix(base, maximumBaseBytes)
 	if truncated == "" {
 		return "", ErrInvalidReceiveContract
 	}
@@ -278,6 +271,21 @@ func AppendProtectedSuffix(base, suffix string) (string, error) {
 		return "", ErrInvalidReceiveContract
 	}
 	return result, nil
+}
+
+// Result names are already valid UTF-8; truncation must not split a scalar.
+func resultNamePrefix(value string, maximumBytes int) string {
+	if maximumBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maximumBytes {
+		return value
+	}
+	end := maximumBytes
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end]
 }
 
 func canonicalSourcePath(value string) (string, string, error) {

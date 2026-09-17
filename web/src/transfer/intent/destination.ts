@@ -50,6 +50,7 @@ import {
 import {
   completeArtifactName,
   requireResultName,
+  resultNamePrefix,
   validateArtifactSpec,
 } from './selection'
 import {
@@ -109,12 +110,15 @@ export async function collisionName(
       extension = requestedName.slice(dot)
     }
   }
-  const maximumStemBytes = MAX_RESULT_COMPONENT_BYTES -
-    TEXT_ENCODER.encode(suffix).byteLength - TEXT_ENCODER.encode(extension).byteLength
-  const scalars = Array.from(stem)
-  while (TEXT_ENCODER.encode(scalars.join('')).byteLength > maximumStemBytes) scalars.pop()
-  if (scalars.length === 0) throw new TypeError('collision suffix consumed the complete result name')
-  return requireResultName(scalars.join('') + suffix + extension)
+  const maximumBaseBytes = MAX_RESULT_COMPONENT_BYTES - TEXT_ENCODER.encode(suffix).byteLength
+  stem = resultNamePrefix(stem, maximumBaseBytes - TEXT_ENCODER.encode(extension).byteLength)
+  if (stem.length === 0) {
+    // Preserving the extension must not prevent a valid name from being
+    // downloaded again. If no complete stem scalar fits, shorten the full name.
+    stem = resultNamePrefix(requestedName, maximumBaseBytes)
+    extension = ''
+  }
+  return requireResultName(stem + suffix + extension)
 }
 
 export async function createNativeContainerRootReservation(input: {

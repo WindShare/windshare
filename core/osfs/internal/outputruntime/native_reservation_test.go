@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -231,53 +232,63 @@ func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 }
 
 func TestStagedAuthorityReservedSuffixIsFrozenAcrossReopen(t *testing.T) {
-	root := newRuntimeTestRootSpec(t)
-	if err := os.WriteFile(filepath.Join(root.path, "report.txt"), []byte("foreign"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	selection := nativeReservationTestSelection(t, 0x35)
-	artifact, err := receivecontract.NewSingleFileDirectoryTree(
-		incrementalTestIdentity16[catalog.FileID](0x36), "report.txt", "report.txt",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := newNativeReservationTestAuthority(t, root.path)
-	if _, err := first.BindDestination(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	lookup, err := first.LookupActive(context.Background(), selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err := first.CreateOperation(context.Background(), lookup, artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, _ := operation.ReceiveIntent()
-	reservation, _ := intent.MaterializationPlan().DestinationReservation()
-	if reservation.CollisionIndex() != 1 || reservation.LogicalReservedName() == "report.txt" ||
-		reservation.PhysicalName() != reservation.LogicalReservedName() {
-		t.Fatalf("collision reservation = index %d logical %q physical %q", reservation.CollisionIndex(),
-			reservation.LogicalReservedName(), reservation.PhysicalName())
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	second := newNativeReservationTestAuthority(t, root.path)
-	if _, err := second.BindDestination(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := second.LookupActive(context.Background(), selection)
-	if err != nil || reopened.Kind() != ActiveLookupReopened {
-		t.Fatalf("suffix reopen = (%d, %v)", reopened.Kind(), err)
-	}
-	reopenedIntent, ok := reopened.Operation().ReceiveIntent()
-	if !ok || !reopenedIntent.EqualCanonical(intent) {
-		t.Fatal("reopen replanned the reserved suffix")
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct{ name, requestedName string }{
+		{"ordinary name", "report.txt"},
+		{"maximum-length extension", "x." + strings.Repeat("y", 253)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := newRuntimeTestRootSpec(t)
+			if err := os.WriteFile(filepath.Join(root.path, test.requestedName), []byte("foreign"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selection := nativeReservationTestSelection(t, 0x35)
+			artifact, err := receivecontract.NewSingleFileDirectoryTree(
+				incrementalTestIdentity16[catalog.FileID](0x36), test.requestedName, test.requestedName,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := newNativeReservationTestAuthority(t, root.path)
+			if _, err := first.BindDestination(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			lookup, err := first.LookupActive(context.Background(), selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation, err := first.CreateOperation(context.Background(), lookup, artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent, _ := operation.ReceiveIntent()
+			reservation, _ := intent.MaterializationPlan().DestinationReservation()
+			if reservation.CollisionIndex() != 1 || reservation.LogicalReservedName() == test.requestedName ||
+				reservation.PhysicalName() != reservation.LogicalReservedName() {
+				t.Fatalf("collision reservation = index %d logical %q physical %q", reservation.CollisionIndex(),
+					reservation.LogicalReservedName(), reservation.PhysicalName())
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			second := newNativeReservationTestAuthority(t, root.path)
+			if _, err := second.BindDestination(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := second.LookupActive(context.Background(), selection)
+			if err != nil || reopened.Kind() != ActiveLookupReopened {
+				t.Fatalf("suffix reopen = (%d, %v)", reopened.Kind(), err)
+			}
+			reopenedIntent, ok := reopened.Operation().ReceiveIntent()
+			if !ok || !reopenedIntent.EqualCanonical(intent) {
+				t.Fatal("reopen replanned the reserved suffix")
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if original, err := os.ReadFile(filepath.Join(root.path, test.requestedName)); err != nil || string(original) != "foreign" {
+				t.Fatalf("original file was replaced: %q, %v", original, err)
+			}
+		})
 	}
 }
 

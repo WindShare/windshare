@@ -24,6 +24,9 @@ Cross-runtime diagnostic contracts:
 
 Receiver-local canonical contracts:
 
+- `name-collision-v1.json`: deterministic collision suffixes, extension preservation,
+  and UTF-8 truncation for names at the component limit.
+
 - `artifact-choice-v1.json`: stable semantic choice identities and IDs. Direct
   resumable ZIP is positive only for an exact reviewed runtime and policy-evidence tuple.
 - `receive-intent-v3.json`: SelectionSpec, ArtifactSpec, binding, V3 plan, and

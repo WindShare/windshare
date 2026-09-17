@@ -409,23 +409,29 @@ describe('File System Access DirectTree lifecycle', () => {
     await reopened.close()
   })
 
-  it('keeps a nonzero collision reservation out of the transfer artifact path', async () => {
+  it.each([
+    { label: 'ordinary name', name: 'report.bin' },
+    { label: 'maximum-length extension', name: 'x.' + 'y'.repeat(253) },
+  ])('writes and reopens a suffixed $label without replacing the original', async ({ name }) => {
     const parent = new MemoryDirectory('downloads')
-    await parent.getFileHandle('report.bin', { create: true })
+    await parent.getFileHandle(name, { create: true })
+    const repository = new MemoryOperationRepository()
+    const checkpointFactory = memoryCheckpointFactory()
+    const locks = new MemoryLockManager()
     const session = await bindTask({
       parent,
-      repository: new MemoryOperationRepository(),
-      checkpointFactory: memoryCheckpointFactory(),
-      locks: new MemoryLockManager(),
-      artifact: await singleFileArtifact(),
+      repository,
+      checkpointFactory,
+      locks,
+      artifact: await singleFileArtifact(name),
       operationSeed: 34,
     })
 
     expect(session.reservation).toMatchObject({
       collisionIndex: 1,
-      requestedName: 'report.bin',
+      requestedName: name,
     })
-    expect(session.reservation.logicalReservedName).not.toBe(session.reservation.requestedName)
+    expect(session.reservation.logicalReservedName).not.toBe(name)
     expect(session.reservation.physicalName).toBe(session.reservation.logicalReservedName)
 
     const transaction = await session.beginFile({
@@ -440,9 +446,21 @@ describe('File System Access DirectTree lifecycle', () => {
     await transaction.commit()
     expect(parent.fileNames()).toEqual([
       session.reservation.physicalName,
-      session.reservation.requestedName,
+      name,
     ].sort())
+    expect(await parent.fileBytes(name)).toEqual(new Uint8Array())
+    expect(await parent.fileBytes(session.reservation.physicalName)).toEqual(Uint8Array.of(7))
     await session.close()
+
+    const reopened = await reopenFileSystemAccessOutput({
+      intent: session.intent,
+      operationRepository: repository,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
+      checkpointRepositoryFactory: checkpointFactory,
+      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
+    })
+    expect(reopened.reservation).toEqual(session.reservation)
+    await reopened.close()
   })
 
   it('reports a pre-existing file as a collision only while its lineage is absent', async () => {

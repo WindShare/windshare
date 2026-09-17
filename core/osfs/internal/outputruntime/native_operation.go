@@ -342,7 +342,14 @@ func (authority *Authority) failPreparedAdmissionLocked(ctx context.Context, cau
 	closeErr := admission.close()
 	authority.admission = nil
 	authority.stage = authorityStageBound
-	return errors.Join(runtimeOutputError(ctx, transferfault.OutputOwnership, "reserve top-level output", cause), stateErr, closeErr)
+	code := transferfault.OutputOwnership
+	// A rejected contract does not imply lost ownership when reservation and
+	// cleanup both have known outcomes. Uncertain mutations still need attention.
+	if errors.Is(cause, destinationauthority.ErrInvalidReservation) &&
+		!errors.Is(cause, destinationauthority.ErrReservationIndeterminate) && stateErr == nil && closeErr == nil {
+		code = transferfault.OutputContract
+	}
+	return errors.Join(runtimeOutputError(ctx, code, "reserve top-level output", cause), stateErr, closeErr)
 }
 
 func (authority *Authority) failCommittedAdmissionLocked(
