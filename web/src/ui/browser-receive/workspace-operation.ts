@@ -140,7 +140,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     this.#admissionSettlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: this.intent.operationId,
       currentLifecycle: () => readLifecycle(this.#repository, this.intent.operationId),
-      discard: () => this.#discard(),
+      retainStart: reason => this.#retainStart(reason),
       recordUnknown: () => this.recordSettlementUnknown(this.intent),
       workspaceUsage: state => this.resolveWorkspaceUsage(state),
     }, input.admission)
@@ -235,6 +235,28 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return owner
   }
 
+  static async reopenStart(input: {
+    windowPort: BrowserReceiveWindow
+    operation: Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-start' }>['operation']
+    trace?: WorkspaceStageTraceListener
+    diagnostics?: OutputDiagnosticsPorts
+  }): Promise<WorkspaceReceiveOperation> {
+    const { operation } = input
+    const owner = new WorkspaceReceiveOperation({
+      windowPort: input.windowPort, intent: operation.intent, lifecycle: operation.lifecycle,
+      repository: operation.repository, namespace: operation.namespace, lease: operation.lease,
+      stages: operation.stages, transferJobId: createTransferJobID(), admission: { kind: 'fresh' },
+      ...(input.trace === undefined ? {} : { trace: input.trace }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+      closeAuthority: async () => {
+        // The reopened authority owns the lease; this new attempt acquires its own capacity claim.
+        try { await owner.#budgetClaim?.release() } finally { await operation.close() }
+      },
+    })
+    await owner.#continueStart()
+    return owner
+  }
+
   get plans(): V2PlanExecutionAuthority {
     return this.#plans
   }
@@ -259,6 +281,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
+    if (action === 'continue' && lifecycle.kind === 'resumable-start') return this.#continueStart()
     if (action === 'continue' && lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'opfs-zip') {
       return this.#continueProgressive(lifecycle)
     }
@@ -580,13 +603,24 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     })
   }
 
-  #discard(): Promise<V2LifecycleMutation> {
-    return this.#packaging.startLifecycleAction(
-      'discard',
-      this.lifecycle,
-      this.#backend,
-      this.#continuationPort(),
-    )
+  async #retainStart(reason?: unknown): Promise<V2LifecycleMutation> {
+    await this.#backend?.close()
+    await this.#budgetClaim?.release()
+    this.#backend = undefined
+    this.#budgetClaim = undefined
+    this.#admitted = undefined
+    const lifecycle = await this.#stages.startup.retain(reason instanceof TransferPauseRequestedError ? 'paused' : 'failed')
+    return Object.freeze({ lifecycle, workspaceUsage: this.resolveWorkspaceUsage(lifecycle) })
+  }
+
+  async #continueStart(): Promise<V2LifecycleMutation> {
+    const plans = await workspacePlanAuthority(this.intent, this)
+    const lifecycle = await this.#stages.startup.retry()
+    this.#admissionSettlement.beginStart()
+    this.#plans = plans
+    this.#transferJobId = createTransferJobID()
+    return Object.freeze({ lifecycle, activeControls: this.activeControls,
+      workspaceUsage: this.resolveWorkspaceUsage(lifecycle), resumeTransfer: true })
   }
 
   #budgetAuthority(): Promise<OriginPrivateWorkspaceBudgetAuthority> {

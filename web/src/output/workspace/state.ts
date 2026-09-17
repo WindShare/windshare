@@ -79,6 +79,7 @@ export const RECEIVE_STATE_AUTHORIZATION_REQUIRED = 21 as const
 export const RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED = 22 as const
 export const RECEIVE_STATE_DESTINATION_SPACE_REQUIRED = 23 as const
 export const RECEIVE_STATE_SOURCE_INVALIDATED = 24 as const
+export const RECEIVE_STATE_RESUMABLE_START = 25 as const
 
 const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'intent-frozen': RECEIVE_STATE_INTENT_FROZEN,
@@ -104,6 +105,7 @@ const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'target-verification-required': RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
   'destination-space-required': RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
   'source-invalidated': RECEIVE_STATE_SOURCE_INVALIDATED,
+  'resumable-start': RECEIVE_STATE_RESUMABLE_START,
 } satisfies Readonly<Record<ReceiveLifecycleState['kind'], number>>)
 
 export type ReceiveStateByte = (typeof RECEIVE_STATE_BYTES_BY_KIND)[ReceiveLifecycleState['kind']]
@@ -121,6 +123,8 @@ interface LifecycleStateBase {
 /** Retained payload is retired by explicit deletion or verified publication; browser handoff proves neither. */
 export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & { kind: 'intent-frozen' }>
+  /** No execution owns payload yet; retry repeats admission without inventing a checkpoint. */
+  | Readonly<LifecycleStateBase & { kind: 'resumable-start'; reason: 'paused' | 'failed' }>
   | Readonly<LifecycleStateBase & { kind: 'preparing'; preparationId: string }>
   | Readonly<LifecycleStateBase & { kind: 'receiving'; activeLeaseId: string }>
   /** The source cannot satisfy this intent; retained bytes authorize cleanup, never continuation. */

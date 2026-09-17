@@ -16,6 +16,7 @@ export type ControllerContextPhase =
 
 export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
   'intent-frozen',
+  'resumable-start',
   'preparing',
   'receiving',
   'resumable-receive',
@@ -123,6 +124,7 @@ export interface DiagnosticContextV1 {
       | 'preparing'
       | 'receiving'
       | 'resumable_receive'
+      | 'resumable_start'
       | 'source_invalidated'
       | 'finalizing_tree'
       | 'committing_atomic'

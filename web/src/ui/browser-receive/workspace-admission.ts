@@ -18,7 +18,7 @@ type ExecutionAdmission =
 interface WorkspaceExecutionAdmissionSettlementPort {
   readonly operationId: string
   readonly currentLifecycle: () => Promise<ReceiveLifecycleState>
-  readonly discard: () => Promise<V2LifecycleMutation>
+  readonly retainStart: (reason?: unknown) => Promise<V2LifecycleMutation>
   readonly recordUnknown: () => Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>>
   readonly workspaceUsage: (state: ReceiveLifecycleState) => WorkspaceUsage | null
 }
@@ -35,6 +35,11 @@ export class WorkspaceExecutionAdmissionSettlement {
 
   beginContinuation(restore: () => Promise<ReceiveLifecycleState>): void {
     this.#admission = { kind: 'pending', origin: { kind: 'continuation', restore } }
+    this.#settlement = undefined
+  }
+
+  beginStart(): void {
+    this.#admission = { kind: 'pending', origin: { kind: 'fresh' } }
     this.#settlement = undefined
   }
 
@@ -66,8 +71,7 @@ export class WorkspaceExecutionAdmissionSettlement {
         }
         return this.#mutation(lifecycle)
       }
-      if (current.kind === 'intent-frozen' || current.kind === 'preparing' ||
-          current.kind === 'receiving') return this.#port.discard()
+      if (current.kind === 'intent-frozen' || current.kind === 'receiving') return this.#port.retainStart(reason)
     }
     return this.#mutation(await this.#port.recordUnknown())
   }
@@ -87,7 +91,7 @@ export class WorkspaceExecutionAdmissionSettlement {
 }
 
 function isStable(state: ReceiveLifecycleState): boolean {
-  return state.kind === 'resumable-receive' || state.kind === 'materialization-sealed' ||
+  return state.kind === 'resumable-start' || state.kind === 'resumable-receive' || state.kind === 'materialization-sealed' ||
     state.kind === 'resumable-package' || state.kind === 'artifact-sealed' ||
     state.kind === 'waiting-to-save' ||
     (state.kind === 'download-started' && state.attemptKind === 'workspace')

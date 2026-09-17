@@ -66,6 +66,7 @@ function savedStage(facts: TaskFacts): StageCopy {
 
 function retainedStage(facts: TaskFacts, continuation: import('../../output/resume/descriptor').ReceiveOperationContinuation): StageCopy {
   switch (continuation) {
+    case 'resume-start': return startupStage(facts)
     case 'cleanup-only': return executionStage(facts)
     case 'resume-receive':
     case 'resume-direct-zip': return pausedStage(facts)
@@ -118,6 +119,7 @@ function executionStage(facts: TaskFacts): StageCopy {
     case 'intent-frozen':
     case 'preparing': return stage('preparing', 'Preparing download', 'Preparing the requested result and its authorized destination.', state.kind)
     case 'receiving': return receivingStage(facts)
+    case 'resumable-start': return startupStage(facts)
     case 'resumable-receive':
     case 'resumable-package': return pausedStage(facts)
     case 'authorization-required': return stage('needs-action', 'Authorize the save destination',
@@ -147,6 +149,16 @@ function activeReceivingStage(facts: TaskFacts): StageCopy {
   if (facts.progress?.phase === 'finishing') return finishingStage('local-finalization')
   if (facts.blocking !== null) return blockingStage(facts.blocking)
   return receivingStage(facts)
+}
+
+function startupStage(facts: TaskFacts): StageCopy {
+  if (facts.readiness === 'original-link-required' || facts.readiness === 'different-share') {
+    return stage('needs-action', 'Open the original link to retry',
+      'The selected download is retained. Open its share link to try again.', facts.readiness)
+  }
+  const paused = facts.lifecycle.kind === 'resumable-start' && facts.lifecycle.reason === 'paused'
+  return stage(paused ? 'paused' : 'needs-action', paused ? 'Paused before downloading' : 'Download could not start',
+    'The selected download is retained. Continue when you are ready to try again.', 'resumable-start')
 }
 
 function receivingStage(facts: TaskFacts): StageCopy {

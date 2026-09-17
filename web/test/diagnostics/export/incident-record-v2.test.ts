@@ -256,6 +256,17 @@ describe('IncidentRecordV2 projection', () => {
     })
   })
 
+  it('exports failed startup as retryable initialization with its retained state', () => {
+    const facts = sealFacts([lifecycleFailureFact({
+      stage: 'output_initialization', recoveryDisposition: 'retryable',
+      kind: 'resumable-start', reason: 'failed',
+    })])
+    expect(projector().project(input(facts)).record.payload.trigger).toMatchObject({
+      stage: 'output_initialization', recovery_disposition: 'retryable',
+      payload: { lifecycle_failure: { state: 'resumable_start', reason: 'failed' } },
+    })
+  })
+
   it('prunes list and byte overflow from the deterministic end with exact counts', () => {
     const facts = sealFacts([
       fact('content_read'),

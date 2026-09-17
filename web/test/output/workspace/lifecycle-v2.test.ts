@@ -24,6 +24,17 @@ import {
 } from '../../../src/output/workspace/state-codec'
 
 describe('receive lifecycle V2 durable states', () => {
+  it.each(['paused', 'failed'] as const)('persists %s startup without a payload checkpoint and allows explicit discard', async reason => {
+    const state: ReceiveLifecycleState = { ...base(), kind: 'resumable-start', reason }
+    const restored = decodeStoredReceiveLifecycleState(await storedReceiveLifecycleState(state))
+    expect(restored).toEqual(state)
+    expect(isTerminalLifecycleState(restored)).toBe(false)
+    expect(reduceReceiveLifecycle(restored, {
+      kind: 'cleanup-verified', expectedGeneration: restored.generation,
+      leaseId: identity(16, 2), cleanupReceiptDigest: identity(32, 10),
+    }, { planKind: 'workspace-then-publish', activeLeaseId: identity(16, 2), preparationRequired: false }).state.kind).toBe('discarded')
+  })
+
   it('persists source invalidation as a terminal receive with explicit retained-data cleanup', async () => {
     const receiving: ReceiveLifecycleState = { ...base(), kind: 'receiving', activeLeaseId: identity(16, 2) }
     const context = { planKind: 'workspace-then-publish' as const, activeLeaseId: identity(16, 2), preparationRequired: false }

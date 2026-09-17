@@ -18,7 +18,9 @@ UI harnesses load their required styles. Assertions protect state, actions, acce
 layouts; incidental copy, exact palette values, and DOM nesting are not contracts. Test presentation
 mappings in unit tests and use browser tests for interactions and representative viewport/theme combinations.
 The short Chromium contracts also build and serve the native-storage capability probe under a
-same-origin Worker CSP, catching bundling failures hidden by the development server.
+same-origin Worker CSP, catching bundling failures hidden by the development server. Production ZIP
+startup contracts abort the emitted Worker request and verify repeated retries, reload recovery,
+capacity admission, and explicit discard of the original task.
 Cross-browser crypto contracts open version-3 sealed blocks from an independent signer, reject
 identity/content/signature substitutions, and exercise native capability failures. Shared Ed25519
 vectors require identical Go, native-browser and portable acceptance of exceptional encodings.

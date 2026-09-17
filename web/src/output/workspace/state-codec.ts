@@ -13,6 +13,7 @@ import {
 import {
   receiveStateByte,
   RECEIVE_STATE_SOURCE_INVALIDATED,
+  RECEIVE_STATE_RESUMABLE_START,
   snapshotRetainedFileSetProgress,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
@@ -21,6 +22,8 @@ import {
 } from './state'
 
 const RESUMABLE_RECEIVE_FILE_SET = 1
+const START_PAUSED = 1
+const START_FAILED = 2
 const RESUMABLE_RECEIVE_DIRECT_ZIP = 2
 const RESUMABLE_RECEIVE_OPFS_ZIP = 3
 const DIRECT_ZIP_PHASE_BETWEEN_MEMBERS = 1
@@ -78,6 +81,7 @@ export function decodeStoredReceiveLifecycleState(
 function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes[] {
   switch (state.kind) {
     case 'intent-frozen': return []
+    case 'resumable-start': return [canonicalFrame(canonicalU8(state.reason === 'paused' ? START_PAUSED : START_FAILED))]
     case 'preparing': return [identityFrame(state.preparationId, 16, 'preparation ID')]
     case 'receiving':
     case 'finalizing-tree':
@@ -267,7 +271,7 @@ export function decodeReceiveLifecycleState(bytes: Uint8Array): ReceiveLifecycle
   if (generation === 0n) throw new TypeError('receive lifecycle generation must not be zero')
   const base: DecodedLifecycleBase = { operationId, receiveIntentDigest, generation }
   const stateByte = reader.byte('lifecycle state')
-  const state = stateByte <= 10
+  const state = stateByte <= 10 || stateByte === RECEIVE_STATE_RESUMABLE_START
     ? decodeMaterializationState(reader, base, stateByte)
     : decodePublicationState(reader, base, stateByte)
   reader.finish()
@@ -284,6 +288,11 @@ function decodeMaterializationState(
 ): ReceiveLifecycleState {
   switch (stateByte) {
     case 1: return Object.freeze({ ...base, kind: 'intent-frozen' })
+    case RECEIVE_STATE_RESUMABLE_START: {
+      const reason = reader.byte('start interruption reason')
+      if (reason !== START_PAUSED && reason !== START_FAILED) throw new TypeError('Invalid start interruption reason')
+      return Object.freeze({ ...base, kind: 'resumable-start', reason: reason === START_PAUSED ? 'paused' : 'failed' })
+    }
     case 2: return Object.freeze({
       ...base,
       kind: 'preparing',

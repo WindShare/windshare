@@ -42,9 +42,10 @@ import type {
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import { FSAReceiveOperation } from './fsa'
+import { WorkspaceReceiveOperation } from './workspace-operation'
 import { unavailableRoute } from './shared'
 import type { BrowserDirectZipCompositionPort } from './direct-zip'
-import { bindRuntimeOutputFailures, diagnosticsFor } from './retained-diagnostics'
+import { bindRuntimeOutputFailures, diagnosticsFor, diagnosticsOption } from './retained-diagnostics'
 import {
   detachRuntimeAfterFailure,
   withFailedRetainedClose,
@@ -91,7 +92,7 @@ type DirectTreeReceiveContinuation = Extract<
 >
 type WorkspaceReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
-  { readonly kind: 'workspace-receive' }
+  { readonly kind: 'workspace-receive' | 'workspace-start' }
 >
 type DirectZipReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
@@ -440,6 +441,7 @@ async function performOrdinaryRetainedAction(
         return Object.freeze({ kind: 'completed' as const })
       })
     case 'direct-tree-receive':
+    case 'workspace-start':
     case 'workspace-receive':
     case 'direct-zip':
       return continueRetainedReceive(executor, continuation, operation.continuation, action, signal, failures)
@@ -586,6 +588,12 @@ function browserRetainedContinuationExecutor(
             outputTrace,
             binding,
           )
+        case 'workspace-start':
+          return bindRuntimeOutputFailures(await WorkspaceReceiveOperation.reopenStart({
+            windowPort, operation: continuation.operation,
+            ...(trace === undefined ? {} : { trace }),
+            ...diagnosticsOption('origin_private', outputTrace, binding.sinks),
+          }), binding)
         case 'direct-zip': {
           if (directZip === undefined) throw unavailableRoute()
           const runtime = await (failures === undefined
