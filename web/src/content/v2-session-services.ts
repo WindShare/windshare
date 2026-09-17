@@ -1,7 +1,7 @@
 import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
 import { BlockResponseQueue, V2BlockInactivityTimeoutError } from './scheduling/block-response-wait'
 import {
-  LEASE_RETIREMENT_WAIT_MILLISECONDS, observeLeaseRetirement, retireRemoteLease,
+  LEASE_RETIREMENT_WAIT_MILLISECONDS, observeLeaseRetirement, LeaseRetirementQueue,
   type LeaseRetirementObservation, type LeaseRetirementOwner,
 } from './scheduling/lease-retirement'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
@@ -149,6 +149,7 @@ export interface V2OpenedRevision {
   readonly leaseId: Uint8Array<ArrayBuffer>
   /** Relinquishes this consumer's lease. The service owns bounded remote retirement;
    * unconfirmed reclamation never changes the file result. Shared reads retain renewal. */
+  /** Wait for shared-read safety; the session owns bounded remote reclamation afterward. */
   release(): Promise<void>
 }
 
@@ -163,6 +164,7 @@ export class V2RevisionService {
   readonly #lanes: V2LaneSet
   readonly #beforeLeaseRelease: (leaseId: Uint8Array<ArrayBuffer>) => Promise<void>
   readonly #retirementOwner: LeaseRetirementOwner
+  readonly #retirements: LeaseRetirementQueue
   readonly #now: () => number
   readonly #lifetime = new AbortController()
   readonly #leases = new Map<string, RemoteLeaseState>()
@@ -186,6 +188,7 @@ export class V2RevisionService {
     this.#beforeLeaseRelease = options.beforeLeaseRelease ?? (() => Promise.resolve())
     this.#retirementOwner = { signal: this.#lifetime.signal,
       ...(options.onLeaseRetirement === undefined ? {} : { observe: options.onLeaseRetirement }) }
+    this.#retirements = new LeaseRetirementQueue(this.#retirementOwner)
     this.#now = options.now ?? (() => performance.now())
   }
 
@@ -306,10 +309,10 @@ export class V2RevisionService {
     } finally {
       deadline.close()
     }
-    await this.#release(leaseId)
+    this.#release(leaseId)
   }
 
-  async #release(leaseId: Uint8Array): Promise<void> {
+  #release(leaseId: Uint8Array): void {
     const key = leaseKey(leaseId)
     const state = this.#leases.get(key)
     if (state === undefined || state.released) return
@@ -317,7 +320,7 @@ export class V2RevisionService {
     state.lifetime.abort(new DOMException('Revision lease released', 'AbortError'))
     if (state.timer !== undefined) clearTimeout(state.timer)
     this.#leases.delete(key)
-    await retireRemoteLease(key, this.#retirementOwner, async signal => {
+    this.#retirements.retire(key, async signal => {
       const message = await this.#lanes.requests.run(
         { kind: 'release_lease', signal },
         async route => {

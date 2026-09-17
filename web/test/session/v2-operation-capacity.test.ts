@@ -36,10 +36,10 @@ describe('operation lifecycle capacity', () => {
       } },
     })
     for (let index = 0; index < V2_MAXIMUM_ACTIVE_OPERATIONS; index += 1) {
-      const operation = router.create(identity(index), V2_MESSAGE_KIND.listChildren, BODY)
+      const operation = router.create(V2_MESSAGE_KIND.listChildren, BODY)
       if (index === 0) settleActive = () => operation.cancel(new Error('settled during trace'))
     }
-    const pending = router.admit(identity(V2_MAXIMUM_ACTIVE_OPERATIONS), V2_MESSAGE_KIND.listChildren, BODY, controller.signal)
+    const pending = router.admit(V2_MESSAGE_KIND.listChildren, BODY, controller.signal)
     if (action === 'complete') {
       await expect(pending).resolves.toMatchObject({ requestKind: V2_MESSAGE_KIND.listChildren })
     } else {
@@ -56,11 +56,11 @@ describe('operation lifecycle capacity', () => {
       trace: { current: (event) => events.push(event) },
     })
     for (let index = 0; index < V2_MAXIMUM_TRACKED_OPERATIONS; index += 1) {
-      router.create(identity(index), V2_MESSAGE_KIND.listChildren, BODY).cancel(new Error('completed work'))
+      router.create(V2_MESSAGE_KIND.listChildren, BODY).cancel(new Error('completed work'))
     }
     events.length = 0
     let admitted = false
-    const pending = router.admit(identity(V2_MAXIMUM_TRACKED_OPERATIONS), V2_MESSAGE_KIND.listChildren, BODY)
+    const pending = router.admit(V2_MESSAGE_KIND.listChildren, BODY)
       .then((operation) => { admitted = true; return operation })
     await Promise.resolve()
     expect(admitted).toBe(false)
@@ -86,15 +86,14 @@ describe('operation lifecycle capacity', () => {
 
   it('reserves concurrent admissions atomically and cancels waiters without creating operations', async () => {
     const router = new V2OperationRouter(() => undefined)
-    const active = Array.from({ length: V2_MAXIMUM_ACTIVE_OPERATIONS }, (_, index) =>
-      router.create(identity(index), V2_MESSAGE_KIND.listChildren, BODY))
-    await expect(router.admit(identity(0), V2_MESSAGE_KIND.listChildren, BODY)).rejects.toThrow('Operation ID was reused')
+    const active = Array.from({ length: V2_MAXIMUM_ACTIVE_OPERATIONS }, () =>
+      router.create(V2_MESSAGE_KIND.listChildren, BODY))
     const controller = new AbortController()
-    const cancelledId = identity(V2_MAXIMUM_ACTIVE_OPERATIONS)
-    const cancelled = router.admit(cancelledId, V2_MESSAGE_KIND.listChildren, BODY, controller.signal)
-    const first = router.admit(identity(V2_MAXIMUM_ACTIVE_OPERATIONS + 1), V2_MESSAGE_KIND.listChildren, BODY)
+
+    const cancelled = router.admit(V2_MESSAGE_KIND.listChildren, BODY, controller.signal)
+    const first = router.admit(V2_MESSAGE_KIND.listChildren, BODY)
     let secondAdmitted = false
-    const second = router.admit(identity(V2_MAXIMUM_ACTIVE_OPERATIONS + 2), V2_MESSAGE_KIND.listChildren, BODY)
+    const second = router.admit(V2_MESSAGE_KIND.listChildren, BODY)
       .then((operation) => { secondAdmitted = true; return operation })
     const cancellation = new Error('user stopped waiting')
     const rejection = expect(cancelled).rejects.toBe(cancellation)
@@ -106,22 +105,22 @@ describe('operation lifecycle capacity', () => {
     admitted.cancel(new Error('finished'))
     await second
     active[1]!.cancel(new Error('finished'))
-    // Cancellation while waiting must not consume an ID or a retention slot.
-    router.create(cancelledId, V2_MESSAGE_KIND.listChildren, BODY)
+    // Abandoned admission cannot consume active or retained capacity.
+    expect(router.create(V2_MESSAGE_KIND.listChildren, BODY)).toBeDefined()
     router.terminate(new Error('done'))
   })
 
   it('settles pending admissions on session termination and rejects pre-aborted requests', async () => {
     const router = new V2OperationRouter(() => undefined)
     for (let index = 0; index < V2_MAXIMUM_ACTIVE_OPERATIONS; index += 1) {
-      router.create(identity(index), V2_MESSAGE_KIND.listChildren, BODY)
+      router.create(V2_MESSAGE_KIND.listChildren, BODY)
     }
-    const pending = router.admit(identity(V2_MAXIMUM_ACTIVE_OPERATIONS), V2_MESSAGE_KIND.listChildren, BODY)
+    const pending = router.admit(V2_MESSAGE_KIND.listChildren, BODY)
     router.terminate(new Error('session closed'))
     await expect(pending).rejects.toMatchObject({ scope: 'session' })
     const controller = new AbortController()
     controller.abort(new Error('already cancelled'))
-    await expect(router.admit(identity(0), V2_MESSAGE_KIND.listChildren, BODY, controller.signal))
+    await expect(router.admit(V2_MESSAGE_KIND.listChildren, BODY, controller.signal))
       .rejects.toThrow('already cancelled')
   })
 })

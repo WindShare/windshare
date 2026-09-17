@@ -267,10 +267,7 @@ export class V2OperationContinuationAuthority {
   }
 
   #requireAllowed(message: V2SessionMessage): void {
-    if (isResponseAllowed(this.requestKind, message.kind)) return
-    throw sessionViolation(
-      `Message kind ${message.kind} cannot answer request kind ${this.requestKind}`,
-    )
+    requireV2OperationResponse(this.requestKind, message)
   }
 
   #validateContinuation(message: V2SessionMessage): void {
@@ -278,9 +275,6 @@ export class V2OperationContinuationAuthority {
     try {
       if (message.kind === V2_MESSAGE_KIND.operationError) {
         const failure = decodeV2OperationErrorControl(message.body)
-        if (!v2OperationErrorScopeAllowed(this.requestKind, failure.scope)) {
-          throw new Error('operation received an error from another scope')
-        }
         if (expected !== undefined && (failure.peerAttempt === undefined ||
           failure.peerAttempt.attemptSequence !== expected.attemptSequence ||
           !equalBytes(failure.peerAttempt.peerPathId, expected.peerPathId) ||
@@ -373,6 +367,20 @@ function isFinalResponse(kind: V2MessageKind): boolean {
     kind === V2_MESSAGE_KIND.operationComplete ||
     kind === V2_MESSAGE_KIND.leaseResult ||
     kind === V2_MESSAGE_KIND.laneAttach
+}
+
+export function requireV2OperationResponse(requestKind: V2MessageKind, message: V2SessionMessage): void {
+  if (!isResponseAllowed(requestKind, message.kind)) {
+    throw sessionViolation(`Message kind ${message.kind} cannot answer request kind ${requestKind}`)
+  }
+  if (message.kind !== V2_MESSAGE_KIND.operationError) return
+  try {
+    if (!v2OperationErrorScopeAllowed(requestKind, decodeV2OperationErrorControl(message.body).scope)) {
+      throw new Error('Operation received an error from another scope')
+    }
+  } catch (cause) {
+    throw sessionViolation('Operation error violates its request contract', cause)
+  }
 }
 
 function isResponseAllowed(request: V2MessageKind, response: V2MessageKind): boolean {

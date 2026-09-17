@@ -18,7 +18,7 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
     protocolSessionIdentity,
     ...(traceEnabled ? { trace: { current: (event: V2ProtocolTraceEvent) => events.push(event) } } : {}),
   })
-  const operationId = identity(26)
+  let operationId!: Uint8Array<ArrayBuffer>
   let ready!: () => void
   const admitted = new Promise<void>(resolve => { ready = resolve })
   const session = {
@@ -26,7 +26,8 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
       kind: V2SessionOperation['requestKind'], body: Uint8Array, options: { laneId?: number },
     ) => {
       expect(options.laneId).toBe(1)
-      const operation = router.create(operationId, kind, body)
+      const operation = router.create(kind, body)
+      operationId = operation.id
       ready()
       return operation
     },
