@@ -94,6 +94,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   transfer_progress: {
     discovered_files: '0',
     discovered_bytes: '0',
+    received_object_bytes: '0',
     written_bytes: '0',
     completed_files: '0',
     completed_bytes: '0',

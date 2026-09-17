@@ -101,6 +101,8 @@ export class V2DirectoryAncestry {
 }
 
 export interface TransferProgress {
+  /** Unique fragment payload per upstream attempt, including sealed-object overhead and retried attempts. */
+  readonly receivedObjectBytes: bigint
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
   readonly phase: 'receiving' | 'finishing'
@@ -227,6 +229,7 @@ export type TransferTraceEvent =
       name: 'transfer_progress'
       discoveredFiles: bigint
       discoveredBytes: bigint
+      receivedObjectBytes: bigint
       writtenBytes: bigint
       completedFiles: bigint
       completedBytes: bigint

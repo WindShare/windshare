@@ -50,11 +50,13 @@ it('exports scheduling decisions with session, lane, block, and completion estim
       fileId: 'AQAAAAAAAAAAAAAAAAAAAA', localBlockIndex: 7n,
       route: 'application-relay' as const, purpose,
       expectedMilliseconds: 12.25, pendingBytes: 4096, bytesPerSecond: 1000.2,
+      admission: { waitedMilliseconds: 200.5, unfinishedBytes: 2048, aheadBytes: 512.2, bytesPerSecond: 1024.5 },
     }
     const projected = projectProtocolTraceEvent(event)
     expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({
       dispatch_sequence: '10', block_index: '7', purpose, expected_ms: 13, bytes_per_second: 1000,
+      admission: { waited_ms: 201, unfinished_bytes: '2048', ahead_bytes: '512', bytes_per_second: 1025 },
     })
     source.current?.(event)
   }
@@ -738,6 +740,7 @@ describe('browser diagnostics production composition', () => {
       name: 'transfer_progress',
       discoveredFiles: 2n,
       discoveredBytes: 10n,
+      receivedObjectBytes: 8n,
       writtenBytes: 4n,
       completedFiles: 1n,
       completedBytes: 4n,

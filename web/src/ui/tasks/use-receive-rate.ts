@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 import { formatBytes } from '../v2-progress-presentation'
 import type { TaskPresentation } from './model'
-import { ReceiveRateSampler, type ReceiveRate } from './receive-rate'
+import { TransferRateSampler, type ReceiveRate } from './receive-rate'
 
 const SAMPLE_INTERVAL_MILLISECONDS = 1000
 const SECONDS_PER_MINUTE = 60
@@ -13,18 +13,19 @@ export function useReceiveRate(task: TaskPresentation): string | null {
   const [sample, setSample] = useState<Readonly<{ identity: string; rate: ReceiveRate | null }> | null>(null)
   const receipt = useEffectEvent(() => ({
     at: performance.now(),
-    bytes: task.progress?.receivedBytes ?? 0n,
+    receivedObjectBytes: task.progress?.receivedObjectBytes ?? 0n,
+    writtenBytes: task.progress?.writtenBytes ?? 0n,
     remaining: task.progress?.remainingBytes ?? null,
   }))
   useEffect(() => {
     if (!active) return
     const initial = receipt()
-    const sampler = new ReceiveRateSampler(initial.at, initial.bytes)
+    const sampler = new TransferRateSampler(initial.at, initial)
     // Sampling continues during a stalled read so an old throughput value decays
     // to zero instead of suggesting that bytes are still arriving.
     const timer = setInterval(() => {
       const current = receipt()
-      setSample({ identity, rate: sampler.sample(current.at, current.bytes, current.remaining) })
+      setSample({ identity, rate: sampler.sample(current.at, current, current.remaining) })
     }, SAMPLE_INTERVAL_MILLISECONDS)
     return () => clearInterval(timer)
   }, [active, identity])

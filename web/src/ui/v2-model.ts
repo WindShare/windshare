@@ -26,6 +26,7 @@ export interface V2Breadcrumb {
 }
 
 export interface V2ReceiverProgress {
+  readonly receivedObjectBytes: bigint
   readonly phase: 'receiving' | 'finishing'
   /** Accepted output payload includes retained coverage; it does not assert restart durability. */
   readonly materializedBytes: bigint
@@ -207,6 +208,7 @@ export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   materializedBytes: 0n,
   discoveredFiles: 0,
   discoveredBytes: 0n,
+  receivedObjectBytes: 0n,
   writtenBytes: 0n,
   completedFiles: 0,
   completedBytes: 0n,

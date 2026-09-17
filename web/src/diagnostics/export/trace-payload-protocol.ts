@@ -445,13 +445,20 @@ function validatePeerSettlement(value: unknown): void {
 export function validateContentScheduling(payload: UnknownRecord): void {
   exactKeys(payload, [
     'dispatch_sequence', 'file_id', 'block_index', 'route', 'purpose', 'expected_ms', 'pending_bytes', 'bytes_per_second',
-  ], [], 'content scheduling payload')
+  ], ['admission'], 'content scheduling payload')
   decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
   canonicalIdentity(payload.file_id, 'content scheduling file')
   member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
   member(payload.purpose, ['content', 'probe', 'rescue'], 'content scheduling purpose')
   integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
   integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
+  if (payload.admission !== undefined) {
+    const admission = recordValue(payload.admission, 'content admission')
+    exactKeys(admission, ['waited_ms', 'unfinished_bytes', 'ahead_bytes', 'bytes_per_second'], [], 'content admission')
+    decimalFields(admission, ['unfinished_bytes', 'ahead_bytes'], 'content admission')
+    integerBetween(admission.waited_ms, 0, Number.MAX_SAFE_INTEGER, 'admission wait')
+    integerBetween(admission.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'receipt throughput')
+  }
 }
 
 function validateLeaseIdentity(leaseId: unknown): void {

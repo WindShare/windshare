@@ -47,6 +47,14 @@ frontiers in that priority remain on normal allocation; preview frontiers never 
 At most one exploratory allocation is active, with one start every five seconds. A successful sample
 is not a prerequisite for normal allocation.
 
+Each browser content lane starts one cold block request, then uses unique fragment receipt to admit
+more work before the current block finishes. Another request starts when unfinished payload falls
+below measured response delay plus 250 ms of traffic, within the receiver's existing concurrency budget.
+Cold starts can add one response round trip before filling a fast lane. Idle measurements expire;
+cancellation releases queued admission without starting a protocol inactivity
+deadline. Correlated `content_scheduling.admission` records include the wait, unfinished bytes and
+receipt-based admission estimate.
+
 Network slots refill independently of ordered output. Read-ahead is bounded by four times each
 reader's concurrency and a shared 64 MiB reservation budget, separate from the 64 MiB block cache.
 Budget offers rotate between readers. A blocked output frontier can trigger one duplicate rescue;
@@ -59,6 +67,11 @@ outstanding content block contributes its own initial cost; the next request's s
 existing work. Reservations remain charged until blocks settle. These requests are never duplicated
 for measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
 independent allocations and rescues; connection status alone does not identify a transfer bottleneck.
+Browser download speed samples received sealed-object bytes, including repeated attempts, separately
+from verified output progress. Only new output writes support completion estimates; receipt never
+advances saved or resumable coverage. Product receipt updates are limited to four per second, and
+`transfer_progress.received_object_bytes` exposes this distinction in traces.
+
 Native control routing seeds each physical lane from its authenticated handshake, then measures
 per-kind responses before caller processing. Pending requests and queued content affect selection;
 30-second-old response samples return to the handshake estimate without probes or startup waits.

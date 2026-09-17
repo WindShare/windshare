@@ -287,6 +287,7 @@ function projectTransferTraceEvent(
     return observation(event.name, {
       discovered_files: decimal(event.discoveredFiles),
       discovered_bytes: decimal(event.discoveredBytes),
+      received_object_bytes: decimal(event.receivedObjectBytes),
       written_bytes: decimal(event.writtenBytes),
       completed_files: decimal(event.completedFiles),
       completed_bytes: decimal(event.completedBytes),

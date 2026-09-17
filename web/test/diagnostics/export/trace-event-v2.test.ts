@@ -467,6 +467,7 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('transfer_progress', {
     discovered_files: '2',
     discovered_bytes: '1024',
+    received_object_bytes: '600',
     written_bytes: '512',
     completed_files: '1',
     completed_bytes: '512',

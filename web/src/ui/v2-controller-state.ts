@@ -229,6 +229,7 @@ export function receiverProgressSnapshot(progress: TransferProgress): V2Receiver
     materializedBytes: progress.materializedBytes,
     discoveredFiles: progress.discoveredFiles,
     discoveredBytes: progress.discoveredBytes,
+    receivedObjectBytes: progress.receivedObjectBytes,
     writtenBytes: progress.writtenBytes,
     completedFiles: progress.completedFiles,
     completedBytes: progress.completedBytes,
