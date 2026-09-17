@@ -49,6 +49,17 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
   const completedOperation = await task.getAttribute('data-operation-id')
   if (completedOperation === null) throw new Error('The replacement task has no operation identity')
 
+  const repeatResult = task.getByRole('button', { name: 'Download again', exact: true })
+  await expect(repeatResult).toBeEnabled()
+  // Stop only this sender: a complete local result must not need a new receive,
+  // even while the browser and relay remain online.
+  await stack.stopSharing(replacement)
+  const repeatedResult = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MILLISECONDS })
+  await repeatResult.click()
+  await assertReplacementDownload(await repeatedResult)
+  await expect(repeatResult).toBeEnabled()
+  await expect(task).toHaveAttribute('data-operation-id', completedOperation)
+
   await page.reload()
   await page.getByRole('button', { name: /^(?:Downloads|下载记录)/u }).click()
   const retained = page.getByRole('dialog').locator(`[data-operation-id="${invalidatedOperation}"]`)

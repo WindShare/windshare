@@ -8,6 +8,7 @@ import { COMPLETE_DISCOVERY, environment, fsaTarget, handoffTarget, identity, po
 
 export const SCENARIOS = ['portal', 'portal-empty', 'portal-loading', 'portal-failed', 'portal-saved', 'folder', 'exact-progress', 'long-names', 'full-directory', 'portrait', 'landscape', 'video', 'unsupported', 'reconnecting', 'capacity', 'verifying', 'partial-ready', 'browser-handoff', 'saved-cleanup'] as const
 export type Scenario = typeof SCENARIOS[number]
+export type CompletedDownloadScenario = 'published' | 'download-started' | 'workspace'
 
 export const ROOT_ROWS: readonly V2BrowseRow[] = [
   { id: 'photos', kind: 'directory', name: 'Summer photos', selection: 'mixed' },

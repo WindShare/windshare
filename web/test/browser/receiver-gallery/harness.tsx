@@ -5,9 +5,11 @@ import { V2ReceiverApp } from '../../../src/ui/V2ReceiverApp'
 import type { V2ReceiverController } from '../../../src/ui/v2-controller'
 import type { V2ReceiverSnapshot } from '../../../src/ui/v2-model'
 import { EMPTY_V2_PREVIEW } from '../../../src/ui/v2-model'
-import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type Scenario } from './fixtures'
+import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDownloadScenario, type Scenario } from './fixtures'
 import { syntheticVideo } from './video'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
+import type { ReceiveLifecycleState } from '../../../src/output/workspace'
+import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../../src/ui/v2-receive-runtime'
 import '../../../src/index.css'
 import '../../../src/App.css'
 
@@ -107,19 +109,36 @@ class GalleryController {
   activeLifecycleActionAdmission = () => ({ allowed: true, reason: null })
   canRetainCurrentOperation = false
   retainCurrentOperation = async () => false
-  performRetainedAction = () => { this.intents.push('retained-action') }
+  performRetainedAction = (operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction) => {
+    this.intents.push(`retained:${operation.operationId}:${action}`)
+  }
   catchUpStoppedCompatibleNames = () => undefined
-  completeDownload = (kind: 'published' | 'download-started') => {
+  completeDownload = (kind: CompletedDownloadScenario) => {
     const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
     const source = facts.lifecycle
-    const lifecycle = source.kind === 'published' ? { ...source, cleanupState: 'clean' as const } : source
+    let lifecycle: ReceiveLifecycleState = source
+    let continuation: V2RetainedReceiveOperation['continuation'] = 'history-only'
+    if (source.kind === 'published') {
+      lifecycle = { ...source, cleanupState: 'clean' }
+      continuation = 'restoration-available'
+    } else if (kind === 'workspace' && source.kind === 'download-started') {
+      lifecycle = { ...source, attemptKind: 'workspace', packageDigest: 'fixture-package' }
+      continuation = 'retry-download'
+    }
+    const display = { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
+      createdAtMilliseconds: facts.display!.createdAtMilliseconds,
+      ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) }
     this.#publish({
       activeReceiveOperationId: null,
       startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
-      taskDisplay: { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
-        createdAtMilliseconds: facts.display!.createdAtMilliseconds,
-        ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) },
+      taskDisplay: display,
       output: { ...this.#snapshot.output, lifecycle, lifecyclePresentation: null },
+      retained: { ...this.#snapshot.retained, operations: [
+        ...this.#snapshot.retained.operations.filter(operation => operation.operationId !== lifecycle.operationId),
+        { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
+          lifecycleGeneration: lifecycle.generation, lifecycle, display, continuation,
+          actions: kind === 'workspace' ? ['redownload', 'delete'] : ['forget'] },
+      ] },
     })
   }
   advanceProgress = (progress: Partial<V2ReceiverSnapshot['progress']>) => {

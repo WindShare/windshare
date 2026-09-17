@@ -47,4 +47,4 @@ Keep the original page open during an active download outage. Reconnection conti
 
 - **Staging vs. Destination**: Staging and export can temporarily require both browser storage and a destination copy. Browser storage quotas do not reflect destination disk free space.
 - **Folder staging cleanup**: Each staged file is removed after its destination write is confirmed. Use **Retry staging cleanup** for pending cleanup, or **Discard incomplete browser data** for incomplete staging left by an ended task.
-- **Retained browser results**: A browser download starting does not confirm that it was saved. Workspace results remain available for another export; use **Delete retained result** when no longer needed.
+- **Retained browser results**: A browser download starting does not confirm that it was saved. **Download again** on the result or in Downloads exports the retained copy without the sender. **Download from sender again** starts a separate receive. Use **Delete retained result** when no longer needed.
