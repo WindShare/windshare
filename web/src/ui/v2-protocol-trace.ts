@@ -117,6 +117,10 @@ function projectRetiredOperation(
   if (event.transition === 'cancelled') return {
     transition: event.transition, request_kind: event.requestKind,
     cancellation_reason: event.cancellationReason, ...request,
+    ...(event.blockWait === undefined ? {} : { block_wait: {
+      phase: event.blockWait.phase, waited_ms: decimal(Math.floor(event.blockWait.waitedMilliseconds)),
+      queue_progress: decimal(event.blockWait.queueProgress),
+    } }),
   }
   return {
     transition: event.transition, request_kind: event.requestKind,

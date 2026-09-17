@@ -91,7 +91,7 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 		t.Fatal(buildErr)
 	}
 	if reflect.TypeOf(fetchErr) != capabilityType ||
-		!errors.Is(fetchErr, contentflow.ErrFragmentInactivity) ||
+		!errors.Is(fetchErr, contentflow.ErrBlockResponseInactivity) ||
 		!errors.As(fetchErr, &boundary) || boundary.Fault() != expected {
 		t.Fatalf("inactive block result=%T %v", fetchErr, fetchErr)
 	}

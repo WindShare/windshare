@@ -9,10 +9,35 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
+
+func TestProtocolProjectionRetainsBlockWaitDecision(t *testing.T) {
+	for _, phase := range []contentflow.BlockReceivePhase{contentflow.BlockAwaitingFirstFragment, contentflow.BlockReceivingFragments} {
+		source := protocolObservationContext()
+		source.Correlation.Role = protocolsession.RoleReceiver
+		source.Correlation.RequestKind = protocolsession.MessageRequestBlocks
+		fact := sessionruntime.NewProtocolOperationObservation(source, sessionruntime.ProtocolOperationObservation{
+			Stage: sessionruntime.ProtocolOperationReceiverFailed, Cause: sessionruntime.ProtocolOperationCauseDeadline,
+			BlockWait: contentflow.BlockWaitTimeout{Phase: phase, Waited: 35 * time.Second, QueueProgress: 12},
+		})
+		projected, err := ProjectProtocolObservation(clievent.CommandGet, fact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait := projected.Fact().(clievent.ProtocolOperationFact).BlockWait()
+		name, ok := wait.Phase.Name()
+		if !ok || name != string(phase) || wait.WaitedMillis != 35_000 || wait.QueueProgress != 12 {
+			t.Fatalf("lost block wait decision: %+v", wait)
+		}
+	}
+	if _, err := projectBlockWait(contentflow.BlockWaitTimeout{Phase: "unknown"}); err == nil {
+		t.Fatal("unknown wait phase was projected")
+	}
+}
 
 func TestProtocolProjectionRetainsControlSchedulingDecision(t *testing.T) {
 	source := protocolObservationContext()

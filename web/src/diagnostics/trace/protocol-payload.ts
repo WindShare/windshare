@@ -11,6 +11,7 @@ export type ProtocolOperationPayloadV2 =
       transition: 'cancelled'
       request_kind: ProtocolMessageKindV1
       cancellation_reason: 'user' | 'superseded' | 'output_abort' | 'timeout' | 'lane_race'
+      block_wait?: Readonly<{ phase: 'awaiting_first_fragment' | 'receiving_fragments'; waited_ms: string; queue_progress: string }>
       request?: ProtocolRequestTraceV1
     }>
   | Readonly<{

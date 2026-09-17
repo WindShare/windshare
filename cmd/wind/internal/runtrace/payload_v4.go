@@ -509,7 +509,14 @@ type requestSchedulingV4 struct {
 	PendingRequests uint32 `json:"pending_requests"`
 }
 
+type blockWaitV4 struct {
+	Phase         string `json:"phase"`
+	WaitedMS      string `json:"waited_ms"`
+	QueueProgress string `json:"queue_progress"`
+}
+
 type protocolOperationPayloadV4 struct {
+	BlockWait               *blockWaitV4         `json:"block_wait,omitempty"`
 	RequestScheduling       *requestSchedulingV4 `json:"request_scheduling,omitempty"`
 	ObservedAt              string               `json:"observed_at"`
 	Role                    string               `json:"role"`

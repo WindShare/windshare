@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 )
@@ -279,6 +280,7 @@ type operationCall struct {
 	traceHasResponse       bool
 	traceHasFinalResponse  bool
 	traceCause             ProtocolOperationCause
+	traceBlockWait         contentflow.BlockWaitTimeout
 	traceEmitted           bool
 	traceOwner             *protocolOperationTerminalOwner
 

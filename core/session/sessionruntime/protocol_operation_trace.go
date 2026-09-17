@@ -68,6 +68,7 @@ type ProtocolOperationObservation struct {
 	UsableLanesAtSettlement uint32
 	Cause                   ProtocolOperationCause
 	RequestScheduling       requestlane.Estimate
+	BlockWait               contentflow.BlockWaitTimeout
 }
 
 type ProtocolObservation interface {
@@ -238,6 +239,11 @@ func (call *operationCall) recordProtocolTraceFailure(err error) {
 	if call == nil || !call.traceEnabled || err == nil {
 		return
 	}
+	if timeout, ok := errors.AsType[*contentflow.BlockWaitTimeout](err); ok {
+		call.stateMu.Lock()
+		call.traceBlockWait = *timeout
+		call.stateMu.Unlock()
+	}
 	call.recordProtocolTraceCause(protocolOperationCause(err))
 }
 
@@ -357,6 +363,7 @@ func (call *operationCall) protocolOperationTerminationTrace(now time.Time, owne
 		UsableLanesAtSelection: call.traceUsableAtSelection,
 		Cause:                  cause,
 		RequestScheduling:      call.requests.Estimate(),
+		BlockWait:              call.traceBlockWait,
 	}
 	call.stateMu.Unlock()
 	call.laneMu.Unlock()
@@ -507,7 +514,8 @@ func protocolOperationCause(err error) ProtocolOperationCause {
 	switch {
 	case err == nil:
 		return ProtocolOperationCauseNone
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, contentflow.ErrFragmentInactivity),
+		errors.Is(err, contentflow.ErrBlockResponseInactivity):
 		return ProtocolOperationCauseDeadline
 	case err == context.Canceled: //nolint:errorlint // Only the canonical leaf proves an ordinary canceled wait.
 		return ProtocolOperationCauseCanceled

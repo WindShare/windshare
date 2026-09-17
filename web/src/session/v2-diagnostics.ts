@@ -42,12 +42,19 @@ export type V2LaneDetachmentClass =
   | 'physical_failure'
   | 'authenticated_failure'
 
+export interface V2BlockWaitTrace {
+  readonly phase: 'awaiting_first_fragment' | 'receiving_fragments'
+  readonly waitedMilliseconds: number
+  readonly queueProgress: number
+}
+
 export type V2ProtocolOperationTraceEvent =
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'cancelled'
       requestKind: ProtocolMessageKindV1
       cancellationReason: V2CancellationTraceReason
+      blockWait?: V2BlockWaitTrace
       request?: V2OperationRequestTrace
       correlation: FailureCorrelation
     }>

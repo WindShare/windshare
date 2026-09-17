@@ -347,6 +347,29 @@ func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
 	}
 }
 
+func TestEncodeV4IncludesBlockWaitDecision(t *testing.T) {
+	for _, phase := range []clievent.BlockWaitPhase{clievent.BlockWaitAwaitingFirstFragment, clievent.BlockWaitReceivingFragments} {
+		session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
+		operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
+		event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+			ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+			Stage: clievent.ProtocolOperationReceiverFailed, ProtocolSession: session, ProtocolOperation: operation,
+			RequestKind: clievent.ProtocolMessageRequestBlocks, Cause: clievent.ProtocolOperationCauseDeadline,
+			BlockWait: clievent.BlockWaitSpec{Phase: phase, WaitedMillis: 35_000, QueueProgress: 12},
+		}))
+		record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait := record.Payload.(protocolOperationPayloadV4).BlockWait
+		name, _ := phase.Name()
+		if wait == nil || wait.Phase != name || wait.WaitedMS != "35000" || wait.QueueProgress != "12" ||
+			record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+			t.Fatalf("uncorrelated block wait decision: %+v", record)
+		}
+	}
+}
+
 func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T) {
 	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))

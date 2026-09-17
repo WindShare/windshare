@@ -123,6 +123,38 @@ type RequestSchedulingSpec struct {
 	PendingRequests     uint32
 }
 
+type BlockWaitPhase uint8
+
+const (
+	BlockWaitAwaitingFirstFragment BlockWaitPhase = iota + 1
+	BlockWaitReceivingFragments
+)
+
+func (phase BlockWaitPhase) Name() (string, bool) {
+	switch phase {
+	case BlockWaitAwaitingFirstFragment:
+		return "awaiting_first_fragment", true
+	case BlockWaitReceivingFragments:
+		return "receiving_fragments", true
+	default:
+		return "", false
+	}
+}
+
+type BlockWaitSpec struct {
+	Phase         BlockWaitPhase
+	WaitedMillis  uint64
+	QueueProgress uint64
+}
+
+func (value BlockWaitSpec) valid() bool {
+	if value.Phase == 0 {
+		return value.WaitedMillis == 0 && value.QueueProgress == 0
+	}
+	_, ok := value.Phase.Name()
+	return ok
+}
+
 type ProtocolOperationSpec struct {
 	Command                 Command
 	ObservedAt              time.Time
@@ -147,6 +179,7 @@ type ProtocolOperationSpec struct {
 	UsableLanesAtSettlement uint32
 	Cause                   ProtocolOperationCause
 	RequestScheduling       RequestSchedulingSpec
+	BlockWait               BlockWaitSpec
 }
 type ProtocolOperationFact struct{ spec ProtocolOperationSpec }
 
@@ -166,6 +199,10 @@ func validateProtocolOperationSpec(spec ProtocolOperationSpec) error {
 	_, sendOK := spec.SendOutcome.Name()
 	_, causeOK := spec.Cause.Name()
 	switch {
+	case spec.BlockWait.Phase != 0 && (spec.RequestKind != ProtocolMessageRequestBlocks || spec.Stage != ProtocolOperationReceiverFailed):
+		return EventContractError{Field: "block_wait", Rule: "requires_failed_block_request"}
+	case !spec.BlockWait.valid():
+		return EventContractError{Field: "block_wait", Rule: "known_phase"}
 	case !stageOK:
 		return EventContractError{Field: "stage", Rule: "known_enum"}
 	case !causeOK:
@@ -228,6 +265,7 @@ func (value ProtocolOperationFact) UsableLanesAtSettlement() uint32 {
 func (value ProtocolOperationFact) RequestScheduling() RequestSchedulingSpec {
 	return value.spec.RequestScheduling
 }
+func (value ProtocolOperationFact) BlockWait() BlockWaitSpec      { return value.spec.BlockWait }
 func (value ProtocolOperationFact) Cause() ProtocolOperationCause { return value.spec.Cause }
 
 type ProtocolErrorContentSpec struct {
