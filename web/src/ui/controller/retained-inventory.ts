@@ -556,11 +556,13 @@ export class RetainedInventoryCoordinator {
     const directZipReceive = intent.plan.kind === 'direct-resumable-zip' &&
       ['resume-direct-zip', 'reauthorize-direct-zip', 'verify-direct-zip-target', 'retry-direct-zip-space']
         .includes(pending.operation.continuation)
+    const startupReceive = intent.plan.kind === 'workspace-then-publish' &&
+      pending.operation.continuation === 'resume-start'
     if (
-      (!directZipReceive && pending.operation.continuation !== 'resume-receive') ||
+      (!directZipReceive && !startupReceive && pending.operation.continuation !== 'resume-receive') ||
       pending.operation.operationId !== intent.operationId ||
       pending.operation.receiveIntentDigest !== intent.digest ||
-      runtime.lifecycle.kind !== 'receiving' ||
+      runtime.lifecycle.kind !== (startupReceive ? 'intent-frozen' : 'receiving') ||
       // Output authority may commit recovery before receive admission. The UI
       // checks forward progress; it does not own the number of durable transitions.
       runtime.lifecycle.generation <= pending.operation.lifecycleGeneration ||

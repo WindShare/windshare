@@ -54,6 +54,7 @@ const LIFECYCLE_STATES = [
   'preparing',
   'receiving',
   'resumable_receive',
+  'resumable_start',
   'source_invalidated',
   'finalizing_tree',
   'committing_atomic',

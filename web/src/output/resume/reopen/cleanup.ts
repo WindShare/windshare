@@ -163,6 +163,12 @@ export type AuthorityOwnedReceiveOperationMutationResult =
   | Readonly<{ kind: 'cleanup'; result: ReceiveOperationDiscardResult }>
 
 export type AuthorityOwnedReceiveOperationContinuation =
+  | Readonly<{
+      kind: 'workspace-start'
+      operation: ReopenedWorkspaceOperation & {
+        readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-start' }>
+      }
+    }>
   | Readonly<{ kind: 'direct-tree-receive'; operation: ReopenedDirectTreeOperation }>
   | Readonly<{ kind: 'direct-tree-catch-up'; operation: ReopenedDirectTreeOperation }>
   | Readonly<{
@@ -398,6 +404,11 @@ function classifyReopenedContinuation(
   }
   if (operation.kind === 'direct-zip') {
     return Object.freeze({ kind: 'direct-zip', operation })
+  }
+  if (operation.lifecycle.kind === 'resumable-start') {
+    return Object.freeze({ kind: 'workspace-start', operation: operation as Extract<
+      AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-start' }
+    >['operation'] })
   }
   if (operation.partialContinuation !== undefined) {
     return { kind: 'workspace-progressive-zip-partial', operation: operation as Extract<

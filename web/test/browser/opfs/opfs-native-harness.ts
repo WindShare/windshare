@@ -1,5 +1,6 @@
 export { probeNativeObjectSupport } from '../../../src/output/origin-private/native-object/support'
 import { openNativeObject } from '../../../src/output/origin-private/native-object/client'
+import { NativeOutputInitializationError } from '../../../src/output/origin-private/native-object/errors'
 import { ObjectCheckpointCoordinator } from '../../../src/output/origin-private/native-object/coordinator'
 import { IndexedDbTaskCheckpointStore } from '../../../src/output/origin-private/task-checkpoint/indexeddb-store'
 import type { TaskObjectRef } from '../../../src/output/origin-private/task-checkpoint/model'
@@ -106,7 +107,9 @@ export async function competingNativeWriter(fixture: NativeArchiveFixture): Prom
     await writer.close()
     return 'unexpectedly-opened'
   } catch (error) {
-    return error instanceof Error ? error.name : String(error)
+    // Preserve the lock-conflict assertion instead of accepting any initialization failure.
+    const native = error instanceof NativeOutputInitializationError ? error.cause : error
+    return native instanceof Error ? native.name : String(native)
   }
 }
 

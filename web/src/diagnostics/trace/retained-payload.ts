@@ -20,6 +20,7 @@ export const RETAINED_ACTIONS = Object.freeze([
 ] as const)
 
 export const RETAINED_CONTINUATIONS = Object.freeze([
+  'resume_start',
   'resume_receive',
   'pending_catch_up',
   'restoration_available',

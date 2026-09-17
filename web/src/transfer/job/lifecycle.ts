@@ -29,17 +29,22 @@ const DIRECT_ZIP_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new 
   'needs-attention',
 ])
 
-const WORKSPACE_RECEIVE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
+const WORKSPACE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
   'resumable-receive',
   'source-invalidated',
   'discarded',
   'needs-attention',
 ])
 
+const WORKSPACE_RECEIVE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
+  ...WORKSPACE_PAUSE_STATES,
+  'resumable-start',
+])
+
 const WORKSPACE_POST_MATERIALIZATION_PAUSE_STATES: ReadonlySet<
   ReceiveLifecycleState['kind']
 > = new Set([
-  ...WORKSPACE_RECEIVE_PAUSE_STATES,
+  ...WORKSPACE_PAUSE_STATES,
   'resumable-package',
   'waiting-to-save',
   'download-started',

@@ -84,6 +84,8 @@ function retainedLabel(
 }
 
 function continuationLabel(operation: V2RetainedReceiveOperation, readiness: TaskRecoveryReadiness): string {
+  if (operation.continuation === 'resume-start') return operation.lifecycle.kind === 'resumable-start' &&
+    operation.lifecycle.reason === 'paused' ? 'Continue' : 'Retry download'
   if (readiness === 'destination-authorization-required') return 'Authorize destination and continue'
   if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return 'Finish and save'
   if (operation.continuation === 'verify-direct-zip-target') return 'Verify destination and continue'

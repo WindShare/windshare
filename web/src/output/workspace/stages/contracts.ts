@@ -87,6 +87,18 @@ export type WorkspaceReceiveIntent = ReceiveIntent & {
 
 export type WorkspaceStageTraceEvent =
   | Readonly<{
+      name: 'receive.start.interrupted'
+      operation_id: string
+      receive_intent_digest: string
+      prior_state: ReceiveLifecycleState['kind']
+      reason: 'paused' | 'failed'
+    }>
+  | Readonly<{
+      name: 'receive.start.retried'
+      operation_id: string
+      receive_intent_digest: string
+    }>
+  | Readonly<{
       name: 'receive.materialization.source_invalidated'
       operation_id: string
       receive_intent_digest: string

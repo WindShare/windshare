@@ -12,7 +12,7 @@ export function retainedContinuationReadiness(
   operation: V2RetainedReceiveOperation,
   currentShareInstance: string | null,
 ): RetainedContinuationReadiness {
-  const remote = operation.continuation === 'resume-receive' ||
+  const remote = operation.continuation === 'resume-start' || operation.continuation === 'resume-receive' ||
     operation.continuation === 'resume-direct-zip' ||
     operation.continuation === 'reauthorize-direct-zip' ||
     operation.continuation === 'verify-direct-zip-target' ||

@@ -123,6 +123,7 @@ export type LifecycleStateV1 =
   | 'preparing'
   | 'receiving'
   | 'resumable_receive'
+  | 'resumable_start'
   | 'source_invalidated'
   | 'finalizing_tree'
   | 'committing_atomic'
@@ -144,6 +145,8 @@ export type LifecycleStateV1 =
   | 'destination_space_required'
 
 export type LifecycleReasonV1 =
+  | 'paused'
+  | 'failed'
   | 'failures'
   | 'stopped'
   | 'direct_atomic_rolled_back'

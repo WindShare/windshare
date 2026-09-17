@@ -56,7 +56,7 @@ describe('incident frozen contracts', () => {
       'needs_attention',
       'terminal',
     ])
-    expect(FAILURE_STAGES).toHaveLength(25)
+    expect(FAILURE_STAGES).toHaveLength(26)
     expect(NATIVE_FAILURE_CLASSES).toHaveLength(11)
     expect(PROTOCOL_MESSAGE_KINDS_V1).toEqual([
       'list_children',
