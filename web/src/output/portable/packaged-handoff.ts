@@ -1,4 +1,9 @@
-import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../transfer/intent'
+import {
+  BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
+  validateArtifactSpec,
+  type ArtifactSpec,
+} from '../../transfer/intent'
+import { artifactDownloadMediaType, ORIGINAL_FILE_DOWNLOAD_MEDIA_TYPE } from './artifact-media-type'
 import type {
   PackagedArtifactV1,
   PublicationAttemptV1,
@@ -21,6 +26,7 @@ export interface PackagedArtifactReadPort {
 
 export interface PackagedArtifactHandoffRequest {
   readonly artifact: PackagedArtifactV1
+  readonly artifactSpec: ArtifactSpec
   readonly attempt: PublicationAttemptV1
   readonly signal?: AbortSignal
 }
@@ -67,6 +73,12 @@ export function createPackagedArtifactHandoffPublisher(
       }
 
       if (request.signal?.aborted) throw new BrowserHandoffNotStartedError()
+      const artifactSpec = await validateArtifactSpec(request.artifactSpec)
+      if (artifactSpec.digest !== request.artifact.artifactSpecDigest) {
+        throw new TypeError('Packaged handoff specification does not bind the sealed artifact')
+      }
+      const mediaType = artifactDownloadMediaType(artifactSpec)
+      if (request.signal?.aborted) throw new BrowserHandoffNotStartedError()
       const reader = await ports.packages.acquireReader?.(request.artifact)
       let handedOff = false
       try {
@@ -81,6 +93,14 @@ export function createPackagedArtifactHandoffPublisher(
           throw new TypeError('Packaged artifact File length changed after seal')
         }
 
+        // Empty OPFS MIME becomes text/plain in Chromium and can append .txt.
+        // Wrapping the sealed File retains its backing bytes; reading into an
+        // ArrayBuffer here would make large downloads pay for a complete copy.
+        const downloadFile = new ports.File([source], request.attempt.route.suggestedName, {
+          type: mediaType,
+          lastModified: source.lastModified,
+        })
+
         // Revocation is still provable before the synchronous browser handoff boundary.
         if (request.signal?.aborted) throw new BrowserHandoffNotStartedError()
         const started = ports.browser.handoffWithLease({
@@ -90,7 +110,7 @@ export function createPackagedArtifactHandoffPublisher(
             attemptId: request.attempt.publicationAttemptId,
             packageDigest: request.artifact.digest,
           },
-          source,
+          source: downloadFile,
           exactBytes: request.artifact.exactBytes,
           suggestedName: request.attempt.route.suggestedName,
           objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
@@ -166,7 +186,9 @@ function probePackagedFile(
   try {
     return probeObjectUrl(
       url,
-      new runtime.File([], PACKAGED_FILE_CAPABILITY_PROBE_NAME),
+      new runtime.File([], PACKAGED_FILE_CAPABILITY_PROBE_NAME, {
+        type: ORIGINAL_FILE_DOWNLOAD_MEDIA_TYPE,
+      }),
     )
   } catch {
     return false

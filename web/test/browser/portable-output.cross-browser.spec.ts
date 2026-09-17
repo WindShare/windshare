@@ -76,7 +76,7 @@ test('supports immutable OPFS packaged File retries without weakening the URL le
     await fixture.preparePackagedFileRetries(suggestedName, bytes)
   }, {
     bytes: [...CROSS_BROWSER_BYTES],
-    suggestedName: 'packaged-cross-browser.bin',
+    suggestedName: 'LICENSE',
   })
 
   const proofs: Array<Awaited<ReturnType<
@@ -91,7 +91,7 @@ test('supports immutable OPFS packaged File retries without weakening the URL le
         return fixture.handoffNextPackagedFileRetry()
       })
       const download = await downloadPromise
-      expect(download.suggestedFilename()).toBe('packaged-cross-browser.bin')
+      expect(download.suggestedFilename()).toBe('LICENSE')
       expect(await readDownload(download)).toEqual(Buffer.from(CROSS_BROWSER_BYTES))
       proofs.push(proof)
     }
@@ -107,6 +107,7 @@ test('supports immutable OPFS packaged File retries without weakening the URL le
   expect(proofs.every((proof) => proof.packageIdentityUnchanged)).toBe(true)
   expect(proofs.every((proof) => proof.sourceFileFresh)).toBe(true)
   expect(proofs.every((proof) => proof.immutableFileSource)).toBe(true)
+  expect(proofs.every((proof) => proof.handoffMediaType === 'application/octet-stream')).toBe(true)
   expect(proofs.every((proof) => proof.freshObjectUrl)).toBe(true)
   expect(proofs[0]!.packageDigest).toBe(proofs[1]!.packageDigest)
   expect(proofs[0]!.receiveIntentDigest).toBe(proofs[1]!.receiveIntentDigest)
