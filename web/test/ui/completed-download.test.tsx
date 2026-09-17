@@ -71,7 +71,6 @@ describe('completed download ownership and presentation', () => {
     }
     const html = renderToString(<V2ReceiverApp controller={controller} />)
     expect(html).toContain(kind === 'published' ? '>Saved<' : 'Download started — check browser downloads')
-    expect(html).toContain('Download again')
     expect(html).not.toContain('<progress')
 
     const offers = controller.getSnapshot().output.offers

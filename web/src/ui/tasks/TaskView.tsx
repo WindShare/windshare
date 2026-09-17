@@ -48,12 +48,11 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   </div>
 }
 
-export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, primaryAction }: {
+export function TaskCard({ task, actions, onDetails, detailsRef, busy = false }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly onDetails: (invoker: HTMLButtonElement) => void
   readonly detailsRef?: Ref<HTMLButtonElement>
-  readonly primaryAction?: ReactNode
   readonly busy?: boolean
 }) {
   const rate = useReceiveRate(task)
@@ -69,8 +68,8 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, p
         {task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
       </div>
       <div className="task-actions">
-        {primaryAction ?? (task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
-          perform={actions.perform} primary busy={busy} />)}
+        {task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
+          perform={actions.perform} primary busy={busy} />}
         <button ref={detailsRef} className="quiet-action" type="button" onClick={event => onDetails(event.currentTarget)}>Details<ReceiverIcon name="chevron-right" /></button>
       </div>
     </div>

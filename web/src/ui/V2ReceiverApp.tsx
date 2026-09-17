@@ -57,7 +57,9 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
   }
   const share = snapshot.share
   const single = share !== null && share.kind !== 'browser' ? share : null
-  const actionLabel = downloadScopeLabel(share, snapshot.draft)
+  const singleResult = single !== null && (current?.stage === 'saved' || current?.stage === 'handed-to-browser') &&
+    snapshot.output.activationPresentation === null
+  const actionLabel = singleResult ? 'Download from sender again' : downloadScopeLabel(share, snapshot.draft)
   const saving = presentSavingActions({
     offers: snapshot.output.offers,
     actionLabel,
@@ -70,12 +72,18 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
     failed: id => controller.previewMediaFailed(id),
   }
   const delivered = isReceiveOutputDelivered(snapshot.output.lifecycle)
-  const singleResult = single !== null && (current?.stage === 'saved' || current?.stage === 'handed-to-browser') &&
-    snapshot.output.activationPresentation === null
   const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle })
   const matching = current === null && share !== null ? tasks.find(task => snapshot.retained.operations.some(operation =>
     operation.operationId === task.operationId && operation.shareInstance === share?.shareInstance && task.primaryAction !== null)) : undefined
   const hasContent = share !== null || snapshot.breadcrumbs.length > 0
+  // Result actions retain their operation identity; choosing a save route starts a separate receive.
+  const additionalReceive = singleResult && current !== null && current.primaryAction !== null
+  const savingControls = <SavingControls model={saving} activation={snapshot.output.activationPresentation}
+    currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
+      ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
+    actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
+    retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
+    onIntent={action => controller.recordExperienceIntent(action)} />
 
   return <main className={`receiver-shell receiver-content-${share?.kind ?? 'pending'}`}>
     <header className="receiver-header">
@@ -125,12 +133,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           exitSelection: () => controller.exitSelectionMode(), selectPage: () => controller.selectPage(),
           clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
         } }} />}
-      {hasContent && !singleResult && <SavingControls model={saving} activation={snapshot.output.activationPresentation}
-        currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
-          ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
-        actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
-        retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
-        onIntent={action => controller.recordExperienceIntent(action)} />}
+      {hasContent && !additionalReceive && savingControls}
       {matching !== undefined && <div className="continuation-suggestion">
         <span>Continue {matching.objectLabel}</span>
         <button type="button" onClick={() => { if (matching.primaryAction !== null) actions.perform(matching.primaryAction) }}>
@@ -138,12 +141,10 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         </button>
       </div>}
       {current !== null && <TaskCard task={current} actions={actions} onDetails={invoker => openDetails('task', invoker)}
-        busy={snapshot.retained.pending !== null}
-        primaryAction={singleResult ? <button className="quiet-action" type="button"
-          disabled={saving.primary === null || saving.primary.disabledReason !== null}
-          title={saving.disabledReason ?? undefined}
-          onClick={() => { if (saving.primary !== null) controller.chooseArtifact(saving.primary.offered.choice.choiceId, saving.primary.recoveryPreference) }}>
-          <ReceiverIcon name="download" />Download again</button> : undefined} />}
+        busy={snapshot.retained.pending !== null} />}
+      {hasContent && additionalReceive && <details className="new-operation">
+        <summary>{actionLabel}</summary>{savingControls}
+      </details>}
       {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>Start another download</button></p>}
       {newOperation !== null && <details className="new-operation">
         <summary>{newOperation.title}</summary><p>{newOperation.description}</p>
