@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"io"
 	"os"
 	"path/filepath"
@@ -146,10 +148,10 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 			t.Errorf("close revision capacity owner: %v", err)
 		}
 	})
-	preparedSender, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
-		Paths: []string{selected}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+	preparedSender, err := liveshare.PrepareSender(ctx, sourceBoundarySenderConfig([]string{selected}, liveshare.SenderConfig{
+		Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		RevisionCapacity: capacityOwner.Coordinator(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,4 +418,21 @@ func TestReceiverCandidateConcurrentAuthenticatedIngressChargesSenderOnce(t *tes
 	if senderErr, receiverErr := harness.sender.Err(), harness.receiver.Err(); senderErr != nil || receiverErr != nil {
 		t.Fatalf("authenticated ingress damaged runtime health sender=%v receiver=%v", senderErr, receiverErr)
 	}
+}
+
+func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) liveshare.SenderConfig {
+	selected := append([]string(nil), paths...)
+	config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
+		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
+	})
+	var err error
+	config.CatalogBudget, err = catalog.NewBudgetAccount("test-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		panic(err)
+	}
+	config.CacheBudget, err = contentflow.NewProcessCacheBudget(uint64(64) << 20)
+	if err != nil {
+		panic(err)
+	}
+	return config
 }

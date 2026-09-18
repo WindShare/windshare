@@ -250,7 +250,7 @@ func TestWindowsRevisionContinuityRejectsMalformedCandidate(t *testing.T) {
 		candidate, _ := catalog.NewVersionCandidate(mutate(baseline.candidateBytes()))
 		file, _ := catalog.FileIDFromBytes([]byte("1234567890123456"))
 		parent, _ := catalog.DirectoryIDFromBytes([]byte("abcdefghijklmnop"))
-		locator, _ := catalog.NewLocator(0, "file.bin")
+		locator, _ := NewSourceReference(0, "file.bin")
 		record, err := catalog.NewFileNodeRecord(file, parent, "file.bin", locator, identity, candidate, 4, catalog.ModifiedTime{})
 		if err != nil {
 			t.Fatal(err)

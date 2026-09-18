@@ -19,9 +19,8 @@ func (senderObservationReclaimTarget) ReclaimIdle(context.Context, revisioncapac
 }
 
 func TestProcessCapacityTraceRouterProjectsActiveShareDecisionCorrelation(t *testing.T) {
-	emitter := &shareRecordingEmitter{detailed: true, trace: true}
-	observations := newShareObservations(emitter)
-	cleanupProtocolObservations(t, observations.protocol)
+	emitter := &shareRecordingEmitter{detailed: true}
+	observations := newShareProjection(emitter)
 	router := &capacitytrace.Router{}
 	releaseTrace := router.Bind(observations.capacityTracer())
 

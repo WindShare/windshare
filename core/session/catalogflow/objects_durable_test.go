@@ -347,11 +347,11 @@ func TestAddressedPageServiceUsesDurableBackendAfterObjectCacheEviction(t *testi
 	var scans atomic.Int32
 	scanner := catalog.DirectoryScannerFunc(func(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
 		scans.Add(1)
-		locator, _ := catalog.NewLocator(0, "served.bin")
+		locator, _ := catalog.NewSourceReference([]byte("object:" + "served.bin"))
 		identity, _ := catalog.NewSourceIdentity([]byte("served-source"))
 		version, _ := catalog.NewVersionCandidate([]byte("served-version"))
 		return catalog.ScanResult{}, request.Children.Add(ctx, catalog.ScannedChild{
-			FileID: fileID(t, 124), Name: "served.bin", Locator: locator,
+			FileID: fileID(t, 124), Name: "served.bin", SourceReference: locator,
 			SourceIdentity: identity, VersionCandidate: version, ExpectedSize: 5,
 		})
 	})
@@ -785,7 +785,7 @@ func commitSelectedDirectories(
 	t.Helper()
 	records := make([]catalog.NodeRecord, len(directories))
 	for index, directory := range directories {
-		locator, _ := catalog.NewLocator(catalog.RootSlot(index), "")
+		locator, _ := catalog.NewSourceReference([]byte("object:" + ""))
 		identity, _ := catalog.NewSourceIdentity([]byte{byte(index + 1)})
 		record, err := catalog.NewDirectoryNodeRecord(
 			directory, root, "directory-"+string(rune('a'+index)), locator, identity, catalog.ModifiedTime{},

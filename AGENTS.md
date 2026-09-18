@@ -38,7 +38,7 @@
 
 WindShare is an open-source E2EE file/folder sharing tool. WindShare makes sharing local files and folders feel instant: select, generate a link, and let anyone browse and download in their browser, without waiting for uploads or a full directory scan. End-to-end encryption keeps both content and file metadata private from relays. Prioritize reliable P2P connectivity, seamless relay fallback, and resumable transfers that preserve progress without unnecessary disk usage. Keep everyday sharing effortless, use shared infrastructure efficiently, and give users control through open source and self-hosting. Technical complexity should serve the experience, never burden it.
 
-The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free application and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities.
+The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free domain and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities. `engine/**` composes those contracts with native connectivity, owns application tasks and shared capacity, and is consumed by the CLI.
 
 ```text
 .
@@ -51,12 +51,14 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
 │   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
-│   ├── liveshare/                Sender/receiver runtime assembly
-│   ├── osfs/                     Root-confined sources, native output authority, checkpoints/recovery
+│   ├── liveshare/                Runtime assembly and injected file-source ownership
+│   ├── osfs/                     Selected native file sources, output authority, checkpoints/recovery
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
 │   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
+├── engine/                       Shared native application API, tasks, observations, aggregate budgets
+│   └── internal/                 Share/receive/recovery workflows and native connectivity
 ├── cmd/
-│   ├── wind/                     Share/get/resume CLI and recovery management
+│   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation

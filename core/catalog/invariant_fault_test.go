@@ -258,15 +258,14 @@ func TestCatalogCodecRejectsHostilePrivateRecordsAndPages(t *testing.T) {
 
 	base := storedNode{
 		Schema: catalogStorageSchema, Kind: uint8(NodeKindFile), ID: file.nodeID.Bytes(),
-		Parent: parent.Bytes(), Name: file.name, RootSlot: uint16(file.locator.rootSlot),
-		RelativePath: file.locator.relativePath, SourceIdentity: file.sourceIdentity.Bytes(),
+		Parent: parent.Bytes(), Name: file.name, SourceReference: file.sourceReference.Bytes(), SourceIdentity: file.sourceIdentity.Bytes(),
 		VersionCandidate: file.versionCandidate.Bytes(), ExpectedSize: file.expectedSize,
 	}
 	mutations := map[string]func(*storedNode){
 		"node-id":   func(value *storedNode) { value.ID = []byte{1} },
 		"modified":  func(value *storedNode) { value.Modified = modified },
 		"parent":    func(value *storedNode) { value.Parent = []byte{1} },
-		"locator":   func(value *storedNode) { value.RootSlot = MaxRootSlots },
+		"locator":   func(value *storedNode) { value.SourceReference = nil },
 		"source":    func(value *storedNode) { value.SourceIdentity = nil },
 		"candidate": func(value *storedNode) { value.VersionCandidate = nil },
 		"file-name": func(value *storedNode) { value.Name = "." },

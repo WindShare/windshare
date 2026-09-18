@@ -177,7 +177,7 @@ func windowsTestRecord(t *testing.T, token windowsMutationToken, relative string
 	file[0] = 1
 	var parent catalog.DirectoryID
 	parent[0] = 2
-	locator, err := catalog.NewLocator(0, relative)
+	locator, err := NewSourceReference(0, relative)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestWindowsStabilityBinderRejectsConfigurationAndRootOpenFailure(t *testing
 	if _, err := newWindowsStabilityBinder(nil, platform); !errors.Is(err, content.ErrUnsupportedStability) {
 		t.Fatalf("empty root set error=%v", err)
 	}
-	tooMany := make([]string, int(catalog.MaxRootSlots)+1)
+	tooMany := make([]string, int(catalog.MaxSelectedRoots)+1)
 	for index := range tooMany {
 		tooMany[index] = t.TempDir()
 	}
@@ -358,7 +358,7 @@ func TestWindowsStabilityBinderPropagatesSyscallBoundaryFailures(t *testing.T) {
 		name        string
 		ctx         context.Context
 		path        string
-		slot        catalog.RootSlot
+		slot        RootSlot
 		platformErr []error
 		stableErr   []error
 		closeFirst  bool
@@ -621,7 +621,7 @@ func TestWindowsRootedRevisionSourceRealWriteExclusionAndReplacement(t *testing.
 	fileID[0] = 1
 	var parent catalog.DirectoryID
 	parent[0] = 2
-	locator, _ := catalog.NewLocator(0, "source.bin")
+	locator, _ := NewSourceReference(0, "source.bin")
 	record, err := catalog.NewFileNodeRecord(fileID, parent, "source.bin", locator, identity, candidate, uint64(len(original)), catalog.ModifiedTime{})
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +713,7 @@ func TestWindowsStableSourceRejectsPreexistingWritableMapping(t *testing.T) {
 	fileID[0] = 1
 	var parent catalog.DirectoryID
 	parent[0] = 2
-	locator, _ := catalog.NewLocator(0, "mapped.bin")
+	locator, _ := NewSourceReference(0, "mapped.bin")
 	record, err := catalog.NewFileNodeRecord(fileID, parent, "mapped.bin", locator, identity, candidate, uint64(len(original)), catalog.ModifiedTime{})
 	if err != nil {
 		t.Fatal(err)
@@ -759,7 +759,7 @@ func TestWindowsRootedRevisionSourceRejectsExistingWriterAndIntermediateReparse(
 		fileID[0] = 1
 		var parent catalog.DirectoryID
 		parent[0] = 2
-		locator, _ := catalog.NewLocator(0, relative)
+		locator, _ := NewSourceReference(0, relative)
 		record, recordErr := catalog.NewFileNodeRecord(fileID, parent, filepath.Base(relative), locator, identity, candidate, 4, catalog.ModifiedTime{})
 		if recordErr != nil {
 			t.Fatal(recordErr)

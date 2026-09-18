@@ -43,6 +43,13 @@ func TestFilesystemOutputDiagnosticFreezesPrimaryBeforeCleanupJoin(t *testing.T)
 	if !errors.Is(joined, primaryCanary) || !errors.Is(joined, cleanupCanary) {
 		t.Fatalf("joined cause identity was lost: %v", joined)
 	}
+	causes := errors.Unwrap(joined).(interface{ Unwrap() []error }).Unwrap()
+	cleanupDiagnostic, ok := FilesystemOutputDiagnosticFor(causes[1])
+	if !ok || cleanupDiagnostic.Stage != FilesystemOutputFailureAuthorityClose ||
+		cleanupDiagnostic.NativeErrorClass != FilesystemNativeErrorSharingViolation ||
+		!errors.Is(causes[1], cleanupCanary) || errors.Is(causes[1], primaryCanary) {
+		t.Fatalf("cleanup diagnostic was hidden behind primary: (%+v, %v)", cleanupDiagnostic, causes[1])
+	}
 	for _, safe := range []string{
 		diagnostic.Stage.String(),
 		diagnostic.NativeErrorClass.String(),
@@ -184,9 +191,9 @@ func TestDiagnoseFilesystemOutputFailurePreservesFirstSafeEvidence(t *testing.T)
 	}
 	primaryFailure := errors.New("primary failure canary")
 	joined := freezeFilesystemOutputFailure(primaryFailure, cleanupFailure)
-	if _, ok := FilesystemOutputDiagnosticFor(joined); ok ||
+	if diagnostic, ok := FilesystemOutputDiagnosticFor(joined); !ok || diagnostic.Stage != FilesystemOutputFailureAuthorityClose ||
 		!errors.Is(joined, primaryFailure) || !errors.Is(joined, cleanupFailure) {
-		t.Fatalf("unclassified joined failure = %v", joined)
+		t.Fatalf("joined failure lost independently classified cleanup = %v", joined)
 	}
 	if got := freezeFilesystemOutputFailure(primaryFailure, nil); got != primaryFailure {
 		t.Fatalf("nil cleanup changed primary identity: %v", got)

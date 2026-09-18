@@ -71,7 +71,7 @@ func TestSelectedCatalogSourcePreservesAuthorityAcrossNestedScans(t *testing.T) 
 	parent, _ := selected.DirectoryID()
 	child := children.items[0]
 	childRecord, err := catalog.NewDirectoryNodeRecord(
-		child.DirectoryID, parent, child.Name, child.Locator, child.SourceIdentity, child.ModifiedTime,
+		child.DirectoryID, parent, child.Name, child.SourceReference, child.SourceIdentity, child.ModifiedTime,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,8 @@ func TestSelectedCatalogSourcePreservesAuthorityAcrossNestedScans(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(nested.items) != 1 || nested.items[0].Locator.RelativePath() != "child/nested.bin" {
+	expectedReference, _ := NewSourceReference(0, "child/nested.bin")
+	if len(nested.items) != 1 || nested.items[0].SourceReference != expectedReference {
 		t.Fatalf("nested locator authority = %+v", nested.items)
 	}
 
@@ -159,18 +160,18 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 		t.Fatal(err)
 	}
 	defer authority.Close()
-	if _, _, err := source.scanChild(cancelled, authority, catalog.Locator{}, entries[0]); !errors.Is(err, context.Canceled) {
+	if _, _, err := source.scanChild(cancelled, authority, sourceLocation{}, entries[0]); !errors.Is(err, context.Canceled) {
 		t.Fatalf("child cancellation error = %v", err)
 	}
 	components := make([]string, 163)
 	for index := range components {
 		components[index] = strings.Repeat("a", 200)
 	}
-	parentLocator, err := catalog.NewLocator(0, strings.Join(components, "/"))
+	parentLocator, err := NewSourceReference(0, strings.Join(components, "/"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := source.scanChild(context.Background(), authority, parentLocator, entries[0]); !errors.Is(err, catalog.ErrInvalidPath) {
+	if _, _, err := source.scanChild(context.Background(), authority, sourceLocation{path: string(parentLocator.Bytes()[sourceReferenceHeaderBytes:])}, entries[0]); !errors.Is(err, catalog.ErrInvalidPath) {
 		t.Fatalf("expanded child locator error = %v", err)
 	}
 	closedHandle, err := os.Open(directRoot)
@@ -181,7 +182,7 @@ func TestSelectedCatalogSourceClassifiesFilesystemAndIdentityFailures(t *testing
 		t.Fatal(err)
 	}
 	request := catalog.ScanRequest{Work: &countingScanWork{}, Children: &collectingScanChildren{}}
-	if _, _, err := source.enumerateCatalogChildren(context.Background(), authority, closedHandle, catalog.Locator{}, request); err == nil {
+	if _, _, err := source.enumerateCatalogChildren(context.Background(), authority, closedHandle, sourceLocation{}, request); err == nil {
 		t.Fatal("enumeration classified a closed directory stream as exhaustion")
 	}
 	if _, err := catalogDirectoryFingerprint(context.Background(), closedHandle); err == nil {
@@ -228,7 +229,7 @@ func (binder *errorOwnedStabilityBinder) Close() error { return binder.closeErr 
 
 func emptyLocatorFileRecord(t *testing.T) catalog.NodeRecord {
 	t.Helper()
-	locator, err := catalog.NewLocator(0, "")
+	locator, err := NewSourceReference(0, "")
 	if err != nil {
 		t.Fatal(err)
 	}

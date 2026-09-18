@@ -3,15 +3,17 @@ package resumecommand
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine"
 )
 
 func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
@@ -87,15 +89,15 @@ func TestResumeListGroupsOperationsAndOnlyShowsBlockedChildren(t *testing.T) {
 		testResumeOperation("1", resumeOperationIncomplete),
 		testResumeOperation("2", resumeOperationResumable),
 		{
-			operationID: strings.Repeat("3", 32), state: resumeOperationCleanupPending,
-			attention: "cleanup-uncertain",
+			ID: testResumeID("3"), State: resumeOperationCleanupPending,
+			Attention: "cleanup-uncertain",
 		},
 		{
-			operationID: strings.Repeat("4", 32), state: resumeOperationNeedsAttention,
-			attention: "operation-ownership-unknown",
-			blockedItems: []resumeBlockedItem{
-				{artifactPath: "tree/unknown.bin", pathKnown: true, reason: resumeBlockedPublicationUnknown},
-				{reason: resumeBlockedCheckpointInvalid},
+			ID: testResumeID("4"), State: resumeOperationNeedsAttention,
+			Attention: "operation-ownership-unknown",
+			BlockedItems: []resumeBlockedItem{
+				{ArtifactPath: "tree/unknown.bin", PathKnown: true, Reason: resumeBlockedPublicationUnknown},
+				{Reason: resumeBlockedCheckpointInvalid},
 			},
 		},
 	}
@@ -142,7 +144,7 @@ func TestResumeListGroupsOperationsAndOnlyShowsBlockedChildren(t *testing.T) {
 
 func TestResumeListKeepsBusyAsAvailabilityNotLifecycle(t *testing.T) {
 	operation := testResumeOperation("1", resumeOperationIncomplete)
-	operation.running = true
+	operation.Running = true
 	snapshot, _ := newResumeInventorySnapshot([]resumeOperation{operation}, false)
 	app, stdout, _ := newResumeTestApp()
 	app.resumeInventories = &fakeResumeStateInventoryOpener{
@@ -232,7 +234,7 @@ func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
 	inventory := &fakeResumeStateInventory{
 		snapshot: snapshot,
 		discardReport: resumeDiscardReport{
-			status: resumeDiscardStatusDiscarded, operationID: strings.Repeat("1", 32),
+			Status: resumeDiscardStatusDiscarded, ID: testResumeID("1"),
 		},
 	}
 	terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
@@ -245,7 +247,7 @@ func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
 	}); result != ResultOK {
 		t.Fatalf("result=%d stderr=%q", result, stderr.String())
 	}
-	if inventory.discardCalls != 1 || inventory.discardIndex != 0 || terminal.calls != 1 {
+	if inventory.discardCalls != 1 || inventory.discardID != snapshot.Operations[0].ID || terminal.calls != 1 {
 		t.Fatalf("inventory=%+v terminal=%+v", inventory, terminal)
 	}
 	for _, want := range []string{
@@ -276,37 +278,44 @@ func TestResumeDiscardRejectsRedirectedInexactUnknownAndRunningSelections(t *tes
 	tests := map[string]struct {
 		snapshot resumeInventorySnapshot
 		terminal *fakeResumeConfirmationTerminal
-		status   string
+		Status   string
 	}{
 		"redirected": {
 			snapshot: base,
 			terminal: &fakeResumeConfirmationTerminal{interactive: false, line: "discard 1"},
-			status:   resumeConfirmationStatus,
+			Status:   resumeConfirmationStatus,
 		},
 		"trailing space": {
 			snapshot: base,
 			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1 "},
-			status:   resumeNotConfirmedStatus,
+			Status:   resumeNotConfirmedStatus,
 		},
 		"unknown registry": {
-			snapshot: resumeInventorySnapshot{operations: base.operations, registryUnknown: true},
+			snapshot: resumeInventorySnapshot{Operations: base.Operations, RegistryUnknown: true},
 			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"},
-			status:   resumeDiscardStatusNeedsAttention,
+			Status:   resumeDiscardStatusNeedsAttention,
 		},
 		"running": {
 			snapshot: func() resumeInventorySnapshot {
 				operation := testResumeOperation("1", resumeOperationIncomplete)
-				operation.running = true
+				operation.Running = true
 				result, _ := newResumeInventorySnapshot([]resumeOperation{operation}, false)
 				return result
 			}(),
 			terminal: &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"},
-			status:   resumeBusyStatus,
+			Status:   resumeBusyStatus,
 		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			inventory := &fakeResumeStateInventory{snapshot: test.snapshot}
+			if name == "unknown registry" {
+				inventory.restriction = &engine.RecoveryFailure{Kind: engine.RecoveryFailureNeedsAttention, Reason: resumeRegistryUnknownReason}
+			}
+			if name == "running" {
+				inventory.checkFailure = &engine.RecoveryFailure{Kind: engine.RecoveryFailureBusy, Reason: resumeOperationRunningReason}
+			}
+
 			app, stdout, _ := newResumeTestApp()
 			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
 			app.resumeConfirmation = test.terminal
@@ -319,7 +328,7 @@ func TestResumeDiscardRejectsRedirectedInexactUnknownAndRunningSelections(t *tes
 				(name == "unknown registry" || name == "running" || name == "redirected") && test.terminal.calls != 0 {
 				t.Fatalf("inventory=%+v terminal=%+v", inventory, test.terminal)
 			}
-			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.status)) {
+			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.Status)) {
 				t.Fatalf("stdout=%q", stdout.String())
 			}
 		})
@@ -333,8 +342,8 @@ func TestResumeDiscardReportsCleanupDebtEvenWhenCleanupReturnsAnError(t *testing
 	inventory := &fakeResumeStateInventory{
 		snapshot: snapshot,
 		discardReport: resumeDiscardReport{
-			status: resumeDiscardStatusCleanupPending, operationID: strings.Repeat("1", 32),
-			attention: "cleanup-uncertain",
+			Status: resumeDiscardStatusCleanupPending, ID: testResumeID("1"),
+			Attention: "cleanup-uncertain",
 		},
 		discardErr: errors.New("private control path should not be printed"),
 	}
@@ -362,7 +371,7 @@ func TestResumeDiscardKeepsACompletedOutcomeWhenAuthorityCloseFails(t *testing.T
 	inventory := &fakeResumeStateInventory{
 		snapshot: snapshot,
 		discardReport: resumeDiscardReport{
-			status: resumeDiscardStatusDiscarded, operationID: strings.Repeat("1", 32),
+			Status: resumeDiscardStatusDiscarded, ID: testResumeID("1"),
 		},
 		discardErr: errors.New("close failed"),
 	}
@@ -378,38 +387,6 @@ func TestResumeDiscardKeepsACompletedOutcomeWhenAuthorityCloseFails(t *testing.T
 		!strings.Contains(stderr.String(), "was discarded") ||
 		strings.Contains(stdout.String()+stderr.String(), "close failed") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-}
-
-func TestResumeDiscardHandlesLeaseRaceDisappearanceAndUnverifiedFailure(t *testing.T) {
-	snapshot, _ := newResumeInventorySnapshot(
-		[]resumeOperation{testResumeOperation("1", resumeOperationIncomplete)}, false,
-	)
-	tests := map[string]struct {
-		err    error
-		status string
-	}{
-		"busy":        {err: osfs.ErrResumeStateBusy, status: resumeBusyStatus},
-		"disappeared": {err: fs.ErrNotExist, status: resumeDiscardStatusChanged},
-		"cancelled":   {err: context.Canceled, status: resumeCancelledStatus},
-		"unknown":     {err: errors.New("ownership changed"), status: resumeDiscardStatusNeedsAttention},
-	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			inventory := &fakeResumeStateInventory{snapshot: snapshot, discardErr: test.err}
-			app, stdout, _ := newResumeTestApp()
-			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
-			app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
-			if result := app.Run(context.Background(), []string{
-				"resume", "discard", "-o", t.TempDir(), "--item", "1",
-			}); result != ResultFailure {
-				t.Fatalf("result=%d", result)
-			}
-			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_discard_status=%q`, test.status)) ||
-				!strings.Contains(stdout.String(), `foreign_objects="preserved"`) {
-				t.Fatalf("stdout=%q", stdout.String())
-			}
-		})
 	}
 }
 
@@ -464,7 +441,7 @@ func TestStdioResumeConfirmationAndOutputBoundaries(t *testing.T) {
 }
 
 func testResumeOperation(fill string, state resumeOperationState) resumeOperation {
-	return resumeOperation{operationID: strings.Repeat(fill, 32), state: state}
+	return resumeOperation{ID: testResumeID(fill), State: state}
 }
 
 type writerLogger struct {
@@ -549,25 +526,36 @@ func (opener *fakeResumeStateInventoryOpener) OpenResumeStateInventory(
 }
 
 type fakeResumeStateInventory struct {
-	snapshot      resumeInventorySnapshot
-	snapshotErr   error
-	discardReport resumeDiscardReport
-	discardErr    error
-	discardCalls  int
-	discardIndex  int
+	snapshot       resumeInventorySnapshot
+	snapshotErr    error
+	discardReport  resumeDiscardReport
+	discardErr     error
+	discardCalls   int
+	discardID      receivecontract.OperationID
+	restriction    *engine.RecoveryFailure
+	checkFailure   *engine.RecoveryFailure
+	discardFailure *engine.RecoveryFailure
 }
 
 func (inventory *fakeResumeStateInventory) Snapshot() (resumeInventorySnapshot, error) {
-	return inventory.snapshot.clone(), inventory.snapshotErr
+	return inventory.snapshot.Clone(), inventory.snapshotErr
+}
+
+func (inventory *fakeResumeStateInventory) DiscardRestriction() *engine.RecoveryFailure {
+	return inventory.restriction
+}
+
+func (inventory *fakeResumeStateInventory) CheckDiscard(receivecontract.OperationID) *engine.RecoveryFailure {
+	return inventory.checkFailure
 }
 
 func (inventory *fakeResumeStateInventory) Discard(
 	_ context.Context,
-	index int,
-) (resumeDiscardReport, error) {
+	id receivecontract.OperationID,
+) engine.RecoveryDiscardResult {
 	inventory.discardCalls++
-	inventory.discardIndex = index
-	return inventory.discardReport, inventory.discardErr
+	inventory.discardID = id
+	return engine.RecoveryDiscardResult{Report: inventory.discardReport, Err: inventory.discardErr, Failure: inventory.discardFailure}
 }
 
 type fakeResumeConfirmationTerminal struct {
@@ -598,4 +586,10 @@ func (shortResumeWriter) Write(value []byte) (int, error) {
 		return 0, nil
 	}
 	return len(value) - 1, nil
+}
+
+func testResumeID(fill string) receivecontract.OperationID {
+	raw, _ := hex.DecodeString(strings.Repeat(fill, 32))
+	id, _ := receivecontract.OperationIDFromBytes(raw)
+	return id
 }

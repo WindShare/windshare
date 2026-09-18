@@ -21,7 +21,7 @@ import (
 type StableBinding struct {
 	File         *os.File
 	Record       catalog.NodeRecord
-	RootSlot     catalog.RootSlot
+	RootSlot     RootSlot
 	RelativePath string
 }
 
@@ -66,8 +66,8 @@ func newOwnedRootedRevisionSource(rootPaths []string, binder ownedStabilityBinde
 }
 
 func newRootedRevisionSource(rootPaths []string, binder StabilityBinder, closer io.Closer) (*RootedRevisionSource, error) {
-	if len(rootPaths) == 0 || len(rootPaths) > catalog.MaxRootSlots {
-		return nil, fmt.Errorf("stable revision source requires 1..%d roots", catalog.MaxRootSlots)
+	if len(rootPaths) == 0 || len(rootPaths) > catalog.MaxSelectedRoots {
+		return nil, fmt.Errorf("stable revision source requires 1..%d roots", catalog.MaxSelectedRoots)
 	}
 	if binder == nil {
 		// os.Root provides containment but does not by itself prove the v2
@@ -86,6 +86,27 @@ func newRootedRevisionSource(rootPaths []string, binder StabilityBinder, closer 
 		}
 		roots = append(roots, root)
 	}
+	return adoptRootedRevisionSource(roots, binder, closer)
+}
+
+func newRetainedRootedRevisionSource(retained []*os.Root, binder StabilityBinder, closer io.Closer) (*RootedRevisionSource, error) {
+	if len(retained) == 0 || len(retained) > catalog.MaxSelectedRoots || binder == nil {
+		return nil, errors.Join(content.ErrUnsupportedStability, closeOwnedBinder(closer))
+	}
+	roots := make([]*os.Root, 0, len(retained))
+	for _, authority := range retained {
+		root, err := authority.OpenRoot(".")
+		if err != nil {
+			return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
+		}
+		roots = append(roots, root)
+	}
+	return adoptRootedRevisionSource(roots, binder, closer)
+}
+
+// Both construction paths transfer independent root ownership here. The binder
+// must prove that any additional native handles describe these exact roots.
+func adoptRootedRevisionSource(roots []*os.Root, binder StabilityBinder, closer io.Closer) (*RootedRevisionSource, error) {
 	if validator, ok := binder.(stabilityRootValidator); ok {
 		if err := validator.ValidateRoots(roots); err != nil {
 			return nil, errors.Join(err, closeRoots(roots), closeOwnedBinder(closer))
@@ -129,8 +150,8 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if !isFile || fileID.IsZero() {
 		return nil, content.WithRevisionComparison(content.ErrRevisionNotFound, content.RevisionComparisonUnavailable)
 	}
-	locator := record.Locator()
-	if locator.IsZero() || locator.RelativePath() == "" {
+	locator, err := parseSourceReference(record.SourceReference())
+	if err != nil || locator.RelativePath() == "" {
 		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	s.mu.RLock()
@@ -148,7 +169,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if err != nil {
 		s.mu.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
+			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
 		}
 		return nil, content.WithRevisionComparison(
 			pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
@@ -162,7 +183,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if err != nil {
 		s.mu.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
+			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
 		}
 		return nil, content.WithRevisionComparison(
 			pathfailure.Filesystem("open stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
@@ -173,7 +194,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if lstatErr != nil {
 		_ = handle.Close()
 		if errors.Is(lstatErr, os.ErrNotExist) {
-			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
+			return nil, content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, lstatErr), content.RevisionComparisonUnavailable)
 		}
 		return nil, content.WithRevisionComparison(
 			pathfailure.Filesystem("reinspect stable revision", locator.RelativePath(), lstatErr), content.RevisionComparisonUnavailable,

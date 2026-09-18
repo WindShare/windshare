@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -87,18 +86,4 @@ func validGetTestLink(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return encoded
-}
-
-func TestGetReceiverRecoveryOptionsFailure(t *testing.T) {
-	app := &App{receiverRecoveryOptions: relayset.ReceiverRecoveryOptions{InitialWait: -1}}
-	if _, code := app.connectGetReceiver(context.Background(), getRequest{}, getObservation{}); code != ExitFailure {
-		t.Fatal(code)
-	}
-	recovery, _ := relayset.NewReceiverRecovery(relayset.ReceiverRecoveryOptions{})
-	owner := &getReceiverRecovery{owner: recovery}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := owner.replace(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
 }

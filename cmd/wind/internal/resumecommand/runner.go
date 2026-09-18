@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 
-	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/engine"
 )
 
-// Runner owns the complete resume command lifecycle while its ports keep native
-// authority, terminal state, and presentation independently testable.
+// Runner owns argument handling, item numbering and terminal confirmation.
+// Engine inventories retain the authority and all recovery decisions.
 type Runner struct {
 	dependencies resumeDependencies
 }
@@ -72,60 +71,45 @@ func (runner Runner) runList(ctx context.Context, args []string) Result {
 	return ResultOK
 }
 
-func (runner Runner) reportListOpenFailure(err error) Result {
-	status := resumeListStatusNeedsAttention
-	reason := resumeDestinationUnknownReason
-	message := "destination state could not be verified; no objects were changed"
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		status = resumeCancelledStatus
-		reason = resumeCommandCancelledReason
-		message = "command was cancelled; no additional objects were changed"
-	} else if errors.Is(err, osfs.ErrResumeStateBusy) {
-		status = resumeBusyStatus
-		reason = resumeDestinationBusyReason
-		message = "destination resume authority is already in use"
+func recoveryFailure(err error) *engine.RecoveryFailure {
+	if failure, ok := errors.AsType[*engine.RecoveryFailure](err); ok {
+		return failure
 	}
-	reason, detail := resumeFailurePresentation(err, reason)
-	rendered, renderErr := runner.dependencies.renderer.ListControlStatus(status, reason, detail)
+	return engine.RecoveryDestinationFailure(err)
+}
+
+func failureStatus(failure *engine.RecoveryFailure, attentionStatus string) string {
+	switch failure.Kind {
+	case engine.RecoveryFailureBusy:
+		return resumeBusyStatus
+	case engine.RecoveryFailureChanged:
+		return resumeDiscardStatusChanged
+	case engine.RecoveryFailureCancelled:
+		return resumeCancelledStatus
+	default:
+		return attentionStatus
+	}
+}
+
+func (runner Runner) reportListOpenFailure(err error) Result {
+	failure := recoveryFailure(err)
+	rendered, renderErr := runner.dependencies.renderer.ListControlStatus(
+		failureStatus(failure, resumeListStatusNeedsAttention), failure.Reason, failure.Detail,
+	)
 	if renderErr != nil {
 		runner.dependencies.logger.Logf("resume list: status could not be represented safely")
 	} else if writeErr := runner.dependencies.output.WriteResult(rendered); writeErr != nil {
 		runner.dependencies.logger.Logf("resume list: status output failed")
 	}
+	message := "destination state could not be verified; no objects were changed"
+	switch failure.Kind {
+	case engine.RecoveryFailureCancelled:
+		message = "command was cancelled; no additional objects were changed"
+	case engine.RecoveryFailureBusy:
+		message = "destination resume authority is already in use"
+	}
 	runner.dependencies.logger.Logf("resume list: %s", message)
 	return ResultFailure
-}
-
-func resumeFailurePresentation(err error, fallback string) (string, resumeFailureDetail) {
-	diagnostic, ok := osfs.FilesystemOutputDiagnosticFor(err)
-	if !ok || !diagnostic.Valid() {
-		return fallback, resumeFailureDetail{}
-	}
-	detail := resumeFailureDetail{
-		stage:          diagnostic.Stage,
-		reconciliation: diagnostic.ReconciliationStep,
-		nativeClass:    diagnostic.NativeErrorClass,
-	}
-	switch diagnostic.Stage {
-	case osfs.FilesystemOutputFailureDestinationBinding:
-		return resumeDestinationBindingReason, detail
-	case osfs.FilesystemOutputFailureInventoryPaging:
-		return resumeInventoryPagingReason, detail
-	case osfs.FilesystemOutputFailureActiveLookup:
-		return resumeActiveLookupReason, detail
-	case osfs.FilesystemOutputFailureOperationAcquisition:
-		return resumeOperationAcquisitionReason, detail
-	case osfs.FilesystemOutputFailureOperationAdmission:
-		return resumeOperationAdmissionReason, detail
-	case osfs.FilesystemOutputFailureCheckpointReconciliation:
-		return resumeCheckpointReconcileReason, detail
-	case osfs.FilesystemOutputFailureNativeDurability:
-		return resumeNativeDurabilityReason, detail
-	case osfs.FilesystemOutputFailureAuthorityClose:
-		return resumeAuthorityCloseReason, detail
-	default:
-		return fallback, resumeFailureDetail{}
-	}
 }
 
 func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
@@ -144,34 +128,21 @@ func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
 	if err != nil {
 		return runner.reportDiscardOpenFailure(request.itemNumber, err)
 	}
-	if snapshot.registryUnknown {
-		return runner.reportDiscardControl(
-			resumeDiscardStatusNeedsAttention,
-			request.itemNumber,
-			resumeRegistryUnknownReason,
-			"registry ownership is uncertain; no objects were changed",
-		)
+	if failure := inventory.DiscardRestriction(); failure != nil {
+		return runner.reportDiscardFailure(request.itemNumber, failure)
 	}
 	index := request.itemNumber - 1
-	if index < 0 || index >= len(snapshot.operations) {
+	if index < 0 || index >= len(snapshot.Operations) {
 		runner.dependencies.logger.Logf(
 			"resume discard: --item %d is outside the current inventory (operations=%d)",
 			request.itemNumber,
-			len(snapshot.operations),
+			len(snapshot.Operations),
 		)
 		return ResultUsage
 	}
-	selected := snapshot.operations[index]
-	if !selected.valid() {
-		return runner.reportDiscardOpenFailure(request.itemNumber, errResumeStateContract)
-	}
-	if selected.running {
-		return runner.reportDiscardControl(
-			resumeBusyStatus,
-			request.itemNumber,
-			resumeOperationRunningReason,
-			"selected operation is already running; no objects were changed",
-		)
+	selected := snapshot.Operations[index]
+	if failure := inventory.CheckDiscard(selected.ID); failure != nil {
+		return runner.reportDiscardFailure(request.itemNumber, failure)
 	}
 
 	confirmation := runner.dependencies.confirmation
@@ -210,66 +181,41 @@ func (runner Runner) runDiscard(ctx context.Context, args []string) Result {
 		)
 	}
 
-	report, discardErr := inventory.Discard(ctx, index)
-	if report.valid() {
-		return runner.reportDiscardSettlement(request.itemNumber, report, discardErr)
+	result := inventory.Discard(ctx, selected.ID)
+	if result.Report.Valid() {
+		return runner.reportDiscardSettlement(request.itemNumber, result)
 	}
-	if errors.Is(discardErr, osfs.ErrResumeStateBusy) {
-		return runner.reportDiscardControl(
-			resumeBusyStatus,
-			request.itemNumber,
-			resumeOperationRunningReason,
-			"selected operation became busy; no objects were changed",
-		)
+	if result.Failure == nil {
+		return runner.reportDiscardOpenFailure(request.itemNumber, engine.ErrRecoveryContract)
 	}
-	if errors.Is(discardErr, fs.ErrNotExist) {
-		return runner.reportDiscardControl(
-			resumeDiscardStatusChanged,
-			request.itemNumber,
-			resumeOperationChangedReason,
-			"selected operation changed after listing; no additional objects were changed",
-		)
-	}
-	if errors.Is(discardErr, context.Canceled) || errors.Is(discardErr, context.DeadlineExceeded) {
-		return runner.reportDiscardControl(
-			resumeCancelledStatus,
-			request.itemNumber,
-			resumeCommandCancelledReason,
-			"command was cancelled; no additional objects were changed",
-		)
-	}
-	return runner.reportDiscardControl(
-		resumeDiscardStatusNeedsAttention,
-		request.itemNumber,
-		resumeOperationUnknownReason,
-		"selected operation could not be verified; final and foreign objects were preserved",
-	)
+	return runner.reportDiscardFailure(request.itemNumber, result.Failure)
 }
 
 func (runner Runner) reportDiscardOpenFailure(itemNumber int, err error) Result {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return runner.reportDiscardControl(
-			resumeCancelledStatus,
-			itemNumber,
-			resumeCommandCancelledReason,
-			"command was cancelled; no objects were changed",
-		)
+	return runner.reportDiscardFailure(itemNumber, recoveryFailure(err))
+}
+
+func (runner Runner) reportDiscardFailure(itemNumber int, failure *engine.RecoveryFailure) Result {
+	message := "selected operation could not be verified; final and foreign objects were preserved"
+	switch failure.Reason {
+	case resumeRegistryUnknownReason:
+		message = "registry ownership is uncertain; no objects were changed"
+	case resumeOperationRunningReason:
+		message = "selected operation is already running; no objects were changed"
+	case resumeDestinationBusyReason:
+		message = "destination resume authority is already in use"
+	case resumeOperationChangedReason:
+		message = "selected operation changed after listing; no additional objects were changed"
+	case resumeCommandCancelledReason:
+		message = "command was cancelled; no additional objects were changed"
+	default:
+		if failure.Kind == engine.RecoveryFailureNeedsAttention && failure.Reason != resumeOperationUnknownReason {
+			message = "destination state could not be verified; no objects were changed"
+		}
 	}
-	if errors.Is(err, osfs.ErrResumeStateBusy) {
-		return runner.reportDiscardControl(
-			resumeBusyStatus,
-			itemNumber,
-			resumeDestinationBusyReason,
-			"destination resume authority is already in use",
-		)
-	}
-	reason, detail := resumeFailurePresentation(err, resumeDestinationUnknownReason)
 	return runner.reportDiscardControlWithDetail(
-		resumeDiscardStatusNeedsAttention,
-		itemNumber,
-		reason,
-		"destination state could not be verified; no objects were changed",
-		detail,
+		failureStatus(failure, resumeDiscardStatusNeedsAttention),
+		itemNumber, failure.Reason, message, failure.Detail,
 	)
 }
 
@@ -305,10 +251,9 @@ func (runner Runner) reportDiscardControlWithDetail(
 
 func (runner Runner) reportDiscardSettlement(
 	itemNumber int,
-	report resumeDiscardReport,
-	discardErr error,
+	result engine.RecoveryDiscardResult,
 ) Result {
-	rendered, err := runner.dependencies.renderer.DiscardReport(itemNumber, report)
+	rendered, err := runner.dependencies.renderer.DiscardReport(itemNumber, result.Report)
 	if err != nil {
 		runner.dependencies.logger.Logf("resume discard: settlement could not be represented safely")
 		return ResultFailure
@@ -317,11 +262,11 @@ func (runner Runner) reportDiscardSettlement(
 		runner.dependencies.logger.Logf("resume discard: result output failed")
 		return ResultFailure
 	}
-	switch report.status {
+	if result.Successful() {
+		return ResultOK
+	}
+	switch result.Report.Status {
 	case resumeDiscardStatusDiscarded:
-		if discardErr == nil {
-			return ResultOK
-		}
 		runner.dependencies.logger.Logf(
 			"resume discard: owned state was discarded, but destination authority did not close cleanly",
 		)

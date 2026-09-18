@@ -95,7 +95,7 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 	firstFile, firstRecord := fileRecord(t, 1)
 	secondFile := catalogID[catalog.FileID](10)
 	parent := catalogID[catalog.DirectoryID](8)
-	locator, _ := catalog.NewLocator(0, "second")
+	locator, _ := catalog.NewSourceReference([]byte("object:" + "second"))
 	identity, _ := catalog.NewSourceIdentity([]byte("second-identity"))
 	candidate, _ := catalog.NewVersionCandidate([]byte("second-candidate"))
 	secondRecord, err := catalog.NewFileNodeRecord(secondFile, parent, "second", locator, identity, candidate, 1, catalog.ModifiedTime{})

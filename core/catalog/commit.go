@@ -222,8 +222,8 @@ func validateDirectoryCommit(instance ShareInstance, commit DirectoryCommit, syn
 		return fmt.Errorf("%w: directory %x exceeds its entry limit", ErrPageLimit, directoryID)
 	}
 	if synthetic {
-		if commit.children.Count() == 0 || commit.children.Count() > MaxRootSlots || commit.omittedCount != 0 {
-			return fmt.Errorf("catalog synthetic root must contain 1..%d selected roots without omissions", MaxRootSlots)
+		if commit.children.Count() == 0 || commit.children.Count() > MaxSelectedRoots || commit.omittedCount != 0 {
+			return fmt.Errorf("catalog synthetic root must contain 1..%d selected roots without omissions", MaxSelectedRoots)
 		}
 	}
 	return nil

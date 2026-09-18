@@ -19,9 +19,6 @@ const (
 	processTraceSenderSessionRetired testrun.Milestone = "sender_session_retired"
 	processTraceSenderRelayRecovery  testrun.Milestone = "sender_relay_recovery"
 	processTraceSenderStop           testrun.Milestone = "sender_stop"
-	processTraceReceiverDirectLane   testrun.Milestone = "receiver_direct_lane"
-	processTraceReceiverRelayContent testrun.Milestone = "receiver_relay_content"
-	processTraceReceiverJoinStopped  testrun.Milestone = "receiver_join_stopped"
 )
 
 type processTraceEventSink interface {

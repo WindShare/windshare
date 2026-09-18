@@ -20,7 +20,7 @@ func platformCatalogBaseline(*os.File) (catalog.SourceIdentity, catalog.VersionC
 	return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 }
 
-func newPlatformRootedRevisionSource([]string) (*RootedRevisionSource, error) {
+func newPlatformRootedRevisionSource([]*os.Root) (*RootedRevisionSource, error) {
 	return nil, content.ErrUnsupportedStability
 }
 

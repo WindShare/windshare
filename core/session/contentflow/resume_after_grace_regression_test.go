@@ -105,7 +105,7 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	for index := range data {
 		data[index] = byte(index / int(chunkSize))
 	}
-	locator, err := catalog.NewLocator(0, "resume.bin")
+	locator, err := catalog.NewSourceReference([]byte("object:" + "resume.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

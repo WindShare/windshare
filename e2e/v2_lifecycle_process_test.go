@@ -78,6 +78,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 		}
 	}
 	requireV2UserTraceFact(t, receiver, "content_path_selected", "content_path", "relay")
+	requireV2UserTraceFact(t, receiver, "engine_task_observed", "admission_trigger", "relay_only_policy")
 	assertV2UserTraceTransportDiagnostics(t, receiver, "relay", false)
 	assertV2File(t, filepath.Join(output, filepath.Base(source)), payload)
 	events := drainV2ProcessTraces(t, receiver)

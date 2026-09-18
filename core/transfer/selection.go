@@ -12,8 +12,8 @@ import (
 const (
 	SmallTransferFileLimit      = uint64(30)
 	SmallTransferByteLimit      = uint64(8) << 20
-	MaxSelectionRuleOverrides   = catalog.MaxRootSlots
-	MaxSelectionPathTargets     = catalog.MaxRootSlots
+	MaxSelectionRuleOverrides   = catalog.MaxSelectedRoots
+	MaxSelectionPathTargets     = catalog.MaxSelectedRoots
 	MaxSelectionPathTargetBytes = catalog.MaxSelectedRootNamesBytes
 )
 

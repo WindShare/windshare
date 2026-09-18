@@ -16,7 +16,7 @@ func fileRecordWithModifiedTime(t *testing.T, fileByte byte, size uint64, modifi
 	t.Helper()
 	file := catalogID[catalog.FileID](fileByte)
 	parent := catalogID[catalog.DirectoryID](8)
-	locator, err := catalog.NewLocator(0, "file")
+	locator, err := catalog.NewSourceReference([]byte("object:" + "file"))
 	if err != nil {
 		t.Fatal(err)
 	}

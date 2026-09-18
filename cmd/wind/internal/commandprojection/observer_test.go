@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/diagnosticerror"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"os"
 	"path/filepath"
 	"strings"
@@ -532,14 +533,14 @@ func TestSharingSubjectProjectionUsesFrozenHumanDisplayFact(t *testing.T) {
 			t.Errorf("close revision capacity owner: %v", err)
 		}
 	})
-	sender, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{
-		Paths: []string{path}, Relays: []string{"ws://127.0.0.1:8484"},
+	sender, err := liveshare.PrepareSender(context.Background(), sourceBoundarySenderConfig([]string{path}, liveshare.SenderConfig{
+		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
 		RevisionCapacity: capacityOwner.Coordinator(),
 		CatalogStorage: liveshare.CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
 			return catalog.NewMemoryCatalogBackend(), nil
 		}),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,4 +624,21 @@ func sourceTransferJobID(t *testing.T, marker byte) transfer.TransferJobID {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) liveshare.SenderConfig {
+	selected := append([]string(nil), paths...)
+	config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
+		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
+	})
+	var err error
+	config.CatalogBudget, err = catalog.NewBudgetAccount("test-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		panic(err)
+	}
+	config.CacheBudget, err = contentflow.NewProcessCacheBudget(uint64(64) << 20)
+	if err != nil {
+		panic(err)
+	}
+	return config
 }

@@ -187,7 +187,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedLocator, _ := catalog.NewLocator(0, "")
+	selectedLocator, _ := catalog.NewSourceReference([]byte("object:" + ""))
 	selectedIdentity, _ := catalog.NewSourceIdentity([]byte("synthetic-capacity-directory"))
 	selected, err := catalog.NewDirectoryNodeRecord(
 		directoryID, syntheticRoot, "files", selectedLocator, selectedIdentity, catalog.ModifiedTime{},
@@ -221,14 +221,14 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	for index := range fileCount {
 		fileID := syntheticCapacityID[catalog.FileID](index + 10)
 		name := fmt.Sprintf("file-%03d.bin", index)
-		locator, locatorErr := catalog.NewLocator(0, name)
+		locator, locatorErr := catalog.NewSourceReference([]byte("object:" + name))
 		identity, identityErr := catalog.NewSourceIdentity(fmt.Appendf(nil, "synthetic-capacity-file-%d", index))
 		candidate, candidateErr := catalog.NewVersionCandidate(fmt.Appendf(nil, "synthetic-capacity-version-%d", index))
 		if errors.Join(locatorErr, identityErr, candidateErr) != nil {
 			t.Fatal(errors.Join(locatorErr, identityErr, candidateErr))
 		}
 		children = append(children, catalog.ScannedChild{
-			FileID: fileID, Name: name, Locator: locator, SourceIdentity: identity,
+			FileID: fileID, Name: name, SourceReference: locator, SourceIdentity: identity,
 			VersionCandidate: candidate, ExpectedSize: uint64(len(syntheticCapacityPayload)),
 		})
 		files[fileID] = bytes.Clone(syntheticCapacityPayload)

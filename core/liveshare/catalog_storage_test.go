@@ -159,9 +159,9 @@ func TestCatalogStorageTracerPanicCannotInterruptSenderLifecycle(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("catalog tracer authority"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{filename}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		CatalogTracer: CatalogStorageTraceFunc(func(CatalogStorageTrace) {
 			panic("catalog diagnostics must remain observational")
 		}),

@@ -127,9 +127,9 @@ func newPreparedReceiverForLifecycleTest(t *testing.T) *PreparedReceiver {
 	if err := os.WriteFile(filepath.Join(root, "source.bin"), []byte("receiver lifecycle"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{root}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)

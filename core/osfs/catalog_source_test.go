@@ -54,7 +54,8 @@ func TestSelectedCatalogSourceDefersDescendantEnumerationUntilScan(t *testing.T)
 		t.Fatalf("scan result=%+v children=%d work=%d identities=%d", result, len(children.items), work.units, identities.Load())
 	}
 	for _, child := range children.items {
-		if child.Locator.RelativePath() == "" {
+		location, err := parseSourceReference(child.SourceReference)
+		if err != nil || location.RelativePath() == "" {
 			t.Fatalf("child lost private locator authority: %+v", child)
 		}
 		if child.DirectoryID.IsZero() && (child.FileID.IsZero() || child.VersionCandidate.IsZero()) {

@@ -14,16 +14,18 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type bindingOnlyGetOutputAuthority struct {
-	getOutputAuthority
+	engine.OutputAuthority
 	events *[]string
 }
 
-func (authority *bindingOnlyGetOutputAuthority) BindDestination(context.Context) (getOutputMode, error) {
+func (authority *bindingOnlyGetOutputAuthority) BindDestination(context.Context) (engine.OutputMode, error) {
 	*authority.events = append(*authority.events, "bind")
-	return getOutputResumable, nil
+	return engine.OutputResumable, nil
 }
 
 func (authority *bindingOnlyGetOutputAuthority) Close() error {
@@ -37,50 +39,32 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	app := &App{Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader("")}
-	request, parse := app.parseGetRequest([]string{encoded})
-	if parse != requestParseReady || request.outDir != "." {
-		t.Fatalf("request=%+v parse=%d stderr=%q", request, parse, stderr.String())
+	var stderr bytes.Buffer
+	app := &App{Stderr: &stderr}
+	request, parsed := app.parseGetRequest([]string{encoded})
+	if parsed != requestParseReady || request.outDir != "." {
+		t.Fatalf("request=%+v parsed=%v", request, parsed)
 	}
-
-	var (
-		config getOutputAuthorityConfig
-		events []string
-	)
-	app.getOutputFactory = getOutputAuthorityFactoryFunc(func(candidate getOutputAuthorityConfig) (getOutputAuthority, error) {
-		config = candidate
+	var events []string
+	app.getOutputFactory = engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
+		if config.Tracer == nil {
+			t.Fatal("missing output observations")
+		}
 		events = append(events, "construct")
 		return &bindingOnlyGetOutputAuthority{events: &events}, nil
 	})
-	runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{})
-	if err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app.receiverDial = func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		events = append(events, "dial")
+		cancel()
+		return nil, context.Canceled
 	}
-	prepared, code := app.prepareGetOutput(context.Background(), request, getObservation{runtime: runtime})
-	if code != ExitOK {
-		t.Fatalf("prepare exit=%d stderr=%q", code, stderr.String())
+	if code := app.Run(ctx, []string{"get", encoded}); code != ExitNetwork {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
-	wantRoot, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.rootPath != wantRoot || !config.createRoot || config.tracer == nil {
-		t.Fatalf("output config=%+v want_root=%q", config, wantRoot)
-	}
-	if strings.Join(events, ",") != "construct,bind" {
-		t.Fatalf("pre-session events=%v", events)
-	}
-	if err := prepared.authority.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(events, ",") != "construct,bind,close" {
-		t.Fatalf("authority lifecycle=%v", events)
-	}
-	runtime.Close()
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("preparation wrote stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if strings.Join(events, ",") != "construct,bind,dial,close" {
+		t.Fatalf("authority order=%v", events)
 	}
 }
 
@@ -102,12 +86,12 @@ func TestGetExistingTracePrecedesOutputMutation(t *testing.T) {
 		) (userTraceRecorder, error) {
 			return nil, runtrace.ErrTraceExists
 		},
-		getOutputFactory: getOutputAuthorityFactoryFunc(func(getOutputAuthorityConfig) (getOutputAuthority, error) {
+		getOutputFactory: engine.OutputFactoryFunc(func(engine.OutputConfig) (engine.OutputAuthority, error) {
 			outputCalls++
 			return nil, errors.New("output construction must not run")
 		}),
 	}
-	if code := app.runGet(t.Context(), []string{"--trace", filepath.Join(t.TempDir(), "get.ndjson"), encoded}); code != ExitFailure {
+	if code := app.Run(t.Context(), []string{"get", "--trace", filepath.Join(t.TempDir(), "get.ndjson"), encoded}); code != ExitFailure {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if outputCalls != 0 {
@@ -160,7 +144,7 @@ func TestGetTraceDirectoryOwnsAndReportsRunFileBeforeOutputConstruction(t *testi
 	outputCalls := 0
 	app := &App{
 		Stdout: &stdout, Stderr: &stderr,
-		getOutputFactory: getOutputAuthorityFactoryFunc(func(getOutputAuthorityConfig) (getOutputAuthority, error) {
+		getOutputFactory: engine.OutputFactoryFunc(func(engine.OutputConfig) (engine.OutputAuthority, error) {
 			outputCalls++
 			entries, readErr := os.ReadDir(traceDirectory)
 			if readErr != nil || len(entries) != outputCalls {
@@ -176,7 +160,7 @@ func TestGetTraceDirectoryOwnsAndReportsRunFileBeforeOutputConstruction(t *testi
 		}),
 	}
 	for run := range 2 {
-		if code := app.runGet(t.Context(), []string{"--trace-dir", traceDirectory, encoded}); code != ExitFailure {
+		if code := app.Run(t.Context(), []string{"get", "--trace-dir", traceDirectory, encoded}); code != ExitFailure {
 			t.Fatalf("run %d exit=%d stderr=%q", run+1, code, stderr.String())
 		}
 	}

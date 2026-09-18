@@ -17,7 +17,6 @@ import (
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/senderobject"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -32,7 +31,7 @@ const (
 )
 
 type SenderConfig struct {
-	Paths              []string
+	Source             FileSourceFactory
 	Relays             []string
 	ChunkSize          uint32
 	Random             io.Reader
@@ -43,6 +42,8 @@ type SenderConfig struct {
 	RootPrefetchTracer RootPrefetchTracer
 	RevisionTracer     content.RevisionTracer
 	RevisionCapacity   *revisioncapacity.Coordinator
+	CatalogBudget      *catalog.BudgetAccount
+	CacheBudget        *contentflow.ProcessCacheBudget
 
 	preparation senderPreparationDependencies
 }
@@ -90,12 +91,6 @@ func productionSenderPreparationDependencies() senderPreparationDependencies {
 	}
 }
 
-type selectedCatalogSource interface {
-	catalog.DirectoryScanner
-	SelectedRoots() []catalog.NodeRecord
-	Close() error
-}
-
 type PreparedSender struct {
 	mu sync.Mutex
 
@@ -110,8 +105,7 @@ type PreparedSender struct {
 	sessionAuthKey   []byte
 	random           *lockedReader
 
-	selectedSource  selectedCatalogSource
-	revisionSource  *osfs.RootedRevisionSource
+	source          FileSource
 	catalogStore    *catalog.CatalogStore
 	revisionStore   *content.RevisionStore
 	revisionDeriver senderRevisionIdentityDeriver
@@ -179,8 +173,11 @@ func prepareSender(
 	if config.RevisionCapacity == nil {
 		return nil, errors.New("live share sender requires application revision capacity")
 	}
-	if len(config.Paths) == 0 || len(config.Relays) == 0 {
-		return nil, errors.New("live share sender requires selected paths and at least one relay")
+	if config.CatalogBudget == nil || config.CacheBudget == nil {
+		return nil, errors.New("live share sender requires application catalog and cache budgets")
+	}
+	if config.Source == nil || len(config.Relays) == 0 {
+		return nil, errors.New("live share sender requires a file source and at least one relay")
 	}
 	if config.ChunkSize == 0 {
 		config.ChunkSize = catalog.DefaultChunkSize
@@ -201,7 +198,7 @@ func prepareSender(
 			resultErr = errors.Join(resultErr, sender.Close())
 		}
 	}()
-	authority, err := prepareSenderAuthority(config, random, sender)
+	authority, err := prepareSenderAuthority(ctx, config, random, sender)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +214,7 @@ func prepareSender(
 	return sender, nil
 }
 
-func prepareSenderAuthority(config SenderConfig, random *lockedReader, sender *PreparedSender) (authority senderAuthority, resultErr error) {
+func prepareSenderAuthority(ctx context.Context, config SenderConfig, random *lockedReader, sender *PreparedSender) (authority senderAuthority, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			authority.destroy()
@@ -253,20 +250,21 @@ func prepareSenderAuthority(config SenderConfig, random *lockedReader, sender *P
 	if err != nil {
 		return authority, err
 	}
-	selected, err := osfs.NewSelectedCatalogSource(osfs.SelectedCatalogSourceConfig{
-		Paths: config.Paths, SyntheticRoot: authority.syntheticRoot,
-		Identities: osfs.CatalogIdentitySourceFunc(func() ([catalog.IdentityBytes]byte, error) {
+	sender.source, err = config.Source.OpenFileSource(ctx, FileSourceContext{
+		ShareInstance: authority.shareInstance, SyntheticRoot: authority.syntheticRoot,
+		NewIdentity: func() ([catalog.IdentityBytes]byte, error) {
 			var identity [catalog.IdentityBytes]byte
 			_, err := io.ReadFull(random, identity[:])
 			return identity, err
-		}),
+		},
 	})
 	if err != nil {
 		return authority, err
 	}
-	sender.selectedSource = selected
-	sender.revisionSource, err = selected.RevisionSource()
-	if err != nil {
+	if sender.source == nil {
+		return authority, errors.New("file source factory returned a nil source")
+	}
+	if err := ctx.Err(); err != nil {
 		return authority, err
 	}
 	sender.keyTree, err = content.NewKeyTree(readSecret, authority.shareInstance)
@@ -295,10 +293,6 @@ func prepareSenderCatalog(
 		return senderCatalog{}, err
 	}
 	sender.catalogObjects = objects
-	processBudget, err := catalog.NewBudgetAccount("live-share-process", catalog.DefaultProcessBudgetLimits())
-	if err != nil {
-		return senderCatalog{}, err
-	}
 	shareBudget, err := catalog.NewBudgetAccount("live-share", catalog.DefaultShareBudgetLimits())
 	if err != nil {
 		return senderCatalog{}, err
@@ -333,7 +327,7 @@ func prepareSenderCatalog(
 	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance: authority.shareInstance, Backend: backend,
-		ProcessBudget: processBudget, ShareBudget: shareBudget, PageSealer: objects, SpillFactory: spillFactory,
+		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, PageSealer: objects, SpillFactory: spillFactory,
 	})
 	if err != nil {
 		if catalogStorageCause(err) == CatalogStorageCauseBudgetExceeded {
@@ -345,7 +339,7 @@ func prepareSenderCatalog(
 		_ = backend.Close()
 		return senderCatalog{}, err
 	}
-	selectedRoots := sender.selectedSource.SelectedRoots()
+	selectedRoots := sender.source.SelectedRoots()
 	sender.selectedSummary, err = newSelectedRootSummary(selectedRoots)
 	if err != nil {
 		return senderCatalog{}, err
@@ -378,7 +372,7 @@ func prepareSenderCatalog(
 	sender.catalogAccess, err = newSenderCatalogAccess(
 		authority.shareInstance,
 		sender.catalogStore,
-		directoryScannerWithAdmission(sender.selectedSource, config.ScanAdmission),
+		directoryScannerWithAdmission(sender.source, config.ScanAdmission),
 		selectedRoots,
 		config.RootPrefetchTracer,
 	)
@@ -420,11 +414,7 @@ func prepareSenderContent(
 	if err != nil {
 		return err
 	}
-	cacheBudget, err := contentflow.NewProcessCacheBudget(defaultSharedBlockCacheBytes)
-	if err != nil {
-		return err
-	}
-	sender.cache, err = contentflow.NewSharedBlockCache(authority.shareInstance, defaultSharedBlockCacheBytes, cacheBudget)
+	sender.cache, err = contentflow.NewSharedBlockCache(authority.shareInstance, defaultSharedBlockCacheBytes, config.CacheBudget)
 	if err != nil {
 		return err
 	}
@@ -442,7 +432,7 @@ func prepareSenderContent(
 	}
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
-		Source: sender.revisionSource, CapacityCoordinator: config.RevisionCapacity,
+		Source: sender.source, CapacityCoordinator: config.RevisionCapacity,
 		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance),
 		RevisionDeriver: sender.revisionDeriver, MetadataBudget: metadataBudget,
 		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,

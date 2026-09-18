@@ -30,7 +30,7 @@ func committedRootForTest(t *testing.T, share ShareInstance, root DirectoryID) C
 	if childID == root {
 		childID[1] = 1
 	}
-	locator, _ := NewLocator(0, "")
+	locator, _ := NewSourceReference([]byte("object:" + ""))
 	identity, _ := NewSourceIdentity([]byte("descriptor-selected-root"))
 	child, err := NewDirectoryNodeRecord(childID, root, "selected", locator, identity, ModifiedTime{})
 	if err != nil {
@@ -136,7 +136,7 @@ func TestEntryAndNodeRecordKeepPublicAndPrivateMetadataSeparate(t *testing.T) {
 		t.Fatal("file entry projected as a directory")
 	}
 
-	locator, _ := NewLocator(0, "root-relative locator")
+	locator, _ := NewSourceReference([]byte("object:" + "root-relative locator"))
 	identity, _ := NewSourceIdentity([]byte("source identity"))
 	candidate, _ := NewVersionCandidate([]byte("version candidate"))
 	record, err := NewFileNodeRecord(fileID, parentID, "report.txt", locator, identity, candidate, 42, modified)
@@ -170,12 +170,12 @@ func TestCanonicalNameAndPathPolicy(t *testing.T) {
 	}
 
 	decomposed := "Cafe\u0301/report.txt"
-	locator, err := NewLocator(0, decomposed)
+	locator, err := NewSourceReference([]byte("object:" + decomposed))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if locator.RelativePath() != decomposed {
-		t.Fatalf("private locator spelling was rewritten to %q", locator.RelativePath())
+	if string(locator.Bytes()) != "object:"+decomposed {
+		t.Fatalf("private locator spelling was rewritten to %q", string(locator.Bytes()))
 	}
 	if canonical, err := CanonicalPath(decomposed); err != nil || canonical != "Café/report.txt" {
 		t.Fatalf("public canonical path = %q, %v", canonical, err)
@@ -226,7 +226,7 @@ func TestDomainAccessorsPreserveTypedSemantics(t *testing.T) {
 		t.Fatalf("descriptor accessors = %+v", descriptor)
 	}
 
-	locator, _ := NewLocator(3, "folder/file")
+	locator, _ := NewSourceReference([]byte("object:" + "folder/file"))
 	identity, _ := NewSourceIdentity([]byte("source"))
 	candidate, _ := NewVersionCandidate([]byte("candidate"))
 	parent := idValue[DirectoryID](8)
@@ -235,8 +235,8 @@ func TestDomainAccessorsPreserveTypedSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := record.Entry()
-	if locator.RootSlot() != 3 || locator.RelativePath() != "folder/file" || string(identity.Bytes()) != "source" ||
-		record.Kind() != NodeKindFile || record.NodeID() != file.NodeID() || record.Parent() != parent || record.Locator() != locator ||
+	if string(locator.Bytes()) != "object:folder/file" || string(identity.Bytes()) != "source" ||
+		record.Kind() != NodeKindFile || record.NodeID() != file.NodeID() || record.Parent() != parent || record.SourceReference() != locator ||
 		record.SourceIdentity() != identity || record.IsSyntheticRoot() || entry.Kind() != NodeKindFile || entry.ExpectedSize() != 12 || entry.ModifiedTime() != modified {
 		t.Fatalf("record accessors = %+v / %+v", record, entry)
 	}

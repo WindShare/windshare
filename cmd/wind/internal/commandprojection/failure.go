@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/engine"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -60,6 +61,18 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (cl
 		return clievent.Failure{}, false
 	}
 	traversal.remaining--
+	// Inspect this node directly: errors.As would bypass the traversal budget and
+	// allow a diagnostic carrier's As method to replace the workflow's decision.
+	//nolint:errorlint
+	if reason, ok := cause.(engine.ReceiveFailure); ok {
+		if failure, known := projectReceiveFailure(reason); known {
+			return failure, true
+		}
+		if failure, known := classifyErrorAtDepth(reason.Cause, depth+1, traversal); known {
+			return failure, true
+		}
+		return mustFailure(clievent.FailureUnexpected), true
+	}
 	if failure, ok := classifyDirectError(cause); ok {
 		return failure, true
 	}
@@ -89,6 +102,9 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (cl
 }
 
 func classifyDirectError(cause error) (clievent.Failure, bool) {
+	if diagnostic, ok := engine.ReceiveOutputDiagnostic(cause); ok {
+		return ProjectNormalizedFault(diagnostic.FaultDomain, diagnostic.NormalizedScope, diagnostic.NormalizedCode)
+	}
 	if exactError(cause, context.Canceled) {
 		return mustFailure(clievent.FailureCanceled), true
 	}
@@ -159,47 +175,6 @@ func classifyDirectError(cause error) (clievent.Failure, bool) {
 		return mustFailure(clievent.FailurePeerNegotiation), true
 	}
 	return clievent.Failure{}, false
-}
-
-func containsExactError(cause, target error) (found bool) {
-	defer func() {
-		if recover() != nil {
-			found = false
-		}
-	}()
-	return containsExactErrorAtDepth(
-		cause, target, 0, &errorTraversal{remaining: maximumErrorTreeNodes},
-	)
-}
-
-func containsExactErrorAtDepth(
-	cause, target error,
-	depth int,
-	traversal *errorTraversal,
-) bool {
-	if cause == nil || depth >= maximumErrorTreeDepth || traversal.remaining == 0 || typedNil(cause) {
-		return false
-	}
-	traversal.remaining--
-	if exactError(cause, target) {
-		return true
-	}
-	switch reflect.TypeOf(cause) {
-	case trustedJoinType, trustedMultiWrapType, reflect.TypeFor[*relayset.ReceiverJoinFailure]():
-		children, ok := cause.(interface{ Unwrap() []error })
-		if !ok {
-			return false
-		}
-		for _, child := range children.Unwrap() {
-			if containsExactErrorAtDepth(child, target, depth+1, traversal) {
-				return true
-			}
-		}
-	case trustedWrapType:
-		child, ok := cause.(interface{ Unwrap() error })
-		return ok && containsExactErrorAtDepth(child.Unwrap(), target, depth+1, traversal)
-	}
-	return false
 }
 
 func typedNil(value error) bool {

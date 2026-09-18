@@ -232,8 +232,19 @@ func DiagnoseFilesystemOutputFailure(stage FilesystemOutputFailureStage, cause e
 }
 
 func diagnoseFilesystemOutputFailure(stage FilesystemOutputFailureStage, cause error) error {
-	if cause == nil || errors.Is(cause, context.Canceled) ||
-		errors.Is(cause, context.DeadlineExceeded) {
+	if cause == nil {
+		return nil
+	}
+	if stage == FilesystemOutputFailureAuthorityClose {
+		// A release failure is independent of the operation that initiated
+		// shutdown. Keep this boundary even when its cause has earlier evidence
+		// or includes cancellation alongside another close failure.
+		diagnostic := filesystemOutputDiagnostic(stage, cause)
+		diagnostic.Stage = stage
+		diagnostic.ReconciliationStep = 0
+		return &filesystemOutputDiagnosticError{diagnostic: diagnostic, cause: cause}
+	}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause
 	}
 	if existing, ok := FilesystemOutputDiagnosticFor(cause); ok {
@@ -247,8 +258,9 @@ func freezeFilesystemOutputFailure(primary, cleanup error) error {
 	if cleanup == nil {
 		return primary
 	}
+	cleanup = diagnoseFilesystemOutputFailure(FilesystemOutputFailureAuthorityClose, cleanup)
 	if primary == nil {
-		return diagnoseFilesystemOutputFailure(FilesystemOutputFailureAuthorityClose, cleanup)
+		return cleanup
 	}
 	if diagnostic, ok := FilesystemOutputDiagnosticFor(primary); ok {
 		return &filesystemOutputDiagnosticError{

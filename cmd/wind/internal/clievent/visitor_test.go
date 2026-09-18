@@ -9,6 +9,10 @@ import (
 
 type exhaustiveVisitor struct{ visited string }
 
+func (visitor *exhaustiveVisitor) VisitEngineTaskObserved(EngineTaskObserved) error {
+	return visitor.mark("engine_task")
+}
+
 func (visitor *exhaustiveVisitor) VisitNativeConnectivityObserved(NativeConnectivityObserved) error {
 	return nil
 }

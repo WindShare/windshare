@@ -107,7 +107,7 @@ func assertV4ProducerFactsPrecedeCommandResult(t *testing.T, component string, r
 	}
 	for index := terminal + 1; index < len(records); index++ {
 		switch event := records[index].Event; event {
-		case "relay_lifecycle", "webrtc_lifecycle", "peer_attempt", "receiver_termination", "lane_settlement", "observer_loss":
+		case "engine_task_observed", "relay_lifecycle", "webrtc_lifecycle", "peer_attempt", "receiver_termination", "lane_settlement", "observer_loss":
 			t.Fatalf("%s user trace emitted %s after its command result", component, event)
 		}
 	}
@@ -211,7 +211,7 @@ func validateV4TraceRecord(
 		correlation = &projected
 	}
 	record := v4TraceRecord{
-		Event: event, RuntimeRunID: runtimeRunID, Correlation: correlation, Payload: payload,
+		Command: command, Event: event, RuntimeRunID: runtimeRunID, Correlation: correlation, Payload: payload,
 	}
 	validateV4DiagnosticRecord(t, record)
 	return record
@@ -378,6 +378,8 @@ func validateV4TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 func validateV4DiagnosticRecord(t *testing.T, record v4TraceRecord) {
 	t.Helper()
 	switch record.Event {
+	case "engine_task_observed":
+		validateV4EngineTaskRecord(t, record)
 	case "lane_adopted", "lane_settlement":
 		if record.Correlation == nil || record.Correlation.ProtocolSessionID == "" ||
 			record.Correlation.LaneID == nil || record.Correlation.LaneEpoch == nil {
@@ -686,6 +688,7 @@ type v4ProtocolCorrelationKey struct {
 }
 
 type v4ProtocolCorrelationEvidence struct {
+	engineTaskID string
 	runtimeRunID string
 	keys         map[v4ProtocolCorrelationKey]struct{}
 }
@@ -710,6 +713,7 @@ func registerCriticalV4ProtocolCorrelation(t *testing.T, process *v2Process, rec
 		return
 	}
 	evidence := v4ProtocolCorrelationEvidence{
+		engineTaskID: assertV4CriticalEngineTask(t, process.userTraceCommand, records),
 		runtimeRunID: records[0].RuntimeRunID,
 		keys:         make(map[v4ProtocolCorrelationKey]struct{}),
 	}
@@ -764,6 +768,9 @@ func registerCriticalV4ProtocolCorrelation(t *testing.T, process *v2Process, rec
 		t.Fatal("critical sender trace has no receiver trace to correlate")
 	}
 	for _, receiver := range receivers {
+		if sender.engineTaskID == receiver.engineTaskID {
+			t.Fatal("sender and receiver unexpectedly share an engine task identity")
+		}
 		if sender.runtimeRunID == receiver.runtimeRunID {
 			t.Fatal("sender and receiver unexpectedly share a local runtime_run_id")
 		}
