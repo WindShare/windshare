@@ -8,7 +8,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 )
 
-const catalogStorageSchema = 2
+const catalogStorageSchema = 3
 
 var ErrCorruptCatalogStorage = errors.New("catalog durable storage is corrupt")
 
@@ -60,8 +60,7 @@ type storedNode struct {
 	ID               []byte
 	Parent           []byte
 	Name             string
-	RootSlot         uint16
-	RelativePath     string
+	SourceReference  []byte
 	SourceIdentity   []byte
 	VersionCandidate []byte
 	ExpectedSize     uint64
@@ -146,8 +145,8 @@ func encodeNodeRecord(record NodeRecord) ([]byte, error) {
 	}
 	value := storedNode{
 		Schema: catalogStorageSchema, Kind: uint8(record.kind), ID: record.nodeID.Bytes(),
-		Parent: record.parent.Bytes(), Name: record.name, RootSlot: uint16(record.locator.rootSlot),
-		RelativePath: record.locator.relativePath, SourceIdentity: record.sourceIdentity.Bytes(),
+		Parent: record.parent.Bytes(), Name: record.name, SourceReference: record.sourceReference.Bytes(),
+		SourceIdentity:   record.sourceIdentity.Bytes(),
 		VersionCandidate: record.versionCandidate.Bytes(), ExpectedSize: record.expectedSize,
 		Modified: storeModifiedTime(record.modified), SyntheticRoot: record.syntheticRoot,
 	}
@@ -172,8 +171,8 @@ func decodeNodeRecord(encoded []byte) (NodeRecord, error) {
 	}
 	if value.SyntheticRoot {
 		if NodeKind(value.Kind) != NodeKindDirectory || len(value.Parent) != IdentityBytes ||
-			!bytes.Equal(value.Parent, make([]byte, IdentityBytes)) || value.RootSlot != 0 ||
-			value.Name != "" || value.RelativePath != "" || len(value.SourceIdentity) != 0 ||
+			!bytes.Equal(value.Parent, make([]byte, IdentityBytes)) ||
+			value.Name != "" || len(value.SourceReference) != 0 || len(value.SourceIdentity) != 0 ||
 			len(value.VersionCandidate) != 0 || value.ExpectedSize != 0 || value.Modified.Present {
 			return NodeRecord{}, fmt.Errorf("%w: malformed synthetic root", ErrCorruptCatalogStorage)
 		}
@@ -187,7 +186,7 @@ func decodeNodeRecord(encoded []byte) (NodeRecord, error) {
 	if err != nil {
 		return NodeRecord{}, fmt.Errorf("%w: invalid node parent", ErrCorruptCatalogStorage)
 	}
-	locator, err := NewLocator(RootSlot(value.RootSlot), value.RelativePath)
+	locator, err := NewSourceReference(value.SourceReference)
 	if err != nil {
 		return NodeRecord{}, fmt.Errorf("%w: %w", ErrCorruptCatalogStorage, err)
 	}

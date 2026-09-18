@@ -86,7 +86,7 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	locator, err := catalog.NewLocator(0, "")
+	locator, err := catalog.NewSourceReference([]byte("object:" + ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,8 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 	}
 
 	sender := &PreparedSender{
-		selectedSource: &senderPreparationCatalogSource{selected: []catalog.NodeRecord{selectedRoot}},
-		keyTree:        keyTree,
+		source:  &senderPreparationCatalogSource{selected: []catalog.NodeRecord{selectedRoot}},
+		keyTree: keyTree,
 	}
 	authority := senderAuthority{
 		publicKey:      publicKey,
@@ -132,7 +132,7 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 	return senderPreparationHarness{
 		sender:    sender,
 		authority: authority,
-		config: SenderConfig{
+		config: SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 			RevisionCapacity: newTestRevisionCapacity(t),
 			ChunkSize:        catalog.MinChunkSize,
 			Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
@@ -152,9 +152,9 @@ func TestPrepareSenderRejectsPartiallyInjectedDependencies(t *testing.T) {
 	dependencies := productionSenderPreparationDependencies()
 	dependencies.newRecordSealer = nil
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{"unused"},
+		Source:           testFileSource([]string{"unused"}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		preparation:      dependencies,
 	})
@@ -297,9 +297,9 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("zero-share-content-boundary"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config := SenderConfig{
+	config := SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{filename}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 	random := &lockedReader{reader: mathrand.New(mathrand.NewSource(29))}
@@ -310,7 +310,7 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 		}
 	})
 	dependencies := productionSenderPreparationDependencies()
-	authority, err := prepareSenderAuthority(config, random, sender)
+	authority, err := prepareSenderAuthority(context.Background(), config, random, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 	if err == nil {
 		t.Fatal("content preparation accepted a zero share authority")
 	}
-	if sender.catalogStore == nil || sender.revisionSource == nil {
+	if sender.catalogStore == nil || sender.source == nil {
 		t.Fatal("zero-share test did not retain valid prior-stage resources")
 	}
 	if sender.revisionStore != nil || sender.recordSealer != nil || sender.cache != nil {
@@ -347,9 +347,9 @@ func TestPrepareSenderRollsBackRecordSealerConstructorFailure(t *testing.T) {
 		return nil, injected
 	}
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename},
+		Source:           testFileSource([]string{filename}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
 		Random:           mathrand.New(mathrand.NewSource(23)),
@@ -358,4 +358,8 @@ func TestPrepareSenderRollsBackRecordSealerConstructorFailure(t *testing.T) {
 	if sender != nil || !errors.Is(err, injected) {
 		t.Fatalf("record sealer constructor result = %v, %v", sender, err)
 	}
+}
+
+func (*senderPreparationCatalogSource) OpenStable(context.Context, catalog.NodeRecord) (content.StableFile, error) {
+	return nil, content.ErrRevisionNotFound
 }

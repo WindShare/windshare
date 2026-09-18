@@ -51,11 +51,11 @@ func TestDomainConstructorsRejectInvalidAxes(t *testing.T) {
 	if _, err := NewVersionCandidate(make([]byte, MaxVersionCandidateBytes+1)); err == nil {
 		t.Fatal("oversized version candidate was accepted")
 	}
-	if _, err := NewLocator(MaxRootSlots, "file"); err == nil {
-		t.Fatal("out-of-range root slot was accepted")
+	if _, err := NewSourceReference(nil); err == nil {
+		t.Fatal("empty source reference was accepted")
 	}
-	if _, err := NewLocator(0, "../file"); err == nil {
-		t.Fatal("escaping locator was accepted")
+	if _, err := NewSourceReference(make([]byte, MaxSourceReferenceBytes+1)); err == nil {
+		t.Fatal("oversized source reference was accepted")
 	}
 	if _, err := NewFileEntry(FileID{}, "file", 1, ModifiedTime{}); err == nil {
 		t.Fatal("zero file identity was accepted")
@@ -69,7 +69,7 @@ func TestDomainConstructorsRejectInvalidAxes(t *testing.T) {
 	if _, err := NewSyntheticRootNodeRecord(DirectoryID{}); err == nil {
 		t.Fatal("zero synthetic root was accepted")
 	}
-	locator, _ := NewLocator(0, "file")
+	locator, _ := NewSourceReference([]byte("object:" + "file"))
 	identity, _ := NewSourceIdentity([]byte("identity"))
 	candidate, _ := NewVersionCandidate([]byte("candidate"))
 	if _, err := NewDirectoryNodeRecord(idValue[DirectoryID](1), DirectoryID{}, "dir", locator, identity, ModifiedTime{}); err == nil {

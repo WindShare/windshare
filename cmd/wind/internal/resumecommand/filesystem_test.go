@@ -4,166 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine"
 )
-
-func TestFilesystemSummaryProjectionUsesClosedOperationVocabulary(t *testing.T) {
-	tests := []struct {
-		state  osfs.ResumeOperationState
-		reason osfs.FilesystemOutputStateReason
-		want   resumeOperationState
-	}{
-		{osfs.ResumeOperationIncomplete, osfs.FilesystemOutputStateReasonNone, resumeOperationIncomplete},
-		{osfs.ResumeOperationResumable, osfs.FilesystemOutputStateReasonNone, resumeOperationResumable},
-		{osfs.ResumeOperationCleanupPending, osfs.FilesystemOutputStateCleanupUncertain, resumeOperationCleanupPending},
-		{osfs.ResumeOperationNeedsAttention, osfs.FilesystemOutputStateOperationOwnershipUnknown, resumeOperationNeedsAttention},
-	}
-	for _, test := range tests {
-		summary := validResumeSummaryView()
-		summary.state = test.state
-		summary.reason = test.reason
-		operation, err := projectResumeStateSummary(summary)
-		wantAttention := ""
-		if test.reason != osfs.FilesystemOutputStateReasonNone {
-			wantAttention = test.reason.String()
-		}
-		if err != nil || operation.state != test.want || operation.attention != wantAttention {
-			t.Fatalf("state=%s operation=%+v err=%v", test.state, operation, err)
-		}
-	}
-
-	for _, state := range []osfs.ResumeOperationState{0, osfs.ResumeOperationDiscarded} {
-		summary := validResumeSummaryView()
-		summary.state = state
-		if _, err := projectResumeStateSummary(summary); !errors.Is(err, errResumeStateContract) {
-			t.Fatalf("state=%d error=%v", state, err)
-		}
-	}
-}
-
-func TestFilesystemSummaryProjectionShowsOnlyBlockedItemsAndHidesControlReferences(t *testing.T) {
-	summary := validResumeSummaryView()
-	summary.items = []osfs.ResumeStateItem{}
-	operation, err := projectResumeStateSummary(summary)
-	if err != nil || len(operation.blockedItems) != 0 {
-		t.Fatalf("empty projection=%+v err=%v", operation, err)
-	}
-
-	blockedTests := []struct {
-		item fakeResumeItemView
-		want resumeBlockedReason
-	}{
-		{fakeResumeItemView{path: "result/publish", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockPublicationUnknown}, resumeBlockedPublicationUnknown},
-		{fakeResumeItemView{path: "result/checkpoint", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockCheckpointInvalid}, resumeBlockedCheckpointInvalid},
-		{fakeResumeItemView{path: "result/partial", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockOwnedObjectUnknown}, resumeBlockedOwnedObjectUnknown},
-		{fakeResumeItemView{path: "result/revision", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockRevisionConflict}, resumeBlockedRevisionConflict},
-		{fakeResumeItemView{state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockCheckpointInvalid, reference: "private-record-17"}, resumeBlockedCheckpointInvalid},
-	}
-	projected := make([]resumeBlockedItem, 0, len(blockedTests))
-	for _, test := range blockedTests {
-		item, err := projectResumeBlockedItem(test.item)
-		if err != nil || item.reason != test.want {
-			t.Fatalf("item=%+v projected=%+v err=%v", test.item, item, err)
-		}
-		projected = append(projected, item)
-	}
-	operation = testResumeOperation("1", resumeOperationIncomplete)
-	operation.blockedItems = projected
-	snapshot, err := newResumeInventorySnapshot([]resumeOperation{operation}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rendered, _, err := (textRenderer{}).Inventory(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"publication-unknown", "checkpoint-invalid", "owned-object-unknown", "revision-conflict", "path_known=false"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("rendered=%q missing=%q", rendered, want)
-		}
-	}
-	if strings.Contains(rendered, "private-record-17") {
-		t.Fatalf("control reference leaked: %q", rendered)
-	}
-
-	for _, invalid := range []fakeResumeItemView{
-		{state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockCheckpointInvalid},
-		{path: "unsafe/../path", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockPublicationUnknown},
-		{path: "result/file", state: osfs.ResumeItemPublished, reason: osfs.ResumeItemBlockNone},
-	} {
-		if _, err := projectResumeBlockedItem(invalid); !errors.Is(err, errResumeStateContract) {
-			t.Fatalf("invalid=%+v error=%v", invalid, err)
-		}
-	}
-}
-
-func TestResumeInventoryRejectsAmbiguousOrdinalsAndInvalidAttention(t *testing.T) {
-	operation := testResumeOperation("1", resumeOperationIncomplete)
-	if _, err := newResumeInventorySnapshot([]resumeOperation{operation, operation}, false); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("duplicate error=%v", err)
-	}
-	invalidAttention := testResumeOperation("2", resumeOperationNeedsAttention)
-	invalidAttention.attention = "cleanup-uncertain"
-	if _, err := newResumeInventorySnapshot([]resumeOperation{invalidAttention}, false); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("attention error=%v", err)
-	}
-	unsorted := resumeInventorySnapshot{operations: []resumeOperation{
-		testResumeOperation("2", resumeOperationIncomplete),
-		testResumeOperation("1", resumeOperationIncomplete),
-	}}
-	if unsorted.valid() {
-		t.Fatal("unsorted ordinal snapshot was accepted")
-	}
-	if _, _, err := (textRenderer{}).Inventory(unsorted); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("render error=%v", err)
-	}
-}
-
-func TestFilesystemDiscardProjectionSeparatesCommandOutcomeFromInventoryHistory(t *testing.T) {
-	tests := []struct {
-		state  osfs.ResumeOperationState
-		reason osfs.FilesystemOutputStateReason
-		want   string
-	}{
-		{osfs.ResumeOperationDiscarded, osfs.FilesystemOutputStateReasonNone, resumeDiscardStatusDiscarded},
-		{osfs.ResumeOperationCleanupPending, osfs.FilesystemOutputStateCleanupUncertain, resumeDiscardStatusCleanupPending},
-		{osfs.ResumeOperationNeedsAttention, osfs.FilesystemOutputStateOperationOwnershipUnknown, resumeDiscardStatusNeedsAttention},
-	}
-	for _, test := range tests {
-		summary := validResumeSummaryView()
-		summary.state = test.state
-		summary.reason = test.reason
-		report, err := projectResumeDiscardSummary(summary)
-		if err != nil || report.status != test.want || !report.valid() {
-			t.Fatalf("state=%d report=%+v err=%v", test.state, report, err)
-		}
-	}
-	summary := validResumeSummaryView()
-	if _, err := projectResumeDiscardSummary(summary); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("active discard report error=%v", err)
-	}
-}
-
-func TestFilesystemInventoryAndDiscardFailClosedForDetachedValues(t *testing.T) {
-	var detached *filesystemResumeStateInventory
-	if _, err := detached.Snapshot(); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("detached snapshot error=%v", err)
-	}
-	if _, err := detached.Discard(context.Background(), 0); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("detached discard error=%v", err)
-	}
-	if _, err := decodeResumeOperationID("not-hex"); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("decode error=%v", err)
-	}
-	if _, err := projectResumeStateSummary((*fakeResumeSummaryView)(nil)); !errors.Is(err, errResumeStateContract) {
-		t.Fatalf("nil summary error=%v", err)
-	}
-}
 
 func TestFilesystemRunnerHelpUsesOnlyRootOwnedOperationInventory(t *testing.T) {
 	stdout := &bytes.Buffer{}
@@ -181,81 +29,61 @@ func TestFilesystemRunnerHelpUsesOnlyRootOwnedOperationInventory(t *testing.T) {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
-
-type fakeResumeSummaryView struct {
-	operation  receivecontract.OperationID
-	intent     transfer.ReceiveIntentDigest
-	state      osfs.ResumeOperationState
-	generation uint64
-	reason     osfs.FilesystemOutputStateReason
-	items      []osfs.ResumeStateItem
-	busy       bool
-	valid      bool
-}
-
-func validResumeSummaryView() *fakeResumeSummaryView {
-	operation, _ := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{0x11}, receivecontract.StableIdentityBytes))
-	intent, _ := transfer.ReceiveIntentDigestFromBytes(bytes.Repeat([]byte{0x22}, transfer.ReceiveIntentDigestBytes))
-	return &fakeResumeSummaryView{
-		operation: operation, intent: intent, state: osfs.ResumeOperationIncomplete,
-		generation: 1, reason: osfs.FilesystemOutputStateReasonNone, valid: true,
+func TestFilesystemRunnerUsesEngineRecoveryWithoutCreatingMissingRoot(t *testing.T) {
+	application, err := engine.New(engine.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := application.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	missing := filepath.Join(t.TempDir(), "missing")
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	runner := NewFilesystemRunner(FilesystemConfig{
+		Recovery: application, Input: strings.NewReader(""), Output: stdout,
+		RawTerminalOutput: stderr, SerializedTerminalOutput: stderr,
+		Logf: func(format string, args ...any) { _, _ = fmt.Fprintf(stderr, format, args...) },
+	})
+	if result := runner.Run(context.Background(), []string{"list", "-o", missing}); result != ResultFailure {
+		t.Fatalf("missing destination result=%d", result)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only resume created destination: %v", err)
+	}
+	if !strings.Contains(stdout.String(), resumeDestinationBindingReason) || stderr.Len() == 0 {
+		t.Fatalf("engine failure projection stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
-func (summary *fakeResumeSummaryView) OperationID() receivecontract.OperationID {
-	if summary == nil {
-		return receivecontract.OperationID{}
+func TestResumeDiscardProjectsEngineRefusalAfterConfirmation(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot([]resumeOperation{testResumeOperation("1", resumeOperationResumable)}, false)
+	for _, test := range []struct {
+		name    string
+		failure *engine.RecoveryFailure
+		status  string
+	}{
+		{"changed", &engine.RecoveryFailure{Kind: engine.RecoveryFailureChanged, Reason: resumeOperationChangedReason}, resumeDiscardStatusChanged},
+		{"busy", &engine.RecoveryFailure{Kind: engine.RecoveryFailureBusy, Reason: resumeOperationRunningReason}, resumeBusyStatus},
+		{"cancelled", &engine.RecoveryFailure{Kind: engine.RecoveryFailureCancelled, Reason: resumeCommandCancelledReason}, resumeCancelledStatus},
+		{"attention", &engine.RecoveryFailure{Kind: engine.RecoveryFailureNeedsAttention, Reason: resumeOperationUnknownReason}, resumeDiscardStatusNeedsAttention},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inventory := &fakeResumeStateInventory{snapshot: snapshot, discardFailure: test.failure}
+			terminal := &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
+			app, stdout, _ := newResumeTestApp()
+			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+			app.resumeConfirmation = terminal
+			result := app.Run(context.Background(), []string{"resume", "discard", "-o", t.TempDir(), "--item", "1"})
+			if result != ResultFailure || terminal.calls != 1 || inventory.discardCalls != 1 ||
+				inventory.discardID != snapshot.Operations[0].ID {
+				t.Fatalf("identity-bound interaction result=%d inventory=%+v terminal=%+v", result, inventory, terminal)
+			}
+			if !strings.Contains(stdout.String(), fmt.Sprintf("resume_discard_status=%q", test.status)) ||
+				!strings.Contains(stdout.String(), fmt.Sprintf("reason=%q", test.failure.Reason)) {
+				t.Fatalf("engine decision was lost: %q", stdout.String())
+			}
+		})
 	}
-	return summary.operation
 }
-func (summary *fakeResumeSummaryView) ReceiveIntentDigest() transfer.ReceiveIntentDigest {
-	if summary == nil {
-		return transfer.ReceiveIntentDigest{}
-	}
-	return summary.intent
-}
-func (summary *fakeResumeSummaryView) State() osfs.ResumeOperationState {
-	if summary == nil {
-		return 0
-	}
-	return summary.state
-}
-func (summary *fakeResumeSummaryView) StateGeneration() uint64 {
-	if summary == nil {
-		return 0
-	}
-	return summary.generation
-}
-func (summary *fakeResumeSummaryView) NeedsAttentionReason() osfs.FilesystemOutputStateReason {
-	if summary == nil {
-		return 0
-	}
-	return summary.reason
-}
-func (summary *fakeResumeSummaryView) Items() []osfs.ResumeStateItem {
-	if summary == nil {
-		return nil
-	}
-	return append([]osfs.ResumeStateItem(nil), summary.items...)
-}
-func (summary *fakeResumeSummaryView) Busy() bool {
-	return summary != nil && summary.busy
-}
-func (summary *fakeResumeSummaryView) Valid() bool {
-	return summary != nil && summary.valid
-}
-
-type fakeResumeItemView struct {
-	path      string
-	state     osfs.ResumeItemState
-	reason    osfs.ResumeItemBlockReason
-	reference string
-}
-
-func (item fakeResumeItemView) CanonicalPath() string                   { return item.path }
-func (item fakeResumeItemView) State() osfs.ResumeItemState             { return item.state }
-func (item fakeResumeItemView) BlockReason() osfs.ResumeItemBlockReason { return item.reason }
-func (item fakeResumeItemView) DiagnosticReference() string             { return item.reference }
-
-var _ resumeSummaryView = (*fakeResumeSummaryView)(nil)
-var _ resumeItemView = fakeResumeItemView{}

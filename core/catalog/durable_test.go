@@ -45,14 +45,14 @@ func wideFileID(index uint64) FileID {
 func wideScannedFile(t *testing.T, index int) ScannedChild {
 	t.Helper()
 	name := fmt.Sprintf("file-%06d", index)
-	locator, err := NewLocator(0, name)
+	locator, err := NewSourceReference([]byte("object:" + name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity, _ := NewSourceIdentity(fmt.Appendf(nil, "source-%d", index))
 	candidate, _ := NewVersionCandidate(fmt.Appendf(nil, "version-%d", index))
 	return ScannedChild{
-		FileID: wideFileID(uint64(index)), Name: name, Locator: locator,
+		FileID: wideFileID(uint64(index)), Name: name, SourceReference: locator,
 		SourceIdentity: identity, VersionCandidate: candidate, ExpectedSize: uint64(index),
 	}
 }

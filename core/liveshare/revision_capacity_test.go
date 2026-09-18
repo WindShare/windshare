@@ -43,8 +43,8 @@ func TestPreparedSendersShareApplicationRevisionCapacityUntilEveryStoreCloses(t 
 		if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		sender, err := PrepareSender(context.Background(), SenderConfig{
-			Paths: []string{path}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
+			Source: testFileSource([]string{path}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 			RevisionCapacity: coordinator,
 		})
 		if err != nil {
@@ -112,8 +112,8 @@ func TestPrepareSenderFailureUnregistersStoreBeforeReturning(t *testing.T) {
 		return nil, injected
 	}
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{path}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
+		Source: testFileSource([]string{path}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		RevisionCapacity: owner.Coordinator(), preparation: dependencies,
 	})
 	if sender != nil || !errors.Is(err, injected) {
@@ -129,8 +129,8 @@ func TestPrepareSenderRejectsMissingApplicationRevisionCapacity(t *testing.T) {
 	if err := os.WriteFile(path, []byte("explicit owner"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{path}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+	if _, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
+		Source: testFileSource([]string{path}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	}); err == nil {
 		t.Fatal("sender preparation accepted a missing application revision capacity owner")
 	}

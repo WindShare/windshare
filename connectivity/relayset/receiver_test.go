@@ -6,6 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -92,7 +95,7 @@ func receiverTestShare(t *testing.T, urls []string) *liveshare.PreparedSender {
 	if err = os.WriteFile(file, []byte("multi relay"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{Paths: []string{file}, Relays: urls, RevisionCapacity: capacity.Coordinator()})
+	sender, err := liveshare.PrepareSender(context.Background(), sourceBoundarySenderConfig([]string{file}, liveshare.SenderConfig{Relays: urls, RevisionCapacity: capacity.Coordinator()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,4 +318,21 @@ func TestReceiverCancellationJoinsPendingDial(t *testing.T) {
 	if _, _, err = set.WaitReady(context.Background()); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+}
+
+func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) liveshare.SenderConfig {
+	selected := append([]string(nil), paths...)
+	config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
+		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
+	})
+	var err error
+	config.CatalogBudget, err = catalog.NewBudgetAccount("test-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		panic(err)
+	}
+	config.CacheBudget, err = contentflow.NewProcessCacheBudget(uint64(64) << 20)
+	if err != nil {
+		panic(err)
+	}
+	return config
 }

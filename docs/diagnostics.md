@@ -20,6 +20,7 @@ Traces are recorded in line-delimited JSON (NDJSON). Sensitive secrets (link key
 
 Correlate events across the session using:
 
+- `engine_task_id`: Native task identity linking source acquisition, session replacement, admission, and settlement.
 - `protocol_session_id`: Global ID linking sender and receiver protocol sessions.
 - `runtime_run_id`: Unique ID for a single process execution.
 - `protocol_operation_id` + `response_sequence`: Identifies an individual RPC or protocol operation.
@@ -27,6 +28,7 @@ Correlate events across the session using:
 
 ### Key Events
 
+- `engine_task_observed`: Native task lifecycle, source acquisition, session replacement, and content-admission decisions. Correlate share, receive-operation, job, and previous/current session identities. `task_settled` carries the authoritative `outcome` and `failure_class`; `failure` retains the selected reason, and `cleanup_failure` separately identifies resource-release faults. A stop request or finished lifecycle alone does not imply success.
 - `protocol_operation` & `protocol_response_send_returned`: Operation lifecycle, lane selection, and send attempts.
 - `protocol_error_received`: Authenticated protocol errors (`scope`, `code`, `retryable`, `retry_after_ms`).
 - `sender_session_terminated`: Session shutdown reason, failing component (`source`), error cause chain (`nodes`), and stack trace (`capture_stack`).

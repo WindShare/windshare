@@ -153,7 +153,7 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	for index := range data {
 		data[index] = byte(index / catalog.MinChunkSize)
 	}
-	locator, _ := catalog.NewLocator(0, "file.bin")
+	locator, _ := catalog.NewSourceReference([]byte("object:" + "file.bin"))
 	sourceIdentity, _ := catalog.NewSourceIdentity([]byte("runtime-source"))
 	candidate, _ := catalog.NewVersionCandidate([]byte("runtime-candidate"))
 	record, err := catalog.NewFileNodeRecord(file, parent, "file.bin", locator, sourceIdentity, candidate, size, catalog.ModifiedTime{})

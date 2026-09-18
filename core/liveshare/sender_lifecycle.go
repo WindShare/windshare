@@ -8,7 +8,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
@@ -26,9 +25,8 @@ type senderOwnedResources struct {
 	recordSealer    *records.Sealer
 	revisionStore   *content.RevisionStore
 	revisionDeriver senderRevisionIdentityDeriver
-	revisionSource  *osfs.RootedRevisionSource
 	catalogStore    *catalog.CatalogStore
-	selectedSource  selectedCatalogSource
+	source          FileSource
 	keyTree         *content.KeyTree
 }
 
@@ -53,9 +51,8 @@ func (sender *PreparedSender) Stop() error {
 		recordSealer:    sender.recordSealer,
 		revisionStore:   sender.revisionStore,
 		revisionDeriver: sender.revisionDeriver,
-		revisionSource:  sender.revisionSource,
 		catalogStore:    sender.catalogStore,
-		selectedSource:  sender.selectedSource,
+		source:          sender.source,
 		keyTree:         sender.keyTree,
 	}
 	var beginErr error
@@ -114,14 +111,11 @@ func (sender *PreparedSender) finishClose(
 		// Store close is the join proof for every user of this injected secret.
 		resources.revisionDeriver.Destroy()
 	}
-	if resources.revisionSource != nil {
-		result = errors.Join(result, resources.revisionSource.Close())
-	}
 	if resources.catalogStore != nil {
 		result = errors.Join(result, resources.catalogStore.Close())
 	}
-	if resources.selectedSource != nil {
-		result = errors.Join(result, resources.selectedSource.Close())
+	if resources.source != nil {
+		result = errors.Join(result, resources.source.Close())
 	}
 	// Quiescence precedes destruction because both sealers retain cloned key
 	// authority that active catalog or content work may still dereference.
@@ -155,9 +149,8 @@ func (sender *PreparedSender) finishClose(
 	sender.recordSealer = nil
 	sender.revisionStore = nil
 	sender.revisionDeriver = nil
-	sender.revisionSource = nil
 	sender.catalogStore = nil
-	sender.selectedSource = nil
+	sender.source = nil
 	sender.keyTree = nil
 	sender.random = nil
 	sender.capability = link.Link{}

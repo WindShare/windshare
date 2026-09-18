@@ -57,10 +57,10 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 			t.Errorf("close revision capacity owner: %v", err)
 		}
 	})
-	preparedSender, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
-		Paths: []string{selected}, Relays: []string{receiverRuntimeScopeRelay}, ChunkSize: catalog.MinChunkSize,
+	preparedSender, err := liveshare.PrepareSender(ctx, sourceBoundarySenderConfig([]string{selected}, liveshare.SenderConfig{
+		Relays: []string{receiverRuntimeScopeRelay}, ChunkSize: catalog.MinChunkSize,
 		RevisionCapacity: capacityOwner.Coordinator(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

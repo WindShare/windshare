@@ -230,7 +230,7 @@ func wideCatalogStore(
 }
 
 func selectedWideDirectory(root, directory DirectoryID) (NodeRecord, error) {
-	locator, err := NewLocator(0, "")
+	locator, err := NewSourceReference([]byte("object:" + ""))
 	if err != nil {
 		return NodeRecord{}, err
 	}
@@ -243,7 +243,7 @@ func selectedWideDirectory(root, directory DirectoryID) (NodeRecord, error) {
 
 func benchmarkWideScannedFile(index int) (ScannedChild, error) {
 	name := fmt.Sprintf("file-%07d", index)
-	locator, err := NewLocator(0, name)
+	locator, err := NewSourceReference([]byte("object:" + name))
 	if err != nil {
 		return ScannedChild{}, err
 	}
@@ -258,7 +258,7 @@ func benchmarkWideScannedFile(index int) (ScannedChild, error) {
 	var file FileID
 	binary.BigEndian.PutUint64(file[8:], uint64(index)+1)
 	return ScannedChild{
-		FileID: file, Name: name, Locator: locator, SourceIdentity: identity,
+		FileID: file, Name: name, SourceReference: locator, SourceIdentity: identity,
 		VersionCandidate: candidate, ExpectedSize: uint64(index),
 	}, nil
 }

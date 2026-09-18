@@ -1,6 +1,7 @@
 package clievent
 
 type Visitor interface {
+	VisitEngineTaskObserved(EngineTaskObserved) error
 	VisitNativeConnectivityObserved(NativeConnectivityObserved) error
 	VisitPlatformSetupObserved(PlatformSetupObserved) error
 	VisitReady(Ready) error

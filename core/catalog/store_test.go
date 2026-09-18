@@ -106,27 +106,27 @@ func TestDefaultMemoryStoreSpillNamespacesArePrivate(t *testing.T) {
 
 func scannedFile(t *testing.T, id byte, name string, size uint64) ScannedChild {
 	t.Helper()
-	locator, err := NewLocator(0, name)
+	locator, err := NewSourceReference([]byte("object:" + name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity, _ := NewSourceIdentity([]byte("source-" + name))
 	candidate, _ := NewVersionCandidate([]byte("version-" + name))
 	return ScannedChild{
-		FileID: idValue[FileID](id), Name: name, Locator: locator,
+		FileID: idValue[FileID](id), Name: name, SourceReference: locator,
 		SourceIdentity: identity, VersionCandidate: candidate, ExpectedSize: size,
 	}
 }
 
 func scannedDirectory(t *testing.T, id byte, name string) ScannedChild {
 	t.Helper()
-	locator, err := NewLocator(0, name)
+	locator, err := NewSourceReference([]byte("object:" + name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity, _ := NewSourceIdentity([]byte("source-" + name))
 	return ScannedChild{
-		DirectoryID: idValue[DirectoryID](id), Name: name, Locator: locator, SourceIdentity: identity,
+		DirectoryID: idValue[DirectoryID](id), Name: name, SourceReference: locator, SourceIdentity: identity,
 	}
 }
 

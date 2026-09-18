@@ -38,8 +38,16 @@ func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Ver
 	return windowsCatalogObjectBaseline(file)
 }
 
-func newPlatformRootedRevisionSource(paths []string) (*RootedRevisionSource, error) {
-	return NewWindowsRootedRevisionSource(paths)
+func newPlatformRootedRevisionSource(roots []*os.Root) (*RootedRevisionSource, error) {
+	binder := &WindowsStabilityBinder{platform: nativeWindowsRevisionPlatform{}}
+	for _, authority := range roots {
+		root, err := retainWindowsRevisionRoot(authority)
+		if err != nil {
+			return nil, errors.Join(err, binder.Close())
+		}
+		binder.roots = append(binder.roots, root)
+	}
+	return newRetainedRootedRevisionSource(roots, binder, binder)
 }
 
 type WindowsStabilityBinder struct {
@@ -54,7 +62,7 @@ func NewWindowsStabilityBinder(rootPaths []string) (*WindowsStabilityBinder, err
 }
 
 func newWindowsStabilityBinder(rootPaths []string, platform windowsRevisionPlatform) (*WindowsStabilityBinder, error) {
-	if len(rootPaths) == 0 || len(rootPaths) > catalog.MaxRootSlots || platform == nil {
+	if len(rootPaths) == 0 || len(rootPaths) > catalog.MaxSelectedRoots || platform == nil {
 		return nil, content.ErrUnsupportedStability
 	}
 	roots := make([]windowsRevisionRoot, 0, len(rootPaths))
@@ -158,7 +166,11 @@ func (b *WindowsStabilityBinder) RevisionContinuity(record catalog.NodeRecord) (
 		// The record's historical observation cannot strengthen a root whose
 		// current retained authority has no matching reopen profile. Decide this
 		// before the content store derives and charges the revision identity.
-		slot := int(record.Locator().RootSlot())
+		location, err := parseSourceReference(record.SourceReference())
+		if err != nil {
+			return 0, content.ErrRevisionStale
+		}
+		slot := int(location.RootSlot())
 		if slot < 0 || slot >= len(b.roots) {
 			return content.OpenHandleRevisionContinuity, nil
 		}

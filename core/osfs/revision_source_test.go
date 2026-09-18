@@ -36,13 +36,13 @@ func (b *ownedTestStabilityBinder) Close() error {
 	return nil
 }
 
-func rootedFileRecord(t *testing.T, slot catalog.RootSlot, relativePath string, size uint64) catalog.NodeRecord {
+func rootedFileRecord(t *testing.T, slot RootSlot, relativePath string, size uint64) catalog.NodeRecord {
 	t.Helper()
 	var file catalog.FileID
 	file[0] = 1
 	var parent catalog.DirectoryID
 	parent[0] = 2
-	locator, err := catalog.NewLocator(slot, relativePath)
+	locator, err := NewSourceReference(slot, relativePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestRootedRevisionSourceRejectsInvalidRootsRecordsAndBinders(t *testing.T) 
 	if _, err := NewRootedRevisionSource(RootedRevisionSourceConfig{Binder: binder}); err == nil {
 		t.Fatal("empty root set accepted")
 	}
-	tooMany := make([]string, int(catalog.MaxRootSlots)+1)
+	tooMany := make([]string, int(catalog.MaxSelectedRoots)+1)
 	if _, err := NewRootedRevisionSource(RootedRevisionSourceConfig{RootPaths: tooMany, Binder: binder}); err == nil {
 		t.Fatal("oversized root set accepted")
 	}

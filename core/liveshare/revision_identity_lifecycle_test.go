@@ -149,7 +149,7 @@ func newLifecycleRevisionFixture(
 	share := lifecycleIdentity[catalog.ShareInstance](0x31)
 	file := lifecycleIdentity[catalog.FileID](0x32)
 	parent := lifecycleIdentity[catalog.DirectoryID](0x33)
-	locator, err := catalog.NewLocator(0, "lifecycle.bin")
+	locator, err := catalog.NewSourceReference([]byte("object:" + "lifecycle.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

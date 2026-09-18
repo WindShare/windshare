@@ -108,7 +108,7 @@ func faultCommitFixture(t *testing.T) (NodeRecord, NodeRecord) {
 	t.Helper()
 	root := idValue[DirectoryID](190)
 	directory := idValue[DirectoryID](191)
-	parentLocator, _ := NewLocator(0, "directory")
+	parentLocator, _ := NewSourceReference([]byte("object:" + "directory"))
 	parentIdentity, _ := NewSourceIdentity([]byte("directory"))
 	parent, err := NewDirectoryNodeRecord(directory, root, "directory", parentLocator, parentIdentity, ModifiedTime{})
 	if err != nil {

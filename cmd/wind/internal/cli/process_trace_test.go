@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -114,12 +115,12 @@ func TestGetRequestParsesConnectivityPolicy(t *testing.T) {
 	}
 	app, _, stderr := newSemanticTestApp(strings.NewReader(""))
 	request, parse := app.parseGetRequest([]string{encoded, "--connectivity", "relay-only"})
-	if parse != requestParseReady || request.connectivity != ConnectivityRelayOnly {
+	if parse != requestParseReady || request.connectivity != engine.ConnectivityRelayOnly {
 		t.Fatalf("relay-only request = %+v, parse=%d stderr=%q", request, parse, stderr.String())
 	}
 	app, _, stderr = newSemanticTestApp(strings.NewReader(""))
 	request, parse = app.parseGetRequest([]string{encoded, "--connectivity", "p2p-only"})
-	if parse != requestParseReady || request.connectivity != ConnectivityP2POnly {
+	if parse != requestParseReady || request.connectivity != engine.ConnectivityP2POnly {
 		t.Fatalf("p2p-only request = %+v, parse=%d stderr=%q", request, parse, stderr.String())
 	}
 	app, _, stderr = newSemanticTestApp(strings.NewReader(""))

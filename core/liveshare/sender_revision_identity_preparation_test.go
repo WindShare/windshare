@@ -55,9 +55,9 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.
 		return newRevisionStore(config)
 	}
 	tracer := &preparationRevisionTracer{}
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename},
+		Source:           testFileSource([]string{filename}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
 		Random:           mathrand.New(mathrand.NewSource(71)),
@@ -132,9 +132,9 @@ func TestPrepareSenderRollbackDestroysRevisionIdentityAuthority(t *testing.T) {
 		return content.DerivedKey{}, lateFailure
 	}
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename},
+		Source:           testFileSource([]string{filename}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
 		Random:           mathrand.New(mathrand.NewSource(73)),

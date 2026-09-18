@@ -307,6 +307,8 @@ func (visitor eventVisitor) VisitProtocolObservationObserved(event clievent.Prot
 	return nil
 }
 
+func (eventVisitor) VisitEngineTaskObserved(clievent.EngineTaskObserved) error { return nil }
+
 func (eventVisitor) VisitNativeConnectivityObserved(clievent.NativeConnectivityObserved) error {
 	return nil
 }

@@ -27,8 +27,8 @@ func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Ver
 	return POSIXCatalogBaseline(file)
 }
 
-func newPlatformRootedRevisionSource(paths []string) (*RootedRevisionSource, error) {
-	return NewRootedRevisionSource(RootedRevisionSourceConfig{RootPaths: paths, Binder: POSIXStabilityBinder{}})
+func newPlatformRootedRevisionSource(roots []*os.Root) (*RootedRevisionSource, error) {
+	return newRetainedRootedRevisionSource(roots, POSIXStabilityBinder{}, nil)
 }
 
 type posixMutationToken struct {

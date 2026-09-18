@@ -605,7 +605,7 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	locator, _ := catalog.NewLocator(0, "")
+	locator, _ := catalog.NewSourceReference([]byte("object:" + ""))
 	identity, _ := catalog.NewSourceIdentity([]byte("selected-directory"))
 	selected, err := catalog.NewDirectoryNodeRecord(
 		fixture.directoryID, fixture.syntheticRoot, "folder", locator, identity, catalog.ModifiedTime{},
@@ -659,11 +659,11 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 			return catalog.ScanResult{}, ctx.Err()
 		case <-fixture.scanGate:
 		}
-		fileLocator, _ := catalog.NewLocator(0, "file.bin")
+		fileLocator, _ := catalog.NewSourceReference([]byte("object:" + "file.bin"))
 		fileIdentity, _ := catalog.NewSourceIdentity([]byte("file-object"))
 		candidate, _ := catalog.NewVersionCandidate([]byte("file-version"))
 		err := request.Children.Add(ctx, catalog.ScannedChild{
-			FileID: fixture.fileID, Name: "file.bin", Locator: fileLocator,
+			FileID: fixture.fileID, Name: "file.bin", SourceReference: fileLocator,
 			SourceIdentity: fileIdentity, VersionCandidate: candidate, ExpectedSize: uint64(len(fixture.fileData)),
 		})
 		return catalog.ScanResult{}, err

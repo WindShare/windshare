@@ -145,77 +145,6 @@ func TestCapabilityPublicationChecksOneCompleteWrite(t *testing.T) {
 	}
 }
 
-func TestSharePublicationOrdersWarmupAndReadinessAfterStdout(t *testing.T) {
-	var order []string
-	err := executeSharePublication(sharePublicationPlan{
-		buildPayload: func() ([]byte, error) {
-			order = append(order, "build")
-			return []byte("Link: capability\n"), nil
-		},
-		publishPayload: func(payload []byte) error {
-			order = append(order, "stdout:"+string(payload))
-			return nil
-		},
-		stopRuntime:       func() { order = append(order, "stop") },
-		startRootPrefetch: func() { order = append(order, "prefetch") },
-		publishPrivateReady: func() error {
-			order = append(order, "private-ready")
-			return nil
-		},
-		publishPublicReady: func() { order = append(order, "public-ready") },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"build", "stdout:Link: capability\n", "prefetch", "private-ready", "public-ready"}
-	if !equalShareStrings(order, want) {
-		t.Fatalf("order = %q, want %q", order, want)
-	}
-}
-
-func TestSharePublicationFailureNeverPublishesPublicReadyAndStdoutFailureDoesNotStart(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		buildErr   error
-		publishErr error
-		privateErr error
-		wantStage  sharePublicationStage
-		wantOrder  []string
-	}{
-		{name: "encoding", buildErr: errors.New("encoding canary"), wantStage: sharePublicationBuildFailed, wantOrder: []string{"build", "stop"}},
-		{name: "stdout", publishErr: io.ErrShortWrite, wantStage: sharePublicationWriteFailed, wantOrder: []string{"build", "stdout", "stop"}},
-		{name: "private readiness", privateErr: errors.New("private trace canary"), wantStage: sharePublicationPrivateReadyFailed, wantOrder: []string{"build", "stdout", "prefetch", "private-ready", "stop"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var order []string
-			err := executeSharePublication(sharePublicationPlan{
-				buildPayload: func() ([]byte, error) {
-					order = append(order, "build")
-					return []byte("Link: capability\n"), test.buildErr
-				},
-				publishPayload: func([]byte) error {
-					order = append(order, "stdout")
-					return test.publishErr
-				},
-				stopRuntime:       func() { order = append(order, "stop") },
-				startRootPrefetch: func() { order = append(order, "prefetch") },
-				publishPrivateReady: func() error {
-					order = append(order, "private-ready")
-					return test.privateErr
-				},
-				publishPublicReady: func() { order = append(order, "public-ready") },
-			})
-			var failure *sharePublicationFailure
-			if !errors.As(err, &failure) || failure.stage != test.wantStage {
-				t.Fatalf("failure = %#v, want stage %d", err, test.wantStage)
-			}
-			if !equalShareStrings(order, test.wantOrder) {
-				t.Fatalf("order = %q, want %q", order, test.wantOrder)
-			}
-		})
-	}
-}
-
 func testShareCapability(t *testing.T) link.Link {
 	t.Helper()
 	seed := bytes.Repeat([]byte{0x5a}, ed25519.SeedSize)
@@ -249,15 +178,3 @@ func (shareShortWriter) Write(payload []byte) (int, error) { return len(payload)
 type shareFailedWriter struct{}
 
 func (shareFailedWriter) Write([]byte) (int, error) { return 0, errors.New("stdout provider canary") }
-
-func equalShareStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}

@@ -8,22 +8,24 @@ Windows 上现有 CLI 与 osfs 的接口、句柄和文件版本实现随重构�
 
 保持日常操作直接顺畅：选中文件后立即获得链接，逐步浏览目录，连接失败后保留已完成的下载进度。本地磁盘文件继续使用原生读取，无需额外复制整个文件，也无需提前遍历目录。
 
-## 现有实现
+## 重构前基线
 
-| 现有实现 | 需要延续的能力与调整 |
+以下记录本计划启动时的职责归属；实施状态由[路线图 M2.1](后续计划.md#33-工作分解)维护。
+
+| 重构前实现 | 需要延续的能力与调整 |
 | --- | --- |
-| [CLI 接收编排](../cmd/wind/internal/cli/get.go)与[传输装配](../cmd/wind/internal/cli/get_transfer.go) | 会话替换、连接准入、传输接续和最终结算目前由 CLI 代码协调。 |
-| [CLI 分享](../cmd/wind/internal/cli/share.go)与[分享结算](../cmd/wind/internal/cli/share_settlement.go) | 发送端准备、中转注册、提供分享服务，以及用户明确停止分享时的行为。 |
+| CLI 接收编排 `get.go` 与传输装配 `get_transfer.go` | 会话替换、连接准入、传输接续和最终结算目前由 CLI 代码协调。 |
+| CLI 分享 `share.go` 与分享结算 `share_settlement.go` | 发送端准备、中转注册、提供分享服务，以及用户明确停止分享时的行为。 |
 | [发送端准备](../core/liveshare/sender.go)与[资源所有权](../core/liveshare/sender_lifecycle.go) | `SenderConfig.Paths` 在内部创建 osfs；准备和释放流程都持有具体的文件版本源类型。 |
 | [目录扫描](../core/catalog/progress.go)、[文件版本源](../core/content/revision.go)与[osfs 文件选择](../core/osfs/catalog_source.go) | 现有消费侧接口和按需发现机制，为文件源注入提供了基础。 |
 | [私有目录记录](../core/catalog/model.go) | 源对象身份和版本证据已采用不透明表示；定位信息仍假设由根槽位与相对路径组成。 |
-| [接收接续](../core/session/receivercontinuation/session.go)与[输出适配器](../cmd/wind/internal/cli/get_output_authority.go) | 提取应用装配逻辑时，复用现有恢复和输出语义。 |
+| [接收接续](../core/session/receivercontinuation/session.go)与 CLI 输出适配器 `get_output_authority.go` | 提取应用装配逻辑时，复用现有恢复和输出语义。 |
 
 Android 文档选择返回带授权的 URI，通过内容提供者访问。提供者可能暴露远程文档或虚拟文档，访问权限也可能失效。返回的文件描述符还可能对应无法随机定位的管道。这些差异由文件源设计处理，独立于启动方式。这里将其作为设计依据，当前实现以 osfs 和非路径测试源推进。相关说明见[文档访问](https://developer.android.com/training/data-storage/shared/documents-files)与[ContentResolver](https://developer.android.com/reference/android/content/ContentResolver)。
 
 ## 应用结构
 
-在 `cmd/**` 和 `core/**` 之外引入 `engine/`，作为共享的原生应用入口，组合现有 core、connectivity 和 transport 组件。
+在 `cmd/**` 和 `core/**` 之外引入 [`engine/`](../engine/)，作为共享的原生应用入口，组合现有 core、connectivity 和 transport 组件。
 
 | 组件 | 职责 |
 | --- | --- |

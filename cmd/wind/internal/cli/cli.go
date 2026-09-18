@@ -17,6 +17,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/platformsetup"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -79,12 +80,13 @@ type App struct {
 	commandEventCapacity int
 
 	receiverRecoveryOptions relayset.ReceiverRecoveryOptions
-	receiverPeerFactory     func() (receiverPeerStarter, error)
+	receiverPeerFactory     func() (engine.ReceivePeerStarter, error)
 	receiverDial            func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
 	processTrace            *processTrace
-	revisionCapacity        *revisioncapacity.Coordinator
+	application             *engine.Engine
+	engineConfig            engine.Config
 	revisionCapacityTrace   *capacitytrace.Router
-	getOutputFactory        getOutputAuthorityFactory
+	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
 }
 
@@ -102,12 +104,10 @@ func Main() int {
 		app.closeTerminalOutput()
 		return ExitFailure
 	}
-	capacityTrace := &capacitytrace.Router{}
-	capacityConfig := revisioncapacity.DefaultProcessConfig()
-	capacityConfig.Tracer = capacityTrace
-	capacityOwner, err := revisioncapacity.NewProcessOwner(capacityConfig)
+	app.revisionCapacityTrace = &capacitytrace.Router{}
+	application, err := app.newApplication()
 	if err != nil {
-		app.writeCompleteLine("%s: initialize process revision capacity: %v", commandmeta.Name, err)
+		app.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
 		_ = trace.close()
 		app.closeTerminalOutput()
 		return ExitFailure
@@ -116,21 +116,20 @@ func Main() int {
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	app.processTrace = trace
-	app.revisionCapacity = capacityOwner.Coordinator()
-	app.revisionCapacityTrace = capacityTrace
+	app.application = application
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
 		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
 	)
-	if err := trace.close(); err != nil {
-		app.writeCompleteLine("%s: publish test trace: %v", commandmeta.Name, err)
+	if err := application.Close(context.Background()); err != nil {
+		app.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
 		if code == ExitOK {
 			code = ExitFailure
 		}
 	}
-	if err := capacityOwner.Close(); err != nil {
-		app.writeCompleteLine("%s: close process revision capacity: %v", commandmeta.Name, err)
+	if err := trace.close(); err != nil {
+		app.writeCompleteLine("%s: publish test trace: %v", commandmeta.Name, err)
 		if code == ExitOK {
 			code = ExitFailure
 		}
@@ -141,7 +140,24 @@ func Main() int {
 
 // Run 分派子命令。stdlib flag 不认子命令,这里手工分派(§6.9 工程要求:
 // 不引 CLI 框架)。
-func (a *App) Run(ctx context.Context, args []string) int {
+func (a *App) Run(ctx context.Context, args []string) (code int) {
+	if a.application == nil {
+		application, err := a.newApplication()
+		if err != nil {
+			a.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
+			return ExitFailure
+		}
+		a.application = application
+		defer func() {
+			if err := application.Close(context.Background()); err != nil {
+				a.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
+				if code == ExitOK {
+					code = ExitFailure
+				}
+			}
+			a.application = nil
+		}()
+	}
 	if len(args) == 0 {
 		a.usage()
 		return ExitUsage
@@ -163,6 +179,25 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		a.usage()
 		return ExitUsage
 	}
+}
+
+func (a *App) newApplication() (*engine.Engine, error) {
+	config := a.engineConfig
+	if config.Now == nil && a.clock != nil {
+		config.Now = a.clock.Now
+	}
+	if a.revisionCapacityTrace == nil {
+		a.revisionCapacityTrace = &capacitytrace.Router{}
+	}
+	if config.RevisionCapacity.Limits == (revisioncapacity.CapacityLimits{}) {
+		config.RevisionCapacity.Limits = revisioncapacity.DefaultProcessLimits()
+	}
+	if config.RevisionCapacity.RetryAfter == 0 {
+		config.RevisionCapacity.RetryAfter = revisioncapacity.DefaultCapacityRetryAfter
+	}
+	config.RevisionCapacity.Tracer = a.revisionCapacityTrace
+	config.Receive = a.receiveDependencies()
+	return engine.New(config)
 }
 
 func (a *App) usage() {

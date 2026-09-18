@@ -37,7 +37,7 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 	}
 	store := newRestartCatalogStore(t, share, preservingCatalogBackend{CatalogBackend: rawBackend}, objects)
 	sessionBudget := newRestartBudget(t, "first-session")
-	locator, _ := catalog.NewLocator(0, "")
+	locator, _ := catalog.NewSourceReference([]byte("object:" + ""))
 	identity, _ := catalog.NewSourceIdentity([]byte("restart-directory"))
 	selected, err := catalog.NewDirectoryNodeRecord(
 		directoryID, rootID, "folder", locator, identity, catalog.ModifiedTime{},
@@ -56,11 +56,11 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 		t.Fatal(err)
 	}
 	scanner := catalog.DirectoryScannerFunc(func(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
-		fileLocator, _ := catalog.NewLocator(0, "restart.bin")
+		fileLocator, _ := catalog.NewSourceReference([]byte("object:" + "restart.bin"))
 		fileIdentity, _ := catalog.NewSourceIdentity([]byte("restart-file"))
 		candidate, _ := catalog.NewVersionCandidate([]byte("restart-revision"))
 		err := request.Children.Add(ctx, catalog.ScannedChild{
-			FileID: id16[catalog.FileID](48), Name: "restart.bin", Locator: fileLocator,
+			FileID: id16[catalog.FileID](48), Name: "restart.bin", SourceReference: fileLocator,
 			SourceIdentity: fileIdentity, VersionCandidate: candidate, ExpectedSize: 9,
 		})
 		return catalog.ScanResult{}, err

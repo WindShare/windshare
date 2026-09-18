@@ -3,6 +3,7 @@ package commandprojection
 import (
 	"context"
 	"fmt"
+	"github.com/windshare/windshare/engine"
 	"math"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestHistoricalDeliveryCompletesWithoutVerifiedBytes(t *testing.T) {
 	}
 	job.Progress.DiscoveredBytes, job.Progress.PublishedBytes = math.MaxUint64, math.MaxUint64
 	job.Progress.VerifiedBytes, job.Progress.PreviouslyPublishedBytes = math.MaxUint64, 1
-	if successfulGetResult(job) {
+	if value, _ := engine.SettleReceive(engine.ReceiveSettlementInput{Result: job}); value.Outcome == engine.OutcomeSuccess {
 		t.Fatal("overflowing historical progress proved successful completion")
 	}
 }
@@ -143,105 +144,6 @@ func TestCapacityBudgetPauseProjectsAsResumableJobWithoutFileFailure(t *testing.
 	}
 	if files := result.Files(); files.FailedFiles != 0 || files.PausedFiles != 0 || files.HasNonSuccess() {
 		t.Fatalf("job-level capacity pause became a file failure: %+v", files)
-	}
-}
-
-func TestGetResultProjectionFreezesStatusAndExitPrecedence(t *testing.T) {
-	destination := clievent.NewDisplayPath("C:/downloads/result")
-	success := successfulJobResult(t)
-	sourceDrift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionTerminal, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name       string
-		mutate     func(*GetResultInput)
-		wantStatus clievent.ResultStatus
-		wantExit   clievent.ExitCode
-		wantDrift  clievent.DriftReason
-	}{
-		{"success", func(*GetResultInput) {}, clievent.ResultSuccess, clievent.ExitSuccess, clievent.DriftNone},
-		{"nominal success invariant failure", func(input *GetResultInput) {
-			input.Result.Progress.PublishedBytes--
-		}, clievent.ResultFailed, clievent.ExitFailure, clievent.DriftNone},
-		{"partial missing selection", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = fmt.Errorf("selection wrapper: %w", transfer.ErrSelectionTargetMissing)
-		}, clievent.ResultPartial, clievent.ExitUsage, clievent.DriftNone},
-		{"exact missing selection outranks caller cancel", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = transfer.ErrSelectionTargetMissing
-			input.ContextError = context.Canceled
-		}, clievent.ResultPartial, clievent.ExitUsage, clievent.DriftNone},
-		{"inexact complete discovery does not prove missing selection", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = fmt.Errorf("selection wrapper: %w", transfer.ErrSelectionTargetMissing)
-			input.Result.Progress.CountersExact = false
-		}, clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone},
-		{"failed discovery does not prove missing selection", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = transfer.ErrSelectionTargetMissing
-			input.Result.Progress.Discovery = transfer.DiscoveryFailed
-		}, clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone},
-		{"open discovery does not prove missing selection", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = transfer.ErrSelectionTargetMissing
-			input.Result.Progress.Discovery = transfer.DiscoveryOpen
-		}, clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone},
-		{"drift outranks exact missing selection network and cancel", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-			input.Result.SelectionResolutionFailure = transfer.ErrSelectionTargetMissing
-			input.Result.SourceDriftFault = sourceDrift
-			input.RuntimeError = opaqueCanaryError{"relay-token-canary"}
-			input.ContextError = context.Canceled
-		}, clievent.ResultPartial, clievent.ExitDrift, clievent.DriftSource},
-		{"drift outranks network and cancel", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePaused
-			input.Result.SourceDriftFault = sourceDrift
-			input.Result.SourceDriftFailure = opaqueCanaryError{"catalog/path/canary"}
-			input.RuntimeError = opaqueCanaryError{"relay-token-canary"}
-			input.ContextError = context.Canceled
-		}, clievent.ResultPaused, clievent.ExitDrift, clievent.DriftSource},
-		{"session fault is network", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePaused
-			input.Result.TerminationFault = sessionTerminal
-		}, clievent.ResultPaused, clievent.ExitNetwork, clievent.DriftNone},
-		{"runtime failure outranks cancel", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomeFailed
-			input.RuntimeError = opaqueCanaryError{"provider-url-canary"}
-			input.ContextError = context.Canceled
-		}, clievent.ResultFailed, clievent.ExitNetwork, clievent.DriftNone},
-		{"caller cancel is local exit", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePaused
-			input.ContextError = context.Canceled
-		}, clievent.ResultPaused, clievent.ExitFailure, clievent.DriftNone},
-		{"ordinary partial remains local", func(input *GetResultInput) {
-			input.Result.Outcome = transfer.DirectTreeOutcomePartial
-		}, clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := GetResultInput{Result: success, Destination: destination, Elapsed: 3 * time.Second}
-			test.mutate(&input)
-			result, err := ProjectGetResult(input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.Status() != test.wantStatus || result.ExitCode() != test.wantExit || result.Drift() != test.wantDrift {
-				t.Fatalf("result status/exit/drift = %d/%d/%d want %d/%d/%d", result.Status(), result.ExitCode(), result.Drift(), test.wantStatus, test.wantExit, test.wantDrift)
-			}
-			if test.wantStatus == clievent.ResultSuccess {
-				if _, present := result.Failure(); present {
-					t.Fatal("successful result retained failure")
-				}
-			} else if failure, present := result.Failure(); !present || !failure.Valid() {
-				t.Fatalf("unsuccessful result missing safe failure: %+v,%t", failure, present)
-			}
-		})
 	}
 }
 
@@ -364,12 +266,16 @@ func TestGetResultUsesSettlementOwnedCountsAndDropsDiagnosticPathsAndCauses(t *t
 }
 
 func TestShareAndCommandFailureProjectionNeverDeriveExitFromRenderer(t *testing.T) {
-	clean, err := ProjectShareResult(ShareResultInput{Clean: true, Elapsed: time.Second})
+	clean, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{Completion: engine.TaskCompletion[engine.ShareResult]{
+		Settlement: engine.TaskSettlement{Outcome: engine.OutcomeStopped}, Value: engine.ShareResult{Elapsed: time.Second},
+	}})
 	if err != nil || clean.ExitCode() != clievent.ExitSuccess || !clean.StoppedCleanly() {
 		t.Fatalf("clean share result = %+v err=%v", clean, err)
 	}
-	failed, err := ProjectShareResult(ShareResultInput{
-		Failure: opaqueCanaryError{"provider-secret"}, FailureClass: ShareFailureNetwork,
+	failed, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
+		Completion: engine.TaskCompletion[engine.ShareResult]{Settlement: engine.TaskSettlement{
+			Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"},
+		}},
 	})
 	if err != nil || failed.ExitCode() != clievent.ExitNetwork || failed.StoppedCleanly() {
 		t.Fatalf("failed share result = %+v err=%v", failed, err)

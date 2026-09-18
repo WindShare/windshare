@@ -7,14 +7,12 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
-	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -38,40 +36,20 @@ type detailedDiagnosticsPreference interface {
 	detailedDiagnosticsEnabled() bool
 }
 
-type traceRecordingPreference interface {
-	traceRecordingEnabled() bool
-}
-
 type shareObservations struct {
-	observer shareEventObserver
-
+	observer       shareEventObserver
 	relayMu        sync.RWMutex
 	relayAuthority clievent.RelayAuthority
-
-	completionMu         sync.Mutex
-	relayComplete        []func() relayv2.LifecycleObservationCompletion
-	webRTCChannels       *webRTCObservationSet
-	native               *nativepeer.NativePeerConnectivity
-	nativeReader         nativeObservationReader
-	peerFactory          *v2peer.Factory
-	peerAttemptReader    *observationbridge.Reader[v2peer.SenderAttemptObservation]
-	peerDiagnosticReader *observationbridge.Reader[v2peer.PeerDiagnosticObservation]
-	protocol             protocolObservationStream
-	completeOnce         sync.Once
-
-	losses *observationbridge.CumulativeLosses[observerLossSource]
+	losses         *observationbridge.CumulativeLosses[observerLossSource]
 }
 
-func newShareObservations(observer shareEventObserver) *shareObservations {
+func newShareProjection(observer shareEventObserver) *shareObservations {
 	observations := &shareObservations{observer: observer}
 	if preference, ok := observer.(detailedDiagnosticsPreference); ok && preference.detailedDiagnosticsEnabled() {
-		observations.webRTCChannels = &webRTCObservationSet{}
 		observations.losses = observationbridge.NewCumulativeLosses[observerLossSource](observer)
-		observations.protocol = startProtocolObservations(observations.protocolObservationContext)
 	}
 	return observations
 }
-
 func (observations *shareObservations) SetRelayAuthority(authority clievent.RelayAuthority) {
 	if observations == nil || !authority.Valid() {
 		return
@@ -108,13 +86,6 @@ func (observations *shareObservations) TraceCapacity(value revisioncapacity.Trac
 func (observations *shareObservations) TraceRevision(value content.RevisionTrace) {
 	event, err := commandprojection.ProjectSenderRevision(value)
 	observations.emitProjected(clievent.ObserverLossSenderRevision, event, err)
-}
-
-func (observations *shareObservations) revisionTracer() content.RevisionTracer {
-	if !observations.detailedDiagnosticsEnabled() {
-		return nil
-	}
-	return observations
 }
 
 func (observations *shareObservations) capacityTracer() revisioncapacity.Tracer {
@@ -230,27 +201,6 @@ func (observations *shareObservations) protocolObservationContext(
 	observations.emitProjectedContext(ctx, gate, clievent.ObserverLossProtocolOperation, event, err)
 }
 
-func (observations *shareObservations) protocolObservations() observationstream.Producer[sessionruntime.ProtocolObservation] {
-	if observations == nil {
-		return observationstream.Producer[sessionruntime.ProtocolObservation]{}
-	}
-	return observations.protocol.producer
-}
-
-func (observations *shareObservations) terminalSendObserver() sessionruntime.SenderTerminalSendObserver {
-	if !observations.traceRecordingEnabled() {
-		return nil
-	}
-	return observations
-}
-
-func (observations *shareObservations) sessionTerminalObserver() sessionruntime.SenderSessionTerminalObserver {
-	if !observations.traceRecordingEnabled() {
-		return nil
-	}
-	return observations
-}
-
 func (observations *shareObservations) ObserveRelayRecovery(authority clievent.RelayAuthority, value senderrelay.Attempt) {
 	var state clievent.RelayRecoveryState
 	switch value.State {
@@ -328,21 +278,6 @@ func (observations *shareObservations) detailedDiagnosticsEnabled() bool {
 	return ok && preference.detailedDiagnosticsEnabled()
 }
 
-func (observations *shareObservations) traceRecordingEnabled() bool {
-	if observations == nil || observations.observer == nil {
-		return false
-	}
-	preference, ok := observations.observer.(traceRecordingPreference)
-	return ok && preference.traceRecordingEnabled()
-}
-
-func (observations *shareObservations) relayObservationCapacity() int {
-	if !observations.detailedDiagnosticsEnabled() {
-		return 0
-	}
-	return relayv2.DefaultLifecycleObservationCapacity
-}
-
 func (observations *shareObservations) ObservePeerDiagnostic(value v2peer.PeerDiagnosticObservation) {
 	observations.peerDiagnosticContext(context.Background(), nil, value)
 }
@@ -387,142 +322,6 @@ func (observations *shareObservations) reportCumulativeLoss(
 		return
 	}
 	observations.observer.ReportObserverLoss(category, reason, cumulative)
-}
-
-func (observations *shareObservations) attachRelayStream(stream <-chan relayv2.LifecycleTrace) func() {
-	if observations == nil || !observations.detailedDiagnosticsEnabled() || stream == nil {
-		return func() {}
-	}
-	gate := &observationbridge.PublicationGate{}
-	reader := observationbridge.Start(stream, gate, func(ctx context.Context, value relayv2.LifecycleTrace) {
-		observations.relayLifecycleContext(ctx, gate, value)
-	})
-	// The connection owns its reader through retirement. Keeping only a final
-	// counter at command scope prevents completed streams accumulating on reconnect.
-	return func() {
-		ctx, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
-		status := reader.Join(ctx)
-		cancel()
-		observations.reportReaderStatus(clievent.ObserverLossRelayLifecycle, status)
-	}
-}
-
-func (observations *shareObservations) registerRelayCompletion(
-	complete func() relayv2.LifecycleObservationCompletion,
-) {
-	if observations == nil || !observations.detailedDiagnosticsEnabled() || complete == nil {
-		return
-	}
-	observations.completionMu.Lock()
-	observations.relayComplete = append(observations.relayComplete, complete)
-	observations.completionMu.Unlock()
-}
-
-func (observations *shareObservations) registerPeerFactory(
-	factory *v2peer.Factory,
-	process func(v2peer.SenderAttemptObservation),
-) {
-	if observations == nil || factory == nil || factory.SenderAttemptObservations() == nil && factory.PeerDiagnostics() == nil {
-		return
-	}
-	attemptGate := &observationbridge.PublicationGate{}
-	attemptReader := observationbridge.Start(
-		factory.SenderAttemptObservations(),
-		attemptGate,
-		func(ctx context.Context, value v2peer.SenderAttemptObservation) {
-			if observations.detailedDiagnosticsEnabled() {
-				observations.senderAttemptContext(ctx, attemptGate, value)
-			}
-			if ctx.Err() == nil && process != nil {
-				process(value)
-			}
-		},
-	)
-	diagnosticGate := &observationbridge.PublicationGate{}
-	diagnosticReader := observationbridge.Start(
-		factory.PeerDiagnostics(),
-		diagnosticGate,
-		func(ctx context.Context, value v2peer.PeerDiagnosticObservation) {
-			observations.peerDiagnosticContext(ctx, diagnosticGate, value)
-		},
-	)
-	observations.completionMu.Lock()
-	observations.peerFactory = factory
-	observations.peerAttemptReader = attemptReader
-	observations.peerDiagnosticReader = diagnosticReader
-	observations.completionMu.Unlock()
-}
-
-func (observations *shareObservations) completeWithin() {
-	ctx, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
-	observations.complete(ctx)
-	cancel()
-}
-
-func (observations *shareObservations) complete(ctx context.Context) {
-	if observations == nil {
-		return
-	}
-	observations.completeOnce.Do(func() {
-		observations.completionMu.Lock()
-		relayComplete := append([]func() relayv2.LifecycleObservationCompletion(nil), observations.relayComplete...)
-		webRTC := observations.webRTCChannels
-		native := observations.native
-		nativeReader := observations.nativeReader
-		peers := observations.peerFactory
-		peerAttemptReader := observations.peerAttemptReader
-		peerDiagnosticReader := observations.peerDiagnosticReader
-		observations.completionMu.Unlock()
-
-		protocolCompletion, protocolStatus := observations.protocol.complete(ctx)
-		observations.reportCumulativeLoss(observerLossProtocolQueue, clievent.ObserverLossProtocolOperation, clievent.ObserverLossStreamCapacity, protocolCompletion.CapacityDropped)
-		observations.reportReaderStatus(clievent.ObserverLossProtocolOperation, protocolStatus)
-
-		// Sender session owners have stopped before completion; closing the shared
-		// native owner now joins gateway and socket work before cutting its stream.
-		if native != nil {
-			_ = native.Close(context.Background())
-		}
-		nativeCompletion, nativeStatus := nativeReader.complete(ctx)
-		observations.reportCumulativeLoss(observerLossNativeQueue, clievent.ObserverLossNativeConnectivity, clievent.ObserverLossStreamCapacity, nativeCompletion.CapacityDropped)
-		observations.reportReaderStatus(clievent.ObserverLossNativeConnectivity, nativeStatus)
-		var relay relayv2.LifecycleObservationCompletion
-		for _, complete := range relayComplete {
-			mergeRelayCompletion(&relay, complete())
-		}
-		observations.reportRelayCompletion(relay)
-		webRTCCompletion, webRTCStatuses := webRTC.complete(ctx)
-		observations.reportWebRTCCompletion(webRTCCompletion)
-		for _, status := range webRTCStatuses {
-			observations.reportReaderStatus(clievent.ObserverLossWebRTCLifecycle, status)
-		}
-		if peers != nil {
-			completion := peers.CompleteObservations()
-			attemptStatus := peerAttemptReader.Join(ctx)
-			diagnosticStatus := peerDiagnosticReader.Join(ctx)
-			observations.reportSenderCompletion(completion)
-			observations.reportReaderStatus(clievent.ObserverLossSenderAttempt, attemptStatus)
-			observations.reportReaderStatus(clievent.ObserverLossSenderAttempt, diagnosticStatus)
-		}
-	})
-}
-
-func (observations *shareObservations) reportRelayCompletion(completion relayv2.LifecycleObservationCompletion) {
-	observations.reportCumulativeLoss(observerLossRelayQueue, clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, completion.Loss.CapacityDropped)
-}
-
-func (observations *shareObservations) reportWebRTCCompletion(completion wsrtc.LifecycleObservationCompletion) {
-	observations.reportCumulativeLoss(observerLossWebRTCQueue, clievent.ObserverLossWebRTCLifecycle, clievent.ObserverLossStreamCapacity, completion.Loss.CapacityDropped)
-}
-
-func (observations *shareObservations) reportSenderCompletion(completion v2peer.SenderObservationCompletion) {
-	observations.reportCumulativeLoss(observerLossSenderAttemptCapacity, clievent.ObserverLossSenderAttempt, clievent.ObserverLossStreamCapacity, completion.Attempts.Loss.CapacityDropped)
-	observations.reportCumulativeLoss(observerLossSenderDiagnosticDrain, clievent.ObserverLossSenderAttempt, clievent.ObserverLossStreamCapacity, completion.Diagnostics.Loss.CapacityDropped)
-}
-
-func mergeRelayCompletion(total *relayv2.LifecycleObservationCompletion, next relayv2.LifecycleObservationCompletion) {
-	total.Enqueued = saturatingAdd(total.Enqueued, next.Enqueued)
-	total.Loss.CapacityDropped = saturatingAdd(total.Loss.CapacityDropped, next.Loss.CapacityDropped)
 }
 
 func (observations *shareObservations) reportReaderStatus(

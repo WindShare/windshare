@@ -271,28 +271,21 @@ func (v opaqueValue) bytes() []byte { return []byte(v.value) }
 func (v opaqueValue) isZero() bool  { return v.value == "" }
 
 const (
-	MaxRootSlots              = 4_096
+	MaxSelectedRoots          = 4_096
 	MaxSelectedRootNamesBytes = 1 << 20
 )
 
-type RootSlot uint16
-
-type Locator struct {
-	rootSlot     RootSlot
-	relativePath string
-	valid        bool
-}
+// SourceReference is meaningful only to the file source that produced it. It is
+// private catalog data, never a receiver path or a protocol object identity.
+type SourceReference struct{ opaqueValue }
 type SourceIdentity struct{ opaqueValue }
 type VersionCandidate struct{ opaqueValue }
 
-func NewLocator(rootSlot RootSlot, relativePath string) (Locator, error) {
-	if uint64(rootSlot) >= MaxRootSlots {
-		return Locator{}, errors.New("catalog locator root slot exceeds the selected-root limit")
-	}
-	if err := validateSourceLocator(relativePath); err != nil {
-		return Locator{}, err
-	}
-	return Locator{rootSlot: rootSlot, relativePath: relativePath, valid: true}, nil
+const MaxSourceReferenceBytes = 64 << 10
+
+func NewSourceReference(raw []byte) (SourceReference, error) {
+	value, err := newOpaqueValue("source reference", raw, MaxSourceReferenceBytes)
+	return SourceReference{value}, err
 }
 
 func NewSourceIdentity(raw []byte) (SourceIdentity, error) {
@@ -307,9 +300,8 @@ func NewVersionCandidate(raw []byte) (VersionCandidate, error) {
 
 func (v SourceIdentity) Bytes() []byte   { return v.bytes() }
 func (v VersionCandidate) Bytes() []byte { return v.bytes() }
-func (v Locator) RootSlot() RootSlot     { return v.rootSlot }
-func (v Locator) RelativePath() string   { return v.relativePath }
-func (v Locator) IsZero() bool           { return !v.valid }
+func (v SourceReference) Bytes() []byte  { return v.bytes() }
+func (v SourceReference) IsZero() bool   { return v.isZero() }
 func (v SourceIdentity) IsZero() bool    { return v.isZero() }
 func (v VersionCandidate) IsZero() bool  { return v.isZero() }
 
@@ -384,7 +376,7 @@ type NodeRecord struct {
 	fileID           FileID
 	parent           DirectoryID
 	name             string
-	locator          Locator
+	sourceReference  SourceReference
 	sourceIdentity   SourceIdentity
 	versionCandidate VersionCandidate
 	expectedSize     uint64
@@ -401,7 +393,7 @@ func NewSyntheticRootNodeRecord(id DirectoryID) (NodeRecord, error) {
 	return NodeRecord{kind: NodeKindDirectory, nodeID: id.NodeID(), directoryID: id, syntheticRoot: true}, nil
 }
 
-func NewDirectoryNodeRecord(id DirectoryID, parent DirectoryID, name string, locator Locator, sourceIdentity SourceIdentity, modified ModifiedTime) (NodeRecord, error) {
+func NewDirectoryNodeRecord(id DirectoryID, parent DirectoryID, name string, reference SourceReference, sourceIdentity SourceIdentity, modified ModifiedTime) (NodeRecord, error) {
 	entry, err := NewDirectoryEntry(id, name, modified)
 	if err != nil {
 		return NodeRecord{}, err
@@ -409,13 +401,13 @@ func NewDirectoryNodeRecord(id DirectoryID, parent DirectoryID, name string, loc
 	if id.NodeID() == parent.NodeID() {
 		return NodeRecord{}, errors.New("catalog directory identity collides with its parent")
 	}
-	if parent.IsZero() || locator.IsZero() || sourceIdentity.IsZero() {
+	if parent.IsZero() || reference.IsZero() || sourceIdentity.IsZero() {
 		return NodeRecord{}, errors.New("catalog directory record requires parent and private source metadata")
 	}
-	return NodeRecord{kind: entry.kind, nodeID: entry.nodeID, directoryID: id, parent: parent, name: entry.name, locator: locator, sourceIdentity: sourceIdentity, modified: modified}, nil
+	return NodeRecord{kind: entry.kind, nodeID: entry.nodeID, directoryID: id, parent: parent, name: entry.name, sourceReference: reference, sourceIdentity: sourceIdentity, modified: modified}, nil
 }
 
-func NewFileNodeRecord(id FileID, parent DirectoryID, name string, locator Locator, sourceIdentity SourceIdentity, candidate VersionCandidate, expectedSize uint64, modified ModifiedTime) (NodeRecord, error) {
+func NewFileNodeRecord(id FileID, parent DirectoryID, name string, reference SourceReference, sourceIdentity SourceIdentity, candidate VersionCandidate, expectedSize uint64, modified ModifiedTime) (NodeRecord, error) {
 	entry, err := NewFileEntry(id, name, expectedSize, modified)
 	if err != nil {
 		return NodeRecord{}, err
@@ -423,16 +415,16 @@ func NewFileNodeRecord(id FileID, parent DirectoryID, name string, locator Locat
 	if id.NodeID() == parent.NodeID() {
 		return NodeRecord{}, errors.New("catalog file identity collides with its parent")
 	}
-	if parent.IsZero() || locator.IsZero() || sourceIdentity.IsZero() || candidate.IsZero() {
+	if parent.IsZero() || reference.IsZero() || sourceIdentity.IsZero() || candidate.IsZero() {
 		return NodeRecord{}, errors.New("catalog file record requires parent and private source metadata")
 	}
-	return NodeRecord{kind: entry.kind, nodeID: entry.nodeID, fileID: id, parent: parent, name: entry.name, locator: locator, sourceIdentity: sourceIdentity, versionCandidate: candidate, expectedSize: expectedSize, modified: modified}, nil
+	return NodeRecord{kind: entry.kind, nodeID: entry.nodeID, fileID: id, parent: parent, name: entry.name, sourceReference: reference, sourceIdentity: sourceIdentity, versionCandidate: candidate, expectedSize: expectedSize, modified: modified}, nil
 }
 
 func (n NodeRecord) Kind() NodeKind                     { return n.kind }
 func (n NodeRecord) NodeID() NodeID                     { return n.nodeID }
 func (n NodeRecord) Parent() DirectoryID                { return n.parent }
-func (n NodeRecord) Locator() Locator                   { return n.locator }
+func (n NodeRecord) SourceReference() SourceReference   { return n.sourceReference }
 func (n NodeRecord) SourceIdentity() SourceIdentity     { return n.sourceIdentity }
 func (n NodeRecord) VersionCandidate() VersionCandidate { return n.versionCandidate }
 func (n NodeRecord) IsSyntheticRoot() bool              { return n.syntheticRoot }
@@ -452,7 +444,7 @@ func (n NodeRecord) MatchesEntry(entry Entry) bool { return n.Entry() == entry }
 
 func (n NodeRecord) EstimatedMemoryBytes() uint64 {
 	return CatalogNodeMemoryOverhead + uint64(
-		len(n.name)+len(n.locator.relativePath)+len(n.sourceIdentity.value)+len(n.versionCandidate.value),
+		len(n.name)+len(n.sourceReference.value)+len(n.sourceIdentity.value)+len(n.versionCandidate.value),
 	)
 }
 
@@ -460,7 +452,7 @@ func (n NodeRecord) valid() bool {
 	if n.syntheticRoot {
 		return n.kind == NodeKindDirectory && !n.directoryID.IsZero() && n.nodeID == n.directoryID.NodeID()
 	}
-	return n.Entry().valid() && !n.parent.IsZero() && !n.locator.IsZero() && !n.sourceIdentity.IsZero() && (n.kind != NodeKindFile || !n.versionCandidate.IsZero())
+	return n.Entry().valid() && !n.parent.IsZero() && !n.sourceReference.IsZero() && !n.sourceIdentity.IsZero() && (n.kind != NodeKindFile || !n.versionCandidate.IsZero())
 }
 
 const (
@@ -572,33 +564,6 @@ func CanonicalPath(path string) (string, error) {
 		return "", fmt.Errorf("%w: root component uses the reserved %q prefix", ErrInvalidPath, reservedOutputRootPrefix)
 	}
 	return strings.Join(components, "/"), nil
-}
-
-// validateSourceLocator applies the portable containment policy without
-// rewriting filesystem spelling. Public catalog names are NFC, but replacing a
-// sender-private decomposed component with its NFC form can point at a different
-// inode (or no inode) on filesystems whose lookup is byte-sensitive.
-func validateSourceLocator(path string) error {
-	if path == "" {
-		return nil
-	}
-	if !utf8.ValidString(path) || len(path) > MaxPathBytes || strings.ContainsRune(path, '\\') ||
-		strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") {
-		return fmt.Errorf("%w: locator must be relative, valid UTF-8, and slash-separated", ErrInvalidPath)
-	}
-	components := strings.Split(path, "/")
-	if len(components) > MaxPathDepth {
-		return fmt.Errorf("%w: got %d components", ErrPathTooDeep, len(components))
-	}
-	for index, component := range components {
-		if len(component) > MaxNameBytes {
-			return fmt.Errorf("%w: component %d is too long", ErrInvalidPath, index)
-		}
-		if _, err := CanonicalName(component); err != nil {
-			return fmt.Errorf("%w: component %d: %w", ErrInvalidPath, index, err)
-		}
-	}
-	return nil
 }
 
 func siblingCollisionKey(name string) string {
