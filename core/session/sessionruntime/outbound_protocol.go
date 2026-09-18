@@ -186,14 +186,19 @@ func classifyRevisionFailure(diagnostic error, code uint16, retryable bool) erro
 		return sessionProtocolBoundaryError(errors.Join(protocolsession.ErrInvalidOperationFailure, diagnostic))
 	}
 	revisionFailure := errors.Join(diagnostic, cause)
-	if code == contentflow.RevisionCodeDrift {
+	switch code {
+	case contentflow.RevisionCodeDrift:
 		return sourceBoundaryError(transferfault.SourceRevisionInvalidated, revisionFailure)
-	}
-	if !retryable && permanentRevisionOperationCode(code) {
-		return sourceBoundaryError(transferfault.SourcePermanent, revisionFailure)
-	}
-	if code == contentflow.RevisionCodeStale {
+	case contentflow.RevisionCodeStale:
+		// Retryability cannot turn an obsolete candidate into authority to retire
+		// an already-opened revision's download progress.
 		return sourceBoundaryError(transferfault.SourceRevisionChanged, revisionFailure)
+	case contentflow.RevisionCodeNotFound,
+		contentflow.RevisionCodeUnreadable,
+		contentflow.RevisionCodeUnsupportedStability:
+		if !retryable {
+			return sourceBoundaryError(transferfault.SourcePermanent, revisionFailure)
+		}
 	}
 	return sourceBoundaryError(transferfault.SourceUnavailable, revisionFailure)
 }
@@ -226,18 +231,6 @@ func catalogDirectoryBoundaryError(cause error) error {
 func sourceBoundaryError(code transferfault.SourceCode, cause error) error {
 	value, _ := transferfault.NewSource(transferfault.ScopeFileLocal, code)
 	return transferfault.Wrap(value, cause)
-}
-
-func permanentRevisionOperationCode(code uint16) bool {
-	switch code {
-	case contentflow.RevisionCodeStale,
-		contentflow.RevisionCodeNotFound,
-		contentflow.RevisionCodeUnreadable,
-		contentflow.RevisionCodeUnsupportedStability:
-		return true
-	default:
-		return false
-	}
 }
 
 func revisionOperationCause(code uint16) (error, bool) {

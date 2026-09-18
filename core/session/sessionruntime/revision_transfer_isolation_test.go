@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -68,31 +69,40 @@ func (revisionTransferRevisions) ReleaseRevision(context.Context, transfer.Revis
 }
 
 type revisionTransferRanges struct {
-	failed  catalog.FileID
-	failure error
+	failed    catalog.FileID
+	failure   error
+	delivered content.Range
 }
 
-func (source revisionTransferRanges) ReadRange(
+func (source *revisionTransferRanges) ReadRange(
 	ctx context.Context,
 	_ transfer.RevisionHandle,
 	descriptor content.FileRevisionDescriptor,
 	requested content.Range,
 	sink transfer.RangeSink,
 ) error {
-	if descriptor.FileID() == source.failed {
+	if descriptor.FileID() == source.failed && requested.Offset != 0 {
 		return source.failure
 	}
-	return sink.WriteRange(ctx, requested.Offset, make([]byte, requested.Length()))
+	if err := sink.WriteRange(ctx, requested.Offset, make([]byte, requested.Length())); err != nil {
+		return err
+	}
+	if descriptor.FileID() == source.failed {
+		source.delivered = requested
+	}
+	return nil
 }
 
 type revisionTransferOutput struct {
-	session      transfer.OutputSessionID
-	secret       [32]byte
-	scope        transfer.DirectoryAdmissionScope
-	binding      transfer.DirectTreeSessionBinding
-	settlements  map[catalog.FileID]transfer.FileSettlementKind
-	jobPauses    int
-	jobCompletes int
+	session         transfer.OutputSessionID
+	secret          [32]byte
+	scope           transfer.DirectoryAdmissionScope
+	binding         transfer.DirectTreeSessionBinding
+	settlements     map[catalog.FileID]transfer.FileSettlementKind
+	jobPauses       int
+	jobCompletes    int
+	filePauses      int
+	fileRetirements int
 }
 
 func newRevisionTransferOutput(t *testing.T) *revisionTransferOutput {
@@ -278,6 +288,7 @@ func (transaction *revisionTransferTransaction) Pause(
 	context.Context,
 	transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
+	transaction.output.filePauses++
 	settlement, err := transfer.NewVerifiedFileSettlement(transfer.FilePaused, transaction.checkpoint)
 	if err == nil {
 		transaction.output.settlements[transaction.binding.FileID()] = settlement.Kind()
@@ -288,6 +299,7 @@ func (transaction *revisionTransferTransaction) Retire(
 	context.Context,
 	transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
+	transaction.output.fileRetirements++
 	settlement, err := transfer.NewFailedFileSettlement(transaction.binding)
 	if err == nil {
 		transaction.output.settlements[transaction.binding.FileID()] = settlement.Kind()
@@ -296,37 +308,43 @@ func (transaction *revisionTransferTransaction) Retire(
 }
 
 func TestEveryRevisionFailureDispositionSettlesOneFileAndContinuesSibling(t *testing.T) {
-	codes := []uint16{
-		contentflow.RevisionCodeStale,
-		contentflow.RevisionCodeNotFound,
-		contentflow.RevisionCodeUnreadable,
-		contentflow.RevisionCodeUnsupportedStability,
-		contentflow.RevisionCodeQuota,
-		contentflow.RevisionCodeLeaseExpired,
-		contentflow.RevisionCodeDrift,
-		contentflow.RevisionCodeInvalidLease,
+	tests := []struct {
+		code           uint16
+		retryable      bool
+		wantSettlement transfer.FileSettlementKind
+		wantSourceCode transferfault.SourceCode
+	}{
+		{contentflow.RevisionCodeStale, false, transfer.FilePaused, transferfault.SourceRevisionChanged},
+		{contentflow.RevisionCodeStale, true, transfer.FilePaused, transferfault.SourceRevisionChanged},
+		{contentflow.RevisionCodeNotFound, false, transfer.FileFailed, transferfault.SourcePermanent},
+		{contentflow.RevisionCodeNotFound, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeUnreadable, false, transfer.FileFailed, transferfault.SourcePermanent},
+		{contentflow.RevisionCodeUnreadable, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeUnsupportedStability, false, transfer.FileFailed, transferfault.SourcePermanent},
+		{contentflow.RevisionCodeUnsupportedStability, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeQuota, false, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeQuota, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeLeaseExpired, false, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeLeaseExpired, true, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeDrift, false, transfer.FileFailed, transferfault.SourceRevisionInvalidated},
+		{contentflow.RevisionCodeDrift, true, transfer.FileFailed, transferfault.SourceRevisionInvalidated},
+		{contentflow.RevisionCodeInvalidLease, false, transfer.FilePaused, transferfault.SourceUnavailable},
+		{contentflow.RevisionCodeInvalidLease, true, transfer.FilePaused, transferfault.SourceUnavailable},
 	}
-	for _, code := range codes {
-		for _, retryable := range []bool{false, true} {
-			t.Run(fmt.Sprintf("code_%04x_retryable_%t", code, retryable), func(t *testing.T) {
-				failure := RemoteOperationFailureSnapshot{
-					scope: protocolsession.OperationScopeRevision,
-					code:  code, retryable: retryable, message: "revision operation failed",
-				}
-				if retryable {
-					failure.retryAfter = time.Millisecond
-				}
-				wantSettlement := transfer.FilePaused
-				if code == contentflow.RevisionCodeDrift || !retryable && permanentRevisionOperationCode(code) {
-					wantSettlement = transfer.FileFailed
-				}
-				runContentTransferIsolationCase(
-					t, failure.Scope(), code, retryable, wantSettlement, revisionOperationError(failure),
-					false, code == contentflow.RevisionCodeDrift ||
-						code == contentflow.RevisionCodeStale && retryable,
-				)
-			})
-		}
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("code_%04x_retryable_%t", test.code, test.retryable), func(t *testing.T) {
+			failure := RemoteOperationFailureSnapshot{
+				scope: protocolsession.OperationScopeRevision,
+				code:  test.code, retryable: test.retryable, message: "revision operation failed",
+			}
+			if test.retryable {
+				failure.retryAfter = time.Millisecond
+			}
+			runContentTransferIsolationCase(
+				t, failure.Scope(), test.code, test.retryable, test.wantSettlement, revisionOperationError(failure),
+				false, test.wantSourceCode,
+			)
+		})
 	}
 }
 
@@ -337,7 +355,7 @@ func TestTerminalBlockOperationFailureSettlesOneFileAndContinuesSibling(t *testi
 	}
 	runContentTransferIsolationCase(
 		t, failure.Scope(), failure.Code(), failure.Retryable(), transfer.FilePaused,
-		isolatedBlockOperationError(NewRemoteOperationError(failure)), false, false,
+		isolatedBlockOperationError(NewRemoteOperationError(failure)), false, transferfault.SourceUnavailable,
 	)
 }
 
@@ -354,7 +372,7 @@ func TestOpenResultRevisionDriftRemainsCLIVisibleAndContinuesSibling(t *testing.
 	if _, err := receiver.RequestLane(context.Background(), 0); err != nil {
 		t.Fatalf("revision-open drift damaged the protocol session: %v", err)
 	}
-	result := runContentTransferIsolationCase(
+	runContentTransferIsolationCase(
 		t,
 		protocolsession.OperationScopeRevision,
 		contentflow.RevisionCodeDrift,
@@ -362,14 +380,33 @@ func TestOpenResultRevisionDriftRemainsCLIVisibleAndContinuesSibling(t *testing.
 		0,
 		failure,
 		true,
-		true,
+		transferfault.SourceRevisionInvalidated,
 	)
-	expected, _ := transferfault.NewSource(
-		transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated,
-	)
-	if result.SourceDriftFault != expected {
-		t.Fatalf("CLI-visible source drift = %v", result.SourceDriftFailure)
+}
+
+func TestOpenResultRevisionStaleRemainsCLIVisibleAndContinuesSibling(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	fixture.contentStore.openErr = content.ErrRevisionStale
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer sender.Close()
+	defer receiver.Close()
+	_, failure := receiver.OpenRevision(context.Background(), fixture.fileID)
+	if failure == nil {
+		t.Fatal("authenticated OPEN_RESULTS stale unexpectedly opened a revision")
 	}
+	if _, err := receiver.RequestLane(context.Background(), 0); err != nil {
+		t.Fatalf("revision-open stale damaged the protocol session: %v", err)
+	}
+	runContentTransferIsolationCase(
+		t,
+		protocolsession.OperationScopeRevision,
+		contentflow.RevisionCodeStale,
+		false,
+		0,
+		failure,
+		true,
+		transferfault.SourceRevisionChanged,
+	)
 }
 
 func runContentTransferIsolationCase(
@@ -380,14 +417,16 @@ func runContentTransferIsolationCase(
 	wantSettlement transfer.FileSettlementKind,
 	failure error,
 	failAtOpen bool,
-	wantSourceDrift bool,
-) transfer.JobResult {
+	wantSourceCode transferfault.SourceCode,
+) {
 	t.Helper()
 	share := id16[catalog.ShareInstance](210)
 	root := id16[catalog.DirectoryID](211)
 	failed := id16[catalog.FileID](212)
 	good := id16[catalog.FileID](213)
-	size := uint64(catalog.MinChunkSize)
+	// Commit a complete read window before the next request fails, so retaining
+	// a checkpoint must preserve real progress rather than an empty range set.
+	size := uint64(transfer.DefaultConcurrentBlocks+1) * uint64(catalog.MinChunkSize)
 	entries := make([]catalog.Entry, 0, 2)
 	for _, spec := range []struct {
 		file catalog.FileID
@@ -473,10 +512,10 @@ func runContentTransferIsolationCase(
 		t.Fatal(err)
 	}
 	revisions := revisionTransferRevisions{opened: opened, failures: make(map[catalog.FileID]error)}
-	ranges := revisionTransferRanges{failed: failed, failure: failure}
+	ranges := &revisionTransferRanges{failed: failed, failure: failure}
 	if failAtOpen {
 		revisions.failures[failed] = failure
-		ranges = revisionTransferRanges{}
+		ranges = &revisionTransferRanges{}
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: jobID,
@@ -488,14 +527,46 @@ func runContentTransferIsolationCase(
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
-	sourceCode, sourceFault := result.Files[0].Fault.SourceCode()
+	wantFault, err := transferfault.NewSource(transferfault.ScopeFileLocal, wantSourceCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSourceDrift := wantSourceCode == transferfault.SourceRevisionChanged ||
+		wantSourceCode == transferfault.SourceRevisionInvalidated
 	if result.Outcome != transfer.DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		result.SucceededFiles != 1 || len(result.Files) != 1 ||
 		output.settlements[failed] != wantSettlement || output.settlements[good] != transfer.FilePublished ||
-		output.jobPauses != 0 || output.jobCompletes != 1 ||
-		!sourceFault || sourceCode == 0 || result.Files[0].Fault.Scope() != transferfault.ScopeFileLocal ||
-		(result.SourceDriftFailure != nil) != wantSourceDrift {
+		output.jobPauses != 0 || output.jobCompletes != 1 {
 		t.Fatalf("result=%+v settlements=%v", result, output.settlements)
+	}
+	if result.Files[0].Fault != wantFault || result.Files[0].Settlement.Kind() != wantSettlement ||
+		(result.SourceDriftFailure != nil) != wantSourceDrift ||
+		wantSourceDrift && result.SourceDriftFault != wantFault ||
+		!wantSourceDrift && result.SourceDriftFault.Valid() {
+		t.Fatalf("file fault=%v drift=%v; want source fault=%v drift=%t",
+			result.Files[0].Fault, result.SourceDriftFault, wantFault, wantSourceDrift)
+	}
+	checkpoint, hasCheckpoint := result.Files[0].Settlement.VerifiedCheckpoint()
+	switch wantSettlement {
+	case transfer.FilePaused:
+		if output.filePauses != 1 || output.fileRetirements != 0 || !hasCheckpoint ||
+			ranges.delivered.Offset != 0 || ranges.delivered.End == 0 || ranges.delivered.End >= size ||
+			!slices.Equal(checkpoint.Ranges().Ranges(), []content.Range{ranges.delivered}) ||
+			result.Progress.VerifiedBytes != size+ranges.delivered.Length() ||
+			result.Progress.NewlyVerifiedBytes != size+ranges.delivered.Length() ||
+			result.Progress.FileOutcomes.PausedFiles != 1 {
+			t.Fatalf("pause lost committed progress: output=%+v checkpoint=%+v progress=%+v",
+				output, checkpoint, result.Progress)
+		}
+	case transfer.FileFailed:
+		if output.filePauses != 0 || output.fileRetirements != 1 || hasCheckpoint {
+			t.Fatalf("permanent failure did not retire its file: output=%+v settlement=%+v",
+				output, result.Files[0].Settlement)
+		}
+	default:
+		if output.filePauses != 0 || output.fileRetirements != 0 || hasCheckpoint {
+			t.Fatalf("revision-open failure unexpectedly settled a file transaction: %+v", output)
+		}
 	}
 	if failAtOpen {
 		var remote *RemoteRevisionError
@@ -503,12 +574,11 @@ func runContentTransferIsolationCase(
 			remote.Failure().Retryable != retryable {
 			t.Fatalf("open failure lost remote revision diagnostic: %+v", result.Files[0])
 		}
-		return result
+		return
 	}
 	var remote RemoteOperationError
 	if !errors.As(result.Files[0].Cause, &remote) || remote.Failure().Scope() != scope ||
 		remote.Failure().Code() != code || remote.Failure().Retryable() != retryable {
 		t.Fatalf("operation failure lost remote diagnostic: %+v", result.Files[0])
 	}
-	return result
 }
