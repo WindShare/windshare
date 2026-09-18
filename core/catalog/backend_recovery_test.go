@@ -26,7 +26,7 @@ func backendTestMeter(t *testing.T) *attemptResourceMeter {
 
 func backendDirectoryRecord(t *testing.T, directory, parent DirectoryID, name string, identity byte) NodeRecord {
 	t.Helper()
-	locator, err := NewLocator(0, name)
+	locator, err := NewSourceReference([]byte("object:" + name))
 	if err != nil {
 		t.Fatal(err)
 	}

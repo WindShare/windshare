@@ -34,7 +34,7 @@ func TestPOSIXStabilityBinderValidatesCandidateAndDetectsMutation(t *testing.T) 
 	fileID[0] = 1
 	var parent catalog.DirectoryID
 	parent[0] = 2
-	locator, _ := catalog.NewLocator(0, "source.bin")
+	locator, _ := NewSourceReference(0, "source.bin")
 	record, err := catalog.NewFileNodeRecord(fileID, parent, "source.bin", locator, identity, candidate, uint64(len(data)), catalog.ModifiedTime{})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,12 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 	}
 
 	// newPlatformRootedRevisionSource
-	revSource, err := newPlatformRootedRevisionSource([]string{root})
+	authority, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Close()
+	revSource, err := newPlatformRootedRevisionSource([]*os.Root{authority})
 	if err != nil {
 		t.Fatalf("newPlatformRootedRevisionSource error = %v", err)
 	}

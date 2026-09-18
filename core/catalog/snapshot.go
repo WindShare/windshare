@@ -105,8 +105,8 @@ func NewSyntheticRootCommit(spec SyntheticRootCommitSpec) (DirectoryCommit, erro
 	if spec.ShareInstance.IsZero() || spec.SyntheticRoot.IsZero() || spec.Generation.IsZero() {
 		return DirectoryCommit{}, errors.New("synthetic root commit requires share, root, and generation identities")
 	}
-	if len(spec.SelectedRoots) == 0 || len(spec.SelectedRoots) > MaxRootSlots {
-		return DirectoryCommit{}, fmt.Errorf("synthetic root has %d selected roots; required range is 1..%d", len(spec.SelectedRoots), MaxRootSlots)
+	if len(spec.SelectedRoots) == 0 || len(spec.SelectedRoots) > MaxSelectedRoots {
+		return DirectoryCommit{}, fmt.Errorf("synthetic root has %d selected roots; required range is 1..%d", len(spec.SelectedRoots), MaxSelectedRoots)
 	}
 	selected := slices.Clone(spec.SelectedRoots)
 	var nameBytes uint64

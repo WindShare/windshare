@@ -306,13 +306,7 @@ func (p nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoo
 	if err != nil {
 		return nil, classifyWindowsRootOpenError(err)
 	}
-	if _, err := inspectWindowsFileIdentityWith(handle, p.metadataAPI()); err != nil {
-		_ = windows.CloseHandle(handle)
-		return nil, classifyWindowsIdentityError(err)
-	}
-	filesystem, filesystemErr := p.metadataAPI().Filesystem(handle)
-	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: p.metadataAPI(), filesystem: filesystem, filesystemErr: filesystemErr}
-	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata, profile: inspectWindowsRevisionProfile(handle, metadata)}, nil
+	return adoptNativeWindowsRevisionRoot(handle, p.metadataAPI())
 }
 
 func (p nativeWindowsRevisionPlatform) Token(file *os.File) (windowsMutationToken, error) {
@@ -328,6 +322,35 @@ type windowsRootRevisionMetadata struct {
 
 func (metadata windowsRootRevisionMetadata) Filesystem(windows.Handle) (string, error) {
 	return metadata.filesystem, metadata.filesystemErr
+}
+
+// A retained selection can move while sharing. Duplicating its handle keeps
+// native write exclusion bound to that original directory instead of its name.
+func retainWindowsRevisionRoot(authority *os.Root) (windowsRevisionRoot, error) {
+	file, err := authority.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	var handle windows.Handle
+	process := windows.CurrentProcess()
+	duplicateErr := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &handle, 0, false, windows.DUPLICATE_SAME_ACCESS)
+	closeErr := file.Close()
+	if err := errors.Join(duplicateErr, closeErr); err != nil {
+		if duplicateErr == nil {
+			err = errors.Join(err, windows.CloseHandle(handle))
+		}
+		return nil, err
+	}
+	return adoptNativeWindowsRevisionRoot(handle, nativeWindowsRevisionMetadata{})
+}
+
+func adoptNativeWindowsRevisionRoot(handle windows.Handle, api windowsRevisionMetadata) (*nativeWindowsRevisionRoot, error) {
+	if _, err := inspectWindowsFileIdentityWith(handle, api); err != nil {
+		return nil, errors.Join(classifyWindowsIdentityError(err), windows.CloseHandle(handle))
+	}
+	filesystem, filesystemErr := api.Filesystem(handle)
+	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: api, filesystem: filesystem, filesystemErr: filesystemErr}
+	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata, profile: inspectWindowsRevisionProfile(handle, metadata)}, nil
 }
 
 type nativeWindowsRevisionRoot struct {

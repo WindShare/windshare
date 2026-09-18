@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/engine"
 	"net/netip"
 	"testing"
 	"time"
@@ -10,72 +11,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
-
-type testNativeObservationSource struct {
-	producer observationstream.Producer[nativepeer.Observation]
-	stream   observationstream.Consumer[nativepeer.Observation]
-}
-
-func (source *testNativeObservationSource) Observations() <-chan nativepeer.Observation {
-	return source.stream
-}
-func (source *testNativeObservationSource) CompleteObservations() observationstream.Completion {
-	return source.producer.Complete()
-}
-
-func TestNativeObservationBridgeDrainsBoundedPrefixAndAccountsCapacity(t *testing.T) {
-	producer, stream, err := observationstream.New[nativepeer.Observation](1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := nativepeer.Observation{Subject: nativepeer.Subject{Side: nativepeer.SideSender}, Provider: &provider.Event{Milestone: "provider_created"}}
-	producer.TryPublish(value)
-	producer.TryPublish(value)
-	producer.TryPublish(value)
-	source := &testNativeObservationSource{producer: producer, stream: stream}
-	emitter := &shareRecordingEmitter{}
-	reader := startNativeObservation(source, clievent.CommandShare, emitter)
-	completion, status := reader.complete(context.Background())
-	if completion.Enqueued != 1 || completion.CapacityDropped != 2 || !status.Joined || status.Forwarded != 1 {
-		t.Fatalf("completion=%+v status=%+v", completion, status)
-	}
-	if len(emitter.events) != 1 {
-		t.Fatalf("events=%d", len(emitter.events))
-	}
-	if _, ok := emitter.events[0].(clievent.NativeConnectivityObserved); !ok {
-		t.Fatalf("event=%T", emitter.events[0])
-	}
-	next, nextStatus := reader.complete(context.Background())
-	if next != completion || nextStatus != status {
-		t.Fatal("completion not idempotent")
-	}
-	if producer.TryPublish(value) {
-		t.Fatal("post-cut publication accepted")
-	}
-	if c, s := (nativeObservationReader{}).complete(context.Background()); c.Enqueued != 0 || !s.Joined {
-		t.Fatal("disabled source not empty")
-	}
-	if startNativeObservation(nil, clievent.CommandGet, emitter).reader != nil {
-		t.Fatal("nil source enabled")
-	}
-	if startNativeObservation(source, clievent.CommandGet, nil).reader != nil {
-		t.Fatal("nil sink enabled")
-	}
-}
-
-func TestNativeObservationBridgeRejectsOpenProviderFacts(t *testing.T) {
-	producer, stream, _ := observationstream.New[nativepeer.Observation](1)
-	producer.TryPublish(nativepeer.Observation{Provider: &provider.Event{Milestone: "raw-error-token"}})
-	emitter := &shareRecordingEmitter{}
-	reader := startNativeObservation(&testNativeObservationSource{producer: producer, stream: stream}, clievent.CommandGet, emitter)
-	_, status := reader.complete(context.Background())
-	if !status.Joined || len(emitter.events) != 0 || emitter.lifecycleLoss != 1 {
-		t.Fatalf("status=%+v emitter=%+v", status, emitter)
-	}
-}
 
 func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver}
@@ -118,60 +55,17 @@ func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T
 	}
 }
 
-func TestNativeObservationRegistrationRespectsCommandVisibilityAndClose(t *testing.T) {
-	for _, detailed := range []bool{false, true} {
-		runtime, _ := newGetReportingRuntime(t, false, detailed)
-		observation := newGetObservation(runtime)
-		cleanupProtocolObservations(t, observation.state.protocol)
-		native := nativepeer.New(nativepeer.Config{Side: nativepeer.SideReceiver, ObservationCapacity: nativepeer.DefaultObservationCapacity})
-		observation.registerNative(native)
-		if (observation.state.native.reader != nil) != detailed {
-			t.Fatal("visibility did not control reader")
-		}
-		if err := native.Close(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		observation.complete(context.Background())
-		observation.complete(context.Background())
-		runtime.Close()
-	}
-	(getObservation{}).registerNative(nil)
-}
-
-func TestShareNativeObserverLossIsReportedOnceAtFinalCut(t *testing.T) {
-	producer, stream, _ := observationstream.New[nativepeer.Observation](1)
+func TestShareProjectsEngineNativeObservationAndFinalLoss(t *testing.T) {
 	value := nativepeer.Observation{Subject: nativepeer.Subject{Side: nativepeer.SideSender}, Provider: &provider.Event{Milestone: "provider_created"}}
-	producer.TryPublish(value)
-	producer.TryPublish(value)
-	producer.TryPublish(value)
 	emitter := &shareRecordingEmitter{detailed: true}
-	observations := newShareObservations(emitter)
-	cleanupProtocolObservations(t, observations.protocol)
-	observations.nativeReader = startNativeObservation(&testNativeObservationSource{producer: producer, stream: stream}, clievent.CommandShare, emitter)
-	observations.completeWithin()
-	observations.completeWithin()
+	observations := newShareProjection(emitter)
+	app := &App{}
+	app.observeEngineShare(observations, engine.ShareObservation{Native: &value})
+	app.observeEngineShare(observations, engine.ShareObservation{Loss: &engine.ShareObservationLoss{Source: engine.ShareLossNative, Dropped: 2}})
 	if emitter.lifecycleLoss != 2 || len(emitter.events) != 1 {
 		t.Fatalf("loss=%d events=%d", emitter.lifecycleLoss, len(emitter.events))
 	}
 }
-
-func TestSenderNativeQueueTracksDetailedCommandOwnership(t *testing.T) {
-	for _, detailed := range []bool{false, true} {
-		emitter := &shareRecordingEmitter{detailed: detailed}
-		observations := newShareObservations(emitter)
-		cleanupProtocolObservations(t, observations.protocol)
-		factory, err := (&App{}).newSenderPeerFactory(observations, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if (factory.NativeConnectivity().Observations() != nil) != detailed || (observations.nativeReader.reader != nil) != detailed {
-			t.Fatal("sender native queue visibility differs from owner reader")
-		}
-		observations.completeWithin()
-		observations.completeWithin()
-	}
-}
-
 func TestNativeProcessAdmissionProjectionKeepsQueueAndAllowanceFacts(t *testing.T) {
 	at := time.Unix(100, 0)
 	for _, kind := range []nativepeer.AdmissionKind{nativepeer.AdmissionQueued, nativepeer.AdmissionGranted, nativepeer.AdmissionReleased, nativepeer.AdmissionRejected} {

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"github.com/windshare/windshare/engine"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -20,7 +21,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/internal/testoutputroot"
@@ -56,24 +56,18 @@ func TestGetRequestRejectsRetiredSuite(t *testing.T) {
 	}
 }
 
-func TestRelayRegistrationIdentityRejectsWrongWidths(t *testing.T) {
-	if _, _, _, err := relayRegistrationIdentity(liveshare.RegistrationMaterial{}); err == nil {
-		t.Fatal("empty relay identity was accepted")
-	}
-}
-
 func TestTransferResultDriftClassification(t *testing.T) {
 	for _, value := range []transferfault.Fault{
 		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)),
 		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated)),
 		mustCLIFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)),
 	} {
-		result, err := commandprojection.ProjectGetResult(commandprojection.GetResultInput{
+		result, err := projectTestGetResult(engine.ReceiveSettlementInput{
 			Result: transfer.JobResult{
 				Outcome:          transfer.DirectTreeOutcomePartial,
 				SourceDriftFault: value,
 			},
-			Destination: clievent.NewDisplayPath(t.TempDir()),
+			Destination: t.TempDir(),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -82,10 +76,10 @@ func TestTransferResultDriftClassification(t *testing.T) {
 			t.Fatalf("drift projection = %v/%v", result.Drift(), result.ExitCode())
 		}
 	}
-	network, err := commandprojection.ProjectGetResult(commandprojection.GetResultInput{
+	network, err := projectTestGetResult(engine.ReceiveSettlementInput{
 		Result:       transfer.JobResult{Outcome: transfer.DirectTreeOutcomePaused},
 		RuntimeError: errors.New("network"),
-		Destination:  clievent.NewDisplayPath(t.TempDir()),
+		Destination:  t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -100,22 +94,6 @@ func mustCLIFault(value transferfault.Fault, err error) transferfault.Fault {
 		panic(err)
 	}
 	return value
-}
-
-func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {
-	wholeShare, err := selectionRules(nil)
-	if err != nil || wholeShare.Mode() != transfer.SelectionByNodeID || !wholeShare.DefaultSelected() {
-		t.Fatalf("whole-share rules mode=%d default=%v error=%v", wholeShare.Mode(), wholeShare.DefaultSelected(), err)
-	}
-	paths, err := selectionRules([]string{"tree/b.txt", "tree/a.txt"})
-	if err != nil || paths.Mode() != transfer.SelectionByCatalogPath || paths.DefaultSelected() ||
-		!paths.FileSelectedAt(catalog.FileID{}, "tree/a.txt", false) ||
-		paths.FileSelectedAt(catalog.FileID{}, "tree/c.txt", false) {
-		t.Fatalf("path rules mode=%d default=%v error=%v", paths.Mode(), paths.DefaultSelected(), err)
-	}
-	if _, err := selectionRules([]string{"../escape"}); err == nil {
-		t.Fatal("non-canonical path selection was accepted")
-	}
 }
 
 func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
@@ -148,8 +126,7 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	app := &App{
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
-		processTrace:     privateTrace,
-		revisionCapacity: newTestRevisionCapacity(t),
+		processTrace: privateTrace,
 		openUserTrace: func(
 			target runtrace.Target,
 			command clievent.Command,
@@ -448,4 +425,12 @@ func newCLIRelayServer(t *testing.T, store *memoryStopStore) *httptest.Server {
 	})
 
 	return server
+}
+
+func projectTestGetResult(input engine.ReceiveSettlementInput) (clievent.TransferResult, error) {
+	result, err := engine.SettleReceive(input)
+	if err != nil {
+		return clievent.TransferResult{}, err
+	}
+	return commandprojection.ProjectReceiveResult(result)
 }

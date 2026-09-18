@@ -25,7 +25,7 @@ type ScannedChild struct {
 	DirectoryID      DirectoryID
 	FileID           FileID
 	Name             string
-	Locator          Locator
+	SourceReference  SourceReference
 	SourceIdentity   SourceIdentity
 	VersionCandidate VersionCandidate
 	ExpectedSize     uint64
@@ -39,11 +39,11 @@ func (child ScannedChild) nodeRecord(parent DirectoryID) (NodeRecord, error) {
 			return NodeRecord{}, errors.New("catalog scanned directory carries file metadata")
 		}
 		return NewDirectoryNodeRecord(
-			child.DirectoryID, parent, child.Name, child.Locator, child.SourceIdentity, child.ModifiedTime,
+			child.DirectoryID, parent, child.Name, child.SourceReference, child.SourceIdentity, child.ModifiedTime,
 		)
 	case child.DirectoryID.IsZero() && !child.FileID.IsZero():
 		return NewFileNodeRecord(
-			child.FileID, parent, child.Name, child.Locator, child.SourceIdentity,
+			child.FileID, parent, child.Name, child.SourceReference, child.SourceIdentity,
 			child.VersionCandidate, child.ExpectedSize, child.ModifiedTime,
 		)
 	default:

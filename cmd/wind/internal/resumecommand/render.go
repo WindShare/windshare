@@ -1,6 +1,7 @@
 package resumecommand
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -27,11 +28,11 @@ func (textRenderer) Usage() string {
 }
 
 func (textRenderer) Inventory(snapshot resumeInventorySnapshot) (string, bool, error) {
-	if !snapshot.valid() {
+	if !snapshot.Valid() {
 		return "", false, errResumeStateContract
 	}
 	status := resumeListStatusReady
-	if snapshot.needsAttention() {
+	if snapshot.NeedsAttention() {
 		status = resumeListStatusNeedsAttention
 	}
 	var output strings.Builder
@@ -39,17 +40,17 @@ func (textRenderer) Inventory(snapshot resumeInventorySnapshot) (string, bool, e
 		&output,
 		"resume_list_status=%q operations=%d registry_unknown=%t\n",
 		status,
-		len(snapshot.operations),
-		snapshot.registryUnknown,
+		len(snapshot.Operations),
+		snapshot.RegistryUnknown,
 	)
-	for index, operation := range snapshot.operations {
+	for index, operation := range snapshot.Operations {
 		rendered, err := renderResumeOperation(index+1, operation)
 		if err != nil {
 			return "", false, err
 		}
 		output.WriteString(rendered)
 	}
-	return output.String(), snapshot.needsAttention(), nil
+	return output.String(), snapshot.NeedsAttention(), nil
 }
 
 func (textRenderer) ListControlStatus(
@@ -57,7 +58,7 @@ func (textRenderer) ListControlStatus(
 	reason string,
 	detail resumeFailureDetail,
 ) (string, error) {
-	if !detail.valid() {
+	if !detail.Valid() {
 		return "", errResumeStateContract
 	}
 	var output strings.Builder
@@ -71,17 +72,17 @@ func renderResumeFailureDetail(output *strings.Builder, detail resumeFailureDeta
 	if output == nil || detail == (resumeFailureDetail{}) {
 		return
 	}
-	fmt.Fprintf(output, " stage=%q", detail.stage.String())
-	if detail.reconciliation != 0 {
-		fmt.Fprintf(output, " reconciliation_stage=%q", detail.reconciliation.String())
+	fmt.Fprintf(output, " stage=%q", detail.Stage.String())
+	if detail.Reconciliation != 0 {
+		fmt.Fprintf(output, " reconciliation_stage=%q", detail.Reconciliation.String())
 	}
-	if detail.nativeClass != 0 {
-		fmt.Fprintf(output, " native_error_class=%q", detail.nativeClass.String())
+	if detail.NativeClass != 0 {
+		fmt.Fprintf(output, " native_error_class=%q", detail.NativeClass.String())
 	}
 }
 
 func renderResumeOperation(itemNumber int, operation resumeOperation) (string, error) {
-	if itemNumber <= 0 || !operation.valid() {
+	if itemNumber <= 0 || !operation.Valid() {
 		return "", errResumeStateContract
 	}
 	var output strings.Builder
@@ -89,29 +90,29 @@ func renderResumeOperation(itemNumber int, operation resumeOperation) (string, e
 		&output,
 		"resume_operation=%d state=%q operation_id=%q running=%t item-blocked=%d",
 		itemNumber,
-		operation.state.String(),
-		operation.operationID,
-		operation.running,
-		len(operation.blockedItems),
+		operation.State.String(),
+		hex.EncodeToString(operation.ID.Bytes()),
+		operation.Running,
+		len(operation.BlockedItems),
 	)
-	if operation.attention != "" {
-		fmt.Fprintf(&output, " reason=%q", operation.attention)
+	if operation.Attention != "" {
+		fmt.Fprintf(&output, " reason=%q", operation.Attention)
 	}
 	output.WriteByte('\n')
-	for _, item := range operation.blockedItems {
-		if item.pathKnown {
+	for _, item := range operation.BlockedItems {
+		if item.PathKnown {
 			fmt.Fprintf(
 				&output,
 				"  item-blocked path=%q reason=%q\n",
-				item.artifactPath,
-				item.reason.String(),
+				item.ArtifactPath,
+				item.Reason.String(),
 			)
 			continue
 		}
 		fmt.Fprintf(
 			&output,
 			"  item-blocked path_known=false reason=%q\n",
-			item.reason.String(),
+			item.Reason.String(),
 		)
 	}
 	return output.String(), nil
@@ -139,7 +140,7 @@ func (textRenderer) DiscardControlStatus(
 	reason string,
 	detail resumeFailureDetail,
 ) (string, error) {
-	if !detail.valid() {
+	if !detail.Valid() {
 		return "", errResumeStateContract
 	}
 	var output strings.Builder
@@ -158,37 +159,37 @@ func (textRenderer) DiscardControlStatus(
 }
 
 func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (string, error) {
-	if itemNumber <= 0 || !report.valid() {
+	if itemNumber <= 0 || !report.Valid() {
 		return "", errResumeStateContract
 	}
 	var output strings.Builder
 	fmt.Fprintf(
 		&output,
 		"resume_discard_status=%q item=%d operation_id=%q published_files=%q foreign_objects=%q",
-		report.status,
+		report.Status,
 		itemNumber,
-		report.operationID,
+		hex.EncodeToString(report.ID.Bytes()),
 		resumePublishedFileTreatment,
 		resumeForeignObjectTreatment,
 	)
-	if report.attention != "" {
-		fmt.Fprintf(&output, " reason=%q", report.attention)
+	if report.Attention != "" {
+		fmt.Fprintf(&output, " reason=%q", report.Attention)
 	}
 	output.WriteByte('\n')
-	for _, item := range report.blockedItems {
-		if item.pathKnown {
+	for _, item := range report.BlockedItems {
+		if item.PathKnown {
 			fmt.Fprintf(
 				&output,
 				"  item-blocked path=%q reason=%q\n",
-				item.artifactPath,
-				item.reason.String(),
+				item.ArtifactPath,
+				item.Reason.String(),
 			)
 			continue
 		}
 		fmt.Fprintf(
 			&output,
 			"  item-blocked path_known=false reason=%q\n",
-			item.reason.String(),
+			item.Reason.String(),
 		)
 	}
 	return output.String(), nil

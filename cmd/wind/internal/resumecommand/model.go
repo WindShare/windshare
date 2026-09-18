@@ -2,13 +2,10 @@ package resumecommand
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
-	"slices"
 
-	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine"
 )
 
 const (
@@ -44,40 +41,14 @@ const (
 	resumeTerminalRequiredReason     = "interactive-terminal-required"
 	resumeConfirmationMismatchReason = "confirmation-did-not-match"
 	resumeCommandCancelledReason     = "command-cancelled"
-
-	resumeDestinationOwnershipReason = "destination-ownership-unknown"
-	resumeLeaseOwnershipReason       = "lease-ownership-unknown"
-	resumeCleanupUncertainReason     = "cleanup-uncertain"
 )
 
 var (
-	errResumeStateContract     = errors.New("resume state CLI contract is invalid")
+	errResumeStateContract     = engine.ErrRecoveryContract
 	errResumeTerminalRequired  = errors.New("resume discard confirmation requires an interactive terminal")
 	errResumeConfirmationInput = errors.New("resume discard confirmation could not be read")
+	newResumeInventorySnapshot = engine.NewRecoverySnapshot
 )
-
-type resumeFailureDetail struct {
-	stage          osfs.FilesystemOutputFailureStage
-	reconciliation osfs.FilesystemCheckpointReconciliationStep
-	nativeClass    osfs.FilesystemNativeErrorClass
-}
-
-func (detail resumeFailureDetail) valid() bool {
-	if detail == (resumeFailureDetail{}) {
-		return true
-	}
-	if !detail.stage.Valid() {
-		return false
-	}
-	if detail.reconciliation != 0 {
-		if !detail.reconciliation.Valid() ||
-			detail.stage != osfs.FilesystemOutputFailureCheckpointReconciliation &&
-				detail.stage != osfs.FilesystemOutputFailureNativeDurability {
-			return false
-		}
-	}
-	return detail.nativeClass == 0 || detail.nativeClass.Valid()
-}
 
 // Result is deliberately smaller than the process exit-code space: resume does
 // not own network or snapshot-drift outcomes.
@@ -98,227 +69,27 @@ type resumeDiscardRequest struct {
 	itemNumber int
 }
 
-type resumeOperationState uint8
+type resumeFailureDetail = engine.RecoveryFailureDetail
+type resumeOperationState = engine.RecoveryOperationState
+type resumeOperation = engine.RecoveryOperation
+type resumeBlockedItem = engine.RecoveryBlockedItem
+type resumeInventorySnapshot = engine.RecoverySnapshot
+type resumeDiscardReport = engine.RecoveryDiscardReport
 
 const (
-	resumeOperationIncomplete resumeOperationState = iota + 1
-	resumeOperationResumable
-	resumeOperationCleanupPending
-	resumeOperationNeedsAttention
+	resumeOperationIncomplete       = engine.RecoveryIncomplete
+	resumeOperationResumable        = engine.RecoveryResumable
+	resumeOperationCleanupPending   = engine.RecoveryCleanupPending
+	resumeOperationNeedsAttention   = engine.RecoveryNeedsAttention
+	resumeBlockedPublicationUnknown = engine.RecoveryBlockedPublicationUnknown
+	resumeBlockedCheckpointInvalid  = engine.RecoveryBlockedCheckpointInvalid
 )
 
-func (state resumeOperationState) valid() bool {
-	return state >= resumeOperationIncomplete && state <= resumeOperationNeedsAttention
-}
-
-func (state resumeOperationState) String() string {
-	switch state {
-	case resumeOperationIncomplete:
-		return "incomplete"
-	case resumeOperationResumable:
-		return "resumable"
-	case resumeOperationCleanupPending:
-		return "cleanup-pending"
-	case resumeOperationNeedsAttention:
-		return "operation-needs-attention"
-	default:
-		return ""
-	}
-}
-
-type resumeBlockedReason uint8
-
-const (
-	resumeBlockedPublicationUnknown resumeBlockedReason = iota + 1
-	resumeBlockedCheckpointInvalid
-	resumeBlockedOwnedObjectUnknown
-	resumeBlockedRevisionConflict
-)
-
-func (reason resumeBlockedReason) valid() bool {
-	return reason >= resumeBlockedPublicationUnknown && reason <= resumeBlockedRevisionConflict
-}
-
-func (reason resumeBlockedReason) String() string {
-	switch reason {
-	case resumeBlockedPublicationUnknown:
-		return "publication-unknown"
-	case resumeBlockedCheckpointInvalid:
-		return "checkpoint-invalid"
-	case resumeBlockedOwnedObjectUnknown:
-		return "owned-object-unknown"
-	case resumeBlockedRevisionConflict:
-		return "revision-conflict"
-	default:
-		return ""
-	}
-}
-
-type resumeBlockedItem struct {
-	artifactPath string
-	pathKnown    bool
-	reason       resumeBlockedReason
-}
-
-func (item resumeBlockedItem) valid() bool {
-	if !item.reason.valid() {
-		return false
-	}
-	if !item.pathKnown {
-		return item.artifactPath == "" && item.reason == resumeBlockedCheckpointInvalid
-	}
-	canonical, err := catalog.CanonicalPath(item.artifactPath)
-	return err == nil && canonical == item.artifactPath && item.artifactPath != ""
-}
-
-type resumeOperation struct {
-	operationID  string
-	state        resumeOperationState
-	attention    string
-	running      bool
-	blockedItems []resumeBlockedItem
-}
-
-func (operation resumeOperation) valid() bool {
-	if !validLowerHex(operation.operationID, receivecontract.StableIdentityBytes) ||
-		!operation.state.valid() || !validOperationAttention(operation.state, operation.attention) {
-		return false
-	}
-	if operation.running && len(operation.blockedItems) != 0 {
-		return false
-	}
-	for _, item := range operation.blockedItems {
-		if !item.valid() {
-			return false
-		}
-	}
-	return true
-}
-
-func validOperationAttention(state resumeOperationState, reason string) bool {
-	if state == resumeOperationNeedsAttention {
-		return isOperationAttentionReason(reason) && reason != resumeCleanupUncertainReason
-	}
-	if state == resumeOperationCleanupPending {
-		return reason == "" || reason == resumeCleanupUncertainReason
-	}
-	return reason == ""
-}
-
-func isOperationAttentionReason(reason string) bool {
-	switch reason {
-	case resumeDestinationOwnershipReason,
-		resumeRegistryUnknownReason,
-		resumeLeaseOwnershipReason,
-		resumeOperationUnknownReason,
-		resumeCleanupUncertainReason:
-		return true
-	default:
-		return false
-	}
-}
-
-type resumeInventorySnapshot struct {
-	operations      []resumeOperation
-	registryUnknown bool
-}
-
-func newResumeInventorySnapshot(
-	operations []resumeOperation,
-	registryUnknown bool,
-) (resumeInventorySnapshot, error) {
-	canonical := slices.Clone(operations)
-	slices.SortFunc(canonical, func(left, right resumeOperation) int {
-		if left.operationID < right.operationID {
-			return -1
-		}
-		if left.operationID > right.operationID {
-			return 1
-		}
-		return 0
-	})
-	for index, operation := range canonical {
-		if !operation.valid() || index > 0 && canonical[index-1].operationID == operation.operationID {
-			return resumeInventorySnapshot{}, errResumeStateContract
-		}
-		canonical[index].blockedItems = slices.Clone(operation.blockedItems)
-	}
-	return resumeInventorySnapshot{operations: canonical, registryUnknown: registryUnknown}, nil
-}
-
-func (snapshot resumeInventorySnapshot) clone() resumeInventorySnapshot {
-	cloned := resumeInventorySnapshot{
-		operations: slices.Clone(snapshot.operations), registryUnknown: snapshot.registryUnknown,
-	}
-	for index := range cloned.operations {
-		cloned.operations[index].blockedItems = slices.Clone(cloned.operations[index].blockedItems)
-	}
-	return cloned
-}
-
-func (snapshot resumeInventorySnapshot) valid() bool {
-	for index, operation := range snapshot.operations {
-		if !operation.valid() || index > 0 && snapshot.operations[index-1].operationID >= operation.operationID {
-			return false
-		}
-	}
-	return true
-}
-
-func (snapshot resumeInventorySnapshot) needsAttention() bool {
-	if snapshot.registryUnknown {
-		return true
-	}
-	for _, operation := range snapshot.operations {
-		if operation.state == resumeOperationNeedsAttention {
-			return true
-		}
-	}
-	return false
-}
-
-type resumeDiscardReport struct {
-	status       string
-	operationID  string
-	attention    string
-	blockedItems []resumeBlockedItem
-}
-
-func (report resumeDiscardReport) valid() bool {
-	if !validLowerHex(report.operationID, receivecontract.StableIdentityBytes) {
-		return false
-	}
-	for _, item := range report.blockedItems {
-		if !item.valid() {
-			return false
-		}
-	}
-	switch report.status {
-	case resumeDiscardStatusDiscarded:
-		return report.attention == ""
-	case resumeDiscardStatusCleanupPending:
-		return report.attention == "" || report.attention == resumeCleanupUncertainReason
-	case resumeDiscardStatusNeedsAttention:
-		return isOperationAttentionReason(report.attention) && report.attention != resumeCleanupUncertainReason
-	default:
-		return false
-	}
-}
-
-func validLowerHex(value string, decodedBytes int) bool {
-	if len(value) != hex.EncodedLen(decodedBytes) {
-		return false
-	}
-	decoded, err := hex.DecodeString(value)
-	return err == nil && hex.EncodeToString(decoded) == value
-}
-
-// resumeStateInventory binds each displayed ordinal to one freshly listed
-// OperationID. Discard reacquires that exact operation through the root authority;
-// neither the ordinal nor a display path becomes deletion authority.
 type resumeStateInventory interface {
 	Snapshot() (resumeInventorySnapshot, error)
-	Discard(context.Context, int) (resumeDiscardReport, error)
+	DiscardRestriction() *engine.RecoveryFailure
+	CheckDiscard(receivecontract.OperationID) *engine.RecoveryFailure
+	Discard(context.Context, receivecontract.OperationID) engine.RecoveryDiscardResult
 }
 
 type resumeStateInventoryOpener interface {

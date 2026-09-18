@@ -221,6 +221,45 @@ func FilesystemOutputDiagnosticFor(err error) (FilesystemOutputDiagnostic, bool)
 	return diagnostic, diagnostic.Valid()
 }
 
+// FilesystemOutputFailureForStage retains every independently annotated failure
+// at a stage. The first diagnostic describes the primary operation; joined
+// release failures remain separate branches and must be selected independently.
+func FilesystemOutputFailureForStage(err error, stage FilesystemOutputFailureStage) error {
+	if err == nil || !stage.Valid() {
+		return nil
+	}
+	var diagnostic FilesystemOutputDiagnostic
+	// Match only this node; recursive matching would also retain unrelated siblings.
+	//nolint:errorlint
+	switch carrier := err.(type) {
+	case FilesystemOutputDiagnosticCarrier:
+		diagnostic = carrier.FilesystemOutputDiagnostic()
+	case interface {
+		FilesystemOutputDiagnostic() outputruntime.FilesystemOutputDiagnostic
+	}:
+		diagnostic = projectFilesystemOutputDiagnostic(carrier.FilesystemOutputDiagnostic())
+	}
+	if diagnostic.Valid() && diagnostic.Stage == stage {
+		return err
+	}
+	// Visit every branch ourselves so distinct failures at the same stage survive.
+	//nolint:errorlint
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		var matching []error
+		for _, cause := range wrapped.Unwrap() {
+			if selected := FilesystemOutputFailureForStage(cause, stage); selected != nil {
+				matching = append(matching, selected)
+			}
+		}
+		return errors.Join(matching...)
+	case interface{ Unwrap() error }:
+		return FilesystemOutputFailureForStage(wrapped.Unwrap(), stage)
+	default:
+		return nil
+	}
+}
+
 type FilesystemOutputTraceOperation uint8
 
 const (

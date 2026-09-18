@@ -79,7 +79,7 @@ func readyIdentity[T ~[catalog.IdentityBytes]byte](seed byte) T {
 func virtualReadySource(descendants uint64) (*readyVirtualCatalogSource, error) {
 	synthetic := readyIdentity[catalog.DirectoryID](31)
 	directory := readyIdentity[catalog.DirectoryID](63)
-	locator, err := catalog.NewLocator(0, "")
+	locator, err := catalog.NewSourceReference([]byte("object:" + ""))
 	if err != nil {
 		return nil, err
 	}
@@ -125,14 +125,14 @@ func prepareVirtualReady(descendants uint64) (readyMeasurement, func() error, er
 		syntheticRoot:  readyIdentity[catalog.DirectoryID](31),
 		rootGeneration: readyIdentity[catalog.DirectoryGeneration](47),
 	}
-	sender := &PreparedSender{selectedSource: source}
+	sender := &PreparedSender{source: source}
 	sender.keyTree, err = content.NewKeyTree(readSecret, authority.shareInstance)
 	if err != nil {
 		authority.destroy()
 		return readyMeasurement{}, nil, err
 	}
 	random := &lockedReader{reader: &readyDeterministicReader{}}
-	catalogState, err := prepareSenderCatalog(context.Background(), SenderConfig{
+	catalogState, err := prepareSenderCatalog(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		ChunkSize: catalog.DefaultChunkSize,
 		Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}, random, sender, authority, readyUnusedSpillFactory{}, productionSenderPreparationDependencies())
@@ -204,9 +204,9 @@ func BenchmarkReadyRealDisk(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.StartTimer()
-			sender, err := PrepareSender(context.Background(), SenderConfig{
+			sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 				RevisionCapacity: revisionCapacity,
-				Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.DefaultChunkSize,
+				Source:           testFileSource([]string{root}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.DefaultChunkSize,
 				Random: &readyDeterministicReader{}, Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 			})
 			if err == nil {
@@ -251,4 +251,8 @@ func BenchmarkReadyRealDisk(b *testing.B) {
 		}
 		run(b, func(int) (string, func(), error) { return root, func() {}, nil })
 	})
+}
+
+func (*readyVirtualCatalogSource) OpenStable(context.Context, catalog.NodeRecord) (content.StableFile, error) {
+	return nil, content.ErrRevisionNotFound
 }

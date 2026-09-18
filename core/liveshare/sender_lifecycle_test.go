@@ -131,7 +131,7 @@ func TestPreparedSenderConcurrentCloseJoinsCacheBeforeSourceTeardown(t *testing.
 			closedAfterJoin:   sourceClosed,
 		}
 		sender := &PreparedSender{
-			cache: cache, selectedSource: source,
+			cache: cache, source: source,
 			capability: link.Link{ReadSecret: []byte{1}}, privateKey: ed25519.PrivateKey{2},
 		}
 		reentrantStopResult := make(chan error, 1)
@@ -233,9 +233,9 @@ func TestPreparedSenderRollbackDestroysPartiallyBuiltSealers(t *testing.T) {
 		return content.DerivedKey{}, lateFailure
 	}
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
+		Source:           testFileSource([]string{filename}), Relays: []string{"ws://127.0.0.1:8484"},
 		ChunkSize: catalog.MinChunkSize, Random: mathrand.New(mathrand.NewSource(7)),
 		preparation: dependencies,
 	})
@@ -297,4 +297,8 @@ func TestPreparedSenderStopFreezesRuntimeBeforeAsyncJoin(t *testing.T) {
 			t.Fatal("closed sender retained its stopped runtime factory")
 		}
 	})
+}
+
+func (*closeOrderCatalogSource) OpenStable(context.Context, catalog.NodeRecord) (content.StableFile, error) {
+	return nil, content.ErrRevisionNotFound
 }

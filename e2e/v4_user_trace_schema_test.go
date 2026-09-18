@@ -53,6 +53,7 @@ type v4TraceCorrelation struct {
 }
 
 type v4TraceRecord struct {
+	Command      string
 	Event        string
 	RuntimeRunID string
 	Correlation  *v4TraceCorrelation
@@ -203,6 +204,15 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 	rejection := v4TraceSchema(v4TraceFields(v4TraceString, "source_event", "source_location", "source_stage", "field", "rule"), v4TraceOptionalFields(v4TraceRawString, "sample_protocol_session_id", "sample_protocol_operation_id", "sample_revision_id", "sample_response_sequence", "sample_attempt_sequence"), v4TraceObjectSliceField("evidence", rejectionField), v4TraceFields(v4TraceBool, "truncated"), v4TraceFields(v4TraceDecimal, "omitted_fields", "omitted_bytes"))
 
 	return map[string]*v4TraceObjectSchema{
+		"engine_task_observed": v4TraceSchema(
+			v4TraceFields(v4TraceString, "engine_task_id", "stage", "stop_reason"),
+			v4TraceOptionalFields(v4TraceString, "outcome", "failure_class"),
+			v4TraceFields(v4TraceTimestamp, "observed_at"),
+			v4TraceOptionalFields(v4TraceIdentity, "share_instance", "receive_operation_id", "transfer_job_id", "previous_protocol_session_id"),
+			v4TraceOptionalFields(v4TraceString, "admission_trigger", "admission_terminal_owner"),
+			v4TraceObjectField("failure", failure, true),
+			v4TraceObjectField("cleanup_failure", failure, true),
+		),
 		"ready":               v4TraceSchema(),
 		"platform_setup":      v4TraceSchema(v4TraceFields(v4TraceString, "state", "reason")),
 		"native_connectivity": v4NativeConnectivitySchema(),

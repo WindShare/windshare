@@ -1,250 +1,125 @@
 package commandprojection
 
 import (
+	"github.com/windshare/windshare/engine"
 	"math"
-	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/core/transfer"
-	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
-type GetResultInput struct {
-	Result              transfer.JobResult
-	AdmissionError      error
-	RuntimeError        error
-	ConnectionError     error
-	ContextError        error
-	Elapsed             time.Duration
-	Destination         clievent.DisplayPath
-	DestinationAdjusted bool
-}
-
-func ProjectGetResult(input GetResultInput) (clievent.TransferResult, error) {
-	if input.Result.TerminationInterruption != 0 && !input.Result.TerminationInterruption.Valid() ||
-		input.Result.SettlementInterruption != 0 && !input.Result.SettlementInterruption.Valid() {
-		return clievent.TransferResult{}, ErrInvalidProjection
+// ProjectReceiveResult translates an already settled application outcome.
+func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (clievent.TransferResult, error) {
+	status := clievent.ResultFailed
+	switch input.Outcome {
+	case engine.OutcomeSuccess:
+		status = clievent.ResultSuccess
+	case engine.OutcomePartial:
+		status = clievent.ResultPartial
+	case engine.OutcomePaused:
+		status = clievent.ResultPaused
 	}
-	status := projectResultStatus(input.Result)
+	exit := projectApplicationFailureClass(input.FailureClass)
 	drift := clievent.DriftNone
-	exit := clievent.ExitFailure
-	switch {
-	case input.Result.SourceDriftFault.Valid():
-		drift, exit = clievent.DriftSource, clievent.ExitDrift
-	case status == clievent.ResultSuccess:
-		exit = clievent.ExitSuccess
-	case provesMissingSelection(input.Result):
-		exit = clievent.ExitUsage
-	case resultHasTerminalNetworkFault(input.Result):
-		exit = clievent.ExitNetwork
-	case input.Result.TerminationInterruption.Valid() || input.Result.SettlementInterruption.Valid():
-		exit = clievent.ExitFailure
-	case (input.Result.Outcome == transfer.DirectTreeOutcomePaused ||
-		input.Result.Outcome == transfer.DirectTreeOutcomeFailed) &&
-		getResultHasNetworkAuthority(input):
-		exit = clievent.ExitNetwork
+	if input.FailureClass == engine.FailureSourceDrift {
+		drift = clievent.DriftSource
 	}
-	failure, hasFailure := resultFailure(input, status, exit)
-	spec := clievent.TransferResultSpec{
-		Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Elapsed,
-		Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted,
-		Files:             projectFileOutcomes(input.Result.Progress.FileOutcomes),
-		DirectoryFailures: saturatingCount(len(input.Result.Directories), input.Result.OmittedDirectoryFailures),
-		OmittedDiagnostics: saturatingAdd(
-			input.Result.OmittedDirectoryFailures,
-			input.Result.OmittedFileFailures,
-		),
-		PublishedBytes: input.Result.Progress.PublishedBytes,
-		CountersExact:  input.Result.Progress.CountersExact,
+	r := input.Value.Transfer
+	spec := clievent.TransferResultSpec{Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Value.Elapsed, Destination: clievent.NewDisplayPath(input.Value.Destination), DestinationAdjusted: input.Value.DestinationAdjusted,
+		Files: projectFileOutcomes(r.Progress.FileOutcomes), DirectoryFailures: saturatingCount(len(r.Directories), r.OmittedDirectoryFailures), OmittedDiagnostics: saturatingAdd(r.OmittedDirectoryFailures, r.OmittedFileFailures), PublishedBytes: r.Progress.PublishedBytes, CountersExact: r.Progress.CountersExact}
+	if input.Outcome != engine.OutcomeSuccess {
+		spec.Failure, _ = ClassifyError(input.Err)
 	}
-	if hasFailure {
-		spec.Failure = failure
-	}
-	result, err := clievent.NewTransferResult(spec)
+	value, err := clievent.NewTransferResult(spec)
 	if err != nil {
 		return clievent.TransferResult{}, ErrInvalidProjection
 	}
-	return result, nil
+	return value, nil
 }
-
-func provesMissingSelection(result transfer.JobResult) bool {
-	return result.Outcome == transfer.DirectTreeOutcomePartial &&
-		result.Progress.Discovery == transfer.DiscoveryComplete &&
-		result.Progress.CountersExact &&
-		containsExactError(result.SelectionResolutionFailure, transfer.ErrSelectionTargetMissing)
-}
-
-func projectResultStatus(result transfer.JobResult) clievent.ResultStatus {
-	switch result.Outcome {
-	case transfer.DirectTreeOutcomeSuccess:
-		if successfulGetResult(result) {
-			return clievent.ResultSuccess
-		}
-		return clievent.ResultFailed
-	case transfer.DirectTreeOutcomePartial:
-		return clievent.ResultPartial
-	case transfer.DirectTreeOutcomePaused:
-		return clievent.ResultPaused
-	case transfer.DirectTreeOutcomeFailed:
-		return clievent.ResultFailed
+func projectApplicationFailureClass(class engine.FailureClass) clievent.ExitCode {
+	switch class {
+	case engine.FailureNone:
+		return clievent.ExitSuccess
+	case engine.FailureNetwork:
+		return clievent.ExitNetwork
+	case engine.FailureUsage:
+		return clievent.ExitUsage
+	case engine.FailureSourceDrift:
+		return clievent.ExitDrift
 	default:
-		return clievent.ResultFailed
+		return clievent.ExitFailure
 	}
 }
 
-func successfulGetResult(result transfer.JobResult) bool {
-	progress := result.Progress
-	files := progress.FileOutcomes
-	return result.TerminationCause == nil && !result.TerminationFault.Valid() &&
-		result.TerminationInterruption == 0 &&
-		result.SettlementFailure == nil && !result.SettlementFault.Valid() &&
-		result.SettlementInterruption == 0 &&
-		result.SelectionResolutionFailure == nil && result.SourceDriftFailure == nil &&
-		!result.SourceDriftFault.Valid() && len(result.Directories) == 0 && len(result.Files) == 0 &&
-		result.OmittedDirectoryFailures == 0 && result.OmittedFileFailures == 0 &&
-		files.PausedFiles == 0 && files.CollisionFiles == 0 && files.FailedFiles == 0 &&
-		files.ItemBlockedFiles == 0 && result.Settlement.Kind() == transfer.DirectTreeSettlementSuccess &&
-		progress.Discovery == transfer.DiscoveryComplete && progress.CountersExact &&
-		progress.PublishedFiles == result.SucceededFiles &&
-		progress.PublishedFiles == progress.DiscoveredFiles &&
-		progress.PublishedBytes == progress.DiscoveredBytes &&
-		progress.PreviouslyPublishedBytes <= progress.DiscoveredBytes &&
-		progress.VerifiedBytes == progress.DiscoveredBytes-progress.PreviouslyPublishedBytes
-}
-
-func resultHasTerminalNetworkFault(result transfer.JobResult) bool {
-	fault := result.TerminationFault
-	return fault.Domain() == transferfault.DomainSession && fault.Scope() == transferfault.ScopeSessionTerminal
-}
-
-func getResultHasNetworkAuthority(input GetResultInput) bool {
-	fault := input.Result.TerminationFault
-	return input.AdmissionError != nil || input.RuntimeError != nil || input.ConnectionError != nil ||
-		fault.Domain() == transferfault.DomainSession && fault.Scope() == transferfault.ScopeSessionTerminal
-}
-
-func resultFailure(
-	input GetResultInput,
-	status clievent.ResultStatus,
-	exit clievent.ExitCode,
-) (clievent.Failure, bool) {
-	if status == clievent.ResultSuccess {
-		return clievent.Failure{}, false
-	}
-	if exit == clievent.ExitUsage {
-		return mustFailure(clievent.FailureSelectionMissing), true
-	}
-	for _, value := range []transferfault.Fault{
-		input.Result.SourceDriftFault,
-		input.Result.TerminationFault,
-		input.Result.SettlementFault,
-	} {
-		if failure, ok := ProjectFault(value); ok {
-			return failure, true
-		}
-	}
-	if failure, ok := ProjectTransferInterruption(input.Result.TerminationInterruption); ok {
+// The workflow's typed reason owns precedence over incidental diagnostic causes.
+func projectReceiveFailure(value engine.ReceiveFailure) (clievent.Failure, bool) {
+	if failure, ok := ProjectFault(value.Fault); ok {
 		return failure, true
 	}
-	if failure, ok := ProjectTransferInterruption(input.Result.SettlementInterruption); ok {
+	if failure, ok := ProjectTransferInterruption(value.Interruption); ok {
 		return failure, true
 	}
-	if failure, ok := projectFileOutcomeFailure(input.Result.Progress.FileOutcomes); ok {
-		return failure, true
+	local := map[engine.ReceiveLocalFailure]clievent.FailureCode{
+		engine.ReceiveLocalSelectionMissing: clievent.FailureSelectionMissing, engine.ReceiveLocalRevisionConflict: clievent.FailureCheckpointRevisionConflict,
+		engine.ReceiveLocalCheckpointInvalid: clievent.FailureCheckpointInvalid, engine.ReceiveLocalOwnedObjectUnknown: clievent.FailureOwnedObjectUnknown, engine.ReceiveLocalDestinationCollision: clievent.FailureDestinationCollision}
+	if code, ok := local[value.Local]; ok {
+		return mustFailure(code), true
 	}
-	for _, directory := range input.Result.Directories {
-		if failure, ok := ProjectFault(directory.Fault); ok {
-			return failure, true
-		}
-	}
-	for _, file := range input.Result.Files {
-		for _, value := range []transferfault.Fault{file.Fault, file.SettlementFault, file.LeaseReleaseFault} {
-			if failure, ok := ProjectFault(value); ok {
-				return failure, true
-			}
-		}
-	}
-	for _, cause := range []error{
-		input.AdmissionError, input.RuntimeError, input.ConnectionError,
-		input.ContextError, input.Result.TerminationCause,
-		input.Result.SettlementFailure, input.Result.SelectionResolutionFailure,
-		input.Result.SourceDriftFailure,
-	} {
-		if cause != nil {
-			failure, _ := ClassifyError(cause)
-			return failure, true
-		}
-	}
-	return mustFailure(clievent.FailureUnexpected), true
-}
-
-func projectFileOutcomeFailure(outcomes transfer.FileOutcomeSummary) (clievent.Failure, bool) {
-	// Local semantic outcomes are authoritative aggregates; bounded diagnostics
-	// cannot safely choose either the result code or its product wording.
-	for _, candidate := range []struct {
-		count uint64
-		code  clievent.FailureCode
-	}{
-		{outcomes.RevisionConflictFiles, clievent.FailureCheckpointRevisionConflict},
-		{outcomes.CheckpointInvalidFiles, clievent.FailureCheckpointInvalid},
-		{outcomes.OwnedObjectUnknownFiles, clievent.FailureOwnedObjectUnknown},
-		{outcomes.CollisionFiles, clievent.FailureDestinationCollision},
-	} {
-		if candidate.count != 0 {
-			return mustFailure(candidate.code), true
-		}
+	if code, ok := ReceiveFailureCode(value.Code); ok {
+		return mustFailure(code), true
 	}
 	return clievent.Failure{}, false
 }
-
-type ShareFailureClass uint8
-
-const (
-	ShareFailureLocal ShareFailureClass = iota + 1
-	ShareFailureNetwork
-)
-
-type ShareResultInput struct {
-	Clean        bool
-	Failure      error
-	FailureClass ShareFailureClass
-	Elapsed      time.Duration
+func ReceiveFailureCode(code engine.ReceiveFailureCode) (clievent.FailureCode, bool) {
+	switch code {
+	case engine.ReceiveFailureInvalidInput:
+		return clievent.FailureInvalidInput, true
+	case engine.ReceiveFailureOutputContract:
+		return clievent.FailureOutputContract, true
+	case engine.ReceiveFailureOutputFileAlreadyActive:
+		return clievent.FailureOutputFileAlreadyActive, true
+	case engine.ReceiveFailureOutputNeedsAttention:
+		return clievent.FailureOutputNeedsAttention, true
+	case engine.ReceiveFailureOutputOwnership:
+		return clievent.FailureOutputOwnership, true
+	case engine.ReceiveFailureOutputRecoveryUnavailable:
+		return clievent.FailureOutputRecoveryUnavailable, true
+	case engine.ReceiveFailurePeerConfiguration:
+		return clievent.FailurePeerConfiguration, true
+	case engine.ReceiveFailurePeerNegotiation:
+		return clievent.FailurePeerNegotiation, true
+	case engine.ReceiveFailurePeerProtocol:
+		return clievent.FailurePeerProtocol, true
+	case engine.ReceiveFailurePeerSignaling:
+		return clievent.FailurePeerSignaling, true
+	case engine.ReceiveFailurePeerStopped:
+		return clievent.FailurePeerStopped, true
+	default:
+		return 0, false
+	}
 }
 
-func ProjectShareResult(input ShareResultInput) (clievent.ShareResult, error) {
-	if input.Clean {
-		if input.Failure != nil || input.FailureClass != 0 {
-			return clievent.ShareResult{}, ErrInvalidProjection
-		}
-		result, err := clievent.NewShareResult(clievent.ShareResultSpec{
-			ExitCode: clievent.ExitSuccess,
-			Elapsed:  input.Elapsed,
-		})
-		if err != nil {
-			return clievent.ShareResult{}, ErrInvalidProjection
-		}
-		return result, nil
-	}
-	if input.FailureClass != ShareFailureLocal && input.FailureClass != ShareFailureNetwork {
+func ProjectShareResult(input engine.TaskResult[engine.ShareResult]) (clievent.ShareResult, error) {
+	exit := clievent.ExitSuccess
+	switch input.FailureClass {
+	case engine.FailureNone:
+	case engine.FailureUsage:
+		exit = clievent.ExitUsage
+	case engine.FailureNetwork:
+		exit = clievent.ExitNetwork
+	case engine.FailureSourceDrift:
+		exit = clievent.ExitDrift
+	case engine.FailureLocal:
+		exit = clievent.ExitFailure
+	default:
 		return clievent.ShareResult{}, ErrInvalidProjection
 	}
-	failure, _ := ClassifyError(input.Failure)
-	if input.Failure == nil {
-		failure = mustFailure(clievent.FailureUnexpected)
-	}
-	exit := clievent.ExitFailure
-	if input.FailureClass == ShareFailureNetwork {
-		exit = clievent.ExitNetwork
-	}
-	result, err := clievent.NewShareResult(clievent.ShareResultSpec{
-		ExitCode: exit, Elapsed: input.Elapsed, Failure: failure,
-	})
+	failure, _ := ClassifyError(input.Err)
+	result, err := clievent.NewShareResult(clievent.ShareResultSpec{ExitCode: exit, Elapsed: input.Value.Elapsed, Failure: failure})
 	if err != nil {
 		return clievent.ShareResult{}, ErrInvalidProjection
 	}
 	return result, nil
 }
-
 func ProjectCommandFailure(
 	command clievent.Command,
 	exit clievent.ExitCode,

@@ -8,7 +8,7 @@ import (
 
 func selectedRootRecord(t *testing.T, root DirectoryID, id byte, name string) NodeRecord {
 	t.Helper()
-	locator, _ := NewLocator(RootSlot(id), "")
+	locator, _ := NewSourceReference([]byte("object:" + ""))
 	identity, _ := NewSourceIdentity([]byte(name))
 	record, err := NewDirectoryNodeRecord(idValue[DirectoryID](id), root, name, locator, identity, ModifiedTime{})
 	if err != nil {

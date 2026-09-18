@@ -125,11 +125,11 @@ func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) 
 		"directory-file-fields": {
 			Schema: catalogStorageSchema, Kind: uint8(NodeKindDirectory), ID: directoryRecord.NodeID().Bytes(),
 			Parent: parent.Bytes(), Name: "directory", SourceIdentity: []byte("source"),
-			VersionCandidate: []byte("unexpected"), RelativePath: "directory",
+			VersionCandidate: []byte("unexpected"), SourceReference: []byte("object:directory"),
 		},
 		"file-without-candidate": {
 			Schema: catalogStorageSchema, Kind: uint8(NodeKindFile), ID: fileRecord.NodeID().Bytes(),
-			Parent: parent.Bytes(), Name: "file", SourceIdentity: []byte("source"), RelativePath: "file",
+			Parent: parent.Bytes(), Name: "file", SourceIdentity: []byte("source"), SourceReference: []byte("object:file"),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

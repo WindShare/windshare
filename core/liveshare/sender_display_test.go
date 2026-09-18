@@ -65,7 +65,7 @@ func TestSenderSelectedRootSummaryDoesNotScanDirectoryDescendants(t *testing.T) 
 	if size, known := selected.FileSize(); known || size != 0 {
 		t.Fatalf("directory summary exposed a descendant-derived size: %d, known %v", size, known)
 	}
-	records := sender.selectedSource.SelectedRoots()
+	records := sender.source.SelectedRoots()
 	directoryID, ok := records[0].DirectoryID()
 	if !ok {
 		t.Fatal("selected directory lost directory identity")
@@ -114,9 +114,9 @@ func TestNewSelectedRootSummaryValidation(t *testing.T) {
 
 func prepareDisplaySender(t *testing.T, paths []string) *PreparedSender {
 	t.Helper()
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            paths, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource(paths), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		CatalogStorage: CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
 			return catalog.NewMemoryCatalogBackend(), nil
 		}),

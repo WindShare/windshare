@@ -17,6 +17,7 @@ import (
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
+	"github.com/windshare/windshare/engine"
 )
 
 func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRuntime, *bytes.Buffer) {
@@ -451,4 +452,51 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 	if !strings.Contains(output, "Download completed") || !strings.Contains(output, "Trace is incomplete") {
 		t.Fatalf("trace failure output=%q", output)
 	}
+}
+
+type getTransferCompletion struct {
+	result                  transfer.JobResult
+	finalProgress           clievent.TransferProgress
+	finalProgressProjection error
+}
+
+func (a *App) reportTransferResultWithAdmission(
+	ctx context.Context,
+	completion getTransferCompletion,
+	admissionErr error,
+	runtimeErr error,
+	connectionErr error,
+	destination string,
+	destinationAdjusted bool,
+	startedAt time.Time,
+	observation getObservation,
+) int {
+	if completion.finalProgressProjection != nil {
+		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
+	}
+	now := observation.runtime.Clock().Now()
+	elapsed := max(now.Sub(startedAt), 0)
+	settled, err := engine.SettleReceive(engine.ReceiveSettlementInput{
+		Result: completion.result, AdmissionError: admissionErr,
+		RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(),
+		Elapsed: elapsed, Destination: destination,
+		DestinationAdjusted: destinationAdjusted,
+	})
+	if err != nil {
+		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
+	}
+	projected, err := commandprojection.ProjectReceiveResult(settled)
+	if err != nil {
+		return observation.commandFailure(ExitFailure, err)
+	}
+	event, err := clievent.NewTransferSettled(projected)
+	if err != nil {
+		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
+	}
+	observation.finalize(completion.finalProgress, event)
+	code, ok := projected.ExitCode().ProcessCode()
+	if !ok {
+		return ExitFailure
+	}
+	return code
 }

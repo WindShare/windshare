@@ -47,7 +47,6 @@ type SelectedCatalogSourceConfig struct {
 type SelectedCatalogSource struct {
 	mu         sync.RWMutex
 	roots      []*os.Root
-	rootPaths  []string
 	selected   []catalog.NodeRecord
 	identities CatalogIdentitySource
 	used       map[catalog.NodeID]struct{}
@@ -55,8 +54,12 @@ type SelectedCatalogSource struct {
 }
 
 func NewSelectedCatalogSource(config SelectedCatalogSourceConfig) (*SelectedCatalogSource, error) {
-	if len(config.Paths) == 0 || len(config.Paths) > catalog.MaxRootSlots || config.SyntheticRoot.IsZero() {
-		return nil, fmt.Errorf("osfs: selected catalog source requires 1..%d roots and a synthetic root", catalog.MaxRootSlots)
+	return newSelectedCatalogSource(context.Background(), config)
+}
+
+func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceConfig) (*SelectedCatalogSource, error) {
+	if len(config.Paths) == 0 || len(config.Paths) > catalog.MaxSelectedRoots || config.SyntheticRoot.IsZero() {
+		return nil, fmt.Errorf("osfs: selected catalog source requires 1..%d roots and a synthetic root", catalog.MaxSelectedRoots)
 	}
 	if config.Identities == nil {
 		config.Identities = CatalogIdentitySourceFunc(func() ([catalog.IdentityBytes]byte, error) {
@@ -72,12 +75,14 @@ func NewSelectedCatalogSource(config SelectedCatalogSourceConfig) (*SelectedCata
 		return nil, errors.Join(cause, source.Close())
 	}
 	for index, selectedPath := range config.Paths {
-		record, root, rootPath, err := source.openSelectedRoot(selectedPath, catalog.RootSlot(index), config.SyntheticRoot)
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
+		record, root, err := source.openSelectedRoot(selectedPath, RootSlot(index), config.SyntheticRoot)
 		if err != nil {
 			return fail(err)
 		}
 		source.roots = append(source.roots, root)
-		source.rootPaths = append(source.rootPaths, rootPath)
 		source.selected = append(source.selected, record)
 	}
 	return source, nil
@@ -85,19 +90,19 @@ func NewSelectedCatalogSource(config SelectedCatalogSourceConfig) (*SelectedCata
 
 func (source *SelectedCatalogSource) openSelectedRoot(
 	selectedPath string,
-	slot catalog.RootSlot,
+	slot RootSlot,
 	parent catalog.DirectoryID,
-) (catalog.NodeRecord, *os.Root, string, error) {
+) (catalog.NodeRecord, *os.Root, error) {
 	absolute, err := filepath.Abs(selectedPath)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("resolve selected root", selectedPath, err)
+		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("resolve selected root", selectedPath, err)
 	}
 	before, err := os.Lstat(absolute)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("inspect selected root", absolute, err)
+		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
 	if isReparsePoint(before) || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() && !before.Mode().IsRegular() {
-		return catalog.NodeRecord{}, nil, "", fmt.Errorf("osfs: selected root %q is not a stable file or directory", absolute)
+		return catalog.NodeRecord{}, nil, fmt.Errorf("osfs: selected root %q is not a stable file or directory", absolute)
 	}
 	rootPath, relative := filepath.Dir(absolute), filepath.Base(absolute)
 	if before.IsDir() {
@@ -105,7 +110,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("open selected root authority", rootPath, err)
+		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("open selected root authority", rootPath, err)
 	}
 	openName := relative
 	if openName == "" {
@@ -114,28 +119,28 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 	handle, err := root.Open(openName)
 	if err != nil {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", pathfailure.Filesystem("open selected root object", absolute, err)
+		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("open selected root object", absolute, err)
 	}
 	opened, statErr := handle.Stat()
 	identity, candidate, baselineErr := platformCatalogBaseline(handle)
 	closeErr := handle.Close()
 	if err := errors.Join(statErr, baselineErr, closeErr); err != nil {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", errors.Join(fmt.Errorf("inspect selected root object: %w", err), root.Close())
+		return catalog.NodeRecord{}, nil, errors.Join(fmt.Errorf("inspect selected root object: %w", err), root.Close())
 	}
 	if opened.IsDir() != before.IsDir() || !os.SameFile(before, opened) {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", errors.Join(catalog.ErrDirectoryStale, root.Close())
+		return catalog.NodeRecord{}, nil, errors.Join(catalog.ErrDirectoryStale, root.Close())
 	}
 	modified, err := catalogModifiedTime(opened)
 	if err != nil {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", errors.Join(err, root.Close())
+		return catalog.NodeRecord{}, nil, errors.Join(err, root.Close())
 	}
-	locator, err := catalog.NewLocator(slot, filepath.ToSlash(relative))
+	locator, err := NewSourceReference(slot, filepath.ToSlash(relative))
 	if err != nil {
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", errors.Join(err, root.Close())
+		return catalog.NodeRecord{}, nil, errors.Join(err, root.Close())
 	}
 	name := filepath.Base(absolute)
 	if opened.IsDir() {
@@ -144,22 +149,22 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 			var record catalog.NodeRecord
 			record, idErr = catalog.NewDirectoryNodeRecord(directory, parent, name, locator, identity, modified)
 			if idErr == nil {
-				return record, root, rootPath, nil
+				return record, root, nil
 			}
 		}
 		_ = root.Close()
-		return catalog.NodeRecord{}, nil, "", idErr
+		return catalog.NodeRecord{}, nil, idErr
 	}
 	file, err := source.newFileID()
 	if err == nil {
 		var record catalog.NodeRecord
 		record, err = catalog.NewFileNodeRecord(file, parent, name, locator, identity, candidate, uint64(opened.Size()), modified)
 		if err == nil {
-			return record, root, rootPath, nil
+			return record, root, nil
 		}
 	}
 	_ = root.Close()
-	return catalog.NodeRecord{}, nil, "", err
+	return catalog.NodeRecord{}, nil, err
 }
 
 func (source *SelectedCatalogSource) SelectedRoots() []catalog.NodeRecord {
@@ -170,13 +175,13 @@ func (source *SelectedCatalogSource) SelectedRoots() []catalog.NodeRecord {
 
 func (source *SelectedCatalogSource) RevisionSource() (*RootedRevisionSource, error) {
 	source.mu.RLock()
+	defer source.mu.RUnlock()
 	if source.closed {
-		source.mu.RUnlock()
 		return nil, content.ErrRevisionStoreClosed
 	}
-	paths := append([]string(nil), source.rootPaths...)
-	source.mu.RUnlock()
-	return newPlatformRootedRevisionSource(paths)
+	// File lookup must retain the same root authority as discovery. Reopening
+	// names here could bind a replaced directory outside the selected scope.
+	return newPlatformRootedRevisionSource(source.roots)
 }
 
 func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
@@ -187,7 +192,10 @@ func (source *SelectedCatalogSource) ScanDirectory(ctx context.Context, request 
 	if !directoryKind || directoryID.IsZero() || request.Work == nil || request.Children == nil {
 		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.New("osfs: invalid catalog scan request"))
 	}
-	locator := request.Directory.Locator()
+	locator, err := parseSourceReference(request.Directory.SourceReference())
+	if err != nil {
+		return catalog.ScanResult{}, catalog.NewPermanentScanError(errors.Join(catalog.ErrDirectoryStale, err))
+	}
 	source.mu.RLock()
 	if source.closed || int(locator.RootSlot()) >= len(source.roots) {
 		source.mu.RUnlock()
@@ -237,7 +245,7 @@ func (source *SelectedCatalogSource) enumerateCatalogChildren(
 	ctx context.Context,
 	directory *os.Root,
 	handle *os.File,
-	locator catalog.Locator,
+	locator sourceLocation,
 	request catalog.ScanRequest,
 ) (catalog.ScanResult, [sha256.Size]byte, error) {
 	result := catalog.ScanResult{}
@@ -320,7 +328,7 @@ func catalogDirectoryFingerprint(ctx context.Context, handle *os.File) ([sha256.
 func (source *SelectedCatalogSource) scanChild(
 	ctx context.Context,
 	directory *os.Root,
-	parentLocator catalog.Locator,
+	parentLocator sourceLocation,
 	entry fs.DirEntry,
 ) (catalog.ScannedChild, bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -355,11 +363,11 @@ func (source *SelectedCatalogSource) scanChild(
 	if parentLocator.RelativePath() != "" {
 		relative = parentLocator.RelativePath() + "/" + name
 	}
-	locator, err := catalog.NewLocator(parentLocator.RootSlot(), filepath.ToSlash(relative))
+	locator, err := NewSourceReference(parentLocator.RootSlot(), filepath.ToSlash(relative))
 	if err != nil {
 		return catalog.ScannedChild{}, false, catalog.NewPermanentScanError(err)
 	}
-	child := catalog.ScannedChild{Name: name, Locator: locator, SourceIdentity: identity, ModifiedTime: modified}
+	child := catalog.ScannedChild{Name: name, SourceReference: locator, SourceIdentity: identity, ModifiedTime: modified}
 	if opened.IsDir() {
 		child.DirectoryID, err = source.newDirectoryID()
 	} else {

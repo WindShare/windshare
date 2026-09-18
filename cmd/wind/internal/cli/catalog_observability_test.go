@@ -3,12 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
+
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/engine"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/catalog"
@@ -29,22 +32,30 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&legacyOutput, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	emitter := &shareRecordingEmitter{}
-	observations := newShareObservations(emitter)
-	cleanupProtocolObservations(t, observations.protocol)
-	prepared, code := (&App{revisionCapacity: newTestRevisionCapacity(t)}).prepareShareSender(
-		context.Background(),
-		shareRequest{
-			paths: []string{sharedPath}, relayURLs: []string{DefaultRelayURL}, chunkSize: catalog.MinChunkSize,
+	observations := newShareProjection(emitter)
+	application, err := engine.New(engine.Config{Share: engine.ShareDependencies{
+		Relays: func(context.Context, []string, relayset.SenderFactory) (engine.ShareRelays, error) {
+			return nil, errors.New("test ends after source preparation")
 		},
-		newSystemCommandClock(time.Now),
-		emitter,
-		observations,
-	)
-	if code != ExitOK {
-		t.Fatalf("prepare share sender exit = %d", code)
-	}
-	if err := prepared.Close(); err != nil {
+	}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer func() { _ = application.Close(context.Background()) }()
+	current, err := application.StartShare(context.Background(), engine.ShareRequest{
+		Source: shareFileSource([]string{sharedPath}), RelayURLs: []string{DefaultRelayURL}, ChunkSize: catalog.MinChunkSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for fact := range current.Observations() {
+		if event, ok := fact.Event.(engine.ShareObservation); ok {
+			(&App{}).observeEngineShare(observations, event)
+		}
+	}
+	result, err := current.Wait(context.Background())
+	if err != nil || result.CleanupError != nil {
+		t.Fatalf("cleanup = %v/%v", err, result.CleanupError)
 	}
 	if legacyOutput.Len() != 0 {
 		t.Fatalf("catalog producer bypassed the typed CLI boundary: %q", legacyOutput.String())

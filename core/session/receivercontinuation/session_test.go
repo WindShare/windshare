@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func newFixture(t *testing.T, directory ...bool) *fixture {
 	if len(directory) != 0 && directory[0] {
 		source = filepath.Dir(filename)
 	}
-	sender, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{Paths: []string{source}, Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: owner.Coordinator()})
+	sender, err := liveshare.PrepareSender(context.Background(), sourceBoundarySenderConfig([]string{source}, liveshare.SenderConfig{Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: owner.Coordinator()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,4 +339,21 @@ func TestContinuationRequiresWinningNetworkRetirementAndFreshIdentity(t *testing
 	if err != nil || change.Kind() != revisionwait.GenerationLifetimeEnded {
 		t.Fatalf("change=%v err=%v", change, err)
 	}
+}
+
+func sourceBoundarySenderConfig(paths []string, config liveshare.SenderConfig) liveshare.SenderConfig {
+	selected := append([]string(nil), paths...)
+	config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
+		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: selected, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
+	})
+	var err error
+	config.CatalogBudget, err = catalog.NewBudgetAccount("test-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		panic(err)
+	}
+	config.CacheBudget, err = contentflow.NewProcessCacheBudget(uint64(64) << 20)
+	if err != nil {
+		panic(err)
+	}
+	return config
 }

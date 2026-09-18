@@ -37,9 +37,9 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file.bin"), []byte("live content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{root}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +94,8 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 	}
 	sender.mu.Lock()
 	retainedOwnedGraph := sender.runtimeFactory != nil || sender.cache != nil || sender.catalogAccess != nil || sender.catalogObjects != nil ||
-		sender.recordSealer != nil || sender.revisionStore != nil || sender.revisionSource != nil ||
-		sender.catalogStore != nil || sender.selectedSource != nil || sender.keyTree != nil || sender.random != nil
+		sender.recordSealer != nil || sender.revisionStore != nil ||
+		sender.catalogStore != nil || sender.source != nil || sender.keyTree != nil || sender.random != nil
 	sender.mu.Unlock()
 	if retainedOwnedGraph {
 		t.Fatal("closed sender retained its destroyed resource graph")
@@ -129,9 +129,9 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	if err := os.WriteFile(filepath.Join(root, "nested", "file.bin"), payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{root}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -420,9 +420,9 @@ func TestPrepareSenderClosesEveryPartiallyBuiltAuthority(t *testing.T) {
 	}
 	for _, available := range []int{0, 32, 48, 64, 80, 96, 112, 124} {
 		t.Run(fmt.Sprintf("random-bytes-%d", available), func(t *testing.T) {
-			if sender, err := PrepareSender(context.Background(), SenderConfig{
+			if sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 				RevisionCapacity: newTestRevisionCapacity(t),
-				Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
+				Source:           testFileSource([]string{filename}), Relays: []string{"ws://127.0.0.1:8484"},
 				ChunkSize: catalog.MinChunkSize, Random: &budgetReader{remaining: available},
 			}); err == nil {
 				_ = sender.Close()
@@ -430,23 +430,23 @@ func TestPrepareSenderClosesEveryPartiallyBuiltAuthority(t *testing.T) {
 			}
 		})
 	}
-	if _, err := PrepareSender(context.Background(), SenderConfig{}); err == nil {
+	if _, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget()}); err == nil {
 		t.Fatal("empty sender config was accepted")
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := PrepareSender(cancelled, SenderConfig{Paths: []string{filename}, Relays: []string{"ws://relay"}}); err == nil {
+	if _, err := PrepareSender(cancelled, SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(), Source: testFileSource([]string{filename}), Relays: []string{"ws://relay"}}); err == nil {
 		t.Fatal("cancelled preparation was accepted")
 	}
-	if _, err := PrepareSender(context.Background(), SenderConfig{
+	if _, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename}, Relays: []string{"ws://relay"}, ChunkSize: catalog.MinChunkSize + 1,
+		Source:           testFileSource([]string{filename}), Relays: []string{"ws://relay"}, ChunkSize: catalog.MinChunkSize + 1,
 	}); err == nil {
 		t.Fatal("invalid chunk geometry was accepted")
 	}
-	if _, err := PrepareSender(context.Background(), SenderConfig{
+	if _, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{filename}, Relays: []string{"ws://relay"}, Now: func() time.Time { return time.Unix(-1, 0) },
+		Source:           testFileSource([]string{filename}), Relays: []string{"ws://relay"}, Now: func() time.Time { return time.Unix(-1, 0) },
 	}); err == nil {
 		t.Fatal("non-portable descriptor creation time was accepted")
 	}

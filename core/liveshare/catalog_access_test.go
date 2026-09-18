@@ -21,16 +21,16 @@ func TestPreparedSenderStartsRootPrefetchOnlyAtReadyBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	traces := make(chan RootPrefetchTrace, 4)
-	sender, err := PrepareSender(context.Background(), SenderConfig{
+	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
-		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		Source:           testFileSource([]string{root}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		RootPrefetchTracer: RootPrefetchTraceFunc(func(event RootPrefetchTrace) { traces <- event }),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sender.Close() })
-	records := sender.selectedSource.SelectedRoots()
+	records := sender.source.SelectedRoots()
 	directory, ok := records[0].DirectoryID()
 	if !ok {
 		t.Fatal("selected directory root lost its directory identity")
