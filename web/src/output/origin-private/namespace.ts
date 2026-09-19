@@ -25,7 +25,7 @@ const WORKSPACE_OWNERSHIP_MARKER = '.windshare-workspace-owner-v1'
 const WORKSPACE_OWNERSHIP_MARKER_DOMAIN = 'windshare/workspace-activation-owner/v1'
 const RANDOM_IDENTITY_BYTES = 32
 
-interface OriginPrivateStorageManager extends StorageManager {
+interface OriginPrivateDirectorySource {
   getDirectory(): Promise<FileSystemDirectoryHandle>
 }
 
@@ -66,7 +66,7 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
   readonly display?: import('../workspace/operation-display').ReceiveOperationDisplay
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly repository: ReceiveOperationRepository
-  readonly storage?: OriginPrivateStorageManager
+  readonly storage?: OriginPrivateDirectorySource
   readonly signal?: AbortSignal
   readonly randomEntryIdentity?: () => string
   readonly randomOwnedObjectId?: () => string
@@ -106,9 +106,6 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
   try {
     input.signal?.throwIfAborted()
     const storage = input.storage ?? requireOriginPrivateStorage()
-    // A real task merits eviction protection; denial must not block an ordinary download.
-    await storage.persist?.().catch(() => false)
-    input.signal?.throwIfAborted()
     const parent = await storage.getDirectory()
     const entryName = originPrivateWorkspaceActivationEntryName(candidate)
     if (await optionalDirectory(parent, entryName) !== undefined) {
@@ -169,7 +166,7 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
 
 export async function inspectOriginPrivateWorkspaceActivationCandidate(input: {
   readonly candidate: WorkspaceActivationCandidateV1
-  readonly storage?: OriginPrivateStorageManager
+  readonly storage?: OriginPrivateDirectorySource
 }): Promise<OriginPrivateWorkspaceActivationObservation> {
   const parent = await (input.storage ?? requireOriginPrivateStorage()).getDirectory()
   const entryName = originPrivateWorkspaceActivationEntryName(input.candidate)
@@ -196,7 +193,7 @@ export async function inspectOriginPrivateWorkspaceActivationCandidate(input: {
 export async function reopenOriginPrivateWorkspaceNamespace(input: {
   readonly receiveIntent: ReceiveIntent
   readonly repository: ReceiveOperationRepository
-  readonly storage?: OriginPrivateStorageManager
+  readonly storage?: OriginPrivateDirectorySource
 }): Promise<OriginPrivateWorkspaceNamespace> {
   const intent = await requireWorkspaceIntent(input.receiveIntent)
   const parent = await (input.storage ?? requireOriginPrivateStorage()).getDirectory()
@@ -229,7 +226,7 @@ export async function reopenOriginPrivateWorkspaceNamespace(input: {
 export async function inspectOriginPrivateWorkspaceNamespace(input: {
   readonly receiveIntent: ReceiveIntent
   readonly repository: ReceiveOperationRepository
-  readonly storage?: OriginPrivateStorageManager
+  readonly storage?: OriginPrivateDirectorySource
 }): Promise<OriginPrivateWorkspaceNamespace | undefined> {
   const intent = await requireWorkspaceIntent(input.receiveIntent)
   const rootHandleId = originPrivateWorkspaceRootHandleId(intent.operationId)
@@ -345,12 +342,12 @@ async function requireWorkspaceIntent(intentInput: ReceiveIntent): Promise<Recei
   }>
 }
 
-function requireOriginPrivateStorage(): OriginPrivateStorageManager {
-  const storage = navigator.storage as Partial<OriginPrivateStorageManager>
+function requireOriginPrivateStorage(): OriginPrivateDirectorySource {
+  const storage = navigator.storage as Partial<OriginPrivateDirectorySource>
   if (typeof storage.getDirectory !== 'function') {
     throw new DOMException('Origin-private file system is unavailable', 'NotSupportedError')
   }
-  return storage as OriginPrivateStorageManager
+  return storage as OriginPrivateDirectorySource
 }
 
 function workspaceNamespace(input: {

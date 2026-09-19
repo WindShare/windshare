@@ -1,5 +1,6 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
+import { requestBrowserStoragePersistence } from '../../output/browser-storage/persistence'
 import {
   emitOutputTrace,
   outputTraceEvent,
@@ -164,6 +165,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
     }))
     input.signal.throwIfAborted()
     this.#requireLive()
+    requestBrowserStoragePersistence(this.#window.navigator.storage, operationId, this.#diagnostics?.trace)
     attempt.repository = await this.#dependencies.openRepository()
     input.signal.throwIfAborted()
     this.#requireLive()
