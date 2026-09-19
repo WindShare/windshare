@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/reachability"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/transport/webrtc/provider"
@@ -88,15 +89,23 @@ type queuedHandshake struct {
 
 func newQueuedHandshake(t *testing.T) *queuedHandshake {
 	t.Helper()
+	return newResourceQueuedHandshake(t, nil)
+}
+
+func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority) *queuedHandshake {
+	t.Helper()
+	if sockets != nil {
+		t.Cleanup(func() { _ = sockets.Close() })
+	}
 	clock := &handshakeClock{now: time.Unix(1, 0)}
 	makeTimers := func() handshakeTimers {
 		return handshakeTimers{clock: clock, created: make(chan recordedReceiverPhaseTimer, 8)}
 	}
 	h := &queuedHandshake{clock: clock, senderTimers: makeTimers(), receiverTimers: makeTimers(), session: newTestPeerSession(90), started: &atomic.Int32{}}
-	newNative := func(count *atomic.Int32) *nativepeer.NativePeerConnectivity {
+	newNative := func(count *atomic.Int32, sockets *socketauthority.Authority) *nativepeer.NativePeerConnectivity {
 		pool, _ := icepolicy.NewICEEndpointPool(nil)
 		gate := nativepeer.NewProcessAdmission(nativepeer.AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
-		native := nativepeer.New(nativepeer.Config{Admission: gate, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
+		native := nativepeer.New(nativepeer.Config{Admission: gate, Sockets: sockets, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
 			if count != nil {
 				count.Add(1)
 			}
@@ -105,7 +114,7 @@ func newQueuedHandshake(t *testing.T) *queuedHandshake {
 		t.Cleanup(func() { _ = native.Close(context.Background()) })
 		return native
 	}
-	h.native = newNative(h.started)
+	h.native = newNative(h.started, sockets)
 	for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
 		connection, err := h.native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: testBinding(i)})
 		if err != nil {
@@ -113,11 +122,11 @@ func newQueuedHandshake(t *testing.T) *queuedHandshake {
 		}
 		h.blockers = append(h.blockers, connection)
 	}
-	senderFactory, err := NewFactory(Config{Native: h.native, PhaseTimers: h.senderTimers, Now: clock.Now})
+	senderFactory, err := NewFactory(Config{Native: h.native, PhaseTimers: h.senderTimers, Now: clock.Now, SenderAttemptObservationCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: newNative(nil), PhaseTimers: h.receiverTimers})
+	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: newNative(nil, nil), PhaseTimers: h.receiverTimers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +171,11 @@ func TestSenderCapacityWaitSharesPreparationAndBothPeersKeepFullChecking(t *test
 	if senderPrep.phase != PeerAttemptPhasePreparation || receiverPrep.duration != PeerSignalingPreparationBudget {
 		t.Fatal(senderPrep, receiverPrep)
 	}
-	h.clock.Advance(9 * time.Second)
+	resources := receiveTest(t, h.senderTimers.created)
+	if resources.phase != PeerAttemptPhaseResources || resources.duration != PeerSignalingPreparationBudget-PeerAnswerPreparationReserve {
+		t.Fatal(resources)
+	}
+	h.clock.Advance(resources.duration - time.Second)
 	_ = h.blockers[0].Close()
 	var answer capturedControl
 	for {
@@ -189,8 +202,8 @@ func TestSenderCapacityWaitSharesPreparationAndBothPeersKeepFullChecking(t *test
 	if stage != PeerAttemptPhaseChecking || pending.generation != 0 {
 		t.Fatal("sender lost full checking window", stage, pending)
 	}
-	// The retired original preparation timers have fired at fake t=48s without
-	// cancelling the checking phase whose real start was fake t=9s.
+	// Retired resource and signaling deadlines cannot cancel the checking
+	// phase, whose full window begins only after resources become available.
 	if h.started.Load() != nativepeer.ProcessConcurrentAttempts+1 {
 		t.Fatal("unexpected provider start count", h.started.Load())
 	}

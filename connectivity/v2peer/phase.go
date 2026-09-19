@@ -27,8 +27,9 @@ const (
 )
 
 var (
-	ErrPeerNegotiationTimeout = errors.New("peer negotiation phase timed out")
-	ErrPeerAdmissionTimeout   = errors.New("peer lane-admission phase timed out")
+	ErrPeerNegotiationTimeout         = errors.New("peer negotiation phase timed out")
+	ErrPeerResourcePreparationTimeout = errors.New("peer resource preparation timed out")
+	ErrPeerAdmissionTimeout           = errors.New("peer lane-admission phase timed out")
 )
 
 type PeerAttemptPhase string
@@ -37,6 +38,7 @@ const (
 	PeerAttemptPhaseNegotiation  PeerAttemptPhase = "negotiation"
 	PeerAttemptPhaseAdmission    PeerAttemptPhase = "lane_admission"
 	PeerAttemptPhasePreparation  PeerAttemptPhase = "signaling_preparation"
+	PeerAttemptPhaseResources    PeerAttemptPhase = "resource_preparation"
 	PeerAttemptPhaseChecking     PeerAttemptPhase = "ice_checking"
 	PeerAttemptPhaseEstablishing PeerAttemptPhase = "datachannel_establishment"
 )
@@ -81,6 +83,8 @@ func peerPhaseTimeout(phase PeerAttemptPhase) error {
 	switch phase {
 	case PeerAttemptPhaseNegotiation, PeerAttemptPhasePreparation, PeerAttemptPhaseChecking, PeerAttemptPhaseEstablishing:
 		return ErrPeerNegotiationTimeout
+	case PeerAttemptPhaseResources:
+		return errors.Join(ErrPeerResourcePreparationTimeout, context.DeadlineExceeded)
 	case PeerAttemptPhaseAdmission:
 		return ErrPeerAdmissionTimeout
 	default:
@@ -138,6 +142,7 @@ type peerPhaseLifecycle struct {
 	state             peerPhaseState
 	generation        uint64
 	deadline          *peerPhaseDeadline
+	resourceDeadline  *peerPhaseDeadline
 	pendingExpiration peerPhaseExpiration
 	expirationOwned   bool
 	expirations       chan peerPhaseExpiration
@@ -176,6 +181,60 @@ func (lifecycle *peerPhaseLifecycle) beginNegotiation(
 	lifecycle.state = peerPhaseNegotiating
 	lifecycle.negotiationCancel = lifecycle.deadline.cancel
 	return ctx, nil
+}
+
+// Resource admission is a cancellable portion of signaling preparation. Its
+// earlier deadline leaves delivery time for a typed failure, while successful
+// admission leaves the original preparation deadline intact.
+func (lifecycle *peerPhaseLifecycle) prepareResources(
+	parent context.Context,
+	prepare func(context.Context) error,
+) (err error) {
+	lifecycle.mu.Lock()
+	if !lifecycle.staged || lifecycle.state != peerPhaseNegotiating ||
+		lifecycle.stage != PeerAttemptPhasePreparation || lifecycle.resourceDeadline != nil || prepare == nil {
+		lifecycle.mu.Unlock()
+		return ErrConfig
+	}
+	ctx, deadline, err := lifecycle.newDeadlineLocked(parent, PeerAttemptPhaseResources,
+		PeerSignalingPreparationBudget-PeerAnswerPreparationReserve)
+	if err != nil {
+		lifecycle.mu.Unlock()
+		return err
+	}
+	lifecycle.resourceDeadline = deadline
+	lifecycle.mu.Unlock()
+	defer func() {
+		lifecycle.mu.Lock()
+		defer lifecycle.mu.Unlock()
+		// Settlement and expiration use the same lock: a queued timer callback
+		// cannot cancel resources after their ownership has been transferred.
+		cause := context.Cause(ctx)
+		if cause != nil && errors.Is(err, ctx.Err()) {
+			// Context-aware dependencies may return Err instead of Cause. That
+			// cancellation is how this deadline interrupts work, not an owner stop.
+			err = cause
+		} else {
+			err = errors.Join(err, cause)
+		}
+		deadline.stop(nil)
+		lifecycle.resourceDeadline = nil
+	}()
+	go func() {
+		select {
+		case <-deadline.timer.C():
+			lifecycle.mu.Lock()
+			if lifecycle.resourceDeadline == deadline {
+				// Native admission also needs the deadline identity to retain its
+				// exact socket-capacity decision when the queue wait expires.
+				deadline.cancel(peerPhaseTimeout(PeerAttemptPhaseResources))
+			}
+			lifecycle.mu.Unlock()
+		case <-deadline.stopped:
+		case <-ctx.Done():
+		}
+	}()
+	return prepare(ctx)
 }
 
 func (lifecycle *peerPhaseLifecycle) beginAdmission(
@@ -328,6 +387,7 @@ func (lifecycle *peerPhaseLifecycle) terminate(cause error) bool {
 		return false
 	}
 	if lifecycle.state == peerPhaseTerminal {
+		lifecycle.stopDeadlineLocked(cause)
 		return true
 	}
 	if lifecycle.state != peerPhaseAdmitted {
@@ -355,25 +415,16 @@ func (lifecycle *peerPhaseLifecycle) armLocked(
 	phase PeerAttemptPhase,
 	budget time.Duration,
 ) (context.Context, error) {
-	if lifecycle.timers == nil || !validPeerPhaseBudgets(
-		lifecycle.negotiationBudget,
-		lifecycle.admissionBudget,
-	) {
-		return nil, ErrConfig
+	ctx, deadline, err := lifecycle.newDeadlineLocked(parent, phase, budget)
+	if err != nil {
+		return nil, err
 	}
-	timer, err := lifecycle.timers.NewPeerPhaseTimer(phase, budget)
-	if err != nil || timer == nil {
-		return nil, errors.Join(ErrConfig, err)
-	}
-	ctx, cancel := context.WithCancelCause(parent)
+	timer, cancel := deadline.timer, deadline.cancel
 	lifecycle.generation++
 	lifecycle.pendingExpiration = peerPhaseExpiration{}
 	lifecycle.expirationOwned = false
 	expiration := peerPhaseExpiration{
 		phase: phase, generation: lifecycle.generation, cause: peerPhaseTimeout(phase),
-	}
-	deadline := &peerPhaseDeadline{
-		timer: timer, cancel: cancel, stopped: make(chan struct{}),
 	}
 	lifecycle.deadline = deadline
 	go func() {
@@ -391,7 +442,29 @@ func (lifecycle *peerPhaseLifecycle) armLocked(
 	return ctx, nil
 }
 
+func (lifecycle *peerPhaseLifecycle) newDeadlineLocked(
+	parent context.Context,
+	phase PeerAttemptPhase,
+	budget time.Duration,
+) (context.Context, *peerPhaseDeadline, error) {
+	if parent == nil || lifecycle.timers == nil || !validPeerPhaseBudgets(
+		lifecycle.negotiationBudget, lifecycle.admissionBudget,
+	) {
+		return nil, nil, ErrConfig
+	}
+	timer, err := lifecycle.timers.NewPeerPhaseTimer(phase, budget)
+	if err != nil || timer == nil {
+		return nil, nil, errors.Join(ErrConfig, err)
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	return ctx, &peerPhaseDeadline{timer: timer, cancel: cancel, stopped: make(chan struct{})}, nil
+}
+
 func (lifecycle *peerPhaseLifecycle) stopDeadlineLocked(cause error) {
+	if lifecycle.resourceDeadline != nil {
+		lifecycle.resourceDeadline.stop(cause)
+		lifecycle.resourceDeadline = nil
+	}
 	if lifecycle.deadline == nil {
 		return
 	}
