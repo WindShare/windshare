@@ -287,6 +287,26 @@ func (handler *senderHandler) closeInbox() {
 	}
 }
 
+func (attempt *peerAttempt) prepareNativeAttempt(ctx context.Context, request nativepeer.AttemptRequest) (*nativepeer.PreparedAttempt, error) {
+	var prepared *nativepeer.PreparedAttempt
+	err := attempt.phases.prepareResources(ctx, func(resourceContext context.Context) error {
+		var prepareErr error
+		prepared, prepareErr = attempt.config.factory.native.PrepareAttempt(resourceContext, request)
+		return prepareErr
+	})
+	if err == nil {
+		return prepared, nil
+	}
+	prepared.Close()
+	if errors.Is(err, ErrPeerResourcePreparationTimeout) {
+		attempt.recorder.phaseDeadlineExpired(PeerAttemptPhaseResources)
+	}
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(err, socketauthority.ErrCapacity) {
+		err = cause
+	}
+	return nil, err
+}
+
 func (attempt *peerAttempt) run(ctx context.Context) error {
 	attempt.recorder.begin()
 	// The received offer already owns its preparation window. Capacity waiting
@@ -301,15 +321,8 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
 	var prepared *nativepeer.PreparedAttempt
 	if attempt.config.factory.peerConnections == nil {
-		// A busy answer must reach the receiver before its preparation deadline;
-		// otherwise remote capacity becomes an indistinguishable local timeout.
-		resourceContext, cancelResources := context.WithTimeout(negotiationContext, PeerSignalingPreparationBudget-PeerAnswerPreparationReserve)
-		prepared, err = attempt.config.factory.native.PrepareAttempt(resourceContext, request)
-		cancelResources()
+		prepared, err = attempt.prepareNativeAttempt(negotiationContext, request)
 		if err != nil {
-			if cause := context.Cause(negotiationContext); cause != nil && !errors.Is(err, socketauthority.ErrCapacity) {
-				err = cause
-			}
 			return attempt.finish(ctx, errors.Join(ErrNegotiation, err), nil, false)
 		}
 		defer prepared.Close()

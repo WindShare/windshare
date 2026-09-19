@@ -91,7 +91,7 @@ func NewProcessAdmission(clock AdmissionClock) *ProcessAdmission {
 var processAdmission = NewProcessAdmission(AdmissionClock{})
 
 func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts)) (*attemptPermit, error) {
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	if endpoints < 0 || endpoints > ProcessMaximumSTUNEndpointsPerAttempt {
@@ -116,7 +116,7 @@ func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnect
 		g.mu.Unlock()
 		select {
 		case <-w.ready:
-			if err := ctx.Err(); err != nil {
+			if err := context.Cause(ctx); err != nil {
 				w.permit.release()
 				return nil, err
 			}

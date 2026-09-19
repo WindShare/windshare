@@ -39,7 +39,7 @@ func peerFailure(err error) (uint16, string) {
 	switch {
 	case errors.Is(err, socketauthority.ErrCapacity):
 		return protocolsession.PeerOperationCodeCapacity, peerCapacityFailureMessage
-	case errors.Is(err, ErrPeerNegotiationTimeout), errors.Is(err, ErrPeerAdmissionTimeout):
+	case errors.Is(err, ErrPeerNegotiationTimeout), errors.Is(err, ErrPeerResourcePreparationTimeout), errors.Is(err, ErrPeerAdmissionTimeout):
 		return protocolsession.PeerOperationCodeTimeout, peerTimeoutFailureMessage
 	case errors.Is(err, errCandidateLimit):
 		return protocolsession.PeerOperationCodeCandidates, peerCandidateLimitMessage
@@ -79,6 +79,8 @@ func attemptFailure(result, primary error, operationCanceled bool) (failure Send
 		return senderAttemptCancelledFailure()
 	case errors.Is(primary, socketauthority.ErrCapacity):
 		return senderOperationAttemptFailure(protocolsession.PeerOperationCodeCapacity, peerCapacityFailureMessage, primary)
+	case errors.Is(primary, ErrPeerResourcePreparationTimeout):
+		return senderOperationAttemptFailure(protocolsession.PeerOperationCodeTimeout, peerTimeoutFailureMessage, primary)
 	case errors.Is(primary, context.Canceled) || errors.Is(primary, context.DeadlineExceeded):
 		return senderRuntimeStoppedFailure()
 	case result != nil:
@@ -99,6 +101,8 @@ func senderAttemptTermination(cause error, operationCanceled bool) SenderAttempt
 	switch {
 	case errors.Is(cause, socketauthority.ErrCapacity):
 		initiator, reason = "local", "socket_capacity"
+	case errors.Is(cause, ErrPeerResourcePreparationTimeout):
+		initiator, reason = "local", "resource_preparation_timeout"
 	case errors.Is(cause, ErrPeerAdmissionTimeout):
 		initiator, reason = "local", "admission_timeout"
 	case errors.Is(cause, ErrPeerNegotiationTimeout):
