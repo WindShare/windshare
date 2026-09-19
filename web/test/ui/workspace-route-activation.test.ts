@@ -111,6 +111,30 @@ describe('workspace route activation ownership', () => {
     }))
   })
 
+  it('binds an operation and releases its activation lock while eviction permission stays pending', async () => {
+    const persist = vi.fn(() => new Promise<boolean>(() => {}))
+    const fixture = await routeFixture({ persist, trackActivationLock: true })
+    await expect(fixture.commit()).resolves.toMatchObject({ kind: 'bound-operation' })
+    expect(persist).toHaveBeenCalledOnce()
+    expect(fixture.events).toContain('activation-lock-exit')
+    expect(fixture.boundOperations).toHaveLength(1)
+  })
+
+  it.each([true, false])('settles failed activation before a late persistence result (%s)', async granted => {
+    let resolve!: (value: boolean) => void
+    const pending = new Promise<boolean>(accept => { resolve = accept })
+    const fixture = await routeFixture({ failure: 'during-runtime', persist: () => pending })
+    const owned = requireOwned(await fixture.commit())
+    await owned.authority.settleActivationFailure(owned.cause)
+    await owned.authority.detach()
+    resolve(granted)
+    await pending
+    const lifecycle = await fixture.repository.readLifecycle(OPERATION_ID)
+    expect(lifecycle === undefined ? undefined : decodeStoredReceiveLifecycleState(lifecycle).kind).toBe('discarded')
+    expect(fixture.parent.hasNamespace).toBe(false)
+    expect(fixture.boundOperations).toEqual([])
+  })
+
   it('persists the immutable pre-click ranking instead of recomputing it from the selected route', async () => {
     const secondary = identity(92, 32) as ArtifactChoiceID
     const ranking: ArtifactChoiceID[] = []
@@ -329,6 +353,7 @@ type FailurePoint =
 async function routeFixture(options: {
   readonly failure?: FailurePoint
   readonly trackActivationLock?: boolean
+  readonly persist?: StorageManager['persist']
   readonly preClickRanking?: readonly ArtifactChoiceID[]
 } = {}) {
   const planned = await workspaceResolvedAction()
@@ -511,7 +536,8 @@ async function routeFixture(options: {
   }
   const windowPort = Object.freeze({
     navigator: Object.freeze({
-      storage: Object.freeze({ estimate: async () => ({ quota: 1, usage: 0 }) }),
+      storage: Object.freeze({ estimate: async () => ({ quota: 1, usage: 0 }),
+        ...(options.persist === undefined ? {} : { persist: options.persist }) }),
       locks: Object.freeze({}),
     }),
   }) as unknown as BrowserReceiveWindow

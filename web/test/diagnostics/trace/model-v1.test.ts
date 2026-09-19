@@ -209,6 +209,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     },
     counter_overflowed: false,
   },
+  storage_persistence: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA', request_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    transition: 'already_pending',
+  },
   output_reservation: { backend: 'file_system_access', transition: 'started' },
   output_write: { backend: 'file_system_access', transition: 'transaction_started' },
   checkpoint: { backend: 'origin_private', transition: 'persisted' },

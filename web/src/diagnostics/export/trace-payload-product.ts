@@ -1,4 +1,5 @@
 import { PROJECTION_DISCOVERY_STATES } from '../trace/model'
+import { STORAGE_PERSISTENCE_TRANSITIONS } from '../trace/storage-persistence-payload'
 import {
   RETAINED_ACTION_TRANSITIONS,
   RETAINED_ACTIONS,
@@ -510,6 +511,13 @@ export function validateTransferProgress(payload: UnknownRecord): void {
   booleanValue(payload.capacity_wait_visible, 'capacity wait visibility')
   member(payload.discovery, ['open', 'complete', 'failed'], 'transfer discovery state')
   booleanValue(payload.partial, 'transfer partial flag')
+}
+
+export function validateStoragePersistence(payload: UnknownRecord): void {
+  exactKeys(payload, ['operation_id', 'request_operation_id', 'transition'], [], 'storage_persistence payload')
+  canonicalIdentity(payload.operation_id, 'storage persistence operation ID')
+  canonicalIdentity(payload.request_operation_id, 'storage persistence request operation ID')
+  member(payload.transition, STORAGE_PERSISTENCE_TRANSITIONS, 'storage persistence transition')
 }
 
 export function validateOutputReservation(payload: UnknownRecord): void {

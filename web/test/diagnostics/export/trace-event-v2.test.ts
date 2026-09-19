@@ -488,6 +488,9 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
     observerElapsedMilliseconds: 12n,
   })),
   observation('performance_summary', PERFORMANCE_SUMMARY),
+  observation('storage_persistence', {
+    operation_id: OPERATION_ID, request_operation_id: OPERATION_ID, transition: 'requested',
+  }),
   observation('output_reservation', { backend: 'file_system_access', transition: 'acquired' }),
   observation('output_write', { backend: 'origin_private', transition: 'transaction_committed' }),
   observation('checkpoint', { backend: 'origin_private', transition: 'persisted' }),
