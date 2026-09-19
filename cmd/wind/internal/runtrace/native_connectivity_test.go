@@ -108,6 +108,20 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 	if event.Facts().Admission.Queued != 0 {
 		t.Fatal("mutable admission facts escaped")
 	}
+	facts.Kind = "admission_queued"
+	facts.Admission.SocketCapacity = clievent.NativeSocketCapacityFacts{Used: 58, Requested: 13, Limit: 64}
+	blocked, err := clievent.NewNativeConnectivityObserved(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = encodeV4(testRunIdentity(1), entryMetadata{sequence: 2, time: time.Unix(0, 0)}, blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := record.Payload.(nativeConnectivityPayloadV4).Admission.SocketCapacity
+	if capacity == nil || capacity.Used != "58" || capacity.Reserved != "0" || capacity.Requested != "13" || capacity.Limit != "64" {
+		t.Fatal("capacity decision lost from trace", capacity)
+	}
 	facts.Admission.Wait = -1
 	if _, err := clievent.NewNativeConnectivityObserved(facts); err == nil {
 		t.Fatal("negative allowance duration accepted")

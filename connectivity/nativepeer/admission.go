@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/windshare/windshare/connectivity/icepolicy"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"sync"
 	"time"
 )
@@ -41,6 +42,7 @@ type AdmissionFacts struct {
 	Active, Queued                 int
 	StartsRemaining, STUNRemaining float64
 	ActiveTimeRemaining            time.Duration
+	SocketCapacity                 *socketauthority.CapacityError
 }
 
 // AdmissionClock permits deterministic refill and queue tests without sleeping.
@@ -64,12 +66,16 @@ type admissionWaiter struct {
 	started   time.Time
 	permit    *attemptPermit
 	observe   func(AdmissionFacts)
+	sockets   *socketauthority.Request
+	capacity  *socketauthority.CapacityError
+	err       error
 }
 type attemptPermit struct {
 	gate    *ProcessAdmission
 	started time.Time
 	waiter  *admissionWaiter
 	once    sync.Once
+	sockets *socketauthority.Reservation
 }
 
 func NewProcessAdmission(clock AdmissionClock) *ProcessAdmission {
@@ -84,14 +90,14 @@ func NewProcessAdmission(clock AdmissionClock) *ProcessAdmission {
 
 var processAdmission = NewProcessAdmission(AdmissionClock{})
 
-func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnectivity, endpoints int, observe func(AdmissionFacts)) (*attemptPermit, error) {
+func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts)) (*attemptPermit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if endpoints < 0 || endpoints > ProcessMaximumSTUNEndpointsPerAttempt {
 		return nil, ErrProcessAdmission
 	}
-	w := &admissionWaiter{owner: owner, endpoints: endpoints, ready: make(chan struct{}), started: g.clock.Now(), observe: observe}
+	w := &admissionWaiter{owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe}
 	g.mu.Lock()
 	if len(g.queue) >= ProcessQueuedAttempts {
 		g.emitLocked(w, AdmissionRejected)
@@ -100,33 +106,46 @@ func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnect
 	}
 	g.queue = append(g.queue, w)
 	g.emitLocked(w, AdmissionQueued)
-	g.drainLocked()
 	g.mu.Unlock()
-	select {
-	case <-w.ready:
-		if err := ctx.Err(); err != nil {
-			w.permit.release()
-			return nil, err
-		}
-		return w.permit, nil
-	case <-ctx.Done():
+	for {
+		// Sampling before dispatch prevents a release between a failed reservation
+		// and sleep from stranding a waiter. No native or admission lock is held asleep.
+		changed := sockets.Changes()
 		g.mu.Lock()
-		if w.permit == nil {
-			for i, item := range g.queue {
-				if item == w {
-					g.queue = append(g.queue[:i], g.queue[i+1:]...)
-					break
-				}
-			}
-			g.emitLocked(w, AdmissionRejected)
-			g.drainLocked()
-		}
-		permit := w.permit
+		g.drainLocked()
 		g.mu.Unlock()
-		if permit != nil {
-			permit.release()
+		select {
+		case <-w.ready:
+			if err := ctx.Err(); err != nil {
+				w.permit.release()
+				return nil, err
+			}
+			return w.permit, w.err
+		case <-changed:
+			continue
+		case <-ctx.Done():
+			g.mu.Lock()
+			if w.permit == nil {
+				for i, item := range g.queue {
+					if item == w {
+						g.queue = append(g.queue[:i], g.queue[i+1:]...)
+						break
+					}
+				}
+				g.emitLocked(w, AdmissionRejected)
+				g.drainLocked()
+			}
+			permit := w.permit
+			capacity := w.capacity
+			g.mu.Unlock()
+			if permit != nil {
+				permit.release()
+			}
+			if capacity != nil && errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+				return nil, errors.Join(capacity, context.Cause(ctx))
+			}
+			return nil, context.Cause(ctx)
 		}
-		return nil, context.Cause(ctx)
 	}
 }
 func (g *ProcessAdmission) refillLocked() {
@@ -145,8 +164,7 @@ func (g *ProcessAdmission) drainLocked() {
 		g.timer = nil
 	}
 	g.refillLocked()
-	for len(g.queue) > 0 && g.active < ProcessConcurrentAttempts {
-		index := 0
+	for index := 0; index < len(g.queue) && g.active < ProcessConcurrentAttempts; {
 		w := g.queue[index]
 		wait := max((1-g.starts)*float64(ProcessAdmissionWindow)/ProcessStartsPerWindow,
 			(float64(w.endpoints)-g.endpoints)*float64(ProcessAdmissionWindow)/ProcessSTUNEndpointsPerWindow,
@@ -155,7 +173,24 @@ func (g *ProcessAdmission) drainLocked() {
 			g.timer = g.clock.AfterFunc(max(time.Duration(wait), time.Nanosecond), func() { g.mu.Lock(); g.drainLocked(); g.mu.Unlock() })
 			return
 		}
+		reservation, err := w.sockets.Reserve()
+		if capacity, ok := errors.AsType[*socketauthority.CapacityError](err); ok {
+			if w.capacity == nil || *w.capacity != *capacity {
+				w.capacity = capacity
+				g.emitLocked(w, AdmissionQueued)
+			}
+			// One sender's full socket pool cannot stall independent receivers.
+			index++
+			continue
+		}
 		g.queue = append(g.queue[:index], g.queue[index+1:]...)
+		if err != nil {
+			w.err = err
+			g.emitLocked(w, AdmissionRejected)
+			close(w.ready)
+			continue
+		}
+		w.capacity = nil
 		// Rotate all remaining requests from this owner behind the other owners.
 		var same []*admissionWaiter
 		var other []*admissionWaiter
@@ -172,9 +207,10 @@ func (g *ProcessAdmission) drainLocked() {
 		g.starts--
 		g.endpoints -= float64(w.endpoints)
 		g.activeTime -= float64(ProcessAttemptBudget)
-		w.permit = &attemptPermit{gate: g, started: g.clock.Now(), waiter: w}
+		w.permit = &attemptPermit{gate: g, started: g.clock.Now(), waiter: w, sockets: reservation}
 		g.emitLocked(w, AdmissionGranted)
 		close(w.ready)
+		index = 0
 	}
 }
 func (p *attemptPermit) release() {
@@ -182,6 +218,7 @@ func (p *attemptPermit) release() {
 		return
 	}
 	p.once.Do(func() {
+		p.sockets.Close()
 		g := p.gate
 		g.mu.Lock()
 		g.refillLocked()
@@ -199,6 +236,12 @@ func (g *ProcessAdmission) emitLocked(w *admissionWaiter, kind AdmissionKind) {
 		if w.permit != nil {
 			wait = max(w.permit.started.Sub(w.started), 0)
 		}
-		w.observe(AdmissionFacts{Kind: kind, At: g.clock.Now(), Wait: wait, Active: g.active, Queued: len(g.queue), StartsRemaining: g.starts, STUNRemaining: g.endpoints, ActiveTimeRemaining: time.Duration(g.activeTime)})
+		var capacity *socketauthority.CapacityError
+		if w.capacity != nil {
+			// Observers must not retain an alias to the queue's decision state.
+			snapshot := *w.capacity
+			capacity = &snapshot
+		}
+		w.observe(AdmissionFacts{Kind: kind, At: g.clock.Now(), Wait: wait, Active: g.active, Queued: len(g.queue), StartsRemaining: g.starts, STUNRemaining: g.endpoints, ActiveTimeRemaining: time.Duration(g.activeTime), SocketCapacity: capacity})
 	}
 }

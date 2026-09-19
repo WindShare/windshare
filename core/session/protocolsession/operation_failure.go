@@ -639,12 +639,14 @@ const (
 	PeerOperationCodePolicy           uint16 = 0x5009
 	PeerOperationCodeAuthentication   uint16 = 0x500a
 	PeerOperationCodeSessionInvariant uint16 = 0x500b
+	PeerOperationCodeCapacity         uint16 = 0x500c
 )
 
 type PeerFailureRecoveryScope string
 
 const (
 	PeerFailureAttemptTransient PeerFailureRecoveryScope = "attempt-transient"
+	PeerFailureResourceDeferred PeerFailureRecoveryScope = "resource-deferred"
 	PeerFailurePathTerminal     PeerFailureRecoveryScope = "path-terminal"
 	PeerFailureSessionTerminal  PeerFailureRecoveryScope = "session-terminal"
 )
@@ -654,6 +656,8 @@ const (
 // session termination authority or an automatic retry.
 func PeerFailureScope(code uint16) PeerFailureRecoveryScope {
 	switch code {
+	case PeerOperationCodeCapacity:
+		return PeerFailureResourceDeferred
 	case PeerOperationCodeNegotiation, PeerOperationCodeTimeout, PeerOperationCodeICE, PeerOperationCodeSTUN, PeerOperationCodeTransport, PeerOperationCodeDTLS:
 		return PeerFailureAttemptTransient
 	case PeerOperationCodeAuthentication, PeerOperationCodeSessionInvariant:

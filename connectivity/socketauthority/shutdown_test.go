@@ -2,6 +2,7 @@ package socketauthority
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -24,7 +25,7 @@ func TestClosingPathRetainsCapacityAndAllCloseCallersJoin(t *testing.T) {
 	if err := receiveHandoff(t, runHandoff(func() error {
 		_, err := a.Acquire([16]byte{1}, 1, [16]byte{3}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
 		return err
-	})); err != ErrCapacity {
+	})); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("closing socket stopped counting against capacity: %v", err)
 	}
 	repeated := runHandoff(lease.Close)
@@ -92,7 +93,7 @@ func TestAcquireReplacesClosingPathOnlyAfterSocketCloses(t *testing.T) {
 	if err := receiveHandoff(t, runHandoff(func() error {
 		_, acquireErr := a.Acquire([16]byte{1}, 1, [16]byte{3}, addresses)
 		return acquireErr
-	})); err != ErrCapacity {
+	})); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	unblock()

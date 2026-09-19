@@ -9,10 +9,12 @@ import {
   type V2LaneIdentity,
   type V2PeerAttemptCorrelation,
   type V2PeerAttemptTraceEvent,
+  type V2ConnectivityFailureScope,
 } from './diagnostics'
 import {
   classifyV2PeerAttemptFailure,
   type V2PeerAttemptFailure,
+  type V2PeerFailureDecision,
 } from './v2-peer-failure'
 
 const BROWSER_LINEAR_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
@@ -176,7 +178,7 @@ export class BrowserAttemptLifecycle {
         stage: 'failed',
         failedAtStage,
         failure: snapshotFailure(failure),
-        failureScope: decisionScope(decision.type),
+        failureScope: decisionScope(decision),
         typedErrorCode: diagnosticTypedErrorCode(failure),
         retryable: decision.type === 'retry-attempt',
       }, this.#grantOperationId ?? this.#offerOperationId, this.#lane)
@@ -280,7 +282,8 @@ function diagnosticTypedErrorCode(failure: V2PeerAttemptFailure) {
   return failure.phase === 'admission' ? 'peer-admission' as const : 'peer-negotiation' as const
 }
 
-function decisionScope(decision: string): 'session-terminal' | 'path-terminal' | 'attempt-transient' {
-  if (decision === 'stop-session') return 'session-terminal'
-  return decision === 'stop-path' ? 'path-terminal' : 'attempt-transient'
+function decisionScope(decision: V2PeerFailureDecision): V2ConnectivityFailureScope {
+  if (decision.type === 'stop-session') return 'session-terminal'
+  if (decision.type === 'stop-path') return 'path-terminal'
+  return decision.reason === 'resource-deferred' ? 'resource-deferred' : 'attempt-transient'
 }

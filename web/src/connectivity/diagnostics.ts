@@ -41,13 +41,14 @@ export const V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
   'session-stopped',
 ] as const)
 
-export const V2_CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt-transient', 'path-terminal', 'session-terminal'] as const)
+export const V2_CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt-transient', 'resource-deferred', 'path-terminal', 'session-terminal'] as const)
 
 export const V2_TYPED_PEER_ERROR_CODES = Object.freeze([
   'peer-negotiation',
   'peer-timeout',
   'peer-candidates',
   'peer-admission',
+  'peer-busy',
   'signaling-contract',
   'attempt-cancelled',
   'runtime-stopped',
@@ -66,6 +67,7 @@ export const V2_PEER_OPERATION_TYPED_ERRORS = Object.freeze({
   [V2_PEER_OPERATION_CODE.timeout]: 'peer-timeout',
   [V2_PEER_OPERATION_CODE.candidates]: 'peer-candidates',
   [V2_PEER_OPERATION_CODE.admission]: 'peer-admission',
+  [V2_PEER_OPERATION_CODE.capacity]: 'peer-busy',
 } as const satisfies Readonly<Record<number, V2TypedPeerErrorCode>>)
 
 export const V2_PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
@@ -73,6 +75,7 @@ export const V2_PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
   Object.freeze({ code: V2_PEER_OPERATION_CODE.timeout, typedErrorCode: 'peer-timeout' }),
   Object.freeze({ code: V2_PEER_OPERATION_CODE.candidates, typedErrorCode: 'peer-candidates' }),
   Object.freeze({ code: V2_PEER_OPERATION_CODE.admission, typedErrorCode: 'peer-admission' }),
+  Object.freeze({ code: V2_PEER_OPERATION_CODE.capacity, typedErrorCode: 'peer-busy' }),
 ] as const)
 
 export function v2TypedErrorForPeerOperationCode(

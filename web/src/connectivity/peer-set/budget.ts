@@ -30,6 +30,10 @@ export class PeerAttemptBudget {
     return true
   }
 
+  refundUnstartedAttempt(): void {
+    this.#attempts = Math.min(this.#attemptCapacity, this.#attempts + 1)
+  }
+
   /** Reservation prevents concurrent paths from overspending the shared active-time budget. */
   reserveElapsed(now: number, maximumMilliseconds: number): {
     readonly milliseconds: number

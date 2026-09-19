@@ -421,7 +421,7 @@ export interface TraceEventPayloadByNameV2 {
           | 'admission_response_settled'
           | 'lane_attached'
           | 'admitted'
-        failure_scope: 'attempt-transient' | 'path-terminal' | 'session-terminal'
+        failure_scope: 'attempt-transient' | 'resource-deferred' | 'path-terminal' | 'session-terminal'
         code: PeerFailureCodeV1
         retryable: boolean
       }>
@@ -438,6 +438,7 @@ export interface TraceEventPayloadByNameV2 {
         reason:
           | 'local_transient'
           | 'grant_expired'
+          | 'resource_deferred'
           | 'admission_limited'
           | 'local_policy'
           | 'local_contract'

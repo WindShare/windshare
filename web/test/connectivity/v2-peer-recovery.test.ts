@@ -4,6 +4,7 @@ import { V2PeerSet } from '../../src/connectivity/peer-set/peer-set'
 
 import type { V2PeerRecoveryTraceEvent } from '../../src/connectivity/diagnostics'
 import { V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
+import { V2_PEER_OPERATION_CODE } from '../../src/session/v2-message'
 import {
   createV2PeerAttemptIdentity,
   createV2PeerPathIdentityValue,
@@ -40,6 +41,39 @@ const SESSION_ID = createV2ProtocolSessionIdentity(identity(1))
 const PEER_PATH_ID = createV2PeerPathIdentityValue(identity(2))
 
 describe('demand-driven peer set', () => {
+  it('waits through more than three busy replies without spending negotiation allowance', async () => {
+    const busy: V2PeerAttemptResult = { type: 'failed', failure: {
+      kind: 'authenticated-peer-operation', code: V2_PEER_OPERATION_CODE.capacity,
+    } }
+    const budget = new PeerAttemptBudget()
+    const { supervisor, attempts, clock } = fixture([busy, busy, busy, busy, admitted()], { budget })
+    const content = supervisor.activate()
+    await turn()
+    for (let i = 0; i < 4; i++) await clock.advance(5_000)
+    await supervisor.join()
+    expect(attempts.contexts).toHaveLength(5)
+    expect(attempts.contexts.every(context => context.waveOrdinal === 1)).toBe(true)
+    expect(budget.available(clock.now()).attempts).toBe(7)
+    expect(supervisor.state.kind).toBe('admitted')
+    content.close()
+    await supervisor.close()
+  })
+
+  it('retains the elapsed deadline when the sender remains busy', async () => {
+    const busy: V2PeerAttemptResult = { type: 'failed', failure: {
+      kind: 'authenticated-peer-operation', code: V2_PEER_OPERATION_CODE.capacity,
+    } }
+    const { supervisor, attempts, clock } = fixture([busy, busy, busy, busy, busy])
+    const content = supervisor.activate()
+    await turn()
+    await clock.advance(120_000)
+    await supervisor.join()
+    expect(attempts.contexts).toHaveLength(1)
+    expect(supervisor.state.kind).toBe('quiescent')
+    content.close()
+    await supervisor.close()
+  })
+
   it('takes over browse negotiation without replacing it and releases the idle lane at expiry', async () => {
     const released: number[] = []
     const { supervisor, attempts, clock } = fixture(['pending'], {
