@@ -279,6 +279,8 @@ describe('v2 receiver product orchestration', () => {
     replay.resolve({ kind: 'completed' })
     await waitFor(() => controller.getSnapshot().retained.operations[0]?.actions.length === 1)
     expect(controller.getSnapshot().retained.operations[0]?.actions).toEqual(['continue'])
+    await waitFor(() => controller.getSnapshot().startAdmission.allowed &&
+      controller.getSnapshot().output.offers?.kind === 'artifact-actions')
     await controller.dispose()
   })
 

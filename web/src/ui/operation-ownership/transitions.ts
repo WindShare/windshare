@@ -26,7 +26,7 @@ interface OperationTransitionOptions {
   readonly activeReceive: Pick<ActiveReceiveCoordinator, 'active' | 'canRelease' | 'canRetainForLocalOutput' | 'reset' | 'performLifecycleAction'>
   readonly authority: Pick<V2AuthorityActivationCoordinator, 'pending'>
   readonly retained: Pick<RetainedInventoryCoordinator, 'pending' | 'load' | 'actionAdmission' | 'perform'>
-  readonly outputs: Pick<V2OutputPresentationController, 'clearTask'>
+  readonly outputs: Pick<V2OutputPresentationController, 'clearTask' | 'resetDraft'>
   readonly browse: Pick<BrowserNavigationCoordinator, 'loadPage'>
   readonly previews: Pick<V2PreviewController, 'yieldToReceiving'>
   readonly experienceTrace: Pick<ReceiverExperienceObservability, 'intent'>
@@ -40,6 +40,17 @@ export class ReceiveOperationTransitions {
   constructor(options: OperationTransitionOptions) { this.#options = options }
 
   get pending(): boolean { return this.#pending }
+
+  ownershipReleased(): void {
+    if (!this.#resumeBrowsing(this.#options.joined())) return
+    this.#options.retained.load().catch(() => undefined)
+  }
+
+  releaseFailedReceive(): void {
+    if (this.#options.disposed() || this.#pending || !this.#options.activeReceive.active) return
+    this.#releaseToBrowsing(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
+      .catch(() => undefined)
+  }
 
   activeLifecycleActionAdmission(action: LifecycleUserAction): Readonly<{ allowed: boolean; reason: string | null }> {
     if (!this.#options.activeReceive.active || this.#pending ||
@@ -141,19 +152,17 @@ export class ReceiveOperationTransitions {
   catchUpStoppedCompatibleNames(): void {
     const output = this.#options.snapshot().output
     const repair = output.lifecyclePresentation?.compatibleNameRepair
-    if (this.#options.disposed() || this.#options.retained.pending || output.lifecycle === null ||
+    if (this.#options.disposed() || this.#pending || this.#options.retained.pending || output.lifecycle === null ||
         !this.#options.activeReceive.active || repair?.actionMode !== 'catch-up-required' ||
         repair.visibility === 'notice') return
     const operationId = output.lifecycle.operationId
     // Local replay reacquires exclusive output authority. Release the stopped
     // receiver first, then use the same durable action path as a fresh page.
-    this.#options.resetOwnership(new DOMException(
+    this.#releaseToBrowsing(new DOMException(
       'Stopped receive is handing output authority to local restoration catch-up',
       'AbortError',
-    )).then(async () => {
-      if (this.#options.disposed()) return
-      await this.#options.retained.load()
-      if (this.#options.disposed()) return
+    )).then(released => {
+      if (!released) return
       const operation = this.#options.snapshot().retained.operations.find(candidate =>
         candidate.operationId === operationId)
       if (operation?.actions.includes('catch-up')) this.#options.retained.perform(operation, 'catch-up')
@@ -171,25 +180,54 @@ export class ReceiveOperationTransitions {
     if (this.#options.disposed() || this.#pending || joined === undefined ||
         this.#options.retained.pending || this.#options.authority.pending ||
         (presentation === null && !this.#options.activeReceive.canRelease)) return
-    this.#pending = true
     const boundary = new DOMException(
       presentation?.kind === 'direct-tree-to-zip'
         ? 'The completed DirectTree receive is being replaced by a new ZIP operation'
         : 'The settled task is being released for a new receive operation',
       'AbortError',
     )
-    this.#options.resetOwnership(boundary).then(() => {
-      if (!this.#options.disposed() && this.#options.joined() === joined) {
-        this.#options.publish({ ...this.#options.snapshot(), progress: EMPTY_V2_PROGRESS, error: null })
-        this.#options.beginProjection(joined, 'observation-replacement')
-      }
-    }, error => this.#options.actionError(error)).finally(() => {
+    this.#options.publish({ ...this.#options.snapshot(), error: null })
+    this.#releaseToBrowsing(boundary).catch(() => undefined)
+  }
+
+  async #releaseToBrowsing(reason: unknown): Promise<boolean> {
+    const joined = this.#options.joined()
+    this.#pending = true
+    this.#options.publish(this.#options.snapshot())
+    try {
+      await this.#options.resetOwnership(reason)
+      if (!this.#resumeBrowsing(joined)) return false
+    } catch (error) {
+      if (this.#ownsBrowsing(joined)) this.#options.actionError(error)
+      return false
+    } finally {
       this.#pending = false
-      if (!this.#options.disposed()) {
-        this.#options.publish(this.#options.snapshot())
-        this.#options.retained.load().catch(() => undefined)
-      }
-    })
+      if (!this.#options.disposed()) this.#options.publish(this.#options.snapshot())
+    }
+    if (!this.#ownsBrowsing(joined)) return false
+    // Inventory may start authorized local finalization, so release admission
+    // before loading it while keeping the original operation durably retained.
+    try {
+      await this.#options.retained.load()
+      return this.#ownsBrowsing(joined)
+    } catch (error) {
+      if (this.#ownsBrowsing(joined)) this.#options.actionError(error)
+      return false
+    }
+  }
+
+  #resumeBrowsing(joined: V2JoinedBrowserShare | undefined): boolean {
+    if (!this.#ownsBrowsing(joined)) return false
+    // Retiring a task must restore a live observation, not leave missing offers
+    // presented as confirmation that no longer has an owner.
+    this.#options.outputs.resetDraft()
+    this.#options.beginProjection(joined, 'observation-replacement')
+    this.#options.publish(this.#options.snapshot())
+    return true
+  }
+
+  #ownsBrowsing(joined: V2JoinedBrowserShare | undefined): joined is V2JoinedBrowserShare {
+    return joined !== undefined && !this.#options.disposed() && this.#options.joined() === joined
   }
 
   shareNavigationBlockedReason(): string | null {
