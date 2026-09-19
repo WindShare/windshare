@@ -66,6 +66,9 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		spec.Kind = "admission_" + string(admission.Kind)
 		spec.At = admission.At
 		spec.Admission = &clievent.NativeAdmissionFacts{Wait: admission.Wait, Active: uint64(admission.Active), Queued: uint64(admission.Queued), StartsRemaining: admission.StartsRemaining, STUNRemaining: admission.STUNRemaining, ActiveTimeRemaining: admission.ActiveTimeRemaining}
+		if capacity := admission.SocketCapacity; capacity != nil {
+			spec.Admission.SocketCapacity = clievent.NativeSocketCapacityFacts{Used: uint64(capacity.Used), Reserved: uint64(capacity.Reserved), Requested: uint64(capacity.Requested), Limit: uint64(capacity.Limit)}
+		}
 	}
 	if lifecycle := value.Lifecycle; lifecycle != nil {
 		spec.Kind = string(lifecycle.Kind)

@@ -514,6 +514,8 @@ func cloneSenderAttemptObservation(observation SenderAttemptObservation) SenderA
 
 func typedPeerErrorForOperationCode(code uint16) TypedPeerErrorCode {
 	switch code {
+	case protocolsession.PeerOperationCodeCapacity:
+		return TypedPeerErrorBusy
 	case protocolsession.PeerOperationCodeNegotiation:
 		return TypedPeerErrorNegotiation
 	case protocolsession.PeerOperationCodeTimeout:

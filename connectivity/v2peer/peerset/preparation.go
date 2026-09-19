@@ -2,6 +2,7 @@ package peerset
 
 import (
 	"context"
+	"errors"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"time"
@@ -30,14 +31,14 @@ func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, ref
 	return opportunity
 }
 func (p *Path) waitPreparation(binding v2signal.Binding, wait time.Duration) (PreparedStarter, error) {
-	child, cancel := context.WithCancel(p.ctx)
+	child, cancel := context.WithCancelCause(p.ctx)
 	timer := p.owner.config.Clock.NewTimer(wait)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		select {
 		case <-timer.C():
-			cancel()
+			cancel(context.DeadlineExceeded)
 		case <-child.Done():
 		}
 	}()
@@ -50,14 +51,14 @@ func (p *Path) waitPreparation(binding v2signal.Binding, wait time.Duration) (Pr
 		err = ErrConfig
 	}
 	timer.Stop()
-	expired := child.Err()
-	cancel()
+	expired := context.Cause(child)
+	cancel(context.Canceled)
 	<-done
 	if expired != nil {
 		if prepared.Close != nil {
 			prepared.Close()
 		}
-		return PreparedStarter{}, expired
+		return PreparedStarter{}, errors.Join(expired, err)
 	}
 	return prepared, err
 }

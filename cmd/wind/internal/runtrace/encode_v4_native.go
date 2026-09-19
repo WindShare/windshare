@@ -34,12 +34,20 @@ type nativeSocketPayloadV4 struct {
 }
 
 type nativeAdmissionPayloadV4 struct {
-	Wait                string `json:"wait_ms"`
-	Active              string `json:"active"`
-	Queued              string `json:"queued"`
-	StartsRemaining     string `json:"starts_remaining"`
-	STUNRemaining       string `json:"stun_remaining"`
-	ActiveTimeRemaining string `json:"active_time_remaining_ms"`
+	Wait                string                         `json:"wait_ms"`
+	Active              string                         `json:"active"`
+	Queued              string                         `json:"queued"`
+	StartsRemaining     string                         `json:"starts_remaining"`
+	STUNRemaining       string                         `json:"stun_remaining"`
+	ActiveTimeRemaining string                         `json:"active_time_remaining_ms"`
+	SocketCapacity      *nativeSocketCapacityPayloadV4 `json:"socket_capacity,omitempty"`
+}
+
+type nativeSocketCapacityPayloadV4 struct {
+	Used      string `json:"used"`
+	Reserved  string `json:"reserved"`
+	Requested string `json:"requested"`
+	Limit     string `json:"limit"`
 }
 
 type nativeLifecyclePayloadV4 struct {
@@ -118,6 +126,10 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	}
 	if s := facts.Socket; s != nil {
 		payload.Socket = &nativeSocketPayloadV4{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
+	}
+	if a := facts.Admission; a != nil && a.SocketCapacity.Limit != 0 {
+		c := a.SocketCapacity
+		payload.Admission.SocketCapacity = &nativeSocketCapacityPayloadV4{Used: decimal(c.Used), Reserved: decimal(c.Reserved), Requested: decimal(c.Requested), Limit: decimal(c.Limit)}
 	}
 	visitor.set("native_connectivity", correlation, payload)
 	return nil

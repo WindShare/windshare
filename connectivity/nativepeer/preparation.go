@@ -61,6 +61,17 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	// Selection needs only local facts. No sockets, mappings, DNS or STUN traffic
 	// are created until the exact immutable endpoint cost has been admitted.
 	profile := n.selectProfileLocked(snapshot, path, request.Binding.AttemptSequence, n.config.Now())
+	sockets, err := n.config.Sockets.Request(key.session, snapshot.GenerationID(), [16]byte(key.path), selectAddresses(snapshot.Addresses()))
+	if err != nil {
+		n.mu.Unlock()
+		return nil, err
+	}
+	if path.lease != nil && path.lease.GenerationID() != snapshot.GenerationID() {
+		// Retired providers retain their own references until teardown. The path
+		// must drop its obsolete demand before waiting for replacement capacity.
+		_ = path.lease.Close()
+		path.lease = nil
+	}
 	lifetime, cancel := context.WithCancel(context.Background())
 	prepared := &PreparedAttempt{native: n, request: request, snapshot: snapshot, profile: profile, key: key, path: path, ctx: lifetime, cancel: cancel, done: make(chan struct{})}
 	if path.attempts == nil {
@@ -73,7 +84,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	stop := context.AfterFunc(lifetime, cancelWait)
 	defer func() { stop(); cancelWait() }()
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(request.Binding.AttemptID), AttemptSequence: request.Binding.AttemptSequence, NetworkGenerationID: snapshot.GenerationID(), ICEProfileID: profile.ID(), Side: n.config.Side}
-	permit, err := n.config.Admission.acquire(wait, n, len(profile.URLs()), func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) })
+	permit, err := n.config.Admission.acquire(wait, n, len(profile.URLs()), sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) })
 	if err != nil {
 		prepared.Close()
 		return nil, err
@@ -161,20 +172,23 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 		n.mu.Unlock()
 		return nil, errors.Join(ErrProcessAdmission, ctx.Err(), p.ctx.Err())
 	}
-	var err error
+	lease, err := p.permit.sockets.Activate()
+	if err != nil {
+		n.mu.Unlock()
+		return nil, err
+	}
 	if path.lease == nil || path.lease.GenerationID() != p.snapshot.GenerationID() {
 		if path.lease != nil {
 			_ = path.lease.Close()
 		}
-		path.lease, err = n.config.Sockets.Acquire(p.key.session, p.snapshot.GenerationID(), [16]byte(p.key.path), selectAddresses(p.snapshot.Addresses()))
-		if err != nil {
-			n.mu.Unlock()
-			return nil, err
-		}
+		path.lease = lease
 		previous := path.generation
 		path.generation = p.snapshot.GenerationID()
 		n.observeLifecycleLocked(p.key, path, NetworkChanged, previous)
 		path.mapped = false
+	} else {
+		// The path already owns this allocation across serialized ICE attempts.
+		_ = lease.Close()
 	}
 	now := n.config.Now()
 	remoteProfile := path.remoteProfile

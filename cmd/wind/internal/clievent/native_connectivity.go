@@ -41,6 +41,11 @@ type NativeAdmissionFacts struct {
 	Active, Queued                 uint64
 	StartsRemaining, STUNRemaining float64
 	ActiveTimeRemaining            time.Duration
+	SocketCapacity                 NativeSocketCapacityFacts
+}
+
+type NativeSocketCapacityFacts struct {
+	Used, Reserved, Requested, Limit uint64
 }
 
 type NativeLifecycleFacts struct {

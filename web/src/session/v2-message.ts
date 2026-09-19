@@ -50,6 +50,7 @@ export const V2_PEER_OPERATION_CODE = Object.freeze({
   policy: 0x5009,
   authentication: 0x500a,
   sessionInvariant: 0x500b,
+  capacity: 0x500c,
 } as const)
 
 export type V2MessageKind = (typeof V2_MESSAGE_KIND)[keyof typeof V2_MESSAGE_KIND]
@@ -676,11 +677,13 @@ export function encodeV2Body(value: unknown): Uint8Array<ArrayBuffer> {
   }
 }
 
-export type PeerFailureRecoveryScope = 'attempt-transient' | 'path-terminal' | 'session-terminal'
+export type PeerFailureRecoveryScope = 'attempt-transient' | 'resource-deferred' | 'path-terminal' | 'session-terminal'
 
 // Only closed typed reasons grant recovery or session authority.
 export function peerFailureScope(code: number): PeerFailureRecoveryScope {
   switch (code) {
+    case V2_PEER_OPERATION_CODE.capacity:
+      return 'resource-deferred'
     case V2_PEER_OPERATION_CODE.negotiation:
     case V2_PEER_OPERATION_CODE.timeout:
     case V2_PEER_OPERATION_CODE.ice:

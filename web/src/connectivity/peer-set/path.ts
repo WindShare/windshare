@@ -497,14 +497,20 @@ export class V2PeerRecoverySupervisor {
       }),
       attemptId,
     )
-    if (decision.type === 'stop-path') {
-      this.#stopPath(decision.reason)
-      return false
+    switch (decision.type) {
+      case 'stop-path':
+        this.#stopPath(decision.reason)
+        return false
+      case 'stop-session':
+        this.#terminal = decision.terminal
+        this.#stopSession(decision.terminal)
+        return false
     }
-    if (decision.type === 'stop-session') {
-      this.#terminal = decision.terminal
-      this.#stopSession(decision.terminal)
-      return false
+    if (decision.reason === 'resource-deferred') {
+      // The sender's bounded resource wait is not a failed negotiation. Elapsed
+      // wave/session budgets and the tab's actual-start limits still apply.
+      wave.attempts -= 1
+      this.#budget.refundUnstartedAttempt()
     }
     if (this.#activationCount === 0) {
       this.#state = Object.freeze({ kind: 'idle' })

@@ -910,6 +910,7 @@ describe('R0 resource and state-machine contract', () => {
         timeout: 0x5002,
         candidates: 0x5003,
         admission: 0x5004,
+        capacity: 0x500c,
       },
     })
     expect(semantics.find((value) => value.name === 'relay-registration-errors')).toEqual({

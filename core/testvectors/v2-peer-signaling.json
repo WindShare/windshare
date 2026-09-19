@@ -71,6 +71,10 @@
     },
     {
       "code": 20492,
+      "scope": "resource-deferred"
+    },
+    {
+      "code": 20493,
       "scope": "path-terminal"
     },
     {

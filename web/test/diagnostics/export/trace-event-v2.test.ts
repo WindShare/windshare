@@ -386,6 +386,20 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
     wave_ordinal: '1',
     trigger: 'activation',
   }),
+  correlated('peer_attempt', {
+    stage: 'failed',
+    failed_at_stage: 'offer_sent',
+    failure_scope: 'resource-deferred',
+    code: 'peer_busy',
+    retryable: true,
+  }),
+  correlated('peer_recovery', {
+    stage: 'retry_decided',
+    wave_ordinal: '1',
+    decision: 'retry_attempt',
+    reason: 'resource_deferred',
+    authenticated_retry_after_ms: 0,
+  }),
   correlated('peer_recovery', {
     stage: 'retry_decided',
     wave_ordinal: '2',

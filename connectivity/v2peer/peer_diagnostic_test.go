@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"math"
 	"reflect"
 	"testing"
@@ -86,6 +87,18 @@ func TestRejectedOfferPreservesPolicyAndBusyReasons(t *testing.T) {
 		if failure.TypedPeerErrorCode != test.typed || failure.Operation == nil || failure.Operation.Code != test.wire {
 			t.Fatalf("%v lost its rejection reason: %+v", test.cause, failure)
 		}
+	}
+}
+
+func TestSocketQueueDeadlinePreservesCapacityCause(t *testing.T) {
+	cause := errors.Join(context.DeadlineExceeded, &socketauthority.CapacityError{Used: 58, Requested: 13, Limit: 64})
+	code, message := peerFailure(cause)
+	if code != protocolsession.PeerOperationCodeCapacity {
+		t.Fatal(code, message)
+	}
+	failure := attemptFailure(cause, cause, false)
+	if failure.TypedPeerErrorCode != TypedPeerErrorBusy || failure.Scope != AttemptFailureScopeAttempt || failure.Termination.Cause != "socket_capacity" {
+		t.Fatal("capacity was projected as timeout or session failure", failure)
 	}
 }
 

@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -300,9 +301,13 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
 	var prepared *nativepeer.PreparedAttempt
 	if attempt.config.factory.peerConnections == nil {
-		prepared, err = attempt.config.factory.native.PrepareAttempt(negotiationContext, request)
+		// A busy answer must reach the receiver before its preparation deadline;
+		// otherwise remote capacity becomes an indistinguishable local timeout.
+		resourceContext, cancelResources := context.WithTimeout(negotiationContext, PeerSignalingPreparationBudget-PeerAnswerPreparationReserve)
+		prepared, err = attempt.config.factory.native.PrepareAttempt(resourceContext, request)
+		cancelResources()
 		if err != nil {
-			if cause := context.Cause(negotiationContext); cause != nil {
+			if cause := context.Cause(negotiationContext); cause != nil && !errors.Is(err, socketauthority.ErrCapacity) {
 				err = cause
 			}
 			return attempt.finish(ctx, errors.Join(ErrNegotiation, err), nil, false)

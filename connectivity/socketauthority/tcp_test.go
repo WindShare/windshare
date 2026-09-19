@@ -24,7 +24,7 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	if lease.TCPEndpoints()[0] != first {
 		t.Fatal("TCP listener changed across preparation")
 	}
-	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); err != ErrCapacity {
+	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	mux := lease.TCP()
@@ -82,7 +82,7 @@ func TestTCPOptionalAllocationFailureLeavesUDPCapacityIntact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	if err = lease.PrepareTCP(false); err != ErrCapacity {
+	if err = lease.PrepareTCP(false); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	if len(lease.TCPEndpoints()) != 0 {

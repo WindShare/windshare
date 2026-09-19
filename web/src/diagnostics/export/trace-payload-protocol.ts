@@ -29,6 +29,7 @@ const PEER_FAILURE_CODES = [
   'peer_timeout',
   'peer_candidates',
   'peer_admission',
+  'peer_busy',
   'signaling_contract',
   'attempt_cancelled',
   'runtime_stopped',
@@ -243,7 +244,7 @@ export function validatePeerAttempt(payload: UnknownRecord): void {
         'admission_response_received', 'admission_response_settled', 'lane_attached',
         'admitted',
       ], 'peer failed-at stage')
-      member(payload.failure_scope, ['attempt-transient', 'path-terminal', 'session-terminal'], 'peer failure scope')
+      member(payload.failure_scope, ['attempt-transient', 'resource-deferred', 'path-terminal', 'session-terminal'], 'peer failure scope')
       member(payload.code, PEER_FAILURE_CODES, 'peer failure code')
       booleanValue(payload.retryable, 'peer retryable')
       validateAttemptSummary(payload.summary)
@@ -338,7 +339,7 @@ export function validatePeerRecovery(payload: UnknownRecord): void {
       member(payload.decision, ['retry_attempt', 'stop_path', 'stop_session'],
         'peer retry decision')
       member(payload.reason, [
-        'local_transient', 'grant_expired', 'admission_limited', 'local_policy',
+        'local_transient', 'grant_expired', 'resource_deferred', 'admission_limited', 'local_policy',
         'local_contract', 'peer_operation_final', 'lane_rejection_final',
         'untyped_failure', 'session_terminal',
       ], 'peer retry reason')
