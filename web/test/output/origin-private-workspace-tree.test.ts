@@ -233,14 +233,14 @@ describe('origin-private workspace activation commit cut', () => {
     const parent = new NamespaceDirectoryHandle('root', true)
     const onPersistenceCommitted = vi.fn()
     const onActivationCandidateCommitted = vi.fn()
+    const persist = vi.fn(() => new Promise<boolean>(() => {}))
+    const storage = { ...storageFor(parent), persist }
 
     const opening = openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
       preClickRanking: await selectedRanking(intent),
       repository,
-      storage: { getDirectory: async () => parent as unknown as FileSystemDirectoryHandle } as StorageManager & {
-        getDirectory(): Promise<FileSystemDirectoryHandle>
-      },
+      storage,
       randomOwnedObjectId: () => identity(91, 32),
       randomEntryIdentity: () => identity(90, 32),
       onActivationCandidateCommitted,
@@ -248,6 +248,7 @@ describe('origin-private workspace activation commit cut', () => {
     })
 
     await expect(opening).resolves.toEqual(expect.objectContaining({ operationId: intent.operationId }))
+    expect(persist).not.toHaveBeenCalled()
     expect(onActivationCandidateCommitted).toHaveBeenCalledOnce()
     expect(onPersistenceCommitted).toHaveBeenCalledOnce()
     expect(repository.handles).toHaveLength(1)

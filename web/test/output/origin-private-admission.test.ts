@@ -128,6 +128,28 @@ describe('origin-private WorkspaceBudget admission', () => {
     await claim.release()
   })
 
+  it('retries the same budget against a higher live quota without forgetting retained bytes', async () => {
+    const intent = await originalFileIntent()
+    const budget = await singleFileBudget(intent, 100n * 1024n ** 3n)
+    const leases = new MemoryLeaseAuthority()
+    let quota = 100
+    const options = {
+      authority: leases, estimate: async () => ({ usage: 40, quota }),
+      verifiedAlreadyOwnedBytes: async () => 40n, minimumReserveBytes: 100n,
+    }
+    const first = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, options)
+    await expect(first.claim(budget)).resolves.toMatchObject({
+      kind: 'rejected', admission: { reason: 'quota-insufficient' },
+    })
+    quota = 1_000_000
+    const retry = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, options)
+    const result = await retry.claim(budget)
+    expect(result.kind).toBe('accepted')
+    expect(leases.facts.map(facts => facts.estimatedQuotaBytes)).toEqual([100n, 1_000_000n])
+    expect(leases.facts.map(facts => facts.verifiedAlreadyOwnedBytes)).toEqual([40n, 40n])
+    if (result.kind === 'accepted') await result.claim.release()
+  })
+
   it('rejects activation when even checkpoint headroom does not fit', async () => {
     const intent = await originalFileIntent()
     const subject = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {

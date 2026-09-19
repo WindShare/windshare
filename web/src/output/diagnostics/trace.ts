@@ -9,6 +9,7 @@ import type {
 } from '../../diagnostics/trace/transfer-payload'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type { BrowserDeliveryPayloadV1 } from '../../diagnostics/trace/browser-delivery-payload'
+import type { StoragePersistencePayloadV1 } from '../../diagnostics/trace/storage-persistence-payload'
 
 export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
   'file_system_access',
@@ -21,6 +22,7 @@ export type OutputDiagnosticBackend = (typeof OUTPUT_DIAGNOSTIC_BACKENDS)[number
 export interface OutputTracePayloadByName {
   readonly performance_phase: PerformancePhasePayloadV1
   readonly performance_summary: PerformanceSummaryPayloadV1
+  readonly storage_persistence: StoragePersistencePayloadV1
   readonly output_reservation: Readonly<{
     backend: OutputDiagnosticBackend
     transition: 'started' | 'acquired' | 'reopened' | 'failed'

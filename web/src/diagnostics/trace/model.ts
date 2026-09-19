@@ -5,6 +5,7 @@ import type {
 } from './direct-zip-payload'
 import type { ProtocolOperationPayloadV2 } from './protocol-payload'
 import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
+import type { StoragePersistencePayloadV1 } from './storage-persistence-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
@@ -72,6 +73,7 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'transfer_progress',
   'performance_phase',
   'performance_summary',
+  'storage_persistence',
   'output_reservation',
   'output_write',
   'checkpoint',
@@ -581,6 +583,7 @@ export interface TraceEventPayloadByNameV2 {
   readonly transfer_progress: TransferProgressPayloadV1
   readonly performance_phase: PerformancePhasePayloadV1
   readonly performance_summary: PerformanceSummaryPayloadV1
+  readonly storage_persistence: StoragePersistencePayloadV1
   readonly output_reservation: Readonly<{
     backend: OutputBackendV1
     transition: 'started' | 'acquired' | 'reopened' | 'failed'
