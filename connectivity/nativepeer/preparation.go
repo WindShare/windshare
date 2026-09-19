@@ -98,7 +98,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 		permit.release()
 	}
 	prepared.mu.Unlock()
-	if err := wait.Err(); err != nil {
+	if err := context.Cause(wait); err != nil {
 		prepared.Close()
 		return nil, err
 	}

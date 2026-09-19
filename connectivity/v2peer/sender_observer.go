@@ -278,6 +278,10 @@ func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase Peer
 		observation.Stage = SenderAttemptNegotiationDeadlineExpired
 		observation.Phase = SenderAttemptPhaseNegotiation
 		observation.DeadlineMillis = durationMilliseconds(recorder.factory.negotiationBudget)
+	case PeerAttemptPhaseResources:
+		observation.Stage = SenderAttemptNegotiationDeadlineExpired
+		observation.Phase = SenderAttemptPhaseNegotiation
+		observation.DeadlineMillis = durationMilliseconds(PeerSignalingPreparationBudget - PeerAnswerPreparationReserve)
 	case PeerAttemptPhaseAdmission:
 		observation.Stage = SenderAttemptAdmissionDeadlineExpired
 		observation.Phase = SenderAttemptPhaseAdmission
