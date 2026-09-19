@@ -93,6 +93,10 @@ func TestPeerFailureNamespaceNeverGrantsUnknownAuthority(t *testing.T) {
 	for code := uint32(0); code <= 65535; code++ {
 		scope := PeerFailureScope(uint16(code))
 		switch uint16(code) {
+		case PeerOperationCodeCapacity:
+			if scope != PeerFailureResourceDeferred {
+				t.Fatal(code, scope)
+			}
 		case PeerOperationCodeNegotiation, PeerOperationCodeTimeout, PeerOperationCodeICE, PeerOperationCodeSTUN, PeerOperationCodeTransport, PeerOperationCodeDTLS:
 			if scope != PeerFailureAttemptTransient {
 				t.Fatal(code, scope)
@@ -107,7 +111,7 @@ func TestPeerFailureNamespaceNeverGrantsUnknownAuthority(t *testing.T) {
 			}
 		}
 	}
-	for _, code := range []uint16{0x5000, 0x500c, 0x5fff} {
+	for _, code := range []uint16{0x5000, 0x500d, 0x5fff} {
 		encoded, err := EncodeOperationFailure(OperationFailure{Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: code, Message: "unknown peer reason"})
 		if err != nil {
 			t.Fatal(err)

@@ -17,7 +17,7 @@ type peerFailureVector struct {
 
 func buildPeerFailureVectors() []peerFailureVector {
 	var result []peerFailureVector
-	for code := uint16(0x5000); code <= 0x500c; code++ {
+	for code := uint16(0x5000); code <= 0x500d; code++ {
 		result = append(result, peerFailureVector{code, protocolsession.PeerFailureScope(code)})
 	}
 	return append(result, peerFailureVector{0x5fff, protocolsession.PeerFailurePathTerminal})

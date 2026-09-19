@@ -16,6 +16,7 @@ describe('connectivity diagnostics vocabulary', () => {
       { code: V2_PEER_OPERATION_CODE.timeout, typedErrorCode: 'peer-timeout' },
       { code: V2_PEER_OPERATION_CODE.candidates, typedErrorCode: 'peer-candidates' },
       { code: V2_PEER_OPERATION_CODE.admission, typedErrorCode: 'peer-admission' },
+      { code: V2_PEER_OPERATION_CODE.capacity, typedErrorCode: 'peer-busy' },
     ])
     for (const entry of V2_PEER_OPERATION_ERROR_REGISTRY) {
       expect(v2TypedErrorForPeerOperationCode(entry.code)).toBe(entry.typedErrorCode)

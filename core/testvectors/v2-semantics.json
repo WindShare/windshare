@@ -99,6 +99,7 @@
       "peer": {
         "admission": 20484,
         "candidates": 20483,
+        "capacity": 20492,
         "negotiation": 20481,
         "timeout": 20482
       },

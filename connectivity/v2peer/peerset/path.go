@@ -3,6 +3,7 @@ package peerset
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"io"
 	"time"
 
@@ -12,8 +13,9 @@ import (
 )
 
 type recoveryWave struct {
-	started  time.Time
-	attempts int
+	started       time.Time
+	attempts      int
+	opportunities int
 }
 
 const MappingOpportunityDelay = 10 * time.Second
@@ -54,6 +56,7 @@ func (p *Path) run() {
 			continue
 		}
 		wave.attempts++
+		wave.opportunities++
 		p.setResourceActive(true)
 		result, admitted := p.executePrepared(opportunity)
 		if stop := p.afterAttempt(&wave, result, admitted); stop != nil {
@@ -90,7 +93,7 @@ func (p *Path) stopReason() *Result {
 	return nil
 }
 func (w recoveryWave) exhausted(now time.Time) bool {
-	return w.attempts >= AttemptsPerWave || (w.attempts > 0 && now.Sub(w.started)+MinimumAttemptOpportunity > WaveBudget)
+	return w.attempts >= AttemptsPerWave || ((w.opportunities > 0 || w.attempts > 0) && now.Sub(w.started)+MinimumAttemptOpportunity > WaveBudget)
 }
 func (p *Path) nextWave(wave *recoveryWave) *Result {
 	p.deferred.settle(false, 0)
@@ -135,7 +138,7 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 		}
 	}
 	now := p.owner.config.Clock.Now()
-	if wave.attempts == 0 {
+	if wave.opportunities == 0 {
 		wave.started = now
 	} else if wave.exhausted(now) {
 		release()
@@ -152,7 +155,7 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 		}
 		return nil, nil
 	}
-	if wave.attempts == 0 && p.config.Native != nil {
+	if wave.opportunities == 0 && p.config.Native != nil {
 		p.config.Native.BeginWave([16]byte(p.key.session), p.key.path)
 	}
 	binding, err := p.freshBinding()
@@ -207,6 +210,16 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *R
 	}
 	if admitted {
 		*wave = recoveryWave{started: p.owner.config.Clock.Now()}
+		return nil
+	}
+	// Capacity deferral proves the remote did not start ICE. Preserve the finite
+	// wall-clock wave and process rate limits, but return its negotiation allowance.
+	if result.Scope == protocolsession.PeerFailureResourceDeferred || errors.Is(result.Cause, socketauthority.ErrCapacity) {
+		wave.attempts--
+		p.owner.config.Budget.refundUnstartedAttempt()
+		if !p.wait(ResourceRetryDelay) {
+			return &Result{Stopped: true}
+		}
 		return nil
 	}
 	delay := time.Duration(wave.attempts) * time.Second

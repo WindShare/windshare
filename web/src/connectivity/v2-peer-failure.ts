@@ -101,7 +101,7 @@ export type V2PeerAttemptResult =
 export type V2PeerFailureDecision =
   | {
       readonly type: 'retry-attempt'
-      readonly reason: 'local-transient' | 'grant-expired'
+      readonly reason: 'local-transient' | 'grant-expired' | 'resource-deferred'
     }
   | {
       readonly type: 'retry-attempt'
@@ -147,10 +147,7 @@ export function classifyV2PeerAttemptFailure(failure: unknown): V2PeerFailureDec
         ? Object.freeze({ type: 'stop-path', reason: 'local-contract' })
         : stopUntypedFailure()
     case 'authenticated-peer-operation':
-      if (!isAuthenticatedPeerOperation(failure)) return stopUntypedFailure()
-      return peerFailureScope(failure.code as number) === 'attempt-transient'
-        ? Object.freeze({ type: 'retry-attempt', reason: 'local-transient' })
-        : Object.freeze({ type: 'stop-path', reason: 'peer-operation-final' })
+      return classifyPeerOperation(failure)
     case 'authenticated-lane-rejection':
       return classifyLaneRejection(failure)
     case 'session-terminal':
@@ -163,6 +160,18 @@ export function classifyV2PeerAttemptFailure(failure: unknown): V2PeerFailureDec
         : stopUntypedFailure()
     default:
       return stopUntypedFailure()
+  }
+}
+
+function classifyPeerOperation(failure: Record<string, unknown>): V2PeerFailureDecision {
+  if (!isAuthenticatedPeerOperation(failure)) return stopUntypedFailure()
+  switch (peerFailureScope(failure.code as number)) {
+    case 'resource-deferred':
+      return Object.freeze({ type: 'retry-attempt', reason: 'resource-deferred' })
+    case 'attempt-transient':
+      return Object.freeze({ type: 'retry-attempt', reason: 'local-transient' })
+    default:
+      return Object.freeze({ type: 'stop-path', reason: 'peer-operation-final' })
   }
 }
 

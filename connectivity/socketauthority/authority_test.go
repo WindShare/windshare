@@ -33,7 +33,7 @@ func TestPathIsolationReferencesRetirementAndBounds(t *testing.T) {
 	if first.Endpoints()[0] == other.Endpoints()[0] {
 		t.Fatal("peer paths share socket")
 	}
-	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{3}, addresses); err != ErrCapacity {
+	if _, err = authority.Acquire([16]byte{1}, 1, [16]byte{3}, addresses); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	retained, err := first.Retain()

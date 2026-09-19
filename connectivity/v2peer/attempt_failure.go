@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 
@@ -36,6 +37,8 @@ func peerFailure(err error) (uint16, string) {
 		return rejected.code, rejected.message
 	}
 	switch {
+	case errors.Is(err, socketauthority.ErrCapacity):
+		return protocolsession.PeerOperationCodeCapacity, peerCapacityFailureMessage
 	case errors.Is(err, ErrPeerNegotiationTimeout), errors.Is(err, ErrPeerAdmissionTimeout):
 		return protocolsession.PeerOperationCodeTimeout, peerTimeoutFailureMessage
 	case errors.Is(err, errCandidateLimit):
@@ -74,6 +77,8 @@ func attemptFailure(result, primary error, operationCanceled bool) (failure Send
 	switch {
 	case operationCanceled || errors.Is(primary, errAnswerDropped) || errors.Is(primary, errCandidateDropped):
 		return senderAttemptCancelledFailure()
+	case errors.Is(primary, socketauthority.ErrCapacity):
+		return senderOperationAttemptFailure(protocolsession.PeerOperationCodeCapacity, peerCapacityFailureMessage, primary)
 	case errors.Is(primary, context.Canceled) || errors.Is(primary, context.DeadlineExceeded):
 		return senderRuntimeStoppedFailure()
 	case result != nil:
@@ -92,6 +97,8 @@ func attemptFailure(result, primary error, operationCanceled bool) (failure Send
 func senderAttemptTermination(cause error, operationCanceled bool) SenderAttemptTermination {
 	initiator, reason := "unknown", "unclassified"
 	switch {
+	case errors.Is(cause, socketauthority.ErrCapacity):
+		initiator, reason = "local", "socket_capacity"
 	case errors.Is(cause, ErrPeerAdmissionTimeout):
 		initiator, reason = "local", "admission_timeout"
 	case errors.Is(cause, ErrPeerNegotiationTimeout):

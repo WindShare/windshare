@@ -67,6 +67,9 @@ type Authority struct {
 	paths          map[pathKey]*pathSockets
 	retiredThrough uint64
 	socketCount    int
+	reservedCount  int
+	reservations   map[pathKey]*Reservation
+	changed        chan struct{}
 	closing        *socketClosure
 }
 
@@ -86,12 +89,23 @@ func New(config Config) *Authority {
 	if config.ListenPacket == nil {
 		config.ListenPacket = net.ListenPacket
 	}
-	return &Authority{config: config, paths: make(map[pathKey]*pathSockets)}
+	return &Authority{config: config, paths: make(map[pathKey]*pathSockets), reservations: make(map[pathKey]*Reservation), changed: make(chan struct{})}
 }
 
 // Acquire freezes addresses for this generation/path. Callers must allocate a
 // newer generation for address/route changes; an existing snapshot is never edited.
 func (a *Authority) Acquire(session [16]byte, generation uint64, path [16]byte, addresses []netip.Addr) (*Lease, error) {
+	request, err := a.Request(session, generation, path, addresses)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.acquireLocked(request.key, request.addresses)
+}
+
+// Request freezes the exact mandatory UDP cost without opening endpoints.
+func (a *Authority) Request(session [16]byte, generation uint64, path [16]byte, addresses []netip.Addr) (*Request, error) {
 	addresses = slices.Clone(addresses)
 	// Preserve the caller's interface/family opportunity order through socket
 	// allocation and provider priority. Equal IPs need only one physical socket.
@@ -112,13 +126,18 @@ func (a *Authority) Acquire(session [16]byte, generation uint64, path [16]byte, 
 	// PeerPathID is session-scoped; equal values in independent authenticated
 	// sessions must never share socket or exclusive ICE ownership.
 	key := pathKey{session, generation, path}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	if len(addresses) > a.config.Capacity {
+		return nil, fmt.Errorf("%w: socket request exceeds total capacity", ErrInvalid)
+	}
+	return &Request{authority: a, key: key, addresses: addresses}, nil
+}
+
+func (a *Authority) acquireLocked(key pathKey, addresses []netip.Addr) (*Lease, error) {
 	for {
 		if a.closing != nil {
 			return nil, ErrClosed
 		}
-		if generation <= a.retiredThrough {
+		if key.generation <= a.retiredThrough {
 			return nil, ErrRetired
 		}
 		entry := a.paths[key]
@@ -138,8 +157,8 @@ func (a *Authority) Acquire(session [16]byte, generation uint64, path [16]byte, 
 		entry.refs++
 		return &Lease{authority: a, entry: entry}, nil
 	}
-	if a.socketCount+len(addresses) > a.config.Capacity {
-		return nil, ErrCapacity
+	if a.reservations[key] != nil || a.socketCount+a.reservedCount+len(addresses) > a.config.Capacity {
+		return nil, a.capacityLocked(len(addresses))
 	}
 	mux := &Mux{}
 	for _, address := range addresses {
@@ -166,6 +185,7 @@ func (a *Authority) Retire(generation uint64) {
 	defer a.mu.Unlock()
 	if generation > a.retiredThrough {
 		a.retiredThrough = generation
+		a.notifyLocked()
 		for _, entry := range a.paths {
 			if entry.key.generation <= generation && entry.idle != nil {
 				entry.idle.cancel()

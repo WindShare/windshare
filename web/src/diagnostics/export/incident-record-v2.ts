@@ -97,6 +97,7 @@ export type PeerFailureCodeV1 =
   | 'peer_timeout'
   | 'peer_candidates'
   | 'peer_admission'
+  | 'peer_busy'
   | 'signaling_contract'
   | 'attempt_cancelled'
   | 'runtime_stopped'
@@ -183,7 +184,7 @@ export type FailureFactV2 =
     }>>>
   | Readonly<FailureFactEnvelopeV2<'peer_failure', Readonly<{
       peer_failure: Readonly<{
-        scope: 'attempt-transient' | 'path-terminal' | 'session-terminal'
+        scope: 'attempt-transient' | 'resource-deferred' | 'path-terminal' | 'session-terminal'
         code: PeerFailureCodeV1
         retryable: boolean
       }>

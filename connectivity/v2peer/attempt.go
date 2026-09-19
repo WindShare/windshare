@@ -19,6 +19,7 @@ const (
 	failureDeliveryTimeout = 2 * time.Second
 
 	peerNegotiationFailureMessage = "Peer negotiation failed"
+	peerCapacityFailureMessage    = "Peer connection resources are busy"
 	peerTimeoutFailureMessage     = "Peer negotiation timed out"
 	peerCandidateFailureMessage   = "ICE candidate exchange failed"
 	peerCandidateLimitMessage     = "ICE candidate limit exceeded"

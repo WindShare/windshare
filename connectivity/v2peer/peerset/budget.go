@@ -21,6 +21,7 @@ const (
 	PrewarmRetention          = 30 * time.Second
 	MaximumPaths              = 8
 	ProcessAttemptCapacity    = 8
+	ResourceRetryDelay        = time.Second
 )
 
 var (
@@ -41,6 +42,12 @@ type Budget struct {
 
 func NewBudget(now time.Time) *Budget {
 	return &Budget{updated: now, attempts: AttemptsPerWindow, active: float64(ActiveTimePerWindow)}
+}
+
+func (b *Budget) refundUnstartedAttempt() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.attempts = min(AttemptsPerWindow, b.attempts+1)
 }
 
 func (b *Budget) reserve(now time.Time) (func(time.Duration), time.Duration) {

@@ -34,6 +34,7 @@ func (a *Authority) startCloseLocked(entry *pathSockets) *socketClosure {
 		a.mu.Lock()
 		delete(a.paths, entry.key)
 		a.socketCount -= entry.socketCount()
+		a.notifyLocked()
 		closing.err = err
 		close(closing.done)
 		a.mu.Unlock()
@@ -50,6 +51,7 @@ func (a *Authority) Close() error {
 	}
 	closing := &socketClosure{done: make(chan struct{})}
 	a.closing = closing
+	a.notifyLocked()
 	paths := make([]*socketClosure, 0, len(a.paths))
 	for _, entry := range a.paths {
 		paths = append(paths, a.startCloseLocked(entry))
