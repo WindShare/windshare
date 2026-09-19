@@ -127,16 +127,8 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
       onActionError: (error) => this.#publishActionError(error),
       onFailure: (error) => this.#publishActionError(error),
-      onOwnershipReleased: () => {
-        if (this.#disposed) return
-        if (this.#joined !== undefined) this.#beginSelectionProjection(this.#joined)
-        this.#publish(this.#snapshot)
-        this.#retained.load().catch(() => undefined)
-      },
-      onRetainedFileFailure: () => {
-        this.#resetReceiveOwnership(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
-          .then(() => this.#retained.load()).catch(error => this.#publishActionError(error))
-      },
+      onOwnershipReleased: () => this.#operationTransitions.ownershipReleased(),
+      onRetainedFileFailure: () => this.#operationTransitions.releaseFailedReceive(),
     })
     this.#authority = new V2AuthorityActivationCoordinator({
       receive: this.#receive,
