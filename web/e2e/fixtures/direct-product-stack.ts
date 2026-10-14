@@ -1,23 +1,17 @@
-import { execFile } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 
 import { createServer as createViteServer, type ViteDevServer } from 'vite'
 
 import { DirectProcess } from './direct-process'
+import { preparedDirectBinaryPaths, type DirectBinaryPaths } from './direct-product-binaries'
 
-const execFileAsync = promisify(execFile)
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const WEB_ROOT = join(REPOSITORY_ROOT, 'web')
-const NATIVE_CLI_EXECUTABLE = 'wind'
-const NATIVE_CLI_PACKAGE = './cmd/wind'
-const BUILD_TIMEOUT_MILLISECONDS = 60_000
-const BUILD_OUTPUT_LIMIT_BYTES = 1_000_000
 const PROCESS_READINESS_TIMEOUT_MILLISECONDS = 20_000
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 5_000
 const RELAY_LISTENING_PATTERN = /wsrelay: listening on ([^\s]+) /u
@@ -48,12 +42,6 @@ export interface DirectDirectoryEntry {
   readonly bytes: Uint8Array
 }
 
-export interface DirectBinaryPaths {
-  readonly directory: string
-  readonly relay: string
-  readonly wind: string
-}
-
 export class DirectProductStack {
   readonly #scenarioId: string
   readonly #observe: (event: DirectStackTrace) => void
@@ -81,13 +69,10 @@ export class DirectProductStack {
 
   async start(): Promise<void> {
     if (this.#rootDirectory !== undefined) throw new Error('Direct product stack already started')
+    this.#binaries = preparedDirectBinaryPaths()
     this.#rootDirectory = await mkdtemp(join(tmpdir(), 'windshare-browser-direct-'))
     try {
-      const [binaries] = await Promise.all([
-        this.#buildBinaries(),
-        this.#startWebServer(),
-      ])
-      this.#binaries = binaries
+      await this.#startWebServer()
       await this.#startRelay()
     } catch (error) {
       const cleanup = await Promise.allSettled([this.dispose()])
@@ -246,17 +231,6 @@ export class DirectProductStack {
     if (failures.length > 1) {
       throw new AggregateError(failures, 'Direct product stack cleanup failed')
     }
-  }
-
-  async #buildBinaries(): Promise<DirectBinaryPaths> {
-    const output = join(this.#requireRoot(), 'bin')
-    await mkdir(output, { recursive: true })
-    const binaries = directBinaryPaths(output)
-    await Promise.all([
-      buildGoBinary(binaries.relay, './relay/cmd/wsrelay'),
-      buildGoBinary(binaries.wind, NATIVE_CLI_PACKAGE),
-    ])
-    return binaries
   }
 
   async #startWebServer(): Promise<void> {
@@ -442,36 +416,8 @@ export function relayReceiverUrl(share: DirectShare, relayUrl?: string): string 
   return receiver.toString()
 }
 
-export function directBinaryPaths(
-  directory: string,
-  platform: NodeJS.Platform = process.platform,
-): DirectBinaryPaths {
-  if (resolve(directory) !== directory) {
-    throw new TypeError('Direct product binary directory path must be absolute and canonical')
-  }
-  return Object.freeze({
-    directory,
-    relay: join(directory, executableName('wsrelay', platform)),
-    wind: join(directory, executableName(NATIVE_CLI_EXECUTABLE, platform)),
-  })
-}
-
-async function buildGoBinary(output: string, packagePath: string): Promise<void> {
-  await execFileAsync('go', ['build', '-o', output, packagePath], {
-    cwd: REPOSITORY_ROOT,
-    env: localGoEnvironment(),
-    timeout: BUILD_TIMEOUT_MILLISECONDS,
-    windowsHide: true,
-    maxBuffer: BUILD_OUTPUT_LIMIT_BYTES,
-  })
-}
-
 function localGoEnvironment(): NodeJS.ProcessEnv {
   return { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off' }
-}
-
-function executableName(name: string, platform: NodeJS.Platform = process.platform): string {
-  return platform === 'win32' ? `${name}.exe` : name
 }
 
 function requirePathSegment(value: string, label: string): void {
