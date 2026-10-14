@@ -2,7 +2,7 @@ import { join, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { directBinaryPaths } from '../../e2e/fixtures/direct-product-stack'
+import { directBinaryPaths } from '../../e2e/fixtures/direct-product-binaries'
 
 describe('direct product-stack executable paths', () => {
   it('derives Windows executables from the invocation-private directory', () => {

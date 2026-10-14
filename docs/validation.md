@@ -36,6 +36,12 @@ receivers. `BenchmarkOpenBlock` measures the production receive path without sea
 Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 
+Browser product suites build `wind` and `wsrelay` once in Playwright global setup, using a private
+invocation directory and a 180-second preparation budget. Workers reuse the completed binaries;
+product-stack startup does not compile Go packages or download dependencies. The suite's global budget
+includes preparation, while individual product-test timeouts remain unchanged. Global teardown
+removes the binaries after the scenarios have stopped their processes.
+
 ## Go package checks
 
 The root `go.mod` owns all production Go packages. Validation obtains the full package set with
