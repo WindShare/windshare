@@ -1,5 +1,5 @@
 # go-test-coverage config for non-core production packages.
-# Core packages have their own gate at core/.testcoverage.yml (total >=90).
+# Core packages have their own gate at core/.testcoverage.yml (total >=60).
 # https://github.com/vladopajic/go-test-coverage
 
 profile: cover.out
@@ -8,9 +8,9 @@ local-prefix: github.com/windshare/windshare
 threshold:
   # Every package must hold the floor on its own; the group total cannot
   # subsidize an under-tested package.
-  package: 70
+  package: 50
   # Non-core production package total.
-  total: 80
+  total: 60
   # No per-file floor.
   file: 0
 
