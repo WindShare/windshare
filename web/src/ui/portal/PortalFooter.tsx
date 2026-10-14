@@ -1,4 +1,5 @@
 import { DiagnosticsEntry } from '../diagnostics/DiagnosticsEntry'
+import { WindShareMark } from '../brand/WindShareMark'
 
 export function PortalFooter() {
   return (
@@ -6,7 +7,7 @@ export function PortalFooter() {
       <div className="portal-container">
         <div className="portal-footer-inner">
           <div className="portal-footer-left">
-            <span className="portal-footer-brand">WindShare · 端到端加密直传</span>
+            <span className="portal-footer-brand"><WindShareMark size={28} /><span>WindShare · 端到端加密直传</span></span>
             <span className="portal-footer-note">
               所有解密操作均在您的浏览器内存中独立完成。中转节点无解密密钥，不留存任何明文数据。
             </span>

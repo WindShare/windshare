@@ -76,6 +76,7 @@
 }
 
 .portal-brand {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 12px;
@@ -84,18 +85,6 @@
   font-weight: 800;
   font-size: 1.25rem;
   letter-spacing: -0.03em;
-}
-
-.portal-brand-logo {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #10b981 0%, #047857 100%);
-  color: #fff;
-  box-shadow: 0 0 20px var(--portal-primary-glow);
-  position: relative;
 }
 
 .portal-brand-title {
@@ -754,6 +743,9 @@
 }
 
 .portal-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 800;
   font-size: 1rem;
   color: #fff;
@@ -829,5 +821,19 @@
 
   .portal-btn-resume {
     text-align: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .portal-status-badge,
+  .portal-btn-github > span {
+    display: none;
+  }
+
+  .portal-btn-github {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+    justify-content: center;
   }
 }

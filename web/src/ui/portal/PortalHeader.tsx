@@ -1,3 +1,4 @@
+import { WindShareMark } from '../brand/WindShareMark'
 import { PORTAL_SECTIONS } from './navigation'
 
 export function PortalHeader() {
@@ -5,13 +6,7 @@ export function PortalHeader() {
     <header className="portal-header">
       <div className="portal-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <a href="/" className="portal-brand" aria-label="WindShare 首页">
-          <div className="portal-brand-logo" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
-              <path d="m13 13-3 3-3-3" />
-              <path d="M10 8v8" />
-            </svg>
-          </div>
+          <WindShareMark size={44} />
           <span className="portal-brand-title">WindShare</span>
           <span className="portal-status-badge">
             <span className="portal-status-dot" aria-hidden="true" />
