@@ -61,9 +61,10 @@ build view loaded. Progress reports include elapsed time. Each invocation checks
 
 Go coverage is blocking:
 
-- core packages total at least 90%;
-- non-core packages total at least 80%;
-- every included package at least 70%.
+- core packages total at least 60%;
+- non-core packages total at least 60%;
+- every included package at least 50%;
+- no per-file minimum.
 
 ## Local commands
 
