@@ -17,6 +17,7 @@ import { ConnectionRecovery } from './connection/ConnectionRecovery'
 import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
 import { ReceiverFold } from './receiver-presentation/ReceiverFold'
+import { WindShareMark } from './brand/WindShareMark'
 import { isReceiveOutputDelivered } from './operation-ownership/completion'
 
 function KeyForm({ controller }: { readonly controller: V2ReceiverController }) {
@@ -87,7 +88,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
 
   return <main className={`receiver-shell receiver-content-${share?.kind ?? 'pending'}`}>
     <header className="receiver-header">
-      <a className="brand" href="/" aria-label="WindShare home">WindShare</a>
+      <a className="brand" href="/" aria-label="WindShare home"><WindShareMark size={36} /><span>WindShare</span></a>
       <div className="receiver-header-actions">
         <TaskDownloads tasks={tasks} snapshot={snapshot} controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
       </div>
