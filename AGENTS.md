@@ -18,7 +18,6 @@
 
 ### Go Specifics
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented. The bigger the interface, the weaker the abstraction.
-- **Hard Requirement**: CI enforces coverage with go-test-coverage over generated, disjoint package sets: **core total ≥90%, non-core total ≥80%, every package ≥70%**.
 
 ### Validation
 
