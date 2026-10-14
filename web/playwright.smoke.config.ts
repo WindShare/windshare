@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+import { DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS } from './e2e/fixtures/direct-product-binaries.ts'
+
 const SMOKE_TEST_TIMEOUT_MILLISECONDS = 80_000
 const SMOKE_HARD_TIMEOUT_MILLISECONDS = 90_000
 
@@ -13,7 +15,9 @@ export default defineConfig({
   workers: 1,
   reporter: 'line',
   timeout: SMOKE_TEST_TIMEOUT_MILLISECONDS,
-  globalTimeout: SMOKE_HARD_TIMEOUT_MILLISECONDS,
+  globalSetup: './e2e/fixtures/direct-product-setup.ts',
+  // Native preparation has its own budget, outside each product test's timeout.
+  globalTimeout: DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS + SMOKE_HARD_TIMEOUT_MILLISECONDS,
   expect: { timeout: 15_000 },
   projects: [{
     name: 'chromium',

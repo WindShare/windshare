@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+import { DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS } from './e2e/fixtures/direct-product-binaries.ts'
+
 const PROGRESSIVE_TEST_TIMEOUT_MILLISECONDS = 75_000
 const PROGRESSIVE_HARD_TIMEOUT_MILLISECONDS = 150_000
 
@@ -15,7 +17,9 @@ export default defineConfig({
   workers: 1,
   reporter: 'line',
   timeout: PROGRESSIVE_TEST_TIMEOUT_MILLISECONDS,
-  globalTimeout: PROGRESSIVE_HARD_TIMEOUT_MILLISECONDS,
+  globalSetup: './e2e/fixtures/direct-product-setup.ts',
+  // Native preparation has its own budget, outside each product test's timeout.
+  globalTimeout: DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS + PROGRESSIVE_HARD_TIMEOUT_MILLISECONDS,
   expect: { timeout: 20_000 },
   projects: [{
     name: 'chromium',
