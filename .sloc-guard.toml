@@ -59,6 +59,13 @@ max_lines = 1100
 reason = "Go tests need room for table-driven cases and fixtures"
 
 [[content.rules]]
+pattern = "**/*tests.rs"
+max_lines = 1100
+skip_comments = true
+skip_blank = false
+warn_at = 900
+
+[[content.rules]]
 pattern = "**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx}"
 max_lines = 1200
 reason = "JavaScript and TypeScript tests need room for fixtures and golden vectors"
