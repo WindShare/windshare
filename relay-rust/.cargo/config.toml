@@ -1,0 +1,3 @@
+[build]
+# Go's ./... traversal skips dot directories but does not read .gitignore.
+target-dir = ".target"

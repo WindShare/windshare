@@ -26,8 +26,8 @@ exclude = [
 # Content: SLOC (Source Lines of Code) limits
 # =============================================================================
 [content]
-# File types to analyze (Go backend + React/TS web frontend)
-extensions = ["go", "ts", "tsx", "js", "jsx"]
+# File types to analyze (Go/Rust backend + React/TS web frontend)
+extensions = ["go", "rs", "ts", "tsx", "js", "jsx"]
 max_lines = 600                           # Default max lines per file (Go and other sources)
 warn_threshold = 0.9                      # Warn at 90% of limit
 skip_comments = true                      # Don't count comment lines
@@ -79,6 +79,7 @@ warn_threshold = 0.8                      # Warn at 80% of limits (inherited by 
 # indicate production-module sprawl. Content limits above still apply.
 count_exclude = [
   "*_test.go",
+  "*_tests.rs",
   "*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx}",
   "go.mod",
   "go.sum",
@@ -88,12 +89,12 @@ count_exclude = [
 # Keeping connectivity and internal runtime packages in scope prevents test
 # infrastructure from escaping the same module boundaries as product code.
 [[structure.rules]]
-scope = "{cmd,connectivity,core,internal,relay,transport}/"
+scope = "{cmd,connectivity,core,internal,relay,relay-rust,transport}/"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
 warn_files_at = 15
-reason = "Go source: keep packages small and flat"
+reason = "Go and Rust source: keep modules small and flat"
 
 # E2E fixtures include reusable process/service infrastructure, so their modules
 # retain the same file-count limit as production code and validation scripts.

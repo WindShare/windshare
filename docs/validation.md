@@ -72,9 +72,29 @@ Go coverage is blocking:
 - every included package at least 50%;
 - no per-file minimum.
 
+## Rust relay checks
+
+`relay-rust/` is an independent Cargo workspace. Its initial `windshare-relay-core` crate uses
+`no_std` and has no runtime dependencies; native and Cloudflare adapters will be added with their
+implementations. The scaffold has no relay behavior or business tests yet.
+Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
+repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
+
+`make rust` checks formatting, denies Clippy warnings across all native targets, runs native tests
+and doctests, and builds the shared core for `wasm32-unknown-unknown`. Cargo.lock is committed and
+build/test gates use `--locked`. The Wasm build checks core portability, not Worker deployment.
+
+Install prerequisites explicitly before running local gates:
+
+```sh
+rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+```
+
+The gate uses `rustup run stable` without installation, regardless of the default toolchain.
+
 ## Local commands
 
-Run commands from the repository root. Local gates use the installed Go, Node.js, pnpm, browser, and
+Run commands from the repository root. Local gates use the installed Go, Rust, Node.js, pnpm, browser, and
 analysis tools; they do not install or update prerequisites.
 
 Keep local experiment workspaces, browser profiles, and generated file trees in `.tmp/` or the system
@@ -89,13 +109,14 @@ that field are incompatible with the current pre-release format.
 
 | Command | Runs |
 |---|---|
-| `make check` | Fast Go and Web feedback. |
+| `make check` | Fast Go, Rust, and Web feedback. |
 | `make ci` | All ordinary gates serially. |
 | `make ci-parallel` | The same gates in three bounded lanes; gopls starts immediately and progress streams live. |
 | `make ci-full` | Ordinary gates plus the weekly suites available on the current host. |
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |
 | `make vectors-update` | Regenerate protocol vectors for review. |
+| `make rust` | Rust formatting, Clippy, native tests, and shared-core Wasm build. |
 | `make web` | ESLint with two workers, TypeScript/Vite build, and Vitest with two isolated workers. |
 | `make e2e` | Critical sender, relay, and receiver process path. |
 | `make browser` | Chromium relay smoke and short browser contracts with two workers. |
@@ -107,7 +128,7 @@ that field are incompatible with the current pre-release format.
 `make ci` and `make ci-parallel` both run this ordinary gate set:
 
 ```text
-short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc
+short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
 ```
 
 Use a focused target or `make check` while iterating. Run `make ci-parallel` after final code changes.
@@ -122,6 +143,7 @@ older in-progress run for the same ref.
 | Static analysis | Hygiene, source-size checks, workflow lint, Go lint, and gopls. |
 | Non-core Go | Vet, production build, short race tests, and coverage. |
 | Core Go | Vet, short race tests, coverage, and protocol vectors. |
+| Rust relay (Linux and Windows) | The same `make rust` gate on both hosts. |
 | Web | Lint, build, and unit tests. |
 | Go E2E | Critical sender/relay/receiver process test. |
 | Chromium | Relay smoke, sustained native-size block bursts, and short browser contracts. |
