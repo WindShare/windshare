@@ -18,6 +18,8 @@ PLATFORM_TARGETS := $(filter-out $(COMPOSITE_TARGETS) $(PORTABLE_TARGETS),$(PUBL
 RUST_CARGO := rustup run stable cargo
 RUST_WORKSPACE := relay-rust
 RUST_BUILD_JOBS := 2
+RUST_COVERAGE_MIN := 60
+RUST_COVERAGE_PACKAGE_MIN := 50
 
 ifeq ($(OS),Windows_NT)
 RUN_PLATFORM_GATE = pwsh -NoLogo -NoProfile -NonInteractive -File scripts/ci/windows/$@.ps1
@@ -68,7 +70,9 @@ rust:
 	@echo "== rust =="
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) fmt --all -- --check
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy --workspace --all-targets --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
-	cd $(RUST_WORKSPACE) && $(RUST_CARGO) test --workspace --locked --jobs $(RUST_BUILD_JOBS)
+	node --test scripts/ci/rust/line-coverage.test.mjs
+	node scripts/ci/rust/check-coverage.mjs "$(RUST_WORKSPACE)" $(RUST_COVERAGE_MIN) $(RUST_COVERAGE_PACKAGE_MIN) $(RUST_BUILD_JOBS)
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) test --workspace --doc --locked --jobs $(RUST_BUILD_JOBS)
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
 	@echo "== rust: PASS =="
 

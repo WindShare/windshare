@@ -223,7 +223,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Install stable Rust and validation components
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview --target wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          check-latest: true
+      - name: Install prebuilt Rust coverage tool
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+          fallback: none
       - name: Check the Rust workspace and Wasm core
         run: make rust
 

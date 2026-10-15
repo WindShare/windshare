@@ -81,13 +81,23 @@ Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in 
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 
 `make rust` checks formatting, denies Clippy warnings across all native targets, runs native tests
-and doctests, and builds the shared core for `wasm32-unknown-unknown`. Cargo.lock is committed and
-build/test gates use `--locked`. The Wasm build checks core portability, not Worker deployment.
+with **60% workspace and 50% per-package line-coverage minimums**, runs doctests, and builds the shared core for
+`wasm32-unknown-unknown`. `cargo-llvm-cov` measures production code, excluding test directories and
+`*_tests.rs` files. An empty scaffold reports no coverable lines; test or tool failures still fail the
+gate. Coverage runs the native tests once in `.target/coverage/`, preserving compiled dependencies
+while clearing stale workspace coverage. Doctests do not contribute to coverage.
+Package coverage sums production-file line counts from the same report using Cargo workspace
+membership and manifest directories; nested packages own their own sources. Measured source files
+must live inside their package directory. There is no per-file minimum or extra test run per package.
+Cargo.lock is committed and build/test gates use `--locked`. The Wasm build checks core portability,
+not Worker deployment. GitHub enforces the same gate on Linux and Windows, installing a prebuilt
+coverage tool to avoid compiling it during CI.
 
 Install prerequisites explicitly before running local gates:
 
 ```sh
-rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview --target wasm32-unknown-unknown
+cargo install --locked cargo-llvm-cov
 ```
 
 The gate uses `rustup run stable` without installation, regardless of the default toolchain.
@@ -116,7 +126,7 @@ that field are incompatible with the current pre-release format.
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |
 | `make vectors-update` | Regenerate protocol vectors for review. |
-| `make rust` | Rust formatting, Clippy, native tests, and shared-core Wasm build. |
+| `make rust` | Rust formatting, Clippy, native coverage (60% workspace / 50% per package), doctests, and shared-core Wasm build. |
 | `make web` | ESLint with two workers, TypeScript/Vite build, and Vitest with two isolated workers. |
 | `make e2e` | Critical sender, relay, and receiver process path. |
 | `make browser` | Chromium relay smoke and short browser contracts with two workers. |
