@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "v2-session",
-  "description": "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.",
+  "description": "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.",
   "cases": [
     {
       "cases": [
@@ -202,6 +202,1093 @@
       "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
       "name": "relay-descriptor-upload-authorization",
       "registerChallengeB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+      "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
+    },
+    {
+      "cases": [
+        {
+          "name": "register-init/canonical",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": true
+        },
+        {
+          "name": "register-init/truncated",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHg==",
+          "accepted": false
+        },
+        {
+          "name": "register-init/trailing-byte",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAA",
+          "accepted": false
+        },
+        {
+          "name": "register-init/foreign-magic",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MycgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/next-wire-version",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgMAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/reserved-byte-6",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/reserved-byte-7",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAG1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/unknown-mode",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgICAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/zero-share-instance",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAAAAAJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/share-id-not-derived-from-pk-hash",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC0Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register-init/pk-hash-not-deriving-share-id",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJUKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "challenge/canonical",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": true
+        },
+        {
+          "name": "challenge/truncated",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPx",
+          "accepted": false
+        },
+        {
+          "name": "challenge/trailing-byte",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHgA=",
+          "accepted": false
+        },
+        {
+          "name": "challenge/foreign-magic",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MycQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/next-wire-version",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQMAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/reserved-byte-6",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAQABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/reserved-byte-7",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAEBAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/unknown-purpose",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIDAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/zero-id",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAAAAAAAAAAAAAAAAAAAAAAAISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/zero-nonce",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZVPxHg==",
+          "accepted": false
+        },
+        {
+          "name": "challenge/zero-expiry",
+          "frame": "WS2Q",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/canonical",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": true
+        },
+        {
+          "name": "register-proof/truncated",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ==",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/trailing-byte",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4A",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/foreign-magic",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MycAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/next-wire-version",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAMAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/reserved-byte-6",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAQAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/reserved-byte-7",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAEprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/unknown-mode",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAICAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/zero-sender-key",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPW7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "accepted": false
+        },
+        {
+          "name": "register-proof/zero-signature",
+          "frame": "WS2P",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/canonical",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": true
+        },
+        {
+          "name": "resume-credential/truncated",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/trailing-byte",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/foreign-magic",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MydAIAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/next-wire-version",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAMAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/reserved-byte-5",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIBAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/reserved-byte-6",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAQChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/reserved-byte-7",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAAGhoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+          "accepted": false
+        },
+        {
+          "name": "resume-credential/zero-token",
+          "frame": "WS2T",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/canonical",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": true
+        },
+        {
+          "name": "descriptor-upload/truncated",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotA==",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/trailing-byte",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAIA",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/foreign-magic",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MydQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/next-wire-version",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQMAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/reserved-byte-5",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIBAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/reserved-byte-6",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAQAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/reserved-byte-7",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAEAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/empty-object",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "descriptor-upload/maximum-object",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAEAAWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWg==",
+          "accepted": true
+        },
+        {
+          "name": "descriptor-upload/oversized-object",
+          "frame": "WS2U",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVQIAAAAAAEABWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          "accepted": false
+        },
+        {
+          "name": "registered/canonical",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": true
+        },
+        {
+          "name": "registered/truncated",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPQ==",
+          "accepted": false
+        },
+        {
+          "name": "registered/trailing-byte",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZYA",
+          "accepted": false
+        },
+        {
+          "name": "registered/foreign-magic",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyawIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/next-wire-version",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwMAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/reserved-byte-5",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/reserved-byte-6",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/reserved-byte-7",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAG1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/zero-share-id",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAAAAAAAAAAAAAAAAABAQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "registered/zero-share-instance",
+          "frame": "WS2K",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MySwIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAAAAAQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/canonical",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": true
+        },
+        {
+          "name": "stop-init/truncated",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9w",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/trailing-byte",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQA=",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/foreign-magic",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyeAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/next-wire-version",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAMAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/reserved-byte-5",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/reserved-byte-6",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/reserved-byte-7",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAG1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/zero-share-instance",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAAAAAJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/zero-relay-identity",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/zero-stop-id",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAAAAAAAAAAAAAAAAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "stop-init/share-id-not-derived-from-pk-hash",
+          "frame": "WS2X",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyWAIAAAC0Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/canonical",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": true
+        },
+        {
+          "name": "stop-proof/truncated",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNw==",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/trailing-byte",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwcA",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/foreign-magic",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MydgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/next-wire-version",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgMAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/reserved-byte-5",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/reserved-byte-6",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAQAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/reserved-byte-7",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAEprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/zero-sender-key",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "accepted": false
+        },
+        {
+          "name": "stop-proof/zero-signature",
+          "frame": "WS2V",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "stopped/canonical",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAABiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": true
+        },
+        {
+          "name": "stopped/truncated",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAABiY2RlZmdoaWprbG1ub3A=",
+          "accepted": false
+        },
+        {
+          "name": "stopped/trailing-byte",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAABiY2RlZmdoaWprbG1ub3BxAA==",
+          "accepted": false
+        },
+        {
+          "name": "stopped/foreign-magic",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyeQIAAABiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": false
+        },
+        {
+          "name": "stopped/next-wire-version",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQMAAABiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": false
+        },
+        {
+          "name": "stopped/reserved-byte-5",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIBAABiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": false
+        },
+        {
+          "name": "stopped/reserved-byte-6",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAQBiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": false
+        },
+        {
+          "name": "stopped/reserved-byte-7",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAAFiY2RlZmdoaWprbG1ub3Bx",
+          "accepted": false
+        },
+        {
+          "name": "stopped/zero-stop-id",
+          "frame": "WS2Y",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyWQIAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/canonical",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAsAAAAA",
+          "accepted": true
+        },
+        {
+          "name": "error/truncated",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAsAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "error/trailing-byte",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAsAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "error/foreign-magic",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyZQIAAAsAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/next-wire-version",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQMAAAsAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/reserved-byte-5",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIBAAsAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/unknown-code-zero",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/unknown-code-after-last",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAA0AAAAA",
+          "accepted": false
+        },
+        {
+          "name": "error/retry-on-permanent-refusal",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAsAAAPo",
+          "accepted": false
+        },
+        {
+          "name": "error/retry-beyond-limit",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAoAAHUx",
+          "accepted": false
+        },
+        {
+          "name": "error/retry-at-limit",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAAoAAHUw",
+          "accepted": true
+        }
+      ],
+      "name": "relay-control-frame-decoding"
+    },
+    {
+      "cases": [
+        {
+          "name": "fresh-at-last-live-second",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": true
+        },
+        {
+          "name": "fresh-at-expiry",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "resume-at-last-live-second",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt18a0HprP1KF0j+XLm+UeK+ZKT9TYOjNiJA/ZU1cHNu7o93/vZUVwtgvLcQ5Ry620mnZzLcEPGvN3zUErUi/5xwc=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": true
+        },
+        {
+          "name": "fresh-proof-claims-resume",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-proof-claims-fresh",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt18a0HprP1KF0j+XLm+UeK+ZKT9TYOjNiJA/ZU1cHNu7o93/vZUVwtgvLcQ5Ry620mnZzLcEPGvN3zUErUi/5xwc=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-answers-resume-challenge",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 1,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-answers-register-challenge",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt18a0HprP1KF0j+XLm+UeK+ZKT9TYOjNiJA/ZU1cHNu7o93/vZUVwtgvLcQ5Ry620mnZzLcEPGvN3zUErUi/5xwc=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-with-resume-domain",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt14X1rP5oYov+WKq1KKrGGhUN6IZc8197mcC1M3BSX7Dpl9Mhdvwj4NUgN2tBk8DDKqAlYi2w/PV4/eys1846JAc=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-signed-with-register-domain",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1wwUzvBJGWSb3TrXJ4DeZ3D0EjSpOv1BtMY8LNJ8RqY5XjlQJpShKSOvo8gD+xB6+Qvj595GJadMUnWoSlHq/A8=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-for-another-relay",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt17fWR1oe/1NhIEMZaRgMZ5Kh/gk2/BCD9BoF/HvUEKCrtgbmtO7eUjTX4sIQa0aHXhbdmp8obA7XP8+DhEpPeQw=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-by-foreign-key",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAACMpjFFkHoubF+z3AeRwBibglLaPkFDcEs7LKTlJvJd0V+on8UdAoQ6Fop9iR2+NTuRMQRltzCKQZwQl/Vqanhlhah9VVav2aDdISdHDgCv3JMpRH9rSWpBc3BgkbzMiwY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signature-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/S7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-share-instance-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5BQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-descriptor-digest-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEIOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-resume-token-hash-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2WysMvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-id-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AAIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-nonce-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ICIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-expiry-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-replays-stop-signature",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "stop-at-last-live-second",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": true
+        },
+        {
+          "name": "stop-at-expiry",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000032",
+          "authenticated": false
+        },
+        {
+          "name": "stop-answers-register-challenge",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 0,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-addressed-to-another-relay",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJesO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1zJDTCkP3H7Swr+phpTd7snLDvAZVfDwXxT7fiMiSqv0evgxjKjDkBKoihl5cFu/nvBQBZnMbt75HpNwLQrUcQg=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-id-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdY2NkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-share-instance-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5BQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-challenge-nonce-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "g4OEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-signed-by-foreign-key",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAACMpjFFkHoubF+z3AeRwBibglLaPkFDcEs7LKTlJvJd0fbzroGjXBzrr39+QdUtPOY8rZ+xYjwaxuj9soIycMyb0YW8+uckbqs8ZgDw2kogYyChQgMcO5Emek1TSspJTQ4=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-signature-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+mjZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-replays-registration-signature",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        }
+      ],
+      "name": "relay-control-proof-authentication",
       "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
     },
     {
