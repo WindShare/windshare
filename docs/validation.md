@@ -74,9 +74,9 @@ Go coverage is blocking:
 
 ## Rust relay checks
 
-`relay-rust/` is an independent Cargo workspace. Its initial `windshare-relay-core` crate uses
-`no_std` and has no runtime dependencies; native and Cloudflare adapters will be added with their
-implementations. The scaffold has no relay behavior or business tests yet.
+`relay-rust/` is an independent Cargo workspace. Its `windshare-relay-core` crate uses `no_std`,
+with no I/O or async runtime dependencies. Sender-key and signature checks consume the shared
+Go/browser Ed25519 acceptance vectors. Control workflows and platform adapters are not implemented yet.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 
