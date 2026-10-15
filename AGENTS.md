@@ -19,6 +19,12 @@
 ### Go Specifics
 - **Accept Interfaces, Return Structs**: Define interfaces where they are used (consumer side), not where they are implemented. The bigger the interface, the weaker the abstraction.
 
+### Rust Specifics
+- **Prefer Static Dispatch**: Use Generics and Trait Bounds over Trait Objects (e.g., `Box<dyn Trait>`) to leverage monomorphization and compiler optimizations, unless runtime polymorphism is strictly necessary.
+- **Make Illegal States Unrepresentable**: Use Enums with associated data to model state machines, rather than Structs with many optional fields.
+- **Separate Tests from Code**: Tests in `*_tests.rs`; prefer `#[path="..."] mod ...;` over `pub(crate)` for test access.
+
+
 ### Validation
 
 - `make <gate>` or `make check` or `make ci-parallel`. Local gates use installed prerequisites.
