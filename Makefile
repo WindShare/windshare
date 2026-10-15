@@ -5,12 +5,19 @@ override GOTOOLCHAIN := local
 override GOWORK := off
 export GOTOOLCHAIN GOWORK
 
-PUBLIC_TARGETS := ci ci-parallel ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors vectors-update web e2e browser browser-weekly gopls long-go
+PUBLIC_TARGETS := ci ci-parallel ci-full check hygiene sloc workflow-lint lint vet short-go race coverage vectors vectors-update rust web e2e browser browser-weekly gopls long-go
 include scripts/ci/ci-gates.mk
 
 INTERNAL_TARGETS := browser-weekly-supplement $(CI_PARALLEL_LANES)
 COMPOSITE_TARGETS := ci ci-parallel ci-full browser-weekly $(CI_PARALLEL_LANES)
-PLATFORM_TARGETS := $(filter-out $(COMPOSITE_TARGETS),$(PUBLIC_TARGETS) $(INTERNAL_TARGETS))
+PORTABLE_TARGETS := rust
+PLATFORM_TARGETS := $(filter-out $(COMPOSITE_TARGETS) $(PORTABLE_TARGETS),$(PUBLIC_TARGETS) $(INTERNAL_TARGETS))
+
+# rustup run fails when stable is missing instead of installing it during a gate.
+# Bound Cargo workers because two other CI lanes can be active at the same time.
+RUST_CARGO := rustup run stable cargo
+RUST_WORKSPACE := relay-rust
+RUST_BUILD_JOBS := 2
 
 ifeq ($(OS),Windows_NT)
 RUN_PLATFORM_GATE = pwsh -NoLogo -NoProfile -NonInteractive -File scripts/ci/windows/$@.ps1
@@ -49,6 +56,21 @@ ci-full: ci long-go browser-weekly-supplement
 
 browser-weekly: browser browser-weekly-supplement
 	@echo "browser-weekly: all gates passed"
+
+check: rust
+
+# Cargo owns its bounded workers; MSYS Make's jobserver handles cannot be used by
+# native Windows Cargo. Keep scheduler state out of this leaf gate on both hosts.
+rust: private export MAKEFLAGS :=
+rust: private export MFLAGS :=
+rust: private export CARGO_MAKEFLAGS :=
+rust:
+	@echo "== rust =="
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) fmt --all -- --check
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy --workspace --all-targets --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) test --workspace --locked --jobs $(RUST_BUILD_JOBS)
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
+	@echo "== rust: PASS =="
 
 $(PLATFORM_TARGETS):
 	$(RUN_PLATFORM_GATE)

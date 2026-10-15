@@ -1,0 +1,10 @@
+[package]
+name = "windshare-relay-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Transport-independent WindShare relay control semantics"
+
+[lints]
+workspace = true

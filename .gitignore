@@ -62,6 +62,10 @@ web/dist/*
 # Release build output (cross-compiled binaries)
 dist/
 
+# Rust relay workspace build output; Cargo.lock remains versioned.
+/relay-rust/.target/
+/relay-rust/target/
+
 config.yaml
 cmd/switch-a/config.yaml
 tmpclaude-*

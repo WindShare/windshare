@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 # A newer run for the same branch or pull request makes the older result stale,
-# while unrelated refs keep all seven validation lanes available in parallel.
+# while unrelated refs keep all validation lanes available in parallel.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -209,6 +209,23 @@ jobs:
           --profile="$RUNNER_TEMP/core.cover.out" --source-dir=core
       - name: Verify protocol vectors once
         run: make vectors
+
+  rust:
+    name: Rust relay (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install stable Rust and validation components
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+      - name: Check the Rust workspace and Wasm core
+        run: make rust
 
   web:
     name: Web application
