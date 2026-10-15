@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/senderobject"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -293,7 +291,7 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := registry.Publish(
-		fixture.init.ShareID, sender.ref, verifiedEndpointDescriptor(t, fixture),
+		fixture.init.ShareID, sender.ref, authorizedEndpointDescriptor(t, fixture),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +471,7 @@ func TestSenderCleanupRetiresReceiverBeforeEndpointSessionPublication(t *testing
 	if err := registry.BeginRegistration(fixture.init, sender.ref); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender.ref, verifiedEndpointDescriptor(t, fixture)); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender.ref, authorizedEndpointDescriptor(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	joined, err := registry.Join(fixture.init.ShareID, receiver.ref)
@@ -516,7 +514,7 @@ func TestReceiverSessionActivationClosesJoinStopRaceWithoutStaleMembership(t *te
 		if err := registry.BeginRegistration(fixture.init, sender.ref); err != nil {
 			t.Fatal(err)
 		}
-		if err := registry.Publish(fixture.init.ShareID, sender.ref, verifiedEndpointDescriptor(t, fixture)); err != nil {
+		if err := registry.Publish(fixture.init.ShareID, sender.ref, authorizedEndpointDescriptor(t, fixture)); err != nil {
 			t.Fatal(err)
 		}
 		sender.setRole(roleSender, fixture.init.ShareID)
@@ -599,7 +597,7 @@ func TestConcurrentResumeLoserCleanupCannotEraseWinnerOrStopAuthority(t *testing
 	if err := registry.BeginRegistration(fixture.init, oldSender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, oldSender, verifiedEndpointDescriptor(t, fixture)); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, oldSender, authorizedEndpointDescriptor(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if _, transitioned := registry.UnexpectedDisconnect(fixture.init.ShareID, oldSender); !transitioned {
@@ -914,20 +912,12 @@ func newEndpointFixture(t *testing.T) endpointFixture {
 	}
 	fixture.init.Mode = v2.RegistrationFresh
 	fixture.init.ResumeTokenHash = sha256.Sum256(fixture.token[:])
-	info := append([]byte("windshare/v2 descriptor\x00"), fixture.init.PKHash[:]...)
-	key, err := hkdf.Key(sha256.New, bytes.Repeat([]byte{0x11}, 16), nil, string(info), 32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.descriptor, err = sealDescriptor(fixture.init, key, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture.descriptor = []byte("opaque descriptor: endpoint fixture")
 	fixture.init.DescriptorDigest = sha256.Sum256(fixture.descriptor)
 	return fixture
 }
 
-func verifiedEndpointDescriptor(t *testing.T, fixture endpointFixture) v2.VerifiedDescriptor {
+func authorizedEndpointDescriptor(t *testing.T, fixture endpointFixture) v2.AuthorizedDescriptorUpload {
 	t.Helper()
 	endpoint, err := v2.NormalizeRelayEndpoint("https://relay.example/unit-authority")
 	if err != nil {
@@ -958,13 +948,13 @@ func verifiedEndpointDescriptor(t *testing.T, fixture endpointFixture) v2.Verifi
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, err := v2.VerifyDescriptorUpload(
+	authorized, err := v2.AuthorizeDescriptorUpload(
 		fixture.init, authority, v2.DescriptorUpload{Object: fixture.descriptor},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return verified
+	return authorized
 }
 
 func endpointStop(t *testing.T, fixture endpointFixture) (v2.StopInit, v2.StopAuthority) {
@@ -1035,13 +1025,4 @@ func endpointResumeAuthority(
 		t.Fatal(err)
 	}
 	return authority
-}
-
-func sealDescriptor(init v2.RegisterInit, key []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
-	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
-	if err != nil {
-		return nil, err
-	}
-	return senderobject.Seal(binding, key, privateKey,
-		bytes.Repeat([]byte{0x18}, senderobject.NonceBytes), []byte{0xa1, 0x00, 0x01})
 }

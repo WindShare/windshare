@@ -193,7 +193,7 @@ func (s *Server) newConnection(socket BinaryConnection, cancel context.CancelFun
 }
 
 // Serve owns the complete connection role transition. Registration attempts
-// stay invisible until descriptor verification and Registry.Publish both pass.
+// stay invisible until descriptor upload authorization and Registry.Publish both pass.
 func (s *Server) Serve(ctx context.Context, socket BinaryConnection) error {
 	if s == nil || socket == nil {
 		return ErrConfig
@@ -318,7 +318,8 @@ func (s *Server) serveFreshRegistration(ctx context.Context, peer *connection, i
 	if err != nil {
 		return ErrProtocol
 	}
-	descriptor, err := v2.VerifyDescriptorUpload(init, authority, upload)
+	descriptor, err := v2.AuthorizeDescriptorUpload(init, authority, upload)
+	s.traceAdmission(peer, v2.RelaySessionID{}, admissionDescriptorUpload, admissionOutcome(ctx, err))
 	if err != nil {
 		return ErrProtocol
 	}
