@@ -140,7 +140,12 @@ type StopAuthority struct {
 	valid      bool
 }
 
-func authenticateStopProof(init StopInit, challenge Challenge, proof StopProof, now time.Time) (StopAuthority, error) {
+// authenticateStopProof requires STOP_INIT to name this relay: the sender signs
+// that identity, so a proof answered for one relay cannot retire the share on another.
+func authenticateStopProof(init StopInit, challenge Challenge, relayIdentity RelayIdentity, proof StopProof, now time.Time) (StopAuthority, error) {
+	if subtle.ConstantTimeCompare(init.RelayIdentity[:], relayIdentity[:]) != 1 {
+		return StopAuthority{}, ErrIdentity
+	}
 	if !challengeAlive(challenge, now) {
 		return StopAuthority{}, ErrChallengeExpired
 	}

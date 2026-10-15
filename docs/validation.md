@@ -76,7 +76,8 @@ Go coverage is blocking:
 
 `relay-rust/` is an independent Cargo workspace. Its `windshare-relay-core` crate uses `no_std`,
 with no I/O or async runtime dependencies. Sender-key and signature checks consume the shared
-Go/browser Ed25519 acceptance vectors. Control workflows and platform adapters are not implemented yet.
+Go/browser Ed25519 acceptance vectors; REGISTER/RESUME/STOP frames, preimages, proofs and refusals
+consume `v2-session.json`. The control state machine and platform adapters are not implemented yet.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 

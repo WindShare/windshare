@@ -1,6 +1,6 @@
 # Cloudflare 原生中转与 Rust 统一计划
 
-状态：Rust 工作区、严格发送者验签与共享接受向量已实现；中转控制语义和平台适配器待实现
+状态：Rust 工作区、严格发送者验签、REGISTER／RESUME／STOP 控制帧与证明认证已实现；控制状态机和平台适配器待实现
 最后更新：2026-10-15
 
 ## 目的
@@ -69,9 +69,9 @@ Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方�
 
 ## 实施起点
 
-`relay-rust/` 是独立 Cargo workspace，首个 crate 为 `no_std`、无 I/O 和异步运行时依赖的 `windshare-relay-core`。`sender_auth::SenderPublicKey` 已实现严格公钥检查与验签，直接复用 Go／浏览器的 `ed25519-acceptance.json`；公钥合法不代表持有私钥或获得中转操作权限。控制协议和两个平台适配器随实际实现逐步加入。
+`relay-rust/` 是独立 Cargo workspace，首个 crate 为 `no_std`、无 I/O 和异步运行时依赖的 `windshare-relay-core`。`sender_auth::SenderPublicKey` 已实现严格公钥检查与验签，直接复用 Go／浏览器的 `ed25519-acceptance.json`；公钥合法不代表持有私钥或获得中转操作权限。`registration`、`stop` 与 `descriptor_upload` 解码中转收到的控制帧并编码其回复；认证消费一次性 challenge，把发送者证明转为不可复制的授权，上传授权只核对已签名摘要。字节布局、签名原文与拒绝规则由 `v2-session.json` 的共享向量约束。
 
-`make rust` 检查格式、Clippy、原生测试和内核 Wasm 构建，接入 `make check`、`make ci`、`make ci-parallel` 及 Linux/Windows GitHub CI。本地前置工具与门禁职责见 [validation.md](validation.md#rust-relay-checks)。下一步实现 REGISTER／RESUME／STOP 编解码、签名原文和共享证明向量，再推进控制状态机与平台宿主。
+`make rust` 检查格式、Clippy、原生测试和内核 Wasm 构建，接入 `make check`、`make ci`、`make ci-parallel` 及 Linux/Windows GitHub CI。本地前置工具与门禁职责见 [validation.md](validation.md#rust-relay-checks)。下一步实现控制状态机：challenge 签发与有界账本、注册／恢复／STOP 生命周期和永久停止记录，再推进平台宿主。
 
 ## 目标架构
 

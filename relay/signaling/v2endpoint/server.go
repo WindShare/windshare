@@ -486,6 +486,8 @@ func (s *Server) activateReceiverSession(
 
 func (s *Server) serveStop(ctx context.Context, peer *connection, first []byte) error {
 	init, err := v2.ParseStopInit(first)
+	// Authentication enforces the relay identity again; refusing here first
+	// keeps misaddressed STOPs from spending challenge capacity.
 	if err != nil || !bytes.Equal(init.RelayIdentity[:], s.relayIdentity[:]) {
 		return ErrProtocol
 	}
@@ -509,7 +511,7 @@ func (s *Server) serveStop(ctx context.Context, peer *connection, first []byte) 
 	if err != nil {
 		return ErrProtocol
 	}
-	authority, err := s.challenges.AuthenticateStop(challenge.ID, init, proof)
+	authority, err := s.challenges.AuthenticateStop(challenge.ID, init, s.relayIdentity, proof)
 	if err != nil {
 		return ErrProtocol
 	}

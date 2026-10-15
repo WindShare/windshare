@@ -154,59 +154,6 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 	}
 }
 
-func TestRegisterAndStopProofsRejectEveryIdentitySubstitution(t *testing.T) {
-	init, challenge, relayIdentity, privateKey := frozenRegistration(t)
-	proof, _ := NewRegisterProof(init, challenge, relayIdentity, privateKey)
-	tests := []func(RegisterInit, Challenge, RelayIdentity, RegisterProof) error{
-		func(value RegisterInit, c Challenge, relay RelayIdentity, p RegisterProof) error {
-			value.ShareInstance[0] ^= 1
-			_, err := authenticateRegisterProof(value, c, relay, p, time.Unix(1_700_000_000, 0))
-			return err
-		},
-		func(value RegisterInit, c Challenge, relay RelayIdentity, p RegisterProof) error {
-			value.DescriptorDigest[0] ^= 1
-			_, err := authenticateRegisterProof(value, c, relay, p, time.Unix(1_700_000_000, 0))
-			return err
-		},
-		func(value RegisterInit, c Challenge, relay RelayIdentity, p RegisterProof) error {
-			c.Nonce[0] ^= 1
-			_, err := authenticateRegisterProof(value, c, relay, p, time.Unix(1_700_000_000, 0))
-			return err
-		},
-		func(value RegisterInit, c Challenge, relay RelayIdentity, p RegisterProof) error {
-			relay[0] ^= 1
-			_, err := authenticateRegisterProof(value, c, relay, p, time.Unix(1_700_000_000, 0))
-			return err
-		},
-	}
-	for index, test := range tests {
-		if err := test(init, challenge, relayIdentity, proof); !errors.Is(err, ErrProof) {
-			t.Fatalf("registration substitution %d error = %v", index, err)
-		}
-	}
-	if _, err := authenticateRegisterProof(init, challenge, relayIdentity, proof, time.Unix(int64(challenge.ExpiresAtUnixSeconds), 0)); !errors.Is(err, ErrChallengeExpired) {
-		t.Fatalf("expiry boundary error = %v", err)
-	}
-
-	var stop StopInit
-	stop.ShareID, stop.ShareInstance, stop.PKHash, stop.RelayIdentity = init.ShareID, init.ShareInstance, init.PKHash, relayIdentity
-	copy(stop.StopID[:], testSequence(0x62, StopIDBytes))
-	stopChallenge := challenge
-	stopChallenge.Purpose = ChallengeStop
-	stopProof, err := NewStopProof(stop, stopChallenge, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stopAuthority, err := authenticateStopProof(stop, stopChallenge, stopProof, time.Unix(1_700_000_000, 0))
-	if err != nil || !stopAuthority.Authorizes(stop) {
-		t.Fatal(err)
-	}
-	stop.StopID[0] ^= 1
-	if _, err := authenticateStopProof(stop, stopChallenge, stopProof, time.Unix(1_700_000_000, 0)); !errors.Is(err, ErrProof) {
-		t.Fatalf("stop ID substitution error = %v", err)
-	}
-}
-
 func TestOpaqueRouteExposesOnlyRouteAndCiphertextLength(t *testing.T) {
 	var session RelaySessionID
 	copy(session[:], testSequence(1, RelaySessionIDBytes))
@@ -329,42 +276,18 @@ func TestChallengeLedgerIsTheOnlyAuthorityMint(t *testing.T) {
 	})
 	stopChallenge, _ := stopLedger.Issue(ChallengeStop, stopBinding)
 	stopProof, _ := NewStopProof(stop, stopChallenge, privateKey)
-	stopAuthority, err := stopLedger.AuthenticateStop(stopChallenge.ID, stop, stopProof)
+	stopAuthority, err := stopLedger.AuthenticateStop(stopChallenge.ID, stop, relay, stopProof)
 	if err != nil || !stopAuthority.Authorizes(stop) {
 		t.Fatalf("stop authority = %+v, %v", stopAuthority, err)
 	}
 }
 
-func TestVariableAndControlFramesRejectReservedTrailingAndLengthAliases(t *testing.T) {
-	init, challenge, _, _ := frozenRegistration(t)
-	cases := [][]byte{}
-	initBytes, _ := init.MarshalBinary()
-	challengeBytes, _ := challenge.MarshalBinary()
-	cases = append(cases, initBytes, challengeBytes)
-	for _, valid := range cases {
-		hostile := bytes.Clone(valid)
-		hostile[7] = 1
-		if bytes.Equal(valid[:4], []byte("WS2R")) {
-			if _, err := ParseRegisterInit(hostile); err == nil {
-				t.Fatal("REGISTER_INIT reserved bit accepted")
-			}
-		} else if _, err := ParseChallenge(hostile); err == nil {
-			t.Fatal("challenge reserved bit accepted")
-		}
-	}
-	upload := DescriptorUpload{Object: bytes.Repeat([]byte{1}, 100)}
-	encoded, _ := upload.MarshalBinary()
-	if _, err := ParseDescriptorUpload(append(encoded, 0)); err == nil {
-		t.Fatal("descriptor trailing byte accepted")
-	}
+// Decoder refusals live in the shared control vectors; these encoder-side
+// refusals are Go API behavior that no other runtime reproduces.
+func TestEncodersRefuseOversizedDescriptorsAndPermanentRetryHints(t *testing.T) {
 	tooLarge := DescriptorUpload{Object: make([]byte, MaxDescriptorBytes+1)}
 	if _, err := tooLarge.MarshalBinary(); err == nil {
 		t.Fatal("oversized descriptor accepted")
-	}
-	errorFrame := ErrorFrame{Code: ErrorStopped}
-	errorBytes, _ := errorFrame.MarshalBinary()
-	if parsed, err := ParseError(errorBytes); err != nil || parsed.Code != ErrorStopped || parsed.RetryAfter != 0 {
-		t.Fatalf("stopped error = %+v, %v", parsed, err)
 	}
 	if _, err := (ErrorFrame{Code: ErrorStopped, RetryAfter: time.Second}).MarshalBinary(); err == nil {
 		t.Fatal("permanent stopped error carried retry-after")
@@ -522,22 +445,9 @@ func TestFixedIdentityDecodersRejectWidthsAndCopyInput(t *testing.T) {
 	}
 }
 
-func TestResumePurposeAndStopBindingAreDistinct(t *testing.T) {
-	init, challenge, relay, privateKey := frozenRegistration(t)
+func TestStopAndRegistrationChallengeBindingsAreDistinct(t *testing.T) {
+	init, _, relay, _ := frozenRegistration(t)
 	init.Mode = RegistrationResume
-	challenge.Purpose = ChallengeResume
-	proof, err := NewRegisterProof(init, challenge, relay, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authenticateRegisterProof(init, challenge, relay, proof, time.Unix(1_700_000_000, 0)); err != nil {
-		t.Fatal(err)
-	}
-	freshChallenge := challenge
-	freshChallenge.Purpose = ChallengeRegister
-	if _, err := authenticateRegisterProof(init, freshChallenge, relay, proof, time.Unix(1_700_000_000, 0)); !errors.Is(err, ErrPurpose) {
-		t.Fatalf("cross-purpose proof error = %v", err)
-	}
 	var stop StopInit
 	stop.ShareID, stop.ShareInstance, stop.PKHash, stop.RelayIdentity = init.ShareID, init.ShareInstance, init.PKHash, relay
 	copy(stop.StopID[:], testSequence(0x71, StopIDBytes))

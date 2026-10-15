@@ -1,7 +1,7 @@
 # Cross-runtime protocol vectors
 
-This directory freezes byte-level contracts shared by Go and TypeScript, with Rust
-also consuming the sender-signature acceptance contract. Go is the generation authority
+This directory freezes byte-level contracts shared by Go and TypeScript, with the Rust
+relay also consuming the sender-signature acceptance and relay control contracts. Go is the generation authority
 for generated protocol vectors; Web tests reconstruct them through public TypeScript codecs.
 
 ## Generate and verify
@@ -58,7 +58,9 @@ Other generated v2 files retain sender objects, sessions, fragmentation,
 identity, and peer signaling. `v2-identity.json` also checks compact link generation
 and origin-based relay resolution against the browser parser. `v2-session.json` includes relay connection probes,
 acknowledgements, stale resume errors, and independent frame/byte credit deltas for
-both relay directions alongside registration and session bytes.
+both relay directions alongside registration and session bytes. Its relay control cases list
+every decoder refusal and proof-authentication boundary for REGISTER, RESUME and STOP. Go,
+browser and Rust decoders share the frame decisions; Go and Rust relays share the proof decisions.
 Peer signaling schema 2 includes monotonic attempt
 sequences, the closed peer reason-to-recovery-scope mapping, and signed
 session-bound path controls. Path-control schema 2 also binds an opaque provider
