@@ -1,8 +1,8 @@
 # Cross-runtime protocol vectors
 
-This directory freezes byte-level contracts shared by Go and TypeScript. Go is
-the generation authority; Web tests reconstruct the same values through public
-TypeScript codecs.
+This directory freezes byte-level contracts shared by Go and TypeScript, with Rust
+also consuming the sender-signature acceptance contract. Go is the generation authority
+for generated protocol vectors; Web tests reconstruct them through public TypeScript codecs.
 
 ## Generate and verify
 
@@ -16,6 +16,12 @@ Use `make vectors` for non-mutating verification. `inventory.txt` is the exact,
 sorted JSON allowlist, and Go tests reject missing or extra files.
 
 ## Inventory
+
+Sender authentication:
+
+- `ed25519-acceptance.json`: independent public-key and signature acceptance decisions,
+  including noncanonical, small-order and mixed-order inputs. Go and browser tests and
+  `make rust` consume the same file; Rust checks key construction separately from signatures.
 
 Cross-runtime diagnostic contracts:
 

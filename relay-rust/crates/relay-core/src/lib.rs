@@ -4,3 +4,5 @@
 //! platform limits and I/O mechanisms cannot become implicit control decisions.
 
 #![no_std]
+
+pub mod sender_auth;
