@@ -7,7 +7,8 @@
 
 use crate::{
     authentication::{AuthenticationError, SenderProof},
-    challenge::{Challenge, ChallengePurpose, UnixSeconds},
+    challenge::{Challenge, ChallengePurpose},
+    clock::UnixMillis,
     descriptor_upload::{AuthorizedDescriptor, DescriptorDigestMismatch, DescriptorUpload},
     identifiers::{
         DescriptorDigest, RelayIdentity, ResumeToken, ResumeTokenHash, ShareId, ShareInstance,
@@ -16,7 +17,7 @@ use crate::{
     wire::{FrameError, Magic, Writer, open_discriminated, open_reserved},
 };
 
-const REGISTER_INIT_MAGIC: Magic = *b"WS2R";
+pub(crate) const REGISTER_INIT_MAGIC: Magic = *b"WS2R";
 const REGISTER_PROOF_MAGIC: Magic = *b"WS2P";
 const RESUME_CREDENTIAL_MAGIC: Magic = *b"WS2T";
 const REGISTERED_MAGIC: Magic = *b"WS2K";
@@ -266,7 +267,7 @@ pub fn authenticate_registration(
     challenge: Challenge,
     relay: &RelayIdentity,
     proof: &RegisterProof,
-    now: UnixSeconds,
+    now: UnixMillis,
 ) -> Result<RegistrationAuthority, AuthenticationError> {
     if challenge.purpose() != init.mode.challenge_purpose() {
         return Err(AuthenticationError::PurposeMismatch);

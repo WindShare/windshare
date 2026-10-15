@@ -641,6 +641,69 @@
           "accepted": false
         },
         {
+          "name": "join/canonical",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": true
+        },
+        {
+          "name": "join/truncated",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlQ==",
+          "accepted": false
+        },
+        {
+          "name": "join/trailing-byte",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4A",
+          "accepted": false
+        },
+        {
+          "name": "join/foreign-magic",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyagIAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/next-wire-version",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgMAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-5",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIBAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-6",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAQC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-7",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAG1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/zero-share-id",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAAAAAAAAAAAAAAAAAA=",
+          "accepted": false
+        },
+        {
           "name": "stop-init/canonical",
           "frame": "WS2X",
           "direction": "client-to-relay",

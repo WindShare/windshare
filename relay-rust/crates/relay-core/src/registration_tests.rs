@@ -12,7 +12,7 @@ use crate::{
     challenge::ChallengePurpose,
     descriptor_upload::DescriptorUpload,
     test_vectors::{
-        Decimal, array, bytes, challenge, last_live_second, relay_identity, session_case,
+        Decimal, array, bytes, challenge, last_live_instant, relay_identity, session_case,
     },
 };
 
@@ -99,7 +99,7 @@ fn fresh_registration_reproduces_shared_bytes_and_publishes_its_descriptor() {
     );
 
     let proof = RegisterProof::decode(&bytes(&vector.register_proof_b64)).expect("shared WS2P");
-    let now = last_live_second(&challenge);
+    let now = last_live_instant(&challenge);
     let registration = match authenticate_registration(init, challenge, &relay, &proof, now) {
         Ok(RegistrationAuthority::Fresh(registration)) => registration,
         outcome => panic!("fresh proof must mint fresh authority: {outcome:?}"),
@@ -139,7 +139,7 @@ fn resume_reproduces_shared_bytes_and_presents_its_committed_token() {
     );
 
     let proof = RegisterProof::decode(&bytes(&vector.resume_proof_b64)).expect("shared WS2P");
-    let now = last_live_second(&challenge);
+    let now = last_live_instant(&challenge);
     match authenticate_registration(init, challenge, &relay, &proof, now) {
         Ok(RegistrationAuthority::Resume(registration)) => assert_eq!(registration.init(), &init),
         outcome => panic!("resume proof must mint resume authority: {outcome:?}"),
@@ -172,7 +172,7 @@ fn descriptor_authorization_depends_only_on_the_committed_digest() {
             case.name
         );
         let proof = RegisterProof::decode(&bytes(&case.register_proof_b64)).expect("shared WS2P");
-        let now = last_live_second(&challenge);
+        let now = last_live_instant(&challenge);
         let Ok(RegistrationAuthority::Fresh(authority)) =
             authenticate_registration(init, challenge, &relay, &proof, now)
         else {

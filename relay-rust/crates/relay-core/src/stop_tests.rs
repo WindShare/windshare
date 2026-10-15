@@ -8,7 +8,7 @@ use super::{StopInit, StopProof, Stopped, authenticate_stop};
 use crate::{
     challenge::ChallengePurpose,
     test_vectors::{
-        Decimal, array, bytes, challenge, last_live_second, relay_identity, session_case,
+        Decimal, array, bytes, challenge, last_live_instant, relay_identity, session_case,
     },
 };
 
@@ -55,7 +55,7 @@ fn stop_reproduces_shared_bytes_and_authority() {
     );
 
     let proof = StopProof::decode(&bytes(&vector.stop_proof_b64)).expect("shared WS2V");
-    let now = last_live_second(&challenge);
+    let now = last_live_instant(&challenge);
     let authority =
         authenticate_stop(init, challenge, &relay, &proof, now).expect("shared STOP proof");
     assert_eq!(authority.init(), &init);
