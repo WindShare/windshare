@@ -140,7 +140,7 @@ func (l *ChallengeLedger) AuthenticateRegistration(id ChallengeID, init Register
 	return authenticateRegisterProof(init, challenge, relayIdentity, proof, l.now())
 }
 
-func (l *ChallengeLedger) AuthenticateStop(id ChallengeID, init StopInit, proof StopProof) (StopAuthority, error) {
+func (l *ChallengeLedger) AuthenticateStop(id ChallengeID, init StopInit, relayIdentity RelayIdentity, proof StopProof) (StopAuthority, error) {
 	binding, err := StopChallengeBinding(init)
 	if err != nil {
 		return StopAuthority{}, err
@@ -149,7 +149,7 @@ func (l *ChallengeLedger) AuthenticateStop(id ChallengeID, init StopInit, proof 
 	if err != nil {
 		return StopAuthority{}, err
 	}
-	return authenticateStopProof(init, challenge, proof, l.now())
+	return authenticateStopProof(init, challenge, relayIdentity, proof, l.now())
 }
 
 func (l *ChallengeLedger) cleanup(now time.Time) {

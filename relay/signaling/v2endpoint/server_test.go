@@ -985,7 +985,7 @@ func endpointStop(t *testing.T, fixture endpointFixture) (v2.StopInit, v2.StopAu
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := ledger.AuthenticateStop(challenge.ID, stop, proof)
+	authority, err := ledger.AuthenticateStop(challenge.ID, stop, endpoint.Identity, proof)
 	if err != nil {
 		t.Fatal(err)
 	}
