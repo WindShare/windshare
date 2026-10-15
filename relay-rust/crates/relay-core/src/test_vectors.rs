@@ -9,7 +9,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::de::DeserializeOwned;
 
 use crate::{
-    challenge::{Challenge, ChallengePurpose, UnixSeconds},
+    challenge::{Challenge, ChallengePurpose, ChallengeSeed},
+    clock::{UnixMillis, UnixSeconds},
     identifiers::{ChallengeId, ChallengeNonce, RelayIdentity},
 };
 
@@ -62,9 +63,14 @@ pub fn challenge(purpose: ChallengePurpose, id: &str, nonce: &str, expires_at: &
     .expect("vector challenge expiry is nonzero")
 }
 
-/// One second before expiry: the last moment a proof is still accepted.
-pub const fn last_live_second(challenge: &Challenge) -> UnixSeconds {
-    UnixSeconds(challenge.expires_at().0 - 1)
+/// The random values a host would draw to reissue a vector's challenge.
+pub fn challenge_seed(id: &str, nonce: &str) -> ChallengeSeed {
+    ChallengeSeed::new(array(id), array(nonce)).expect("vector challenge values are nonzero")
+}
+
+/// One millisecond before expiry: the last moment a proof is still accepted.
+pub const fn last_live_instant(challenge: &Challenge) -> UnixMillis {
+    UnixMillis(challenge.expires_at().start().0 - 1)
 }
 
 /// A decimal string, as vectors encode integers beyond JavaScript's safe range.

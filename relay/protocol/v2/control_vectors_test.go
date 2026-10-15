@@ -15,6 +15,7 @@ var controlFrameDecoders = map[string]func([]byte) error{
 	"WS2T": func(raw []byte) error { _, err := ParseResumeCredential(raw); return err },
 	"WS2U": func(raw []byte) error { _, err := ParseDescriptorUpload(raw); return err },
 	"WS2K": func(raw []byte) error { _, err := ParseRegistered(raw); return err },
+	"WS2J": func(raw []byte) error { _, err := ParseJoin(raw); return err },
 	"WS2X": func(raw []byte) error { _, err := ParseStopInit(raw); return err },
 	"WS2V": func(raw []byte) error { _, err := ParseStopProof(raw); return err },
 	"WS2Y": func(raw []byte) error { _, err := ParseStopped(raw); return err },

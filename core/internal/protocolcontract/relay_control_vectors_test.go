@@ -206,6 +206,7 @@ func relayControlFrameDecodingVectors(r relayControlFixture) map[string]any {
 	stopInit := stop.encode()
 	stopProof := relaySenderProof("WS2V", 0, r.f.edPublic, ed25519.Sign(r.f.edPrivate, stop.preimage(stopChallenge)))
 	stopped := slices.Concat([]byte("WS2Y"), []byte{wireVersion, 0, 0, 0}, stop.stopID)
+	join := slices.Concat([]byte("WS2J"), []byte{wireVersion, 0, 0, 0}, fresh.shareID)
 
 	shareInstanceAt := relayHeaderBytes + relayShareIDBytes
 	pkHashAt := shareInstanceAt + relayShareInstanceBytes
@@ -245,6 +246,9 @@ func relayControlFrameDecodingVectors(r relayControlFixture) map[string]any {
 		{label: "registered", direction: relayRelayToClient, canonical: registered, reserved: headerReserved, variants: []relayFrameVariant{
 			rejectedFrame("zero-share-id", withZeroField(registered, relayHeaderBytes, relayShareIDBytes)),
 			rejectedFrame("zero-share-instance", withZeroField(registered, shareInstanceAt, relayShareInstanceBytes)),
+		}},
+		{label: "join", direction: relayClientToRelay, canonical: join, reserved: headerReserved, variants: []relayFrameVariant{
+			rejectedFrame("zero-share-id", withZeroField(join, relayHeaderBytes, relayShareIDBytes)),
 		}},
 		{label: "stop-init", direction: relayClientToRelay, canonical: stopInit, reserved: headerReserved, variants: []relayFrameVariant{
 			rejectedFrame("zero-share-instance", withZeroField(stopInit, shareInstanceAt, relayShareInstanceBytes)),
