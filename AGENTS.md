@@ -84,6 +84,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── httpapi/                  WebSocket upgrade, Origin policy, and admission hook
 │   ├── connectionlimit/          Global and per-source connection limits
 │   └── stunonly/                 Independent bounded UDP STUN listeners, health, and metrics
+├── relay-rust/                   Independent Cargo workspace for the Rust relay replacement
+│   └── crates/relay-core/        Shared no-I/O control kernel (initial scaffold)
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
