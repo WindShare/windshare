@@ -264,9 +264,9 @@ func (r *Registry) AbortRegistration(shareID v2.ShareID, owner ConnectionRef) bo
 	return true
 }
 
-// Publish accepts only the unforgeable value returned after challenge, digest,
-// size, and descriptor-signature verification. The registry owns its bytes.
-func (r *Registry) Publish(shareID v2.ShareID, owner ConnectionRef, descriptor v2.VerifiedDescriptor) error {
+// Publish requires sender-authorized, bounded bytes for this registration.
+// Object validity belongs to receivers; the registry owns only opaque bytes.
+func (r *Registry) Publish(shareID v2.ShareID, owner ConnectionRef, descriptor v2.AuthorizedDescriptorUpload) error {
 	if r == nil {
 		return ErrConfig
 	}

@@ -143,6 +143,68 @@
       "stoppedErrorB64": "V1MyRQIAAAsAAAAA"
     },
     {
+      "cases": [
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "valid-object",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": true,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "relayUploadAuthorized": true
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAAAB/w==",
+          "name": "opaque-byte",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EqBAK5qoZQNC2Y7sxzUZhQuu9vVGHExuS2TgYmHgy64nLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxKgQCuaqGUDQtmO7Mc1GYULrvb1RhxMbktk4GJh4MuuJy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1yCoomsBeYQMG1N4wZBuMXJmkMrjNyHkclTeUfNsyTcEcJfPwgP+zZEzwHf7C9RTd7cikG6SmWO2eew/Pa2z2wk=",
+          "relayUploadAuthorized": true
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "previous-object-version",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/ENjBnxul3lMFhUBkCs18xBnTHuT+1Q0Qc46EYI3pAmaTLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxDYwZ8bpd5TBYVAZArNfMQZ0x7k/tUNEHOOhGCN6QJmky8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+dBt/wje7dtMzMAPldVu6AtHOflCM7aniakzJBir07Tp8kr5D2+hgjxR/ZfMYAlIYYOZqZ7VrMx8oPVG1pJpAg=",
+          "relayUploadAuthorized": true
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwEAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "invalid-object-flags",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EEht47QBhDWshrW22SdR0GWIn00sIX0VDntxWUBGPsbXLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxBIbeO0AYQ1rIa1ttknUdBliJ9NLCF9FQ57cVlARj7G1y8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt19mfVb5aCG+xWpsm2VvK1KIHKA5erhbifxxbmTRDZFaz7FwuQLzmcNDL/TDYTymx6nljMAtbyE3G9gV3V+vxfgw=",
+          "relayUploadAuthorized": true
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAM=",
+          "name": "invalid-object-signature",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EeETre6hqpVQNevD420dWZiVMYjNsUXFfCslHLVxldGvLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxHhE63uoaqVUDXrw+NtHVmYlTGIzbFFxXwrJRy1cZXRry8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt18cIOevG94+R9R/UKU/9+4Fs5NHT+2sEM97p2U92AviJmEIN9XuaAFEbLRcOffKgx9x5X7tLhpklmaamru6mkwA=",
+          "relayUploadAuthorized": true
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAM=",
+          "name": "digest-substitution",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4=",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "relayUploadAuthorized": false
+        }
+      ],
+      "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
+      "name": "relay-descriptor-upload-authorization",
+      "registerChallengeB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+      "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
+    },
+    {
       "grants": [
         {
           "bytes": 0,

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/senderauth"
-	"github.com/windshare/windshare/core/senderobject"
 )
 
 const (
@@ -67,7 +66,6 @@ func NewRegisterProof(init RegisterInit, challenge Challenge, relayIdentity Rela
 
 type SenderAuthority struct {
 	initDigest [sha256.Size]byte
-	sender     *senderauth.Verifier
 	valid      bool
 }
 
@@ -86,16 +84,14 @@ func authenticateRegisterProof(init RegisterInit, challenge Challenge, relayIden
 	if err != nil {
 		return SenderAuthority{}, err
 	}
-	sender, err := senderauth.NewVerifier(publicKey(proof.SenderPublicKey))
-	if err != nil || !sender.Verify(preimage, proof.Signature[:]) {
+	if !senderauth.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
 		return SenderAuthority{}, ErrProof
 	}
 	encoded, err := init.MarshalBinary()
 	if err != nil {
 		return SenderAuthority{}, err
 	}
-	authority := SenderAuthority{initDigest: sha256.Sum256(encoded), sender: sender, valid: true}
-	return authority, nil
+	return SenderAuthority{initDigest: sha256.Sum256(encoded), valid: true}, nil
 }
 
 func StopPreimage(init StopInit, challenge Challenge) ([]byte, error) {
@@ -190,42 +186,32 @@ func (a StopAuthority) Authorizes(init StopInit) bool {
 	return subtle.ConstantTimeCompare(digest[:], a.initDigest[:]) == 1
 }
 
-type VerifiedDescriptor struct {
+// AuthorizedDescriptorUpload proves publication authority for bounded opaque bytes,
+// not the validity of the end-to-end object. Receivers own object authentication.
+type AuthorizedDescriptorUpload struct {
 	initDigest [sha256.Size]byte
 	object     []byte
 	valid      bool
 }
 
-// VerifyDescriptorUpload proves that WS2U bytes are exactly the digest committed
-// by REGISTER_INIT and are signed by the challenge-authenticated sender key.
-func VerifyDescriptorUpload(init RegisterInit, authority SenderAuthority, upload DescriptorUpload) (VerifiedDescriptor, error) {
+// AuthorizeDescriptorUpload binds WS2U bytes to the authenticated registration
+// digest so object formats can evolve without changing relay admission.
+func AuthorizeDescriptorUpload(init RegisterInit, authority SenderAuthority, upload DescriptorUpload) (AuthorizedDescriptorUpload, error) {
 	if !authority.Authorizes(init) {
-		return VerifiedDescriptor{}, ErrProof
+		return AuthorizedDescriptorUpload{}, ErrProof
 	}
-	digest := sha256.Sum256(upload.Object)
+	if len(upload.Object) == 0 || len(upload.Object) > MaxDescriptorBytes {
+		return AuthorizedDescriptorUpload{}, ErrMalformed
+	}
+	object := cloneBytes(upload.Object)
+	digest := sha256.Sum256(object)
 	if subtle.ConstantTimeCompare(digest[:], init.DescriptorDigest[:]) != 1 {
-		return VerifiedDescriptor{}, ErrProof
+		return AuthorizedDescriptorUpload{}, ErrProof
 	}
-	if err := verifyDescriptorSignature(init, authority.sender, upload.Object); err != nil {
-		return VerifiedDescriptor{}, ErrProof
-	}
-	return VerifiedDescriptor{initDigest: authority.initDigest, object: cloneBytes(upload.Object), valid: true}, nil
+	return AuthorizedDescriptorUpload{initDigest: authority.initDigest, object: object, valid: true}, nil
 }
 
-func verifyDescriptorSignature(init RegisterInit, sender *senderauth.Verifier, object []byte) error {
-	// Relay admission must enforce the same object version and authentication
-	// contract as receivers without maintaining another sealed-object codec.
-	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
-	if err != nil {
-		return ErrProof
-	}
-	if err := senderobject.Verify(binding, sender, object); err != nil {
-		return ErrProof
-	}
-	return nil
-}
-
-func (d VerifiedDescriptor) ObjectFor(init RegisterInit) ([]byte, bool) {
+func (d AuthorizedDescriptorUpload) ObjectFor(init RegisterInit) ([]byte, bool) {
 	if !d.valid {
 		return nil, false
 	}

@@ -211,7 +211,7 @@ func receiveWindowFixture(t *testing.T) (*Server, *connection, *connection, v2.R
 	if err := registry.BeginRegistration(fixture.init, sender.ref); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender.ref, verifiedEndpointDescriptor(t, fixture)); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender.ref, authorizedEndpointDescriptor(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	joined, err := registry.Join(fixture.init.ShareID, receiver.ref)

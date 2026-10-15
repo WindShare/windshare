@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/sha256"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/senderobject"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -74,14 +72,14 @@ func (s *memoryTombstones) Commit(_ context.Context, record Tombstone) (CommitOu
 }
 
 type routeFixture struct {
-	init       v2.RegisterInit
-	descriptor []byte
-	token      v2.ResumeToken
-	stop       v2.StopInit
-	verified   v2.VerifiedDescriptor
-	authority  v2.SenderAuthority
-	stopAuth   v2.StopAuthority
-	privateKey ed25519.PrivateKey
+	init             v2.RegisterInit
+	descriptor       []byte
+	token            v2.ResumeToken
+	stop             v2.StopInit
+	authorizedUpload v2.AuthorizedDescriptorUpload
+	authority        v2.SenderAuthority
+	stopAuth         v2.StopAuthority
+	privateKey       ed25519.PrivateKey
 }
 
 func makeFixture(t *testing.T, identityByte byte) routeFixture {
@@ -96,18 +94,7 @@ func makeFixture(t *testing.T, identityByte byte) routeFixture {
 	shareDigest := sha256.Sum256(append([]byte("windshare/v2 share-id\x00"), fixture.init.PKHash[:]...))
 	copy(fixture.init.ShareID[:], shareDigest[:v2.ShareIDBytes])
 	copy(fixture.init.ShareInstance[:], testBytes(identityByte+1, v2.ShareInstanceBytes))
-	info := append([]byte("windshare/v2 descriptor"), 0)
-	info = append(info, fixture.init.PKHash[:]...)
-	descriptorKey, err := hkdf.Key(sha256.New, bytes.Repeat([]byte{0x11}, 16), nil, string(info), 32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.descriptor, err = sealTestDescriptor(
-		fixture.init, descriptorKey, privateKey, bytes.Repeat([]byte{identityByte + 2}, 12), []byte{0xa1, 0x00, 0x01},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture.descriptor = append([]byte("opaque descriptor: "), identityByte)
 	fixture.init.DescriptorDigest = sha256.Sum256(fixture.descriptor)
 	copy(fixture.token[:], testBytes(identityByte+3, v2.ResumeTokenBytes))
 	fixture.init.ResumeTokenHash = sha256.Sum256(fixture.token[:])
@@ -118,20 +105,13 @@ func makeFixture(t *testing.T, identityByte byte) routeFixture {
 	copy(fixture.stop.StopID[:], testBytes(identityByte+5, v2.StopIDBytes))
 	fixture.privateKey = privateKey
 	fixture.authority = registrationAuthority(t, fixture, fixture.init)
-	fixture.verified, err = v2.VerifyDescriptorUpload(fixture.init, fixture.authority, v2.DescriptorUpload{Object: fixture.descriptor})
+	var err error
+	fixture.authorizedUpload, err = v2.AuthorizeDescriptorUpload(fixture.init, fixture.authority, v2.DescriptorUpload{Object: fixture.descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.stopAuth = stopAuthority(t, fixture, fixture.stop)
 	return fixture
-}
-
-func sealTestDescriptor(init v2.RegisterInit, key []byte, privateKey ed25519.PrivateKey, nonce, plaintext []byte) ([]byte, error) {
-	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
-	if err != nil {
-		return nil, err
-	}
-	return senderobject.Seal(binding, key, privateKey, nonce, plaintext)
 }
 
 func challengeLedger(t *testing.T) *v2.ChallengeLedger {
@@ -240,7 +220,7 @@ func TestCrashGraceResumeAndRoleDerivedRouting(t *testing.T) {
 	if err != nil || starting.Status != JoinStarting || starting.RetryAfter == 0 {
 		t.Fatalf("starting join = %+v, %v", starting, err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, senderA, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, senderA, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	joined, err := registry.Join(fixture.init.ShareID, receiverA)
@@ -336,10 +316,10 @@ func TestConnectionGenerationIsRouteAndSessionAuthority(t *testing.T) {
 	if registry.AbortRegistration(fixture.init.ShareID, ownerB) {
 		t.Fatal("same-ID replacement aborted the old generation")
 	}
-	if err := registry.Publish(fixture.init.ShareID, ownerB, fixture.verified); !errors.Is(err, ErrOwner) {
+	if err := registry.Publish(fixture.init.ShareID, ownerB, fixture.authorizedUpload); !errors.Is(err, ErrOwner) {
 		t.Fatalf("same-ID replacement publish error = %v", err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, ownerA, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, ownerA, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	receiver := routeTestConnection("generation-receiver")
@@ -380,7 +360,7 @@ func TestRetiredSessionAuthorityIsExactAndExpires(t *testing.T) {
 	if err := registry.BeginRegistration(fixture.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	joined, err := registry.Join(fixture.init.ShareID, receiver)
@@ -438,7 +418,7 @@ func TestExplicitStopIsDurablePermanentAndNeverGrace(t *testing.T) {
 	if err := registry.BeginRegistration(fixture.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := registry.Stop(context.Background(), fixture.stop, fixture.stopAuth); err == nil {
@@ -502,7 +482,7 @@ func TestStartingDeadlineAndAtomicStopJoin(t *testing.T) {
 	if err := registry.BeginRegistration(fixture.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -555,17 +535,17 @@ func TestRegistrationAbortAndOpaqueAuthorityBoundaries(t *testing.T) {
 	if err := registry.BeginRegistration(fixture.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, outsider, fixture.verified); !errors.Is(err, ErrOwner) {
+	if err := registry.Publish(fixture.init.ShareID, outsider, fixture.authorizedUpload); !errors.Is(err, ErrOwner) {
 		t.Fatalf("outsider publish error = %v", err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, v2.VerifiedDescriptor{}); !errors.Is(err, ErrOwner) {
-		t.Fatalf("unverified descriptor publish error = %v", err)
+	if err := registry.Publish(fixture.init.ShareID, sender, v2.AuthorizedDescriptorUpload{}); !errors.Is(err, ErrOwner) {
+		t.Fatalf("unauthorized descriptor upload publish error = %v", err)
 	}
 	other := makeFixture(t, 0x72)
-	if err := registry.Publish(fixture.init.ShareID, sender, other.verified); !errors.Is(err, ErrOwner) {
+	if err := registry.Publish(fixture.init.ShareID, sender, other.authorizedUpload); !errors.Is(err, ErrOwner) {
 		t.Fatalf("cross-registration descriptor error = %v", err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	replacement := routeTestConnection("replacement")
@@ -618,7 +598,7 @@ func TestSessionEndBudgetsAndRandomIdentityFailures(t *testing.T) {
 	if err := registry.BeginRegistration(fixture.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	first, err := registry.Join(fixture.init.ShareID, receiverA)
@@ -656,7 +636,7 @@ func TestSessionEndBudgetsAndRandomIdentityFailures(t *testing.T) {
 	if err := broken.BeginRegistration(other.init, sender); err != nil {
 		t.Fatal(err)
 	}
-	if err := broken.Publish(other.init.ShareID, sender, other.verified); err != nil {
+	if err := broken.Publish(other.init.ShareID, sender, other.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := broken.Join(other.init.ShareID, routeTestConnection("receiver")); err == nil {

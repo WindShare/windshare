@@ -128,12 +128,12 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, err := VerifyDescriptorUpload(init, authority, upload)
+	authorized, err := AuthorizeDescriptorUpload(init, authority, upload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if object, ok := verified.ObjectFor(init); !ok || !bytes.Equal(object, upload.Object) {
-		t.Fatal("verified descriptor did not preserve its registration binding")
+	if object, ok := authorized.ObjectFor(init); !ok || !bytes.Equal(object, upload.Object) {
+		t.Fatal("authorized descriptor did not preserve its registration binding")
 	}
 	if encoded, err := upload.MarshalBinary(); err != nil || !bytes.Equal(encoded, uploadBytes) {
 		t.Fatalf("WS2U byte replay changed: %v", err)
@@ -380,33 +380,8 @@ func TestDescriptorDigestSubstitutionFailsBeforePublication(t *testing.T) {
 		t.Fatal("test fixture digest mismatch")
 	}
 	object[20] ^= 1
-	if _, err := VerifyDescriptorUpload(init, authority, DescriptorUpload{Object: object}); !errors.Is(err, ErrProof) {
+	if _, err := AuthorizeDescriptorUpload(init, authority, DescriptorUpload{Object: object}); !errors.Is(err, ErrProof) {
 		t.Fatalf("descriptor substitution error = %v", err)
-	}
-}
-
-func TestDescriptorAdmissionRejectsInvalidObjectsWithAuthenticatedUploadDigests(t *testing.T) {
-	for name, offset := range map[string]int{
-		"previous-object-version": 0, "flags": 1, "nonce": 8, "ciphertext": 20,
-	} {
-		t.Run(name, func(t *testing.T) {
-			init, challenge, relay, privateKey := frozenRegistration(t)
-			object := frozenDescriptor(t)
-			object[offset] ^= 1
-			// A sender-authenticated upload digest cannot replace object authentication.
-			init.DescriptorDigest = sha256.Sum256(object)
-			proof, err := NewRegisterProof(init, challenge, relay, privateKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-			authority, err := authenticateRegisterProof(init, challenge, relay, proof, time.Unix(1_700_000_000, 0))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := VerifyDescriptorUpload(init, authority, DescriptorUpload{Object: object}); !errors.Is(err, ErrProof) {
-				t.Fatalf("descriptor admission error = %v", err)
-			}
-		})
 	}
 }
 
