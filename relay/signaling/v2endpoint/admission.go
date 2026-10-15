@@ -14,6 +14,7 @@ const (
 	admissionFirstFrame        = "first_frame"
 	admissionStopProof         = "stop_proof"
 	admissionRegistration      = "registration"
+	admissionDescriptorUpload  = "descriptor_upload_authorization"
 	admissionStarted           = "started"
 	admissionExpired           = "expired"
 	admissionFailed            = "failed"

@@ -86,7 +86,7 @@ func publishRoute(t *testing.T, registry *Registry, fixture routeFixture, owner 
 	if err := registry.BeginRegistration(fixture.init, owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, owner, fixture.verified); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, owner, fixture.authorizedUpload); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +165,7 @@ func TestPendingStopFencesPublishAbortAndResumeWithoutClaimingDurability(t *test
 		}
 		stopDone := startStop(registry, fixture)
 		<-store.entered
-		if err := registry.Publish(fixture.init.ShareID, sender, fixture.verified); !errors.Is(err, ErrStopping) {
+		if err := registry.Publish(fixture.init.ShareID, sender, fixture.authorizedUpload); !errors.Is(err, ErrStopping) {
 			t.Fatalf("Publish during pending STOP = %v", err)
 		}
 		if registry.AbortRegistration(fixture.init.ShareID, sender) {

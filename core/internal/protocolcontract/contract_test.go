@@ -785,6 +785,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"resumeStaleErrorB64": b64(resumeStaleError), "connectionProbeNonce": fmt.Sprint(connectionProbeNonce),
 			"connectionProbeB64": b64(connectionProbe), "connectionProbeAckB64": b64(connectionProbeAck),
 		},
+		descriptorUploadAuthorizationVectors(f, objects[0].encoded, relayIdentity, resumeHash, expires),
 		relaySessionCreditVectors(opaqueRelaySessionID),
 		map[string]any{
 			"name": "sender-signed-operation-error", "shareInstanceB64": b64(f.shareInstance),

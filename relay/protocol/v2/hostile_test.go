@@ -151,20 +151,20 @@ func TestProofAuthoritiesCannotCrossRegistrationOrStopBoundaries(t *testing.T) {
 
 	uploadBytes := testB64(t, frozenRegistrationVector(t).DescriptorUploadB64)
 	upload, _ := ParseDescriptorUpload(uploadBytes)
-	if _, err := VerifyDescriptorUpload(init, SenderAuthority{}, upload); !errors.Is(err, ErrProof) {
+	if _, err := AuthorizeDescriptorUpload(init, SenderAuthority{}, upload); !errors.Is(err, ErrProof) {
 		t.Fatalf("zero descriptor authority error = %v", err)
 	}
 	malformed := bytes.Clone(upload.Object)
 	malformed[1] = 1
-	if _, err := VerifyDescriptorUpload(init, authority, DescriptorUpload{Object: malformed}); !errors.Is(err, ErrProof) {
+	if _, err := AuthorizeDescriptorUpload(init, authority, DescriptorUpload{Object: malformed}); !errors.Is(err, ErrProof) {
 		t.Fatalf("descriptor header substitution error = %v", err)
 	}
-	verified, _ := VerifyDescriptorUpload(init, authority, upload)
-	if object, ok := (VerifiedDescriptor{}).ObjectFor(init); ok || object != nil {
-		t.Fatal("zero verified descriptor released bytes")
+	authorized, _ := AuthorizeDescriptorUpload(init, authority, upload)
+	if object, ok := (AuthorizedDescriptorUpload{}).ObjectFor(init); ok || object != nil {
+		t.Fatal("zero authorized descriptor released bytes")
 	}
-	if object, ok := verified.ObjectFor(otherInit); ok || object != nil {
-		t.Fatal("verified descriptor crossed registration")
+	if object, ok := authorized.ObjectFor(otherInit); ok || object != nil {
+		t.Fatal("authorized descriptor crossed registration")
 	}
 
 	var stop StopInit

@@ -65,7 +65,7 @@ func publishGenerationTestRoute(
 	if err := registry.BeginRegistration(fixture.init, owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Publish(fixture.init.ShareID, owner, verifiedEndpointDescriptor(t, fixture)); err != nil {
+	if err := registry.Publish(fixture.init.ShareID, owner, authorizedEndpointDescriptor(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 }
