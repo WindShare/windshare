@@ -11,6 +11,7 @@ use crate::{
     FrameError,
     challenge::ChallengePurpose,
     descriptor_upload::DescriptorUpload,
+    join::Join,
     registration::{RegisterInit, RegisterProof, ResumeCredential, authenticate_registration},
     stop::{StopInit, StopProof, authenticate_stop},
     test_vectors::{Decimal, bytes, challenge, relay_identity, session_case, unix_seconds},
@@ -62,6 +63,7 @@ fn decode_client_frame(frame: &str, encoded: &[u8]) -> Result<(), FrameError> {
         "WS2P" => RegisterProof::decode(encoded).map(drop),
         "WS2T" => ResumeCredential::decode(encoded).map(drop),
         "WS2U" => DescriptorUpload::decode(encoded).map(drop),
+        "WS2J" => Join::decode(encoded).map(drop),
         "WS2X" => StopInit::decode(encoded).map(drop),
         "WS2V" => StopProof::decode(encoded).map(drop),
         other => panic!("the relay has no decoder for client frame {other}"),
@@ -95,7 +97,7 @@ fn client_frames_follow_shared_decoding_vectors() {
     }
     assert_eq!(
         covered,
-        BTreeSet::from(["WS2P", "WS2R", "WS2T", "WS2U", "WS2V", "WS2X"])
+        BTreeSet::from(["WS2J", "WS2P", "WS2R", "WS2T", "WS2U", "WS2V", "WS2X"])
     );
 }
 
@@ -110,7 +112,7 @@ fn proofs_follow_shared_authentication_vectors() {
             &case.challenge_nonce_b64,
             &case.challenge_expires_at,
         );
-        let now = unix_seconds(&case.now_unix_seconds);
+        let now = unix_seconds(&case.now_unix_seconds).start();
         let init = bytes(&case.init_b64);
         let proof = bytes(&case.proof_b64);
         let outcome = match case.operation.as_str() {

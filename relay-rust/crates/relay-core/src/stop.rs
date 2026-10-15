@@ -5,12 +5,13 @@
 
 use crate::{
     authentication::{AuthenticationError, SenderProof},
-    challenge::{Challenge, ChallengePurpose, UnixSeconds},
+    challenge::{Challenge, ChallengePurpose},
+    clock::UnixMillis,
     identifiers::{RelayIdentity, ShareInstance, ShareRoute, StopId},
     wire::{FrameError, Magic, Writer, open_reserved},
 };
 
-const STOP_INIT_MAGIC: Magic = *b"WS2X";
+pub(crate) const STOP_INIT_MAGIC: Magic = *b"WS2X";
 const STOP_PROOF_MAGIC: Magic = *b"WS2V";
 const STOPPED_MAGIC: Magic = *b"WS2Y";
 
@@ -163,7 +164,7 @@ pub fn authenticate_stop(
     challenge: Challenge,
     relay: &RelayIdentity,
     proof: &StopProof,
-    now: UnixSeconds,
+    now: UnixMillis,
 ) -> Result<StopAuthority, AuthenticationError> {
     if challenge.purpose() != ChallengePurpose::Stop {
         return Err(AuthenticationError::PurposeMismatch);

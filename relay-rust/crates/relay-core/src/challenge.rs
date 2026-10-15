@@ -1,15 +1,12 @@
 //! CHALLENGE (`WS2Q`): relay-issued freshness that every sender proof signs.
 
 use crate::{
+    clock::{UnixMillis, UnixSeconds},
     identifiers::{ChallengeId, ChallengeNonce},
     wire::{Magic, Writer},
 };
 
 const MAGIC: Magic = *b"WS2Q";
-
-/// Seconds since the Unix epoch, as read from the host clock.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct UnixSeconds(pub u64);
 
 /// The single operation a challenge may authenticate.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -29,6 +26,28 @@ impl ChallengePurpose {
             Self::Resume => 1,
             Self::Stop => 2,
         }
+    }
+}
+
+/// Unpredictable values a host draws to issue one challenge.
+///
+/// Move-only like the challenge it seeds: reusing a seed would issue two
+/// challenges that one signature could answer.
+#[derive(Debug)]
+pub struct ChallengeSeed {
+    id: ChallengeId,
+    nonce: ChallengeNonce,
+}
+
+impl ChallengeSeed {
+    /// Returns `None` when either value is all zeros, which the wire reserves
+    /// and only a broken random source produces.
+    #[must_use]
+    pub fn new(id: [u8; 16], nonce: [u8; 32]) -> Option<Self> {
+        Some(Self {
+            id: ChallengeId::new(id)?,
+            nonce: ChallengeNonce::new(nonce)?,
+        })
     }
 }
 
@@ -67,6 +86,29 @@ impl Challenge {
         })
     }
 
+    /// Issues a challenge that expires with the handshake holding it.
+    ///
+    /// A challenge never outlives its connection's handshake, so its expiry is
+    /// that handshake's deadline rounded up to whole wire seconds instead of an
+    /// independent lifetime. Handshake deadlines lie at least one timeout past
+    /// the epoch, so the rounded expiry is never the zero the wire reserves.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the seed enforces its one-use rule"
+    )]
+    pub(crate) const fn issue(
+        purpose: ChallengePurpose,
+        seed: ChallengeSeed,
+        deadline: UnixMillis,
+    ) -> Self {
+        Self {
+            purpose,
+            id: seed.id,
+            nonce: seed.nonce,
+            expires_at: deadline.ceil_seconds(),
+        }
+    }
+
     /// Returns the operation this challenge may authenticate.
     #[must_use]
     pub const fn purpose(&self) -> ChallengePurpose {
@@ -82,8 +124,8 @@ impl Challenge {
     /// A proof is accepted strictly before the expiry second, matching the
     /// half-open interval every client signs against.
     #[must_use]
-    pub const fn is_live_at(&self, now: UnixSeconds) -> bool {
-        now.0 < self.expires_at.0
+    pub const fn is_live_at(&self, now: UnixMillis) -> bool {
+        now.0 < self.expires_at.start().0
     }
 
     /// Encodes the challenge sent to the client.
