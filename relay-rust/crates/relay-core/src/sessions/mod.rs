@@ -140,6 +140,30 @@ impl Session {
         effects
     }
 
+    /// Validates a direction before any payload arrives, so startup credit can
+    /// precede the E2E handshake rather than waiting for its first frame.
+    ///
+    /// This does not advance receiver admission or authorize sender confirmation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a foreign lifecycle, revoked ownership, retirement or expiry.
+    pub fn check_route<'a, O: LifecycleObserver>(
+        &'a self,
+        lifecycle: &'a ShareLifecycle<O>,
+        direction: Direction,
+        now: UnixMillis,
+    ) -> Result<ValidatedForward<'a, O>, ForwardRefusal> {
+        self.check_forward(
+            lifecycle,
+            ForwardPermit {
+                session: self.key,
+                direction,
+            },
+            now,
+        )
+    }
+
     /// Revalidates a queued permit against both live authorities, including time.
     ///
     /// The returned borrow spans synchronous submission. Hosts must not cache a

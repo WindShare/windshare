@@ -259,3 +259,6 @@ mod revocation;
 
 #[path = "session_authority_tests.rs"]
 mod authority;
+
+#[path = "flow_tests.rs"]
+mod flow_tests;

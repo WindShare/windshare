@@ -114,7 +114,9 @@ pub struct Effects {
     /// never close a shared sender for a session-local failure.
     ///
     /// Retirement does not release submitted bytes or settle connection credit.
-    /// Those remain host-owned until consumption/settlement or confirmed closure.
+    /// Apply this retirement to each destination's flow ledger; host confirmation
+    /// of queue discard releases unsent occupancy, while consumption/settlement
+    /// or confirmed connection closure releases submitted occupancy.
     /// STOP defers physical cleanup to its Retire step after persisting intent.
     pub retirement: Option<Retirement>,
     /// Outcome of this input.

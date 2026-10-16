@@ -7,6 +7,7 @@ use crate::{
 
 const OPAQUE_MAGIC: [u8; 4] = *b"WS2O";
 const ADMITTED_MAGIC: [u8; 4] = *b"WS2M";
+const OPAQUE_HEADER_BYTES: u32 = 8 + 8 + 4;
 
 /// Maximum ciphertext in one relay envelope, shared by Go and browser codecs.
 pub const MAX_OPAQUE_CIPHERTEXT_BYTES: u32 = 65_536;
@@ -22,6 +23,11 @@ pub struct OpaqueHeader {
 }
 
 impl OpaqueHeader {
+    /// A complete envelope includes its routing header and nonempty ciphertext.
+    pub const MIN_ENCODED_BYTES: u32 = OPAQUE_HEADER_BYTES + 1;
+    /// Maximum charge of one envelope to a delivery budget.
+    pub const MAX_ENCODED_BYTES: u32 = OPAQUE_HEADER_BYTES + MAX_OPAQUE_CIPHERTEXT_BYTES;
+
     /// Validates version, reserved bytes, identity, bounds and exact frame length.
     ///
     /// # Errors

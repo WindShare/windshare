@@ -11,7 +11,9 @@
 //! connection preparation, and a share lifecycle is constructed only from the
 //! durable record its host stores. Receiver sessions keep an absolute admission
 //! budget and issue routing permits checked against live session and share
-//! authority immediately before submission. Payloads and credit remain host-owned.
+//! authority immediately before submission. Connection delivery ledgers reserve
+//! startup and ordinary capacity, retaining submitted occupancy through retirement
+//! until consumption, settlement or confirmed closure. Payloads remain host-owned.
 
 #![no_std]
 
@@ -20,6 +22,7 @@ pub mod challenge;
 pub mod clock;
 pub mod descriptor_upload;
 pub mod error_frame;
+pub mod flow;
 pub mod handshake;
 pub mod identifiers;
 pub mod join;

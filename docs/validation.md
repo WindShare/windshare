@@ -84,8 +84,11 @@ connection preparation. STOP tests cover ordered persistence/cleanup/final commi
 retry identity, registration/RESUME races and late callbacks. Restoration covers every durable record,
 surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
 pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued
-permits and callbacks, and sibling isolation. WS2O/WS2M codecs consume shared vectors and reject
-malformed framing; platform adapters and hibernated-session restoration remain unimplemented.
+permits and callbacks, and sibling isolation. Delivery-ledger tests cover startup reservations,
+frame/byte bounds, FIFO submission, cancellation/discard/settlement ordering, cumulative feedback,
+stale generations and fixed cleanup deadlines using injected time. WS2O/WS2M codecs consume shared
+vectors and reject malformed framing. Delivery wire changes, platform adapters and hibernated
+session/ledger restoration remain unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 
