@@ -69,6 +69,11 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// Reads a headerless layout, such as a persisted lifecycle record.
+    pub const fn new(encoded: &'a [u8]) -> Self {
+        Self { rest: encoded }
+    }
+
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N], FrameError> {
         let (field, rest) = self
             .rest

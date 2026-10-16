@@ -14,11 +14,12 @@ use super::{
 /// Host evidence about one publication transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicationResult {
-    /// Persistence and connection preparation both completed. The route remains
-    /// hidden until the lifecycle returns `Action::Registered`.
+    /// The unresolved record, descriptor bytes and connection preparation all
+    /// completed. The route remains hidden until the lifecycle returns
+    /// `Action::Registered`.
     Committed,
-    /// No record, prepared resource, or outstanding write for this attempt
-    /// remains. A failed write alone is insufficient evidence of an abort.
+    /// No stored record, prepared resource, or outstanding write for this
+    /// attempt remains. A failed write alone is insufficient evidence of an abort.
     Aborted,
     /// The host cannot establish whether persistence or preparation completed.
     Uncertain,
@@ -92,6 +93,10 @@ pub enum Refusal {
     NotFound,
     /// A receiver must wait for publication.
     Starting,
+    /// A receiver must wait for the restored route's sender to reattach.
+    SenderDetached,
+    /// The share instance was permanently stopped.
+    Stopped,
 }
 
 impl Refusal {
@@ -107,7 +112,8 @@ impl Refusal {
             Self::PublicationUncertain | Self::SequenceExhausted => {
                 Some(ErrorFrame::Admission(RETRY))
             }
-            Self::Starting => Some(ErrorFrame::Starting(RETRY)),
+            Self::Starting | Self::SenderDetached => Some(ErrorFrame::Starting(RETRY)),
+            Self::Stopped => Some(ErrorFrame::Stopped),
             Self::StaleOperation => None,
         }
     }
@@ -128,16 +134,20 @@ pub enum Action<'f> {
     Reserved(Reservation),
     /// Execute the bounded host transaction before confirming publication.
     Publish(PublishRequest<'f>),
-    /// Send REGISTERED; this registration is now visible through JOIN readiness.
+    /// Replace the unresolved record with `record()`, then send REGISTERED;
+    /// JOIN readiness follows. If that write fails or is uncertain, close the
+    /// share's connections and restore it from storage.
     Registered(PublishedRegistration),
     /// Lifecycle permits receiver admission using these exact host resources.
     JoinReady(PublishedRegistration),
     /// The attempt never reached publication; close its connection only if
-    /// this exact attempt still owns the host's connection resources.
+    /// this exact attempt still owns the host's connection resources. Storage
+    /// needs no write: a reservation stores nothing, and an abort already
+    /// proved its unresolved record gone.
     Released(RegistrationId),
     /// Keep the route hidden, close this attempt's connection and reconcile
-    /// only its resources/record. Report Aborted only after all work is quiescent
-    /// and no record or prepared resource remains. Never retry publication.
+    /// only its resources and unresolved record. Report Aborted only after all
+    /// work is quiescent and neither remains. Never retry publication.
     Reconcile(RegistrationId),
     /// Refuse a peer input, or ignore a stale host callback.
     Refused(Refusal),

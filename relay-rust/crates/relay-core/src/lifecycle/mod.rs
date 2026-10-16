@@ -1,4 +1,4 @@
-//! Single-share fresh registration, independent of persistence and sockets.
+//! Single-share registration authority, independent of storage and sockets.
 //!
 //! Hosts serialize events, execute both parts of each `Effects`, and schedule
 //! `deadline()` as an absolute timer/alarm. Every event checks that deadline,
@@ -9,19 +9,28 @@
 //! fenced. Only authoritative rollback can reopen the route. A late success
 //! cannot publish it, and cleanup always names the exact operation.
 //!
-//! This stage ends at publication. Published-sender disconnect grace, RESUME,
-//! permanent STOP and receiver session allocation are separate lifecycle work;
-//! hosts must not use a fresh engine to bypass an existing durable record.
+//! [`ShareLifecycle::restore`] is the only constructor, and it takes whatever
+//! [`Record`] storage holds for the share, so an actor can never start empty
+//! over a registration, unresolved publication or STOP. Hosts store exactly
+//! the records `PublishRequest` and `PublishedRegistration` name.
+//!
+//! Published-sender disconnect grace, RESUME, STOP and receiver session
+//! allocation are separate lifecycle work.
 
 mod effect;
 mod observation;
 mod operation;
+mod record;
 
 pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationResult, Refusal};
 pub use observation::{Decision, Observation, ObservedEvent, Observer, Phase};
 pub use operation::{
     ConnectionRef, Incarnation, Publication, PublishRequest, PublishedRegistration, RegistrationId,
     Reservation,
+};
+pub use record::{
+    EncodedRecord, MAX_RECORD_BYTES, PublishedRoute, Record, RecordError, RestoreError,
+    RouteVersion, StoppedShare, UnresolvedPublication,
 };
 
 use core::num::NonZeroU64;
@@ -38,8 +47,21 @@ enum State {
     Vacant,
     Reserved(Pending),
     Publishing(Pending),
-    Fenced(Pending),
+    Fenced(UnresolvedPublication),
     Published(PublishedRegistration),
+    // The owner's operation belonged to an earlier incarnation, so no
+    // connection in this one may serve receivers until it reattaches.
+    Detached(
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "RESUME and re-adoption will match the restored registration and version"
+            )
+        )]
+        PublishedRoute,
+    ),
+    Stopped(StoppedShare),
 }
 
 /// One share's registration authority. No clock, random source, storage or
@@ -55,23 +77,63 @@ pub struct ShareLifecycle<O> {
 }
 
 impl<O: Observer> ShareLifecycle<O> {
-    /// Creates a vacant share actor after the host has established that no
-    /// durable registration, unresolved transaction or permanent STOP exists.
-    /// Replacements must use a fresh incarnation to fence old callbacks.
-    pub const fn vacant(
+    /// Constructs the share actor from what storage holds for `relay` and
+    /// `share`: `None` only when no record exists. Every restore, including a
+    /// replacement inside one process, needs a fresh `incarnation`.
+    ///
+    /// An unresolved publication restores fenced under its stored operation,
+    /// and the returned `Action::Reconcile` must be executed like any other
+    /// action. A published route restores detached, since its owner belonged
+    /// to the old incarnation. `now` only timestamps the observation:
+    /// restoring never derives or extends a deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RestoreError`] when the record names another relay or share,
+    /// or was minted by `incarnation`.
+    pub fn restore(
         relay: RelayIdentity,
         share: ShareId,
+        stored: Option<Record>,
         incarnation: Incarnation,
         observer: O,
-    ) -> Self {
-        Self {
+        now: UnixMillis,
+    ) -> Result<(Self, Action<'static>), RestoreError> {
+        let (state, action) = match stored {
+            None => (State::Vacant, Action::None),
+            Some(record) if record.relay() != relay => return Err(RestoreError::ForeignRelay),
+            Some(record) if record.share() != share => return Err(RestoreError::ForeignShare),
+            Some(Record::Unresolved(unresolved)) if unresolved.id.incarnation == incarnation => {
+                return Err(RestoreError::ReusedIncarnation);
+            }
+            Some(Record::Unresolved(unresolved)) => {
+                (State::Fenced(unresolved), Action::Reconcile(unresolved.id))
+            }
+            Some(Record::Published(route)) => (State::Detached(route), Action::None),
+            Some(Record::Stopped(stopped)) => (State::Stopped(stopped), Action::None),
+        };
+        let operation = match action {
+            Action::Reconcile(id) => Some(id),
+            _ => None,
+        };
+        let mut lifecycle = Self {
             relay,
             share,
             incarnation,
             last_sequence: 0,
-            state: State::Vacant,
+            state,
             observer,
-        }
+        };
+        let phase = lifecycle.phase();
+        lifecycle.observe(
+            now,
+            ObservedEvent::Restore,
+            operation,
+            None,
+            phase,
+            decision(&action),
+        );
+        Ok((lifecycle, action))
     }
 
     /// Returns lifecycle visibility without exposing mutable state.
@@ -83,6 +145,8 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Publishing(_) => Phase::Publishing,
             State::Fenced(_) => Phase::Fenced,
             State::Published(_) => Phase::Published,
+            State::Detached(_) => Phase::Detached,
+            State::Stopped(_) => Phase::Stopped,
         }
     }
 
@@ -92,7 +156,11 @@ impl<O: Observer> ShareLifecycle<O> {
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
             State::Reserved(pending) | State::Publishing(pending) => Some(pending.deadline),
-            State::Vacant | State::Fenced(_) | State::Published(_) => None,
+            State::Vacant
+            | State::Fenced(_)
+            | State::Published(_)
+            | State::Detached(_)
+            | State::Stopped(_) => None,
         }
     }
 
@@ -146,7 +214,7 @@ impl<O: Observer> ShareLifecycle<O> {
         deadline: UnixMillis,
         now: UnixMillis,
     ) -> Action<'static> {
-        if init.route().share_id() != self.share {
+        if init.registration().route().share_id() != self.share {
             return Action::Refused(Refusal::WrongShare);
         }
         if init.mode() != RegistrationMode::Fresh {
@@ -158,6 +226,13 @@ impl<O: Observer> ShareLifecycle<O> {
         match self.state {
             State::Vacant => {}
             State::Fenced(_) => return Action::Refused(Refusal::PublicationUncertain),
+            State::Stopped(stopped)
+                if stopped.share_instance == init.registration().share_instance() =>
+            {
+                return Action::Refused(Refusal::Stopped);
+            }
+            // A stopped share ID also stays occupied for every other instance:
+            // its single record is the permanent STOP evidence.
             _ => return Action::Refused(Refusal::Occupied),
         }
         let Some(sequence) = self.last_sequence.checked_add(1).and_then(NonZeroU64::new) else {
@@ -203,27 +278,30 @@ impl<O: Observer> ShareLifecycle<O> {
     }
 
     fn finish(&mut self, id: RegistrationId, result: PublicationResult) -> Action<'static> {
-        let (State::Publishing(pending) | State::Fenced(pending)) = self.state else {
-            return Action::Refused(Refusal::StaleOperation);
+        let (unresolved, publishing) = match self.state {
+            State::Publishing(pending) if pending.id == id => (pending.unresolved(), true),
+            State::Fenced(unresolved) if unresolved.id == id => (unresolved, false),
+            _ => return Action::Refused(Refusal::StaleOperation),
         };
-        if pending.id != id {
-            return Action::Refused(Refusal::StaleOperation);
-        }
         match result {
             PublicationResult::Aborted => {
                 self.state = State::Vacant;
                 Action::Released(id)
             }
-            PublicationResult::Committed if matches!(self.state, State::Publishing(_)) => {
+            PublicationResult::Committed if publishing => {
                 let published = PublishedRegistration {
                     id,
-                    init: pending.init,
+                    route: PublishedRoute {
+                        relay: self.relay,
+                        registration: unresolved.registration,
+                        version: RouteVersion::FIRST,
+                    },
                 };
                 self.state = State::Published(published);
                 Action::Registered(published)
             }
             PublicationResult::Committed | PublicationResult::Uncertain => {
-                self.state = State::Fenced(pending);
+                self.state = State::Fenced(unresolved);
                 Action::Reconcile(id)
             }
         }
@@ -235,10 +313,11 @@ impl<O: Observer> ShareLifecycle<O> {
                 self.state = State::Vacant;
                 Action::Released(id)
             }
-            State::Publishing(pending) | State::Fenced(pending) if pending.id == id => {
-                self.state = State::Fenced(pending);
+            State::Publishing(pending) if pending.id == id => {
+                self.state = State::Fenced(pending.unresolved());
                 Action::Reconcile(id)
             }
+            State::Fenced(unresolved) if unresolved.id == id => Action::Reconcile(id),
             _ => Action::Refused(Refusal::StaleOperation),
         }
     }
@@ -252,6 +331,8 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Reserved(_) | State::Publishing(_) => Action::Refused(Refusal::Starting),
             State::Fenced(_) => Action::Refused(Refusal::PublicationUncertain),
             State::Published(published) => Action::JoinReady(published),
+            State::Detached(_) => Action::Refused(Refusal::SenderDetached),
+            State::Stopped(_) => Action::Refused(Refusal::Stopped),
         }
     }
 
@@ -267,7 +348,7 @@ impl<O: Observer> ShareLifecycle<O> {
                 )
             }
             State::Publishing(pending) if now >= pending.deadline => {
-                self.state = State::Fenced(pending);
+                self.state = State::Fenced(pending.unresolved());
                 (
                     pending.id,
                     Expiration::Reconcile(pending.id),
