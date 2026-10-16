@@ -85,6 +85,12 @@ nonzero_identifier!(
     16
 );
 
+nonzero_identifier!(
+    /// Host-allocated opaque session route, never reused on surviving connections.
+    RelaySessionId,
+    8
+);
+
 digest_identifier!(
     /// Domain-separated SHA-256 prefix of the share's sender public key.
     PkHash,

@@ -46,6 +46,7 @@ struct Vector {
     register_proof_b64: String,
     descriptor_upload_b64: String,
     registered_b64: String,
+    join_b64: String,
     resume_challenge_id_b64: String,
     resume_challenge_nonce_b64: String,
     resume_expires_at: Decimal,
@@ -217,7 +218,7 @@ impl Fixture {
     }
 
     fn join(&self, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) -> Effects<'static> {
-        engine.handle(Event::Join(self.share()), at)
+        engine.handle(Event::CheckJoin(self.share()), at)
     }
 
     fn reserve_event(&self, at: UnixMillis) -> Event<'static> {
@@ -601,3 +602,6 @@ mod ownership;
 
 #[path = "stopping_tests.rs"]
 mod stopping;
+
+#[path = "session_tests.rs"]
+mod sessions;

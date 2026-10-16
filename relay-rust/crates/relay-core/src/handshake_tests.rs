@@ -256,7 +256,12 @@ fn join_completes_without_sender_authority() {
     let mut handshake = vector.open();
     assert_eq!(
         handshake.receive(&bytes(&vector.join_b64), OPENED_AT),
-        Step::Complete(Outcome::Join(init.registration().route().share_id()))
+        Step::Complete(Outcome::Join(crate::join::JoinRequest::new(
+            vector.relay(),
+            connection(),
+            init.registration().route().share_id(),
+            OPENED_AT
+        )))
     );
     assert_eq!(handshake.phase(), Phase::Finished);
 }

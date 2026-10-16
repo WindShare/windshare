@@ -191,7 +191,7 @@ fn every_event_checks_publication_expiry_before_accepting_success_or_new_work() 
         let request = fixture.publish(&mut engine);
         let event = match trigger {
             0 => Event::Tick,
-            1 => Event::Join(fixture.share()),
+            1 => Event::CheckJoin(fixture.share()),
             2 => fixture.reserve_event(request.deadline),
             _ => Event::PublicationFinished {
                 id: request.id,

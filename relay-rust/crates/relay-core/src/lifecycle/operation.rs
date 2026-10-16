@@ -44,7 +44,7 @@ impl Incarnation {
 
 /// Correlation identity minted by the lifecycle, never by a callback.
 ///
-/// Registrations, resumes and stops share this identity space.
+/// Registrations, resumes, stops and receiver admissions share this identity space.
 /// The relay, share and incarnation fence independent actors; the connection
 /// generation and checked sequence fence retries within one actor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +57,16 @@ pub struct OperationId {
 }
 
 impl OperationId {
+    // Receiver admissions share the owner's scope, but never its participant or
+    // sequence. Keeping that common scope once makes queued permits compact.
+    pub(crate) const fn for_session(self, connection: ConnectionRef, sequence: NonZeroU64) -> Self {
+        Self {
+            connection,
+            sequence,
+            ..self
+        }
+    }
+
     /// Returns the relay whose lifecycle this operation belongs to.
     #[must_use]
     pub const fn relay(self) -> RelayIdentity {
