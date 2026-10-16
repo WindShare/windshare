@@ -122,11 +122,14 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 		}
 		h.blockers = append(h.blockers, connection)
 	}
-	senderFactory, err := NewFactory(Config{Native: h.native, PhaseTimers: h.senderTimers, Now: clock.Now, SenderAttemptObservationCapacity: 64})
+	// No TURN servers are configured: relay-only ICE keeps both real providers
+	// checking until this test advances their clocks, regardless of host speed.
+	configuration := pion.Configuration{ICETransportPolicy: pion.ICETransportPolicyRelay}
+	senderFactory, err := NewFactory(Config{Native: h.native, Configuration: configuration, PhaseTimers: h.senderTimers, Now: clock.Now, SenderAttemptObservationCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: newNative(nil, nil), PhaseTimers: h.receiverTimers})
+	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: newNative(nil, nil), Configuration: configuration, PhaseTimers: h.receiverTimers})
 	if err != nil {
 		t.Fatal(err)
 	}
