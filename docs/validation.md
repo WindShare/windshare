@@ -82,7 +82,10 @@ reservation, authenticated publication, stale-operation fencing, uncertain host 
 grace and ownership-bound RESUME. JOIN readiness and REGISTERED wait for confirmed persistence and
 connection preparation. STOP tests cover ordered persistence/cleanup/final commit, uncertain results,
 retry identity, registration/RESUME races and late callbacks. Restoration covers every durable record,
-surviving owners and interrupted STOP cleanup; platform adapters remain unimplemented.
+surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
+pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued
+permits and callbacks, and sibling isolation. WS2O/WS2M codecs consume shared vectors and reject
+malformed framing; platform adapters and hibernated-session restoration remain unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 

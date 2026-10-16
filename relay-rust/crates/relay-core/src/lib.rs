@@ -9,7 +9,9 @@
 //! for exact retirement and final durable confirmation before replying.
 //! Publication remains hidden until the host confirms persistence and
 //! connection preparation, and a share lifecycle is constructed only from the
-//! durable record its host stores.
+//! durable record its host stores. Receiver sessions keep an absolute admission
+//! budget and issue routing permits checked against live session and share
+//! authority immediately before submission. Payloads and credit remain host-owned.
 
 #![no_std]
 
@@ -24,6 +26,7 @@ pub mod join;
 pub mod lifecycle;
 pub mod registration;
 pub mod sender_auth;
+pub mod sessions;
 pub mod stop;
 mod wire;
 

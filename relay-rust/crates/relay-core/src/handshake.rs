@@ -20,8 +20,8 @@ use crate::{
     clock::UnixMillis,
     descriptor_upload::{DescriptorDigestMismatch, DescriptorUpload},
     error_frame::ErrorFrame,
-    identifiers::{RelayIdentity, ShareId},
-    join::{JOIN_MAGIC, Join},
+    identifiers::RelayIdentity,
+    join::{JOIN_MAGIC, Join, JoinRequest},
     lifecycle::{ConnectionRef, OperationId, Publication, Reservation, ResumeAttempt, Resumption},
     registration::{
         FreshRegistration, REGISTER_INIT_MAGIC, RegisterInit, RegisterProof, RegistrationAuthority,
@@ -102,7 +102,7 @@ pub enum Outcome<'f> {
     /// A STOP proved sender authority to retire its share instance.
     Stop(StopAuthority),
     /// A receiver asked to join a share, which needs no sender authority.
-    Join(ShareId),
+    Join(JoinRequest),
 }
 
 /// Why a handshake closes its connection without replying.
@@ -403,9 +403,12 @@ impl ControlHandshake {
         match frame.first_chunk().copied() {
             Some(REGISTER_INIT_MAGIC) => Ok(self.registration(RegisterInit::decode(frame)?, now)),
             Some(STOP_INIT_MAGIC) => self.stop(StopInit::decode(frame)?, now),
-            Some(JOIN_MAGIC) => Ok(Step::Complete(Outcome::Join(
+            Some(JOIN_MAGIC) => Ok(Step::Complete(Outcome::Join(JoinRequest::new(
+                self.relay,
+                self.connection,
                 Join::decode(frame)?.share_id(),
-            ))),
+                now,
+            )))),
             _ => Err(CloseReason::Malformed(FrameError::Header)),
         }
     }

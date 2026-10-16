@@ -14,7 +14,7 @@ struct StopVector {
     stopped_b64: String,
 }
 
-fn authority(fixture: &Fixture, connection: ConnectionRef) -> StopAuthority {
+pub(super) fn authority(fixture: &Fixture, connection: ConnectionRef) -> StopAuthority {
     let vector: StopVector = session_case("fresh-relay-registration-proof");
     let at = UnixMillis(unix_seconds(&vector.stop_expires_at).start().0 - VECTOR_STOP_MILLIS - 1);
     let mut handshake = ControlHandshake::open(fixture.relay(), connection, at);
@@ -89,7 +89,7 @@ fn assert_fenced(fixture: &Fixture, engine: &mut ShareLifecycle<Recorder>, at: U
     assert_eq!(engine.phase(), Phase::Stopping);
     assert_eq!(engine.deadline(), None);
     for event in [
-        Event::Join(fixture.share()),
+        Event::CheckJoin(fixture.share()),
         fixture.reserve_event(at),
         Event::BeginResume {
             connection: connection(4, 1),
@@ -171,6 +171,7 @@ fn uncertainty_at_each_phase_keeps_the_same_irreversible_obligation() {
             assert_eq!(
                 engine.handle(Event::Tick, later),
                 Effects {
+                    revocation: None,
                     expiration: None,
                     action: Action::None
                 }

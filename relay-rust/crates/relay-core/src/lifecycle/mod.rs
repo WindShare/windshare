@@ -1,6 +1,6 @@
 //! Single-share route authority, independent of storage and sockets.
 //!
-//! Hosts serialize events, execute both parts of each `Effects`, and schedule
+//! Hosts serialize events, apply every part of each `Effects`, and schedule
 //! `deadline()` as an absolute timer/alarm. Every event checks that deadline,
 //! so late timers never extend ownership. The engine retains only bounded
 //! metadata; descriptor bytes belong to the host transaction. Hosts finish
@@ -25,12 +25,15 @@
 //!
 //! STOP fences the route immediately, persists its cleanup obligation, retires
 //! exact participants and outstanding publication work, then commits the final
-//! record before acknowledging. Receiver session allocation remains separate.
+//! record before acknowledging. Receiver JOIN creates a session bound to this
+//! ownership; revocations name the exact old ownership for session cleanup.
+//! Hosts retain session authorities in their own bounded resource storage.
 
 mod effect;
 mod observation;
 mod operation;
 mod record;
+mod session;
 mod stopping;
 
 pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationResult, Refusal};
@@ -43,6 +46,7 @@ pub use record::{
     EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
     RestoreError, StoppedShare, UnresolvedPublication,
 };
+pub use session::Joined;
 pub use stopping::{PendingStop, StopAcknowledgement, StopCleanup, StopResult, StopStep, StopWork};
 
 use core::{num::NonZeroU64, time::Duration};
@@ -204,6 +208,7 @@ impl<O: Observer> ShareLifecycle<O> {
     pub fn handle<'f>(&mut self, event: Event<'f>, now: UnixMillis) -> Effects<'f> {
         // STOP must retain the exact cleanup obligation even at an expired
         // reservation/grace boundary. A refused STOP still runs normal expiry.
+        let owner_before = self.session_owner();
         let is_stop = matches!(event, Event::Stop { .. });
         let mut expiration = if is_stop { None } else { self.expire(now) };
         let before = self.phase();
@@ -229,12 +234,14 @@ impl<O: Observer> ShareLifecycle<O> {
                 authority,
             } => self.stop(connection, authority),
             Event::StopFinished { work, result } => self.finish_stop(work, result),
-            Event::Join(share) => self.join(share),
+            Event::CheckJoin(share) => self.join(share),
+            Event::Join { request, session } => self.join_session(request, session, now),
             Event::Tick => Action::None,
         };
         let operation = match &action {
             Action::Reserved(reservation) => Some(reservation.id()),
             Action::ResumeAdmitted(attempt) => Some(attempt.id()),
+            Action::Joined(joined) => Some(joined.session.key().admission()),
             Action::Stop(work) => Some(work.pending().id()),
             _ => operation,
         };
@@ -259,7 +266,12 @@ impl<O: Observer> ShareLifecycle<O> {
         if is_stop && matches!(action, Action::Refused(_)) {
             expiration = self.expire(now);
         }
-        Effects { expiration, action }
+        let revocation = self.session_revocation(owner_before);
+        Effects {
+            revocation,
+            expiration,
+            action,
+        }
     }
 
     /// Installs the stored state and returns the host action it requires,

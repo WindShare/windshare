@@ -64,7 +64,29 @@ A stopping record restores into cleanup even when old sockets survived. A
 completed STOP retry acknowledges the same stop ID on the retrying connection
 generation; a pending retry gets a bounded retry hint without retaining waiters.
 Structured STOP observations include operation, stop ID, phase and cleanup
-identity. Receiver sessions/ForwardPermit and both platform adapters remain next.
+identity.
+
+Receiver JOIN now carries its exact connection and a 30-second absolute admission
+deadline from the handshake. `Action::Joined` creates a move-only
+`sessions::Session`: awaiting receiver → awaiting sender → active → retired.
+Provisional sessions forward the opaque E2E handshake in both directions;
+`WS2M` from the exact sender admits only after a receiver frame. Traffic never
+extends admission, and active sessions have no relay-idle timeout.
+
+`ForwardPermit` binds relay/share/instance, wire session, actor/admission
+generation, direction, protocol version and both connection generations.
+`Session::check_forward` borrows the live session and lifecycle through submission;
+queued frames and delayed callbacks must check again. STOP fences permits before
+persistence, RESUME replaces ownership, and owner loss enters grace immediately.
+Their exact-owner revocations produce session cleanup obligations; STOP executes
+physical cleanup in its durable Retire step. Receiver failure or admission expiry
+retires only that session. Retirement never refunds submitted bytes.
+
+Hosts own bounded session storage, non-reused wire IDs, scheduling and payloads.
+The core validates `WS2O` framing without retaining ciphertext and traces session
+transitions/refusals. Credit/startup capacity, retirement settlement, hibernation
+session restoration and both platform adapters remain next. A restored lifecycle
+currently invalidates previous session permits, including surviving sockets.
 
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
@@ -85,5 +107,7 @@ build. The lifecycle tests use injected time and the real handshake/shared
 vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
 uncertain publication, owner loss and lapse, resume binding, STOP commit order,
 STOP/RESUME races, retries, late callbacks and restoration of every stored record.
+Session tests cover provisional handshake routing, fixed admission deadlines,
+quiet active sessions, queued-permit revocation and receiver/sibling isolation.
 See [validation](../../validation.md#rust-relay-checks) for prerequisites and
 gate ownership.

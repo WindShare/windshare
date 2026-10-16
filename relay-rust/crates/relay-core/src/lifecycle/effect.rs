@@ -3,15 +3,17 @@
 use crate::{
     clock::UnixMillis,
     error_frame::{ErrorFrame, RetryAfter},
-    identifiers::ShareId,
+    identifiers::{RelaySessionId, ShareId},
+    join::JoinRequest,
     registration::RegisterInit,
+    sessions::Revocation,
     stop::StopAuthority,
 };
 
 use super::{
-    ConnectionRef, GraceRoute, OperationId, Publication, PublishRequest, PublishedRegistration,
-    PublishedRoute, Reservation, ResumeAttempt, Resumed, Resumption, StopAcknowledgement,
-    StopResult, StopWork,
+    ConnectionRef, GraceRoute, Joined, OperationId, Publication, PublishRequest,
+    PublishedRegistration, PublishedRoute, Reservation, ResumeAttempt, Resumed, Resumption,
+    StopAcknowledgement, StopResult, StopWork,
 };
 
 /// Host evidence about one publication transaction.
@@ -98,8 +100,15 @@ pub enum Event<'f> {
         /// Uncertain or failed work remains fenced and must be retried.
         result: StopResult,
     },
-    /// Checks lifecycle readiness; session admission still belongs to the host.
-    Join(ShareId),
+    /// Inspects readiness without allocating a receiver admission.
+    CheckJoin(ShareId),
+    /// Consumes a completed receiver handshake after the host reserves capacity.
+    Join {
+        /// Connection-bound request, including its original absolute deadline.
+        request: JoinRequest,
+        /// Host-allocated ID, never reused while either connection survives.
+        session: RelaySessionId,
+    },
     /// The timer/alarm reached the next deadline.
     Tick,
 }
@@ -111,14 +120,19 @@ pub enum Refusal {
     WrongShare,
     /// A STOP authority is addressed to another relay.
     WrongRelay,
+    /// A sender connection cannot also join its own relay session.
+    InvalidReceiver,
     /// The authenticated STOP names another published or stopping instance.
     StopMismatch,
     /// STOP is not yet durably committed and fully cleaned up.
     StopPending,
     /// The registration's mode is not the one this event handles.
     UnsupportedMode,
-    /// The original handshake deadline has passed.
+    /// The original sender handshake deadline has passed.
     Expired,
+    /// The receiver admission budget elapsed before JOIN could install a session.
+    /// Close that receiver; there is no sender challenge to reject.
+    JoinExpired,
     /// Another attempt or published sender owns the share.
     Occupied,
     /// A transaction needs authoritative reconciliation before another attempt.
@@ -151,6 +165,7 @@ impl Refusal {
         match self {
             Self::WrongShare | Self::NotFound => Some(ErrorFrame::NotFound),
             Self::UnsupportedMode => Some(ErrorFrame::UnsupportedMode),
+            Self::InvalidReceiver => Some(ErrorFrame::Malformed),
             Self::Expired => Some(ErrorFrame::ChallengeExpired),
             Self::Occupied => Some(ErrorFrame::AlreadyRegistered),
             Self::PublicationUncertain | Self::SequenceExhausted | Self::StopPending => {
@@ -162,7 +177,7 @@ impl Refusal {
                 Some(ErrorFrame::InvalidProof)
             }
             Self::ResumeStale => Some(ErrorFrame::ResumeStale),
-            Self::StaleOperation => None,
+            Self::StaleOperation | Self::JoinExpired => None,
         }
     }
 }
@@ -206,6 +221,9 @@ pub enum Action<'f> {
     Stopped(StopAcknowledgement),
     /// Lifecycle permits receiver admission using these exact host resources.
     JoinReady(PublishedRegistration),
+    /// Install this session and deliver the owner's sealed descriptor. Any failed
+    /// preparation ends this exact admission through the session state machine.
+    Joined(Joined),
     /// The attempt never reached publication; close its connection only if
     /// this exact attempt still owns the host's connection resources. Storage
     /// needs no write: a reservation stores nothing, and an abort already
@@ -239,8 +257,13 @@ pub enum Expiration {
 
 /// One event may expire an older attempt before deciding on the current input.
 #[derive(Debug, Eq, PartialEq)]
-#[must_use = "execute the expiration before the requested action"]
+#[must_use = "apply revocation, execute expiration, then perform the requested action"]
 pub struct Effects<'f> {
+    /// Apply immediately to sessions of this exact old ownership. Retain the
+    /// resulting cleanup work: STOP executes physical retirement only in its
+    /// Retire step, after storing intent. Live permit checks already reject old
+    /// routes even before the host applies this revocation.
+    pub revocation: Option<Revocation>,
     /// Timer cleanup is explicit even when a peer request discovers expiry.
     pub expiration: Option<Expiration>,
     /// Decision for the input itself.

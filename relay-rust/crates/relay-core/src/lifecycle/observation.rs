@@ -3,6 +3,7 @@
 use crate::{
     clock::UnixMillis,
     identifiers::{RelayIdentity, ShareId, StopId},
+    sessions::SessionKey,
 };
 
 use super::{
@@ -61,6 +62,8 @@ pub enum ObservedEvent {
         result: StopResult,
     },
     /// A receiver checked readiness.
+    CheckJoin,
+    /// A connection-bound receiver request was admitted or refused.
     Join,
     /// A timer event without an expired operation.
     Tick,
@@ -96,6 +99,8 @@ pub enum Decision {
     Lapsed,
     /// Allowed receiver admission.
     JoinReady,
+    /// Created an exact receiver admission and permit generation.
+    Joined(SessionKey),
     /// Released an unpublished attempt.
     Released,
     /// Kept a possibly committed transaction hidden.
@@ -214,7 +219,8 @@ pub(super) const fn event_context(
             Some(work.pending().id()),
             Some(work.pending().id().connection()),
         ),
-        Event::Join(_) => (ObservedEvent::Join, None, None),
+        Event::CheckJoin(_) => (ObservedEvent::CheckJoin, None, None),
+        Event::Join { request, .. } => (ObservedEvent::Join, None, Some(request.connection())),
         Event::Tick => (ObservedEvent::Tick, None, None),
     }
 }
@@ -233,6 +239,7 @@ pub(super) const fn decision(action: &Action<'_>) -> Decision {
         },
         Action::Stopped(_) => Decision::Stopped,
         Action::JoinReady(_) => Decision::JoinReady,
+        Action::Joined(joined) => Decision::Joined(joined.session.key()),
         Action::Released(_) => Decision::Released,
         Action::Reconcile(_) => Decision::Reconcile,
         Action::Refused(reason) => Decision::Refused(*reason),
