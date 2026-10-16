@@ -39,7 +39,8 @@ bytes, keyed by relay identity and share:
 | Registered or Resumed, before REGISTERED | `Published` (registration, resume hash, owner connection) | published if the owner survived, else grace returning `Detached` |
 | Detached | `Grace` (registration, resume hash, absolute deadline) | grace with the stored deadline |
 | Lapsed | none | vacant |
-| STOP, before STOPPED (next stage) | `Stopped` (instance, stop ID); permanent | stopped |
+| STOP intent, before cleanup | `Stopping` (instance, stop ID, operation, exact cleanup); irreversible | stopping, returning `Stop(Retire)` |
+| STOP cleanup complete, before STOPPED | `Stopped` (instance, stop ID); permanent | stopped |
 
 A crash before REGISTERED's write therefore never revives a fenced attempt.
 Restore needs a fresh incarnation and keeps stored operation identities.
@@ -49,6 +50,21 @@ process restart it is empty. Only a restore that finds the owner gone derives a
 grace deadline, and the host persists it, so later restores never extend it.
 A stopped instance is refused with `Stopped`, and other instances of a stopped
 share stay occupied.
+
+Authenticated STOP immediately fences JOIN, registration and RESUME, including
+an absent route or an unfinished registration. Its explicit host steps are
+`Persist → Retire → Commit`: store the stop fact and cleanup obligation, retire
+the exact connection/operation and quiesce its writes, then store the final
+record. Only confirmed completion of all three permits STOPPED. Failed or
+uncertain work stays fenced and retries the same step; stale publication
+callbacks cannot reopen it. Host writes/deletes are conditional on exact records,
+so late publication or rollback cannot overwrite or remove STOP evidence.
+
+A stopping record restores into cleanup even when old sockets survived. A
+completed STOP retry acknowledges the same stop ID on the retrying connection
+generation; a pending retry gets a bounded retry hint without retaining waiters.
+Structured STOP observations include operation, stop ID, phase and cleanup
+identity. Receiver sessions/ForwardPermit and both platform adapters remain next.
 
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
@@ -67,7 +83,7 @@ without accepted inbound frames. Both Rust adapters must keep it.
 `make rust` covers formatting, Clippy, native coverage, doctests and the core Wasm
 build. The lifecycle tests use injected time and the real handshake/shared
 vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
-uncertain publication, owner loss and lapse, resume binding, record layout and
-restoration of every stored record.
+uncertain publication, owner loss and lapse, resume binding, STOP commit order,
+STOP/RESUME races, retries, late callbacks and restoration of every stored record.
 See [validation](../../validation.md#rust-relay-checks) for prerequisites and
 gate ownership.

@@ -51,8 +51,8 @@ impl Fixture {
             .registration()
     }
 
-    fn operation(&self) -> RegistrationId {
-        RegistrationId {
+    fn operation(&self) -> OperationId {
+        OperationId {
             relay: self.relay,
             share: self.registration().route().share_id(),
             incarnation: Incarnation::new([7; 16]).unwrap(),
@@ -100,6 +100,13 @@ impl Fixture {
             share_instance: stop.share_instance(),
             stop_id: stop.stop_id(),
         })
+    }
+
+    fn pending(&self, cleanup: StopCleanup) -> PendingStop {
+        let Record::Stopped(stopped) = self.stopped() else {
+            unreachable!()
+        };
+        PendingStop::new(self.operation(), stopped, cleanup)
     }
 
     /// Format, kind and relay, then the shared frame's body from its share ID.
@@ -164,6 +171,96 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
 }
 
 #[test]
+fn stopping_records_preserve_the_exact_cleanup_obligation_in_bounded_bytes() {
+    let fixture = Fixture::new();
+    let mut old = fixture.operation();
+    old.incarnation = Incarnation::new([8; 16]).unwrap();
+    old.connection.generation = NonZeroU64::new(4).unwrap();
+    old.sequence = NonZeroU64::MIN;
+    for (cleanup, tag, width) in [
+        (StopCleanup::None, CLEANUP_NONE, 0),
+        (
+            StopCleanup::Reservation(old),
+            CLEANUP_RESERVATION,
+            OPERATION_BYTES,
+        ),
+        (
+            StopCleanup::Publication(old),
+            CLEANUP_PUBLICATION,
+            OPERATION_BYTES,
+        ),
+        (
+            StopCleanup::Owner(old.connection()),
+            CLEANUP_OWNER,
+            CONNECTION_BYTES,
+        ),
+    ] {
+        let pending = fixture.pending(cleanup);
+        let record = pending.record();
+        let encoded = record.encode();
+        let raw = encoded.as_bytes();
+        let tag_offset = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES;
+        assert_eq!(raw.len(), tag_offset + 1 + width);
+        assert!(raw.len() <= MAX_RECORD_BYTES);
+        assert_eq!(raw[tag_offset], tag);
+        assert_eq!(raw[0], FORMAT);
+        assert_eq!(raw[1], STOPPING);
+        let stopped = pending.stopped().record().encode();
+        assert_eq!(
+            &raw[2..HEADER_BYTES + STOP_FACT_BYTES],
+            &stopped.as_bytes()[2..]
+        );
+        assert_eq!(Record::decode(raw), Ok(record));
+        assert_eq!(record.relay(), fixture.relay);
+        assert_eq!(record.share(), fixture.registration().route().share_id());
+
+        // Partial storage writes and trailing garbage never erase a fence.
+        for length in 0..raw.len() {
+            assert!(Record::decode(&raw[..length]).is_err());
+        }
+        assert_eq!(
+            Record::decode(&[raw, &[0]].concat()),
+            Err(RecordError::Length)
+        );
+    }
+}
+
+#[test]
+fn stopping_records_reject_unknown_cleanup_and_zero_operation_or_connection_fields() {
+    let fixture = Fixture::new();
+    let operation = fixture.operation();
+    let cleanup_start = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES;
+    let pending_start = HEADER_BYTES + STOP_FACT_BYTES;
+    for cleanup in [
+        StopCleanup::Reservation(operation),
+        StopCleanup::Publication(operation),
+        StopCleanup::Owner(operation.connection()),
+    ] {
+        let stored = fixture.pending(cleanup).record().encode();
+        let raw = stored.as_bytes();
+        let mut unknown = raw.to_vec();
+        unknown[cleanup_start] = CLEANUP_OWNER + 1;
+        assert_eq!(Record::decode(&unknown), Err(RecordError::Field));
+        let zeroed = |start: usize, width: usize| {
+            let mut invalid = raw.to_vec();
+            invalid[start..start + width].fill(0);
+            assert_eq!(Record::decode(&invalid), Err(RecordError::Field));
+        };
+        for start in [pending_start, cleanup_start + 1] {
+            if start == cleanup_start + 1 && matches!(cleanup, StopCleanup::Owner(_)) {
+                zeroed(start, 8);
+                zeroed(start + 8, 8);
+            } else {
+                zeroed(start, 16);
+                zeroed(start + 16, 8);
+                zeroed(start + 24, 8);
+                zeroed(start + 32, 8);
+            }
+        }
+    }
+}
+
+#[test]
 fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
     let fixture = Fixture::new();
     let unresolved = fixture.unresolved().encode().as_bytes().to_vec();
@@ -186,7 +283,7 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&stopped, 0..1, FORMAT + 1), RecordError::Format),
         (edit(&grace, 0..1, FORMAT - 1), RecordError::Format),
         (edit(&published, 1..2, 0), RecordError::Kind),
-        (edit(&published, 1..2, STOPPED + 1), RecordError::Kind),
+        (edit(&published, 1..2, STOPPING + 1), RecordError::Kind),
         // Relay identity, then a share ID no longer derived from its key hash.
         (edit(&published, 2..34, 0), RecordError::Field),
         (edit(&published, 34..35, 0xff), RecordError::Field),

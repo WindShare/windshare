@@ -11,7 +11,9 @@
 //!
 //! Losing the owner stores the grace deadline as an absolute instant. Only a
 //! restore that finds the stored owner gone derives one, so later restores
-//! never extend it.
+//! never extend it. STOP first persists its permanent fact together with the
+//! exact cleanup obligation, then replaces it with Stopped only after cleanup.
+//! Restoring Stopping repeats cleanup; it can never re-adopt a surviving owner.
 
 use core::{error::Error, fmt, num::NonZeroU64};
 
@@ -25,16 +27,22 @@ use crate::{
     wire::{Reader, Writer},
 };
 
-use super::{ConnectionRef, Incarnation, RegistrationId};
+use super::{ConnectionRef, Incarnation, OperationId, PendingStop, StopCleanup};
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 2;
+const FORMAT: u8 = 3;
 
 const UNRESOLVED: u8 = 1;
 const PUBLISHED: u8 = 2;
 const GRACE: u8 = 3;
 const STOPPED: u8 = 4;
+const STOPPING: u8 = 5;
+
+const CLEANUP_NONE: u8 = 0;
+const CLEANUP_RESERVATION: u8 = 1;
+const CLEANUP_PUBLICATION: u8 = 2;
+const CLEANUP_OWNER: u8 = 3;
 
 // Format and kind, then the relay identity and share ID every record names.
 const HEADER_BYTES: usize = 1 + 1 + 32 + 12;
@@ -46,6 +54,12 @@ const CONNECTION_BYTES: usize = 8 + 8;
 // Incarnation and connection, then the attempt sequence.
 const OPERATION_BYTES: usize = 16 + CONNECTION_BYTES + 8;
 
+// Instance, key hash and stop ID.
+const STOP_FACT_BYTES: usize = 16 + 16 + 16;
+// The cleanup tag and at most one publication operation keep a stopping
+// record smaller than an unresolved publication.
+const _: () = assert!(STOP_FACT_BYTES + 1 + OPERATION_BYTES <= REGISTRATION_BYTES);
+
 /// Largest encoded record, an unresolved publication; hosts may size storage
 /// columns from it.
 pub const MAX_RECORD_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + OPERATION_BYTES;
@@ -56,14 +70,14 @@ pub const MAX_RECORD_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + OPERATIO
 /// exact operation, ending in `PublicationResult::Aborted`, removes it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnresolvedPublication {
-    pub(super) id: RegistrationId,
+    pub(super) id: OperationId,
     pub(super) registration: Registration,
 }
 
 impl UnresolvedPublication {
     /// Returns the operation whose resources and record need reconciliation.
     #[must_use]
-    pub const fn id(&self) -> RegistrationId {
+    pub const fn id(&self) -> OperationId {
         self.id
     }
 
@@ -154,6 +168,12 @@ pub struct StoppedShare {
 }
 
 impl StoppedShare {
+    /// The final record, stored only after exact participant cleanup.
+    #[must_use]
+    pub const fn record(self) -> Record {
+        Record::Stopped(self)
+    }
+
     /// Returns the retired route.
     #[must_use]
     pub const fn route(&self) -> ShareRoute {
@@ -187,7 +207,10 @@ pub enum Record {
     /// Replaces the owned record once its owner is gone, from
     /// `GraceRoute::record`; removed when the route lapses.
     Grace(GraceRoute),
-    /// Stored by STOP before STOPPED; never removed.
+    /// Stored before STOP cleanup, retaining its exact participants across
+    /// restart. It may become Stopped, never a live route or an absent record.
+    Stopping(PendingStop),
+    /// Stored after STOP cleanup and before STOPPED; never removed.
     Stopped(StoppedShare),
 }
 
@@ -199,6 +222,7 @@ impl Record {
             Self::Unresolved(unresolved) => unresolved.id.relay,
             Self::Published(owned) => owned.route.relay,
             Self::Grace(grace) => grace.route.relay,
+            Self::Stopping(pending) => pending.id().relay(),
             Self::Stopped(stopped) => stopped.relay,
         }
     }
@@ -210,6 +234,7 @@ impl Record {
             Self::Unresolved(unresolved) => unresolved.registration.route().share_id(),
             Self::Published(owned) => owned.route.registration.route().share_id(),
             Self::Grace(grace) => grace.route.registration.route().share_id(),
+            Self::Stopping(pending) => pending.id().share(),
             Self::Stopped(stopped) => stopped.route.share_id(),
         }
     }
@@ -221,6 +246,7 @@ impl Record {
             Self::Unresolved(_) => UNRESOLVED,
             Self::Published(_) => PUBLISHED,
             Self::Grace(_) => GRACE,
+            Self::Stopping(_) => STOPPING,
             Self::Stopped(_) => STOPPED,
         };
         let mut out = Writer::new();
@@ -240,11 +266,12 @@ impl Record {
                 put_registration(&mut out, &grace.route.registration);
                 out.put(&grace.deadline.0.to_be_bytes());
             }
-            Self::Stopped(stopped) => {
-                out.put(stopped.share_instance.as_bytes())
-                    .put(stopped.route.pk_hash().as_bytes())
-                    .put(stopped.stop_id.as_bytes());
+            Self::Stopping(pending) => {
+                put_stopped(&mut out, pending.stopped());
+                put_operation(&mut out, pending.id);
+                put_cleanup(&mut out, pending.cleanup);
             }
+            Self::Stopped(stopped) => put_stopped(&mut out, *stopped),
         }
         EncodedRecord(out)
     }
@@ -280,15 +307,16 @@ impl Record {
                 route: read_route(&mut body, relay, share_id)?,
                 deadline: UnixMillis(u64::from_be_bytes(take(&mut body)?)),
             }),
-            STOPPED => {
-                let share_instance = instance(&mut body)?;
-                Self::Stopped(StoppedShare {
-                    relay,
-                    route: route(share_id, take(&mut body)?)?,
-                    share_instance,
-                    stop_id: StopId::new(take(&mut body)?).ok_or(RecordError::Field)?,
-                })
+            STOPPING => {
+                let stopped = read_stopped(&mut body, relay, share_id)?;
+                let share = stopped.route.share_id();
+                Self::Stopping(PendingStop::new(
+                    read_operation(&mut body, relay, share)?,
+                    stopped,
+                    read_cleanup(&mut body, relay, share)?,
+                ))
             }
+            STOPPED => Self::Stopped(read_stopped(&mut body, relay, share_id)?),
             _ => return Err(RecordError::Kind),
         };
         body.finish().map_err(|_| RecordError::Length)?;
@@ -369,6 +397,65 @@ impl fmt::Display for RestoreError {
 
 impl Error for RestoreError {}
 
+fn put_stopped(out: &mut Writer<MAX_RECORD_BYTES>, stopped: StoppedShare) {
+    out.put(stopped.share_instance.as_bytes())
+        .put(stopped.route.pk_hash().as_bytes())
+        .put(stopped.stop_id.as_bytes());
+}
+
+fn put_cleanup(out: &mut Writer<MAX_RECORD_BYTES>, cleanup: StopCleanup) {
+    match cleanup {
+        StopCleanup::None => {
+            out.put(&[CLEANUP_NONE]);
+        }
+        StopCleanup::Reservation(id) | StopCleanup::Publication(id) => {
+            let kind = if matches!(cleanup, StopCleanup::Reservation(_)) {
+                CLEANUP_RESERVATION
+            } else {
+                CLEANUP_PUBLICATION
+            };
+            out.put(&[kind]);
+            put_operation(out, id);
+        }
+        StopCleanup::Owner(owner) => {
+            out.put(&[CLEANUP_OWNER]);
+            put_connection(out, owner);
+        }
+    }
+}
+
+fn read_stopped(
+    body: &mut Reader<'_>,
+    relay: RelayIdentity,
+    share_id: [u8; 12],
+) -> Result<StoppedShare, RecordError> {
+    let share_instance = instance(body)?;
+    Ok(StoppedShare {
+        relay,
+        route: route(share_id, take(body)?)?,
+        share_instance,
+        stop_id: StopId::new(take(body)?).ok_or(RecordError::Field)?,
+    })
+}
+
+fn read_cleanup(
+    body: &mut Reader<'_>,
+    relay: RelayIdentity,
+    share: ShareId,
+) -> Result<StopCleanup, RecordError> {
+    match take::<1>(body)?[0] {
+        CLEANUP_NONE => Ok(StopCleanup::None),
+        CLEANUP_RESERVATION => Ok(StopCleanup::Reservation(read_operation(
+            body, relay, share,
+        )?)),
+        CLEANUP_PUBLICATION => Ok(StopCleanup::Publication(read_operation(
+            body, relay, share,
+        )?)),
+        CLEANUP_OWNER => Ok(StopCleanup::Owner(read_connection(body)?)),
+        _ => Err(RecordError::Field),
+    }
+}
+
 fn put_registration(out: &mut Writer<MAX_RECORD_BYTES>, registration: &Registration) {
     out.put(registration.share_instance().as_bytes())
         .put(registration.route().pk_hash().as_bytes())
@@ -381,7 +468,7 @@ fn put_connection(out: &mut Writer<MAX_RECORD_BYTES>, connection: ConnectionRef)
         .put(&connection.generation.get().to_be_bytes());
 }
 
-fn put_operation(out: &mut Writer<MAX_RECORD_BYTES>, id: RegistrationId) {
+fn put_operation(out: &mut Writer<MAX_RECORD_BYTES>, id: OperationId) {
     out.put(id.incarnation.as_bytes());
     put_connection(out, id.connection);
     out.put(&id.sequence.get().to_be_bytes());
@@ -441,10 +528,10 @@ fn read_operation(
     body: &mut Reader<'_>,
     relay: RelayIdentity,
     share: ShareId,
-) -> Result<RegistrationId, RecordError> {
+) -> Result<OperationId, RecordError> {
     let incarnation = Incarnation::new(take(body)?).ok_or(RecordError::Field)?;
     let connection = read_connection(body)?;
-    Ok(RegistrationId {
+    Ok(OperationId {
         relay,
         share,
         incarnation,

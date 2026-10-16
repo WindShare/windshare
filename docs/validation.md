@@ -80,8 +80,9 @@ Go/browser Ed25519 acceptance vectors; REGISTER/RESUME/STOP frames, preimages, p
 consume `v2-session.json`. The per-connection handshake and single-share lifecycle cover
 reservation, authenticated publication, stale-operation fencing, uncertain host results, owner-loss
 grace and ownership-bound RESUME. JOIN readiness and REGISTERED wait for confirmed persistence and
-connection preparation. Lifecycle restoration covers every durable record and surviving owners;
-lifecycle STOP and platform adapters remain unimplemented.
+connection preparation. STOP tests cover ordered persistence/cleanup/final commit, uncertain results,
+retry identity, registration/RESUME races and late callbacks. Restoration covers every durable record,
+surviving owners and interrupted STOP cleanup; platform adapters remain unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 

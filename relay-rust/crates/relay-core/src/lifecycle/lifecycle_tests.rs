@@ -598,3 +598,6 @@ mod restoration;
 
 #[path = "ownership_tests.rs"]
 mod ownership;
+
+#[path = "stopping_tests.rs"]
+mod stopping;

@@ -2,10 +2,13 @@
 
 use crate::{
     clock::UnixMillis,
-    identifiers::{RelayIdentity, ShareId},
+    identifiers::{RelayIdentity, ShareId, StopId},
 };
 
-use super::{Cancellation, ConnectionRef, Incarnation, PublicationResult, Refusal, RegistrationId};
+use super::{
+    Action, Cancellation, ConnectionRef, Event, Incarnation, OperationId, PublicationResult,
+    Refusal, ShareLifecycle, StopCleanup, StopResult, StopStep,
+};
 
 /// Lifecycle phases shared by both platform adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,6 +26,8 @@ pub enum Phase {
     /// No connection serves the published route until its sender resumes or
     /// the grace deadline lapses it.
     Grace,
+    /// An irreversible STOP still needs durable recording or exact cleanup.
+    Stopping,
     /// The share instance was permanently stopped.
     Stopped,
 }
@@ -46,6 +51,15 @@ pub enum ObservedEvent {
     Resume,
     /// The route's owner connection ended without STOP.
     OwnerDisconnected,
+    /// An authenticated sender requested permanent retirement.
+    Stop(StopId),
+    /// Host evidence about one phase of irreversible retirement.
+    StopFinished {
+        /// Phase the callback names, including out-of-order callbacks.
+        step: StopStep,
+        /// Whether that phase is confirmed complete.
+        result: StopResult,
+    },
     /// A receiver checked readiness.
     Join,
     /// A timer event without an expired operation.
@@ -69,6 +83,15 @@ pub enum Decision {
     Resumed,
     /// Started the grace of a route whose owner is gone.
     Detached,
+    /// Requested or retried one STOP phase.
+    Stop {
+        /// Requested persistence or cleanup phase.
+        step: StopStep,
+        /// Exact old participants, including after a restore.
+        cleanup: StopCleanup,
+    },
+    /// Permitted STOPPED after all durable and cleanup evidence.
+    Stopped,
     /// Removed a grace route whose sender never resumed.
     Lapsed,
     /// Allowed receiver admission.
@@ -96,7 +119,7 @@ pub struct Observation {
     pub incarnation: Incarnation,
     /// Attempt being acted on, including stale callback identities, a
     /// restored unresolved operation and a re-adopted owner.
-    pub operation: Option<RegistrationId>,
+    pub operation: Option<OperationId>,
     /// Requesting connection, present even before a reservation exists, or
     /// the owner a disconnect or restored record names.
     pub connection: Option<ConnectionRef>,
@@ -119,4 +142,100 @@ pub trait Observer {
 
 impl Observer for () {
     fn observe(&mut self, _: Observation) {}
+}
+
+impl<O: Observer> ShareLifecycle<O> {
+    pub(super) fn observe(
+        &mut self,
+        at: UnixMillis,
+        event: ObservedEvent,
+        operation: Option<OperationId>,
+        connection: Option<ConnectionRef>,
+        before: Phase,
+        decision: Decision,
+    ) {
+        self.observer.observe(Observation {
+            at,
+            relay: self.relay,
+            share: self.share,
+            incarnation: self.incarnation,
+            operation,
+            connection,
+            event,
+            before,
+            after: self.phase(),
+            decision,
+        });
+    }
+}
+
+pub(super) const fn event_context(
+    event: &Event<'_>,
+) -> (ObservedEvent, Option<OperationId>, Option<ConnectionRef>) {
+    match event {
+        Event::Reserve { connection, .. } => (ObservedEvent::Reserve, None, Some(*connection)),
+        Event::Publish(publication) => (
+            ObservedEvent::Publish,
+            Some(publication.id()),
+            Some(publication.id().connection()),
+        ),
+        Event::PublicationFinished { id, result } => (
+            ObservedEvent::PublicationFinished(*result),
+            Some(*id),
+            Some(id.connection()),
+        ),
+        Event::Cancel { id, reason } => (
+            ObservedEvent::Cancel(*reason),
+            Some(*id),
+            Some(id.connection()),
+        ),
+        Event::BeginResume { connection, .. } => {
+            (ObservedEvent::BeginResume, None, Some(*connection))
+        }
+        Event::Resume(resumption) => (
+            ObservedEvent::Resume,
+            Some(resumption.id()),
+            Some(resumption.id().connection()),
+        ),
+        Event::OwnerDisconnected(owner) => (ObservedEvent::OwnerDisconnected, None, Some(*owner)),
+        Event::Stop {
+            connection,
+            authority,
+        } => (
+            ObservedEvent::Stop(authority.init().stop_id()),
+            None,
+            Some(*connection),
+        ),
+        Event::StopFinished { work, result } => (
+            ObservedEvent::StopFinished {
+                step: work.step(),
+                result: *result,
+            },
+            Some(work.pending().id()),
+            Some(work.pending().id().connection()),
+        ),
+        Event::Join(_) => (ObservedEvent::Join, None, None),
+        Event::Tick => (ObservedEvent::Tick, None, None),
+    }
+}
+
+pub(super) const fn decision(action: &Action<'_>) -> Decision {
+    match action {
+        Action::Reserved(_) => Decision::Reserved,
+        Action::Publish(_) => Decision::Publish,
+        Action::Registered(_) => Decision::Registered,
+        Action::ResumeAdmitted(_) => Decision::ResumeAdmitted,
+        Action::Resumed(_) => Decision::Resumed,
+        Action::Detached(_) => Decision::Detached,
+        Action::Stop(work) => Decision::Stop {
+            step: work.step(),
+            cleanup: work.pending().cleanup(),
+        },
+        Action::Stopped(_) => Decision::Stopped,
+        Action::JoinReady(_) => Decision::JoinReady,
+        Action::Released(_) => Decision::Released,
+        Action::Reconcile(_) => Decision::Reconcile,
+        Action::Refused(reason) => Decision::Refused(*reason),
+        Action::None => Decision::None,
+    }
 }

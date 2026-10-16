@@ -44,10 +44,11 @@ impl Incarnation {
 
 /// Correlation identity minted by the lifecycle, never by a callback.
 ///
+/// Registrations, resumes and stops share this identity space.
 /// The relay, share and incarnation fence independent actors; the connection
 /// generation and checked sequence fence retries within one actor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegistrationId {
+pub struct OperationId {
     pub(super) relay: RelayIdentity,
     pub(super) share: ShareId,
     pub(super) incarnation: Incarnation,
@@ -55,14 +56,14 @@ pub struct RegistrationId {
     pub(super) sequence: NonZeroU64,
 }
 
-impl RegistrationId {
-    /// Returns the relay whose proof and publication this operation belongs to.
+impl OperationId {
+    /// Returns the relay whose lifecycle this operation belongs to.
     #[must_use]
     pub const fn relay(self) -> RelayIdentity {
         self.relay
     }
 
-    /// Returns the share this operation may publish.
+    /// Returns the share this operation belongs to.
     #[must_use]
     pub const fn share(self) -> ShareId {
         self.share
@@ -89,7 +90,7 @@ impl RegistrationId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Pending {
-    pub id: RegistrationId,
+    pub id: OperationId,
     pub init: RegisterInit,
     pub deadline: UnixMillis,
 }
@@ -113,7 +114,7 @@ pub struct Reservation(pub(super) Pending);
 impl Reservation {
     /// Returns the identity used to cancel failed or disconnected handshakes.
     #[must_use]
-    pub const fn id(&self) -> RegistrationId {
+    pub const fn id(&self) -> OperationId {
         self.0.id
     }
 
@@ -133,14 +134,14 @@ impl Reservation {
 /// An authenticated upload bound to the reservation its handshake consumed.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Publication<'f> {
-    pub(super) id: RegistrationId,
+    pub(super) id: OperationId,
     pub(super) deadline: UnixMillis,
     pub(super) descriptor: AuthorizedDescriptor<'f>,
 }
 
 impl<'f> Publication<'f> {
     pub(crate) const fn new(
-        id: RegistrationId,
+        id: OperationId,
         deadline: UnixMillis,
         descriptor: AuthorizedDescriptor<'f>,
     ) -> Self {
@@ -153,7 +154,7 @@ impl<'f> Publication<'f> {
 
     /// Returns the attempt whose publication was authenticated.
     #[must_use]
-    pub const fn id(&self) -> RegistrationId {
+    pub const fn id(&self) -> OperationId {
         self.id
     }
 
@@ -174,7 +175,7 @@ impl<'f> Publication<'f> {
 #[derive(Debug, Eq, PartialEq)]
 pub struct PublishRequest<'f> {
     /// All resource and storage changes must be conditional on this identity.
-    pub id: RegistrationId,
+    pub id: OperationId,
     /// Metadata authenticated by the sender.
     pub init: RegisterInit,
     /// Opaque, authenticated upload; never a parsed end-to-end object.
@@ -205,7 +206,7 @@ impl PublishRequest<'_> {
 /// disconnecting does not, since no new owner exists to protect.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ResumeAttempt {
-    pub(super) id: RegistrationId,
+    pub(super) id: OperationId,
     pub(super) init: RegisterInit,
     pub(super) deadline: UnixMillis,
     // The observed ownership's sequence, or `None` when no route existed, so
@@ -216,7 +217,7 @@ pub struct ResumeAttempt {
 impl ResumeAttempt {
     /// Returns the identity the resuming connection owns the route under.
     #[must_use]
-    pub const fn id(&self) -> RegistrationId {
+    pub const fn id(&self) -> OperationId {
         self.id
     }
 
@@ -253,7 +254,7 @@ impl Resumption {
 
     /// Returns the attempt whose resume was authenticated.
     #[must_use]
-    pub const fn id(&self) -> RegistrationId {
+    pub const fn id(&self) -> OperationId {
         self.attempt.id
     }
 
@@ -269,7 +270,7 @@ impl Resumption {
 pub struct PublishedRegistration {
     /// The owning sender's operation: resource ownership and callback
     /// correlation. A restore re-adopting the owner mints a new one.
-    pub id: RegistrationId,
+    pub id: OperationId,
     /// The durable route receivers are admitted to.
     pub route: PublishedRoute,
 }

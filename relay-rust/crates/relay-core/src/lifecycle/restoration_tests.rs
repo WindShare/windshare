@@ -6,7 +6,7 @@ fn restarted() -> Incarnation {
 
 fn finish(
     engine: &mut ShareLifecycle<Recorder>,
-    id: RegistrationId,
+    id: OperationId,
     result: PublicationResult,
     at: UnixMillis,
 ) -> Action<'static> {

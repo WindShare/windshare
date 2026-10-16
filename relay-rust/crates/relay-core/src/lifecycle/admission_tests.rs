@@ -236,6 +236,9 @@ fn only_peer_refusals_have_wire_responses() {
     let retry = RetryAfter::from_millis(250).unwrap();
     let cases = [
         (Refusal::WrongShare, Some(ErrorFrame::NotFound)),
+        (Refusal::WrongRelay, Some(ErrorFrame::InvalidProof)),
+        (Refusal::StopMismatch, Some(ErrorFrame::InvalidProof)),
+        (Refusal::StopPending, Some(ErrorFrame::Admission(retry))),
         (Refusal::NotFound, Some(ErrorFrame::NotFound)),
         (Refusal::UnsupportedMode, Some(ErrorFrame::UnsupportedMode)),
         (Refusal::Expired, Some(ErrorFrame::ChallengeExpired)),

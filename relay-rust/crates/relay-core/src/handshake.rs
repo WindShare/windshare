@@ -22,9 +22,7 @@ use crate::{
     error_frame::ErrorFrame,
     identifiers::{RelayIdentity, ShareId},
     join::{JOIN_MAGIC, Join},
-    lifecycle::{
-        ConnectionRef, Publication, RegistrationId, Reservation, ResumeAttempt, Resumption,
-    },
+    lifecycle::{ConnectionRef, OperationId, Publication, Reservation, ResumeAttempt, Resumption},
     registration::{
         FreshRegistration, REGISTER_INIT_MAGIC, RegisterInit, RegisterProof, RegistrationAuthority,
         RegistrationMode, ResumeCredential, authenticate_registration,
@@ -201,7 +199,7 @@ enum Awaiting {
     },
     Descriptor {
         registration: FreshRegistration,
-        id: RegistrationId,
+        id: OperationId,
     },
     StopProof {
         init: StopInit,
@@ -487,7 +485,7 @@ impl ControlHandshake {
 
     fn descriptor(
         registration: FreshRegistration,
-        id: RegistrationId,
+        id: OperationId,
         deadline: UnixMillis,
         frame: &[u8],
     ) -> Result<Step<'_>, CloseReason> {
