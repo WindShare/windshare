@@ -18,10 +18,11 @@ use crate::{
     authentication::AuthenticationError,
     challenge::{Challenge, ChallengePurpose, ChallengeSeed},
     clock::UnixMillis,
-    descriptor_upload::{AuthorizedDescriptor, DescriptorDigestMismatch, DescriptorUpload},
+    descriptor_upload::{DescriptorDigestMismatch, DescriptorUpload},
     error_frame::ErrorFrame,
     identifiers::{RelayIdentity, ShareId},
     join::{JOIN_MAGIC, Join},
+    lifecycle::{ConnectionRef, Publication, RegistrationId, Reservation},
     registration::{
         FreshRegistration, REGISTER_INIT_MAGIC, RegisterInit, RegisterProof, RegistrationAuthority,
         RegistrationMode, ResumeCredential, ResumeRegistration, authenticate_registration,
@@ -75,12 +76,30 @@ pub enum AdmissionRequest {
     Stop(StopInit),
 }
 
+/// The host's decision for the exact admission request.
+///
+/// Fresh registration requires a lifecycle reservation; RESUME and STOP retain
+/// their independent admission paths until their lifecycle stages are implemented.
+#[derive(Debug, Eq, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "bounded admission capabilities stay inline in this allocation-free kernel"
+)]
+pub enum Admission {
+    /// Consume the share's reservation for this connection and deadline.
+    Fresh(Reservation),
+    /// The host admitted recovery of an existing registration.
+    Resume,
+    /// The host admitted a stop handshake before its sender proof.
+    Stop,
+}
+
 /// Authority or intent a completed handshake hands to the host.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Outcome<'f> {
     /// A fresh registration proved sender authority and uploaded the
     /// descriptor it committed; the bytes borrow the upload frame.
-    Publish(AuthorizedDescriptor<'f>),
+    Publish(Publication<'f>),
     /// A resume proved sender authority over the route it names.
     Resume(ResumeRegistration),
     /// A STOP proved sender authority to retire its share instance.
@@ -103,6 +122,8 @@ pub enum CloseReason {
     UnexpectedFrame,
     /// The host admitted an operation the handshake was not waiting on.
     NoPendingAdmission,
+    /// The host's grant names another role, registration, relay, connection or deadline.
+    AdmissionMismatch,
     /// A STOP named another relay, so it never spends a challenge.
     MisaddressedStop,
     /// The sender proof did not grant authority.
@@ -152,10 +173,15 @@ pub enum Step<'f> {
 #[derive(Debug)]
 pub struct ControlHandshake {
     relay: RelayIdentity,
+    connection: ConnectionRef,
     progress: Progress,
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a pending handshake owns bounded metadata without requiring an allocator"
+)]
 enum Progress {
     Pending {
         awaiting: Awaiting,
@@ -171,22 +197,41 @@ enum Awaiting {
     ResumeCredential(RegisterInit),
     Admission(AdmissionRequest),
     RegistrationProof {
-        init: RegisterInit,
+        admission: RegistrationAdmission,
         challenge: Challenge,
     },
-    Descriptor(FreshRegistration),
+    Descriptor {
+        registration: FreshRegistration,
+        id: RegistrationId,
+    },
     StopProof {
         init: StopInit,
         challenge: Challenge,
     },
 }
 
+#[derive(Debug)]
+enum RegistrationAdmission {
+    Fresh(Reservation),
+    Resume(RegisterInit),
+}
+
+impl RegistrationAdmission {
+    const fn init(&self) -> RegisterInit {
+        match self {
+            Self::Fresh(reservation) => *reservation.init(),
+            Self::Resume(init) => *init,
+        }
+    }
+}
+
 impl ControlHandshake {
     /// Starts the handshake of a connection `relay` accepted at `now`.
     #[must_use]
-    pub fn open(relay: RelayIdentity, now: UnixMillis) -> Self {
+    pub fn open(relay: RelayIdentity, connection: ConnectionRef, now: UnixMillis) -> Self {
         Self {
             relay,
+            connection,
             progress: Progress::Pending {
                 awaiting: Awaiting::FirstFrame,
                 deadline: now.saturating_add(FIRST_FRAME_TIMEOUT),
@@ -205,7 +250,7 @@ impl ControlHandshake {
             Awaiting::ResumeCredential(_) => Phase::AwaitingResumeCredential,
             Awaiting::Admission(_) => Phase::AwaitingAdmission,
             Awaiting::RegistrationProof { .. } => Phase::AwaitingRegistrationProof,
-            Awaiting::Descriptor(_) => Phase::AwaitingDescriptor,
+            Awaiting::Descriptor { .. } => Phase::AwaitingDescriptor,
             Awaiting::StopProof { .. } => Phase::AwaitingStopProof,
         }
     }
@@ -250,10 +295,13 @@ impl ControlHandshake {
             Awaiting::FirstFrame => self.first_frame(frame, now),
             Awaiting::ResumeCredential(init) => self.resume_credential(init, frame, deadline),
             Awaiting::Admission(_) => Err(CloseReason::UnexpectedFrame),
-            Awaiting::RegistrationProof { init, challenge } => {
-                self.registration_proof(init, challenge, frame, deadline, now)
+            Awaiting::RegistrationProof {
+                admission,
+                challenge,
+            } => self.registration_proof(admission, challenge, frame, deadline, now),
+            Awaiting::Descriptor { registration, id } => {
+                Self::descriptor(registration, id, deadline, frame)
             }
-            Awaiting::Descriptor(registration) => Self::descriptor(registration, frame),
             Awaiting::StopProof { init, challenge } => self.stop_proof(init, challenge, frame, now),
         };
         step.unwrap_or_else(Step::Close)
@@ -264,7 +312,12 @@ impl ControlHandshake {
     /// The host draws `seed` from a cryptographic random source. Admission
     /// counts against the phase deadline, so a slow lifecycle decision cannot
     /// extend the handshake.
-    pub fn admit(&mut self, seed: ChallengeSeed, now: UnixMillis) -> Step<'static> {
+    pub fn admit(
+        &mut self,
+        admission: Admission,
+        seed: ChallengeSeed,
+        now: UnixMillis,
+    ) -> Step<'static> {
         let (awaiting, deadline) = match self.take_pending(now, CloseReason::NoPendingAdmission) {
             Ok(pending) => pending,
             Err(reason) => return Step::Close(reason),
@@ -272,17 +325,43 @@ impl ControlHandshake {
         let Awaiting::Admission(request) = awaiting else {
             return Step::Close(CloseReason::NoPendingAdmission);
         };
-        let (awaiting, challenge) = match request {
-            AdmissionRequest::Registration(init) => {
-                let challenge = Challenge::issue(init.mode().challenge_purpose(), seed, deadline);
+        let (awaiting, challenge) = match (request, admission) {
+            (AdmissionRequest::Registration(init), Admission::Fresh(reservation))
+                if init.mode() == RegistrationMode::Fresh
+                    && reservation.init() == &init
+                    && reservation.id().relay() == self.relay
+                    && reservation.id().connection() == self.connection
+                    && reservation.deadline() == deadline =>
+            {
+                let challenge = Challenge::issue(ChallengePurpose::Register, seed, deadline);
                 let encoded = challenge.encode();
-                (Awaiting::RegistrationProof { init, challenge }, encoded)
+                (
+                    Awaiting::RegistrationProof {
+                        admission: RegistrationAdmission::Fresh(reservation),
+                        challenge,
+                    },
+                    encoded,
+                )
             }
-            AdmissionRequest::Stop(init) => {
+            (AdmissionRequest::Registration(init), Admission::Resume)
+                if init.mode() == RegistrationMode::Resume =>
+            {
+                let challenge = Challenge::issue(ChallengePurpose::Resume, seed, deadline);
+                let encoded = challenge.encode();
+                (
+                    Awaiting::RegistrationProof {
+                        admission: RegistrationAdmission::Resume(init),
+                        challenge,
+                    },
+                    encoded,
+                )
+            }
+            (AdmissionRequest::Stop(init), Admission::Stop) => {
                 let challenge = Challenge::issue(ChallengePurpose::Stop, seed, deadline);
                 let encoded = challenge.encode();
                 (Awaiting::StopProof { init, challenge }, encoded)
             }
+            _ => return Step::Close(CloseReason::AdmissionMismatch),
         };
         self.continue_with(awaiting, deadline);
         Step::SendChallenge(challenge)
@@ -371,27 +450,46 @@ impl ControlHandshake {
 
     fn registration_proof(
         &mut self,
-        init: RegisterInit,
+        admission: RegistrationAdmission,
         challenge: Challenge,
         frame: &[u8],
         deadline: UnixMillis,
         now: UnixMillis,
     ) -> Result<Step<'static>, CloseReason> {
         let proof = RegisterProof::decode(frame)?;
-        match authenticate_registration(init, challenge, &self.relay, &proof, now)? {
-            RegistrationAuthority::Fresh(registration) => {
-                self.continue_with(Awaiting::Descriptor(registration), deadline);
+        let authority =
+            authenticate_registration(admission.init(), challenge, &self.relay, &proof, now)?;
+        match (admission, authority) {
+            (
+                RegistrationAdmission::Fresh(reservation),
+                RegistrationAuthority::Fresh(registration),
+            ) => {
+                self.continue_with(
+                    Awaiting::Descriptor {
+                        registration,
+                        id: reservation.id(),
+                    },
+                    deadline,
+                );
                 Ok(Step::AwaitFrame)
             }
-            RegistrationAuthority::Resume(registration) => {
+            (RegistrationAdmission::Resume(_), RegistrationAuthority::Resume(registration)) => {
                 Ok(Step::Complete(Outcome::Resume(registration)))
             }
+            _ => Err(CloseReason::AdmissionMismatch),
         }
     }
 
-    fn descriptor(registration: FreshRegistration, frame: &[u8]) -> Result<Step<'_>, CloseReason> {
+    fn descriptor(
+        registration: FreshRegistration,
+        id: RegistrationId,
+        deadline: UnixMillis,
+        frame: &[u8],
+    ) -> Result<Step<'_>, CloseReason> {
         let descriptor = registration.authorize_descriptor(DescriptorUpload::decode(frame)?)?;
-        Ok(Step::Complete(Outcome::Publish(descriptor)))
+        Ok(Step::Complete(Outcome::Publish(Publication::new(
+            id, deadline, descriptor,
+        ))))
     }
 
     fn stop_proof(
