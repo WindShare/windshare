@@ -306,6 +306,20 @@ describe('v2 relay receiver send credit', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('treats accepted frames as liveness while probe acknowledgements stay queued', async () => {
+    vi.useFakeTimers()
+    const socket = new FakeSocket()
+    const connection = await connect(socket)
+    const unrelated = encodeV2SessionRetired({ relaySessionId: new Uint8Array(relaySessionId.byteLength).fill(9) })
+    for (let elapsed = 0; elapsed < 180_000; elapsed += 15_000) {
+      await vi.advanceTimersByTimeAsync(15_000)
+      socket.message(unrelated)
+    }
+    expect(connection.channel.state).toBe('open')
+    await connection.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('does not debit a grant when the caller cancels before the physical send', async () => {
     const socket = new FakeSocket()
     const connection = await connect(socket)

@@ -62,12 +62,12 @@ func TestReceiverWaitsForBothCreditDimensionsAndPreservesCancellation(t *testing
 
 func TestReceiverHeartbeatRunsWhileApplicationCreditIsUnavailable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		socket := &silentHeartbeatSocket{scriptedSocket: newScriptedSocket()}
+		socket := newScriptedSocket()
 		link := newLink(t.Context(), socket, true)
 		channel := link.installFixed(relaySessionID(72))
 		link.heartbeat = HeartbeatConfig{Interval: time.Second, Timeout: 3 * time.Second}
 		link.start()
-		assertWriteMagic(t, socket.scriptedSocket, v2.ReceiveCreditMagic)
+		assertWriteMagic(t, socket, v2.ReceiveCreditMagic)
 		result := make(chan error, 1)
 		go func() { result <- channel.Send(t.Context(), []byte("waiting for capacity")) }()
 		synctest.Wait()
@@ -79,8 +79,10 @@ func TestReceiverHeartbeatRunsWhileApplicationCreditIsUnavailable(t *testing.T) 
 		if err := <-result; err == nil {
 			t.Fatal("heartbeat did not settle pending send")
 		}
-		if len(socket.writes) != 0 {
-			t.Fatal("credit wait leaked application bytes")
+		for len(socket.writes) > 0 {
+			if message := <-socket.writes; string(message.data[:4]) != v2.ConnectionProbeMagic {
+				t.Fatalf("credit wait leaked application bytes: %q", message.data)
+			}
 		}
 	})
 }

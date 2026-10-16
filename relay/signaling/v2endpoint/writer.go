@@ -21,15 +21,9 @@ type forwardQueue struct {
 
 func (s *Server) writeLoop(ctx context.Context, peer *connection) error {
 	for {
-		select {
-		case item := <-peer.control:
-			err := s.write(ctx, peer.socket, item.data)
-			item.done <- err
-			if err != nil {
-				peer.requestClose()
-				return err
-			}
-		default:
+		if err := s.writeConnectionControl(ctx, peer); err != nil {
+			peer.requestClose()
+			return err
 		}
 		wroteSessionTraffic, err := s.writeSessionTraffic(ctx, peer)
 		if err != nil {
@@ -116,6 +110,15 @@ func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bo
 func (s *Server) writeSessionData(ctx context.Context, peer *connection, data []byte) error {
 	// A session cycle may contain retirement, credit, and content writes. Probe
 	// responses must wait for at most the current physical write, not that batch.
+	if err := s.writeConnectionControl(ctx, peer); err != nil {
+		return err
+	}
+	return s.write(ctx, peer.socket, data)
+}
+
+// writeConnectionControl writes pending connection-level replies ahead of any
+// session traffic, without waiting when none is pending.
+func (s *Server) writeConnectionControl(ctx context.Context, peer *connection) error {
 	select {
 	case item := <-peer.control:
 		err := s.write(ctx, peer.socket, item.data)
@@ -125,7 +128,10 @@ func (s *Server) writeSessionData(ctx context.Context, peer *connection, data []
 		}
 	default:
 	}
-	return s.write(ctx, peer.socket, data)
+	if ack, ok := peer.takeProbeAck(); ok {
+		return s.write(ctx, peer.socket, ack)
+	}
+	return nil
 }
 
 func (s *Server) write(parent context.Context, socket BinaryConnection, data []byte) error {

@@ -233,27 +233,33 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
       if (!(event.data instanceof ArrayBuffer)) {
         throw new V2RelayReceiverError('Relay delivered a non-binary frame')
       }
-      const encoded = new Uint8Array(event.data)
-      if (this.#heartbeat.receive(encoded) || this.#credit.receive(encoded)) return
-      const relayError = decodeRelayErrorIfPresent(encoded)
-      if (relayError !== undefined) {
-        throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
-      }
-      const retired = decodeSessionRetiredIfPresent(encoded)
-      if (retired !== undefined) {
-        // A relay retirement is idempotent: stale controls cannot acquire authority over
-        // a different receiver session, and exact retirement ends this channel cleanly.
-        if (equalBytes(retired, this.#relaySessionId)) this.#retire()
-        return
-      }
-      const routed = decodeV2OpaqueRoute(encoded)
-      if (!equalBytes(routed.relaySessionId, this.#relaySessionId)) {
-        throw new V2RelayReceiverError('Relay delivered another receiver session')
-      }
-      this.#receiveQueue.push(routed.ciphertext)
+      this.#dispatch(new Uint8Array(event.data))
+      // Every accepted frame proves the relay alive, so liveness never waits on
+      // an acknowledgement queued behind content.
+      this.#heartbeat.observeInbound()
     } catch (error) {
       this.#fail(error)
     }
+  }
+
+  #dispatch(encoded: Uint8Array): void {
+    if (this.#heartbeat.receive(encoded) || this.#credit.receive(encoded)) return
+    const relayError = decodeRelayErrorIfPresent(encoded)
+    if (relayError !== undefined) {
+      throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
+    }
+    const retired = decodeSessionRetiredIfPresent(encoded)
+    if (retired !== undefined) {
+      // A relay retirement is idempotent: stale controls cannot acquire authority over
+      // a different receiver session, and exact retirement ends this channel cleanly.
+      if (equalBytes(retired, this.#relaySessionId)) this.#retire()
+      return
+    }
+    const routed = decodeV2OpaqueRoute(encoded)
+    if (!equalBytes(routed.relaySessionId, this.#relaySessionId)) {
+      throw new V2RelayReceiverError('Relay delivered another receiver session')
+    }
+    this.#receiveQueue.push(routed.ciphertext)
   }
 
   readonly #onClose = (): void => {

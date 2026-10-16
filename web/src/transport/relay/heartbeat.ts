@@ -2,12 +2,18 @@ import {
   decodeV2ConnectionProbeAck,
   encodeV2ConnectionProbe,
   V2_CONNECTION_PROBE_ACK_MAGIC,
+  V2RelayProtocolError,
 } from './v2-protocol'
 
+// Probes leave on this cadence whether or not earlier ones were acknowledged,
+// so an acknowledgement queued behind content never silences this direction.
 export const V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS = 15_000
-// A receiver's relay reader can pause for a 15-second forward wait, and the
-// acknowledgement can follow one bounded write. Keep a further network margin.
+// Loss is a full timeout without any accepted inbound frame. Three intervals
+// absorb a relay reply delayed behind one bounded write plus network delay.
 export const V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS = 45_000
+// Acknowledgements can lag several probes on a slow downlink while content
+// keeps the connection alive; untracked probes lose only their round-trip trace.
+const MAXIMUM_TRACKED_PROBES = 8
 
 let nextHeartbeatConnectionId = 0n
 
@@ -16,6 +22,7 @@ export interface RelayHeartbeatTrace {
   readonly round: bigint
   readonly stage: 'probe' | 'acknowledged' | 'failed'
   readonly bufferedBytes: number
+  /** Round trip for an acknowledgement; inbound silence for a failure. */
   readonly elapsedMilliseconds: number
   readonly timeoutMilliseconds: number
 }
@@ -32,82 +39,115 @@ interface ProbeSocket {
   send(data: Uint8Array<ArrayBuffer>): void
 }
 
-/** One outstanding connection probe; traffic never resets its response deadline. */
+interface TrackedProbe {
+  readonly round: bigint
+  readonly sentAt: number
+}
+
+/** Fixed-cadence connection probes; only inbound silence for a full timeout is loss. */
 export class RelayHeartbeat {
   readonly #connectionId = ++nextHeartbeatConnectionId
   readonly #socket: ProbeSocket
   readonly #fail: (error: unknown) => void
   readonly #trace: ((event: RelayHeartbeatTrace) => void) | undefined
-  #timer: ReturnType<typeof setTimeout> | undefined
+  #probeTimer: ReturnType<typeof setTimeout> | undefined
+  #silenceTimer: ReturnType<typeof setTimeout> | undefined
   #round = 0n
-  #pending: bigint | undefined
-  #startedAt = 0
+  #acknowledged = 0n
+  #tracked: TrackedProbe[] = []
+  #lastInboundAt = Date.now()
   #closed = false
 
   constructor(socket: ProbeSocket, fail: (error: unknown) => void, trace?: (event: RelayHeartbeatTrace) => void) {
     this.#socket = socket
     this.#fail = fail
     this.#trace = trace
-    this.#schedule()
+    this.#scheduleProbe()
+    this.#armSilence(V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS)
   }
 
+  /** Records a frame the connection accepted; the silence timer rereads it lazily. */
+  observeInbound(): void {
+    this.#lastInboundAt = Date.now()
+  }
+
+  /**
+   * Consumes a probe acknowledgement. The relay may coalesce replies to its
+   * newest nonce, so one acknowledgement covers every earlier probe; a nonce
+   * already covered or never sent is a protocol violation.
+   */
   receive(encoded: Uint8Array): boolean {
     if (encoded.byteLength < 4 || String.fromCharCode(...encoded.subarray(0, 4)) !== V2_CONNECTION_PROBE_ACK_MAGIC) {
       return false
     }
     const nonce = decodeV2ConnectionProbeAck(encoded)
-    // A duplicate or stale response cannot extend the next outstanding probe.
-    if (!this.#closed && nonce === this.#pending) {
-      this.#emit('acknowledged')
-      this.#pending = undefined
-      globalThis.clearTimeout(this.#timer)
-      this.#schedule()
+    if (this.#closed) return true
+    if (nonce <= this.#acknowledged || nonce > this.#round) {
+      throw new V2RelayProtocolError('identity', 'connection probe acknowledgement names no outstanding probe')
     }
+    this.#acknowledged = nonce
+    const acknowledged = this.#tracked.find(probe => probe.round === nonce)
+    this.#tracked = this.#tracked.filter(probe => probe.round > nonce)
+    if (acknowledged !== undefined) this.#emit('acknowledged', nonce, Date.now() - acknowledged.sentAt)
     return true
   }
 
   close(): void {
     this.#closed = true
-    this.#pending = undefined
-    globalThis.clearTimeout(this.#timer)
+    this.#tracked = []
+    globalThis.clearTimeout(this.#probeTimer)
+    globalThis.clearTimeout(this.#silenceTimer)
   }
 
-  #schedule(): void {
-    this.#timer = globalThis.setTimeout(() => this.#probe(), V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS)
+  #scheduleProbe(): void {
+    this.#probeTimer = globalThis.setTimeout(() => this.#probe(), V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS)
+  }
+
+  #armSilence(delay: number): void {
+    this.#silenceTimer = globalThis.setTimeout(() => this.#checkSilence(), delay)
   }
 
   #probe(): void {
     if (this.#closed) return
     this.#round += 1n
-    this.#pending = this.#round
-    this.#startedAt = Date.now()
+    const now = Date.now()
+    this.#tracked.push({ round: this.#round, sentAt: now })
+    if (this.#tracked.length > MAXIMUM_TRACKED_PROBES) this.#tracked.shift()
+    this.#emit('probe', this.#round, 0)
     // Append one tiny probe even during pressure: waiting for bufferedAmount to
     // drain first would leave a silent, permanently blocked socket undetectable.
-    this.#timer = globalThis.setTimeout(
-      () => this.#failed(new RelayHeartbeatError()),
-      V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS,
-    )
-    this.#emit('probe')
     try {
       this.#socket.send(encodeV2ConnectionProbe(this.#round))
     } catch (error) {
-      this.#failed(error)
+      this.#failed(error, now - this.#lastInboundAt)
+      return
     }
+    this.#scheduleProbe()
   }
 
-  #failed(error: unknown): void {
+  #checkSilence(): void {
     if (this.#closed) return
-    this.#emit('failed')
+    const silence = Date.now() - this.#lastInboundAt
+    if (silence >= V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS) {
+      this.#failed(new RelayHeartbeatError(), silence)
+      return
+    }
+    // Rearming once per timeout window, not per frame, keeps busy connections cheap.
+    this.#armSilence(V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS - silence)
+  }
+
+  #failed(error: unknown, silence: number): void {
+    if (this.#closed) return
+    this.#emit('failed', this.#round, silence)
     this.close()
     this.#fail(error)
   }
 
-  #emit(stage: RelayHeartbeatTrace['stage']): void {
+  #emit(stage: RelayHeartbeatTrace['stage'], round: bigint, elapsedMilliseconds: number): void {
     try {
       this.#trace?.({
-        connectionId: this.#connectionId, round: this.#round, stage, bufferedBytes: this.#socket.bufferedAmount,
-        elapsedMilliseconds: Date.now() - this.#startedAt,
-        timeoutMilliseconds: V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS,
+        connectionId: this.#connectionId, round, stage, bufferedBytes: this.#socket.bufferedAmount,
+        elapsedMilliseconds, timeoutMilliseconds: V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS,
       })
     } catch {
       // Diagnostic consumers cannot suppress liveness detection.
