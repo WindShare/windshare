@@ -35,7 +35,7 @@ Correlate events across the session using:
 - `peer_attempt`: P2P / ICE connection attempts, progression stages, and disconnect causes.
 - `relay_availability`: Current ready, configured, and terminal relay counts plus whether any relay was previously ready; separate from active download paths.
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
-- `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, elapsed wait, and timeout.
+- `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, timeout, and elapsed wait (round trip for an acknowledgement, inbound silence for a failure).
 - `filesystem_output`: Output ownership and settlement decisions. Runtime failures are located by `runtime_decision.component` and `runtime_decision.operation`; `failure.stage` is present only when a native filesystem stage is classified.
 - `capabilities.mode`: Filesystem capabilities (`live_only` vs restart-resumable).
 
@@ -102,7 +102,7 @@ The same controls are available through `window.windshareDiagnostics`:
 - `content_scheduling`: Dispatched block requests, lane selection, standby probes, and throughput metrics (see [performance](performance.md#content-paths)).
 - `operation_recovery`: Operation retry decisions, protocol generation, and available lanes.
 - `connection_recovery`: Initial, fast, and slow waiting phases; attempt, generation, retry delay, wait reason (backoff, recovery capacity, or service cooldown), outcome, and failure context.
-- `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time, and timeout. Initial events can precede protocol-session identity.
+- `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time (round trip, or inbound silence on failure), and timeout. Initial events can precede protocol-session identity.
 - `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`).
 - `lease_retirement`: Block lease cleanup and timeouts.
 - Block timeout `protocol_operation` events include `block_wait`: the receive phase, elapsed wait, and count of earlier-request fragments that extended queue allowance.

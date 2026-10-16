@@ -38,56 +38,57 @@ describe('connection probe wire contract', () => {
 })
 
 describe('relay heartbeat ownership', () => {
-  it('bounds silent loss even while outbound data remains blocked', async () => {
+  it('fails after a full timeout without inbound frames even while outbound data remains blocked', async () => {
     vi.useFakeTimers()
     const socket = { bufferedAmount: 1_000_000, send: vi.fn() }
     const failed = vi.fn()
     const trace = vi.fn()
     const heartbeat = new RelayHeartbeat(socket, failed, trace)
-    await vi.advanceTimersByTimeAsync(INTERVAL)
-    expect(socket.send).toHaveBeenCalledTimes(1)
-    expect(decodeV2ConnectionProbe(socket.send.mock.calls[0]?.[0] as Uint8Array)).toBe(1n)
     await vi.advanceTimersByTimeAsync(TIMEOUT - 1)
     expect(failed).not.toHaveBeenCalled()
+    expect(socket.send.mock.calls.map(call => decodeV2ConnectionProbe(call[0] as Uint8Array)))
+      .toEqual([1n, 2n])
     await vi.advanceTimersByTimeAsync(1)
     expect(failed).toHaveBeenCalledWith(expect.any(RelayHeartbeatError))
-    expect(trace.mock.calls.map(call => call[0].stage)).toEqual(['probe', 'failed'])
-    expect(trace.mock.calls[1]?.[0]).toMatchObject({ round: 1n, bufferedBytes: 1_000_000, elapsedMilliseconds: TIMEOUT })
+    expect(trace.mock.calls.map(call => call[0].stage)).toEqual(['probe', 'probe', 'failed'])
+    expect(trace.mock.calls[2]?.[0]).toMatchObject({ round: 2n, bufferedBytes: 1_000_000, elapsedMilliseconds: TIMEOUT })
     await vi.advanceTimersByTimeAsync(10 * TIMEOUT)
-    expect(socket.send).toHaveBeenCalledTimes(1)
+    expect(socket.send).toHaveBeenCalledTimes(2)
     heartbeat.close()
   })
 
-  it('tolerates bounded read and write pressure without depending on content traffic', async () => {
+  it('keeps probing and stays alive while content outlives delayed acknowledgements', async () => {
     vi.useFakeTimers()
     const socket = { bufferedAmount: 0, send: vi.fn() }
     const failed = vi.fn()
-    const heartbeat = new RelayHeartbeat(socket, failed)
-    await vi.advanceTimersByTimeAsync(INTERVAL + 30_000)
-    expect(heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toBe(true)
-    await vi.advanceTimersByTimeAsync(INTERVAL)
-    expect(socket.send).toHaveBeenCalledTimes(2)
-    expect(heartbeat.receive(encodeV2ConnectionProbeAck(2n))).toBe(true)
+    const trace = vi.fn()
+    const heartbeat = new RelayHeartbeat(socket, failed, trace)
+    for (let elapsed = 0; elapsed < 4 * TIMEOUT; elapsed += INTERVAL) {
+      await vi.advanceTimersByTimeAsync(INTERVAL)
+      heartbeat.observeInbound()
+    }
     expect(failed).not.toHaveBeenCalled()
+    const sent = socket.send.mock.calls.length
+    expect(sent).toBe((4 * TIMEOUT) / INTERVAL)
+    // One coalesced acknowledgement covers every earlier probe.
+    expect(heartbeat.receive(encodeV2ConnectionProbeAck(BigInt(sent)))).toBe(true)
+    const acknowledged = trace.mock.calls.filter(call => call[0].stage === 'acknowledged').map(call => call[0].round)
+    expect(acknowledged).toEqual([BigInt(sent)])
     heartbeat.close()
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('never treats duplicate responses or content traffic as a current acknowledgement', async () => {
+  it('rejects acknowledgements that are repeated or name an unsent probe', async () => {
     vi.useFakeTimers()
     const socket = { bufferedAmount: 0, send: vi.fn() }
-    const failed = vi.fn()
-    const heartbeat = new RelayHeartbeat(socket, failed)
-    await vi.advanceTimersByTimeAsync(INTERVAL)
-    heartbeat.receive(encodeV2ConnectionProbeAck(1n))
+    const heartbeat = new RelayHeartbeat(socket, vi.fn())
+    expect(() => heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
     await vi.advanceTimersByTimeAsync(INTERVAL)
     expect(heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toBe(true)
+    expect(() => heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
     expect(heartbeat.receive(new TextEncoder().encode('WS2Ocontent'))).toBe(false)
     expect(heartbeat.receive(new Uint8Array(1))).toBe(false)
-    await vi.advanceTimersByTimeAsync(TIMEOUT)
-    expect(failed).toHaveBeenCalledTimes(1)
-    heartbeat.receive(encodeV2ConnectionProbeAck(2n))
-    expect(vi.getTimerCount()).toBe(0)
+    heartbeat.close()
   })
 
   it('contains trace failure and ends immediately on a failed probe write', async () => {
@@ -104,7 +105,7 @@ describe('relay heartbeat ownership', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('cancels pending idle and response timers when its owner closes', async () => {
+  it('cancels pending probe and silence timers when its owner closes', async () => {
     vi.useFakeTimers()
     const socket = { bufferedAmount: 0, send: vi.fn() }
     const failed = vi.fn()

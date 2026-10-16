@@ -26,6 +26,11 @@ revives it. Operation identities include the actor incarnation, connection
 generation and a non-wrapping attempt sequence. Structured observations record
 transitions and refusal reasons without carrying descriptor bytes.
 
+Go/browser clients and the Go relay already follow the host-neutral liveness
+contract in the [protocol specification](../../协议规范.md): fixed-cadence
+`WS2H` probes, coalescible `WS2A` replies and failure only after a full timeout
+without accepted inbound frames. Both Rust adapters must keep it.
+
 This stage ends at publication. Published-sender disconnect grace, lifecycle
 RESUME/STOP, durable-state restoration, session forwarding and both platform
 adapters remain to be implemented. Construct a vacant lifecycle only after

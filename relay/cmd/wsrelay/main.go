@@ -148,11 +148,11 @@ func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf 
 	return runWithSTUNListeners(ctx, args, onReady, logf, stunonly.Listeners{})
 }
 
-func heartbeatLogTracer(logf func(string, ...any)) v2endpoint.HeartbeatTraceFunc {
-	return func(event v2endpoint.HeartbeatTrace) {
-		logf("wsrelay: heartbeat connection_id=%s generation=%d round=%d stage=%s timeout_ms=%d elapsed_ms=%d cause=%v",
-			event.Connection.ConnectionID(), event.Connection.LocalGeneration(), event.Round, event.Stage,
-			event.Timeout.Milliseconds(), event.Elapsed.Milliseconds(), event.Cause)
+func livenessLogTracer(logf func(string, ...any)) v2endpoint.LivenessTraceFunc {
+	return func(event v2endpoint.LivenessTrace) {
+		logf("wsrelay: liveness_expired connection_id=%s generation=%d silence_ms=%d timeout_ms=%d",
+			event.Connection.ConnectionID(), event.Connection.LocalGeneration(),
+			event.Silence.Milliseconds(), event.Timeout.Milliseconds())
 	}
 }
 
@@ -235,8 +235,8 @@ func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.A
 	}
 	endpointServer, err := v2endpoint.New(v2endpoint.Config{
 		Registry: routes.registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
-		WriteTimeout:    *endpointWriteTimeout,
-		HeartbeatTracer: heartbeatLogTracer(logf),
+		WriteTimeout:   *endpointWriteTimeout,
+		LivenessTracer: livenessLogTracer(logf),
 		AdmissionTracer: v2endpoint.AdmissionTraceFunc(func(event v2endpoint.AdmissionTrace) {
 			logf("wsrelay: admission connection_id=%s generation=%d session_id=%x phase=%s outcome=%s",
 				event.Connection.ConnectionID(), event.Connection.LocalGeneration(), event.SessionID, event.Phase, event.Outcome)

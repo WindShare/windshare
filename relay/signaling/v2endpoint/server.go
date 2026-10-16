@@ -38,7 +38,6 @@ var (
 type BinaryConnection interface {
 	Read(context.Context) (websocket.MessageType, []byte, error)
 	Write(context.Context, websocket.MessageType, []byte) error
-	Ping(context.Context) error
 	Close(websocket.StatusCode, string) error
 	SetReadLimit(int64)
 }
@@ -112,8 +111,11 @@ type Config struct {
 	ForwardTracer    ForwardTracer
 	AdmissionTracer  AdmissionTracer
 	WriteTimeout     time.Duration
-	Heartbeat        HeartbeatConfig
-	HeartbeatTracer  HeartbeatTracer
+	// LivenessTimeout closes a connection after this long without an accepted
+	// inbound frame. Zero selects the protocol timeout; it must exceed the
+	// client probe interval or idle healthy clients would be dropped.
+	LivenessTimeout time.Duration
+	LivenessTracer  LivenessTracer
 }
 
 type Server struct {
@@ -125,8 +127,8 @@ type Server struct {
 	forwardTracer    ForwardTracer
 	admissionTracer  AdmissionTracer
 	writeTimeout     time.Duration
-	heartbeat        HeartbeatConfig
-	heartbeatTracer  HeartbeatTracer
+	livenessTimeout  time.Duration
+	livenessTracer   LivenessTracer
 
 	connections *connectionRegistry
 }
@@ -145,8 +147,10 @@ func New(config Config) (*Server, error) {
 	if config.WriteTimeout < 0 {
 		return nil, ErrConfig
 	}
-	heartbeat, err := config.Heartbeat.Normalize()
-	if err != nil || heartbeat.Timeout/2 < config.WriteTimeout {
+	if config.LivenessTimeout == 0 {
+		config.LivenessTimeout = v2.ConnectionSilenceTimeout
+	}
+	if config.LivenessTimeout <= v2.ConnectionProbeInterval {
 		return nil, ErrConfig
 	}
 	return &Server{
@@ -154,7 +158,7 @@ func New(config Config) (*Server, error) {
 		connectionIDs: config.ConnectionIDs, retirementTracer: config.RetirementTracer, forwardTracer: config.ForwardTracer,
 		writeTimeout: config.WriteTimeout, connections: newConnectionRegistry(),
 		admissionTracer: config.AdmissionTracer,
-		heartbeat:       heartbeat, heartbeatTracer: config.HeartbeatTracer,
+		livenessTimeout: config.LivenessTimeout, livenessTracer: config.LivenessTracer,
 	}, nil
 }
 
@@ -212,18 +216,18 @@ func (s *Server) Serve(ctx context.Context, socket BinaryConnection) error {
 	socket.SetReadLimit(MaximumV2WebSocketMessageSize)
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- s.writeLoop(connectionContext, peer) }()
-	heartbeatDone := make(chan error, 1)
-	go func() { heartbeatDone <- s.heartbeatLoop(connectionContext, peer) }()
+	livenessDone := make(chan error, 1)
+	go func() { livenessDone <- s.livenessLoop(connectionContext, peer) }()
 
 	serveErr := s.serveConnection(connectionContext, peer)
 	peer.requestClose()
 	s.cleanup(peer)
 	writerErr := <-writerDone
-	heartbeatErr := <-heartbeatDone
+	livenessErr := <-livenessDone
 	peer.closed.Store(true)
 	_ = socket.Close(websocket.StatusNormalClosure, "")
-	if errors.Is(heartbeatErr, ErrHeartbeat) {
-		return errors.Join(ErrConnection, heartbeatErr)
+	if errors.Is(livenessErr, ErrLiveness) {
+		return errors.Join(ErrConnection, livenessErr)
 	}
 	if serveErr != nil && !normalClose(serveErr) {
 		return serveErr
