@@ -24,6 +24,8 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
+const recoveryIntegrationTimeout = 30 * time.Second
+
 type recoveryClock struct{ elapsed atomic.Int64 }
 
 func (c *recoveryClock) Now() time.Time { return time.Unix(1, c.elapsed.Load()) }
@@ -96,7 +98,9 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 			t.Error(err)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// Retry timing is virtual, but authenticated sessions and native disk writes
+	// share CI resources. This watchdog bounds hangs, not recovery latency.
+	ctx, cancel := context.WithTimeout(t.Context(), recoveryIntegrationTimeout)
 	defer cancel()
 	sender, err := application.StartShare(ctx, engine.ShareRequest{Source: liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: []string{filename}, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
@@ -147,11 +151,19 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	result, err := receiver.Wait(context.Background())
 	if err != nil || result.Outcome != engine.OutcomeSuccess {
 		for _, event := range events {
-			if value, ok := event.(engine.ReceiveRecoveryObserved); ok {
-				t.Logf("recovery=%+v", value)
+			switch value := event.(type) {
+			case engine.ReceiveRecoveryObserved, engine.ReceiveGenerationChanged, engine.ReceiveAdmissionObserved:
+				t.Logf("%T: %+v", value, value)
+			case engine.ReceiveProtocolObserved:
+				t.Logf("protocol at=%s %T: %+v", value.Value.ObservedAt().Format(time.RFC3339Nano), value.Value, value.Value)
+			case engine.ReceiveTransferObserved:
+				trace := value.Value
+				t.Logf("transfer session=%x job=%x stage=%v verified=%d published=%d",
+					trace.ProtocolSessionID, trace.TransferJobID, trace.Stage, trace.Progress.VerifiedBytes, trace.Progress.PublishedBytes)
 			}
 		}
-		t.Fatalf("receive=%+v wait=%v", result, err)
+		t.Fatalf("outcome=%v failure=%v cause=%v test_context=%v progress=%+v wait=%v",
+			result.Outcome, result.FailureClass, result.Err, ctx.Err(), result.Value.Transfer.Progress, err)
 	}
 	if dials.Load() != 2 || primaryAttempts.Load() < 4 || stoppedAttempts.Load() != 1 {
 		t.Fatalf("generations=%d attempts=%d stopped=%d", dials.Load(), primaryAttempts.Load(), stoppedAttempts.Load())
