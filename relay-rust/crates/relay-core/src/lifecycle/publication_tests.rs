@@ -291,11 +291,11 @@ fn callbacks_cannot_cross_actor_incarnations_or_relays() {
         let (mut replacement, _) = ShareLifecycle::restore(
             relay,
             fixture.share(),
-            None,
-            [],
+            Restoration::restarted(None),
             incarnation,
             Recorder::default(),
             fixture.at,
+            |_, _| {},
         )
         .unwrap();
         let reservation = fixture.reserve(&mut replacement, connection(1, 1), fixture.at);

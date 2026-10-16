@@ -19,7 +19,7 @@ fn every_interrupted_stop_stage_restores_cleanup_without_re_adopting_survivors()
             // The intent write reached storage, but any subsequent callback or
             // final write may have been lost. No stage stores completion early.
             let pending = work.pending();
-            let owner = published.id.connection();
+            let owner = published.owner.connection();
             let surviving = if survives { &[owner][..] } else { &[] };
             let (mut engine, action) = fixture
                 .restore_at(Some(pending.record()), surviving, restarted(), fixture.at)
@@ -162,11 +162,11 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
         let (mut engine, _) = ShareLifecycle::restore(
             relay,
             share,
-            None,
-            [],
+            Restoration::restarted(None),
             restarted(),
             Recorder::default(),
             fixture.at,
+            |_, _| {},
         )
         .unwrap();
         assert_eq!(
@@ -185,22 +185,26 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
         registration.registration().descriptor_digest(),
         registration.registration().resume_token_hash(),
     );
+    let publication = fixture.publish(&mut fixture.engine()).id;
     let published = fixture.register(&mut fixture.engine());
     let route = PublishedRoute {
         relay: fixture.relay(),
         registration: other,
     };
+    let owner = route.ownership(published.owner.epoch(), published.owner.connection());
     for stored in [
         Record::Published(OwnedRoute {
             route,
-            owner: published.id.connection(),
+            epoch: owner.epoch(),
+            owner: owner.connection(),
         }),
-        Record::Grace(GraceRoute {
+        Record::Grace(GraceRoute::new(
             route,
-            deadline: fixture.at.saturating_add(SENDER_GRACE),
-        }),
+            owner,
+            fixture.at.saturating_add(SENDER_GRACE),
+        )),
         Record::Unresolved(UnresolvedPublication {
-            id: published.id,
+            id: publication,
             registration: other,
         }),
     ] {

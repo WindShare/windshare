@@ -66,11 +66,11 @@ fn foreign_actor_and_role_confusion_never_grant_forwarding() {
     let (foreign, _) = ShareLifecycle::restore(
         RelayIdentity::new([99; 32]).unwrap(),
         fixture.share(),
-        None,
-        [],
+        Restoration::restarted(None),
         Incarnation::new([3; 16]).unwrap(),
         Recorder::default(),
         fixture.at,
+        |_, _| {},
     )
     .unwrap();
     assert_eq!(

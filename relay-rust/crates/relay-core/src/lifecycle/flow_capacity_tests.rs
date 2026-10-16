@@ -46,8 +46,8 @@ fn capacity_configuration_requires_room_for_startup_and_bounded_cleanup() {
 fn unused_startup_bytes_do_not_block_admission_when_ordinary_capacity_is_free() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
-    let owner = fixture.register(&mut engine);
-    let mut ledger = ledger::<3>(&fixture, owner.id.connection());
+    let published = fixture.register(&mut engine);
+    let mut ledger = ledger::<3>(&fixture, published.owner.connection());
     for id in 2..4 {
         let mut session = join(&fixture, &mut engine, connection(id, 1), id, fixture.at);
         let flow = open(
