@@ -49,9 +49,6 @@ contract in the [protocol specification](../../协议规范.md): fixed-cadence
 `WS2H` probes, coalescible `WS2A` replies and failure only after a full timeout
 without accepted inbound frames. Both Rust adapters must keep it.
 
-Published-sender disconnect grace, lifecycle RESUME/STOP, reattaching a detached
-route (RESUME, or hibernation re-adoption by route version), session forwarding
-and both platform adapters remain to be implemented.
 
 `make rust` covers formatting, Clippy, native coverage, doctests and the core Wasm
 build. The registration tests use injected time and the real handshake/shared
