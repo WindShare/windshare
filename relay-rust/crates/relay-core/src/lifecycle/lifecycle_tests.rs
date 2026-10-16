@@ -11,10 +11,13 @@ use crate::{
     descriptor_upload::DescriptorUpload,
     handshake::{Admission, AdmissionRequest, CloseReason, ControlHandshake, Outcome, Step},
     registration::RegisterInit,
+    stop::StopInit,
     test_vectors::{Decimal, bytes, challenge_seed, relay_identity, session_case, unix_seconds},
 };
 
 const VECTOR_REGISTRATION_MILLIS: u64 = 5_000;
+// WS2R carries the instance right after the eight-byte header and share ID.
+const INIT_INSTANCE_OFFSET: usize = 8 + 12;
 
 #[derive(Default, Debug)]
 struct Recorder(Vec<Observation>);
@@ -43,22 +46,42 @@ struct Vector {
     register_proof_b64: String,
     descriptor_upload_b64: String,
     registered_b64: String,
+    resume_challenge_id_b64: String,
+    resume_challenge_nonce_b64: String,
+    resume_expires_at: Decimal,
     resume_init_b64: String,
+    resume_credential_b64: String,
+    resume_proof_b64: String,
+    stop_init_b64: String,
 }
 
 struct Fixture {
     vector: Vector,
     upload: Vec<u8>,
+    /// When a fresh handshake must start for the shared challenge expiry.
     at: UnixMillis,
+    /// When a resume handshake must start for its shared challenge expiry.
+    resume_at: UnixMillis,
+}
+
+/// When a registration handshake must start for its deadline to round up to
+/// the shared challenge expiry.
+fn registration_start(expires_at: &str) -> UnixMillis {
+    UnixMillis(unix_seconds(expires_at).start().0 - VECTOR_REGISTRATION_MILLIS - 1)
 }
 
 impl Fixture {
     fn new() -> Self {
         let vector: Vector = session_case("fresh-relay-registration-proof");
-        let at =
-            UnixMillis(unix_seconds(&vector.expires_at).start().0 - VECTOR_REGISTRATION_MILLIS - 1);
+        let at = registration_start(&vector.expires_at);
+        let resume_at = registration_start(&vector.resume_expires_at);
         let upload = bytes(&vector.descriptor_upload_b64);
-        Self { vector, upload, at }
+        Self {
+            vector,
+            upload,
+            at,
+            resume_at,
+        }
     }
 
     fn relay(&self) -> RelayIdentity {
@@ -88,20 +111,32 @@ impl Fixture {
         engine
     }
 
-    /// Restores through persisted bytes, as a host reads its storage.
+    /// Restores after a process restart, when no connection survives.
     fn restore(
         &self,
         stored: Option<Record>,
         incarnation: Incarnation,
+    ) -> Result<(ShareLifecycle<Recorder>, Action<'static>), RestoreError> {
+        self.restore_at(stored, &[], incarnation, self.at)
+    }
+
+    /// Restores through persisted bytes, as a host reads its storage.
+    fn restore_at(
+        &self,
+        stored: Option<Record>,
+        surviving: &[ConnectionRef],
+        incarnation: Incarnation,
+        at: UnixMillis,
     ) -> Result<(ShareLifecycle<Recorder>, Action<'static>), RestoreError> {
         let stored = stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap());
         ShareLifecycle::restore(
             self.relay(),
             self.share(),
             stored,
+            surviving.iter().copied(),
             incarnation,
             Recorder::default(),
-            self.at,
+            at,
         )
     }
 
@@ -168,6 +203,19 @@ impl Fixture {
         }
     }
 
+    /// Publishes the shared registration, owned by `connection(1, 1)`.
+    fn register(&self, engine: &mut ShareLifecycle<Recorder>) -> PublishedRegistration {
+        let request = self.publish(engine);
+        let finished = Event::PublicationFinished {
+            id: request.id,
+            result: PublicationResult::Committed,
+        };
+        match engine.handle(finished, self.at).action {
+            Action::Registered(published) => published,
+            action => panic!("publication must register: {action:?}"),
+        }
+    }
+
     fn join(&self, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) -> Effects<'static> {
         engine.handle(Event::Join(self.share()), at)
     }
@@ -178,6 +226,89 @@ impl Fixture {
             init: self.init(),
             deadline: at.saturating_add(Duration::from_millis(VECTOR_REGISTRATION_MILLIS)),
         }
+    }
+
+    fn resume_init(&self) -> RegisterInit {
+        RegisterInit::decode(&bytes(&self.vector.resume_init_b64)).unwrap()
+    }
+
+    /// The same resume, naming another instance of the share.
+    fn foreign_resume_init(&self) -> RegisterInit {
+        let mut init = bytes(&self.vector.resume_init_b64);
+        init[INIT_INSTANCE_OFFSET] ^= 1;
+        RegisterInit::decode(&init).unwrap()
+    }
+
+    /// Requests resume admission with the deadline of a handshake opened at
+    /// `resume_at`, the only start its shared challenge allows.
+    fn resume_event(&self, connection: ConnectionRef) -> Event<'static> {
+        Event::BeginResume {
+            connection,
+            init: self.resume_init(),
+            deadline: self
+                .resume_at
+                .saturating_add(Duration::from_millis(VECTOR_REGISTRATION_MILLIS)),
+        }
+    }
+
+    fn begin_resume(
+        &self,
+        engine: &mut ShareLifecycle<Recorder>,
+        connection: ConnectionRef,
+    ) -> ResumeAttempt {
+        match engine
+            .handle(self.resume_event(connection), self.resume_at)
+            .action
+        {
+            Action::ResumeAdmitted(attempt) => attempt,
+            action => panic!("expected resume admission: {action:?}"),
+        }
+    }
+
+    /// Runs the shared resume handshake on the attempt's connection.
+    fn authenticate_resume(&self, attempt: ResumeAttempt) -> Resumption {
+        let at = self.resume_at;
+        let mut handshake = ControlHandshake::open(self.relay(), attempt.id().connection(), at);
+        assert_eq!(
+            handshake.receive(&bytes(&self.vector.resume_init_b64), at),
+            Step::AwaitFrame
+        );
+        assert_eq!(
+            handshake.receive(&bytes(&self.vector.resume_credential_b64), at),
+            Step::RequestAdmission(AdmissionRequest::Registration(self.resume_init()))
+        );
+        let seed = challenge_seed(
+            &self.vector.resume_challenge_id_b64,
+            &self.vector.resume_challenge_nonce_b64,
+        );
+        assert!(matches!(
+            handshake.admit(Admission::Resume(attempt), seed, at),
+            Step::SendChallenge(_)
+        ));
+        match handshake.receive(&bytes(&self.vector.resume_proof_b64), at) {
+            Step::Complete(Outcome::Resume(resumption)) => resumption,
+            step => panic!("expected authenticated resume: {step:?}"),
+        }
+    }
+
+    fn resume(
+        &self,
+        engine: &mut ShareLifecycle<Recorder>,
+        connection: ConnectionRef,
+    ) -> Effects<'static> {
+        let resumption = self.authenticate_resume(self.begin_resume(engine, connection));
+        engine.handle(Event::Resume(resumption), self.resume_at)
+    }
+
+    /// The STOP record the shared stop vector would store.
+    fn stopped(&self) -> Record {
+        let stop = StopInit::decode(&bytes(&self.vector.stop_init_b64)).unwrap();
+        Record::Stopped(StoppedShare {
+            relay: stop.relay(),
+            route: stop.route(),
+            share_instance: stop.share_instance(),
+            stop_id: stop.stop_id(),
+        })
     }
 }
 
@@ -464,3 +595,6 @@ mod admission;
 
 #[path = "restoration_tests.rs"]
 mod restoration;
+
+#[path = "ownership_tests.rs"]
+mod ownership;

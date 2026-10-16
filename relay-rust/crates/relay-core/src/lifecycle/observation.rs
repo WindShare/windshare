@@ -18,10 +18,11 @@ pub enum Phase {
     Publishing,
     /// An abandoned or uncertain publication must be reconciled.
     Fenced,
-    /// The host confirmed publication and the route is visible.
+    /// A sender connection owns the visible route.
     Published,
-    /// A restored route is published, but no sender connection serves it yet.
-    Detached,
+    /// No connection serves the published route until its sender resumes or
+    /// the grace deadline lapses it.
+    Grace,
     /// The share instance was permanently stopped.
     Stopped,
 }
@@ -39,6 +40,12 @@ pub enum ObservedEvent {
     PublicationFinished(PublicationResult),
     /// The attempt lost its owner or failed.
     Cancel(Cancellation),
+    /// A handshake asked to resume the route.
+    BeginResume,
+    /// A handshake supplied its authenticated resume.
+    Resume,
+    /// The route's owner connection ended without STOP.
+    OwnerDisconnected,
     /// A receiver checked readiness.
     Join,
     /// A timer event without an expired operation.
@@ -56,6 +63,14 @@ pub enum Decision {
     Publish,
     /// Acknowledged publication.
     Registered,
+    /// Bound a resume to the current ownership.
+    ResumeAdmitted,
+    /// Transferred ownership to the resuming connection.
+    Resumed,
+    /// Started the grace of a route whose owner is gone.
+    Detached,
+    /// Removed a grace route whose sender never resumed.
+    Lapsed,
     /// Allowed receiver admission.
     JoinReady,
     /// Released an unpublished attempt.
@@ -79,10 +94,11 @@ pub struct Observation {
     pub share: ShareId,
     /// Actor lifetime.
     pub incarnation: Incarnation,
-    /// Attempt being acted on, including stale callback identities and a
-    /// restored unresolved operation.
+    /// Attempt being acted on, including stale callback identities, a
+    /// restored unresolved operation and a re-adopted owner.
     pub operation: Option<RegistrationId>,
-    /// Requesting connection, present even before a reservation exists.
+    /// Requesting connection, present even before a reservation exists, or
+    /// the owner a disconnect or restored record names.
     pub connection: Option<ConnectionRef>,
     /// Cause of the decision.
     pub event: ObservedEvent,

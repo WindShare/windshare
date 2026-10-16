@@ -18,7 +18,7 @@ use crate::{
     error_frame::ErrorFrame,
     identifiers::RelayIdentity,
     lifecycle::{Action, ConnectionRef, Event, Incarnation, ShareLifecycle},
-    registration::RegisterInit,
+    registration::{RegisterInit, RegistrationMode},
     stop::StopInit,
     test_vectors::{
         Decimal, array, bytes, challenge_seed, relay_identity, session_case, unix_seconds,
@@ -35,7 +35,8 @@ fn connection() -> ConnectionRef {
     }
 }
 
-fn fresh_admission(
+/// Admits `init` through a vacant share lifecycle, as a host would.
+fn admission(
     handshake: &ControlHandshake,
     relay: RelayIdentity,
     init: &[u8],
@@ -46,24 +47,30 @@ fn fresh_admission(
         relay,
         init.registration().route().share_id(),
         None,
+        [],
         Incarnation::new([1; 16]).unwrap(),
         (),
         now,
     )
     .unwrap();
-    match lifecycle
-        .handle(
-            Event::Reserve {
-                connection: connection(),
-                init,
-                deadline: handshake.deadline().unwrap(),
-            },
-            now,
-        )
-        .action
-    {
+    let connection = connection();
+    let deadline = handshake.deadline().unwrap();
+    let event = match init.mode() {
+        RegistrationMode::Fresh => Event::Reserve {
+            connection,
+            init,
+            deadline,
+        },
+        RegistrationMode::Resume => Event::BeginResume {
+            connection,
+            init,
+            deadline,
+        },
+    };
+    match lifecycle.handle(event, now).action {
         Action::Reserved(reservation) => Admission::Fresh(reservation),
-        action => panic!("fresh handshake admission: {action:?}"),
+        Action::ResumeAdmitted(attempt) => Admission::Resume(attempt),
+        action => panic!("handshake admission: {action:?}"),
     }
 }
 
@@ -157,7 +164,7 @@ fn fresh_registration_spends_one_challenge_and_publishes_its_descriptor() {
     );
     assert_eq!(
         handshake.admit(
-            fresh_admission(&handshake, vector.relay(), &init_bytes, at),
+            admission(&handshake, vector.relay(), &init_bytes, at),
             vector.register_seed(),
             at
         ),
@@ -201,12 +208,16 @@ fn resume_presents_its_token_before_spending_a_challenge() {
         &vector.resume_challenge_id_b64,
         &vector.resume_challenge_nonce_b64,
     );
+    let admission = admission(&handshake, vector.relay(), &init_bytes, at);
     assert_eq!(
-        handshake.admit(Admission::Resume, seed, at),
+        handshake.admit(admission, seed, at),
         Step::SendChallenge(array(&vector.resume_challenge_b64))
     );
     match handshake.receive(&bytes(&vector.resume_proof_b64), at) {
-        Step::Complete(Outcome::Resume(registration)) => assert_eq!(registration.init(), &init),
+        Step::Complete(Outcome::Resume(resumption)) => {
+            assert_eq!(resumption.init(), &init);
+            assert_eq!(resumption.id().connection(), connection());
+        }
         step => panic!("the resume proof must complete the resume: {step:?}"),
     }
 }
@@ -268,7 +279,7 @@ fn handshakes_publish_only_the_committed_descriptor() {
         );
         assert_eq!(
             handshake.admit(
-                fresh_admission(&handshake, relay, &bytes(&case.register_init_b64), at),
+                admission(&handshake, relay, &bytes(&case.register_init_b64), at),
                 vector.register_seed(),
                 at
             ),
@@ -320,7 +331,7 @@ fn deadlines_bound_every_phase_including_admission() {
     assert_eq!(slow_admission.deadline(), Some(registration_deadline));
     assert_eq!(
         slow_admission.admit(
-            fresh_admission(
+            admission(
                 &slow_admission,
                 vector.relay(),
                 &bytes(&vector.register_init_b64),
@@ -362,7 +373,7 @@ fn a_rejected_proof_spends_the_only_challenge() {
     ));
     assert!(matches!(
         handshake.admit(
-            fresh_admission(
+            admission(
                 &handshake,
                 vector.relay(),
                 &bytes(&vector.register_init_b64),
@@ -459,7 +470,7 @@ fn frames_and_admissions_out_of_turn_close_the_handshake() {
     ));
     assert!(matches!(
         skipped_proof.admit(
-            fresh_admission(&skipped_proof, vector.relay(), &init, OPENED_AT),
+            admission(&skipped_proof, vector.relay(), &init, OPENED_AT),
             vector.register_seed(),
             OPENED_AT
         ),

@@ -3,10 +3,11 @@
 //! Hosts own clocks, persistence, sockets, and opaque payload forwarding so that
 //! platform limits and I/O mechanisms cannot become implicit control decisions.
 //! This crate decodes the control frames a relay receives, encodes the ones it
-//! sends, drives connection handshakes and single-share fresh registration, and
-//! turns sender proofs into move-only authorities. Publication remains hidden
-//! until the host confirms persistence and connection preparation, and a share
-//! lifecycle is constructed only from the durable record its host stores.
+//! sends, drives connection handshakes and single-share registration, resume
+//! and owner-loss grace, and turns sender proofs into move-only authorities.
+//! Publication remains hidden until the host confirms persistence and
+//! connection preparation, and a share lifecycle is constructed only from the
+//! durable record its host stores.
 
 #![no_std]
 
