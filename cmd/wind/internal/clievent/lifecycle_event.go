@@ -222,51 +222,71 @@ func NewPeerAttemptObserved(spec PeerAttemptSpec) (PeerAttemptObserved, error) {
 	return PeerAttemptObserved{spec: spec}, nil
 }
 
+// peerStageShape names the stage groups that decide which PeerAttemptSpec
+// fields are required or forbidden, so each cross-field rule is stated once
+// against a named group instead of re-deriving stage comparisons inline.
+type peerStageShape struct {
+	failed, deadline, negotiation, admission, response, grantRequired, grantAllowed bool
+}
+
+func peerStageShapeOf(stage PeerAttemptStage) peerStageShape {
+	negotiation := stage == PeerNegotiationDeadlineArmed || stage == PeerNegotiationDeadlineExpired
+	admissionDeadline := stage == PeerAdmissionDeadlineArmed || stage == PeerAdmissionDeadlineExpired
+	response := stage == PeerAdmissionResponseSettled || stage == PeerAttemptAdmitted
+	grantRequired := stage == PeerLaneHelloAuthenticated || response
+	failed := stage == PeerAttemptFailed
+	return peerStageShape{
+		failed:        failed,
+		deadline:      negotiation || admissionDeadline,
+		negotiation:   negotiation,
+		admission:     admissionDeadline || grantRequired,
+		response:      response,
+		grantRequired: grantRequired,
+		grantAllowed:  grantRequired || stage == PeerAdmissionDeadlineExpired || failed,
+	}
+}
+
 func validPeerAttemptSpec(spec PeerAttemptSpec) bool {
 	_, stageOK := spec.Stage.Name()
+	shape := peerStageShapeOf(spec.Stage)
+	return stageOK && spec.Sequence != 0 &&
+		spec.Command.Valid() && spec.Session.Valid() && spec.PeerPath.Valid() && spec.Attempt.Valid() &&
+		spec.HasOfferOperation == spec.OfferOperation.Valid() &&
+		validPeerAttemptFailure(spec, shape) && validPeerAttemptPhase(spec, shape) &&
+		validPeerAttemptGrant(spec, shape) && validPeerAttemptAdmission(spec, shape)
+}
+
+func validPeerAttemptFailure(spec PeerAttemptSpec, shape peerStageShape) bool {
 	_, scopeOK := spec.FailureScope.Name()
+	_, failedAtOK := spec.FailedAtStage.Name()
+	if spec.FailureSummary != (PeerAttemptFailureSummary{}) && (!shape.failed || !spec.FailureSummary.Valid()) {
+		return false
+	}
+	return shape.failed == spec.Failure.Valid() && shape.failed == failedAtOK && shape.failed == scopeOK &&
+		(!failedAtOK || spec.FailedAtStage != PeerAttemptStarted && spec.FailedAtStage != PeerAttemptFailed)
+}
+
+func validPeerAttemptPhase(spec PeerAttemptSpec, shape peerStageShape) bool {
 	_, phaseOK := spec.Phase.Name()
+	return (shape.negotiation || shape.admission) == phaseOK &&
+		(!shape.negotiation || spec.Phase == PeerPhaseNegotiation) &&
+		(!shape.admission || spec.Phase == PeerPhaseAdmission) &&
+		shape.deadline == (spec.DeadlineMillis != 0)
+}
+
+func validPeerAttemptGrant(spec PeerAttemptSpec, shape peerStageShape) bool {
+	return spec.HasGrantOperation == spec.GrantOperation.Valid() &&
+		(!shape.grantRequired || spec.HasGrantOperation) && (!spec.HasGrantOperation || shape.grantAllowed) &&
+		(!spec.HasLane || spec.Lane.Valid()) &&
+		(!shape.grantRequired || spec.HasLane) && (!spec.HasLane || shape.grantAllowed)
+}
+
+func validPeerAttemptAdmission(spec PeerAttemptSpec, shape peerStageShape) bool {
 	_, admissionOK := spec.AdmissionDisposition.Name()
 	_, deliveryOK := spec.ResponseDelivery.Name()
 	_, rejectionOK := spec.RejectionCode.Name()
-	_, failedAtOK := spec.FailedAtStage.Name()
-	if spec.FailureSummary != (PeerAttemptFailureSummary{}) &&
-		(spec.Stage != PeerAttemptFailed || !spec.FailureSummary.Valid()) {
-		return false
-	}
-	hasFailure := spec.Failure.Valid()
-	deadlineStage := spec.Stage == PeerNegotiationDeadlineArmed ||
-		spec.Stage == PeerNegotiationDeadlineExpired || spec.Stage == PeerAdmissionDeadlineArmed ||
-		spec.Stage == PeerAdmissionDeadlineExpired
-	negotiationPhaseStage := spec.Stage == PeerNegotiationDeadlineArmed ||
-		spec.Stage == PeerNegotiationDeadlineExpired
-	admissionPhaseStage := spec.Stage == PeerAdmissionDeadlineArmed ||
-		spec.Stage == PeerAdmissionDeadlineExpired || spec.Stage == PeerLaneHelloAuthenticated ||
-		spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
-	phaseRequired := negotiationPhaseStage || admissionPhaseStage
-	grantRequired := spec.Stage == PeerLaneHelloAuthenticated ||
-		spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
-	grantAllowed := grantRequired || spec.Stage == PeerAdmissionDeadlineExpired ||
-		spec.Stage == PeerAttemptFailed
-	responseStage := spec.Stage == PeerAdmissionResponseSettled || spec.Stage == PeerAttemptAdmitted
-	rejectionStage := responseStage && spec.AdmissionDisposition == PeerAdmissionRejected
-	return spec.Command.Valid() && spec.Session.Valid() && spec.PeerPath.Valid() && spec.Attempt.Valid() &&
-		spec.Sequence != 0 && stageOK &&
-		(spec.Stage == PeerAttemptFailed) == hasFailure &&
-		(spec.Stage == PeerAttemptFailed) == failedAtOK &&
-		(!failedAtOK || spec.FailedAtStage != PeerAttemptStarted && spec.FailedAtStage != PeerAttemptFailed) &&
-		(spec.Stage == PeerAttemptFailed) == scopeOK &&
-		spec.HasOfferOperation == spec.OfferOperation.Valid() &&
-		phaseRequired == phaseOK &&
-		(!negotiationPhaseStage || spec.Phase == PeerPhaseNegotiation) &&
-		(!admissionPhaseStage || spec.Phase == PeerPhaseAdmission) &&
-		deadlineStage == (spec.DeadlineMillis != 0) &&
-		spec.HasGrantOperation == spec.GrantOperation.Valid() &&
-		(!grantRequired || spec.HasGrantOperation) && (!spec.HasGrantOperation || grantAllowed) &&
-		(!spec.HasLane || spec.Lane.Valid()) &&
-		(!grantRequired || spec.HasLane) && (!spec.HasLane || grantAllowed) &&
-		responseStage == admissionOK && responseStage == deliveryOK &&
-		rejectionStage == rejectionOK &&
+	rejected := shape.response && spec.AdmissionDisposition == PeerAdmissionRejected
+	return shape.response == admissionOK && shape.response == deliveryOK && rejected == rejectionOK &&
 		(spec.Stage != PeerAttemptAdmitted ||
 			spec.AdmissionDisposition == PeerAdmissionAccepted && spec.ResponseDelivery == PeerResponseDelivered) &&
 		(spec.RejectionRetryAfterMillis == 0 || spec.RejectionCode == PeerLaneRejectAdmissionLimited)
