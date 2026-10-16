@@ -23,9 +23,10 @@ grace with an absolute deadline (60 s); receivers retry and fresh registrations
 are refused until the sender resumes or the route lapses back to vacant. RESUME
 is admitted before its challenge and bound to the ownership it observed,
 including an absent route, so only an authenticated sender learns `NotFound`.
-Its commit replaces a live or lost owner with the resuming connection and names
-the replaced owner for cleanup. Another publication, resume or restore in
-between makes it `ResumeStale`; the observed owner merely disconnecting does not.
+Its commit replaces a live or lost owner with the resuming connection, advances
+the route's ownership epoch and names the replaced owner for cleanup. Another
+publication or resume in between makes it `ResumeStale`; the observed owner
+disconnecting or a restore does not.
 
 Its only constructor, `restore`, takes the share's durable `lifecycle::Record`,
 or `None` when storage holds nothing, so no host can start an empty actor over
@@ -36,18 +37,23 @@ bytes, keyed by relay identity and share:
 | --- | --- | --- |
 | Reserve, Released, resume admission | none; an abort already removed the unresolved record | vacant |
 | Publish transaction | `Unresolved` (exact operation), with the descriptor | fenced, returning `Reconcile` |
-| Registered or Resumed, before REGISTERED | `Published` (registration, resume hash, owner connection) | published if the owner survived, else grace returning `Detached` |
-| Detached | `Grace` (registration, resume hash, absolute deadline) | grace with the stored deadline |
+| Registered or Resumed, before REGISTERED | `Published` (registration, resume hash, ownership epoch, owner connection) | published if the owner survived, else grace returning `Detached` |
+| Detached | `Grace` (registration, resume hash, absolute deadline, lost ownership) | grace with the stored deadline |
 | Lapsed | none | vacant |
 | STOP intent, before cleanup | `Stopping` (instance, stop ID, operation, exact cleanup); irreversible | stopping, returning `Stop(Retire)` |
 | STOP cleanup complete, before STOPPED | `Stopped` (instance, stop ID); permanent | stopped |
 
 A crash before REGISTERED's write therefore never revives a fenced attempt.
-Restore needs a fresh incarnation and keeps stored operation identities.
-`surviving` lists connections that outlived the previous incarnation, such as
-hibernated sockets, so the stored owner is re-adopted without a write; after a
-process restart it is empty. Only a restore that finds the owner gone derives a
-grace deadline, and the host persists it, so later restores never extend it.
+Restore needs a fresh incarnation, which fences only old publication and STOP
+callbacks. Its `Restoration` input names surviving connections and the
+`SessionSnapshot`s hosts record beside them (empty after a process restart). A
+surviving owner keeps its stored ownership without a write, so hibernation is
+neither connection replacement nor session retirement: each snapshot of that
+ownership whose receiver survived, admission deadline holds and wire ID and
+admission are unique becomes the same `Session` again, permits included. Every
+other snapshot is retired alone; new admissions use the fresh incarnation and
+never collide with survivors. Only a restore that finds the owner gone derives
+a grace deadline, and the host persists it, so later restores never extend it.
 A stopped instance is refused with `Stopped`, and other instances of a stopped
 share stay occupied.
 
@@ -73,8 +79,8 @@ Provisional sessions forward the opaque E2E handshake in both directions;
 `WS2M` from the exact sender admits only after a receiver frame. Traffic never
 extends admission, and active sessions have no relay-idle timeout.
 
-`ForwardPermit` binds relay/share/instance, wire session, actor/admission
-generation, direction, protocol version and both connection generations.
+`ForwardPermit` binds relay/share/instance, wire session, ownership epoch,
+admission, direction, protocol version and both connection generations.
 `Session::check_forward` borrows the live session and lifecycle through submission;
 queued frames and delayed callbacks must check again. STOP fences permits before
 persistence, RESUME replaces ownership, and owner loss enters grace immediately.
@@ -101,9 +107,10 @@ Hosts own payloads, scheduling, bounded storage sizes and non-reused wire IDs.
 The core traces resource transitions/refusals without retaining ciphertext.
 These are kernel contracts: bidirectional `WS2B`, handshake startup capacities and
 settlement wire controls still need coordinated Go/browser codecs and vectors.
-Hibernated session/ledger restoration and both platform adapters also remain next;
-a restored lifecycle currently invalidates previous session permits. A surviving
-connection must not restart with an empty delivery ledger.
+Hibernated ledger restoration and both platform adapters remain next: ledgers
+restore after sessions, revalidating open flows against reinstated sessions and
+settling retired snapshots' flows. A surviving connection must not restart with
+an empty delivery ledger.
 
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
@@ -123,7 +130,8 @@ without accepted inbound frames. Both Rust adapters must keep it.
 build. The lifecycle tests use injected time and the real handshake/shared
 vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
 uncertain publication, owner loss and lapse, resume binding, STOP commit order,
-STOP/RESUME races, retries, late callbacks and restoration of every stored record.
+STOP/RESUME races, retries, late callbacks, restoration of every stored record
+and of surviving sessions over hibernated sockets.
 Session/flow tests cover provisional routing, fixed admission deadlines, quiet
 active sessions, startup protection, independent frame/byte bounds, FIFO receipts,
 cancellation with in-flight payloads, cumulative refunds, exact-generation cleanup,

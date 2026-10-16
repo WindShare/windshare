@@ -13,19 +13,26 @@
 //! too: deferred cleanup cannot prolong forwarding authority.
 //!
 //! No payload, queue, timer, allocator or platform capacity lives here. The
-//! session itself is not cloneable, so snapshots cannot become live authorities.
+//! session itself is not cloneable. Hosts whose sockets outlive the actor, such
+//! as hibernated ones, record `Session::snapshot` beside them after every input;
+//! a snapshot is inert data that only `ShareLifecycle::restore` validates and
+//! turns back into the same session.
 
 mod authority;
 mod effect;
 mod frames;
 mod observation;
+mod snapshot;
 
 pub use authority::{
     Direction, ForwardPermit, ForwardRefusal, Revocation, SessionKey, ValidatedForward,
 };
-pub use effect::{Action, Effects, EndReason, Event, Refusal, Retirement, RetirementReason};
+pub use effect::{
+    Action, Effects, EndReason, Event, Refusal, Retirement, RetirementReason, SnapshotFault,
+};
 pub use frames::{MAX_OPAQUE_CIPHERTEXT_BYTES, OpaqueHeader, SessionAdmitted};
 pub use observation::{Decision, Observation, Observer};
+pub use snapshot::{EncodedSnapshot, MAX_SNAPSHOT_BYTES, SessionSnapshot};
 
 use crate::{
     clock::UnixMillis,
@@ -48,11 +55,37 @@ pub enum Phase {
     Retired,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum State {
+/// The phases a session can still forward in, and the only ones a snapshot
+/// records: a retired admission never becomes live again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Stage {
     AwaitingReceiver { deadline: UnixMillis },
     AwaitingSender { deadline: UnixMillis },
     Active,
+}
+
+impl Stage {
+    const fn phase(self) -> Phase {
+        match self {
+            Self::AwaitingReceiver { .. } => Phase::AwaitingReceiver,
+            Self::AwaitingSender { .. } => Phase::AwaitingSender,
+            Self::Active => Phase::Active,
+        }
+    }
+
+    const fn deadline(self) -> Option<UnixMillis> {
+        match self {
+            Self::AwaitingReceiver { deadline } | Self::AwaitingSender { deadline } => {
+                Some(deadline)
+            }
+            Self::Active => None,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum State {
+    Live(Stage),
     Retired(RetirementReason),
 }
 
@@ -72,13 +105,22 @@ impl Session {
     ) -> Self {
         Self {
             key: SessionKey {
-                admission_sequence: admission.sequence(),
+                owner: published.owner,
+                admitted_by: admission.incarnation(),
                 receiver: admission.connection(),
-                owner: published.id,
+                admission_sequence: admission.sequence(),
                 wire_id,
                 instance: published.route.registration().share_instance(),
             },
-            state: State::AwaitingReceiver { deadline },
+            state: State::Live(Stage::AwaitingReceiver { deadline }),
+        }
+    }
+
+    /// Reinstalls a snapshot the restoring lifecycle has already validated.
+    pub(crate) const fn restored(snapshot: SessionSnapshot) -> Self {
+        Self {
+            key: snapshot.key,
+            state: State::Live(snapshot.stage),
         }
     }
 
@@ -92,9 +134,7 @@ impl Session {
     #[must_use]
     pub const fn phase(&self) -> Phase {
         match self.state {
-            State::AwaitingReceiver { .. } => Phase::AwaitingReceiver,
-            State::AwaitingSender { .. } => Phase::AwaitingSender,
-            State::Active => Phase::Active,
+            State::Live(stage) => stage.phase(),
             State::Retired(_) => Phase::Retired,
         }
     }
@@ -103,10 +143,24 @@ impl Session {
     #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
-            State::AwaitingReceiver { deadline } | State::AwaitingSender { deadline } => {
-                Some(deadline)
-            }
-            State::Active | State::Retired(_) => None,
+            State::Live(stage) => stage.deadline(),
+            State::Retired(_) => None,
+        }
+    }
+
+    /// What to record beside the session's connections after every input, so
+    /// an actor restored over them can reinstall this exact admission.
+    ///
+    /// `None` once retired: drop the recorded snapshot, keeping only what
+    /// late-frame handling needs.
+    #[must_use]
+    pub const fn snapshot(&self) -> Option<SessionSnapshot> {
+        match self.state {
+            State::Live(stage) => Some(SessionSnapshot {
+                key: self.key,
+                stage,
+            }),
+            State::Retired(_) => None,
         }
     }
 
@@ -276,9 +330,9 @@ impl Session {
             Event::Frame { source, .. } => {
                 let direction = self.key.direction(source).expect("validated participant");
                 if direction == Direction::ToSender
-                    && let State::AwaitingReceiver { deadline } = self.state
+                    && let State::Live(Stage::AwaitingReceiver { deadline }) = self.state
                 {
-                    self.state = State::AwaitingSender { deadline };
+                    self.state = State::Live(Stage::AwaitingSender { deadline });
                 }
                 // E2E handshake frames need routing before WS2M can be sent.
                 Action::Forward(ForwardPermit {
@@ -287,9 +341,11 @@ impl Session {
                 })
             }
             Event::Admit { .. } => match self.state {
-                State::AwaitingReceiver { .. } => Action::Refused(Refusal::ReceiverNotObserved),
-                State::AwaitingSender { .. } | State::Active => {
-                    self.state = State::Active;
+                State::Live(Stage::AwaitingReceiver { .. }) => {
+                    Action::Refused(Refusal::ReceiverNotObserved)
+                }
+                State::Live(Stage::AwaitingSender { .. } | Stage::Active) => {
+                    self.state = State::Live(Stage::Active);
                     Action::Active
                 }
                 State::Retired(_) => unreachable!(),

@@ -73,10 +73,19 @@ fn a_stored_publication_restores_fenced_and_only_its_exact_abort_reopens_the_sha
 }
 
 #[test]
-fn a_published_route_re_adopts_its_surviving_owner_without_a_write() {
+fn a_published_route_re_adopts_its_surviving_ownership_without_a_write() {
     let fixture = Fixture::new();
-    let published = fixture.register(&mut fixture.engine());
-    let owner = published.id.connection();
+    let mut original = fixture.engine();
+    let publication = fixture.publish(&mut original).id;
+    let Action::Registered(published) = finish(
+        &mut original,
+        publication,
+        PublicationResult::Committed,
+        fixture.at,
+    ) else {
+        panic!("publication must register");
+    };
+    let owner = published.owner.connection();
     let (mut engine, action) = fixture
         .restore_at(
             Some(published.record()),
@@ -92,22 +101,22 @@ fn a_published_route_re_adopts_its_surviving_owner_without_a_write() {
     let Action::JoinReady(adopted) = fixture.join(&mut engine, fixture.at).action else {
         panic!("a surviving owner keeps serving receivers");
     };
-    assert_eq!(adopted.route, published.route);
-    assert_eq!(adopted.id.connection(), owner);
-    assert_eq!(adopted.id.incarnation(), restarted());
-    assert_eq!(adopted.record(), published.record());
+    // Rebuilding the actor is no ownership change: sessions stay bound to it.
+    assert_eq!(adopted, published);
+    assert_eq!(adopted.owner.epoch(), OwnershipEpoch::FIRST);
     let restored = engine.observer.0[0];
     assert_eq!(
-        (restored.operation, restored.connection, restored.after),
-        (Some(adopted.id), Some(owner), Phase::Published)
+        (restored.ownership, restored.connection, restored.after),
+        (Some(published.owner), Some(owner), Phase::Published)
     );
+    assert_eq!(restored.incarnation, restarted());
 
     // Callbacks for the operation that published it name no current work,
     // while the re-adopted owner can still be lost.
     assert_eq!(
         finish(
             &mut engine,
-            published.id,
+            publication,
             PublicationResult::Aborted,
             fixture.at
         ),
@@ -125,7 +134,7 @@ fn a_published_route_re_adopts_its_surviving_owner_without_a_write() {
 fn a_lost_owner_derives_one_grace_that_later_restores_never_extend() {
     let fixture = Fixture::new();
     let published = fixture.register(&mut fixture.engine());
-    let owner = published.id.connection();
+    let owner = published.owner.connection();
     let (mut engine, action) = fixture
         .restore_at(
             Some(published.record()),
@@ -135,11 +144,9 @@ fn a_lost_owner_derives_one_grace_that_later_restores_never_extend() {
         )
         .unwrap();
     let deadline = fixture.at.saturating_add(SENDER_GRACE);
-    let grace = GraceRoute {
-        route: published.route,
-        deadline,
-    };
+    let grace = GraceRoute::new(published.route, published.owner, deadline);
     assert_eq!(action, Action::Detached(grace));
+    assert_eq!(grace.lost(), published.owner);
     assert_eq!(engine.phase(), Phase::Grace);
     assert_eq!(engine.deadline(), Some(deadline));
     let restored = engine.observer.0[0];
@@ -268,24 +275,29 @@ fn restoration_refuses_records_of_another_relay_or_share_and_a_reused_incarnatio
             RestoreError::ReusedIncarnation,
         ),
     ] {
-        let restored =
-            ShareLifecycle::restore(relay, share, stored, [], incarnation, (), fixture.at).err();
+        let restored = ShareLifecycle::restore(
+            relay,
+            share,
+            Restoration::restarted(stored),
+            incarnation,
+            (),
+            fixture.at,
+            |_, _| {},
+        )
+        .err();
         assert_eq!(restored, Some(error));
     }
     let published = fixture.register(&mut fixture.engine());
-    let grace = GraceRoute {
-        route: published.route,
-        deadline: fixture.at,
-    };
+    let grace = GraceRoute::new(published.route, published.owner, fixture.at);
     for record in [published.record(), grace.record(), fixture.stopped()] {
         let restored = ShareLifecycle::restore(
             fixture.relay(),
             other_share,
-            Some(record),
-            [],
+            Restoration::restarted(Some(record)),
             restarted(),
             (),
             fixture.at,
+            |_, _| {},
         )
         .err();
         assert_eq!(restored, Some(RestoreError::ForeignShare));

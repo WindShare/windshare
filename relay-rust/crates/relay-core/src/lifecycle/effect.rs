@@ -137,7 +137,8 @@ pub enum Refusal {
     Occupied,
     /// A transaction needs authoritative reconciliation before another attempt.
     PublicationUncertain,
-    /// The incarnation exhausted its non-reusable attempt identities.
+    /// The incarnation exhausted its non-reusable attempt identities, or the
+    /// route its ownership epochs.
     SequenceExhausted,
     /// The reservation, transaction or owner is no longer current.
     StaleOperation,
@@ -152,8 +153,8 @@ pub enum Refusal {
     Stopped,
     /// The share holds a registration other than the one the resume names.
     ResumeMismatch,
-    /// A publication, another resume or a restore replaced the ownership the
-    /// resume observed; the sender resumes again.
+    /// A publication or another resume replaced the ownership the resume
+    /// observed; the sender resumes again.
     ResumeStale,
 }
 

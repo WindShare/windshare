@@ -4,16 +4,17 @@
 //! Reservations and resume attempts never reach storage. A publication
 //! transaction stores its unresolved record before it can commit, and
 //! REGISTERED first replaces that record with the published route and its
-//! owner; every RESUME rewrites that owner before its acknowledgement.
+//! ownership; every RESUME rewrites that ownership before its acknowledgement.
 //! A crash at any point therefore restores a fenced attempt that still needs
 //! reconciliation, or a route whose sender may already hold REGISTERED, never
-//! a revived attempt the lifecycle fenced.
+//! a revived attempt the lifecycle fenced. Restoring the stored ownership over
+//! its surviving owner is no ownership change, so its sessions stay valid.
 //!
-//! Losing the owner stores the grace deadline as an absolute instant. Only a
-//! restore that finds the stored owner gone derives one, so later restores
-//! never extend it. STOP first persists its permanent fact together with the
-//! exact cleanup obligation, then replaces it with Stopped only after cleanup.
-//! Restoring Stopping repeats cleanup; it can never re-adopt a surviving owner.
+//! Losing the owner stores the lost ownership and an absolute grace deadline.
+//! Only a restore that finds the stored owner gone derives one, so later
+//! restores never extend it. STOP first persists its permanent fact together
+//! with the exact cleanup obligation, then replaces it with Stopped only after
+//! cleanup. Restoring Stopping repeats cleanup; it never re-adopts survivors.
 
 use core::{error::Error, fmt, num::NonZeroU64};
 
@@ -27,11 +28,13 @@ use crate::{
     wire::{Reader, Writer},
 };
 
-use super::{ConnectionRef, Incarnation, OperationId, PendingStop, StopCleanup};
+use super::{
+    ConnectionRef, Incarnation, OperationId, OwnershipEpoch, OwnershipId, PendingStop, StopCleanup,
+};
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 3;
+const FORMAT: u8 = 4;
 
 const UNRESOLVED: u8 = 1;
 const PUBLISHED: u8 = 2;
@@ -50,9 +53,14 @@ const HEADER_BYTES: usize = 1 + 1 + 32 + 12;
 // after its share ID, which the header already holds.
 const REGISTRATION_BYTES: usize = 16 + 16 + 32 + 32;
 // Connection slot and generation.
-const CONNECTION_BYTES: usize = 8 + 8;
+const CONNECTION_BYTES: usize = ConnectionRef::ENCODED_BYTES;
 // Incarnation and connection, then the attempt sequence.
 const OPERATION_BYTES: usize = 16 + CONNECTION_BYTES + 8;
+// Epoch, then the owner connection.
+const OWNERSHIP_BYTES: usize = 8 + CONNECTION_BYTES;
+// A grace deadline beside the lost ownership keeps grace records within the
+// unresolved bound that hosts size storage from.
+const _: () = assert!(8 + OWNERSHIP_BYTES <= OPERATION_BYTES);
 
 // Instance, key hash and stop ID.
 const STOP_FACT_BYTES: usize = 16 + 16 + 16;
@@ -102,16 +110,30 @@ impl PublishedRoute {
     pub const fn registration(&self) -> &Registration {
         &self.registration
     }
+
+    pub(super) const fn ownership(
+        &self,
+        epoch: OwnershipEpoch,
+        connection: ConnectionRef,
+    ) -> OwnershipId {
+        OwnershipId::new(
+            self.relay,
+            self.registration.route().share_id(),
+            epoch,
+            connection,
+        )
+    }
 }
 
-/// A published route and the connection that served it when last written.
+/// A published route and the ownership that served it when last written.
 ///
-/// Naming the owner lets a restore re-adopt a connection that survived, such
-/// as a hibernated socket, without writing; an owner that did not survive
-/// starts grace instead.
+/// Naming the ownership lets a restore re-adopt an owner that survived, such
+/// as a hibernated socket, without writing or changing the ownership its
+/// sessions are bound to; an owner that did not survive starts grace instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnedRoute {
     pub(super) route: PublishedRoute,
+    pub(super) epoch: OwnershipEpoch,
     pub(super) owner: ConnectionRef,
 }
 
@@ -122,10 +144,10 @@ impl OwnedRoute {
         &self.route
     }
 
-    /// Returns the connection lifetime that served the route.
+    /// Returns the ownership that served the route.
     #[must_use]
-    pub const fn owner(&self) -> ConnectionRef {
-        self.owner
+    pub const fn ownership(&self) -> OwnershipId {
+        self.route.ownership(self.epoch, self.owner)
     }
 }
 
@@ -135,13 +157,36 @@ impl OwnedRoute {
 pub struct GraceRoute {
     pub(super) route: PublishedRoute,
     pub(super) deadline: UnixMillis,
+    // The lost ownership: a resume that observed it, even before a restore,
+    // still replaces it, and the next owner continues its epochs.
+    pub(super) epoch: OwnershipEpoch,
+    pub(super) owner: ConnectionRef,
 }
 
 impl GraceRoute {
+    pub(super) const fn new(
+        route: PublishedRoute,
+        lost: OwnershipId,
+        deadline: UnixMillis,
+    ) -> Self {
+        Self {
+            route,
+            deadline,
+            epoch: lost.epoch,
+            owner: lost.connection,
+        }
+    }
+
     /// Returns the published route.
     #[must_use]
     pub const fn route(&self) -> &PublishedRoute {
         &self.route
+    }
+
+    /// Returns the ownership the route lost.
+    #[must_use]
+    pub const fn lost(&self) -> OwnershipId {
+        self.route.ownership(self.epoch, self.owner)
     }
 
     /// Returns the instant the route lapses, persisted so restores never
@@ -260,11 +305,12 @@ impl Record {
             }
             Self::Published(owned) => {
                 put_registration(&mut out, &owned.route.registration);
-                put_connection(&mut out, owned.owner);
+                put_ownership(&mut out, owned.epoch, owned.owner);
             }
             Self::Grace(grace) => {
                 put_registration(&mut out, &grace.route.registration);
                 out.put(&grace.deadline.0.to_be_bytes());
+                put_ownership(&mut out, grace.epoch, grace.owner);
             }
             Self::Stopping(pending) => {
                 put_stopped(&mut out, pending.stopped());
@@ -301,11 +347,14 @@ impl Record {
             }
             PUBLISHED => Self::Published(OwnedRoute {
                 route: read_route(&mut body, relay, share_id)?,
+                epoch: OwnershipEpoch::new(nonzero(&mut body)?),
                 owner: read_connection(&mut body)?,
             }),
             GRACE => Self::Grace(GraceRoute {
                 route: read_route(&mut body, relay, share_id)?,
                 deadline: UnixMillis(u64::from_be_bytes(take(&mut body)?)),
+                epoch: OwnershipEpoch::new(nonzero(&mut body)?),
+                owner: read_connection(&mut body)?,
             }),
             STOPPING => {
                 let stopped = read_stopped(&mut body, relay, share_id)?;
@@ -344,7 +393,8 @@ impl fmt::Debug for EncodedRecord {
     }
 }
 
-/// Why stored bytes are not a record this kernel wrote.
+/// Why stored bytes are not a lifecycle record or session snapshot this
+/// kernel wrote.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordError {
     /// The byte count differs from the record kind's exact layout.
@@ -360,10 +410,10 @@ pub enum RecordError {
 impl fmt::Display for RecordError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Length => "lifecycle record length does not match its layout",
-            Self::Format => "lifecycle record uses an unknown layout version",
-            Self::Kind => "lifecycle record kind is unknown",
-            Self::Field => "lifecycle record carries an invalid field",
+            Self::Length => "stored relay record length does not match its layout",
+            Self::Format => "stored relay record uses an unknown layout version",
+            Self::Kind => "stored relay record kind is unknown",
+            Self::Field => "stored relay record carries an invalid field",
         })
     }
 }
@@ -464,8 +514,12 @@ fn put_registration(out: &mut Writer<MAX_RECORD_BYTES>, registration: &Registrat
 }
 
 fn put_connection(out: &mut Writer<MAX_RECORD_BYTES>, connection: ConnectionRef) {
-    out.put(&connection.id.get().to_be_bytes())
-        .put(&connection.generation.get().to_be_bytes());
+    out.put(&connection.encode());
+}
+
+fn put_ownership(out: &mut Writer<MAX_RECORD_BYTES>, epoch: OwnershipEpoch, owner: ConnectionRef) {
+    out.put(&epoch.get().get().to_be_bytes());
+    put_connection(out, owner);
 }
 
 fn put_operation(out: &mut Writer<MAX_RECORD_BYTES>, id: OperationId) {
@@ -518,10 +572,7 @@ fn read_route(
 }
 
 fn read_connection(body: &mut Reader<'_>) -> Result<ConnectionRef, RecordError> {
-    Ok(ConnectionRef {
-        id: nonzero(body)?,
-        generation: nonzero(body)?,
-    })
+    ConnectionRef::decode(take(body)?).ok_or(RecordError::Field)
 }
 
 fn read_operation(

@@ -18,6 +18,7 @@ const FRAME_HEADER_BYTES: usize = 8;
 const STOP_ROUTE_BYTES: usize = 12 + 16 + 16;
 // Distinct bytes, so the layout test pins their order.
 const GRACE_DEADLINE: u64 = 0x0102_0304_0506_0708;
+const OWNER_EPOCH: u64 = 0x1112_1314_1516_1718;
 
 #[derive(Deserialize)]
 struct Vector {
@@ -78,18 +79,27 @@ impl Fixture {
         }
     }
 
+    fn ownership(&self) -> OwnershipId {
+        self.route().ownership(
+            OwnershipEpoch::new(NonZeroU64::new(OWNER_EPOCH).unwrap()),
+            self.operation().connection,
+        )
+    }
+
     fn published(&self) -> Record {
         Record::Published(OwnedRoute {
             route: self.route(),
-            owner: self.operation().connection,
+            epoch: self.ownership().epoch,
+            owner: self.ownership().connection,
         })
     }
 
     fn grace(&self) -> Record {
-        Record::Grace(GraceRoute {
-            route: self.route(),
-            deadline: UnixMillis(GRACE_DEADLINE),
-        })
+        Record::Grace(GraceRoute::new(
+            self.route(),
+            self.ownership(),
+            UnixMillis(GRACE_DEADLINE),
+        ))
     }
 
     fn stopped(&self) -> Record {
@@ -122,6 +132,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
     let registration_body = fixture.register_init.len() - FRAME_HEADER_BYTES;
     let connection = [&0x0102_u64.to_be_bytes()[..], &3_u64.to_be_bytes()].concat();
     let operation = [&[7; 16][..], &connection, &u64::MAX.to_be_bytes()].concat();
+    let ownership = [&OWNER_EPOCH.to_be_bytes()[..], &connection].concat();
     let stop = StopInit::decode(&fixture.stop_init).unwrap();
     let cases = [
         (
@@ -136,7 +147,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
             fixture.published(),
             [
                 fixture.prefix(PUBLISHED, &fixture.register_init, registration_body),
-                connection,
+                ownership.clone(),
             ]
             .concat(),
         ),
@@ -145,6 +156,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
             [
                 fixture.prefix(GRACE, &fixture.register_init, registration_body),
                 GRACE_DEADLINE.to_be_bytes().to_vec(),
+                ownership,
             ]
             .concat(),
         ),
@@ -295,9 +307,14 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&unresolved, 158..166, 0), RecordError::Field),
         (edit(&unresolved, 166..174, 0), RecordError::Field),
         (edit(&unresolved, 174..182, 0), RecordError::Field),
-        // The owner's connection slot and generation, and the stop ID.
+        // The owner's epoch, connection slot and generation, also after a
+        // grace deadline, and the stop ID.
         (edit(&published, 142..150, 0), RecordError::Field),
         (edit(&published, 150..158, 0), RecordError::Field),
+        (edit(&published, 158..166, 0), RecordError::Field),
+        (edit(&grace, 150..158, 0), RecordError::Field),
+        (edit(&grace, 158..166, 0), RecordError::Field),
+        (edit(&grace, 166..174, 0), RecordError::Field),
         (edit(&stopped, 78..94, 0), RecordError::Field),
     ];
     for (bytes, error) in cases {

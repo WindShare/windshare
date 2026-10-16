@@ -5,17 +5,26 @@ use core::num::NonZeroU64;
 use crate::{
     WIRE_VERSION,
     identifiers::{RelayIdentity, RelaySessionId, ShareId, ShareInstance},
-    lifecycle::{ConnectionRef, Observer as LifecycleObserver, OperationId, ShareLifecycle},
+    lifecycle::{
+        ConnectionRef, Incarnation, Observer as LifecycleObserver, OperationId, OwnershipId,
+        ShareLifecycle,
+    },
 };
 
 use super::{RetirementReason, Session};
 
 /// One receiver admission, including the sender ownership it joined.
+///
+/// Nothing here names the actor incarnation serving it, so rebuilding the
+/// actor over the same sockets keeps the key, and every permit carrying it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionKey {
-    pub(super) admission_sequence: NonZeroU64,
+    pub(super) owner: OwnershipId,
+    // A restored actor admits under its own fresh incarnation, so its new
+    // admissions never collide with surviving ones without a durable counter.
+    pub(super) admitted_by: Incarnation,
     pub(super) receiver: ConnectionRef,
-    pub(super) owner: OperationId,
+    pub(super) admission_sequence: NonZeroU64,
     pub(super) wire_id: RelaySessionId,
     pub(super) instance: ShareInstance,
 }
@@ -24,13 +33,17 @@ impl SessionKey {
     /// Correlates the admission and its non-reusable permit generation.
     #[must_use]
     pub const fn admission(self) -> OperationId {
-        self.owner
-            .for_session(self.receiver, self.admission_sequence)
+        OperationId::admission(
+            self.owner,
+            self.admitted_by,
+            self.receiver,
+            self.admission_sequence,
+        )
     }
 
     /// The exact sender ownership, not merely its socket slot.
     #[must_use]
-    pub const fn owner(self) -> OperationId {
+    pub const fn owner(self) -> OwnershipId {
         self.owner
     }
 
@@ -79,6 +92,18 @@ impl SessionKey {
             None
         }
     }
+
+    /// Whether both keys claim one routing ID or one issued admission, either
+    /// of which an actor hands out once.
+    pub(crate) fn collides(self, other: Self) -> bool {
+        self.wire_id == other.wire_id
+            || (self.admitted_by == other.admitted_by
+                && self.admission_sequence == other.admission_sequence)
+    }
+
+    pub(crate) const fn admitted_by(self) -> Incarnation {
+        self.admitted_by
+    }
 }
 
 /// Direction comes from the exact connection, never from opaque payload bytes.
@@ -102,7 +127,8 @@ pub struct ForwardPermit {
 }
 
 impl ForwardPermit {
-    /// Includes relay, share, session, incarnation and both connection generations.
+    /// Includes relay, share, session, ownership epoch, admission and both
+    /// connection generations.
     #[must_use]
     pub const fn session(self) -> SessionKey {
         self.session
@@ -176,14 +202,14 @@ pub enum ForwardRefusal {
 /// cannot leave old permits usable while STOP persistence is in flight.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Revocation {
-    pub(crate) owner: OperationId,
+    pub(crate) owner: OwnershipId,
     pub(crate) reason: RetirementReason,
 }
 
 impl Revocation {
     /// Exact old ownership; a later resume on the same socket is different.
     #[must_use]
-    pub const fn owner(self) -> OperationId {
+    pub const fn owner(self) -> OwnershipId {
         self.owner
     }
 

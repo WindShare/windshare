@@ -48,7 +48,7 @@ fn join(
     let Action::Joined(joined) = effects.action else {
         panic!("expected joined session: {:?}", effects.action);
     };
-    assert_eq!(joined.registration.id, joined.session.key().owner());
+    assert_eq!(joined.registration.owner, joined.session.key().owner());
     joined.session
 }
 
@@ -125,10 +125,10 @@ fn join_binds_original_deadline_and_published_owner_before_any_forwarding() {
         key.instance(),
         published.route.registration.share_instance()
     );
-    assert_eq!(key.owner(), published.id);
+    assert_eq!(key.owner(), published.owner);
     assert_eq!(key.receiver(), receiver);
-    assert_eq!(key.sender(), published.id.connection());
-    assert_ne!(key.admission(), key.owner());
+    assert_eq!(key.sender(), published.owner.connection());
+    assert_eq!(key.admission().incarnation(), engine.incarnation);
     assert_eq!(
         engine.observer.0.last().unwrap().decision,
         Decision::Joined(key)
@@ -259,6 +259,9 @@ mod revocation;
 
 #[path = "session_authority_tests.rs"]
 mod authority;
+
+#[path = "session_restoration_tests.rs"]
+mod restoration;
 
 #[path = "flow_tests.rs"]
 mod flow_tests;

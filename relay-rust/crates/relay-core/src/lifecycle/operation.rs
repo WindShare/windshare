@@ -12,6 +12,9 @@ use crate::{
 use super::{OwnedRoute, PublishedRoute, Record, UnresolvedPublication};
 
 /// One lifetime of a host connection slot. Reusing a slot requires a new generation.
+///
+/// Records, session snapshots and surviving sockets name exact lifetimes, so a
+/// host never reuses a reference while any of them can still name it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConnectionRef {
     /// Host-local socket slot or identifier.
@@ -20,11 +23,35 @@ pub struct ConnectionRef {
     pub generation: NonZeroU64,
 }
 
+impl ConnectionRef {
+    pub(crate) const ENCODED_BYTES: usize = 8 + 8;
+
+    /// Slot, then generation, both big-endian, as records and snapshots store them.
+    pub(crate) const fn encode(self) -> [u8; Self::ENCODED_BYTES] {
+        let mut bytes = [0; Self::ENCODED_BYTES];
+        let (id, generation) = bytes.split_at_mut(8);
+        id.copy_from_slice(&self.id.get().to_be_bytes());
+        generation.copy_from_slice(&self.generation.get().to_be_bytes());
+        bytes
+    }
+
+    /// Rejects a zero slot or generation, which no host lifetime carries.
+    pub(crate) fn decode(bytes: [u8; Self::ENCODED_BYTES]) -> Option<Self> {
+        Some(Self {
+            id: NonZeroU64::new(u64::from_be_bytes(*bytes.first_chunk()?))?,
+            generation: NonZeroU64::new(u64::from_be_bytes(*bytes.last_chunk()?))?,
+        })
+    }
+}
+
 /// A host-chosen, nonzero incarnation of a single-share lifecycle.
 ///
 /// Every restore needs a fresh value: a random 128-bit value or a durably
 /// allocated counter keeps callbacks from before the restore from naming new
 /// work. Stored operations keep the incarnation that minted them.
+///
+/// It fences host work, not authority: route ownership and receiver sessions
+/// survive a restore over the sockets that carry them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Incarnation([u8; 16]);
 
@@ -57,13 +84,20 @@ pub struct OperationId {
 }
 
 impl OperationId {
-    // Receiver admissions share the owner's scope, but never its participant or
-    // sequence. Keeping that common scope once makes queued permits compact.
-    pub(crate) const fn for_session(self, connection: ConnectionRef, sequence: NonZeroU64) -> Self {
+    // Sessions keep their admission in parts beside the ownership that already
+    // holds relay and share, which keeps queued permits compact.
+    pub(crate) const fn admission(
+        ownership: OwnershipId,
+        incarnation: Incarnation,
+        connection: ConnectionRef,
+        sequence: NonZeroU64,
+    ) -> Self {
         Self {
+            relay: ownership.relay,
+            share: ownership.share,
+            incarnation,
             connection,
             sequence,
-            ..self
         }
     }
 
@@ -95,6 +129,86 @@ impl OperationId {
     #[must_use]
     pub const fn sequence(self) -> NonZeroU64 {
         self.sequence
+    }
+}
+
+/// Position of one ownership among a published route's successive owners.
+///
+/// Publication starts at the first epoch and every committed RESUME advances
+/// it. Records store it, so restoring an actor keeps the ownership instead of
+/// minting a replacement that would retire every receiver session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnershipEpoch(NonZeroU64);
+
+impl OwnershipEpoch {
+    pub(super) const FIRST: Self = Self(NonZeroU64::MIN);
+
+    pub(crate) const fn new(epoch: NonZeroU64) -> Self {
+        Self(epoch)
+    }
+
+    /// Returns the stored epoch.
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
+    }
+
+    /// The successor ownership's epoch; it never wraps into an older one.
+    pub(super) fn next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
+}
+
+/// One connection's ownership of a published route: what sessions bind to and
+/// what revocations name.
+///
+/// A lapsed route restarts its epochs, so the exact owner lifetime is part of
+/// the identity: owners of successive routes were never live together.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnershipId {
+    pub(super) relay: RelayIdentity,
+    pub(super) share: ShareId,
+    pub(super) epoch: OwnershipEpoch,
+    pub(super) connection: ConnectionRef,
+}
+
+impl OwnershipId {
+    pub(crate) const fn new(
+        relay: RelayIdentity,
+        share: ShareId,
+        epoch: OwnershipEpoch,
+        connection: ConnectionRef,
+    ) -> Self {
+        Self {
+            relay,
+            share,
+            epoch,
+            connection,
+        }
+    }
+
+    /// Returns the relay whose lifecycle owns the route.
+    #[must_use]
+    pub const fn relay(self) -> RelayIdentity {
+        self.relay
+    }
+
+    /// Returns the owned share.
+    #[must_use]
+    pub const fn share(self) -> ShareId {
+        self.share
+    }
+
+    /// Returns which of the route's successive owners this is.
+    #[must_use]
+    pub const fn epoch(self) -> OwnershipEpoch {
+        self.epoch
+    }
+
+    /// Returns the exact sender connection lifetime.
+    #[must_use]
+    pub const fn connection(self) -> ConnectionRef {
+        self.connection
     }
 }
 
@@ -211,17 +325,17 @@ impl PublishRequest<'_> {
 /// before its challenge.
 ///
 /// It holds no route capacity, so a failed or abandoned handshake needs no
-/// lifecycle event. Its commit fails as stale once a publication, another
-/// resume or a restore replaced that ownership; the owner merely
-/// disconnecting does not, since no new owner exists to protect.
+/// lifecycle event. Its commit fails as stale once a publication or another
+/// resume replaced that ownership. Neither the owner merely disconnecting nor
+/// a restore rebuilding the actor does: no new owner exists to protect.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ResumeAttempt {
     pub(super) id: OperationId,
     pub(super) init: RegisterInit,
     pub(super) deadline: UnixMillis,
-    // The observed ownership's sequence, or `None` when no route existed, so
-    // an authenticated sender can learn `NotFound` and publish again.
-    pub(super) ownership: Option<NonZeroU64>,
+    // The observed live or lost ownership, or `None` when no route existed,
+    // so an authenticated sender can learn `NotFound` and publish again.
+    pub(super) ownership: Option<OwnershipId>,
 }
 
 impl ResumeAttempt {
@@ -278,9 +392,9 @@ impl Resumption {
 /// A publication or resume whose sender connection owns the published route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedRegistration {
-    /// The owning sender's operation: resource ownership and callback
-    /// correlation. A restore re-adopting the owner mints a new one.
-    pub id: OperationId,
+    /// The sender connection's ownership, which its resources and receiver
+    /// sessions are bound to. A restore re-adopting the owner keeps it.
+    pub owner: OwnershipId,
     /// The durable route receivers are admitted to.
     pub route: PublishedRoute,
 }
@@ -297,7 +411,8 @@ impl PublishedRegistration {
     pub const fn record(self) -> Record {
         Record::Published(OwnedRoute {
             route: self.route,
-            owner: self.id.connection,
+            epoch: self.owner.epoch,
+            owner: self.owner.connection,
         })
     }
 }

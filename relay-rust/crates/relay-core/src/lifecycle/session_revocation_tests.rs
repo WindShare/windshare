@@ -6,7 +6,7 @@ fn join_cannot_cross_stop_or_create_authority_on_the_sender_connection() {
     let mut engine = fixture.engine();
     let published = fixture.register(&mut engine);
     let input = Event::Join {
-        request: request(&fixture, published.id.connection(), fixture.at),
+        request: request(&fixture, published.owner.connection(), fixture.at),
         session: wire_id(1),
     };
     assert_eq!(
@@ -30,7 +30,7 @@ fn join_cannot_cross_stop_or_create_authority_on_the_sender_connection() {
     );
     assert!(matches!(effects.action, Action::Stop(StopWork::Persist(_))));
     let revoke = effects.revocation.unwrap();
-    assert_eq!(revoke.owner(), published.id);
+    assert_eq!(revoke.owner(), published.owner);
     assert_eq!(revoke.reason(), RetirementReason::Stopped);
     // Neither delayed cleanup nor uncertain persistence leaves the queued permit live.
     assert_eq!(
@@ -52,7 +52,7 @@ fn join_cannot_cross_stop_or_create_authority_on_the_sender_connection() {
         retirement.retirement.unwrap().reason,
         RetirementReason::Stopped
     );
-    let late = admitted(&joined, published.id.connection());
+    let late = admitted(&joined, published.owner.connection());
     assert_eq!(
         joined.handle(&engine, late, fixture.at, &mut ()).action,
         SessionAction::Discard(RetirementReason::Stopped)
@@ -205,9 +205,14 @@ fn losing_the_owner_revokes_every_old_session_without_waiting_for_grace() {
     let mut first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let mut second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
     activate(&engine, &mut second, fixture.at);
-    let permit = forward(&engine, &mut first, published.id.connection(), fixture.at);
+    let permit = forward(
+        &engine,
+        &mut first,
+        published.owner.connection(),
+        fixture.at,
+    );
     let effects = engine.handle(
-        Event::OwnerDisconnected(published.id.connection()),
+        Event::OwnerDisconnected(published.owner.connection()),
         fixture.at,
     );
     let revoke = effects.revocation.unwrap();
@@ -242,36 +247,5 @@ fn losing_the_owner_revokes_every_old_session_without_waiting_for_grace() {
             )
             .retirement,
         None
-    );
-}
-
-#[test]
-fn restored_actor_cannot_validate_old_permits_even_when_the_owner_socket_survives() {
-    let fixture = Fixture::new();
-    let mut engine = fixture.engine();
-    let published = fixture.register(&mut engine);
-    let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let permit = forward(&engine, &mut session, connection(2, 1), fixture.at);
-    let (restored, _) = fixture
-        .restore_at(
-            Some(published.record()),
-            &[published.id.connection()],
-            Incarnation::new([2; 16]).unwrap(),
-            fixture.at,
-        )
-        .unwrap();
-    assert_eq!(
-        session
-            .check_forward(&restored, permit, fixture.at)
-            .unwrap_err(),
-        ForwardRefusal::Retired(RetirementReason::OwnerReplaced)
-    );
-    assert_eq!(
-        session
-            .handle(&restored, SessionEvent::Tick, fixture.at, &mut ())
-            .retirement
-            .unwrap()
-            .reason,
-        RetirementReason::OwnerReplaced
     );
 }

@@ -54,7 +54,7 @@ pub enum RetirementReason {
     AdmissionExpired,
     /// Authenticated STOP fenced the share, even before persistence completed.
     Stopped,
-    /// A resume or actor restoration replaced the admitted ownership.
+    /// A resume replaced the admitted ownership.
     OwnerReplaced,
     /// The sender disconnected and its route entered grace.
     OwnerDisconnected,
@@ -62,6 +62,26 @@ pub enum RetirementReason {
     OwnerUnavailable,
     /// Session-local cancellation or transport failure.
     Ended(EndReason),
+    /// Restoration found the host's snapshot inconsistent with what survived.
+    InvalidSnapshot(SnapshotFault),
+}
+
+/// Why a surviving session snapshot cannot have come from this share's
+/// admissions. Each is a host storage fault; restoration ends only that session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotFault {
+    /// It names another relay or share.
+    ForeignLifecycle,
+    /// It claims the restoring incarnation, which has admitted nothing yet.
+    UnissuedAdmission,
+    /// Its receiver is the sender connection, which JOIN never admits.
+    InvalidReceiver,
+    /// Another surviving snapshot claims its wire ID or admission.
+    Duplicate,
+    /// It names another content instance than its ownership's route.
+    InstanceMismatch,
+    /// Its provisional deadline lies beyond one admission budget from now.
+    DeadlineBeyondBudget,
 }
 
 /// A cleanup obligation for exactly one admission.

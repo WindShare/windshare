@@ -151,11 +151,11 @@ fn startup_credit_precedes_frames_in_both_directions_without_advancing_admission
 fn busy_sessions_cannot_spend_new_session_startup_capacity() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
-    let owner = fixture.register(&mut engine);
+    let published = fixture.register(&mut engine);
     let first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
     let third = join(&fixture, &mut engine, connection(4, 1), 3, fixture.at);
-    let mut ledger = ledger::<3>(&fixture, owner.id.connection());
+    let mut ledger = ledger::<3>(&fixture, published.owner.connection());
     let flow = open(
         &mut ledger,
         &engine,

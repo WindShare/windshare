@@ -248,9 +248,9 @@ impl<O: Observer> ShareLifecycle<O> {
             ),
             State::Published(published) => (
                 published.route.registration,
-                StopCleanup::Owner(published.id.connection),
+                StopCleanup::Owner(published.owner.connection),
             ),
-            State::Grace { route, .. } => (route.route.registration, StopCleanup::None),
+            State::Grace(route) => (route.route.registration, StopCleanup::None),
             State::Stopping(_) | State::Stopped(_) => unreachable!(),
         };
         match_registration(registration, init)?;

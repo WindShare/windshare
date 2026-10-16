@@ -3,12 +3,12 @@
 use crate::{
     clock::UnixMillis,
     identifiers::{RelayIdentity, ShareId, StopId},
-    sessions::SessionKey,
+    sessions::{Retirement, SessionKey},
 };
 
 use super::{
-    Action, Cancellation, ConnectionRef, Event, Incarnation, OperationId, PublicationResult,
-    Refusal, ShareLifecycle, StopCleanup, StopResult, StopStep,
+    Action, Cancellation, ConnectionRef, Event, Incarnation, OperationId, OwnershipId,
+    PublicationResult, Refusal, ShareLifecycle, State, StopCleanup, StopResult, StopStep,
 };
 
 /// Lifecycle phases shared by both platform adapters.
@@ -38,6 +38,8 @@ pub enum Phase {
 pub enum ObservedEvent {
     /// The actor was constructed from a stored record, or its absence.
     Restore,
+    /// Restore decided the surviving session snapshot at this host index.
+    RestoreSession(usize),
     /// A handshake requested a route reservation.
     Reserve,
     /// A handshake supplied its authenticated upload.
@@ -101,6 +103,10 @@ pub enum Decision {
     JoinReady,
     /// Created an exact receiver admission and permit generation.
     Joined(SessionKey),
+    /// Reinstalled a surviving admission, permits included.
+    SessionRestored(SessionKey),
+    /// Retired a surviving snapshot instead of reinstalling it.
+    SessionRetired(Retirement),
     /// Released an unpublished attempt.
     Released,
     /// Kept a possibly committed transaction hidden.
@@ -122,6 +128,9 @@ pub struct Observation {
     pub share: ShareId,
     /// Actor lifetime.
     pub incarnation: Incarnation,
+    /// The route's ownership after the decision: its live owner, or the one a
+    /// grace route lost. Its epoch stays unchanged across restores.
+    pub ownership: Option<OwnershipId>,
     /// Attempt being acted on, including stale callback identities, a
     /// restored unresolved operation and a re-adopted owner.
     pub operation: Option<OperationId>,
@@ -164,6 +173,11 @@ impl<O: Observer> ShareLifecycle<O> {
             relay: self.relay,
             share: self.share,
             incarnation: self.incarnation,
+            ownership: match self.state {
+                State::Published(published) => Some(published.owner),
+                State::Grace(route) => Some(route.lost()),
+                _ => None,
+            },
             operation,
             connection,
             event,

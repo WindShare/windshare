@@ -121,7 +121,8 @@ impl Fixture {
         self.restore_at(stored, &[], incarnation, self.at)
     }
 
-    /// Restores through persisted bytes, as a host reads its storage.
+    /// Restores through persisted bytes, as a host reads its storage, over
+    /// surviving sockets that recorded no session.
     fn restore_at(
         &self,
         stored: Option<Record>,
@@ -129,15 +130,19 @@ impl Fixture {
         incarnation: Incarnation,
         at: UnixMillis,
     ) -> Result<(ShareLifecycle<Recorder>, Action<'static>), RestoreError> {
-        let stored = stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap());
+        let restoration = Restoration {
+            record: stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap()),
+            connections: surviving,
+            sessions: &[],
+        };
         ShareLifecycle::restore(
             self.relay(),
             self.share(),
-            stored,
-            surviving.iter().copied(),
+            restoration,
             incarnation,
             Recorder::default(),
             at,
+            |index, outcome| panic!("no snapshot {index} was recorded: {outcome:?}"),
         )
     }
 
@@ -368,7 +373,7 @@ fn publication_requires_host_commit_and_preparation_before_join_or_registered() 
         published.acknowledgement().encode().as_slice(),
         bytes(&fixture.vector.registered_b64)
     );
-    assert_eq!(published.id.connection(), prepared_connection);
+    assert_eq!(published.owner.connection(), prepared_connection);
     assert_eq!(
         published.route.registration().descriptor_digest(),
         crate::identifiers::DescriptorDigest::of(&stored_descriptor)

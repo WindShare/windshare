@@ -182,11 +182,11 @@ fn wrong_route_resume_and_expired_requests_do_not_reserve_capacity() {
     let (mut wrong_actor, _) = ShareLifecycle::restore(
         fixture.relay(),
         other_share,
-        None,
-        [],
+        Restoration::restarted(None),
         Incarnation::new([1; 16]).unwrap(),
         Recorder::default(),
         fixture.at,
+        |_, _| {},
     )
     .unwrap();
     assert_eq!(
