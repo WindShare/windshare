@@ -1,4 +1,4 @@
-//! Single-share registration authority, independent of storage and sockets.
+//! Single-share route authority, independent of storage and sockets.
 //!
 //! Hosts serialize events, execute both parts of each `Effects`, and schedule
 //! `deadline()` as an absolute timer/alarm. Every event checks that deadline,
@@ -9,13 +9,18 @@
 //! fenced. Only authoritative rollback can reopen the route. A late success
 //! cannot publish it, and cleanup always names the exact operation.
 //!
+//! A published route has at most one owner connection. Losing it without STOP
+//! starts a grace whose absolute deadline the host persists, and the route
+//! lapses unless its sender resumes in time. An authenticated RESUME replaces
+//! a live or lost owner, but only the ownership it observed before its
+//! challenge, so it never retires an owner it did not authenticate against.
+//!
 //! [`ShareLifecycle::restore`] is the only constructor, and it takes whatever
 //! [`Record`] storage holds for the share, so an actor can never start empty
 //! over a registration, unresolved publication or STOP. Hosts store exactly
-//! the records `PublishRequest` and `PublishedRegistration` name.
+//! the records lifecycle outputs name.
 //!
-//! Published-sender disconnect grace, RESUME, STOP and receiver session
-//! allocation are separate lifecycle work.
+//! STOP and receiver session allocation are separate lifecycle work.
 
 mod effect;
 mod observation;
@@ -26,21 +31,27 @@ pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationRe
 pub use observation::{Decision, Observation, ObservedEvent, Observer, Phase};
 pub use operation::{
     ConnectionRef, Incarnation, Publication, PublishRequest, PublishedRegistration, RegistrationId,
-    Reservation,
+    Reservation, ResumeAttempt, Resumed, Resumption,
 };
 pub use record::{
-    EncodedRecord, MAX_RECORD_BYTES, PublishedRoute, Record, RecordError, RestoreError,
-    RouteVersion, StoppedShare, UnresolvedPublication,
+    EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
+    RestoreError, StoppedShare, UnresolvedPublication,
 };
 
-use core::num::NonZeroU64;
+use core::{num::NonZeroU64, time::Duration};
 
 use crate::{
     clock::UnixMillis,
     identifiers::{RelayIdentity, ShareId},
-    registration::{RegisterInit, RegistrationMode},
+    registration::{RegisterInit, Registration, RegistrationMode},
 };
 use operation::Pending;
+
+/// How long a published route waits for its sender after losing the owner
+/// connection: enough for a sender to notice the loss and redial through its
+/// relay backoff, short enough that a crashed sender does not keep receivers
+/// retrying a dead share.
+const SENDER_GRACE: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 enum State {
@@ -48,24 +59,27 @@ enum State {
     Reserved(Pending),
     Publishing(Pending),
     Fenced(UnresolvedPublication),
+    // The registration's sequence identifies this ownership.
     Published(PublishedRegistration),
-    // The owner's operation belonged to an earlier incarnation, so no
-    // connection in this one may serve receivers until it reattaches.
-    Detached(
-        #[cfg_attr(
-            not(test),
-            expect(
-                dead_code,
-                reason = "RESUME and re-adoption will match the restored registration and version"
-            )
-        )]
-        PublishedRoute,
-    ),
+    // Keeps the lost owner's sequence, so a resume admitted while that owner
+    // was live still commits after it disconnects.
+    Grace {
+        ownership: NonZeroU64,
+        route: GraceRoute,
+    },
     Stopped(StoppedShare),
 }
 
-/// One share's registration authority. No clock, random source, storage or
-/// socket is owned here; platform hosts provide inputs and execute decisions.
+/// The ownership a resume would replace.
+#[derive(Clone, Copy)]
+struct Ownership {
+    sequence: NonZeroU64,
+    route: PublishedRoute,
+    owner: Option<ConnectionRef>,
+}
+
+/// One share's route authority. No clock, random source, storage or socket is
+/// owned here; platform hosts provide inputs and execute decisions.
 #[derive(Debug)]
 pub struct ShareLifecycle<O> {
     relay: RelayIdentity,
@@ -81,11 +95,18 @@ impl<O: Observer> ShareLifecycle<O> {
     /// `share`: `None` only when no record exists. Every restore, including a
     /// replacement inside one process, needs a fresh `incarnation`.
     ///
+    /// `surviving` lists the share's connections that outlived the previous
+    /// incarnation, such as hibernated sockets; it is empty after a process
+    /// restart. Hosts whose connections survive must never reuse a
+    /// `ConnectionRef` across incarnations, since re-adoption trusts it.
+    ///
     /// An unresolved publication restores fenced under its stored operation,
     /// and the returned `Action::Reconcile` must be executed like any other
-    /// action. A published route restores detached, since its owner belonged
-    /// to the old incarnation. `now` only timestamps the observation:
-    /// restoring never derives or extends a deadline.
+    /// action. A published route re-adopts its stored owner when it survived,
+    /// without a write; otherwise it returns `Action::Detached`, the only
+    /// deadline a restore derives, which the host persists so no later restore
+    /// extends it. A stored grace keeps its deadline, even a past one that the
+    /// next event or timer lapses.
     ///
     /// # Errors
     ///
@@ -95,41 +116,34 @@ impl<O: Observer> ShareLifecycle<O> {
         relay: RelayIdentity,
         share: ShareId,
         stored: Option<Record>,
+        surviving: impl IntoIterator<Item = ConnectionRef>,
         incarnation: Incarnation,
         observer: O,
         now: UnixMillis,
     ) -> Result<(Self, Action<'static>), RestoreError> {
-        let (state, action) = match stored {
-            None => (State::Vacant, Action::None),
+        match stored {
             Some(record) if record.relay() != relay => return Err(RestoreError::ForeignRelay),
             Some(record) if record.share() != share => return Err(RestoreError::ForeignShare),
             Some(Record::Unresolved(unresolved)) if unresolved.id.incarnation == incarnation => {
                 return Err(RestoreError::ReusedIncarnation);
             }
-            Some(Record::Unresolved(unresolved)) => {
-                (State::Fenced(unresolved), Action::Reconcile(unresolved.id))
-            }
-            Some(Record::Published(route)) => (State::Detached(route), Action::None),
-            Some(Record::Stopped(stopped)) => (State::Stopped(stopped), Action::None),
-        };
-        let operation = match action {
-            Action::Reconcile(id) => Some(id),
-            _ => None,
-        };
+            _ => {}
+        }
         let mut lifecycle = Self {
             relay,
             share,
             incarnation,
             last_sequence: 0,
-            state,
+            state: State::Vacant,
             observer,
         };
+        let (action, operation, connection) = lifecycle.install(stored, surviving, now);
         let phase = lifecycle.phase();
         lifecycle.observe(
             now,
             ObservedEvent::Restore,
             operation,
-            None,
+            connection,
             phase,
             decision(&action),
         );
@@ -145,7 +159,7 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Publishing(_) => Phase::Publishing,
             State::Fenced(_) => Phase::Fenced,
             State::Published(_) => Phase::Published,
-            State::Detached(_) => Phase::Detached,
+            State::Grace { .. } => Phase::Grace,
             State::Stopped(_) => Phase::Stopped,
         }
     }
@@ -156,11 +170,8 @@ impl<O: Observer> ShareLifecycle<O> {
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
             State::Reserved(pending) | State::Publishing(pending) => Some(pending.deadline),
-            State::Vacant
-            | State::Fenced(_)
-            | State::Published(_)
-            | State::Detached(_)
-            | State::Stopped(_) => None,
+            State::Grace { route, .. } => Some(route.deadline),
+            State::Vacant | State::Fenced(_) | State::Published(_) | State::Stopped(_) => None,
         }
     }
 
@@ -179,11 +190,19 @@ impl<O: Observer> ShareLifecycle<O> {
             Event::Publish(publication) => self.publish(publication),
             Event::PublicationFinished { id, result } => self.finish(id, result),
             Event::Cancel { id, .. } => self.cancel(id),
+            Event::BeginResume {
+                connection,
+                init,
+                deadline,
+            } => self.begin_resume(connection, init, deadline, now),
+            Event::Resume(resumption) => self.resume(resumption, now),
+            Event::OwnerDisconnected(owner) => self.detach(owner, now),
             Event::Join(share) => self.join(share),
             Event::Tick => Action::None,
         };
         let operation = match &action {
             Action::Reserved(reservation) => Some(reservation.id()),
+            Action::ResumeAdmitted(attempt) => Some(attempt.id()),
             _ => operation,
         };
         self.observe(
@@ -205,6 +224,67 @@ impl<O: Observer> ShareLifecycle<O> {
             expiration = None;
         }
         Effects { expiration, action }
+    }
+
+    /// Installs the stored state and returns the host action it requires,
+    /// with the operation and connection the restore observation names.
+    fn install(
+        &mut self,
+        stored: Option<Record>,
+        surviving: impl IntoIterator<Item = ConnectionRef>,
+        now: UnixMillis,
+    ) -> (
+        Action<'static>,
+        Option<RegistrationId>,
+        Option<ConnectionRef>,
+    ) {
+        match stored {
+            None => (Action::None, None, None),
+            Some(Record::Unresolved(unresolved)) => {
+                self.state = State::Fenced(unresolved);
+                let id = unresolved.id;
+                (Action::Reconcile(id), Some(id), Some(id.connection))
+            }
+            Some(Record::Published(owned)) => {
+                let ownership = self.restored_ownership();
+                if surviving
+                    .into_iter()
+                    .any(|connection| connection == owned.owner)
+                {
+                    let id = self.operation(owned.owner, ownership);
+                    self.state = State::Published(PublishedRegistration {
+                        id,
+                        route: owned.route,
+                    });
+                    return (Action::None, Some(id), Some(owned.owner));
+                }
+                let route = GraceRoute {
+                    route: owned.route,
+                    deadline: now.saturating_add(SENDER_GRACE),
+                };
+                self.state = State::Grace { ownership, route };
+                (Action::Detached(route), None, Some(owned.owner))
+            }
+            Some(Record::Grace(route)) => {
+                self.state = State::Grace {
+                    ownership: self.restored_ownership(),
+                    route,
+                };
+                (Action::None, None, None)
+            }
+            Some(Record::Stopped(stopped)) => {
+                self.state = State::Stopped(stopped);
+                (Action::None, None, None)
+            }
+        }
+    }
+
+    /// A restored route takes this incarnation's first sequence as its
+    /// ownership. Resumes admitted by an earlier incarnation may carry the
+    /// same sequence, so commits also compare the incarnation.
+    const fn restored_ownership(&mut self) -> NonZeroU64 {
+        self.last_sequence = NonZeroU64::MIN.get();
+        NonZeroU64::MIN
     }
 
     fn reserve(
@@ -235,18 +315,11 @@ impl<O: Observer> ShareLifecycle<O> {
             // its single record is the permanent STOP evidence.
             _ => return Action::Refused(Refusal::Occupied),
         }
-        let Some(sequence) = self.last_sequence.checked_add(1).and_then(NonZeroU64::new) else {
+        let Some(sequence) = self.next_sequence() else {
             return Action::Refused(Refusal::SequenceExhausted);
         };
-        self.last_sequence = sequence.get();
         let pending = Pending {
-            id: RegistrationId {
-                relay: self.relay,
-                share: self.share,
-                incarnation: self.incarnation,
-                connection,
-                sequence,
-            },
+            id: self.operation(connection, sequence),
             init,
             deadline,
         };
@@ -294,7 +367,6 @@ impl<O: Observer> ShareLifecycle<O> {
                     route: PublishedRoute {
                         relay: self.relay,
                         registration: unresolved.registration,
-                        version: RouteVersion::FIRST,
                     },
                 };
                 self.state = State::Published(published);
@@ -322,6 +394,128 @@ impl<O: Observer> ShareLifecycle<O> {
         }
     }
 
+    fn begin_resume(
+        &mut self,
+        connection: ConnectionRef,
+        init: RegisterInit,
+        deadline: UnixMillis,
+        now: UnixMillis,
+    ) -> Action<'static> {
+        if init.registration().route().share_id() != self.share {
+            return Action::Refused(Refusal::WrongShare);
+        }
+        if init.mode() != RegistrationMode::Resume {
+            return Action::Refused(Refusal::UnsupportedMode);
+        }
+        if now >= deadline {
+            return Action::Refused(Refusal::Expired);
+        }
+        // An absent route still spends a challenge: only an authenticated
+        // sender may learn the `NotFound` that permits publishing again.
+        let ownership = match self.ownership(init.registration()) {
+            Ok(ownership) => ownership.map(|ownership| ownership.sequence),
+            Err(refusal) => return Action::Refused(refusal),
+        };
+        let Some(sequence) = self.next_sequence() else {
+            return Action::Refused(Refusal::SequenceExhausted);
+        };
+        Action::ResumeAdmitted(ResumeAttempt {
+            id: self.operation(connection, sequence),
+            init,
+            deadline,
+            ownership,
+        })
+    }
+
+    fn resume(&mut self, resumption: Resumption, now: UnixMillis) -> Action<'static> {
+        let attempt = resumption.attempt;
+        if attempt.id.relay != self.relay || attempt.id.share != self.share {
+            return Action::Refused(Refusal::StaleOperation);
+        }
+        if now >= attempt.deadline {
+            return Action::Refused(Refusal::Expired);
+        }
+        let current = match self.ownership(attempt.init.registration()) {
+            Ok(Some(current)) => current,
+            Ok(None) => return Action::Refused(Refusal::NotFound),
+            Err(refusal) => return Action::Refused(refusal),
+        };
+        if attempt.id.incarnation != self.incarnation || attempt.ownership != Some(current.sequence)
+        {
+            return Action::Refused(Refusal::ResumeStale);
+        }
+        let registration = PublishedRegistration {
+            id: attempt.id,
+            route: current.route,
+        };
+        self.state = State::Published(registration);
+        Action::Resumed(Resumed {
+            registration,
+            replaced: current.owner,
+        })
+    }
+
+    /// Returns the ownership a resume of `registration` would replace now,
+    /// `None` when no route exists, or why the share cannot be resumed.
+    fn ownership(&self, registration: &Registration) -> Result<Option<Ownership>, Refusal> {
+        let (held, ownership) = match self.state {
+            State::Vacant => return Ok(None),
+            State::Reserved(pending) | State::Publishing(pending) => {
+                (*pending.init.registration(), Err(Refusal::Starting))
+            }
+            State::Fenced(unresolved) => {
+                (unresolved.registration, Err(Refusal::PublicationUncertain))
+            }
+            State::Published(published) => (
+                published.route.registration,
+                Ok(Ownership {
+                    sequence: published.id.sequence,
+                    route: published.route,
+                    owner: Some(published.id.connection),
+                }),
+            ),
+            State::Grace { ownership, route } => (
+                route.route.registration,
+                Ok(Ownership {
+                    sequence: ownership,
+                    route: route.route,
+                    owner: None,
+                }),
+            ),
+            State::Stopped(stopped) => {
+                let retired = stopped.route == registration.route()
+                    && stopped.share_instance == registration.share_instance();
+                return Err(if retired {
+                    Refusal::Stopped
+                } else {
+                    Refusal::ResumeMismatch
+                });
+            }
+        };
+        if held != *registration {
+            return Err(Refusal::ResumeMismatch);
+        }
+        ownership.map(Some)
+    }
+
+    fn detach(&mut self, owner: ConnectionRef, now: UnixMillis) -> Action<'static> {
+        let State::Published(published) = self.state else {
+            return Action::Refused(Refusal::StaleOperation);
+        };
+        if published.id.connection != owner {
+            return Action::Refused(Refusal::StaleOperation);
+        }
+        let route = GraceRoute {
+            route: published.route,
+            deadline: now.saturating_add(SENDER_GRACE),
+        };
+        self.state = State::Grace {
+            ownership: published.id.sequence,
+            route,
+        };
+        Action::Detached(route)
+    }
+
     fn join(&self, share: ShareId) -> Action<'static> {
         if share != self.share {
             return Action::Refused(Refusal::WrongShare);
@@ -331,18 +525,18 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Reserved(_) | State::Publishing(_) => Action::Refused(Refusal::Starting),
             State::Fenced(_) => Action::Refused(Refusal::PublicationUncertain),
             State::Published(published) => Action::JoinReady(published),
-            State::Detached(_) => Action::Refused(Refusal::SenderDetached),
+            State::Grace { .. } => Action::Refused(Refusal::SenderDetached),
             State::Stopped(_) => Action::Refused(Refusal::Stopped),
         }
     }
 
     fn expire(&mut self, now: UnixMillis) -> Option<Expiration> {
         let before = self.phase();
-        let (id, effect, decision) = match self.state {
+        let (operation, effect, decision) = match self.state {
             State::Reserved(pending) if now >= pending.deadline => {
                 self.state = State::Vacant;
                 (
-                    pending.id,
+                    Some(pending.id),
                     Expiration::Released(pending.id),
                     Decision::Released,
                 )
@@ -350,22 +544,46 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Publishing(pending) if now >= pending.deadline => {
                 self.state = State::Fenced(pending.unresolved());
                 (
-                    pending.id,
+                    Some(pending.id),
                     Expiration::Reconcile(pending.id),
                     Decision::Reconcile,
                 )
+            }
+            State::Grace { route, .. } if now >= route.deadline => {
+                self.state = State::Vacant;
+                (None, Expiration::Lapsed(route.route), Decision::Lapsed)
             }
             _ => return None,
         };
         self.observe(
             now,
             ObservedEvent::Deadline,
-            Some(id),
-            Some(id.connection()),
+            operation,
+            operation.map(RegistrationId::connection),
             before,
             decision,
         );
         Some(effect)
+    }
+
+    /// Issues the next attempt or ownership sequence; it never wraps.
+    fn next_sequence(&mut self) -> Option<NonZeroU64> {
+        let sequence = self
+            .last_sequence
+            .checked_add(1)
+            .and_then(NonZeroU64::new)?;
+        self.last_sequence = sequence.get();
+        Some(sequence)
+    }
+
+    const fn operation(&self, connection: ConnectionRef, sequence: NonZeroU64) -> RegistrationId {
+        RegistrationId {
+            relay: self.relay,
+            share: self.share,
+            incarnation: self.incarnation,
+            connection,
+            sequence,
+        }
     }
 
     fn observe(
@@ -412,6 +630,15 @@ const fn event_context(
             Some(*id),
             Some(id.connection()),
         ),
+        Event::BeginResume { connection, .. } => {
+            (ObservedEvent::BeginResume, None, Some(*connection))
+        }
+        Event::Resume(resumption) => (
+            ObservedEvent::Resume,
+            Some(resumption.id()),
+            Some(resumption.id().connection()),
+        ),
+        Event::OwnerDisconnected(owner) => (ObservedEvent::OwnerDisconnected, None, Some(*owner)),
         Event::Join(_) => (ObservedEvent::Join, None, None),
         Event::Tick => (ObservedEvent::Tick, None, None),
     }
@@ -422,6 +649,9 @@ const fn decision(action: &Action<'_>) -> Decision {
         Action::Reserved(_) => Decision::Reserved,
         Action::Publish(_) => Decision::Publish,
         Action::Registered(_) => Decision::Registered,
+        Action::ResumeAdmitted(_) => Decision::ResumeAdmitted,
+        Action::Resumed(_) => Decision::Resumed,
+        Action::Detached(_) => Decision::Detached,
         Action::JoinReady(_) => Decision::JoinReady,
         Action::Released(_) => Decision::Released,
         Action::Reconcile(_) => Decision::Reconcile,

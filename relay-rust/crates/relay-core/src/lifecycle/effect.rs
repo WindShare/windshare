@@ -1,4 +1,4 @@
-//! Events and host effects of fresh registration.
+//! Events and host effects of registration, resume and owner loss.
 
 use crate::{
     clock::UnixMillis,
@@ -8,7 +8,8 @@ use crate::{
 };
 
 use super::{
-    ConnectionRef, Publication, PublishRequest, PublishedRegistration, RegistrationId, Reservation,
+    ConnectionRef, GraceRoute, Publication, PublishRequest, PublishedRegistration, PublishedRoute,
+    RegistrationId, Reservation, ResumeAttempt, Resumed, Resumption,
 };
 
 /// Host evidence about one publication transaction.
@@ -59,13 +60,27 @@ pub enum Event<'f> {
         result: PublicationResult,
     },
     /// Releases a pre-publication attempt, or fences its in-flight transaction.
-    /// Published sender disconnect/RESUME/STOP belongs to the next lifecycle stage.
+    /// A resume attempt reserves nothing and needs no cancellation.
     Cancel {
         /// Never look this up again by connection ID after asynchronous work.
         id: RegistrationId,
         /// Structured reason recorded in observations.
         reason: Cancellation,
     },
+    /// Handles a resume `AdmissionRequest::Registration`, whose token already
+    /// matched its commitment. Use the deadline from the requesting handshake.
+    BeginResume {
+        /// Exact connection lifetime requesting the resume.
+        connection: ConnectionRef,
+        /// Parsed but not yet authenticated registration.
+        init: RegisterInit,
+        /// Original handshake deadline, never a new timeout.
+        deadline: UnixMillis,
+    },
+    /// Consumes `Outcome::Resume` from the admitted handshake.
+    Resume(Resumption),
+    /// The owner connection closed, failed or missed liveness without STOP.
+    OwnerDisconnected(ConnectionRef),
     /// Checks lifecycle readiness; session admission still belongs to the host.
     Join(ShareId),
     /// The timer/alarm reached the next deadline.
@@ -77,7 +92,7 @@ pub enum Event<'f> {
 pub enum Refusal {
     /// The selected share actor does not own this route.
     WrongShare,
-    /// Fresh registration is the only operation this stage admits.
+    /// The registration's mode is not the one this event handles.
     UnsupportedMode,
     /// The original handshake deadline has passed.
     Expired,
@@ -87,16 +102,22 @@ pub enum Refusal {
     PublicationUncertain,
     /// The incarnation exhausted its non-reusable attempt identities.
     SequenceExhausted,
-    /// The reservation or transaction is no longer the current operation.
+    /// The reservation, transaction or owner is no longer current.
     StaleOperation,
-    /// A receiver arrived before a share was reserved.
+    /// No route exists: a receiver arrived before a share was reserved, or an
+    /// authenticated resume found nothing to resume.
     NotFound,
-    /// A receiver must wait for publication.
+    /// A receiver or resume must wait for publication.
     Starting,
-    /// A receiver must wait for the restored route's sender to reattach.
+    /// A receiver must wait for the grace route's sender to resume.
     SenderDetached,
     /// The share instance was permanently stopped.
     Stopped,
+    /// The share holds a registration other than the one the resume names.
+    ResumeMismatch,
+    /// A publication, another resume or a restore replaced the ownership the
+    /// resume observed; the sender resumes again.
+    ResumeStale,
 }
 
 impl Refusal {
@@ -114,6 +135,8 @@ impl Refusal {
             }
             Self::Starting | Self::SenderDetached => Some(ErrorFrame::Starting(RETRY)),
             Self::Stopped => Some(ErrorFrame::Stopped),
+            Self::ResumeMismatch => Some(ErrorFrame::InvalidProof),
+            Self::ResumeStale => Some(ErrorFrame::ResumeStale),
             Self::StaleOperation => None,
         }
     }
@@ -138,6 +161,17 @@ pub enum Action<'f> {
     /// JOIN readiness follows. If that write fails or is uncertain, close the
     /// share's connections and restore it from storage.
     Registered(PublishedRegistration),
+    /// Pass this attempt into the requesting handshake.
+    ResumeAdmitted(ResumeAttempt),
+    /// Replace the stored record with `registration.record()`, close the
+    /// replaced owner and its relay sessions, then send REGISTERED; JOIN
+    /// readiness follows. If that write fails or is uncertain, close the
+    /// share's connections and restore it from storage.
+    Resumed(Resumed),
+    /// The owner is gone without STOP: store `record()`, retire the owner's
+    /// relay sessions and schedule `deadline()`. If that write fails, a
+    /// restore from storage starts grace again.
+    Detached(GraceRoute),
     /// Lifecycle permits receiver admission using these exact host resources.
     JoinReady(PublishedRegistration),
     /// The attempt never reached publication; close its connection only if
@@ -163,6 +197,10 @@ pub enum Expiration {
     Released(RegistrationId),
     /// Host work may already have committed; close and reconcile this attempt.
     Reconcile(RegistrationId),
+    /// The grace route lapsed without a resume: delete the share's record.
+    /// If the delete fails, restore the share from storage, which lapses the
+    /// stored route again instead of leaving it to block a new publication.
+    Lapsed(PublishedRoute),
 }
 
 /// One event may expire an older attempt before deciding on the current input.

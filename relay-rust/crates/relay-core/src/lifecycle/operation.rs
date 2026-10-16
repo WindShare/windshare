@@ -6,10 +6,10 @@ use crate::{
     clock::UnixMillis,
     descriptor_upload::AuthorizedDescriptor,
     identifiers::{RelayIdentity, ShareId},
-    registration::{RegisterInit, Registered},
+    registration::{RegisterInit, Registered, ResumeRegistration},
 };
 
-use super::{PublishedRoute, Record, UnresolvedPublication};
+use super::{OwnedRoute, PublishedRoute, Record, UnresolvedPublication};
 
 /// One lifetime of a host connection slot. Reusing a slot requires a new generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -196,26 +196,107 @@ impl PublishRequest<'_> {
     }
 }
 
-/// A publication whose host transaction completed while the sender still owned it.
+/// Admission of one resume handshake, bound to the route ownership observed
+/// before its challenge.
+///
+/// It holds no route capacity, so a failed or abandoned handshake needs no
+/// lifecycle event. Its commit fails as stale once a publication, another
+/// resume or a restore replaced that ownership; the owner merely
+/// disconnecting does not, since no new owner exists to protect.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ResumeAttempt {
+    pub(super) id: RegistrationId,
+    pub(super) init: RegisterInit,
+    pub(super) deadline: UnixMillis,
+    // The observed ownership's sequence, or `None` when no route existed, so
+    // an authenticated sender can learn `NotFound` and publish again.
+    pub(super) ownership: Option<NonZeroU64>,
+}
+
+impl ResumeAttempt {
+    /// Returns the identity the resuming connection owns the route under.
+    #[must_use]
+    pub const fn id(&self) -> RegistrationId {
+        self.id
+    }
+
+    /// Returns the registration the resume names.
+    #[must_use]
+    pub const fn init(&self) -> &RegisterInit {
+        &self.init
+    }
+
+    /// Returns the original handshake deadline, which the commit must meet.
+    #[must_use]
+    pub const fn deadline(&self) -> UnixMillis {
+        self.deadline
+    }
+}
+
+/// An authenticated resume bound to the attempt its handshake consumed.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Resumption {
+    pub(super) attempt: ResumeAttempt,
+}
+
+impl Resumption {
+    /// The handshake authenticates exactly the attempt's registration, so
+    /// the spent authority would only duplicate it.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the authority makes authentication the only way to mint a resumption"
+    )]
+    pub(crate) fn new(attempt: ResumeAttempt, authority: ResumeRegistration) -> Self {
+        debug_assert_eq!(authority.init(), &attempt.init);
+        Self { attempt }
+    }
+
+    /// Returns the attempt whose resume was authenticated.
+    #[must_use]
+    pub const fn id(&self) -> RegistrationId {
+        self.attempt.id
+    }
+
+    /// Returns the authenticated registration.
+    #[must_use]
+    pub const fn init(&self) -> &RegisterInit {
+        &self.attempt.init
+    }
+}
+
+/// A publication or resume whose sender connection owns the published route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedRegistration {
-    /// The owning sender's operation: resource ownership and callback correlation.
+    /// The owning sender's operation: resource ownership and callback
+    /// correlation. A restore re-adopting the owner mints a new one.
     pub id: RegistrationId,
     /// The durable route receivers are admitted to.
     pub route: PublishedRoute,
 }
 
 impl PublishedRegistration {
-    /// The only lifecycle action that authorizes this reply is `Action::Registered`.
+    /// Only `Action::Registered` and `Action::Resumed` authorize this reply.
     #[must_use]
     pub const fn acknowledgement(self) -> Registered {
         Registered::new(&self.route.registration)
     }
 
-    /// The record that replaces this publication's unresolved record before
-    /// REGISTERED is sent.
+    /// The record naming this owner, stored before its acknowledgement.
     #[must_use]
     pub const fn record(self) -> Record {
-        Record::Published(self.route)
+        Record::Published(OwnedRoute {
+            route: self.route,
+            owner: self.id.connection,
+        })
     }
+}
+
+/// A committed resume: the route's new owner, and the owner it replaced.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Resumed {
+    /// The resuming connection now owns the route.
+    pub registration: PublishedRegistration,
+    /// The owner still connected when the resume committed. Close exactly
+    /// this lifetime and its relay sessions; later events naming it are stale.
+    pub replaced: Option<ConnectionRef>,
 }

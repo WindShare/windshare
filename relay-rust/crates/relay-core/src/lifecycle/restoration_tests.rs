@@ -1,12 +1,4 @@
-use crate::stop::StopInit;
-
 use super::*;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StopVector {
-    stop_init_b64: String,
-}
 
 fn restarted() -> Incarnation {
     Incarnation::new([2; 16]).unwrap()
@@ -21,25 +13,6 @@ fn finish(
     engine
         .handle(Event::PublicationFinished { id, result }, at)
         .action
-}
-
-fn register(fixture: &Fixture, engine: &mut ShareLifecycle<Recorder>) -> PublishedRegistration {
-    let request = fixture.publish(engine);
-    match finish(engine, request.id, PublicationResult::Committed, fixture.at) {
-        Action::Registered(published) => published,
-        action => panic!("publication must register: {action:?}"),
-    }
-}
-
-fn stopped() -> Record {
-    let vector: StopVector = session_case("fresh-relay-registration-proof");
-    let stop = StopInit::decode(&bytes(&vector.stop_init_b64)).unwrap();
-    Record::Stopped(StoppedShare {
-        relay: stop.relay(),
-        route: stop.route(),
-        share_instance: stop.share_instance(),
-        stop_id: stop.stop_id(),
-    })
 }
 
 #[test]
@@ -100,54 +73,135 @@ fn a_stored_publication_restores_fenced_and_only_its_exact_abort_reopens_the_sha
 }
 
 #[test]
-fn a_registered_route_restores_detached_with_its_version_across_restarts() {
+fn a_published_route_re_adopts_its_surviving_owner_without_a_write() {
     let fixture = Fixture::new();
-    let mut original = fixture.engine();
-    let published = register(&fixture, &mut original);
-    assert_eq!(published.route.version(), RouteVersion::FIRST);
+    let published = fixture.register(&mut fixture.engine());
+    let owner = published.id.connection();
+    let (mut engine, action) = fixture
+        .restore_at(
+            Some(published.record()),
+            &[connection(7, 1), owner],
+            restarted(),
+            fixture.at,
+        )
+        .unwrap();
+    assert_eq!(action, Action::None);
+    assert_eq!(engine.phase(), Phase::Published);
+    assert_eq!(engine.deadline(), None);
+
+    let Action::JoinReady(adopted) = fixture.join(&mut engine, fixture.at).action else {
+        panic!("a surviving owner keeps serving receivers");
+    };
+    assert_eq!(adopted.route, published.route);
+    assert_eq!(adopted.id.connection(), owner);
+    assert_eq!(adopted.id.incarnation(), restarted());
+    assert_eq!(adopted.record(), published.record());
+    let restored = engine.observer.0[0];
     assert_eq!(
-        published.route.registration(),
-        fixture.init().registration()
+        (restored.operation, restored.connection, restored.after),
+        (Some(adopted.id), Some(owner), Phase::Published)
     );
 
-    let mut stored = published.record();
-    for incarnation in [restarted(), Incarnation::new([3; 16]).unwrap()] {
-        let (mut engine, action) = fixture.restore(Some(stored), incarnation).unwrap();
-        assert_eq!(action, Action::None);
-        assert!(matches!(engine.state, State::Detached(route) if route == published.route));
-        assert_eq!(engine.deadline(), None);
-        assert_eq!(
-            fixture.join(&mut engine, fixture.at).action,
-            Action::Refused(Refusal::SenderDetached)
-        );
-        assert_eq!(
-            engine
-                .handle(fixture.reserve_event(fixture.at), fixture.at)
-                .action,
-            Action::Refused(Refusal::Occupied)
-        );
-        // Callbacks for the operation that published it name no current work.
-        assert_eq!(
-            finish(
-                &mut engine,
-                published.id,
-                PublicationResult::Aborted,
-                fixture.at
-            ),
-            Action::Refused(Refusal::StaleOperation)
-        );
-        assert_eq!(engine.phase(), Phase::Detached);
-        let State::Detached(route) = engine.state else {
-            unreachable!();
-        };
-        stored = Record::Published(route);
-    }
+    // Callbacks for the operation that published it name no current work,
+    // while the re-adopted owner can still be lost.
+    assert_eq!(
+        finish(
+            &mut engine,
+            published.id,
+            PublicationResult::Aborted,
+            fixture.at
+        ),
+        Action::Refused(Refusal::StaleOperation)
+    );
+    assert!(matches!(
+        engine
+            .handle(Event::OwnerDisconnected(owner), fixture.at)
+            .action,
+        Action::Detached(_)
+    ));
+}
+
+#[test]
+fn a_lost_owner_derives_one_grace_that_later_restores_never_extend() {
+    let fixture = Fixture::new();
+    let published = fixture.register(&mut fixture.engine());
+    let owner = published.id.connection();
+    let (mut engine, action) = fixture
+        .restore_at(
+            Some(published.record()),
+            &[connection(7, 1)],
+            restarted(),
+            fixture.at,
+        )
+        .unwrap();
+    let deadline = fixture.at.saturating_add(SENDER_GRACE);
+    let grace = GraceRoute {
+        route: published.route,
+        deadline,
+    };
+    assert_eq!(action, Action::Detached(grace));
+    assert_eq!(engine.phase(), Phase::Grace);
+    assert_eq!(engine.deadline(), Some(deadline));
+    let restored = engine.observer.0[0];
+    assert_eq!(
+        (restored.connection, restored.decision),
+        (Some(owner), Decision::Detached)
+    );
+    assert_eq!(
+        fixture.join(&mut engine, fixture.at).action,
+        Action::Refused(Refusal::SenderDetached)
+    );
+    assert_eq!(
+        engine
+            .handle(fixture.reserve_event(fixture.at), fixture.at)
+            .action,
+        Action::Refused(Refusal::Occupied)
+    );
+
+    // The host stored the derived deadline. Restoring it later keeps it, and
+    // a socket that outlived its own loss is not re-adopted from a grace.
+    let later = UnixMillis(deadline.0 - 1);
+    let (mut engine, action) = fixture
+        .restore_at(
+            Some(grace.record()),
+            &[owner],
+            Incarnation::new([3; 16]).unwrap(),
+            later,
+        )
+        .unwrap();
+    assert_eq!(action, Action::None);
+    assert_eq!(engine.phase(), Phase::Grace);
+    assert_eq!(engine.deadline(), Some(deadline));
+    assert_eq!(
+        engine.handle(Event::Tick, deadline).expiration,
+        Some(Expiration::Lapsed(published.route))
+    );
+
+    // A grace restored after its deadline lapses on the first event.
+    let much_later = deadline.saturating_add(Duration::from_secs(600));
+    let (mut engine, _) = fixture
+        .restore_at(
+            Some(grace.record()),
+            &[],
+            Incarnation::new([4; 16]).unwrap(),
+            much_later,
+        )
+        .unwrap();
+    assert_eq!(engine.deadline(), Some(deadline));
+    let effects = fixture.join(&mut engine, much_later);
+    assert_eq!(
+        effects.expiration,
+        Some(Expiration::Lapsed(published.route))
+    );
+    assert_eq!(effects.action, Action::Refused(Refusal::NotFound));
 }
 
 #[test]
 fn a_stop_record_retires_its_instance_and_keeps_the_share_occupied() {
     let fixture = Fixture::new();
-    let (mut engine, action) = fixture.restore(Some(stopped()), restarted()).unwrap();
+    let (mut engine, action) = fixture
+        .restore(Some(fixture.stopped()), restarted())
+        .unwrap();
     assert_eq!(action, Action::None);
     assert_eq!(engine.phase(), Phase::Stopped);
     assert_eq!(engine.deadline(), None);
@@ -162,9 +216,8 @@ fn a_stop_record_retires_its_instance_and_keeps_the_share_occupied() {
         Action::Refused(Refusal::Stopped)
     );
 
-    // WS2R carries the instance right after the eight-byte header and share ID.
     let mut other_instance = bytes(&fixture.vector.register_init_b64);
-    other_instance[8 + 12] ^= 1;
+    other_instance[INIT_INSTANCE_OFFSET] ^= 1;
     let other_instance = RegisterInit::decode(&other_instance).unwrap();
     assert_ne!(
         other_instance.registration().share_instance(),
@@ -216,17 +269,20 @@ fn restoration_refuses_records_of_another_relay_or_share_and_a_reused_incarnatio
         ),
     ] {
         let restored =
-            ShareLifecycle::restore(relay, share, stored, incarnation, (), fixture.at).err();
+            ShareLifecycle::restore(relay, share, stored, [], incarnation, (), fixture.at).err();
         assert_eq!(restored, Some(error));
     }
-    for record in [
-        Record::Published(register(&fixture, &mut fixture.engine()).route),
-        stopped(),
-    ] {
+    let published = fixture.register(&mut fixture.engine());
+    let grace = GraceRoute {
+        route: published.route,
+        deadline: fixture.at,
+    };
+    for record in [published.record(), grace.record(), fixture.stopped()] {
         let restored = ShareLifecycle::restore(
             fixture.relay(),
             other_share,
             Some(record),
+            [],
             restarted(),
             (),
             fixture.at,
