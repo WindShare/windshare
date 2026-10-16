@@ -6,8 +6,10 @@ use crate::{
     clock::UnixMillis,
     descriptor_upload::AuthorizedDescriptor,
     identifiers::{RelayIdentity, ShareId},
-    registration::RegisterInit,
+    registration::{RegisterInit, Registered},
 };
+
+use super::{PublishedRoute, Record, UnresolvedPublication};
 
 /// One lifetime of a host connection slot. Reusing a slot requires a new generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,9 +22,9 @@ pub struct ConnectionRef {
 
 /// A host-chosen, nonzero incarnation of a single-share lifecycle.
 ///
-/// Hosts retain this value while restoring the same engine state, and choose a
-/// fresh value when constructing a replacement. A random 128-bit value or a
-/// durably allocated counter keeps pre-restart callbacks from naming new work.
+/// Every restore needs a fresh value: a random 128-bit value or a durably
+/// allocated counter keeps callbacks from before the restore from naming new
+/// work. Stored operations keep the incarnation that minted them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Incarnation([u8; 16]);
 
@@ -31,6 +33,12 @@ impl Incarnation {
     #[must_use]
     pub fn new(bytes: [u8; 16]) -> Option<Self> {
         (bytes != [0; 16]).then_some(Self(bytes))
+    }
+
+    /// Returns the encoded incarnation.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
     }
 }
 
@@ -84,6 +92,17 @@ pub(super) struct Pending {
     pub id: RegistrationId,
     pub init: RegisterInit,
     pub deadline: UnixMillis,
+}
+
+impl Pending {
+    /// Drops the handshake deadline: once fenced, only reconciliation ends
+    /// the attempt, never a timeout.
+    pub const fn unresolved(self) -> UnresolvedPublication {
+        UnresolvedPublication {
+            id: self.id,
+            registration: *self.init.registration(),
+        }
+    }
 }
 
 /// Admission of one fresh handshake. Moving it into the handshake binds the
@@ -147,10 +166,11 @@ impl<'f> Publication<'f> {
 
 /// Host transaction requested after authentication, before receiver visibility.
 ///
-/// Prepare connection resources and durably store the registration plus these
-/// exact opaque descriptor bytes, all under `id`. Do not expose the route or
-/// send REGISTERED. Report the outcome through `Event::PublicationFinished`.
-/// If work crosses an await, copy only the bounded descriptor into host storage.
+/// Prepare connection resources and durably store [`Self::record`] with these
+/// exact opaque descriptor bytes, conditional on the share having no record.
+/// Do not expose the route or send REGISTERED. Report the outcome through
+/// `Event::PublicationFinished`. If work crosses an await, copy only the
+/// bounded descriptor into host storage.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PublishRequest<'f> {
     /// All resource and storage changes must be conditional on this identity.
@@ -163,19 +183,39 @@ pub struct PublishRequest<'f> {
     pub deadline: UnixMillis,
 }
 
+impl PublishRequest<'_> {
+    /// The record the transaction stores. Until REGISTERED replaces it, a
+    /// restart restores this attempt fenced, so a commit the lifecycle never
+    /// acknowledged cannot become visible.
+    #[must_use]
+    pub const fn record(&self) -> Record {
+        Record::Unresolved(UnresolvedPublication {
+            id: self.id,
+            registration: *self.init.registration(),
+        })
+    }
+}
+
 /// A publication whose host transaction completed while the sender still owned it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedRegistration {
-    /// Resource ownership and callback correlation.
+    /// The owning sender's operation: resource ownership and callback correlation.
     pub id: RegistrationId,
-    /// The committed registration, including its resume commitment.
-    pub init: RegisterInit,
+    /// The durable route receivers are admitted to.
+    pub route: PublishedRoute,
 }
 
 impl PublishedRegistration {
     /// The only lifecycle action that authorizes this reply is `Action::Registered`.
     #[must_use]
-    pub const fn acknowledgement(self) -> crate::registration::Registered {
-        crate::registration::Registered::new(&self.init)
+    pub const fn acknowledgement(self) -> Registered {
+        Registered::new(&self.route.registration)
+    }
+
+    /// The record that replaces this publication's unresolved record before
+    /// REGISTERED is sent.
+    #[must_use]
+    pub const fn record(self) -> Record {
+        Record::Published(self.route)
     }
 }

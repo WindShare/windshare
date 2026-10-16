@@ -122,17 +122,20 @@ fn wrong_route_resume_and_expired_requests_do_not_reserve_capacity() {
     assert_eq!(engine.last_sequence, 0);
 
     let other_share = ShareId::new([0x5a; 12]).unwrap();
-    assert_ne!(other_share, fixture.init().route().share_id());
+    assert_ne!(other_share, fixture.share());
     assert_eq!(
         engine.handle(Event::Join(other_share), fixture.at).action,
         Action::Refused(Refusal::WrongShare)
     );
-    let mut wrong_actor = ShareLifecycle::vacant(
+    let (mut wrong_actor, _) = ShareLifecycle::restore(
         fixture.relay(),
         other_share,
+        None,
         Incarnation::new([1; 16]).unwrap(),
         Recorder::default(),
-    );
+        fixture.at,
+    )
+    .unwrap();
     assert_eq!(
         wrong_actor
             .handle(fixture.reserve_event(fixture.at), fixture.at)
@@ -150,7 +153,7 @@ fn attempt_sequences_never_wrap_into_an_old_identity() {
     let reservation = fixture.reserve(&mut engine, connection(1, 1), fixture.at);
     assert_eq!(reservation.id().sequence().get(), u64::MAX);
     assert_eq!(reservation.id().relay(), fixture.relay());
-    assert_eq!(reservation.id().share(), fixture.init().route().share_id());
+    assert_eq!(reservation.id().share(), fixture.share());
     let id = reservation.id();
     assert_eq!(
         engine
@@ -195,6 +198,8 @@ fn only_peer_refusals_have_wire_responses() {
             Some(ErrorFrame::Admission(retry)),
         ),
         (Refusal::Starting, Some(ErrorFrame::Starting(retry))),
+        (Refusal::SenderDetached, Some(ErrorFrame::Starting(retry))),
+        (Refusal::Stopped, Some(ErrorFrame::Stopped)),
         (Refusal::StaleOperation, None),
     ];
     for (refusal, frame) in cases {

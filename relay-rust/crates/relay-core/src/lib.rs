@@ -5,7 +5,8 @@
 //! This crate decodes the control frames a relay receives, encodes the ones it
 //! sends, drives connection handshakes and single-share fresh registration, and
 //! turns sender proofs into move-only authorities. Publication remains hidden
-//! until the host confirms persistence and connection preparation.
+//! until the host confirms persistence and connection preparation, and a share
+//! lifecycle is constructed only from the durable record its host stores.
 
 #![no_std]
 

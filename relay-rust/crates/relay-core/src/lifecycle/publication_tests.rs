@@ -191,7 +191,7 @@ fn every_event_checks_publication_expiry_before_accepting_success_or_new_work() 
         let request = fixture.publish(&mut engine);
         let event = match trigger {
             0 => Event::Tick,
-            1 => Event::Join(fixture.init().route().share_id()),
+            1 => Event::Join(fixture.share()),
             2 => fixture.reserve_event(request.deadline),
             _ => Event::PublicationFinished {
                 id: request.id,
@@ -288,12 +288,15 @@ fn callbacks_cannot_cross_actor_incarnations_or_relays() {
             Incarnation::new([1; 16]).unwrap(),
         ),
     ] {
-        let mut replacement = ShareLifecycle::vacant(
+        let (mut replacement, _) = ShareLifecycle::restore(
             relay,
-            fixture.init().route().share_id(),
+            fixture.share(),
+            None,
             incarnation,
             Recorder::default(),
-        );
+            fixture.at,
+        )
+        .unwrap();
         let reservation = fixture.reserve(&mut replacement, connection(1, 1), fixture.at);
         assert_eq!(reservation.id().sequence(), request.id.sequence());
         assert_ne!(reservation.id(), request.id);

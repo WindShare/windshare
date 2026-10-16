@@ -66,46 +66,29 @@ impl RegistrationMode {
     }
 }
 
-/// `REGISTER_INIT` (`WS2R`): the share identity a sender asks to route.
+/// What a registration commits, independent of whether it is fresh or a
+/// resume: these are the facts a relay publishes and later restores.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisterInit {
-    mode: RegistrationMode,
+pub struct Registration {
     route: ShareRoute,
     share_instance: ShareInstance,
     descriptor_digest: DescriptorDigest,
     resume_token_hash: ResumeTokenHash,
 }
 
-impl RegisterInit {
-    /// Decodes one complete `WS2R` frame.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FrameError`] unless the frame has the exact v2 layout, a
-    /// known mode, a nonzero share instance and a share ID derived from its
-    /// key hash.
-    pub fn decode(encoded: &[u8]) -> Result<Self, FrameError> {
-        let (mode, mut body) = open_discriminated(encoded, REGISTER_INIT_MAGIC)?;
-        let mode = RegistrationMode::from_wire(mode)?;
-        let share_id = body.array()?;
-        let share_instance = body.array()?;
-        let pk_hash = body.array()?;
-        let descriptor_digest = body.array()?;
-        let resume_token_hash = body.array()?;
-        body.finish()?;
-        Ok(Self {
-            mode,
-            route: ShareRoute::from_wire(share_id, pk_hash)?,
-            share_instance: ShareInstance::new(share_instance).ok_or(FrameError::Field)?,
-            descriptor_digest: DescriptorDigest::new(descriptor_digest),
-            resume_token_hash: ResumeTokenHash::new(resume_token_hash),
-        })
-    }
-
-    /// Returns whether this registration is fresh or a resume.
-    #[must_use]
-    pub const fn mode(&self) -> RegistrationMode {
-        self.mode
+impl Registration {
+    pub(crate) const fn new(
+        route: ShareRoute,
+        share_instance: ShareInstance,
+        descriptor_digest: DescriptorDigest,
+        resume_token_hash: ResumeTokenHash,
+    ) -> Self {
+        Self {
+            route,
+            share_instance,
+            descriptor_digest,
+            resume_token_hash,
+        }
     }
 
     /// Returns the share route whose key hash every proof must match.
@@ -131,16 +114,65 @@ impl RegisterInit {
     pub const fn resume_token_hash(&self) -> ResumeTokenHash {
         self.resume_token_hash
     }
+}
+
+/// `REGISTER_INIT` (`WS2R`): the share identity a sender asks to route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterInit {
+    mode: RegistrationMode,
+    registration: Registration,
+}
+
+impl RegisterInit {
+    /// Decodes one complete `WS2R` frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FrameError`] unless the frame has the exact v2 layout, a
+    /// known mode, a nonzero share instance and a share ID derived from its
+    /// key hash.
+    pub fn decode(encoded: &[u8]) -> Result<Self, FrameError> {
+        let (mode, mut body) = open_discriminated(encoded, REGISTER_INIT_MAGIC)?;
+        let mode = RegistrationMode::from_wire(mode)?;
+        let share_id = body.array()?;
+        let share_instance = body.array()?;
+        let pk_hash = body.array()?;
+        let descriptor_digest = body.array()?;
+        let resume_token_hash = body.array()?;
+        body.finish()?;
+        Ok(Self {
+            mode,
+            registration: Registration::new(
+                ShareRoute::from_wire(share_id, pk_hash)?,
+                ShareInstance::new(share_instance).ok_or(FrameError::Field)?,
+                DescriptorDigest::new(descriptor_digest),
+                ResumeTokenHash::new(resume_token_hash),
+            ),
+        })
+    }
+
+    /// Returns whether this registration is fresh or a resume.
+    #[must_use]
+    pub const fn mode(&self) -> RegistrationMode {
+        self.mode
+    }
+
+    /// Returns the facts this request asks the relay to publish or reclaim.
+    #[must_use]
+    pub const fn registration(&self) -> &Registration {
+        &self.registration
+    }
 
     fn preimage(&self, challenge: &Challenge, relay: &RelayIdentity) -> Writer<PREIMAGE_CAPACITY> {
+        let registration = &self.registration;
         let mut preimage = Writer::new();
         preimage
             .put(self.mode.domain())
-            .put(self.route.share_id().as_bytes())
-            .put(self.share_instance.as_bytes())
-            .put(self.route.pk_hash().as_bytes())
-            .put(self.descriptor_digest.as_bytes())
-            .put(self.resume_token_hash.as_bytes())
+            .put(registration.route.share_id().as_bytes())
+            .put(registration.share_instance.as_bytes())
+            .put(registration.route.pk_hash().as_bytes())
+            .put(registration.descriptor_digest.as_bytes())
+            .put(registration.resume_token_hash.as_bytes())
             .put(relay.as_bytes());
         challenge.put_body(&mut preimage);
         preimage
@@ -224,13 +256,13 @@ impl Registered {
     /// Encoded `WS2K` width in bytes.
     pub const ENCODED_BYTES: usize = 68;
 
-    /// Acknowledges exactly the identity and descriptor `init` committed.
+    /// Acknowledges exactly the identity and descriptor `registration` committed.
     #[must_use]
-    pub const fn new(init: &RegisterInit) -> Self {
+    pub const fn new(registration: &Registration) -> Self {
         Self {
-            share_id: init.route.share_id(),
-            share_instance: init.share_instance,
-            descriptor_digest: init.descriptor_digest,
+            share_id: registration.route.share_id(),
+            share_instance: registration.share_instance,
+            descriptor_digest: registration.descriptor_digest,
         }
     }
 
@@ -279,7 +311,7 @@ pub fn authenticate_registration(
         return Err(AuthenticationError::ChallengeExpired);
     }
     proof.proof.authenticate(
-        init.route.pk_hash(),
+        init.registration.route.pk_hash(),
         init.preimage(&challenge, relay).written(),
     )?;
     Ok(match init.mode {
@@ -326,7 +358,7 @@ impl FreshRegistration {
         self,
         upload: DescriptorUpload<'_>,
     ) -> Result<AuthorizedDescriptor<'_>, DescriptorDigestMismatch> {
-        if DescriptorDigest::of(upload.object()) != self.init.descriptor_digest {
+        if DescriptorDigest::of(upload.object()) != self.init.registration.descriptor_digest {
             return Err(DescriptorDigestMismatch);
         }
         Ok(AuthorizedDescriptor::new(self, upload.object()))

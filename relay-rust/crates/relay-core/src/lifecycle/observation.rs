@@ -20,11 +20,17 @@ pub enum Phase {
     Fenced,
     /// The host confirmed publication and the route is visible.
     Published,
+    /// A restored route is published, but no sender connection serves it yet.
+    Detached,
+    /// The share instance was permanently stopped.
+    Stopped,
 }
 
 /// Milestone or control-flow input being observed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObservedEvent {
+    /// The actor was constructed from a stored record, or its absence.
+    Restore,
     /// A handshake requested a route reservation.
     Reserve,
     /// A handshake supplied its authenticated upload.
@@ -73,13 +79,14 @@ pub struct Observation {
     pub share: ShareId,
     /// Actor lifetime.
     pub incarnation: Incarnation,
-    /// Attempt being acted on, including stale callback identities.
+    /// Attempt being acted on, including stale callback identities and a
+    /// restored unresolved operation.
     pub operation: Option<RegistrationId>,
     /// Requesting connection, present even before a reservation exists.
     pub connection: Option<ConnectionRef>,
     /// Cause of the decision.
     pub event: ObservedEvent,
-    /// State before the decision.
+    /// State before the decision; the restored phase itself for `Restore`.
     pub before: Phase,
     /// State after the decision.
     pub after: Phase,

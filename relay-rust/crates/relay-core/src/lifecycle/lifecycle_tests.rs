@@ -76,12 +76,32 @@ impl Fixture {
         )
     }
 
+    fn share(&self) -> ShareId {
+        self.init().registration().route().share_id()
+    }
+
     fn engine(&self) -> ShareLifecycle<Recorder> {
-        ShareLifecycle::vacant(
+        let (engine, action) = self
+            .restore(None, Incarnation::new([1; 16]).unwrap())
+            .unwrap();
+        assert_eq!(action, Action::None);
+        engine
+    }
+
+    /// Restores through persisted bytes, as a host reads its storage.
+    fn restore(
+        &self,
+        stored: Option<Record>,
+        incarnation: Incarnation,
+    ) -> Result<(ShareLifecycle<Recorder>, Action<'static>), RestoreError> {
+        let stored = stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap());
+        ShareLifecycle::restore(
             self.relay(),
-            self.init().route().share_id(),
-            Incarnation::new([1; 16]).unwrap(),
+            self.share(),
+            stored,
+            incarnation,
             Recorder::default(),
+            self.at,
         )
     }
 
@@ -149,7 +169,7 @@ impl Fixture {
     }
 
     fn join(&self, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) -> Effects<'static> {
-        engine.handle(Event::Join(self.init().route().share_id()), at)
+        engine.handle(Event::Join(self.share()), at)
     }
 
     fn reserve_event(&self, at: UnixMillis) -> Event<'static> {
@@ -218,7 +238,7 @@ fn publication_requires_host_commit_and_preparation_before_join_or_registered() 
     );
     assert_eq!(published.id.connection(), prepared_connection);
     assert_eq!(
-        published.init.descriptor_digest(),
+        published.route.registration().descriptor_digest(),
         crate::identifiers::DescriptorDigest::of(&stored_descriptor)
     );
     assert_eq!(
@@ -411,18 +431,27 @@ fn structured_observations_correlate_expiry_and_the_replacement() {
         panic!("replacement");
     };
     let observations = &engine.observer.0;
-    assert_eq!(observations.len(), 3);
-    assert_eq!(observations[0].operation, Some(id));
-    assert_eq!(observations[0].before, Phase::Vacant);
-    assert_eq!(observations[0].after, Phase::Reserved);
-    assert_eq!(observations[1].event, ObservedEvent::Deadline);
+    assert_eq!(observations.len(), 4);
+    let restored = observations[0];
+    assert_eq!(restored.event, ObservedEvent::Restore);
+    assert_eq!(
+        (restored.before, restored.after),
+        (Phase::Vacant, Phase::Vacant)
+    );
+    assert_eq!((restored.operation, restored.connection), (None, None));
     assert_eq!(observations[1].operation, Some(id));
-    assert_eq!(observations[1].decision, Decision::Released);
-    assert_eq!(observations[2].operation, Some(replacement.id()));
+    assert_eq!(observations[1].before, Phase::Vacant);
+    assert_eq!(observations[1].after, Phase::Reserved);
+    assert_eq!(observations[2].event, ObservedEvent::Deadline);
+    assert_eq!(observations[2].operation, Some(id));
+    assert_eq!(observations[2].decision, Decision::Released);
+    assert_eq!(observations[3].operation, Some(replacement.id()));
     for observation in observations {
         assert_eq!(observation.relay, fixture.relay());
-        assert_eq!(observation.share, fixture.init().route().share_id());
+        assert_eq!(observation.share, fixture.share());
         assert_eq!(observation.incarnation, id.incarnation());
+    }
+    for observation in &observations[1..] {
         assert_eq!(observation.connection, Some(connection(1, 1)));
     }
 }
@@ -432,3 +461,6 @@ mod publication;
 
 #[path = "admission_tests.rs"]
 mod admission;
+
+#[path = "restoration_tests.rs"]
+mod restoration;

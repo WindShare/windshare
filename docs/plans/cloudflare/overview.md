@@ -18,6 +18,24 @@ borrow bounded descriptor bytes; the host owns any copy and all storage/socket
 resources. JOIN readiness and REGISTERED follow only after the host confirms
 persistence and connection preparation.
 
+Its only constructor, `restore`, takes the share's durable `lifecycle::Record`,
+or `None` when storage holds nothing, so no host can start an empty actor over
+an existing registration or STOP. Hosts persist the kernel's fixed-layout record
+bytes, keyed by relay identity and share:
+
+| Transition | Stored record | Restores as |
+| --- | --- | --- |
+| Reserve, Released | none; an abort already removed the unresolved record | vacant |
+| Publish transaction | `Unresolved` (exact operation), with the descriptor | fenced, returning `Reconcile` |
+| Registered, before REGISTERED | `Published` (registration, resume hash, route version) | detached |
+| STOP, before STOPPED (next stage) | `Stopped` (instance, stop ID); permanent | stopped |
+
+A crash before REGISTERED's write therefore never revives a fenced attempt.
+Restore needs a fresh incarnation and keeps stored operation identities and route
+versions; it never derives or extends a deadline. Detached receivers retry and
+fresh registrations are refused; a stopped instance is refused with `Stopped`,
+and other instances of a stopped share stay occupied.
+
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
 attempt and requests reconciliation. Only confirmation that its record,
@@ -31,14 +49,13 @@ contract in the [protocol specification](../../协议规范.md): fixed-cadence
 `WS2H` probes, coalescible `WS2A` replies and failure only after a full timeout
 without accepted inbound frames. Both Rust adapters must keep it.
 
-This stage ends at publication. Published-sender disconnect grace, lifecycle
-RESUME/STOP, durable-state restoration, session forwarding and both platform
-adapters remain to be implemented. Construct a vacant lifecycle only after
-establishing that no existing durable registration, unresolved transaction or
-permanent STOP would be bypassed.
+Published-sender disconnect grace, lifecycle RESUME/STOP, reattaching a detached
+route (RESUME, or hibernation re-adoption by route version), session forwarding
+and both platform adapters remain to be implemented.
 
 `make rust` covers formatting, Clippy, native coverage, doctests and the core Wasm
 build. The registration tests use injected time and the real handshake/shared
-vectors, covering competing attempts, failure/expiry cleanup, stale callbacks
-and uncertain publication. See [validation](../../validation.md#rust-relay-checks)
-for prerequisites and gate ownership.
+vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
+uncertain publication, record layout and restoration of every stored record.
+See [validation](../../validation.md#rust-relay-checks) for prerequisites and
+gate ownership.

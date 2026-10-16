@@ -71,15 +71,15 @@ fn fresh_registration_reproduces_shared_bytes_and_publishes_its_descriptor() {
     let init = RegisterInit::decode(&bytes(&vector.register_init_b64)).expect("shared WS2R");
     assert_eq!(init.mode(), RegistrationMode::Fresh);
     assert_eq!(
-        init.descriptor_digest().as_bytes(),
+        init.registration().descriptor_digest().as_bytes(),
         &array(&vector.descriptor_digest_b64)
     );
     assert_eq!(
-        init.resume_token_hash().as_bytes(),
+        init.registration().resume_token_hash().as_bytes(),
         &array(&vector.resume_token_hash_b64)
     );
     assert_eq!(
-        Registered::new(&init).encode().as_slice(),
+        Registered::new(init.registration()).encode().as_slice(),
         bytes(&vector.registered_b64)
     );
 
@@ -121,7 +121,10 @@ fn resume_reproduces_shared_bytes_and_presents_its_committed_token() {
     assert_eq!(init.mode(), RegistrationMode::Resume);
     let credential =
         ResumeCredential::decode(&bytes(&vector.resume_credential_b64)).expect("shared WS2T");
-    assert_eq!(credential.token().hash(), init.resume_token_hash());
+    assert_eq!(
+        credential.token().hash(),
+        init.registration().resume_token_hash()
+    );
 
     let challenge = challenge(
         ChallengePurpose::Resume,
