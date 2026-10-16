@@ -286,7 +286,7 @@ func validPeerAttemptAdmission(spec PeerAttemptSpec, shape peerStageShape) bool 
 	_, deliveryOK := spec.ResponseDelivery.Name()
 	_, rejectionOK := spec.RejectionCode.Name()
 	rejected := shape.response && spec.AdmissionDisposition == PeerAdmissionRejected
-	return shape.response == admissionOK && shape.response == deliveryOK && rejected == rejectionOK &&
+	return admissionOK == shape.response && deliveryOK == shape.response && rejectionOK == rejected &&
 		(spec.Stage != PeerAttemptAdmitted ||
 			spec.AdmissionDisposition == PeerAdmissionAccepted && spec.ResponseDelivery == PeerResponseDelivered) &&
 		(spec.RejectionRetryAfterMillis == 0 || spec.RejectionCode == PeerLaneRejectAdmissionLimited)
