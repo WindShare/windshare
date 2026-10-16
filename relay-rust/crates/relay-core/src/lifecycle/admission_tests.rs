@@ -51,9 +51,59 @@ fn fresh_admission_is_bound_to_relay_connection_registration_and_deadline() {
 }
 
 #[test]
+fn resume_admission_is_bound_to_relay_connection_registration_and_deadline() {
+    let fixture = Fixture::new();
+    let at = fixture.resume_at;
+    for mismatch in 0..6 {
+        let mut engine = fixture.engine();
+        let mut event = fixture.resume_event(connection(1, 1));
+        let Event::BeginResume {
+            connection: owner,
+            init,
+            deadline,
+        } = &mut event
+        else {
+            unreachable!();
+        };
+        match mismatch {
+            0 => engine.relay = RelayIdentity::new([3; 32]).unwrap(),
+            1 => *owner = connection(2, 1),
+            2 => *owner = connection(1, 2),
+            3 => *init = fixture.foreign_resume_init(),
+            4 => *deadline = UnixMillis(deadline.0 + 1),
+            _ => {}
+        }
+        let admission = if mismatch == 5 {
+            // A resume handshake never spends a challenge on a fresh reservation.
+            Admission::Fresh(fixture.reserve(&mut engine, connection(1, 1), fixture.at))
+        } else {
+            let Action::ResumeAdmitted(attempt) = engine.handle(event, at).action else {
+                panic!("mismatched but valid resume admission");
+            };
+            Admission::Resume(attempt)
+        };
+        let mut handshake = ControlHandshake::open(fixture.relay(), connection(1, 1), at);
+        assert_eq!(
+            handshake.receive(&bytes(&fixture.vector.resume_init_b64), at),
+            Step::AwaitFrame
+        );
+        assert!(matches!(
+            handshake.receive(&bytes(&fixture.vector.resume_credential_b64), at),
+            Step::RequestAdmission(_)
+        ));
+        assert_eq!(
+            handshake.admit(admission, fixture.seed(), at),
+            Step::Close(CloseReason::AdmissionMismatch)
+        );
+        assert_eq!(handshake.phase(), crate::handshake::Phase::Finished);
+    }
+}
+
+#[test]
 fn fresh_handshake_cannot_spend_a_challenge_without_its_reservation() {
     let fixture = Fixture::new();
-    for admission in [Admission::Resume, Admission::Stop] {
+    let attempt = fixture.begin_resume(&mut fixture.engine(), connection(1, 1));
+    for admission in [Admission::Resume(attempt), Admission::Stop] {
         let mut handshake = fixture.handshake(connection(1, 1), fixture.at);
         assert_eq!(
             handshake.admit(admission, fixture.seed(), fixture.at),
@@ -131,6 +181,7 @@ fn wrong_route_resume_and_expired_requests_do_not_reserve_capacity() {
         fixture.relay(),
         other_share,
         None,
+        [],
         Incarnation::new([1; 16]).unwrap(),
         Recorder::default(),
         fixture.at,
@@ -200,6 +251,8 @@ fn only_peer_refusals_have_wire_responses() {
         (Refusal::Starting, Some(ErrorFrame::Starting(retry))),
         (Refusal::SenderDetached, Some(ErrorFrame::Starting(retry))),
         (Refusal::Stopped, Some(ErrorFrame::Stopped)),
+        (Refusal::ResumeMismatch, Some(ErrorFrame::InvalidProof)),
+        (Refusal::ResumeStale, Some(ErrorFrame::ResumeStale)),
         (Refusal::StaleOperation, None),
     ];
     for (refusal, frame) in cases {

@@ -292,6 +292,7 @@ fn callbacks_cannot_cross_actor_incarnations_or_relays() {
             relay,
             fixture.share(),
             None,
+            [],
             incarnation,
             Recorder::default(),
             fixture.at,

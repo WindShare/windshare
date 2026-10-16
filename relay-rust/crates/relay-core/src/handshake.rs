@@ -22,10 +22,12 @@ use crate::{
     error_frame::ErrorFrame,
     identifiers::{RelayIdentity, ShareId},
     join::{JOIN_MAGIC, Join},
-    lifecycle::{ConnectionRef, Publication, RegistrationId, Reservation},
+    lifecycle::{
+        ConnectionRef, Publication, RegistrationId, Reservation, ResumeAttempt, Resumption,
+    },
     registration::{
         FreshRegistration, REGISTER_INIT_MAGIC, RegisterInit, RegisterProof, RegistrationAuthority,
-        RegistrationMode, ResumeCredential, ResumeRegistration, authenticate_registration,
+        RegistrationMode, ResumeCredential, authenticate_registration,
     },
     stop::{STOP_INIT_MAGIC, StopAuthority, StopInit, StopProof, authenticate_stop},
     wire::FrameError,
@@ -78,18 +80,15 @@ pub enum AdmissionRequest {
 
 /// The host's decision for the exact admission request.
 ///
-/// Fresh registration requires a lifecycle reservation; RESUME and STOP retain
-/// their independent admission paths until their lifecycle stages are implemented.
+/// Fresh registration and RESUME require their share lifecycle's admission;
+/// STOP retains an independent admission path until its lifecycle stage is
+/// implemented.
 #[derive(Debug, Eq, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "bounded admission capabilities stay inline in this allocation-free kernel"
-)]
 pub enum Admission {
     /// Consume the share's reservation for this connection and deadline.
     Fresh(Reservation),
-    /// The host admitted recovery of an existing registration.
-    Resume,
+    /// Consume the share's resume attempt for this connection and deadline.
+    Resume(ResumeAttempt),
     /// The host admitted a stop handshake before its sender proof.
     Stop,
 }
@@ -100,8 +99,8 @@ pub enum Outcome<'f> {
     /// A fresh registration proved sender authority and uploaded the
     /// descriptor it committed; the bytes borrow the upload frame.
     Publish(Publication<'f>),
-    /// A resume proved sender authority over the route it names.
-    Resume(ResumeRegistration),
+    /// A resume proved sender authority over the ownership its attempt bound.
+    Resume(Resumption),
     /// A STOP proved sender authority to retire its share instance.
     Stop(StopAuthority),
     /// A receiver asked to join a share, which needs no sender authority.
@@ -213,14 +212,14 @@ enum Awaiting {
 #[derive(Debug)]
 enum RegistrationAdmission {
     Fresh(Reservation),
-    Resume(RegisterInit),
+    Resume(ResumeAttempt),
 }
 
 impl RegistrationAdmission {
     const fn init(&self) -> RegisterInit {
         match self {
             Self::Fresh(reservation) => *reservation.init(),
-            Self::Resume(init) => *init,
+            Self::Resume(attempt) => *attempt.init(),
         }
     }
 }
@@ -343,14 +342,18 @@ impl ControlHandshake {
                     encoded,
                 )
             }
-            (AdmissionRequest::Registration(init), Admission::Resume)
-                if init.mode() == RegistrationMode::Resume =>
+            (AdmissionRequest::Registration(init), Admission::Resume(attempt))
+                if init.mode() == RegistrationMode::Resume
+                    && attempt.init() == &init
+                    && attempt.id().relay() == self.relay
+                    && attempt.id().connection() == self.connection
+                    && attempt.deadline() == deadline =>
             {
                 let challenge = Challenge::issue(ChallengePurpose::Resume, seed, deadline);
                 let encoded = challenge.encode();
                 (
                     Awaiting::RegistrationProof {
-                        admission: RegistrationAdmission::Resume(init),
+                        admission: RegistrationAdmission::Resume(attempt),
                         challenge,
                     },
                     encoded,
@@ -473,8 +476,10 @@ impl ControlHandshake {
                 );
                 Ok(Step::AwaitFrame)
             }
-            (RegistrationAdmission::Resume(_), RegistrationAuthority::Resume(registration)) => {
-                Ok(Step::Complete(Outcome::Resume(registration)))
+            (RegistrationAdmission::Resume(attempt), RegistrationAuthority::Resume(authority)) => {
+                Ok(Step::Complete(Outcome::Resume(Resumption::new(
+                    attempt, authority,
+                ))))
             }
             _ => Err(CloseReason::AdmissionMismatch),
         }

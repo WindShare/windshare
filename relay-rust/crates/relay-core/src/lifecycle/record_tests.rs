@@ -16,6 +16,8 @@ use crate::{
 const FRAME_HEADER_BYTES: usize = 8;
 // Share ID, instance and key hash open the WS2X body.
 const STOP_ROUTE_BYTES: usize = 12 + 16 + 16;
+// Distinct bytes, so the layout test pins their order.
+const GRACE_DEADLINE: u64 = 0x0102_0304_0506_0708;
 
 #[derive(Deserialize)]
 struct Vector {
@@ -69,11 +71,24 @@ impl Fixture {
         })
     }
 
-    fn published(&self) -> Record {
-        Record::Published(PublishedRoute {
+    fn route(&self) -> PublishedRoute {
+        PublishedRoute {
             relay: self.relay,
             registration: self.registration(),
-            version: RouteVersion::FIRST,
+        }
+    }
+
+    fn published(&self) -> Record {
+        Record::Published(OwnedRoute {
+            route: self.route(),
+            owner: self.operation().connection,
+        })
+    }
+
+    fn grace(&self) -> Record {
+        Record::Grace(GraceRoute {
+            route: self.route(),
+            deadline: UnixMillis(GRACE_DEADLINE),
         })
     }
 
@@ -95,16 +110,11 @@ impl Fixture {
 }
 
 #[test]
-fn records_persist_registration_and_stop_facts_in_the_shared_frame_order() {
+fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_order() {
     let fixture = Fixture::new();
     let registration_body = fixture.register_init.len() - FRAME_HEADER_BYTES;
-    let operation = [
-        &[7; 16][..],
-        &0x0102_u64.to_be_bytes(),
-        &3_u64.to_be_bytes(),
-        &u64::MAX.to_be_bytes(),
-    ]
-    .concat();
+    let connection = [&0x0102_u64.to_be_bytes()[..], &3_u64.to_be_bytes()].concat();
+    let operation = [&[7; 16][..], &connection, &u64::MAX.to_be_bytes()].concat();
     let stop = StopInit::decode(&fixture.stop_init).unwrap();
     let cases = [
         (
@@ -119,7 +129,15 @@ fn records_persist_registration_and_stop_facts_in_the_shared_frame_order() {
             fixture.published(),
             [
                 fixture.prefix(PUBLISHED, &fixture.register_init, registration_body),
-                1_u64.to_be_bytes().to_vec(),
+                connection,
+            ]
+            .concat(),
+        ),
+        (
+            fixture.grace(),
+            [
+                fixture.prefix(GRACE, &fixture.register_init, registration_body),
+                GRACE_DEADLINE.to_be_bytes().to_vec(),
             ]
             .concat(),
         ),
@@ -150,6 +168,7 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
     let fixture = Fixture::new();
     let unresolved = fixture.unresolved().encode().as_bytes().to_vec();
     let published = fixture.published().encode().as_bytes().to_vec();
+    let grace = fixture.grace().encode().as_bytes().to_vec();
     let stopped = fixture.stopped().encode().as_bytes().to_vec();
     let edit = |bytes: &[u8], range: Range<usize>, value: u8| {
         let mut edited = bytes.to_vec();
@@ -163,7 +182,9 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
             RecordError::Length,
         ),
         ([&published[..], &[0]].concat(), RecordError::Length),
+        (grace[..grace.len() - 1].to_vec(), RecordError::Length),
         (edit(&stopped, 0..1, FORMAT + 1), RecordError::Format),
+        (edit(&grace, 0..1, FORMAT - 1), RecordError::Format),
         (edit(&published, 1..2, 0), RecordError::Kind),
         (edit(&published, 1..2, STOPPED + 1), RecordError::Kind),
         // Relay identity, then a share ID no longer derived from its key hash.
@@ -177,8 +198,9 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&unresolved, 158..166, 0), RecordError::Field),
         (edit(&unresolved, 166..174, 0), RecordError::Field),
         (edit(&unresolved, 174..182, 0), RecordError::Field),
-        // Route version and stop ID.
+        // The owner's connection slot and generation, and the stop ID.
         (edit(&published, 142..150, 0), RecordError::Field),
+        (edit(&published, 150..158, 0), RecordError::Field),
         (edit(&stopped, 78..94, 0), RecordError::Field),
     ];
     for (bytes, error) in cases {

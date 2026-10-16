@@ -18,6 +18,15 @@ borrow bounded descriptor bytes; the host owns any copy and all storage/socket
 resources. JOIN readiness and REGISTERED follow only after the host confirms
 persistence and connection preparation.
 
+A published route has one owner connection. `OwnerDisconnected` moves it to
+grace with an absolute deadline (60 s); receivers retry and fresh registrations
+are refused until the sender resumes or the route lapses back to vacant. RESUME
+is admitted before its challenge and bound to the ownership it observed,
+including an absent route, so only an authenticated sender learns `NotFound`.
+Its commit replaces a live or lost owner with the resuming connection and names
+the replaced owner for cleanup. Another publication, resume or restore in
+between makes it `ResumeStale`; the observed owner merely disconnecting does not.
+
 Its only constructor, `restore`, takes the share's durable `lifecycle::Record`,
 or `None` when storage holds nothing, so no host can start an empty actor over
 an existing registration or STOP. Hosts persist the kernel's fixed-layout record
@@ -25,16 +34,21 @@ bytes, keyed by relay identity and share:
 
 | Transition | Stored record | Restores as |
 | --- | --- | --- |
-| Reserve, Released | none; an abort already removed the unresolved record | vacant |
+| Reserve, Released, resume admission | none; an abort already removed the unresolved record | vacant |
 | Publish transaction | `Unresolved` (exact operation), with the descriptor | fenced, returning `Reconcile` |
-| Registered, before REGISTERED | `Published` (registration, resume hash, route version) | detached |
+| Registered or Resumed, before REGISTERED | `Published` (registration, resume hash, owner connection) | published if the owner survived, else grace returning `Detached` |
+| Detached | `Grace` (registration, resume hash, absolute deadline) | grace with the stored deadline |
+| Lapsed | none | vacant |
 | STOP, before STOPPED (next stage) | `Stopped` (instance, stop ID); permanent | stopped |
 
 A crash before REGISTERED's write therefore never revives a fenced attempt.
-Restore needs a fresh incarnation and keeps stored operation identities and route
-versions; it never derives or extends a deadline. Detached receivers retry and
-fresh registrations are refused; a stopped instance is refused with `Stopped`,
-and other instances of a stopped share stay occupied.
+Restore needs a fresh incarnation and keeps stored operation identities.
+`surviving` lists connections that outlived the previous incarnation, such as
+hibernated sockets, so the stored owner is re-adopted without a write; after a
+process restart it is empty. Only a restore that finds the owner gone derives a
+grace deadline, and the host persists it, so later restores never extend it.
+A stopped instance is refused with `Stopped`, and other instances of a stopped
+share stay occupied.
 
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
@@ -51,8 +65,9 @@ without accepted inbound frames. Both Rust adapters must keep it.
 
 
 `make rust` covers formatting, Clippy, native coverage, doctests and the core Wasm
-build. The registration tests use injected time and the real handshake/shared
+build. The lifecycle tests use injected time and the real handshake/shared
 vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
-uncertain publication, record layout and restoration of every stored record.
+uncertain publication, owner loss and lapse, resume binding, record layout and
+restoration of every stored record.
 See [validation](../../validation.md#rust-relay-checks) for prerequisites and
 gate ownership.

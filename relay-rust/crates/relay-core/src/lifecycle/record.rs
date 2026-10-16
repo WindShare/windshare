@@ -1,19 +1,22 @@
 //! Durable share records: the only facts a host persists, and the only input
 //! that constructs a share lifecycle.
 //!
-//! Reservations never reach storage. A publication transaction stores its
-//! unresolved record before it can commit, and REGISTERED first replaces that
-//! record with the published route.
+//! Reservations and resume attempts never reach storage. A publication
+//! transaction stores its unresolved record before it can commit, and
+//! REGISTERED first replaces that record with the published route and its
+//! owner; every RESUME rewrites that owner before its acknowledgement.
 //! A crash at any point therefore restores a fenced attempt that still needs
 //! reconciliation, or a route whose sender may already hold REGISTERED, never
 //! a revived attempt the lifecycle fenced.
 //!
-//! Records hold no deadline yet. Any later deadline is stored as an absolute
-//! instant, so restoring never extends it.
+//! Losing the owner stores the grace deadline as an absolute instant. Only a
+//! restore that finds the stored owner gone derives one, so later restores
+//! never extend it.
 
 use core::{error::Error, fmt, num::NonZeroU64};
 
 use crate::{
+    clock::UnixMillis,
     identifiers::{
         DescriptorDigest, RelayIdentity, ResumeTokenHash, ShareId, ShareInstance, ShareRoute,
         StopId,
@@ -26,41 +29,26 @@ use super::{ConnectionRef, Incarnation, RegistrationId};
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 1;
+const FORMAT: u8 = 2;
 
 const UNRESOLVED: u8 = 1;
 const PUBLISHED: u8 = 2;
-const STOPPED: u8 = 3;
+const GRACE: u8 = 3;
+const STOPPED: u8 = 4;
 
 // Format and kind, then the relay identity and share ID every record names.
 const HEADER_BYTES: usize = 1 + 1 + 32 + 12;
 // Instance, key hash, descriptor digest and resume commitment: the WS2R body
 // after its share ID, which the header already holds.
 const REGISTRATION_BYTES: usize = 16 + 16 + 32 + 32;
-// Incarnation, connection slot and generation, then the attempt sequence.
-const OPERATION_BYTES: usize = 16 + 8 + 8 + 8;
+// Connection slot and generation.
+const CONNECTION_BYTES: usize = 8 + 8;
+// Incarnation and connection, then the attempt sequence.
+const OPERATION_BYTES: usize = 16 + CONNECTION_BYTES + 8;
 
 /// Largest encoded record, an unresolved publication; hosts may size storage
 /// columns from it.
 pub const MAX_RECORD_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + OPERATION_BYTES;
-
-/// Durable ownership epoch of one published route.
-///
-/// Restoration preserves it. RESUME and post-hibernation re-adoption will
-/// compare it, so an owner that a newer epoch superseded cannot reattach.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct RouteVersion(NonZeroU64);
-
-impl RouteVersion {
-    /// The epoch a fresh publication starts.
-    pub const FIRST: Self = Self(NonZeroU64::MIN);
-
-    /// Returns the epoch number.
-    #[must_use]
-    pub const fn get(self) -> NonZeroU64 {
-        self.0
-    }
-}
 
 /// A publication whose transaction may have committed.
 ///
@@ -86,12 +74,12 @@ impl UnresolvedPublication {
     }
 }
 
-/// A registration the lifecycle acknowledged with REGISTERED.
+/// A registration the lifecycle acknowledged with REGISTERED. Every owner
+/// that resumes it serves these same facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedRoute {
     pub(super) relay: RelayIdentity,
     pub(super) registration: Registration,
-    pub(super) version: RouteVersion,
 }
 
 impl PublishedRoute {
@@ -100,11 +88,59 @@ impl PublishedRoute {
     pub const fn registration(&self) -> &Registration {
         &self.registration
     }
+}
 
-    /// Returns the ownership epoch hosts record beside the owning connection.
+/// A published route and the connection that served it when last written.
+///
+/// Naming the owner lets a restore re-adopt a connection that survived, such
+/// as a hibernated socket, without writing; an owner that did not survive
+/// starts grace instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnedRoute {
+    pub(super) route: PublishedRoute,
+    pub(super) owner: ConnectionRef,
+}
+
+impl OwnedRoute {
+    /// Returns the published route.
     #[must_use]
-    pub const fn version(&self) -> RouteVersion {
-        self.version
+    pub const fn route(&self) -> &PublishedRoute {
+        &self.route
+    }
+
+    /// Returns the connection lifetime that served the route.
+    #[must_use]
+    pub const fn owner(&self) -> ConnectionRef {
+        self.owner
+    }
+}
+
+/// A published route that no connection serves. It lapses at the absolute
+/// deadline unless its sender resumes first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GraceRoute {
+    pub(super) route: PublishedRoute,
+    pub(super) deadline: UnixMillis,
+}
+
+impl GraceRoute {
+    /// Returns the published route.
+    #[must_use]
+    pub const fn route(&self) -> &PublishedRoute {
+        &self.route
+    }
+
+    /// Returns the instant the route lapses, persisted so restores never
+    /// extend it.
+    #[must_use]
+    pub const fn deadline(&self) -> UnixMillis {
+        self.deadline
+    }
+
+    /// The record that replaces the share's owned record.
+    #[must_use]
+    pub const fn record(self) -> Record {
+        Record::Grace(self)
     }
 }
 
@@ -145,9 +181,12 @@ impl StoppedShare {
 pub enum Record {
     /// Stored by the publication transaction, from `PublishRequest::record`.
     Unresolved(UnresolvedPublication),
-    /// Replaces the unresolved record before REGISTERED, from
-    /// `PublishedRegistration::record`.
-    Published(PublishedRoute),
+    /// Replaces the unresolved record before REGISTERED, and the stored record
+    /// before every RESUME acknowledgement, from `PublishedRegistration::record`.
+    Published(OwnedRoute),
+    /// Replaces the owned record once its owner is gone, from
+    /// `GraceRoute::record`; removed when the route lapses.
+    Grace(GraceRoute),
     /// Stored by STOP before STOPPED; never removed.
     Stopped(StoppedShare),
 }
@@ -158,7 +197,8 @@ impl Record {
     pub const fn relay(&self) -> RelayIdentity {
         match self {
             Self::Unresolved(unresolved) => unresolved.id.relay,
-            Self::Published(route) => route.relay,
+            Self::Published(owned) => owned.route.relay,
+            Self::Grace(grace) => grace.route.relay,
             Self::Stopped(stopped) => stopped.relay,
         }
     }
@@ -168,7 +208,8 @@ impl Record {
     pub const fn share(&self) -> ShareId {
         match self {
             Self::Unresolved(unresolved) => unresolved.registration.route().share_id(),
-            Self::Published(route) => route.registration.route().share_id(),
+            Self::Published(owned) => owned.route.registration.route().share_id(),
+            Self::Grace(grace) => grace.route.registration.route().share_id(),
             Self::Stopped(stopped) => stopped.route.share_id(),
         }
     }
@@ -179,6 +220,7 @@ impl Record {
         let kind = match self {
             Self::Unresolved(_) => UNRESOLVED,
             Self::Published(_) => PUBLISHED,
+            Self::Grace(_) => GRACE,
             Self::Stopped(_) => STOPPED,
         };
         let mut out = Writer::new();
@@ -190,9 +232,13 @@ impl Record {
                 put_registration(&mut out, &unresolved.registration);
                 put_operation(&mut out, unresolved.id);
             }
-            Self::Published(route) => {
-                put_registration(&mut out, &route.registration);
-                out.put(&route.version.get().get().to_be_bytes());
+            Self::Published(owned) => {
+                put_registration(&mut out, &owned.route.registration);
+                put_connection(&mut out, owned.owner);
+            }
+            Self::Grace(grace) => {
+                put_registration(&mut out, &grace.route.registration);
+                out.put(&grace.deadline.0.to_be_bytes());
             }
             Self::Stopped(stopped) => {
                 out.put(stopped.share_instance.as_bytes())
@@ -208,8 +254,8 @@ impl Record {
     /// # Errors
     ///
     /// Returns a [`RecordError`] unless the bytes have this format's exact
-    /// layout for a known kind, nonzero identities, and a share ID derived from
-    /// the stored key hash.
+    /// layout for a known kind, nonzero identities and connection references,
+    /// and a share ID derived from the stored key hash.
     pub fn decode(encoded: &[u8]) -> Result<Self, RecordError> {
         let mut body = Reader::new(encoded);
         let [format, kind] = take(&mut body)?;
@@ -226,10 +272,13 @@ impl Record {
                     registration,
                 })
             }
-            PUBLISHED => Self::Published(PublishedRoute {
-                relay,
-                registration: read_registration(&mut body, share_id)?,
-                version: RouteVersion(nonzero(&mut body)?),
+            PUBLISHED => Self::Published(OwnedRoute {
+                route: read_route(&mut body, relay, share_id)?,
+                owner: read_connection(&mut body)?,
+            }),
+            GRACE => Self::Grace(GraceRoute {
+                route: read_route(&mut body, relay, share_id)?,
+                deadline: UnixMillis(u64::from_be_bytes(take(&mut body)?)),
             }),
             STOPPED => {
                 let share_instance = instance(&mut body)?;
@@ -327,11 +376,15 @@ fn put_registration(out: &mut Writer<MAX_RECORD_BYTES>, registration: &Registrat
         .put(registration.resume_token_hash().as_bytes());
 }
 
+fn put_connection(out: &mut Writer<MAX_RECORD_BYTES>, connection: ConnectionRef) {
+    out.put(&connection.id.get().to_be_bytes())
+        .put(&connection.generation.get().to_be_bytes());
+}
+
 fn put_operation(out: &mut Writer<MAX_RECORD_BYTES>, id: RegistrationId) {
-    out.put(id.incarnation.as_bytes())
-        .put(&id.connection.id.get().to_be_bytes())
-        .put(&id.connection.generation.get().to_be_bytes())
-        .put(&id.sequence.get().to_be_bytes());
+    out.put(id.incarnation.as_bytes());
+    put_connection(out, id.connection);
+    out.put(&id.sequence.get().to_be_bytes());
 }
 
 fn take<const N: usize>(body: &mut Reader<'_>) -> Result<[u8; N], RecordError> {
@@ -366,16 +419,31 @@ fn read_registration(
     ))
 }
 
+fn read_route(
+    body: &mut Reader<'_>,
+    relay: RelayIdentity,
+    share_id: [u8; 12],
+) -> Result<PublishedRoute, RecordError> {
+    Ok(PublishedRoute {
+        relay,
+        registration: read_registration(body, share_id)?,
+    })
+}
+
+fn read_connection(body: &mut Reader<'_>) -> Result<ConnectionRef, RecordError> {
+    Ok(ConnectionRef {
+        id: nonzero(body)?,
+        generation: nonzero(body)?,
+    })
+}
+
 fn read_operation(
     body: &mut Reader<'_>,
     relay: RelayIdentity,
     share: ShareId,
 ) -> Result<RegistrationId, RecordError> {
     let incarnation = Incarnation::new(take(body)?).ok_or(RecordError::Field)?;
-    let connection = ConnectionRef {
-        id: nonzero(body)?,
-        generation: nonzero(body)?,
-    };
+    let connection = read_connection(body)?;
     Ok(RegistrationId {
         relay,
         share,
