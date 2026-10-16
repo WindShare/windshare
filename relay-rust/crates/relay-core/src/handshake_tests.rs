@@ -1,13 +1,13 @@
 extern crate std;
 
-use core::time::Duration;
+use core::{num::NonZeroU64, time::Duration};
 use std::{string::String, vec::Vec};
 
 use serde::Deserialize;
 
 use super::{
-    AdmissionRequest, CloseReason, ControlHandshake, FIRST_FRAME_TIMEOUT, Outcome, Phase,
-    REGISTRATION_TIMEOUT, STOP_TIMEOUT, Step,
+    Admission, AdmissionRequest, CloseReason, ControlHandshake, FIRST_FRAME_TIMEOUT, Outcome,
+    Phase, REGISTRATION_TIMEOUT, STOP_TIMEOUT, Step,
 };
 use crate::{
     FrameError,
@@ -17,6 +17,7 @@ use crate::{
     descriptor_upload::DescriptorUpload,
     error_frame::ErrorFrame,
     identifiers::RelayIdentity,
+    lifecycle::{Action, ConnectionRef, Event, Incarnation, ShareLifecycle},
     registration::RegisterInit,
     stop::StopInit,
     test_vectors::{
@@ -26,6 +27,42 @@ use crate::{
 
 /// An arbitrary connection start for cases whose challenge bytes are not pinned.
 const OPENED_AT: UnixMillis = UnixMillis(1_700_000_000_000);
+
+fn connection() -> ConnectionRef {
+    ConnectionRef {
+        id: NonZeroU64::MIN,
+        generation: NonZeroU64::MIN,
+    }
+}
+
+fn fresh_admission(
+    handshake: &ControlHandshake,
+    relay: RelayIdentity,
+    init: &[u8],
+    now: UnixMillis,
+) -> Admission {
+    let init = RegisterInit::decode(init).expect("shared init");
+    let mut lifecycle = ShareLifecycle::vacant(
+        relay,
+        init.route().share_id(),
+        Incarnation::new([1; 16]).unwrap(),
+        (),
+    );
+    match lifecycle
+        .handle(
+            Event::Reserve {
+                connection: connection(),
+                init,
+                deadline: handshake.deadline().unwrap(),
+            },
+            now,
+        )
+        .action
+    {
+        Action::Reserved(reservation) => Admission::Fresh(reservation),
+        action => panic!("fresh handshake admission: {action:?}"),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,7 +101,7 @@ impl HandshakeVector {
     }
 
     fn open(&self) -> ControlHandshake {
-        ControlHandshake::open(self.relay(), OPENED_AT)
+        ControlHandshake::open(self.relay(), connection(), OPENED_AT)
     }
 
     fn register_seed(&self) -> ChallengeSeed {
@@ -104,7 +141,7 @@ fn fresh_registration_spends_one_challenge_and_publishes_its_descriptor() {
     let at = started_for(&vector.expires_at, REGISTRATION_TIMEOUT);
     let init_bytes = bytes(&vector.register_init_b64);
     let init = RegisterInit::decode(&init_bytes).expect("shared WS2R");
-    let mut handshake = ControlHandshake::open(vector.relay(), at);
+    let mut handshake = ControlHandshake::open(vector.relay(), connection(), at);
 
     assert_eq!(
         handshake.receive(&init_bytes, at),
@@ -116,7 +153,11 @@ fn fresh_registration_spends_one_challenge_and_publishes_its_descriptor() {
         Some(at.saturating_add(REGISTRATION_TIMEOUT))
     );
     assert_eq!(
-        handshake.admit(vector.register_seed(), at),
+        handshake.admit(
+            fresh_admission(&handshake, vector.relay(), &init_bytes, at),
+            vector.register_seed(),
+            at
+        ),
         Step::SendChallenge(array(&vector.register_challenge_b64))
     );
     assert_eq!(handshake.phase(), Phase::AwaitingRegistrationProof);
@@ -130,8 +171,8 @@ fn fresh_registration_spends_one_challenge_and_publishes_its_descriptor() {
     match handshake.receive(&upload, at) {
         Step::Complete(Outcome::Publish(descriptor)) => {
             let expected = DescriptorUpload::decode(&upload).expect("shared WS2U");
-            assert_eq!(descriptor.object(), expected.object());
-            assert_eq!(descriptor.registration().init(), &init);
+            assert_eq!(descriptor.descriptor().object(), expected.object());
+            assert_eq!(descriptor.descriptor().registration().init(), &init);
         }
         step => panic!("the committed upload must publish: {step:?}"),
     }
@@ -145,7 +186,7 @@ fn resume_presents_its_token_before_spending_a_challenge() {
     let at = started_for(&vector.resume_expires_at, REGISTRATION_TIMEOUT);
     let init_bytes = bytes(&vector.resume_init_b64);
     let init = RegisterInit::decode(&init_bytes).expect("shared WS2R");
-    let mut handshake = ControlHandshake::open(vector.relay(), at);
+    let mut handshake = ControlHandshake::open(vector.relay(), connection(), at);
 
     assert_eq!(handshake.receive(&init_bytes, at), Step::AwaitFrame);
     assert_eq!(handshake.phase(), Phase::AwaitingResumeCredential);
@@ -158,7 +199,7 @@ fn resume_presents_its_token_before_spending_a_challenge() {
         &vector.resume_challenge_nonce_b64,
     );
     assert_eq!(
-        handshake.admit(seed, at),
+        handshake.admit(Admission::Resume, seed, at),
         Step::SendChallenge(array(&vector.resume_challenge_b64))
     );
     match handshake.receive(&bytes(&vector.resume_proof_b64), at) {
@@ -173,7 +214,7 @@ fn stop_spends_one_challenge_and_grants_its_authority() {
     let at = started_for(&vector.stop_expires_at, STOP_TIMEOUT);
     let init_bytes = bytes(&vector.stop_init_b64);
     let init = StopInit::decode(&init_bytes).expect("shared WS2X");
-    let mut handshake = ControlHandshake::open(vector.relay(), at);
+    let mut handshake = ControlHandshake::open(vector.relay(), connection(), at);
 
     assert_eq!(
         handshake.receive(&init_bytes, at),
@@ -184,7 +225,7 @@ fn stop_spends_one_challenge_and_grants_its_authority() {
         &vector.stop_challenge_nonce_b64,
     );
     assert_eq!(
-        handshake.admit(seed, at),
+        handshake.admit(Admission::Stop, seed, at),
         Step::SendChallenge(array(&vector.stop_challenge_b64))
     );
     assert_eq!(handshake.phase(), Phase::AwaitingStopProof);
@@ -213,7 +254,7 @@ fn handshakes_publish_only_the_committed_descriptor() {
     let relay = relay_identity(&uploads.relay_identity_b64);
     let at = started_for(&vector.expires_at, REGISTRATION_TIMEOUT);
     for case in uploads.cases {
-        let mut handshake = ControlHandshake::open(relay, at);
+        let mut handshake = ControlHandshake::open(relay, connection(), at);
         let name = &case.name;
         assert!(
             matches!(
@@ -223,7 +264,11 @@ fn handshakes_publish_only_the_committed_descriptor() {
             "{name}"
         );
         assert_eq!(
-            handshake.admit(vector.register_seed(), at),
+            handshake.admit(
+                fresh_admission(&handshake, relay, &bytes(&case.register_init_b64), at),
+                vector.register_seed(),
+                at
+            ),
             Step::SendChallenge(array(&uploads.register_challenge_b64)),
             "{name}"
         );
@@ -271,7 +316,16 @@ fn deadlines_bound_every_phase_including_admission() {
     let registration_deadline = registered_at.saturating_add(REGISTRATION_TIMEOUT);
     assert_eq!(slow_admission.deadline(), Some(registration_deadline));
     assert_eq!(
-        slow_admission.admit(vector.register_seed(), registration_deadline),
+        slow_admission.admit(
+            fresh_admission(
+                &slow_admission,
+                vector.relay(),
+                &bytes(&vector.register_init_b64),
+                registered_at
+            ),
+            vector.register_seed(),
+            registration_deadline
+        ),
         Step::Close(CloseReason::Expired)
     );
 
@@ -282,7 +336,7 @@ fn deadlines_bound_every_phase_including_admission() {
         Step::RequestAdmission(_)
     ));
     assert!(matches!(
-        slow_proof.admit(vector.register_seed(), OPENED_AT),
+        slow_proof.admit(Admission::Stop, vector.register_seed(), OPENED_AT),
         Step::SendChallenge(_)
     ));
     assert_eq!(
@@ -304,7 +358,16 @@ fn a_rejected_proof_spends_the_only_challenge() {
         Step::RequestAdmission(_)
     ));
     assert!(matches!(
-        handshake.admit(vector.register_seed(), OPENED_AT),
+        handshake.admit(
+            fresh_admission(
+                &handshake,
+                vector.relay(),
+                &bytes(&vector.register_init_b64),
+                OPENED_AT
+            ),
+            vector.register_seed(),
+            OPENED_AT
+        ),
         Step::SendChallenge(_)
     ));
     assert_eq!(
@@ -342,7 +405,7 @@ fn a_stop_for_another_relay_never_reaches_admission() {
     let vector = HandshakeVector::load();
     let other_relay = RelayIdentity::new([0x5a; 32]).expect("nonzero relay identity");
     assert_ne!(other_relay, vector.relay());
-    let mut handshake = ControlHandshake::open(other_relay, OPENED_AT);
+    let mut handshake = ControlHandshake::open(other_relay, connection(), OPENED_AT);
     assert_eq!(
         handshake.receive(&bytes(&vector.stop_init_b64), OPENED_AT),
         Step::Close(CloseReason::MisaddressedStop)
@@ -378,11 +441,11 @@ fn frames_and_admissions_out_of_turn_close_the_handshake() {
 
     let mut unasked = vector.open();
     assert_eq!(
-        unasked.admit(vector.register_seed(), OPENED_AT),
+        unasked.admit(Admission::Stop, vector.register_seed(), OPENED_AT),
         Step::Close(CloseReason::NoPendingAdmission)
     );
     assert_eq!(
-        unasked.admit(vector.register_seed(), OPENED_AT),
+        unasked.admit(Admission::Stop, vector.register_seed(), OPENED_AT),
         Step::Close(CloseReason::NoPendingAdmission)
     );
 
@@ -392,7 +455,11 @@ fn frames_and_admissions_out_of_turn_close_the_handshake() {
         Step::RequestAdmission(_)
     ));
     assert!(matches!(
-        skipped_proof.admit(vector.register_seed(), OPENED_AT),
+        skipped_proof.admit(
+            fresh_admission(&skipped_proof, vector.relay(), &init, OPENED_AT),
+            vector.register_seed(),
+            OPENED_AT
+        ),
         Step::SendChallenge(_)
     ));
     assert_eq!(
