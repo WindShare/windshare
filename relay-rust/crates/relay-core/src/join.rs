@@ -16,7 +16,7 @@ pub(crate) const JOIN_MAGIC: Magic = *b"WS2J";
 
 // A provisional session must complete E2E admission promptly; browsing and P2P
 // silence after admission do not consume this budget.
-const SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A decoded JOIN bound to its connection and original admission deadline.
 ///

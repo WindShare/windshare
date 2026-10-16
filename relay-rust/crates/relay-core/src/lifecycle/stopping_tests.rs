@@ -114,9 +114,8 @@ fn stopped_waits_for_recording_exact_retirement_and_final_durability() {
     assert_eq!(work.step(), StopStep::Persist);
     assert_eq!(
         pending.cleanup(),
-        StopCleanup::Owner(published.id.connection())
+        StopCleanup::Owner(published.owner.connection())
     );
-    assert_ne!(pending.id(), published.id);
     assert_eq!(pending.id().connection(), connection(2, 1));
     assert_eq!(pending.stopped().record(), fixture.stopped());
     assert_fenced(&fixture, &mut engine, fixture.at);
@@ -332,7 +331,7 @@ fn absent_and_grace_routes_stop_permanently_even_at_the_grace_boundary() {
             let published = fixture.register(&mut engine);
             let Action::Detached(route) = engine
                 .handle(
-                    Event::OwnerDisconnected(published.id.connection()),
+                    Event::OwnerDisconnected(published.owner.connection()),
                     fixture.at,
                 )
                 .action
@@ -371,13 +370,13 @@ fn resume_races_retire_only_the_owner_present_when_stop_wins() {
             else {
                 panic!("resume wins");
             };
-            assert_eq!(resumed.replaced, Some(old.id.connection()));
+            assert_eq!(resumed.replaced, Some(old.owner.connection()));
             let work = stop(&fixture, &mut engine, fixture.resume_at);
             assert_eq!(work.pending().cleanup(), StopCleanup::Owner(new_owner));
             assert_eq!(
                 engine
                     .handle(
-                        Event::OwnerDisconnected(old.id.connection()),
+                        Event::OwnerDisconnected(old.owner.connection()),
                         fixture.resume_at
                     )
                     .action,
@@ -388,7 +387,7 @@ fn resume_races_retire_only_the_owner_present_when_stop_wins() {
             let work = stop(&fixture, &mut engine, fixture.resume_at);
             assert_eq!(
                 work.pending().cleanup(),
-                StopCleanup::Owner(old.id.connection())
+                StopCleanup::Owner(old.owner.connection())
             );
             assert_eq!(
                 engine
@@ -440,7 +439,7 @@ fn duplicate_stop_waits_without_allocating_waiters_then_acknowledges_its_exact_r
 fn observations_correlate_stop_identity_stage_uncertainty_and_exact_connections() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
-    let owner = fixture.register(&mut engine);
+    let published = fixture.register(&mut engine);
     let begin = engine.observer.0.len();
     let persist = stop(&fixture, &mut engine, fixture.at);
     assert_eq!(
@@ -482,7 +481,7 @@ fn observations_correlate_stop_identity_stage_uncertainty_and_exact_connections(
     }
     assert_eq!(
         persist.pending().cleanup(),
-        StopCleanup::Owner(owner.id.connection())
+        StopCleanup::Owner(published.owner.connection())
     );
 }
 

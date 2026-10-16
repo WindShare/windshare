@@ -9,9 +9,10 @@
 //! for exact retirement and final durable confirmation before replying.
 //! Publication remains hidden until the host confirms persistence and
 //! connection preparation, and a share lifecycle is constructed only from the
-//! durable record its host stores. Receiver sessions keep an absolute admission
-//! budget and issue routing permits checked against live session and share
-//! authority immediately before submission. Connection delivery ledgers reserve
+//! durable record its host stores. Rebuilding it over surviving sockets keeps
+//! the stored ownership and reinstalls validated session snapshots. Receiver
+//! sessions keep an absolute admission budget and issue routing permits checked
+//! against live session and share authority immediately before submission. Connection delivery ledgers reserve
 //! startup and ordinary capacity, retaining submitted occupancy through retirement
 //! until consumption, settlement or confirmed closure. Payloads remain host-owned.
 

@@ -13,7 +13,7 @@ fn losing_the_owner_starts_one_grace_and_its_lapse_reopens_the_share() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
     let published = fixture.register(&mut engine);
-    let owner = published.id.connection();
+    let owner = published.owner.connection();
     let lost_at = fixture.at;
     // A late close of another lifetime of the owner's slot names no owner.
     assert_eq!(
@@ -25,10 +25,7 @@ fn losing_the_owner_starts_one_grace_and_its_lapse_reopens_the_share() {
     assert_eq!(engine.phase(), Phase::Published);
 
     let deadline = lost_at.saturating_add(SENDER_GRACE);
-    let grace = GraceRoute {
-        route: published.route,
-        deadline,
-    };
+    let grace = GraceRoute::new(published.route, published.owner, deadline);
     assert_eq!(
         engine
             .handle(Event::OwnerDisconnected(owner), lost_at)
@@ -110,7 +107,7 @@ fn resume_takes_over_a_live_or_lost_owner_and_answers_like_a_publication() {
     for owner_lost in [false, true] {
         let mut engine = fixture.engine();
         let published = fixture.register(&mut engine);
-        let owner = published.id.connection();
+        let owner = published.owner.connection();
         if owner_lost {
             assert!(matches!(
                 engine
@@ -123,12 +120,15 @@ fn resume_takes_over_a_live_or_lost_owner_and_answers_like_a_publication() {
         let committed = resumed(fixture.resume(&mut engine, successor));
         assert_eq!(committed.replaced, (!owner_lost).then_some(owner));
         let registration = committed.registration;
-        assert_eq!(registration.id.connection(), successor);
+        assert_eq!(registration.owner.connection(), successor);
         assert_eq!(registration.route, published.route);
+        // Each committed resume is the route's next ownership.
+        assert_eq!(registration.owner.epoch().get().get(), 2);
         assert_eq!(
             registration.record(),
             Record::Published(OwnedRoute {
                 route: published.route,
+                epoch: registration.owner.epoch(),
                 owner: successor,
             })
         );
@@ -156,8 +156,8 @@ fn resume_takes_over_a_live_or_lost_owner_and_answers_like_a_publication() {
             .find(|observation| observation.decision == Decision::Resumed)
             .unwrap();
         assert_eq!(
-            (observation.operation, observation.connection),
-            (Some(registration.id), Some(successor))
+            (observation.ownership, observation.connection),
+            (Some(registration.owner), Some(successor))
         );
     }
 }
@@ -173,7 +173,7 @@ fn a_resume_commits_only_over_the_ownership_it_observed() {
     let attempt = fixture.begin_resume(&mut engine, connection(2, 1));
     assert!(matches!(
         engine
-            .handle(Event::OwnerDisconnected(published.id.connection()), at)
+            .handle(Event::OwnerDisconnected(published.owner.connection()), at)
             .action,
         Action::Detached(_)
     ));
@@ -219,14 +219,42 @@ fn a_resume_commits_only_over_the_ownership_it_observed() {
         Action::JoinReady(published)
     );
 
-    // A restore replaces every ownership an earlier incarnation observed.
+    // Restoring keeps the ownership an earlier incarnation's resume observed,
+    // live or lost, so the resume still commits over it.
+    for owner_survives in [true, false] {
+        let mut original = fixture.engine();
+        let published = fixture.register(&mut original);
+        let attempt = fixture.begin_resume(&mut original, connection(2, 1));
+        let owner = published.owner.connection();
+        let surviving = if owner_survives { &[owner][..] } else { &[] };
+        let (mut restored, _) = fixture
+            .restore_at(
+                Some(published.record()),
+                surviving,
+                Incarnation::new([2; 16]).unwrap(),
+                at,
+            )
+            .unwrap();
+        let committed =
+            resumed(restored.handle(Event::Resume(fixture.authenticate_resume(attempt)), at));
+        assert_eq!(committed.replaced, owner_survives.then_some(owner));
+    }
+
+    // Lapsed routes restart their epochs, so the owner's exact lifetime keeps
+    // a resume of the lapsed route from replacing a later publication's owner.
     let mut original = fixture.engine();
     let published = fixture.register(&mut original);
     let attempt = fixture.begin_resume(&mut original, connection(2, 1));
+    let republished = PublishedRegistration {
+        owner: published
+            .route
+            .ownership(published.owner.epoch(), connection(3, 1)),
+        ..published
+    };
     let (mut restored, _) = fixture
         .restore_at(
-            Some(published.record()),
-            &[published.id.connection()],
+            Some(republished.record()),
+            &[connection(3, 1)],
             Incarnation::new([2; 16]).unwrap(),
             at,
         )
@@ -253,10 +281,7 @@ fn an_authenticated_resume_learns_whether_any_route_remains() {
     );
 
     // The grace lapses between admission and commit.
-    let grace = GraceRoute {
-        route: published.route,
-        deadline: UnixMillis(at.0 + 1),
-    };
+    let grace = GraceRoute::new(published.route, published.owner, UnixMillis(at.0 + 1));
     let (mut engine, _) = fixture
         .restore_at(
             Some(grace.record()),
@@ -283,11 +308,11 @@ fn an_authenticated_resume_learns_whether_any_route_remains() {
     let (mut foreign, _) = ShareLifecycle::restore(
         fixture.relay(),
         ShareId::new([0x5a; 12]).unwrap(),
-        None,
-        [],
+        Restoration::restarted(None),
         Incarnation::new([1; 16]).unwrap(),
         (),
         at,
+        |_, _| {},
     )
     .unwrap();
     let late = engine.handle(Event::Resume(resumption), deadline);
@@ -299,6 +324,31 @@ fn an_authenticated_resume_learns_whether_any_route_remains() {
         Action::Refused(Refusal::StaleOperation)
     );
     assert_eq!(engine.phase(), Phase::Published);
+
+    // A stored ownership at the last epoch has no successor to hand over to.
+    let last = PublishedRegistration {
+        owner: published.route.ownership(
+            OwnershipEpoch::new(NonZeroU64::MAX),
+            published.owner.connection(),
+        ),
+        ..published
+    };
+    let (mut engine, _) = fixture
+        .restore_at(
+            Some(last.record()),
+            &[last.owner.connection()],
+            Incarnation::new([3; 16]).unwrap(),
+            at,
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.resume(&mut engine, connection(2, 1)).action,
+        Action::Refused(Refusal::SequenceExhausted)
+    );
+    assert_eq!(
+        fixture.join(&mut engine, at).action,
+        Action::JoinReady(last)
+    );
 }
 
 #[test]
@@ -331,11 +381,11 @@ fn resume_admission_refuses_before_a_challenge_when_it_can_never_commit() {
     let (mut wrong_actor, _) = ShareLifecycle::restore(
         fixture.relay(),
         ShareId::new([0x5a; 12]).unwrap(),
-        None,
-        [],
+        Restoration::restarted(None),
         Incarnation::new([1; 16]).unwrap(),
         Recorder::default(),
         at,
+        |_, _| {},
     )
     .unwrap();
     assert_eq!(
