@@ -82,11 +82,28 @@ Their exact-owner revocations produce session cleanup obligations; STOP executes
 physical cleanup in its durable Retire step. Receiver failure or admission expiry
 retires only that session. Retirement never refunds submitted bytes.
 
-Hosts own bounded session storage, non-reused wire IDs, scheduling and payloads.
-The core validates `WS2O` framing without retaining ciphertext and traces session
-transitions/refusals. Credit/startup capacity, retirement settlement, hibernation
-session restoration and both platform adapters remain next. A restored lifecycle
-currently invalidates previous session permits, including surviving sockets.
+`flow::ConnectionLedger` accounts for one destination connection generation.
+Granted-but-unused, received-but-unsubmitted and submitted-but-unconsumed frames
+and encoded bytes share its host-configured total. Initial grants through
+`Session::check_route` can use a protected startup pool and spare ordinary capacity
+before any frame arrives; later grants use only ordinary capacity. FIFO receipts
+and cumulative consumption release each allocation once. Forwarding checks use constant-time
+slot lookup and a cached absolute cleanup deadline.
+
+Retirement revokes unused grants immediately, retains queued payload charges until
+the host confirms discard, then returns an ordered settlement notice. Submitted
+occupancy survives cancellation and socket writes until consumption, exact final
+settlement or confirmed physical closure. Duplicate/old feedback cannot affect
+replacement slots or connection generations. Cleanup retries and partial
+consumption never renew deadlines; expiry requests closure without an early refund.
+
+Hosts own payloads, scheduling, bounded storage sizes and non-reused wire IDs.
+The core traces resource transitions/refusals without retaining ciphertext.
+These are kernel contracts: bidirectional `WS2B`, handshake startup capacities and
+settlement wire controls still need coordinated Go/browser codecs and vectors.
+Hibernated session/ledger restoration and both platform adapters also remain next;
+a restored lifecycle currently invalidates previous session permits. A surviving
+connection must not restart with an empty delivery ledger.
 
 Failure or expiry before publication releases the reservation. Once host
 publication starts, cancellation, expiry or an uncertain result fences the
@@ -107,7 +124,9 @@ build. The lifecycle tests use injected time and the real handshake/shared
 vectors, covering competing attempts, failure/expiry cleanup, stale callbacks,
 uncertain publication, owner loss and lapse, resume binding, STOP commit order,
 STOP/RESUME races, retries, late callbacks and restoration of every stored record.
-Session tests cover provisional handshake routing, fixed admission deadlines,
-quiet active sessions, queued-permit revocation and receiver/sibling isolation.
+Session/flow tests cover provisional routing, fixed admission deadlines, quiet
+active sessions, startup protection, independent frame/byte bounds, FIFO receipts,
+cancellation with in-flight payloads, cumulative refunds, exact-generation cleanup,
+settlement deadlines and sibling isolation. They use injected time without sleeps.
 See [validation](../../validation.md#rust-relay-checks) for prerequisites and
 gate ownership.
