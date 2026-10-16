@@ -42,12 +42,15 @@ fn fresh_admission(
     now: UnixMillis,
 ) -> Admission {
     let init = RegisterInit::decode(init).expect("shared init");
-    let mut lifecycle = ShareLifecycle::vacant(
+    let (mut lifecycle, _) = ShareLifecycle::restore(
         relay,
-        init.route().share_id(),
+        init.registration().route().share_id(),
+        None,
         Incarnation::new([1; 16]).unwrap(),
         (),
-    );
+        now,
+    )
+    .unwrap();
     match lifecycle
         .handle(
             Event::Reserve {
@@ -242,7 +245,7 @@ fn join_completes_without_sender_authority() {
     let mut handshake = vector.open();
     assert_eq!(
         handshake.receive(&bytes(&vector.join_b64), OPENED_AT),
-        Step::Complete(Outcome::Join(init.route().share_id()))
+        Step::Complete(Outcome::Join(init.registration().route().share_id()))
     );
     assert_eq!(handshake.phase(), Phase::Finished);
 }

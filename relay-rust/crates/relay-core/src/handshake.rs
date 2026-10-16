@@ -442,7 +442,7 @@ impl ControlHandshake {
         // Both values come from this unauthenticated peer, so neither a
         // variable-time comparison nor the explicit refusal reveals anything
         // it did not send; no challenge has been spent yet.
-        if credential.token().hash() != init.resume_token_hash() {
+        if credential.token().hash() != init.registration().resume_token_hash() {
             return Ok(Step::Refuse(ErrorFrame::InvalidProof));
         }
         Ok(self.request_admission(AdmissionRequest::Registration(init), deadline))
