@@ -8,9 +8,11 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/windshare/windshare/internal/connectionliveness"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
 )
@@ -37,6 +39,10 @@ type connection struct {
 	control chan controlWrite
 	wake    chan struct{}
 
+	liveness  *connectionliveness.Monitor
+	lastProbe uint64
+	probeAck  atomic.Uint64
+
 	forwardMu      sync.Mutex
 	forward        map[v2.RelaySessionID]*forwardQueue
 	forwardOrder   []v2.RelaySessionID
@@ -60,7 +66,8 @@ func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel co
 	return &connection{
 		ref: ref, socket: socket, cancel: cancel,
 		control: make(chan controlWrite, MaximumControlQueueFrames), wake: make(chan struct{}, 1),
-		forward: make(map[v2.RelaySessionID]*forwardQueue), sessions: make(map[v2.RelaySessionID]struct{}),
+		liveness: connectionliveness.NewMonitor(time.Now()),
+		forward:  make(map[v2.RelaySessionID]*forwardQueue), sessions: make(map[v2.RelaySessionID]struct{}),
 		windows:        make(map[v2.RelaySessionID]*forwardWindow),
 		receiveWindows: make(map[v2.RelaySessionID]*receiveWindow),
 		retirements:    make(map[v2.RelaySessionID]struct{}),

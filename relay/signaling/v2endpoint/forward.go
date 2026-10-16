@@ -2,6 +2,7 @@ package v2endpoint
 
 import (
 	"context"
+	"time"
 
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
@@ -50,12 +51,15 @@ func (s *Server) forwardLoop(ctx context.Context, source *connection) error {
 		if err := s.forwardFrame(ctx, source, encoded); err != nil {
 			return err
 		}
+		// Frames for already retired sessions are accepted too: the peer is
+		// alive even when its traffic lost a race with retirement.
+		source.liveness.Observe(time.Now())
 	}
 }
 
 func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded []byte) error {
 	if len(encoded) >= 4 && string(encoded[:4]) == v2.ConnectionProbeMagic {
-		return s.answerConnectionProbe(ctx, source, encoded)
+		return s.answerConnectionProbe(source, encoded)
 	}
 	if len(encoded) >= 4 && string(encoded[:4]) == v2.ReceiveCreditMagic {
 		return s.grantReceiveCredit(source, encoded)
@@ -115,7 +119,7 @@ func (s *Server) forwardToDestination(
 
 func (s *Server) forwardCredited(source, destination *connection, sessionID v2.RelaySessionID, encoded []byte) error {
 	// Neither role may pause the socket reader behind productive data pressure:
-	// probes and native Ping/Pong need that reader even during an idle transfer.
+	// every accepted frame is liveness evidence, even during an idle transfer.
 	// Source credit reserves bounded destination storage before each write.
 	trace, permitted := source.consumeForwardCredit(sessionID, len(encoded))
 	trace.Source, trace.Destination = source.ref, destination.ref

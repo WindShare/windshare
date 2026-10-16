@@ -1,15 +1,28 @@
 package v2
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"time"
+)
 
 const (
 	ConnectionProbeMagic    = "WS2H"
 	ConnectionProbeAckMagic = "WS2A"
 	ConnectionProbeBytes    = 16
+
+	// Clients probe at this cadence whether or not earlier probes were
+	// acknowledged, so an acknowledgement queued behind content never silences
+	// the client's direction of the connection.
+	ConnectionProbeInterval = 15 * time.Second
+	// Either side fails a connection after this long without an accepted inbound
+	// frame. Three intervals absorb a probe delayed behind one bounded physical
+	// write plus network delay without treating queue pressure as loss.
+	ConnectionSilenceTimeout = 45 * time.Second
 )
 
-// ConnectionProbe is connection-local liveness evidence, never a routed session
-// frame. Only its matching acknowledgement establishes a successful round trip.
+// ConnectionProbe is connection-local liveness traffic, never a routed session
+// frame. The relay answers with the newest nonce it received; every accepted
+// inbound frame, not only an acknowledgement, proves the peer is alive.
 type ConnectionProbe struct{ Nonce uint64 }
 type ConnectionProbeAck struct{ Nonce uint64 }
 

@@ -34,7 +34,6 @@ type DialOptions struct {
 type BinarySocket interface {
 	Read(context.Context) (websocket.MessageType, []byte, error)
 	Write(context.Context, websocket.MessageType, []byte) error
-	Ping(context.Context) error
 	Close(websocket.StatusCode, string) error
 	SetReadLimit(int64)
 }

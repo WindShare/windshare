@@ -4,9 +4,11 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/windshare/windshare/internal/connectionliveness"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -18,6 +20,8 @@ type link struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	heartbeat HeartbeatConfig
+	liveness  *connectionliveness.Monitor
+	probes    probeLedger
 
 	writeWake      chan struct{}
 	writeMu        sync.Mutex
@@ -57,6 +61,7 @@ func newLinkWithLifecycleStream(parent context.Context, socket BinarySocket, fix
 	linkID := nextLinkID.Add(1)
 	return &link{
 		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
+		liveness:  connectionliveness.NewMonitor(time.Now()),
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
 		windows:        make(map[v2.RelaySessionID]*sendWindow),
 		receiveCredits: make(map[v2.RelaySessionID]*v2.ReceiveCredit),
@@ -124,6 +129,13 @@ func (l *link) traceTransition(channel *Channel, transition retirementTransition
 }
 
 func (l *link) start() {
+	heartbeat, err := l.heartbeat.Normalize()
+	if err != nil {
+		// Dialers validate the configuration; fail closed for direct owners.
+		l.stop(err)
+		return
+	}
+	l.heartbeat = heartbeat
 	go l.readLoop()
 	go l.writeLoop()
 	go l.heartbeatLoop()
@@ -136,53 +148,70 @@ func (l *link) readLoop() {
 			l.stop(err)
 			return
 		}
-		if messageType != websocket.MessageBinary || len(encoded) < 4 {
-			l.stop(ErrProtocol)
+		if err := l.receive(messageType, encoded); err != nil {
+			l.stop(err)
 			return
 		}
-		if string(encoded[:4]) == v2.SessionRetiredMagic {
-			retired, parseErr := v2.ParseSessionRetired(encoded)
-			if parseErr != nil {
-				l.stop(ErrProtocol)
-				return
-			}
-			l.retire(retired.RelaySessionID)
-			continue
+		// Every accepted frame proves the relay alive, so liveness never waits
+		// on an acknowledgement queued behind content.
+		l.liveness.Observe(time.Now())
+	}
+}
+
+func (l *link) receive(messageType websocket.MessageType, encoded []byte) error {
+	if messageType != websocket.MessageBinary || len(encoded) < 4 {
+		return ErrProtocol
+	}
+	switch string(encoded[:4]) {
+	case v2.SessionRetiredMagic:
+		retired, err := v2.ParseSessionRetired(encoded)
+		if err != nil {
+			return ErrProtocol
 		}
-		if string(encoded[:4]) == v2.SessionCreditMagic {
-			credit, err := v2.ParseSessionCredit(encoded)
-			if err != nil || !l.replenishCredit(credit) {
-				l.stop(ErrProtocol)
-				return
-			}
-			continue
+		l.retire(retired.RelaySessionID)
+		return nil
+	case v2.SessionCreditMagic:
+		credit, err := v2.ParseSessionCredit(encoded)
+		if err != nil || !l.replenishCredit(credit) {
+			return ErrProtocol
 		}
-		route, parseErr := v2.ParseOpaqueRoute(encoded)
-		if parseErr != nil {
-			l.stop(ErrProtocol)
-			return
-		}
-		channel, created := l.channel(route.RelaySessionID)
-		if channel == nil {
-			l.stop(ErrProtocol)
-			return
-		}
-		if created {
-			select {
-			case l.accept <- channel:
-			default:
-				l.failChannel(channel, LifecycleRetirementIngressFailure, ErrIngressOverflow)
-				continue
-			}
-		}
-		if !channel.deliver(route.Ciphertext) {
+		return nil
+	case v2.ConnectionProbeAckMagic:
+		return l.acknowledgeProbe(encoded)
+	}
+	route, err := v2.ParseOpaqueRoute(encoded)
+	if err != nil {
+		return ErrProtocol
+	}
+	channel, created := l.channel(route.RelaySessionID)
+	if channel == nil {
+		return ErrProtocol
+	}
+	if created {
+		select {
+		case l.accept <- channel:
+		default:
 			l.failChannel(channel, LifecycleRetirementIngressFailure, ErrIngressOverflow)
+			return nil
 		}
 	}
+	if !channel.deliver(route.Ciphertext) {
+		l.failChannel(channel, LifecycleRetirementIngressFailure, ErrIngressOverflow)
+	}
+	return nil
 }
 
 func (l *link) writeLoop() {
 	for {
+		// Probes bypass credit waits: a blocked content window must not keep
+		// the relay from seeing this client alive.
+		if probe, ok := l.takeProbe(); ok {
+			if err := l.socket.Write(l.ctx, websocket.MessageBinary, probe); err != nil {
+				l.stop(err)
+				return
+			}
+			continue
+		}
 		encoded, err := l.takeReceiveCredit()
 		if err != nil {
 			l.stop(err)
