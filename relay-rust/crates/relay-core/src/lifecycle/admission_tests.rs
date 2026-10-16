@@ -174,7 +174,9 @@ fn wrong_route_resume_and_expired_requests_do_not_reserve_capacity() {
     let other_share = ShareId::new([0x5a; 12]).unwrap();
     assert_ne!(other_share, fixture.share());
     assert_eq!(
-        engine.handle(Event::Join(other_share), fixture.at).action,
+        engine
+            .handle(Event::CheckJoin(other_share), fixture.at)
+            .action,
         Action::Refused(Refusal::WrongShare)
     );
     let (mut wrong_actor, _) = ShareLifecycle::restore(
@@ -242,6 +244,8 @@ fn only_peer_refusals_have_wire_responses() {
         (Refusal::NotFound, Some(ErrorFrame::NotFound)),
         (Refusal::UnsupportedMode, Some(ErrorFrame::UnsupportedMode)),
         (Refusal::Expired, Some(ErrorFrame::ChallengeExpired)),
+        (Refusal::JoinExpired, None),
+        (Refusal::InvalidReceiver, Some(ErrorFrame::Malformed)),
         (Refusal::Occupied, Some(ErrorFrame::AlreadyRegistered)),
         (
             Refusal::PublicationUncertain,

@@ -3,12 +3,72 @@
 //! Joining carries no sender authority: the share capability is end to end,
 //! so the relay only learns which route the receiver wants.
 
+use core::time::Duration;
+
 use crate::{
-    identifiers::ShareId,
+    clock::UnixMillis,
+    identifiers::{RelayIdentity, ShareId},
+    lifecycle::ConnectionRef,
     wire::{FrameError, Magic, open_reserved},
 };
 
 pub(crate) const JOIN_MAGIC: Magic = *b"WS2J";
+
+// A provisional session must complete E2E admission promptly; browsing and P2P
+// silence after admission do not consume this budget.
+const SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A decoded JOIN bound to its connection and original admission deadline.
+///
+/// Only the connection handshake creates this move-only request, so delayed
+/// host admission cannot reset the budget or silently change its participant.
+#[derive(Debug, Eq, PartialEq)]
+pub struct JoinRequest {
+    relay: RelayIdentity,
+    connection: ConnectionRef,
+    share: ShareId,
+    deadline: UnixMillis,
+}
+
+impl JoinRequest {
+    pub(crate) fn new(
+        relay: RelayIdentity,
+        connection: ConnectionRef,
+        share: ShareId,
+        now: UnixMillis,
+    ) -> Self {
+        Self {
+            relay,
+            connection,
+            share,
+            deadline: now.saturating_add(SESSION_ADMISSION_TIMEOUT),
+        }
+    }
+
+    /// Relay of the receiving handshake.
+    #[must_use]
+    pub const fn relay(&self) -> RelayIdentity {
+        self.relay
+    }
+
+    /// Exact receiver lifetime.
+    #[must_use]
+    pub const fn connection(&self) -> ConnectionRef {
+        self.connection
+    }
+
+    /// Requested share.
+    #[must_use]
+    pub const fn share(&self) -> ShareId {
+        self.share
+    }
+
+    /// Absolute budget from receiving JOIN, including host preparation.
+    #[must_use]
+    pub const fn deadline(&self) -> UnixMillis {
+        self.deadline
+    }
+}
 
 /// `JOIN` (`WS2J`): the share a receiver connection asks to join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
