@@ -3,7 +3,10 @@
 //! Hosts serialize events, execute both parts of each `Effects`, and schedule
 //! `deadline()` as an absolute timer/alarm. Every event checks that deadline,
 //! so late timers never extend ownership. The engine retains only bounded
-//! metadata; descriptor bytes belong to the host transaction.
+//! metadata; descriptor bytes belong to the host transaction. Hosts finish
+//! record/cleanup effects without a completion event before applying another
+//! input. Publication and STOP work instead report their explicit completions;
+//! all asynchronous writes and deletes are conditional on the exact record.
 //!
 //! A publication that expires, loses its owner or has an uncertain result is
 //! fenced. Only authoritative rollback can reopen the route. A late success
@@ -20,23 +23,27 @@
 //! over a registration, unresolved publication or STOP. Hosts store exactly
 //! the records lifecycle outputs name.
 //!
-//! STOP and receiver session allocation are separate lifecycle work.
+//! STOP fences the route immediately, persists its cleanup obligation, retires
+//! exact participants and outstanding publication work, then commits the final
+//! record before acknowledging. Receiver session allocation remains separate.
 
 mod effect;
 mod observation;
 mod operation;
 mod record;
+mod stopping;
 
 pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationResult, Refusal};
 pub use observation::{Decision, Observation, ObservedEvent, Observer, Phase};
 pub use operation::{
-    ConnectionRef, Incarnation, Publication, PublishRequest, PublishedRegistration, RegistrationId,
+    ConnectionRef, Incarnation, OperationId, Publication, PublishRequest, PublishedRegistration,
     Reservation, ResumeAttempt, Resumed, Resumption,
 };
 pub use record::{
     EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
     RestoreError, StoppedShare, UnresolvedPublication,
 };
+pub use stopping::{PendingStop, StopAcknowledgement, StopCleanup, StopResult, StopStep, StopWork};
 
 use core::{num::NonZeroU64, time::Duration};
 
@@ -45,6 +52,7 @@ use crate::{
     identifiers::{RelayIdentity, ShareId},
     registration::{RegisterInit, Registration, RegistrationMode},
 };
+use observation::{decision, event_context};
 use operation::Pending;
 
 /// How long a published route waits for its sender after losing the owner
@@ -67,6 +75,7 @@ enum State {
         ownership: NonZeroU64,
         route: GraceRoute,
     },
+    Stopping(StopWork),
     Stopped(StoppedShare),
 }
 
@@ -106,7 +115,8 @@ impl<O: Observer> ShareLifecycle<O> {
     /// without a write; otherwise it returns `Action::Detached`, the only
     /// deadline a restore derives, which the host persists so no later restore
     /// extends it. A stored grace keeps its deadline, even a past one that the
-    /// next event or timer lapses.
+    /// next event or timer lapses. A stopping record resumes exact cleanup,
+    /// including surviving connections, before final persistence and STOPPED.
     ///
     /// # Errors
     ///
@@ -125,6 +135,15 @@ impl<O: Observer> ShareLifecycle<O> {
             Some(record) if record.relay() != relay => return Err(RestoreError::ForeignRelay),
             Some(record) if record.share() != share => return Err(RestoreError::ForeignShare),
             Some(Record::Unresolved(unresolved)) if unresolved.id.incarnation == incarnation => {
+                return Err(RestoreError::ReusedIncarnation);
+            }
+            Some(Record::Stopping(pending))
+                if pending.id().incarnation() == incarnation
+                    || pending
+                        .cleanup()
+                        .operation()
+                        .is_some_and(|id| id.incarnation() == incarnation) =>
+            {
                 return Err(RestoreError::ReusedIncarnation);
             }
             _ => {}
@@ -160,6 +179,7 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Fenced(_) => Phase::Fenced,
             State::Published(_) => Phase::Published,
             State::Grace { .. } => Phase::Grace,
+            State::Stopping(_) => Phase::Stopping,
             State::Stopped(_) => Phase::Stopped,
         }
     }
@@ -171,14 +191,21 @@ impl<O: Observer> ShareLifecycle<O> {
         match self.state {
             State::Reserved(pending) | State::Publishing(pending) => Some(pending.deadline),
             State::Grace { route, .. } => Some(route.deadline),
-            State::Vacant | State::Fenced(_) | State::Published(_) | State::Stopped(_) => None,
+            State::Vacant
+            | State::Fenced(_)
+            | State::Published(_)
+            | State::Stopping(_)
+            | State::Stopped(_) => None,
         }
     }
 
     /// Applies one event. Authentication happens in `ControlHandshake`; host
     /// publication results cannot substitute for an authenticated upload.
     pub fn handle<'f>(&mut self, event: Event<'f>, now: UnixMillis) -> Effects<'f> {
-        let mut expiration = self.expire(now);
+        // STOP must retain the exact cleanup obligation even at an expired
+        // reservation/grace boundary. A refused STOP still runs normal expiry.
+        let is_stop = matches!(event, Event::Stop { .. });
+        let mut expiration = if is_stop { None } else { self.expire(now) };
         let before = self.phase();
         let (observed, operation, connection) = event_context(&event);
         let action = match event {
@@ -197,12 +224,18 @@ impl<O: Observer> ShareLifecycle<O> {
             } => self.begin_resume(connection, init, deadline, now),
             Event::Resume(resumption) => self.resume(resumption, now),
             Event::OwnerDisconnected(owner) => self.detach(owner, now),
+            Event::Stop {
+                connection,
+                authority,
+            } => self.stop(connection, authority),
+            Event::StopFinished { work, result } => self.finish_stop(work, result),
             Event::Join(share) => self.join(share),
             Event::Tick => Action::None,
         };
         let operation = match &action {
             Action::Reserved(reservation) => Some(reservation.id()),
             Action::ResumeAdmitted(attempt) => Some(attempt.id()),
+            Action::Stop(work) => Some(work.pending().id()),
             _ => operation,
         };
         self.observe(
@@ -223,6 +256,9 @@ impl<O: Observer> ShareLifecycle<O> {
         {
             expiration = None;
         }
+        if is_stop && matches!(action, Action::Refused(_)) {
+            expiration = self.expire(now);
+        }
         Effects { expiration, action }
     }
 
@@ -233,11 +269,7 @@ impl<O: Observer> ShareLifecycle<O> {
         stored: Option<Record>,
         surviving: impl IntoIterator<Item = ConnectionRef>,
         now: UnixMillis,
-    ) -> (
-        Action<'static>,
-        Option<RegistrationId>,
-        Option<ConnectionRef>,
-    ) {
+    ) -> (Action<'static>, Option<OperationId>, Option<ConnectionRef>) {
         match stored {
             None => (Action::None, None, None),
             Some(Record::Unresolved(unresolved)) => {
@@ -271,6 +303,17 @@ impl<O: Observer> ShareLifecycle<O> {
                     route,
                 };
                 (Action::None, None, None)
+            }
+            Some(Record::Stopping(pending)) => {
+                // The durable obligation survives hibernation and process
+                // restart. Repeating exact cleanup is safe; re-adoption is not.
+                let work = StopWork::Retire(pending);
+                self.state = State::Stopping(work);
+                (
+                    Action::Stop(work),
+                    Some(pending.id()),
+                    Some(pending.id().connection()),
+                )
             }
             Some(Record::Stopped(stopped)) => {
                 self.state = State::Stopped(stopped);
@@ -306,6 +349,7 @@ impl<O: Observer> ShareLifecycle<O> {
         match self.state {
             State::Vacant => {}
             State::Fenced(_) => return Action::Refused(Refusal::PublicationUncertain),
+            State::Stopping(_) => return Action::Refused(Refusal::StopPending),
             State::Stopped(stopped)
                 if stopped.share_instance == init.registration().share_instance() =>
             {
@@ -350,7 +394,7 @@ impl<O: Observer> ShareLifecycle<O> {
         })
     }
 
-    fn finish(&mut self, id: RegistrationId, result: PublicationResult) -> Action<'static> {
+    fn finish(&mut self, id: OperationId, result: PublicationResult) -> Action<'static> {
         let (unresolved, publishing) = match self.state {
             State::Publishing(pending) if pending.id == id => (pending.unresolved(), true),
             State::Fenced(unresolved) if unresolved.id == id => (unresolved, false),
@@ -379,7 +423,7 @@ impl<O: Observer> ShareLifecycle<O> {
         }
     }
 
-    fn cancel(&mut self, id: RegistrationId) -> Action<'static> {
+    fn cancel(&mut self, id: OperationId) -> Action<'static> {
         match self.state {
             State::Reserved(pending) if pending.id == id => {
                 self.state = State::Vacant;
@@ -482,6 +526,7 @@ impl<O: Observer> ShareLifecycle<O> {
                     owner: None,
                 }),
             ),
+            State::Stopping(_) => return Err(Refusal::StopPending),
             State::Stopped(stopped) => {
                 let retired = stopped.route == registration.route()
                     && stopped.share_instance == registration.share_instance();
@@ -526,6 +571,7 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Fenced(_) => Action::Refused(Refusal::PublicationUncertain),
             State::Published(published) => Action::JoinReady(published),
             State::Grace { .. } => Action::Refused(Refusal::SenderDetached),
+            State::Stopping(_) => Action::Refused(Refusal::StopPending),
             State::Stopped(_) => Action::Refused(Refusal::Stopped),
         }
     }
@@ -559,7 +605,7 @@ impl<O: Observer> ShareLifecycle<O> {
             now,
             ObservedEvent::Deadline,
             operation,
-            operation.map(RegistrationId::connection),
+            operation.map(OperationId::connection),
             before,
             decision,
         );
@@ -576,87 +622,14 @@ impl<O: Observer> ShareLifecycle<O> {
         Some(sequence)
     }
 
-    const fn operation(&self, connection: ConnectionRef, sequence: NonZeroU64) -> RegistrationId {
-        RegistrationId {
+    const fn operation(&self, connection: ConnectionRef, sequence: NonZeroU64) -> OperationId {
+        OperationId {
             relay: self.relay,
             share: self.share,
             incarnation: self.incarnation,
             connection,
             sequence,
         }
-    }
-
-    fn observe(
-        &mut self,
-        at: UnixMillis,
-        event: ObservedEvent,
-        operation: Option<RegistrationId>,
-        connection: Option<ConnectionRef>,
-        before: Phase,
-        decision: Decision,
-    ) {
-        self.observer.observe(Observation {
-            at,
-            relay: self.relay,
-            share: self.share,
-            incarnation: self.incarnation,
-            operation,
-            connection,
-            event,
-            before,
-            after: self.phase(),
-            decision,
-        });
-    }
-}
-
-const fn event_context(
-    event: &Event<'_>,
-) -> (ObservedEvent, Option<RegistrationId>, Option<ConnectionRef>) {
-    match event {
-        Event::Reserve { connection, .. } => (ObservedEvent::Reserve, None, Some(*connection)),
-        Event::Publish(publication) => (
-            ObservedEvent::Publish,
-            Some(publication.id()),
-            Some(publication.id().connection()),
-        ),
-        Event::PublicationFinished { id, result } => (
-            ObservedEvent::PublicationFinished(*result),
-            Some(*id),
-            Some(id.connection()),
-        ),
-        Event::Cancel { id, reason } => (
-            ObservedEvent::Cancel(*reason),
-            Some(*id),
-            Some(id.connection()),
-        ),
-        Event::BeginResume { connection, .. } => {
-            (ObservedEvent::BeginResume, None, Some(*connection))
-        }
-        Event::Resume(resumption) => (
-            ObservedEvent::Resume,
-            Some(resumption.id()),
-            Some(resumption.id().connection()),
-        ),
-        Event::OwnerDisconnected(owner) => (ObservedEvent::OwnerDisconnected, None, Some(*owner)),
-        Event::Join(_) => (ObservedEvent::Join, None, None),
-        Event::Tick => (ObservedEvent::Tick, None, None),
-    }
-}
-
-const fn decision(action: &Action<'_>) -> Decision {
-    match action {
-        Action::Reserved(_) => Decision::Reserved,
-        Action::Publish(_) => Decision::Publish,
-        Action::Registered(_) => Decision::Registered,
-        Action::ResumeAdmitted(_) => Decision::ResumeAdmitted,
-        Action::Resumed(_) => Decision::Resumed,
-        Action::Detached(_) => Decision::Detached,
-        Action::JoinReady(_) => Decision::JoinReady,
-        Action::Released(_) => Decision::Released,
-        Action::Reconcile(_) => Decision::Reconcile,
-        Action::Refused(reason) => Decision::Refused(*reason),
-        Action::None => Decision::None,
     }
 }
 
