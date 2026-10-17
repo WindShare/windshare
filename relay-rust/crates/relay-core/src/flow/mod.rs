@@ -135,6 +135,7 @@ pub struct ConnectionLedger<O> {
     startup_used: Counts,
     state: ConnectionState,
     next_expiration: Option<CloseRequest>,
+    checkpoint_changed: bool,
     observer: O,
 }
 
@@ -168,6 +169,7 @@ impl<O: Observer> ConnectionLedger<O> {
             startup_used: Counts::ZERO,
             state: ConnectionState::Open,
             next_expiration: None,
+            checkpoint_changed: false,
             observer,
         })
     }
@@ -252,6 +254,7 @@ impl<O: Observer> ConnectionLedger<O> {
 
     fn replace(&mut self, slot: usize, next: Option<Delivery>) {
         let before = self.entries.get(slot);
+        self.checkpoint_changed = self.checkpoint_changed || before != next;
         self.usage = self.usage.replace(
             before.map_or_else(Usage::default, Delivery::usage),
             next.map_or_else(Usage::default, Delivery::usage),

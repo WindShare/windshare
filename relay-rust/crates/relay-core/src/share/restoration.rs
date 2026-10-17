@@ -1,42 +1,21 @@
+use super::Checkpoint;
 use super::Readiness;
-use super::handshake_checkpoint::HandshakeCheckpoint;
+use super::checkpoint::ConnectionRole;
 use super::{
     AdmissionState, Connection, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer,
     Output, Record, RelayDecision, Role, ShareLifecycle, ShareRelay, Turn,
 };
 use crate::{
     clock::UnixMillis,
-    flow::{ConnectionLedger, LedgerCheckpoint},
+    flow::ConnectionLedger,
     lifecycle::{Restoration, SessionRestore},
     observation::Journal,
-    sessions::{Retirement, RetirementReason, SessionSnapshot},
+    sessions::{Retirement, RetirementReason},
 };
 use alloc::{
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
-
-/// Complete metadata for an event boundary with no application payload queue.
-/// Durable lifecycle facts are read separately from authoritative storage.
-#[derive(Clone, Debug)]
-pub struct Checkpoint {
-    pub(super) identity: Identity,
-    pub(super) last_session: u64,
-    pub(super) connections: Vec<ConnectionCheckpoint>,
-    pub(super) sessions: Vec<SessionSnapshot>,
-}
-#[derive(Clone, Debug)]
-pub struct ConnectionCheckpoint {
-    pub(super) connection: ConnectionRef,
-    pub(super) role: ConnectionRole,
-    pub(super) ledger: LedgerCheckpoint,
-}
-#[derive(Clone, Debug)]
-pub(super) enum ConnectionRole {
-    Established,
-    Closing,
-    Handshake(HandshakeCheckpoint),
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Restore<'a> {
@@ -72,9 +51,12 @@ impl<O: Observer> ShareRelay<O> {
             return Err(Error::Configuration);
         }
         validate_restore(identity, limits, restored)?;
-        let snapshots = restored
+        let snapshots: Vec<_> = restored
             .checkpoint
-            .map_or(&[][..], |checkpoint| checkpoint.sessions.as_slice());
+            .into_iter()
+            .flat_map(Checkpoint::sessions)
+            .copied()
+            .collect();
         let live: Vec<_> = restored
             .surviving
             .iter()
@@ -95,7 +77,7 @@ impl<O: Observer> ShareRelay<O> {
             Restoration {
                 record: restored.record,
                 connections: &live,
-                sessions: snapshots,
+                sessions: &snapshots,
             },
             identity.incarnation,
             Journal::default(),
@@ -119,6 +101,7 @@ impl<O: Observer> ShareRelay<O> {
             last_work: 0,
             tasks: VecDeque::new(),
             stop_retirement: None,
+            checkpointing: super::checkpoint_tracking::Checkpointing::Disabled,
             observer,
         };
         relay.readiness = if relay.lifecycle.phase() == crate::lifecycle::Phase::Published {
@@ -278,51 +261,6 @@ impl<O: Observer> ShareRelay<O> {
         };
         Some([find(key.sender())?, find(key.receiver())?])
     }
-
-    /// Native hosts need not checkpoint. Hibernating hosts capture this once at the
-    /// end of an event, after applying outputs, and store its encoded bytes.
-    ///
-    /// # Errors
-    /// Incomplete storage work must keep the host active. Unsubmitted
-    /// payloads must be handed off or discarded before hibernation.
-    pub fn checkpoint(&self) -> Result<Checkpoint, Error> {
-        if self.readiness == Readiness::ReloadRequired
-            || !self.tasks.is_empty()
-            || self.stop_retirement.is_some()
-        {
-            return Err(Error::CheckpointBusy);
-        }
-        let connections = self
-            .connections
-            .iter()
-            .map(|(&connection, entry)| {
-                Ok(ConnectionCheckpoint {
-                    connection,
-                    role: match &entry.role {
-                        Role::Closing => ConnectionRole::Closing,
-                        Role::Established => ConnectionRole::Established,
-                        Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. } => {
-                            ConnectionRole::Handshake(transcript.clone())
-                        }
-                    },
-                    ledger: entry
-                        .ledger
-                        .checkpoint()
-                        .map_err(|_| Error::CheckpointBusy)?,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        Ok(Checkpoint {
-            identity: self.identity,
-            last_session: self.last_session,
-            connections,
-            sessions: self
-                .sessions
-                .values()
-                .filter_map(|entry| entry.session.snapshot())
-                .collect(),
-        })
-    }
 }
 
 fn validate_restore(
@@ -342,29 +280,10 @@ fn validate_restore(
         if checkpoint.identity.relay != identity.relay
             || checkpoint.identity.share != identity.share
             || checkpoint.identity.incarnation == identity.incarnation
-            || checkpoint.connections.len() > limits.connections
-            || checkpoint.sessions.len() > limits.sessions
         {
             return Err(Error::InvalidCheckpoint);
         }
-        for (index, entry) in checkpoint.connections.iter().enumerate() {
-            if entry.connection != entry.ledger.destination()
-                || checkpoint.connections[..index]
-                    .iter()
-                    .any(|prior| prior.connection == entry.connection)
-                || entry.ledger.flows().any(|flow| {
-                    u64::from_be_bytes(*flow.session().wire_id().as_bytes())
-                        > checkpoint.last_session
-                })
-            {
-                return Err(Error::InvalidCheckpoint);
-            }
-        }
-        if checkpoint.sessions.iter().any(|session| {
-            u64::from_be_bytes(*session.key().wire_id().as_bytes()) > checkpoint.last_session
-        }) {
-            return Err(Error::InvalidCheckpoint);
-        }
+        checkpoint.validate(limits)?;
     } else if !restored.surviving.is_empty() {
         return Err(Error::InvalidCheckpoint);
     }

@@ -7,7 +7,9 @@
 
 use alloc::boxed::Box;
 
+mod checkpoint;
 mod checkpoint_codec;
+mod checkpoint_tracking;
 mod connections;
 mod deadlines;
 mod delivery;
@@ -23,7 +25,9 @@ mod types;
 #[path = "share_tests.rs"]
 mod tests;
 
-pub use restoration::{Checkpoint, ConnectionCheckpoint, Restore};
+pub use checkpoint::{Checkpoint, CheckpointBudget, ConnectionCheckpoint};
+pub use checkpoint_tracking::{CheckpointFlush, CheckpointWriteError};
+pub use restoration::Restore;
 pub use types::*;
 
 use crate::{
@@ -90,6 +94,7 @@ pub struct ShareRelay<O> {
     last_work: u64,
     tasks: VecDeque<Task>,
     stop_retirement: Option<StopRetirement>,
+    checkpointing: checkpoint_tracking::Checkpointing,
     observer: O,
 }
 
@@ -198,6 +203,9 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) {
         if let Some(entry) = self.connections.get_mut(&connection) {
+            if self.checkpointing.enabled() && entry.ledger.take_checkpoint_change() {
+                self.checkpointing.changed(connection);
+            }
             for item in entry.ledger.observer_mut().0.drain(..) {
                 self.observer.observe(item);
             }

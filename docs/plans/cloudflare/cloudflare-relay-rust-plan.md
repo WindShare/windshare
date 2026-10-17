@@ -69,7 +69,7 @@ Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方�
 
 ## 目标架构
 
-共享内核采用 `no_std + alloc`，由每分享 `share::ShareRelay` 统一持有生命周期、握手、连接、会话与交付账本。`handle(input, now)` 返回有序控制发送、存储、清理命令与下一截止时间；内核负责 wire ID 分配、撤销扇出、持久化屏障和恢复校验。同步 `submit` 在同一独占借用中完成许可复核、FIFO 记账与宿主提交，socket 等待放在调用之前。适配器只执行 I/O、提供容量与调度；需要休眠时保存组合快照，原生热路径无需逐帧快照。交付元数据采用按需分配、有硬上限的稳定索引槽池，握手连接不预留 flow 槽位，快照仅保存仍需保留的 flow 及其索引；连接与会话上限不等于每连接的预分配长度。统一 `observation::Observer` 输出决策，平台仅补充运行环境字段。
+共享内核采用 `no_std + alloc`，由每分享 `share::ShareRelay` 统一持有生命周期、握手、连接、会话与交付账本。`handle(input, now)` 返回有序控制发送、存储、清理命令与下一截止时间；内核负责 wire ID 分配、撤销扇出、持久化屏障和恢复校验。同步 `submit` 在同一独占借用中完成许可复核、FIFO 记账与宿主提交，socket 等待放在调用之前。适配器只执行 I/O、提供容量与调度；休眠宿主在事件末刷新发生变化的连接附件，唤醒时将存活附件交给内核组合校验。原生不启用附件变更记录，热路径无需逐帧快照。交付元数据采用按需分配、有硬上限的稳定索引槽池，握手连接不预留 flow 槽位，快照仅保存仍需保留的 flow 及其索引；连接与会话上限不等于每连接的预分配长度。统一 `observation::Observer` 输出决策，平台仅补充运行环境字段。
 
 ```text
 Go CLI / 浏览器 / 未来客户端
@@ -92,6 +92,32 @@ Go CLI / 浏览器 / 未来客户端
 客户端在升级请求的查询参数中携带非秘密分享路由提示；Worker 据此选定 ShareRelay DO，DO 校验协议中的分享身份与提示一致。提示不授予权限、不进入 `relay_identity`；Go 与浏览器拨号同步调整。
 
 Cloudflare 保留每连接、每分享的资源硬上限，并按共享 isolate 的内存峰值（含 Wasm/JS、复制和宿主缓冲）留余量。窗口和并发由多会话慢网测量确定，不照搬原生上限；必要时增加适配器内的 isolate 级在途计数，不引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建准入额度不阻止已有分享恢复或 STOP；账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
+
+### Attachment budget
+
+Each WebSocket attachment contains that destination's complete delivery ledger, its
+handshake and receiver-owned session snapshots. A small replicated share header retains
+the runtime identity and wire-session high-water mark. New admissions refresh the header
+on all surviving sockets; ordinary data and feedback update only affected connections.
+Closed sockets need no tombstone. Surviving sockets require a valid attachment, and the
+kernel validates the assembled state before restoring authority or issuing credit.
+
+Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
+sets session admission and per-connection retained-flow limits to **32**, including
+unsettled retired flows in each connection's bound, and
+reserves at least **512 bytes** for host serialization/metadata, leaving at most **15,872
+bytes** for the kernel record. `CheckpointBudget::check` verifies the worst encoded
+connection state against this allowance before tracking begins. The sender's fanout
+therefore fits without spreading its accounting across unrelated sockets or writing
+delivery counters to SQLite. Native capacities remain independent.
+
+The Worker must store the binary record as an ArrayBuffer/typed byte array and verify
+the actual wrapper's serialized size; a JavaScript number array or base64 expansion
+cannot assume the same budget. Increase the reserved overhead or reduce the Cloudflare
+profile if needed. `flush_checkpoints` replaces complete changed attachments synchronously
+after outputs finish. On partial failure, retry the retained batch while active or close
+affected sockets before returning; never hibernate with stale delivery accounting.
+Deployment validation must exercise this path through the real Worker binding.
 
 ## 部署体验
 

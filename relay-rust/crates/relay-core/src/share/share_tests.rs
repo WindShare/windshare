@@ -566,5 +566,8 @@ mod capacity;
 #[path = "metadata_tests.rs"]
 mod metadata;
 
+#[path = "checkpoint_tests.rs"]
+mod checkpoints;
+
 #[path = "settlement_tests.rs"]
 mod settlement;
