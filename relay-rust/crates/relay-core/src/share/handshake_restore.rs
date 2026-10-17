@@ -16,7 +16,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        let Some(checkpoint) = restored.checkpoint else {
+        let Some(checkpoint) = restored.checkpoint() else {
             return Ok(());
         };
         for snapshot in &checkpoint.connections {
@@ -36,14 +36,18 @@ impl<O: Observer> ShareRelay<O> {
                 continue;
             }
             let connection = snapshot.connection;
+            let ledger = self
+                .ledgers
+                .get(&connection)
+                .ok_or(Error::InvalidCheckpoint)?;
+            if ledger.checkpoint_flows().next().is_some() {
+                return Err(Error::InvalidCheckpoint);
+            }
+            let declared_capacity = ledger.receive_capacity();
             let entry = self
                 .connections
                 .get_mut(&connection)
                 .ok_or(Error::InvalidCheckpoint)?;
-            if entry.ledger.checkpoint_flows().next().is_some() {
-                return Err(Error::InvalidCheckpoint);
-            }
-            let declared_capacity = entry.ledger.receive_capacity();
             let handshake =
                 ControlHandshake::open(self.identity.relay, connection, transcript.opened);
             self.deadlines
@@ -82,9 +86,9 @@ impl<O: Observer> ShareRelay<O> {
                 }
             }
             if self
-                .connections
+                .ledgers
                 .get(&connection)
-                .and_then(|entry| entry.ledger.receive_capacity())
+                .and_then(crate::flow::ConnectionLedger::receive_capacity)
                 != declared_capacity
             {
                 return Err(Error::InvalidCheckpoint);

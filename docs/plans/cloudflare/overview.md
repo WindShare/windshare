@@ -16,9 +16,10 @@ injected; payloads, sockets, entropy, storage and scheduling remain outside it.
 | `restore(identity, limits, state, observer, now)` | Read authoritative lifecycle facts and validate surviving connections, sessions, ledgers and pending handshakes together. |
 | `handle(input, now)` | Expire due state, apply the input and return ordered commands, any refusal and the next absolute deadline. |
 | `submit(receipt, now, handoff)` | Recheck current authority and FIFO order, charge submission and synchronously hand off the payload under one exclusive borrow. |
-| `checkpoint_connection(connection)` | Capture one connection's delivery ledger, handshake and receiver-owned admissions. |
-| `enable_checkpoints(budget, now)` / `flush_checkpoints(now, write)` | Validate the host's byte allowance, track changed connections and synchronously replace their attachments at event boundaries. |
-| `Checkpoint::from_connections(...)` | Assemble independently decoded attachments for the same kernel recovery validation. |
+| `checkpoint_connection(connection)` | Capture one generation's ledger and admissions, even after its socket disappears. |
+| `checkpoint_manifest()` | Capture the complete retained-generation inventory independently of socket discovery. |
+| `enable_checkpoints(budget, now)` / `flush_checkpoints(now, write)` | Write changed generation records, then the manifest when its membership or header changes. |
+| `Checkpoint::from_connections(manifest, records, limits)` | Require exactly the generations named by the independently recovered manifest. |
 | `checkpoint()` / `Checkpoint::encode()` | Capture a full image for recovery tools and tests. |
 
 Commands request control sends, entropy, payload discard, exact connection
@@ -26,7 +27,8 @@ closure and serialized storage work. Hosts return evidence as inputs, including
 discard and physical-close confirmations. They preserve ordering on each
 connection and report storage results with the issued work ID. Socket readiness
 waits happen before `submit`; its handoff cannot await or cache authorization.
-Native hosts leave attachment tracking disabled and allocate no change journal. Neither host writes delivery counters to a database.
+Native hosts leave checkpoint tracking disabled and allocate no change journal.
+Production host persistence remains pending; forwarding must not write delivery counters to a database.
 
 `observation::Observer` is the single observation interface for lifecycle,
 sessions, delivery and orchestration. Typed decisions carry operation/session
@@ -77,27 +79,30 @@ Lifecycle, handshake, session and settlement deadlines share one indexed schedul
 `WS2N` freezes submitted totals; `WS2S` confirms consumption or discard, separately
 from `WS2B`. Ordinary feedback cannot acknowledge retirement or bypass queue discard.
 
-Recovery validates lifecycle authority before reinstating sessions and their
-delivery obligations. Checkpoints preserve original deadlines, exact connection
-generations, receive capacity, cumulative credit, unsettled occupancy and the wire-ID high-water
-mark. Pending handshakes replay a bounded transcript and reverify proofs against
-their original ownership. Fresh incarnations fence old storage and entropy
-callbacks. Missing or invalid ledger state cannot authorize a surviving socket;
-restoration failure requires closing those sockets. Retired flows retain their
-charges and finish cleanup without recreating sessions or issuing new grants.
+Recovery separates communicating sockets from resource responsibility. `Restore` requires
+`Responsibility::Checkpoint`, explicit host evidence of complete release (`Released`),
+or `Unknown`, which refuses restoration. Restart and empty socket lists do not prove release.
+Every checkpoint ledger is restored; only surviving, authorized connections regain sessions.
+Disconnected generations retain submitted occupancy and share `Limits::connections` with
+live connections until settlement or proven release. Queue discard and expiration cannot
+refund submitted bytes. Original deadlines, cumulative totals and wire-ID high-water marks
+survive repeated recovery; old-generation feedback cannot affect a replacement connection.
+Pending handshakes retain their original ownership; fresh incarnations fence old storage
+and entropy callbacks.
 
-Each attachment owns its destination ledger and receiver-side session snapshots. The small
-share header is replicated: new wire IDs refresh all attachments, while delivery, feedback
-and admission-stage changes refresh only affected connections. This preserves the wire-ID
-high-water mark even when the newest receiver disconnects. Recovery rejects mixed headers,
-duplicate connections and misassigned admissions before checking lifecycle authority.
+Each generation record contains its ledger, handshake and receiver-side admissions.
+The independent `CheckpointManifest` lists every retained generation, including detached
+ones; recovery rejects missing records, duplicates and mixed headers. Hosts must preserve
+the latest coherent inventory and records beyond attachment loss. The kernel validates
+completeness against that inventory, but cannot prove that host storage is current.
 
-Hibernating hosts enable tracking after every restore and flush after applying outputs.
-Flush preflights the whole changed batch; partial host failure retains it for retry. The
-host must retry while active or close affected sockets before ending the event. The sink
-must synchronously replace complete attachments and enforce its actual serialization
-limit. `CheckpointBudget` reserves host-envelope space and checks the maximum retained
-state before enabling tracking; it does not reduce native capacities. See the
+Hibernating hosts enable tracking after restore and flush after applying outputs. Flush
+preflights all changed records and writes a changed manifest last; partial failure retains
+the whole batch for retry. Closing sockets does not repair failed accounting writes. If
+latest responsibility cannot be recovered, the host must report `Unknown`. Old records
+may be deleted only after the updated manifest commits. `CheckpointBudget` bounds each
+generation record; the separately stored manifest is bounded by `Limits::connections`.
+Native capacities are unchanged. See the
 [Cloudflare attachment budget](cloudflare-relay-rust-plan.md#attachment-budget).
 
 Flow metadata uses runtime-bounded, lazily allocated slots. Handshakes allocate

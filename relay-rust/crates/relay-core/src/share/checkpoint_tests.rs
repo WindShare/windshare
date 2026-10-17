@@ -11,6 +11,7 @@ fn budget() -> CheckpointBudget {
 
 #[derive(Default)]
 struct Attachments {
+    manifest: Option<CheckpointManifest>,
     bytes: BTreeMap<ConnectionRef, Vec<u8>>,
     written: Vec<ConnectionRef>,
 }
@@ -19,10 +20,21 @@ impl Attachments {
     fn flush(&mut self, relay: &mut Relay, now: UnixMillis) -> CheckpointFlush {
         self.written.clear();
         let result = relay
-            .flush_checkpoints(now, |connection, bytes| {
-                assert!(bytes.len() + HOST_ENVELOPE_BYTES <= ATTACHMENT_BYTES);
-                self.bytes.insert(connection, bytes.to_vec());
-                self.written.push(connection);
+            .flush_checkpoints(now, |target, bytes| {
+                match target {
+                    CheckpointTarget::Generation(connection) => {
+                        assert!(bytes.len() + HOST_ENVELOPE_BYTES <= ATTACHMENT_BYTES);
+                        self.bytes.insert(connection, bytes.to_vec());
+                        self.written.push(connection);
+                    }
+                    CheckpointTarget::Manifest => {
+                        let manifest =
+                            CheckpointManifest::decode(bytes, Fixture::limits()).unwrap();
+                        self.bytes
+                            .retain(|connection, _| manifest.generations().contains(connection));
+                        self.manifest = Some(manifest);
+                    }
+                }
                 Ok::<_, ()>(())
             })
             .unwrap();
@@ -33,6 +45,7 @@ impl Attachments {
 
     fn checkpoint(&self) -> Checkpoint {
         Checkpoint::from_connections(
+            self.manifest.as_ref().unwrap(),
             self.bytes
                 .values()
                 .map(|bytes| ConnectionCheckpoint::decode(bytes, Fixture::limits()).unwrap())
@@ -50,7 +63,7 @@ impl Attachments {
             &Restore {
                 record: Some(stored),
                 surviving: &self.bytes.keys().copied().collect::<Vec<_>>(),
-                checkpoint: Some(&checkpoint),
+                responsibility: Responsibility::Checkpoint(&checkpoint),
             },
             Trace::default(),
             fixture.at,
@@ -221,7 +234,10 @@ fn partial_host_failure_retries_the_entire_batch_without_losing_updates() {
     host.flush(&mut relay, fixture.at);
     let receipt = receive(&mut relay, key, fixture.at);
     let _ = relay.submit(&receipt, fixture.at, |_| Submission::Complete);
-    let failed = relay.flush_checkpoints(fixture.at, |connection, bytes| {
+    let failed = relay.flush_checkpoints(fixture.at, |target, bytes| {
+        let CheckpointTarget::Generation(connection) = target else {
+            panic!("ordinary delivery does not change the manifest")
+        };
         if connection == key.receiver() {
             return Err("host serialization failed");
         }
@@ -231,7 +247,7 @@ fn partial_host_failure_retries_the_entire_batch_without_losing_updates() {
     assert_eq!(
         failed,
         Err(CheckpointWriteError::Write {
-            connection: key.receiver(),
+            target: CheckpointTarget::Generation(key.receiver()),
             error: "host serialization failed",
         })
     );
@@ -243,7 +259,7 @@ fn partial_host_failure_retries_the_entire_batch_without_losing_updates() {
     assert_eq!(host.written, [key.sender(), key.receiver()]);
     let restored = host.restore(&fixture, stored);
     assert_eq!(
-        restored.connections[&key.sender()].ledger.usage().submitted,
+        restored.ledgers[&key.sender()].usage().submitted,
         Counts::new(1, 21)
     );
 }
@@ -263,6 +279,7 @@ fn closing_the_latest_receiver_does_not_lose_the_share_high_water_mark() {
     let (newest, flows) = fixture.join(&mut relay, 3);
     assert!(
         Checkpoint::from_connections(
+            &relay.checkpoint_manifest().unwrap(),
             vec![
                 relay.checkpoint_connection(first.sender()).unwrap(),
                 old_receiver,
@@ -319,8 +336,7 @@ fn retirement_attachments_restore_unsettled_occupancy_and_original_deadlines() {
     let mut restored = host.restore(&fixture, stored);
     assert_eq!(restored.deadline(), deadline);
     assert_eq!(
-        restored.connections[&key.sender()]
-            .ledger
+        restored.ledgers[&key.sender()]
             .snapshot(flows[0])
             .unwrap()
             .submitted,
@@ -343,12 +359,7 @@ fn retirement_attachments_restore_unsettled_occupancy_and_original_deadlines() {
     );
     host.flush(&mut restored, fixture.at);
     assert_eq!(host.written, [key.sender(), key.receiver()]);
-    assert!(
-        restored.connections[&key.sender()]
-            .ledger
-            .snapshot(flows[0])
-            .is_none()
-    );
+    assert!(restored.ledgers[&key.sender()].snapshot(flows[0]).is_none());
 }
 
 #[test]
@@ -400,16 +411,21 @@ fn independent_checkpoint_codecs_reject_mixed_or_misassigned_state() {
     let sender = relay.checkpoint_connection(connection(1)).unwrap();
     let receiver = relay.checkpoint_connection(connection(2)).unwrap();
     let bytes = receiver.encode();
+    let manifest = relay.checkpoint_manifest().unwrap();
     for bytes in [&bytes[..0], &bytes[..1], &bytes[..bytes.len() - 1]] {
         assert!(ConnectionCheckpoint::decode(bytes, Fixture::limits()).is_err());
     }
     let oversized =
         vec![0; ConnectionCheckpoint::maximum_bytes(Fixture::limits().sessions).unwrap() + 1];
     assert!(ConnectionCheckpoint::decode(&oversized, Fixture::limits()).is_err());
-    assert!(Checkpoint::from_connections(Vec::new(), Fixture::limits()).is_err());
+    assert!(Checkpoint::from_connections(&manifest, Vec::new(), Fixture::limits()).is_err());
     assert!(
-        Checkpoint::from_connections(vec![sender.clone(), sender.clone()], Fixture::limits())
-            .is_err()
+        Checkpoint::from_connections(
+            &manifest,
+            vec![sender.clone(), sender.clone()],
+            Fixture::limits()
+        )
+        .is_err()
     );
     let mut wrong_connection = sender.clone();
     wrong_connection.connection = connection(5);
@@ -419,7 +435,153 @@ fn independent_checkpoint_codecs_reject_mixed_or_misassigned_state() {
     assert!(ConnectionCheckpoint::decode(&wrong_admission.encode(), Fixture::limits()).is_err());
     let mut wrong_identity = receiver;
     wrong_identity.identity = fixture.identity(9);
-    assert!(Checkpoint::from_connections(vec![sender, wrong_identity], Fixture::limits()).is_err());
+    assert!(
+        Checkpoint::from_connections(&manifest, vec![sender, wrong_identity], Fixture::limits())
+            .is_err()
+    );
+}
+
+#[test]
+fn manifest_detects_a_missing_generation_even_when_its_socket_is_gone() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    fixture.join(&mut relay, 2);
+    let manifest = relay.checkpoint_manifest().unwrap();
+    let sender = relay.checkpoint_connection(connection(1)).unwrap();
+    assert!(matches!(
+        Checkpoint::from_connections(&manifest, vec![sender], Fixture::limits()),
+        Err(Error::MissingResponsibility)
+    ));
+    let bytes = manifest.encode();
+    assert_eq!(
+        CheckpointManifest::decode(&bytes, Fixture::limits()).unwrap(),
+        manifest
+    );
+    for bytes in [&bytes[..0], &bytes[..1], &bytes[..bytes.len() - 1]] {
+        assert!(CheckpointManifest::decode(bytes, Fixture::limits()).is_err());
+    }
+    let mut reduced = Fixture::limits();
+    reduced.connections = 1;
+    assert!(CheckpointManifest::decode(&bytes, reduced).is_err());
+    let mut duplicate = manifest;
+    duplicate.generations[1] = duplicate.generations[0];
+    assert!(CheckpointManifest::decode(&duplicate.encode(), Fixture::limits()).is_err());
+    let empty = fixture.relay().checkpoint_manifest().unwrap();
+    let empty = CheckpointManifest::decode(&empty.encode(), Fixture::limits()).unwrap();
+    assert!(Checkpoint::from_connections(&empty, Vec::new(), Fixture::limits()).is_ok());
+}
+
+#[test]
+fn manifest_failure_retries_generation_records_and_only_commits_removal_after_release() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
+    relay.enable_checkpoints(budget(), fixture.at).unwrap();
+    let mut host = Attachments::default();
+    let result = relay.flush_checkpoints(fixture.at, |target, bytes| {
+        match target {
+            CheckpointTarget::Generation(connection) => {
+                host.bytes.insert(connection, bytes.to_vec());
+            }
+            CheckpointTarget::Manifest => return Err("manifest unavailable"),
+        }
+        Ok(())
+    });
+    assert_eq!(
+        result,
+        Err(CheckpointWriteError::Write {
+            target: CheckpointTarget::Manifest,
+            error: "manifest unavailable"
+        })
+    );
+    let flushed = host.flush(&mut relay, fixture.at);
+    assert_eq!(flushed.connections, 1);
+    assert!(flushed.manifest);
+    let _ = relay.handle(Input::Disconnected(connection(1)), fixture.at);
+    assert!(!host.bytes.is_empty());
+    let flushed = host.flush(&mut relay, fixture.at);
+    assert_eq!(flushed.connections, 0);
+    assert!(flushed.manifest);
+    assert!(host.bytes.is_empty());
+    let _ = relay.handle(Input::Closed(connection(1)), fixture.at);
+    assert_eq!(
+        host.flush(&mut relay, fixture.at),
+        CheckpointFlush::default()
+    );
+}
+
+#[test]
+fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachments() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let (key, flows) = active(&mut relay, &fixture, 2);
+    relay.enable_checkpoints(budget(), fixture.at).unwrap();
+    let mut host = Attachments::default();
+    host.flush(&mut relay, fixture.at);
+    let detached = relay.handle(Input::Disconnected(key.sender()), fixture.at);
+    let _ = complete(&mut relay, &work(&detached), fixture.at);
+    for flow in flows {
+        let _ = relay.handle(Input::Discarded(flow), fixture.at);
+    }
+    host.flush(&mut relay, fixture.at);
+    let stored = next_record(&work(&detached));
+    let checkpoint = host.checkpoint();
+    assert!(matches!(
+        checkpoint.connections[0].role,
+        checkpoint::ConnectionRole::Detached
+    ));
+    assert!(
+        Relay::restore(
+            fixture.identity(2),
+            Fixture::limits(),
+            &Restore {
+                record: Some(stored),
+                surviving: &[key.sender()],
+                responsibility: Responsibility::Checkpoint(&checkpoint),
+            },
+            Trace::default(),
+            fixture.at
+        )
+        .is_err()
+    );
+    let (mut restored, turn) = Relay::restore(
+        fixture.identity(2),
+        Fixture::limits(),
+        &Restore::restarted(Some(stored), Responsibility::Checkpoint(&checkpoint)),
+        Trace::default(),
+        fixture.at,
+    )
+    .unwrap();
+    for output in turn.outputs {
+        if let Output::Discard(flow) = output {
+            let _ = restored.handle(Input::Discarded(flow), fixture.at);
+        }
+    }
+    restored.enable_checkpoints(budget(), fixture.at).unwrap();
+    host.flush(&mut restored, fixture.at);
+    assert_eq!(
+        restored
+            .handle(
+                Input::Settled {
+                    connection: key.sender(),
+                    session: key.wire_id(),
+                    total: Counts::new(1, 21)
+                },
+                fixture.at
+            )
+            .refusal,
+        None
+    );
+    host.flush(&mut restored, fixture.at);
+    assert!(
+        !host
+            .checkpoint()
+            .manifest()
+            .generations()
+            .contains(&key.sender())
+    );
 }
 
 #[test]
@@ -451,5 +613,7 @@ fn handshake_expiration_and_storage_barriers_are_included_in_incremental_capture
     ));
     let _ = relay.handle(Input::Closed(connection(2)), deadline);
     host.bytes.remove(&connection(2));
-    assert_eq!(host.flush(&mut relay, deadline), CheckpointFlush::default());
+    let flushed = host.flush(&mut relay, deadline);
+    assert_eq!(flushed.connections, 0);
+    assert!(flushed.manifest);
 }

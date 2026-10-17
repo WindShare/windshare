@@ -29,10 +29,10 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
-        if self.connections.contains_key(&connection) {
+        if self.ledgers.contains_key(&connection) {
             return Err(Error::UnknownConnection);
         }
-        if self.connections.len() >= self.limits.connections {
+        if self.ledgers.len() >= self.limits.connections {
             self.trace(Some(connection), RelayDecision::Capacity, now);
             return Err(Error::Capacity);
         }
@@ -47,6 +47,7 @@ impl<O: Observer> ShareRelay<O> {
             Journal::default(),
         )
         .map_err(|_| Error::Configuration)?;
+        self.ledgers.insert(connection, ledger);
         self.connections.insert(
             connection,
             Connection {
@@ -55,10 +56,9 @@ impl<O: Observer> ShareRelay<O> {
                     transcript: HandshakeCheckpoint::new(now),
                 },
                 reservation: None,
-                ledger,
             },
         );
-        self.checkpointing.changed(connection);
+        self.checkpointing.inserted(connection);
         self.trace(Some(connection), RelayDecision::Connected, now);
         Ok(())
     }
@@ -292,15 +292,10 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) -> bool {
         let result = self
-            .connections
+            .ledgers
             .get_mut(&connection)
             .ok_or(Error::UnknownConnection)
-            .and_then(|entry| {
-                entry
-                    .ledger
-                    .declare_capacity(capacity, now)
-                    .map_err(Error::Flow)
-            });
+            .and_then(|ledger| ledger.declare_capacity(capacity, now).map_err(Error::Flow));
         self.flush_ledger(connection, now, turn);
         if let Err(error) = result {
             self.trace(Some(connection), RelayDecision::Rejected(error), now);
@@ -369,27 +364,48 @@ impl<O: Observer> ShareRelay<O> {
         self.trace(Some(connection), RelayDecision::Closing, now);
     }
 
-    pub(super) fn closed(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
         self.disconnect(connection, now, turn);
+        let was_connected = self.connections.remove(&connection).is_some();
+        self.deadlines.set(Key::Handshake(connection), None);
+        if was_connected && self.ledgers.contains_key(&connection) {
+            self.checkpointing.changed(connection);
+        }
+        self.collect_ledger(connection, now);
+        self.trace(Some(connection), RelayDecision::Disconnected, now);
+    }
+
+    pub(super) fn collect_ledger(&mut self, connection: ConnectionRef, now: UnixMillis) {
+        if !self.connections.contains_key(&connection)
+            && self
+                .ledgers
+                .get(&connection)
+                .is_some_and(|ledger| ledger.metadata_usage().retained_flows == 0)
+        {
+            self.ledgers.remove(&connection);
+            self.checkpointing.removed(connection);
+            self.deadlines.set(Key::Ledger(connection), None);
+            self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
+        }
+    }
+
+    pub(super) fn closed(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
+        self.detach(connection, now, turn);
         let affected: Vec<_> = self
-            .connections
+            .ledgers
             .get(&connection)
             .into_iter()
-            .flat_map(|entry| {
-                entry
-                    .ledger
-                    .checkpoint_flows()
-                    .map(|(flow, _)| flow.session())
-            })
+            .flat_map(|ledger| ledger.checkpoint_flows().map(|(flow, _)| flow.session()))
             .collect();
-        if let Some(entry) = self.connections.get_mut(&connection) {
-            let _ = entry.ledger.confirm_closed(connection, now);
-            for event in entry.ledger.observer_mut().0.drain(..) {
+        if let Some(ledger) = self.ledgers.get_mut(&connection) {
+            let _ = ledger.confirm_closed(connection, now);
+            for event in ledger.observer_mut().0.drain(..) {
                 self.observer.observe(event);
             }
         }
-        self.connections.remove(&connection);
-        self.checkpointing.removed(connection);
+        if self.ledgers.remove(&connection).is_some() {
+            self.checkpointing.removed(connection);
+        }
         self.deadlines.set(Key::Handshake(connection), None);
         self.deadlines.set(Key::Ledger(connection), None);
         for key in affected {

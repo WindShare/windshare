@@ -72,7 +72,7 @@ impl Fixture {
         let (relay, turn) = Relay::restore(
             self.identity(1),
             Self::limits(),
-            &Restore::restarted(None),
+            &Restore::restarted(None, Responsibility::Released),
             Trace::default(),
             self.at,
         )
@@ -140,13 +140,18 @@ impl Fixture {
         next_record(&durable)
     }
     fn join(&self, relay: &mut Relay, receiver: u64) -> (SessionKey, [FlowKey; 2]) {
+        self.join_connection(relay, connection(receiver))
+    }
+    fn join_connection(
+        &self,
+        relay: &mut Relay,
+        receiver: ConnectionRef,
+    ) -> (SessionKey, [FlowKey; 2]) {
         assert_eq!(
-            relay
-                .handle(Input::Connected(connection(receiver)), self.at)
-                .refusal,
+            relay.handle(Input::Connected(receiver), self.at).refusal,
             None
         );
-        let turn = self.control(relay, connection(receiver), "joinB64", self.at);
+        let turn = self.control(relay, receiver, "joinB64", self.at);
         let key = turn
             .outputs
             .iter()
@@ -273,19 +278,22 @@ fn next_record(work: &Work) -> Record {
     }
 }
 fn receive(relay: &mut Relay, key: SessionKey, at: UnixMillis) -> ReceivedFrame {
+    receive_from(relay, key, key.receiver(), at)
+}
+
+fn receive_from(
+    relay: &mut Relay,
+    key: SessionKey,
+    source: ConnectionRef,
+    at: UnixMillis,
+) -> ReceivedFrame {
     let mut writer = Writer::<21>::with_header(*b"WS2O", 0);
     writer
         .put(key.wire_id().as_bytes())
         .put(&1_u32.to_be_bytes())
         .put(&[1]);
     let header = OpaqueHeader::decode(&writer.into_frame()).unwrap();
-    let turn = relay.handle(
-        Input::Frame {
-            source: key.receiver(),
-            header,
-        },
-        at,
-    );
+    let turn = relay.handle(Input::Frame { source, header }, at);
     turn.outputs
         .into_iter()
         .find_map(|output| match output {
@@ -599,3 +607,6 @@ mod checkpoints;
 
 #[path = "settlement_tests.rs"]
 mod settlement;
+
+#[path = "responsibility_tests.rs"]
+mod responsibility;

@@ -22,7 +22,13 @@ pub enum Observation {
 pub enum RelayDecision {
     Connected,
     Closing,
+    Disconnected,
     Closed,
+    ResponsibilityReleased,
+    ResponsibilityRestored {
+        communicating: bool,
+        usage: flow::Usage,
+    },
     Capacity,
     StaleCompletion(crate::share::WorkId),
     StorageUncertain(crate::share::WorkId),
@@ -32,7 +38,10 @@ pub enum RelayDecision {
         result: crate::share::WorkResult,
     },
     HandshakeClosed(crate::handshake::CloseReason),
-    Restored,
+    Restored {
+        connections: usize,
+        retained_generations: usize,
+    },
     InvalidSnapshot,
     CheckpointingEnabled {
         payload_bytes: usize,

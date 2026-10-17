@@ -100,6 +100,8 @@ Metadata regressions cover lazy handshake allocation, asymmetric sender/receiver
 fanout, runtime slot bounds and sparse checkpoint identity/settlement recovery. Incremental
 attachment tests cover destination-only writes, admission transitions, replay/no-op suppression,
 partial write retries, close/high-water preservation, host byte budgets and joint recovery.
+Responsibility recovery tests cover missing sockets and manifests, detached-generation
+charges, repeated recovery without renewed budgets/deadlines, and old-generation settlement isolation.
 Client runtime cutover and production platform adapters remain unimplemented.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort

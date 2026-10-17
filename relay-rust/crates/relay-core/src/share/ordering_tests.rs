@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn stopped_restore_waits_for_every_surviving_receiver_before_commit() {
+fn stopped_restore_waits_for_retained_generations_even_without_surviving_sockets() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.prepare_stop(&mut relay);
@@ -18,35 +18,54 @@ fn stopped_restore_waits_for_every_surviving_receiver_before_commit() {
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let intent = work(&fixture.stop(&mut relay));
     let record = next_record(&intent);
-    let (mut restored, turn) = Relay::restore(
-        fixture.identity(2),
-        Fixture::limits(),
-        &Restore {
-            record: Some(record),
-            surviving: &[key.sender(), key.receiver()],
-            checkpoint: Some(&checkpoint),
-        },
-        Trace::default(),
-        fixture.at,
-    )
-    .unwrap();
-    assert!(
-        turn.outputs
-            .iter()
-            .any(|output| matches!(output, Output::Close(value) if *value == key.receiver()))
-    );
-    let sender_closed = restored.handle(Input::Closed(key.sender()), fixture.at);
-    assert!(
-        !sender_closed
-            .outputs
-            .iter()
-            .any(|output| matches!(output, Output::Work(_)))
-    );
-    let receiver_closed = restored.handle(Input::Closed(key.receiver()), fixture.at);
-    assert!(matches!(
-        next_record(&work(&receiver_closed)),
-        Record::Stopped(_)
-    ));
+    for surviving in [&[key.sender(), key.receiver()][..], &[]] {
+        let (mut restored, turn) = Relay::restore(
+            fixture.identity(2),
+            Fixture::limits(),
+            &Restore {
+                record: Some(record),
+                surviving,
+                responsibility: Responsibility::Checkpoint(&checkpoint),
+            },
+            Trace::default(),
+            fixture.at,
+        )
+        .unwrap();
+        assert!(
+            !turn
+                .outputs
+                .iter()
+                .any(|output| matches!(output, Output::Work(_)))
+        );
+        if !surviving.is_empty() {
+            assert!(
+                turn.outputs.iter().any(
+                    |output| matches!(output, Output::Close(value) if *value == key.receiver())
+                )
+            );
+        }
+        for participant in [key.sender(), key.receiver()] {
+            let disconnected = restored.handle(Input::Disconnected(participant), fixture.at);
+            assert!(
+                !disconnected
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, Output::Work(_)))
+            );
+        }
+        let sender_closed = restored.handle(Input::Closed(key.sender()), fixture.at);
+        assert!(
+            !sender_closed
+                .outputs
+                .iter()
+                .any(|output| matches!(output, Output::Work(_)))
+        );
+        let receiver_closed = restored.handle(Input::Closed(key.receiver()), fixture.at);
+        assert!(matches!(
+            next_record(&work(&receiver_closed)),
+            Record::Stopped(_)
+        ));
+    }
 }
 
 #[test]
@@ -122,7 +141,7 @@ fn startup_exhaustion_does_not_leak_credit_and_reclaimed_capacity_admits_again()
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None),
+        &Restore::restarted(None, Responsibility::Released),
         Trace::default(),
         fixture.at,
     )
@@ -190,7 +209,7 @@ fn stale_completion_and_generation_feedback_cannot_release_new_occupancy() {
         &Restore {
             record: Some(next_record(&durable)),
             surviving: &[key.sender(), key.receiver()],
-            checkpoint: Some(&snapshot),
+            responsibility: Responsibility::Checkpoint(&snapshot),
         },
         Trace::default(),
         fixture.at,

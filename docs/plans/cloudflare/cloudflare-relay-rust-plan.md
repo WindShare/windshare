@@ -51,13 +51,17 @@ buffer, the old connection still delivered all 8 MiB after the new object answer
 reset also disconnected a healthy peer on the same share. `close()`, `CLOSED`, an
 Alarm or an empty socket list cannot supply `Input::Closed` evidence.
 
-Before Cloudflare integration, separate durable authorization revocation, disposal
-of application-owned queues and transport-occupancy settlement. Preserve unsettled
-charges across disconnect/recovery; do not turn a missing attachment or runtime
-restart into a refund. STOP cannot recall bytes already handed to the network.
-A revised STOP/resource contract must change the kernel, protocol and both clients
-together; the probes have not made that change. Whole-share reset is a recovery
-mechanism, not routine isolation of one slow receiver.
+The kernel now retains delivery ledgers independently of communicating sockets.
+Recovery requires a complete responsibility checkpoint or explicit host evidence of
+full release; unknown responsibility refuses restoration. An independent manifest
+detects missing generation records, and detached generations retain capacity until
+settlement or proven release. Restart and empty socket lists cannot refund occupancy.
+
+Next, separate STOP acknowledgement from background resource settlement, updating
+the kernel, protocol and both clients together. STOP cannot recall bytes already
+handed to the network. Before Cloudflare integration, establish how the host retains
+the latest manifest and responsibility records across attachment loss. Whole-share
+reset is a recovery mechanism, not routine isolation of one slow receiver.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
 
@@ -113,15 +117,14 @@ Cloudflare 保留每连接、每分享的资源硬上限，并按共享 isolate 
 
 ### Attachment budget
 
-Each WebSocket attachment contains that destination's complete delivery ledger, its
-handshake and receiver-owned session snapshots. A small replicated share header retains
-the runtime identity and wire-session high-water mark. New admissions refresh the header
-on all surviving sockets; ordinary data and feedback update only affected connections.
-Only connections with proven release need no tombstone. A missing socket attachment
-alone cannot erase unsettled transport responsibility; the Cloudflare ownership
-contract must resolve that case before this layout is integrated. Surviving sockets
-require a valid attachment, and the kernel validates the assembled state before
-restoring authority or issuing credit.
+Each generation record contains its complete ledger, handshake and receiver-owned
+session snapshots. A replicated header retains runtime identity and the wire-session
+high-water mark. New admissions refresh all retained records; ordinary delivery and
+feedback update only affected generations. A separately retained `CheckpointManifest`
+names every required record, including disconnected generations. Missing records or
+unknown responsibility cannot authorize recovery. The host must preserve the latest
+coherent manifest and records independently of socket attachments; the Cloudflare
+storage mechanism remains unresolved and must be established before integration.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including

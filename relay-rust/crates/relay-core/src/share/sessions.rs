@@ -38,7 +38,7 @@ impl<O: Observer> ShareRelay<O> {
         }
         self.last_session += 1;
         self.checkpointing
-            .header_changed(self.connections.keys().copied());
+            .header_changed(self.ledgers.keys().copied());
         let session =
             RelaySessionId::new(self.last_session.to_be_bytes()).expect("nonzero sequence");
         self.lifecycle_event(
@@ -105,10 +105,10 @@ impl<O: Observer> ShareRelay<O> {
                 .map_err(Error::Forward)?;
             let destination = route.permit().destination();
             let result = self
-                .connections
+                .ledgers
                 .get_mut(&destination)
                 .ok_or(Error::UnknownConnection)
-                .and_then(|entry| entry.ledger.open(&route, now).map_err(Error::Flow));
+                .and_then(|ledger| ledger.open(&route, now).map_err(Error::Flow));
             self.flush_ledger(destination, now, turn);
             match result {
                 Ok(grant) => grants.push(grant),
@@ -120,9 +120,9 @@ impl<O: Observer> ShareRelay<O> {
                         reason: RetirementReason::Ended(EndReason::HostFailed),
                     };
                     for grant in grants {
-                        if let Some(entry) = self.connections.get_mut(&grant.flow.destination()) {
-                            let _ = entry.ledger.retire(retirement, now);
-                            let _ = entry.ledger.discarded(grant.flow, now);
+                        if let Some(ledger) = self.ledgers.get_mut(&grant.flow.destination()) {
+                            let _ = ledger.retire(retirement, now);
+                            let _ = ledger.discarded(grant.flow, now);
                         }
                         self.flush_ledger(grant.flow.destination(), now, turn);
                     }
@@ -158,8 +158,8 @@ impl<O: Observer> ShareRelay<O> {
             entry.deferred = deferred;
             let flows = entry.flows;
             for flow in flows {
-                if let Some(connection) = self.connections.get_mut(&flow.destination()) {
-                    let _ = connection.ledger.retire(retirement, now);
+                if let Some(ledger) = self.ledgers.get_mut(&flow.destination()) {
+                    let _ = ledger.retire(retirement, now);
                 }
                 self.flush_ledger(flow.destination(), now, turn);
             }
@@ -180,9 +180,9 @@ impl<O: Observer> ShareRelay<O> {
             entry.deferred = false;
             for flow in entry.flows {
                 if self
-                    .connections
+                    .ledgers
                     .get(&flow.destination())
-                    .is_some_and(|connection| connection.ledger.snapshot(flow).is_some())
+                    .is_some_and(|ledger| ledger.snapshot(flow).is_some())
                 {
                     turn.outputs.push(Output::Discard(flow));
                 }
@@ -250,9 +250,9 @@ impl<O: Observer> ShareRelay<O> {
             let route = (destination, key.wire_id());
             if let Some(flow) = self.routes.get(&route) {
                 if self
-                    .connections
+                    .ledgers
                     .get(&destination)
-                    .is_some_and(|entry| entry.ledger.snapshot(*flow).is_some())
+                    .is_some_and(|ledger| ledger.snapshot(*flow).is_some())
                 {
                     retained = true;
                 } else {
