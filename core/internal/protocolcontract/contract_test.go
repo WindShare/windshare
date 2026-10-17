@@ -779,6 +779,9 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"name": "v2-relay-endpoint-normalization", "cases": v2RelayEndpointCases(),
 		},
 		map[string]any{
+			"name": "v2-relay-share-routing", "cases": v2RelayShareRoutingCases(),
+		},
+		map[string]any{
 			"name":               "sender-authenticated-x25519-transcript",
 			"receiverPrivateB64": b64(receiverPrivate), "receiverPublicB64": b64(receiverKey.PublicKey().Bytes()),
 			"senderPrivateB64": b64(senderPrivate), "senderPublicB64": b64(senderKey.PublicKey().Bytes()),

@@ -111,7 +111,11 @@ Go CLI / 浏览器 / 未来客户端
 两条路径共享 Rust 严格协议实现和纯控制面引擎，但不共享平台 I/O 实现；Cloudflare 的 Rust 代码编译为 Worker 所需的 Wasm 产物
 ```
 
-客户端在升级请求的查询参数中携带非秘密分享路由提示；Worker 据此选定 ShareRelay DO，DO 校验协议中的分享身份与提示一致。提示不授予权限、不进入 `relay_identity`；Go 与浏览器拨号同步调整。
+Go REGISTER/RESUME/JOIN/STOP and browser JOIN now append the public `share_id` upgrade hint using
+the [relay routing contract](../../协议规范.md#4-分享与接收流程). Existing query bytes and `relay_identity`
+remain unchanged; preconfigured routing parameters are rejected. The Worker must select the
+ShareRelay DO from this hint, and the DO must reject a handshake whose share identity differs.
+The hint grants no authority. Cloudflare host routing and authentication integration remain pending.
 
 Cloudflare 保留每连接、每分享的资源硬上限，并按共享 isolate 的内存峰值（含 Wasm/JS、复制和宿主缓冲）留余量。窗口和并发由多会话慢网测量确定，不照搬原生上限；必要时增加适配器内的 isolate 级在途计数，不引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建准入额度不阻止已有分享恢复或 STOP；账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
 

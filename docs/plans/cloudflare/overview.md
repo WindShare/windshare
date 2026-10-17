@@ -30,6 +30,11 @@ waits happen before `submit`; its handoff cannot await or cache authorization.
 Native hosts leave checkpoint tracking disabled and allocate no change journal.
 Production host persistence remains pending; forwarding must not write delivery counters to a database.
 
+Go REGISTER/RESUME/JOIN/STOP and browser JOIN now derive a per-share dial URL with the public
+`share_id` query hint. Shared vectors preserve admission-query bytes and relay identity, and reject
+preconfigured routing parameters. The future Cloudflare host must validate that hint against the
+handshake's share identity; client routing does not resolve host recovery storage.
+
 `observation::Observer` is the single observation interface for lifecycle,
 sessions, delivery and orchestration. Typed decisions carry operation/session
 identity and context; adapters add platform fields when exporting them.

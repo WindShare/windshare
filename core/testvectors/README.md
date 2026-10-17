@@ -57,6 +57,7 @@ Receiver-local canonical contracts:
 Other generated v2 files retain sender objects, sessions, fragmentation,
 identity, and peer signaling. `v2-identity.json` also checks compact link generation
 and origin-based relay resolution against the browser parser. `v2-session.json` includes relay connection probes,
+per-share upgrade URLs (`v2-relay-share-routing`, including query conflicts and unchanged relay identity),
 acknowledgements, stale resume errors, and independent frame/byte credit deltas for
 both relay directions alongside registration and session bytes. Its relay control cases list
 every decoder refusal for REGISTER, RESUME, STOP and JOIN, and every proof-authentication boundary
