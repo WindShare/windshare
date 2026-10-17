@@ -19,7 +19,11 @@ impl Environment for Frozen {
         UnixMillis(self.now.load(Ordering::Acquire))
     }
     fn challenge(&self) -> Result<ChallengeSeed> {
-        Ok(self.seeds.lock().unwrap().pop_front().unwrap())
+        self.seeds
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| anyhow!("injected entropy failure"))
     }
 }
 
@@ -61,8 +65,8 @@ impl Persistence for Controlled {
 
 struct Harness {
     tx: mpsc::Sender<Event>,
-    sender: mpsc::Receiver<Vec<u8>>,
-    stopper: mpsc::Receiver<Vec<u8>>,
+    sender: crate::connection::Writer,
+    stopper: crate::connection::Writer,
     attempts: mpsc::UnboundedReceiver<Attempt>,
     task: JoinHandle<Result<()>>,
     store: Database,
@@ -102,7 +106,7 @@ impl Harness {
             inbox,
             Arc::new(AtomicBool::new(false)),
         ));
-        let (stop_tx, mut stopper) = mpsc::channel(8);
+        let (stop_tx, mut stopper, _stop_closure) = crate::connection::channel(connection(2));
         tx.send(Event::Connected(connection(2), stop_tx))
             .await
             .unwrap();
@@ -113,7 +117,7 @@ impl Harness {
         environment
             .now
             .store(fixture.now(false).0, Ordering::Release);
-        let (sender_tx, mut sender) = mpsc::channel(8);
+        let (sender_tx, mut sender, _sender_closure) = crate::connection::channel(connection(1));
         tx.send(Event::Connected(connection(1), sender_tx))
             .await
             .unwrap();
@@ -164,7 +168,7 @@ impl Harness {
     }
 }
 
-async fn read(rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+async fn read(rx: &mut crate::connection::Writer) -> Vec<u8> {
     timeout(Duration::from_secs(3), rx.recv())
         .await
         .unwrap()
@@ -214,6 +218,7 @@ async fn acknowledgements_wait_for_durable_receipts_and_uncertain_cas_retries() 
         host.store.load(host.fixture.identity().share).unwrap(),
         Some(Record::Stopped(_))
     ));
+    drop(host);
 }
 
 #[tokio::test]
@@ -270,6 +275,58 @@ async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
 }
 
 #[tokio::test]
+async fn failed_actor_drains_socket_cleanup_while_storage_remains_in_flight() {
+    let mut host = Harness::new().await;
+    let publication = host.attempt().await;
+    let (port, mut incoming, _) = crate::connection::channel(connection(3));
+    host.tx
+        .send(Event::Connected(connection(3), port))
+        .await
+        .unwrap();
+    host.tx
+        .send(Event::Control(
+            connection(3),
+            host.fixture.bytes("stopInitB64"),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_secs(3), incoming.recv())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        timeout(Duration::from_secs(3), host.sender.recv())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    timeout(Duration::from_secs(3), async {
+        for _ in 0..crate::config::MAILBOX_CAPACITY * 2 {
+            let (applied, completed) = oneshot::channel();
+            host.tx
+                .send(Event::Closed(connection(1), applied))
+                .await
+                .unwrap();
+            assert!(
+                completed.await.is_err(),
+                "failed kernel cannot accept a release receipt"
+            );
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !host.task.is_finished(),
+        "storage write must fence actor replacement"
+    );
+    publication.release.send(Receipt::Commit).unwrap();
+    assert!((&mut host.task).await.unwrap().is_err());
+    drop(host);
+}
+
+#[tokio::test]
 async fn stop_supersedes_an_ownership_write_already_in_flight() {
     let mut host = Harness::new().await;
     host.attempt().await.release.send(Receipt::Commit).unwrap();
@@ -277,7 +334,10 @@ async fn stop_supersedes_an_ownership_write_already_in_flight() {
     host.stop().await;
     // A same-mailbox marker proves STOP was processed while the write remains
     // blocked, without relying on a scheduling sleep or pretending it failed.
-    host.tx.send(Event::Closed(connection(1))).await.unwrap();
+    host.tx
+        .send(Event::Closed(connection(1), oneshot::channel().0))
+        .await
+        .unwrap();
     assert!(
         timeout(Duration::from_secs(3), host.sender.recv())
             .await
@@ -292,4 +352,5 @@ async fn stop_supersedes_an_ownership_write_already_in_flight() {
         host.store.load(host.fixture.identity().share).unwrap(),
         Some(Record::Stopped(_))
     ));
+    drop(host);
 }

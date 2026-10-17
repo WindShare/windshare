@@ -118,7 +118,7 @@ impl Fixture {
             stopped.operation,
         ]
     }
-    fn begin(&self, relay: &mut ShareRelay<Trace>, stop: bool) {
+    pub fn begin(&self, relay: &mut ShareRelay<Trace>, stop: bool) {
         let connection = connection(if stop { 2 } else { 1 });
         let now = self.now(stop);
         let _ = relay.handle(Input::Connected(connection), now);

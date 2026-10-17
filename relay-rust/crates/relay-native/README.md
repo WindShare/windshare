@@ -25,11 +25,23 @@ and retry the same obligation; operation-scoped cleanup cannot erase another own
 Startup restores pending work and original persisted grace deadlines. Generation
 allocation is durable; challenge entropy comes from the OS.
 
-Per-share actors serialize decisions while database work and bounded socket writers
-run separately. This lifecycle-only storage schema has never admitted payloads;
-its recovery uses that evidence, rather than process restart, to establish zero
-delivery responsibility. Enabling data transfer requires an explicit recovery design.
+Per-share actors serialize decisions; each connection supervisor owns separate reader
+and writer tasks. Slow writes cannot block inbound controls. Output has independent
+frame/byte bounds, reserved control capacity and coalesced priority heartbeat replies.
+Unsubmitted payloads stay with the actor. The connection foundation rechecks a receipt
+through `ShareRelay::submit` and hands it to the bounded writer synchronously; those
+bytes are then submitted responsibility and may still arrive after STOP.
 
-`make rust` includes fault-injected commit ordering tests and a Go-codec WebSocket
-scenario that kills/restarts the actual binary, resumes ownership, stops the share,
+Queue discard precedes its kernel receipt. Closure aborts both tasks, or gives ordered
+terminal replies and the WebSocket close handshake one bounded interval; shutdown
+interrupts that drain.
+Only joined tasks, dropped queues and abortive TCP teardown justify `Closed`;
+shutdown waits until the share actor has processed that receipt.
+This lifecycle-only storage schema has never admitted payloads; its recovery uses that
+evidence to establish zero delivery responsibility. JOIN/data ingress still requires
+delivery recovery and coordinated client runtime integration.
+
+`make rust` covers blocked-write ingress, bounded queues, STOP submission fencing,
+joined teardown, fault-injected commit ordering and a Go-codec WebSocket scenario
+that kills/restarts the actual binary, resumes ownership, stops the share,
 then verifies that another restart cannot republish or resume it.

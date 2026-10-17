@@ -118,7 +118,11 @@ retirement settlement, replay and stale-generation isolation without timers or s
 The native lifecycle host now runs REGISTER/RESUME/STOP and heartbeats on real
 WebSockets with SQLite persistence. Its Go-codec scenario generates fresh keys and
 proofs, restarts the binary after registration, resumes, stops independently and
-restarts again to verify permanent refusal. Fault-injected host tests hold commits,
+restarts again to verify permanent refusal. Connection tests block actual WebSocket
+writes over bounded in-memory I/O while reading inbound controls, verify joined
+task/queue release, terminal reply draining, heartbeat priority and shutdown.
+Real kernel receipts cover queue bounds and STOP fencing at synchronous writer handoff.
+Fault-injected host tests hold commits,
 lose receipts and race STOP with ownership publication. JOIN/forwarding, client
 runtime cutover remain unimplemented. The Cloudflare lifecycle adapter now uses the
 same authority-row transitions, real Worker entropy/time and SQLite. Injected host
