@@ -65,6 +65,9 @@ Rust relays share the proof decisions. `relay-delivery-consumed` freezes the sta
 32-byte cumulative `WS2B` contract across all three runtimes, including exact u64
 totals, complete-envelope bounds and malformed framing. The active receive-credit
 delta contract remains separate until the coordinated runtime cutover.
+The staged `relay-capacity-*` families pin REGISTER/RESUME/JOIN declarations,
+capacity-bound signatures and strict framing. Rust uses these handshake vectors;
+Go/browser expose separate delivery-handshake codecs pending runtime activation.
 Peer signaling schema 2 includes monotonic attempt
 sequences, the closed peer reason-to-recovery-scope mapping, and signed
 session-bound path controls. Path-control schema 2 also binds an opaque provider

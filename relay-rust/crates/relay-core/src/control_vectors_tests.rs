@@ -81,13 +81,31 @@ fn challenge_purpose(wire: u8) -> ChallengePurpose {
 
 #[test]
 fn client_frames_follow_shared_decoding_vectors() {
-    let vector: DecodingVector = session_case("relay-control-frame-decoding");
+    let mut vector: DecodingVector = session_case("relay-control-frame-decoding");
+    vector
+        .cases
+        .retain(|case| !matches!(case.frame.as_str(), "WS2R" | "WS2J"));
+    let capacity: DecodingVector = session_case("relay-capacity-frame-decoding");
+    vector.cases.extend(capacity.cases);
     let mut covered = BTreeSet::new();
     for case in &vector.cases {
         match case.direction.as_str() {
             CLIENT_TO_RELAY => {
                 let decoded = decode_client_frame(&case.frame, &bytes(&case.encoded_b64));
                 assert_eq!(decoded.is_ok(), case.accepted, "{}: {decoded:?}", case.name);
+                if case.accepted {
+                    let raw = bytes(&case.encoded_b64);
+                    match case.frame.as_str() {
+                        "WS2R" => {
+                            assert_eq!(
+                                RegisterInit::decode(&raw).unwrap().encode().as_slice(),
+                                raw
+                            );
+                        }
+                        "WS2J" => assert_eq!(Join::decode(&raw).unwrap().encode().as_slice(), raw),
+                        _ => {}
+                    }
+                }
                 covered.insert(case.frame.as_str());
             }
             // The relay only encodes these frames; positive vectors pin its bytes.
@@ -103,7 +121,7 @@ fn client_frames_follow_shared_decoding_vectors() {
 
 #[test]
 fn proofs_follow_shared_authentication_vectors() {
-    let vector: ProofVector = session_case("relay-control-proof-authentication");
+    let vector: ProofVector = session_case("relay-capacity-proof-authentication");
     let relay = relay_identity(&vector.relay_identity_b64);
     for case in vector.cases {
         let challenge = challenge(

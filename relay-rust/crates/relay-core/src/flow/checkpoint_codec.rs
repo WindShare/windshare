@@ -1,5 +1,5 @@
 use super::{
-    CloseRequest, ConnectionState, Counts, FlowKey,
+    CloseRequest, ConnectionState, Counts, FlowKey, ReceiveCapacity,
     checkpoint::{CheckpointError, LedgerCheckpoint},
     delivery::{Delivery, State},
 };
@@ -12,7 +12,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 1;
+const FORMAT: u8 = 2;
 const KEY_BYTES: usize = crate::sessions::MAX_SNAPSHOT_BYTES - size_of::<u64>();
 const COUNTERS: usize = 5;
 const ENTRY_BYTES: usize = 1 + KEY_BYTES + COUNTERS * 16 + 1 + 8;
@@ -29,6 +29,11 @@ impl LedgerCheckpoint {
         });
         out.extend_from_slice(self.relay.as_bytes());
         out.extend_from_slice(&self.destination.encode());
+        out.push(u8::from(self.receive_capacity.is_some()));
+        if let Some(capacity) = self.receive_capacity {
+            out.extend_from_slice(&capacity.counts().frames.to_be_bytes());
+            out.extend_from_slice(&capacity.counts().encoded_bytes.to_be_bytes());
+        }
         if let ConnectionState::Closing(request) = self.state {
             out.extend_from_slice(&(request.flow.slot as u64).to_be_bytes());
             encode_permit(&mut out, request.flow);
@@ -74,6 +79,11 @@ impl LedgerCheckpoint {
         let relay = RelayIdentity::new(field(&mut body)?).ok_or(CheckpointError::Identity)?;
         let destination =
             ConnectionRef::decode(field(&mut body)?).ok_or(CheckpointError::Identity)?;
+        let receive_capacity = match field::<1>(&mut body)? {
+            [0] => None,
+            [1] => Some(ReceiveCapacity::read(&mut body).map_err(|_| CheckpointError::Capacity)?),
+            _ => return Err(CheckpointError::Format),
+        };
         let state = match kind {
             0 => ConnectionState::Open,
             1 => {
@@ -114,6 +124,7 @@ impl LedgerCheckpoint {
             destination,
             entries,
             state,
+            receive_capacity,
         })
     }
 
@@ -121,7 +132,9 @@ impl LedgerCheckpoint {
     pub fn maximum_bytes(slots: usize) -> Option<usize> {
         slots
             .checked_mul(1 + ENTRY_BYTES)?
-            .checked_add(2 + 32 + ConnectionRef::ENCODED_BYTES + 8)?
+            .checked_add(
+                2 + 32 + ConnectionRef::ENCODED_BYTES + 1 + ReceiveCapacity::ENCODED_BYTES + 8,
+            )?
             .checked_add(8 + 1 + KEY_BYTES + 8)
     }
 }

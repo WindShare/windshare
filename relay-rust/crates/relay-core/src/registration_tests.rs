@@ -61,7 +61,7 @@ struct UploadAuthorizationCase {
 }
 
 fn registration_vector() -> RegistrationVector {
-    session_case("fresh-relay-registration-proof")
+    session_case("relay-capacity-registration")
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn resume_reproduces_shared_bytes_and_presents_its_committed_token() {
 #[test]
 fn descriptor_authorization_depends_only_on_the_committed_digest() {
     let registration = registration_vector();
-    let uploads: UploadAuthorizationVector = session_case("relay-descriptor-upload-authorization");
+    let uploads: UploadAuthorizationVector = session_case("relay-capacity-descriptor-upload");
     let relay = relay_identity(&uploads.relay_identity_b64);
     for case in uploads.cases {
         let challenge = challenge(

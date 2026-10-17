@@ -76,7 +76,7 @@ fn registration_start(expires_at: &str) -> UnixMillis {
 
 impl Fixture {
     fn new() -> Self {
-        let vector: Vector = session_case("fresh-relay-registration-proof");
+        let vector: Vector = session_case("relay-capacity-registration");
         let at = registration_start(&vector.expires_at);
         let resume_at = registration_start(&vector.resume_expires_at);
         let upload = bytes(&vector.descriptor_upload_b64);

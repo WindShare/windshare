@@ -33,7 +33,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let data: serde_json::Value = session_case("fresh-relay-registration-proof");
+        let data: serde_json::Value = session_case("relay-capacity-registration");
         let at = UnixMillis(
             unix_seconds(data["expiresAt"].as_str().unwrap()).start().0 - REGISTRATION_BUDGET - 1,
         );
@@ -559,3 +559,6 @@ mod handshakes;
 
 #[path = "recovery_tests.rs"]
 mod recovery;
+
+#[path = "capacity_tests.rs"]
+mod capacity;

@@ -143,6 +143,64 @@
       "stoppedErrorB64": "V1MyRQIAAAsAAAAA"
     },
     {
+      "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+      "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+      "connectionProbeAckB64": "V1MyQQIAAAABAgMEBQYHCA==",
+      "connectionProbeB64": "V1MySAIAAAABAgMEBQYHCA==",
+      "connectionProbeNonce": "72623859790382856",
+      "descriptorDeliveryB64": "V1MyRAIAAADh4uPk5ebn6AAAAOMDAAAAAAAAj9DR0tPU1dbX2Nna21mIW1WQFRsyPDscj+rkH2pPDpt02aVYBC0yA/EkaRFKaZmOXoqFgzzBGM9I2mmnrLyX6iyQuFM2OSc9s9HjWXcossJyXxrdAacFmW2lE/Z6vJIeGhQvMnOUNwQCSZAnKsBKaA1B1VBKKlJGJreXvJGdkB4WEKiUL9ZgA7jtME6fm7wwYgpZkL8v+nN63a7ao41uCtpoqwV//uw4JLSZoHFqAjyAttOrQtXiARaIso5lpoWnl8sU5wU60kCmWLz4oy60CEFOdrOhtG371Gi0Ag==",
+      "descriptorDigestB64": "Qw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+      "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+      "dialEndpoint": "wss://relay.example/base/v2/ws?token=a%20b",
+      "expiresAt": "1700000030",
+      "joinB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+      "name": "relay-capacity-registration",
+      "opaqueCiphertextB64": "wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5Q==",
+      "opaqueRelaySessionIdB64": "4eLj5OXm5+g=",
+      "opaqueRouteB64": "V1MyTwIAAADh4uPk5ebn6AAAACXBwsPExcbHyMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f4OHi4+Tl",
+      "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+      "receiveBytes": "1048896",
+      "receiveFrames": "16",
+      "registerChallengeB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
+      "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+      "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+      "registeredB64": "V1MySwIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZY=",
+      "relayBaseUrl": "HTTPS://RELAY.EXAMPLE:443/base/?token=a%20b",
+      "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0=",
+      "relayIdentityEndpoint": "wss://relay.example/base/v2/ws",
+      "relaySessionIdB64": "4eLj5OXm5+g=",
+      "resumeChallengeB64": "V1MyUQIBAAACAwQFBgcICQoLDA0ODxARQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGEAAAAAZVPxHw==",
+      "resumeChallengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+      "resumeChallengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+      "resumeCredentialB64": "V1MyVAIAAAChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wA==",
+      "resumeExpiresAt": "1700000031",
+      "resumeInitB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAACAAAAAAACACg",
+      "resumePreimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlc3VtZQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiCWrDtrVYLJh9u0x+EJrR2Nof7+Y7n3HerCZXgyCuayHQIDBAUGBwgJCgsMDQ4PEBFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYQAAAABlU/EfAAAAAAAAAAgAAAAAAAgAoA==",
+      "resumeProofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/sAegO33CHY4GWJBBW5lgyxFQT/XlniP05JhZx8W5g8NIpKR1vn62orWpu7LPPmQO+/g1WxKdsaFm3PhIKEyQs=",
+      "resumeReceiveBytes": "524448",
+      "resumeReceiveFrames": "8",
+      "resumeSignatureB64": "+wB6A7fcIdjgZYkEFbmWDLEVBP9eWeI/TkmFnHxbmDw0ikpHW+fraitam7ss8+ZA77+DVbEp2xoWbc+EgoTJCw==",
+      "resumeStaleErrorB64": "V1MyRQIAAAwAAAAA",
+      "resumeTokenB64": "oaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+v8A=",
+      "resumeTokenHashB64": "y8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+      "sessionAdmittedB64": "V1MyTQIAAADh4uPk5ebn6A==",
+      "sessionCreditB64": "V1MyVwIAAADh4uPk5ebn6AAAAAIAAABk",
+      "sessionRetiredB64": "V1MyRgIAAADh4uPk5ebn6A==",
+      "sessionRetiredRelaySessionIdB64": "4eLj5OXm5+g=",
+      "signatureB64": "SNkMe+GnnxZlRQM9aIPqN16jPeIoEs8WkZUuQQq7KDu0fYVC9rXRP7L2nYGsUVbFv5kZvIaE1X8v1c5MxqiJBg==",
+      "stopChallengeB64": "V1MyUQICAAByc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKEAAAAAZVPxIA==",
+      "stopChallengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+      "stopChallengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+      "stopExpiresAt": "1700000032",
+      "stopIdB64": "YmNkZWZnaGlqa2xtbm9wcQ==",
+      "stopInitB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+      "stopPreimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXN0b3AAtVW+68OSeLBZTpU+QEFCQ0RFRkdISUpLTE1OTyRCoKA4o9ukVCbfe33CT8SWrDtrVYLJh9u0x+EJrR2Nof7+Y7n3HerCZXgyCuayHWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKEAAAAAZVPxIA==",
+      "stopProofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+      "stopSignatureB64": "6KNlsNW8tGkctNIjRJ52FMumDe9p5tBc3JSXCVax3UuzD16rPHJCBi3KLk31gFyjJseVE6XpLgKxj/5jH6w3Bw==",
+      "stoppedB64": "V1MyWQIAAABiY2RlZmdoaWprbG1ub3Bx",
+      "stoppedErrorB64": "V1MyRQIAAAsAAAAA"
+    },
+    {
       "cases": [
         {
           "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
@@ -1352,6 +1410,2990 @@
         }
       ],
       "name": "relay-control-proof-authentication",
+      "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
+    },
+    {
+      "cases": [
+        {
+          "name": "register/canonical",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": true
+        },
+        {
+          "name": "register/truncated",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "register/trailing-byte",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/foreign-magic",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MycgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/next-wire-version",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgMAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/reserved-byte-6",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/reserved-byte-7",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAG1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/missing-capacity",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register/zero-frames",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/zero-bytes",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "register/zero-share-id",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAAAAAAAAAAAAAAAAABAQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-0",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "",
+          "accepted": false
+        },
+        {
+          "name": "register/length-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "Vw==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-2",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1M=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-3",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1My",
+          "accepted": false
+        },
+        {
+          "name": "register/length-4",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-5",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgI=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-6",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-7",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-8",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-9",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1",
+          "accepted": false
+        },
+        {
+          "name": "register/length-10",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1VQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-11",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb4=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-12",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7r",
+          "accepted": false
+        },
+        {
+          "name": "register/length-13",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rww==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-14",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5I=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-15",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4",
+          "accepted": false
+        },
+        {
+          "name": "register/length-16",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-17",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFk=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-18",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlO",
+          "accepted": false
+        },
+        {
+          "name": "register/length-19",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-20",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-21",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5A",
+          "accepted": false
+        },
+        {
+          "name": "register/length-22",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-23",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUI=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-24",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJD",
+          "accepted": false
+        },
+        {
+          "name": "register/length-25",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDRA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-26",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREU=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-27",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVG",
+          "accepted": false
+        },
+        {
+          "name": "register/length-28",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGRw==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-29",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0g=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-30",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJ",
+          "accepted": false
+        },
+        {
+          "name": "register/length-31",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-32",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSks=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-33",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktM",
+          "accepted": false
+        },
+        {
+          "name": "register/length-34",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-35",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU4=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-36",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5P",
+          "accepted": false
+        },
+        {
+          "name": "register/length-37",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-38",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEI=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-39",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKg",
+          "accepted": false
+        },
+        {
+          "name": "register/length-40",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-41",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDg=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-42",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij",
+          "accepted": false
+        },
+        {
+          "name": "register/length-43",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij2w==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-44",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26Q=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-45",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RU",
+          "accepted": false
+        },
+        {
+          "name": "register/length-46",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-47",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt8=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-48",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97",
+          "accepted": false
+        },
+        {
+          "name": "register/length-49",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-50",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcI=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-51",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJP",
+          "accepted": false
+        },
+        {
+          "name": "register/length-52",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-53",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEM=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-54",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMO",
+          "accepted": false
+        },
+        {
+          "name": "register/length-55",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-56",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-57",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0q",
+          "accepted": false
+        },
+        {
+          "name": "register/length-58",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-59",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQk=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-60",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlk",
+          "accepted": false
+        },
+        {
+          "name": "register/length-61",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-62",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqw=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-63",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2",
+          "accepted": false
+        },
+        {
+          "name": "register/length-64",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-65",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKE=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-66",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe",
+          "accepted": false
+        },
+        {
+          "name": "register/length-67",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7Q==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-68",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SM=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-69",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ",
+          "accepted": false
+        },
+        {
+          "name": "register/length-70",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ9w==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-71",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ910=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-72",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911w",
+          "accepted": false
+        },
+        {
+          "name": "register/length-73",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-74",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsak=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-75",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-76",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0Q==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-77",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0Uo=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-78",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpX",
+          "accepted": false
+        },
+        {
+          "name": "register/length-79",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-80",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkQ=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-81",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTS",
+          "accepted": false
+        },
+        {
+          "name": "register/length-82",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-83",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD0=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-84",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2W",
+          "accepted": false
+        },
+        {
+          "name": "register/length-85",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wyw==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-86",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8M=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-87",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8Mv",
+          "accepted": false
+        },
+        {
+          "name": "register/length-88",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-89",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbs=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-90",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbux",
+          "accepted": false
+        },
+        {
+          "name": "register/length-91",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtw==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-92",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwQ=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-93",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSy",
+          "accepted": false
+        },
+        {
+          "name": "register/length-94",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-95",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAY=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-96",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4",
+          "accepted": false
+        },
+        {
+          "name": "register/length-97",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WQ==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-98",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4Wak=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-99",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakN",
+          "accepted": false
+        },
+        {
+          "name": "register/length-100",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-101",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEM=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-102",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN2",
+          "accepted": false
+        },
+        {
+          "name": "register/length-103",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24A==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-104",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24OM=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-105",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONL",
+          "accepted": false
+        },
+        {
+          "name": "register/length-106",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-107",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmk=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-108",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnU",
+          "accepted": false
+        },
+        {
+          "name": "register/length-109",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-110",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgY=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-111",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX",
+          "accepted": false
+        },
+        {
+          "name": "register/length-112",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5Q==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-113",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VU=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-114",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXg",
+          "accepted": false
+        },
+        {
+          "name": "register/length-115",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHg==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-116",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-117",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-118",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-119",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-120",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-121",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-122",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-123",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-124",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-125",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-126",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-127",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-128",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "register/length-129",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "register/length-130",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "register/length-131",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "register/capacity-1-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAQAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "register/capacity-1-18446744073709551615",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAf//////////",
+          "accepted": true
+        },
+        {
+          "name": "register/capacity-18446744073709551615-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiD//////////wAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "register/capacity-9007199254740993-9007199254740995",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAIAAAAAAAAQAgAAAAAAAD",
+          "accepted": true
+        },
+        {
+          "name": "register/capacity-18446744073709551615-18446744073709551615",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiD/////////////////////",
+          "accepted": true
+        },
+        {
+          "name": "register/unknown-mode",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgICAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/zero-share-instance",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAAAAAJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "register/pk-hash-not-deriving-share-id",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJUKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/canonical",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": true
+        },
+        {
+          "name": "resume/truncated",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "resume/trailing-byte",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFAAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/foreign-magic",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MycgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/next-wire-version",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgMBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/reserved-byte-6",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAQC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/reserved-byte-7",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAG1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/missing-capacity",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/zero-frames",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/zero-bytes",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/zero-share-id",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAAAAAAAAAAAAAAAAABAQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-0",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "Vw==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-2",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1M=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-3",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1My",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-4",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-5",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgI=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-6",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIB",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-7",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-8",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-9",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-10",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1VQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-11",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb4=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-12",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7r",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-13",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rww==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-14",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5I=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-15",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-16",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-17",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFk=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-18",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlO",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-19",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-20",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-21",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5A",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-22",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-23",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUI=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-24",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJD",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-25",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDRA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-26",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREU=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-27",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVG",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-28",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGRw==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-29",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0g=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-30",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJ",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-31",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-32",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSks=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-33",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktM",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-34",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-35",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU4=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-36",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5P",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-37",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-38",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEI=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-39",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKg",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-40",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-41",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDg=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-42",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-43",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij2w==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-44",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26Q=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-45",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RU",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-46",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-47",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt8=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-48",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-49",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-50",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcI=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-51",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJP",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-52",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-53",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEM=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-54",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMO",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-55",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-56",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-57",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0q",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-58",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-59",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQk=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-60",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlk",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-61",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-62",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqw=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-63",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-64",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-65",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKE=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-66",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-67",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7Q==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-68",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SM=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-69",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-70",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ9w==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-71",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ910=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-72",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911w",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-73",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-74",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsak=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-75",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-76",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0Q==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-77",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0Uo=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-78",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpX",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-79",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-80",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkQ=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-81",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTS",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-82",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-83",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD0=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-84",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2W",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-85",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wyw==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-86",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8M=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-87",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8Mv",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-88",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-89",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbs=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-90",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbux",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-91",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtw==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-92",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwQ=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-93",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSy",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-94",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-95",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAY=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-96",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-97",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WQ==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-98",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4Wak=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-99",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakN",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-100",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-101",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEM=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-102",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN2",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-103",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24A==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-104",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24OM=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-105",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONL",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-106",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-107",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmk=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-108",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnU",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-109",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-110",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgY=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-111",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-112",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5Q==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-113",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VU=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-114",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXg",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-115",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHg==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-116",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-117",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-118",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-119",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-120",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-121",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-122",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-123",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-124",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-125",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-126",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-127",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-128",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-129",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-130",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "resume/length-131",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "resume/capacity-1-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAQAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "resume/capacity-1-18446744073709551615",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAAf//////////",
+          "accepted": true
+        },
+        {
+          "name": "resume/capacity-18446744073709551615-1",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiD//////////wAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "resume/capacity-9007199254740993-9007199254740995",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAIAAAAAAAAQAgAAAAAAAD",
+          "accepted": true
+        },
+        {
+          "name": "resume/capacity-18446744073709551615-18446744073709551615",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiD/////////////////////",
+          "accepted": true
+        },
+        {
+          "name": "resume/unknown-mode",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgICAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/zero-share-instance",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAAAAAJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "resume/pk-hash-not-deriving-share-id",
+          "frame": "WS2R",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJUKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/canonical",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": true
+        },
+        {
+          "name": "join/truncated",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "join/trailing-byte",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFAAA==",
+          "accepted": false
+        },
+        {
+          "name": "join/foreign-magic",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MyagIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/next-wire-version",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgMAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-5",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIBAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-6",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAQC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/reserved-byte-7",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAG1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/missing-capacity",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/zero-frames",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/zero-bytes",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "join/zero-share-id",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAEAFA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-0",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "",
+          "accepted": false
+        },
+        {
+          "name": "join/length-1",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "Vw==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-2",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1M=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-3",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1My",
+          "accepted": false
+        },
+        {
+          "name": "join/length-4",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySg==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-5",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgI=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-6",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-7",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-8",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-9",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1",
+          "accepted": false
+        },
+        {
+          "name": "join/length-10",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1VQ==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-11",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb4=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-12",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7r",
+          "accepted": false
+        },
+        {
+          "name": "join/length-13",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rww==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-14",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5I=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-15",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4",
+          "accepted": false
+        },
+        {
+          "name": "join/length-16",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-17",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFk=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-18",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlO",
+          "accepted": false
+        },
+        {
+          "name": "join/length-19",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlQ==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-20",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-21",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4A",
+          "accepted": false
+        },
+        {
+          "name": "join/length-22",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-23",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAA=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-24",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-25",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-26",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-27",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-28",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-29",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAA=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-30",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-31",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-32",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAA=",
+          "accepted": false
+        },
+        {
+          "name": "join/length-33",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAA",
+          "accepted": false
+        },
+        {
+          "name": "join/length-34",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEA==",
+          "accepted": false
+        },
+        {
+          "name": "join/length-35",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAEAAAAAAAEAE=",
+          "accepted": false
+        },
+        {
+          "name": "join/capacity-1-1",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAQAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "join/capacity-1-18446744073709551615",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AAAAAAAAAAf//////////",
+          "accepted": true
+        },
+        {
+          "name": "join/capacity-18446744073709551615-1",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT7//////////wAAAAAAAAAB",
+          "accepted": true
+        },
+        {
+          "name": "join/capacity-9007199254740993-9007199254740995",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT4AIAAAAAAAAQAgAAAAAAAD",
+          "accepted": true
+        },
+        {
+          "name": "join/capacity-18446744073709551615-18446744073709551615",
+          "frame": "WS2J",
+          "direction": "client-to-relay",
+          "encodedB64": "V1MySgIAAAC1Vb7rw5J4sFlOlT7/////////////////////",
+          "accepted": true
+        }
+      ],
+      "name": "relay-capacity-frame-decoding"
+    },
+    {
+      "cases": [
+        {
+          "name": "fresh-at-last-live-second",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": true
+        },
+        {
+          "name": "fresh-at-expiry",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "resume-at-last-live-second",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1++CRPtvFerqb+KB/au1DiO8CRFmKyvBBzM7yzFdUsA9INbxLKIERXN1eBAl/P/qP2kfTWpLrAl+az4DQKivKwk=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": true
+        },
+        {
+          "name": "fresh-proof-claims-resume",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-proof-claims-fresh",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1++CRPtvFerqb+KB/au1DiO8CRFmKyvBBzM7yzFdUsA9INbxLKIERXN1eBAl/P/qP2kfTWpLrAl+az4DQKivKwk=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-answers-resume-challenge",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-answers-register-challenge",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1++CRPtvFerqb+KB/au1DiO8CRFmKyvBBzM7yzFdUsA9INbxLKIERXN1eBAl/P/qP2kfTWpLrAl+az4DQKivKwk=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-with-resume-domain",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1y5litOTFRgLq01cjXdpOmCNjEBm85LTDNU0RGSY7wjU0ASp5kHzytgm7Dt5Q9ecQv6l/wBskZC7QgqfcWWorAs=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "resume-signed-with-register-domain",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt14btLgn9jc9PVMzN92Smmh0vWV8Bc0aU4PZtGUYZ9lCsnFOKahTotxlhBNvP8HGXJxsleL3lRiy2kOVa4c6yRg0=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-for-another-relay",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1488WznVhHusMIY/dVYIfcGOOVKQ4DT81FIk5qs5GdBHGrXU2b3u5s65ZzuHV+BSZoE8mVVAMy6Swi9c8XS/VA8=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signed-by-foreign-key",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAACMpjFFkHoubF+z3AeRwBibglLaPkFDcEs7LKTlJvJd0dakWTLkEBjc+BvB6HHfagQBORSUr4OIvryO/BljGGVhbIGZI+OYPii2Wjg5asv5tkF+F84X7JLIFNtCp/LGCQ0=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-signature-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10nZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-share-instance-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5BQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-descriptor-digest-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEIOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-resume-token-hash-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2WysMvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-id-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AAIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-nonce-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ICIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-challenge-expiry-substitution",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "fresh-replays-stop-signature",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "stop-at-last-live-second",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": true
+        },
+        {
+          "name": "stop-at-expiry",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000032",
+          "authenticated": false
+        },
+        {
+          "name": "stop-answers-register-challenge",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 0,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-addressed-to-another-relay",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJesO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1zJDTCkP3H7Swr+phpTd7snLDvAZVfDwXxT7fiMiSqv0evgxjKjDkBKoihl5cFu/nvBQBZnMbt75HpNwLQrUcQg=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-id-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdY2NkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-share-instance-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5BQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-challenge-nonce-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "g4OEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+ijZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-signed-by-foreign-key",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAACMpjFFkHoubF+z3AeRwBibglLaPkFDcEs7LKTlJvJd0fbzroGjXBzrr39+QdUtPOY8rZ+xYjwaxuj9soIycMyb0YW8+uckbqs8ZgDw2kogYyChQgMcO5Emek1TSspJTQ4=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-signature-substitution",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1+mjZbDVvLRpHLTSI0SedhTLpg3vaebQXNyUlwlWsd1Lsw9eqzxyQgYtyi5N9YBcoybHlROl6S4CsY/+Yx+sNwc=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "stop-replays-registration-signature",
+          "operation": "stop",
+          "initB64": "V1MyWAIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdYmNkZWZnaGlqa2xtbm9wcQ==",
+          "challengePurpose": 2,
+          "challengeIdB64": "cnN0dXZ3eHl6e3x9fn+AgQ==",
+          "challengeNonceB64": "goOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKE=",
+          "challengeExpiresAt": "1700000032",
+          "proofB64": "V1MyVgIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000031",
+          "authenticated": false
+        },
+        {
+          "name": "mode-0-capacity-axis-0",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEQAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "mode-0-capacity-axis-8",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFB",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "mode-0-capacity-not-signed",
+          "operation": "registration",
+          "initB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 0,
+          "challengeIdB64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+          "challengeNonceB64": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+          "challengeExpiresAt": "1700000030",
+          "proofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1/W7ilHFp3427wBJ/jBh0zTf2KLJ/IfUCPUb2AcO9uAC5es2GRXZLXWRHyVVwzalolT9XcGaVXVLjKOId5TPgQ4=",
+          "nowUnixSeconds": "1700000029",
+          "authenticated": false
+        },
+        {
+          "name": "mode-1-capacity-axis-0",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEQAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1++CRPtvFerqb+KB/au1DiO8CRFmKyvBBzM7yzFdUsA9INbxLKIERXN1eBAl/P/qP2kfTWpLrAl+az4DQKivKwk=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "mode-1-capacity-axis-8",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFB",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1++CRPtvFerqb+KB/au1DiO8CRFmKyvBBzM7yzFdUsA9INbxLKIERXN1eBAl/P/qP2kfTWpLrAl+az4DQKivKwk=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        },
+        {
+          "name": "mode-1-capacity-not-signed",
+          "operation": "registration",
+          "initB64": "V1MyUgIBAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "challengePurpose": 1,
+          "challengeIdB64": "AgMEBQYHCAkKCwwNDg8QEQ==",
+          "challengeNonceB64": "QkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGE=",
+          "challengeExpiresAt": "1700000031",
+          "proofB64": "V1MyUAIBAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt18a0HprP1KF0j+XLm+UeK+ZKT9TYOjNiJA/ZU1cHNu7o93/vZUVwtgvLcQ5Ry620mnZzLcEPGvN3zUErUi/5xwc=",
+          "nowUnixSeconds": "1700000030",
+          "authenticated": false
+        }
+      ],
+      "name": "relay-capacity-proof-authentication",
+      "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
+    },
+    {
+      "cases": [
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "valid-object",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": true,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "relayUploadAuthorized": true,
+          "signatureB64": "SNkMe+GnnxZlRQM9aIPqN16jPeIoEs8WkZUuQQq7KDu0fYVC9rXRP7L2nYGsUVbFv5kZvIaE1X8v1c5MxqiJBg=="
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAAAB/w==",
+          "name": "opaque-byte",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EqBAK5qoZQNC2Y7sxzUZhQuu9vVGHExuS2TgYmHgy64nLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxKgQCuaqGUDQtmO7Mc1GYULrvb1RhxMbktk4GJh4MuuJy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt15zOaDXHiAmvZ3t2qGIOeBY8tESKPQqLdzBrkR6DftLzAnz3/X1VX/gsy6Sb0oHOrK7XmT3+GFVNYUMJhW/5fQY=",
+          "relayUploadAuthorized": true,
+          "signatureB64": "nM5oNceICa9ne3aoYg54Fjy0RIo9Cot3MGuRHoN+0vMCfPf9fVVf+CzLpJvSgc6srteZPf4YVU1hQwmFb/l9Bg=="
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "previous-object-version",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/ENjBnxul3lMFhUBkCs18xBnTHuT+1Q0Qc46EYI3pAmaTLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxDYwZ8bpd5TBYVAZArNfMQZ0x7k/tUNEHOOhGCN6QJmky8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1yAbzUnNZMbEu0hK+6CWHrJwztC/2nw+OcDZxqVI6SPGP+6Qn4TcDkC4FhBDtz14dUtCrA8E8obf4slk1+oFYA8=",
+          "relayUploadAuthorized": true,
+          "signatureB64": "IBvNSc1kxsS7SEr7oJYesnDO0L/afD45wNnGpUjpI8Y/7pCfhNwOQLgWEEO3PXh1S0KsDwTyht/iyWTX6gVgDw=="
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwEAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=",
+          "name": "invalid-object-flags",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EEht47QBhDWshrW22SdR0GWIn00sIX0VDntxWUBGPsbXLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxBIbeO0AYQ1rIa1ttknUdBliJ9NLCF9FQ57cVlARj7G1y8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1wdX8R4e3UISdLz9+t1Kd0ox2eY7YQgz/8T/CPY6aiS6Y5lZEKhiXlb90lckkWTQUgv/2KHcL1TU2SuymX9N9A0=",
+          "relayUploadAuthorized": true,
+          "signatureB64": "B1fxHh7dQhJ0vP363Up3SjHZ5jthCDP/xP8I9jpqJLpjmVkQqGJeVv3SVySRZNBSC//YodwvVNTZK7KZf030DQ=="
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAM=",
+          "name": "invalid-object-signature",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EeETre6hqpVQNevD420dWZiVMYjNsUXFfCslHLVxldGvLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxHhE63uoaqVUDXrw+NtHVmYlTGIzbFFxXwrJRy1cZXRry8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt15Q+4KBjdcRDMzJTWEdZSCByP/PqBML/hY1yiY8kjsOIEG5V5rDAbYiyi3863Qsa7IH+G5jXPquc9mpm95tkuQI=",
+          "relayUploadAuthorized": true,
+          "signatureB64": "lD7goGN1xEMzMlNYR1lIIHI/8+oEwv+FjXKJjySOw4gQblXmsMBtiLKLfzrdCxrsgf4bmNc+q5z2amb3m2S5Ag=="
+        },
+        {
+          "descriptorUploadB64": "V1MyVQIAAAAAAADjAwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAM=",
+          "name": "digest-substitution",
+          "preimageB64": "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EQw4BzSo9CWRmrLawod7tIxn3XXCxqcDRSldiRNJQPZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4AAAAAAAAAEAAAAAAAEAFA",
+          "receiverObjectValid": false,
+          "registerInitB64": "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxEMOAc0qPQlkZqy2sKHe7SMZ911wsanA0UpXYkTSUD2Wy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiAAAAAAAAAAEAAAAAAAEAFA",
+          "registerProofB64": "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt10jZDHvhp58WZUUDPWiD6jdeoz3iKBLPFpGVLkEKuyg7tH2FQva10T+y9p2BrFFWxb+ZGbyGhNV/L9XOTMaoiQY=",
+          "relayUploadAuthorized": false,
+          "signatureB64": "SNkMe+GnnxZlRQM9aIPqN16jPeIoEs8WkZUuQQq7KDu0fYVC9rXRP7L2nYGsUVbFv5kZvIaE1X8v1c5MxqiJBg=="
+        }
+      ],
+      "descriptorKeyB64": "QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=",
+      "name": "relay-capacity-descriptor-upload",
+      "registerChallengeB64": "V1MyUQIAAAABAgMEBQYHCAkKCwwNDg8QISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0AAAAAAZVPxHg==",
       "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
     },
     {

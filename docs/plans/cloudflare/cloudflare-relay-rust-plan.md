@@ -44,6 +44,8 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 Implementation progress is tracked in [Rust relay implementation](overview.md).
 The staged [delivery flow contract](delivery-flow-contract.md) defines cumulative
 `WS2B` bytes and separates capacity, sending allowance, consumption and settlement.
+Handshake capacity is now wired into Rust connection ledgers with shared Go/TypeScript
+codecs and vectors. Settlement controls remain next, before coordinated client runtime activation.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
 

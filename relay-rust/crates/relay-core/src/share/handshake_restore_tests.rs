@@ -154,6 +154,41 @@ fn begin_resume(fixture: &Fixture, relay: &mut Relay, slot: u64) -> UnixMillis {
 }
 
 #[test]
+fn resume_declares_a_new_connection_capacity_without_reclaiming_the_old_owner() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let (key, _) = fixture.join(&mut relay, 2);
+    let receipt = receive(&mut relay, key, fixture.at);
+    assert_eq!(
+        relay
+            .submit(&receipt, fixture.at, |_| Submission::Complete)
+            .refusal,
+        None
+    );
+    let old_capacity = relay.connections[&connection(1)].ledger.receive_capacity();
+    let at = begin_resume(&fixture, &mut relay, 3);
+    let resumption = work(&fixture.control(&mut relay, connection(3), "resumeProofB64", at));
+    let _ = complete(&mut relay, &resumption, at);
+    let new_capacity = RegisterInit::decode(&fixture.frame("resumeInitB64"))
+        .unwrap()
+        .receive_capacity();
+    assert_eq!(
+        relay.connections[&connection(3)].ledger.receive_capacity(),
+        Some(new_capacity)
+    );
+    assert_ne!(old_capacity, Some(new_capacity));
+    assert_eq!(
+        relay.connections[&connection(1)].ledger.receive_capacity(),
+        old_capacity
+    );
+    assert_eq!(
+        relay.connections[&connection(1)].ledger.usage().submitted,
+        Counts::new(1, 21)
+    );
+}
+
+#[test]
 fn pending_resume_never_rebinds_to_a_replacement_owner_on_wake() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();

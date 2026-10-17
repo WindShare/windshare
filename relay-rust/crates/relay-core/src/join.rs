@@ -7,9 +7,10 @@ use core::time::Duration;
 
 use crate::{
     clock::UnixMillis,
+    flow::ReceiveCapacity,
     identifiers::{RelayIdentity, ShareId},
     lifecycle::ConnectionRef,
-    wire::{FrameError, Magic, open_reserved},
+    wire::{FrameError, Magic, Writer, open_reserved},
 };
 
 pub(crate) const JOIN_MAGIC: Magic = *b"WS2J";
@@ -28,6 +29,7 @@ pub struct JoinRequest {
     connection: ConnectionRef,
     share: ShareId,
     deadline: UnixMillis,
+    receive_capacity: ReceiveCapacity,
 }
 
 impl JoinRequest {
@@ -35,12 +37,14 @@ impl JoinRequest {
         relay: RelayIdentity,
         connection: ConnectionRef,
         share: ShareId,
+        receive_capacity: ReceiveCapacity,
         now: UnixMillis,
     ) -> Self {
         Self {
             relay,
             connection,
             share,
+            receive_capacity,
             deadline: now.saturating_add(SESSION_ADMISSION_TIMEOUT),
         }
     }
@@ -63,6 +67,11 @@ impl JoinRequest {
         self.share
     }
 
+    #[must_use]
+    pub const fn receive_capacity(&self) -> ReceiveCapacity {
+        self.receive_capacity
+    }
+
     /// Absolute budget from receiving JOIN, including host preparation.
     #[must_use]
     pub const fn deadline(&self) -> UnixMillis {
@@ -74,9 +83,20 @@ impl JoinRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Join {
     share_id: ShareId,
+    receive_capacity: ReceiveCapacity,
 }
 
 impl Join {
+    pub const ENCODED_BYTES: usize = 20 + ReceiveCapacity::ENCODED_BYTES;
+
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
+        let mut out = Writer::with_header(JOIN_MAGIC, 0);
+        out.put(self.share_id.as_bytes());
+        self.receive_capacity.put(&mut out);
+        out.into_frame()
+    }
+
     /// Decodes one complete `WS2J` frame.
     ///
     /// # Errors
@@ -86,9 +106,11 @@ impl Join {
     pub fn decode(encoded: &[u8]) -> Result<Self, FrameError> {
         let mut body = open_reserved(encoded, JOIN_MAGIC)?;
         let share_id = body.array()?;
+        let receive_capacity = ReceiveCapacity::read(&mut body)?;
         body.finish()?;
         Ok(Self {
             share_id: ShareId::new(share_id).ok_or(FrameError::Field)?,
+            receive_capacity,
         })
     }
 
@@ -96,5 +118,10 @@ impl Join {
     #[must_use]
     pub const fn share_id(&self) -> ShareId {
         self.share_id
+    }
+
+    #[must_use]
+    pub const fn receive_capacity(&self) -> ReceiveCapacity {
+        self.receive_capacity
     }
 }

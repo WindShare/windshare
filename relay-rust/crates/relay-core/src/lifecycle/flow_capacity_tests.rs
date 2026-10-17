@@ -43,6 +43,25 @@ fn capacity_configuration_requires_room_for_startup_and_bounded_cleanup() {
 }
 
 #[test]
+fn a_host_policy_alone_cannot_authorize_delivery_before_the_handshake() {
+    let fixture = Fixture::new();
+    let mut engine = fixture.engine();
+    fixture.register(&mut engine);
+    let session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
+    let route = session
+        .check_route(&engine, Direction::ToSender, fixture.at)
+        .unwrap();
+    let mut ledger =
+        ConnectionLedger::<1, _>::new(fixture.relay(), session.key().sender(), limits(), ())
+            .unwrap();
+    assert_eq!(
+        ledger.open(&route, fixture.at),
+        Err(FlowRefusal::CapacityUndeclared)
+    );
+    assert_eq!(ledger.usage(), Usage::default());
+}
+
+#[test]
 fn unused_startup_bytes_do_not_block_admission_when_ordinary_capacity_is_free() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
@@ -150,6 +169,12 @@ fn cumulative_counters_cannot_wrap_after_capacity_is_reclaimed() {
         FlowTrace::default(),
     )
     .unwrap();
+    ledger
+        .declare_capacity(
+            crate::flow::ReceiveCapacity::new(u64::MAX, u64::MAX).unwrap(),
+            fixture.at,
+        )
+        .unwrap();
     let flow = open(
         &mut ledger,
         &engine,
