@@ -42,6 +42,11 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
+The [native lifecycle host](../../../relay-rust/crates/relay-native/README.md) now
+executes real REGISTER/RESUME/STOP connections with SQLite authority, OS entropy
+and host timers. Its Go-codec process scenario verifies ownership recovery and
+permanent STOP across restarts. JOIN/data forwarding and the coordinated client
+runtime cutover remain pending; the Go relay is still the product entry point.
 Connection liveness is implemented in the kernel: client `WS2H` probes receive
 `WS2A`, accepted inbound traffic refreshes the independent silence deadline,
 and connection checkpoints preserve the nonce, last inbound time and original expiry.
