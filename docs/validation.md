@@ -104,6 +104,9 @@ attachment tests cover destination-only writes, admission transitions, replay/no
 partial write retries, close/high-water preservation, host byte budgets and joint recovery.
 Responsibility recovery tests cover missing sockets and manifests, detached-generation
 charges, repeated recovery without renewed budgets/deadlines, and old-generation settlement isolation.
+Retirement scenarios cover repeated reconnects beside a healthy download, bidirectional queue
+discard, independent metadata/frame/byte limits, retained reverse-flow debt and host-injected grace.
+All use injected time; no live Cloudflare retention interval is inferred from them.
 Client runtime cutover and production platform adapters remain unimplemented.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort

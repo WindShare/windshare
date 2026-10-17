@@ -34,7 +34,7 @@ pub struct ConnectionCheckpoint {
 pub(super) enum ConnectionRole {
     Established,
     Closing,
-    Detached,
+    Detached(super::Detached),
     Handshake(HandshakeCheckpoint),
 }
 
@@ -63,8 +63,8 @@ impl CheckpointBudget {
     ///
     /// # Errors
     /// Refuses bounds that could exceed this host's attachment allowance.
-    pub fn check(self, session_limit: usize) -> Result<(), Error> {
-        if ConnectionCheckpoint::maximum_bytes(session_limit)
+    pub fn check(self, retained_flow_limit: usize) -> Result<(), Error> {
+        if ConnectionCheckpoint::maximum_bytes(retained_flow_limit)
             .is_some_and(|maximum| maximum <= self.payload_bytes)
         {
             Ok(())
@@ -90,6 +90,7 @@ impl ConnectionCheckpoint {
                 session.key().receiver() != self.connection
                     || u64::from_be_bytes(*session.key().wire_id().as_bytes()) > self.last_session
             })
+            || matches!(self.role, ConnectionRole::Detached(_)) && !self.sessions.is_empty()
             || matches!(self.role, ConnectionRole::Handshake(_))
                 && (!self.sessions.is_empty() || self.ledger.flows().next().is_some())
         {
@@ -149,7 +150,20 @@ impl Checkpoint {
     }
 
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
-        if self.connections.len() > limits.connections || self.sessions().count() > limits.sessions
+        let retired = self
+            .connections
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.role,
+                    ConnectionRole::Detached(super::Detached::Retired)
+                )
+            })
+            .count();
+        if self.connections.len() > limits.generation_limit()?
+            || retired > limits.retirement.generations()
+            || self.connections.len() - retired > limits.connections
+            || self.sessions().count() > limits.sessions
         {
             return Err(Error::InvalidCheckpoint);
         }
@@ -206,7 +220,12 @@ impl<O: Observer> ShareRelay<O> {
             last_session: self.last_session,
             connection,
             role: match self.connections.get(&connection).map(|entry| &entry.role) {
-                None => ConnectionRole::Detached,
+                None => ConnectionRole::Detached(
+                    *self
+                        .detached
+                        .get(&connection)
+                        .ok_or(Error::InvalidCheckpoint)?,
+                ),
                 Some(Role::Closing) => ConnectionRole::Closing,
                 Some(Role::Established) => ConnectionRole::Established,
                 Some(Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. }) => {

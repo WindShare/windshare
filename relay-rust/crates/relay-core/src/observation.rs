@@ -25,6 +25,15 @@ pub enum RelayDecision {
     Disconnected,
     Closed,
     ResponsibilityReleased,
+    Retired {
+        residual: flow::Counts,
+    },
+    RetirementBlocked {
+        usage: crate::share::ConnectionUsage,
+        residual: flow::Counts,
+        generation_limit: usize,
+        residual_limit: flow::Counts,
+    },
     ResponsibilityRestored {
         communicating: bool,
         usage: flow::Usage,

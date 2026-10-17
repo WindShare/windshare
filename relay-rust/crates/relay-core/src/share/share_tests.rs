@@ -59,6 +59,8 @@ impl Fixture {
         Limits {
             connections: 16,
             sessions: SESSION_LIMIT,
+            retained_flows_per_connection: SESSION_LIMIT,
+            retirement: RetirementPolicy::PhysicalRelease,
             delivery: crate::flow::Limits::new(
                 capacity(16),
                 capacity(8),

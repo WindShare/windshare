@@ -90,6 +90,9 @@ pub fn limits() -> Limits {
     Limits {
         connections: CONNECTION_LIMIT,
         sessions: SESSION_LIMIT,
+        retained_flows_per_connection: SESSION_LIMIT,
+        // The probe establishes no release TTL; it does not select a production risk policy.
+        retirement: windshare_relay_core::share::RetirementPolicy::PhysicalRelease,
         delivery: windshare_relay_core::flow::Limits::new(
             capacity(CONNECTION_FRAMES),
             capacity(2),

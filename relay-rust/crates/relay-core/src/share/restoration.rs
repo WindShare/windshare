@@ -70,7 +70,11 @@ impl<O: Observer> ShareRelay<O> {
         observer: O,
         now: UnixMillis,
     ) -> Result<(Self, Turn), Error> {
-        if limits.connections == 0 || limits.sessions == 0 {
+        if limits.connections == 0
+            || limits.sessions == 0
+            || limits.retained_flows_per_connection == 0
+            || limits.generation_limit().is_err()
+        {
             return Err(Error::Configuration);
         }
         validate_restore(identity, limits, restored)?;
@@ -114,6 +118,7 @@ impl<O: Observer> ShareRelay<O> {
             lifecycle,
             connections: BTreeMap::new(),
             ledgers: BTreeMap::new(),
+            detached: BTreeMap::new(),
             sessions: BTreeMap::new(),
             routes: BTreeMap::new(),
             deadlines: Deadlines::default(),
@@ -134,6 +139,7 @@ impl<O: Observer> ShareRelay<O> {
         relay.restore_sessions(decisions, now, &mut turn);
         relay.action(action, None, now, &mut turn);
         relay.restore_handshakes(restored, now, &mut turn)?;
+        relay.progress_retirements(now);
         relay.expire(now, &mut turn);
         relay.progress_stop(now, &mut turn);
         relay.start_work(now, &mut turn);
@@ -163,7 +169,7 @@ impl<O: Observer> ShareRelay<O> {
                 self.identity.relay,
                 connection,
                 self.limits.delivery,
-                self.limits.sessions,
+                self.limits.retained_flows_per_connection,
                 &snapshot.ledger,
                 Journal::default(),
             )
@@ -193,7 +199,21 @@ impl<O: Observer> ShareRelay<O> {
                 },
                 now,
             );
+            if matches!(
+                snapshot.role,
+                ConnectionRole::Detached(super::Detached::Retired)
+            ) && !ledger.queues_discarded()
+            {
+                return Err(Error::InvalidCheckpoint);
+            }
             self.ledgers.insert(connection, ledger);
+            if !communicating {
+                let state = match snapshot.role {
+                    ConnectionRole::Detached(state) => state,
+                    _ => self.limits.retirement.detached(now),
+                };
+                self.detached.insert(connection, state);
+            }
             if communicating {
                 self.connections.insert(
                     connection,
@@ -208,7 +228,7 @@ impl<O: Observer> ShareRelay<O> {
                 );
             }
         }
-        Ok(())
+        self.validate_retirements()
     }
 
     fn restore_sessions(
@@ -319,7 +339,8 @@ fn validate_restore(
         checkpoint.validate(limits)?;
         for connection in restored.surviving {
             if !checkpoint.connections.iter().any(|entry| {
-                entry.connection == *connection && !matches!(entry.role, ConnectionRole::Detached)
+                entry.connection == *connection
+                    && !matches!(entry.role, ConnectionRole::Detached(_))
             }) {
                 return Err(Error::InvalidCheckpoint);
             }

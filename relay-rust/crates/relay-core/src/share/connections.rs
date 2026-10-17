@@ -32,7 +32,7 @@ impl<O: Observer> ShareRelay<O> {
         if self.ledgers.contains_key(&connection) {
             return Err(Error::UnknownConnection);
         }
-        if self.ledgers.len() >= self.limits.connections {
+        if self.connection_usage().admitted >= self.limits.connections {
             self.trace(Some(connection), RelayDecision::Capacity, now);
             return Err(Error::Capacity);
         }
@@ -43,7 +43,7 @@ impl<O: Observer> ShareRelay<O> {
             self.identity.relay,
             connection,
             self.limits.delivery,
-            self.limits.sessions,
+            self.limits.retained_flows_per_connection,
             Journal::default(),
         )
         .map_err(|_| Error::Configuration)?;
@@ -368,21 +368,31 @@ impl<O: Observer> ShareRelay<O> {
         self.disconnect(connection, now, turn);
         let was_connected = self.connections.remove(&connection).is_some();
         self.deadlines.set(Key::Handshake(connection), None);
-        if was_connected && self.ledgers.contains_key(&connection) {
-            self.checkpointing.changed(connection);
+        if self.ledgers.contains_key(&connection) {
+            self.detached
+                .entry(connection)
+                .or_insert_with(|| self.limits.retirement.detached(now));
+            if was_connected {
+                self.checkpointing.changed(connection);
+            }
         }
-        self.collect_ledger(connection, now);
+        self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Disconnected, now);
     }
 
     pub(super) fn collect_ledger(&mut self, connection: ConnectionRef, now: UnixMillis) {
-        if !self.connections.contains_key(&connection)
+        if matches!(
+            self.detached.get(&connection),
+            Some(super::Detached::Retired | super::Detached::Released)
+        ) && self.generation_quiescent(connection)
             && self
                 .ledgers
                 .get(&connection)
                 .is_some_and(|ledger| ledger.metadata_usage().retained_flows == 0)
         {
             self.ledgers.remove(&connection);
+            self.detached.remove(&connection);
+            self.deadlines.set(Key::Retirement(connection), None);
             self.checkpointing.removed(connection);
             self.deadlines.set(Key::Ledger(connection), None);
             self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
@@ -403,14 +413,17 @@ impl<O: Observer> ShareRelay<O> {
                 self.observer.observe(event);
             }
         }
-        if self.ledgers.remove(&connection).is_some() {
-            self.checkpointing.removed(connection);
+        if self.ledgers.contains_key(&connection) {
+            self.detached.insert(connection, super::Detached::Released);
+            self.checkpointing.changed(connection);
         }
+        self.deadlines.set(Key::Retirement(connection), None);
         self.deadlines.set(Key::Handshake(connection), None);
         self.deadlines.set(Key::Ledger(connection), None);
         for key in affected {
             self.collect_session(key, now, turn);
         }
+        self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Closed, now);
     }
 }
