@@ -66,6 +66,155 @@
       "name": "v2-relay-endpoint-normalization"
     },
     {
+      "cases": [
+        {
+          "name": "root",
+          "relayBaseUrl": "https://relay.example",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://relay.example/v2/ws",
+          "relayIdentityB64": "JUjjzIOuUzyG6zdepvhSSWk7sdq80iaEzqHTlIkNEUY=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "canonical-base",
+          "relayBaseUrl": "HTTPS://RELAY.EXAMPLE:443/base/",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/base/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://relay.example/base/v2/ws",
+          "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "query-bytes-and-order",
+          "relayBaseUrl": "https://relay.example?token=a%2fb%20c+~\u0026flag\u0026token=two\u0026empty=\u0026",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/v2/ws?token=a%2fb%20c+~\u0026flag\u0026token=two\u0026empty=\u0026\u0026share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://relay.example/v2/ws",
+          "relayIdentityB64": "JUjjzIOuUzyG6zdepvhSSWk7sdq80iaEzqHTlIkNEUY=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "query-values-are-not-keys",
+          "relayBaseUrl": "https://relay.example?token=x;share_id=other\u0026next=share_id%3Dx",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/v2/ws?token=x;share_id=other\u0026next=share_id%3Dx\u0026share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://relay.example/v2/ws",
+          "relayIdentityB64": "JUjjzIOuUzyG6zdepvhSSWk7sdq80iaEzqHTlIkNEUY=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "decode-names-once-case-sensitive",
+          "relayBaseUrl": "https://relay.example?share%255fid=x\u0026Share_ID=y\u0026share+id=z\u0026%ff=x",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/v2/ws?share%255fid=x\u0026Share_ID=y\u0026share+id=z\u0026%ff=x\u0026share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://relay.example/v2/ws",
+          "relayIdentityB64": "JUjjzIOuUzyG6zdepvhSSWk7sdq80iaEzqHTlIkNEUY=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "ipv6-escaped-path",
+          "relayBaseUrl": "https://[2001:db8::1]:443/a%2Fb/",
+          "accepted": true,
+          "dialEndpoint": "wss://[2001:db8::1]/a%2Fb/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "wss://[2001:db8::1]/a%2Fb/v2/ws",
+          "relayIdentityB64": "tL88sN/xhKsslz4r7ShXUHRfEuytrnnalwUWLISZLIU=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "local-port",
+          "relayBaseUrl": "http://127.0.0.1:8080/relay",
+          "accepted": true,
+          "dialEndpoint": "ws://127.0.0.1:8080/relay/v2/ws?share_id=-_8AAQIDBAUGBwgJ",
+          "relayIdentityEndpoint": "ws://127.0.0.1:8080/relay/v2/ws",
+          "relayIdentityB64": "HHSk7i5KuqyZHYIPDR01knFzmv9wZKj86db1SqmPjEA=",
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "other-share-same-relay",
+          "relayBaseUrl": "https://relay.example",
+          "accepted": true,
+          "dialEndpoint": "wss://relay.example/v2/ws?share_id=AQEBAQEBAQEBAQEB",
+          "relayIdentityEndpoint": "wss://relay.example/v2/ws",
+          "relayIdentityB64": "JUjjzIOuUzyG6zdepvhSSWk7sdq80iaEzqHTlIkNEUY=",
+          "shareIdRawB64": "AQEBAQEBAQEBAQEB"
+        },
+        {
+          "name": "matching-preconfigured-route",
+          "relayBaseUrl": "https://relay.example?share_id=-_8AAQIDBAUGBwgJ",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "conflicting-preconfigured-route",
+          "relayBaseUrl": "https://relay.example?share_id=other",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "empty-route",
+          "relayBaseUrl": "https://relay.example?share_id=",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "bare-route-key",
+          "relayBaseUrl": "https://relay.example?token=x\u0026share_id",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "duplicate-route",
+          "relayBaseUrl": "https://relay.example?share_id=-_8AAQIDBAUGBwgJ\u0026share_id=-_8AAQIDBAUGBwgJ",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "encoded-route-key",
+          "relayBaseUrl": "https://relay.example?sh%61re%5fid=other",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "mixed-route-keys",
+          "relayBaseUrl": "https://relay.example?share_id=-_8AAQIDBAUGBwgJ\u0026%73hare_id=other",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "invalid-base",
+          "relayBaseUrl": "not a URL",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "invalid-query-escape",
+          "relayBaseUrl": "https://relay.example?token=%xy",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJ"
+        },
+        {
+          "name": "zero-share",
+          "relayBaseUrl": "https://relay.example",
+          "accepted": false,
+          "shareIdRawB64": "AAAAAAAAAAAAAAAA"
+        },
+        {
+          "name": "short-share",
+          "relayBaseUrl": "https://relay.example",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwg="
+        },
+        {
+          "name": "long-share",
+          "relayBaseUrl": "https://relay.example",
+          "accepted": false,
+          "shareIdRawB64": "+/8AAQIDBAUGBwgJAQ=="
+        }
+      ],
+      "name": "v2-relay-share-routing"
+    },
+    {
       "clientBodyB64": "V1MyQwJAQUJDREVGR0hJSktMTU5PwMHCw8TFxsfIycrLzM3Oz5GSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wTSe87jE1xJRLKNJ92Amwe+EMNRYNIBMcqn6FV1SY0Hw=",
       "clientHelloB64": "V1MyQwJAQUJDREVGR0hJSktMTU5PwMHCw8TFxsfIycrLzM3Oz5GSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wTSe87jE1xJRLKNJ92Amwe+EMNRYNIBMcqn6FV1SY0HxemG5UjbGUJNvECB0ITVJSiwNYbAm4Wsnrj9P8N/6DOg==",
       "clientProofB64": "XphuVI2xlCTbxAgdCE1SUosDWGwJuFrJ64/T/Df+gzo=",

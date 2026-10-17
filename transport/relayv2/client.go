@@ -77,9 +77,10 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
 		return nil, err
 	}
-	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
+	endpoint, err := v2.RelayEndpointForShare(config.RelayBaseURL, config.Init.ShareID)
 	if err != nil {
-		return nil, err
+		// Local address conflicts cannot recover by retrying the same registration.
+		return nil, errors.Join(ErrProtocol, err)
 	}
 	if config.Init.Validate() != nil || len(config.SenderPrivateKey) != ed25519.PrivateKeySize {
 		return nil, ErrProtocol
@@ -228,9 +229,9 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
 		return nil, err
 	}
-	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
+	endpoint, err := v2.RelayEndpointForShare(config.RelayBaseURL, config.ShareID)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(ErrProtocol, err)
 	}
 	joinBytes, err := (v2.Join{ShareID: config.ShareID}).MarshalBinary()
 	if err != nil {
@@ -326,9 +327,9 @@ type StopConfig struct {
 // not imply delivery settlement: bytes previously submitted to the network may
 // still arrive on old connections. A lost response can be retried with the same ID.
 func Stop(ctx context.Context, config StopConfig) error {
-	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
+	endpoint, err := v2.RelayEndpointForShare(config.RelayBaseURL, config.ShareID)
 	if err != nil {
-		return err
+		return errors.Join(ErrProtocol, err)
 	}
 	init := v2.StopInit{
 		ShareID: config.ShareID, ShareInstance: config.ShareInstance, PKHash: config.PKHash,
