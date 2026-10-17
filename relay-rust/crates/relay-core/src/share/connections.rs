@@ -75,6 +75,9 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
             .connections
             .get_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
+        if matches!(entry.role, Role::Established | Role::Closing) {
+            return self.delivery_control(connection, frame, now, turn);
+        }
         let role = mem::replace(&mut entry.role, Role::Established);
         let Role::Handshake {
             mut handshake,

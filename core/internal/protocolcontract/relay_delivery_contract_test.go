@@ -17,8 +17,12 @@ const (
 // Build from the layout, not a production codec: three implementations agreeing
 // with one another must not hide an identical truncation or arithmetic mistake.
 func relayDeliveryConsumedVectors(sessionID []byte) map[string]any {
+	return relayDeliveryTotalsVectors(sessionID, "relay-delivery-consumed", "WS2B")
+}
+
+func relayDeliveryTotalsVectors(sessionID []byte, name, magic string) map[string]any {
 	encode := func(frames, encodedBytes uint64) []byte {
-		return slices.Concat([]byte("WS2B"), []byte{wireVersion, 0, 0, 0}, sessionID, u64(frames), u64(encodedBytes))
+		return slices.Concat([]byte(magic), []byte{wireVersion, 0, 0, 0}, sessionID, u64(frames), u64(encodedBytes))
 	}
 	const aboveUint32 = uint64(math.MaxUint32) + 1
 	const aboveSafeInteger = uint64(1<<53) + 1
@@ -77,8 +81,15 @@ func relayDeliveryConsumedVectors(sessionID []byte) map[string]any {
 	add("current-runtime-u32-credit", slices.Concat(
 		[]byte("WS2B"), []byte{wireVersion, 0, 0, 0}, sessionID, u32(2), u32(100),
 	))
+	for _, other := range []string{"WS2B", "WS2N", "WS2S"} {
+		if other != magic {
+			mutated := slices.Clone(valid)
+			copy(mutated, other)
+			add("different-control-"+other, mutated)
+		}
+	}
 	return map[string]any{
-		"name": "relay-delivery-consumed", "relaySessionIdB64": b64(sessionID),
+		"name": name, "relaySessionIdB64": b64(sessionID),
 		"counts": counts, "malformed": malformed,
 	}
 }

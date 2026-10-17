@@ -2,7 +2,7 @@ use crate::{
     challenge::ChallengeSeed,
     clock::UnixMillis,
     error_frame::ErrorFrame,
-    flow::{Counts, FlowKey, Grant, ReceivedFrame, Settlement},
+    flow::{Counts, FlowKey, Grant, ReceivedFrame, SettlementNotice},
     identifiers::{RelaySessionId, ShareId},
     lifecycle::{ConnectionRef, Incarnation, OperationId, Record},
     registration::Registered,
@@ -32,6 +32,7 @@ pub enum Error {
     InvalidCheckpoint,
     CheckpointBusy,
     Flow(crate::flow::Refusal),
+    Frame(crate::wire::FrameError),
     Forward(crate::sessions::ForwardRefusal),
 }
 
@@ -169,7 +170,7 @@ pub enum Control {
     },
     Grant(Grant),
     /// Shares the destination's ordered writer with submitted opaque frames.
-    Settlement(Settlement),
+    Settlement(SettlementNotice),
     Stopped(Stopped),
 }
 

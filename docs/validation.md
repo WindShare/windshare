@@ -92,7 +92,10 @@ barriers, serialized retries, synchronous handoff, stale callbacks, capacity rol
 isolation. Hibernation tests restore sessions, pending handshakes, delivery credit and unsettled
 occupancy together without renewing deadlines. Cumulative WS2B codecs in Rust, Go and TypeScript
 consume shared count-boundary and malformed-frame vectors, independently of runtime windows.
-Handshake capacity, settlement wire controls, runtime cutover and platform adapters remain unimplemented.
+Handshake capacity and distinct WS2N/WS2S settlement controls also consume shared
+Rust/Go/TypeScript vectors. Aggregate wire tests cover retirement/discard ordering,
+exact totals after partial consumption, replay, slot reuse and hibernated expiry.
+Client runtime cutover and platform adapters remain unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 

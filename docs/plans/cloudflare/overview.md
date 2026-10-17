@@ -54,7 +54,9 @@ grace, stopping or permanent stopped facts.
 REGISTER, RESUME and JOIN bind immutable receive capacity to the connection;
 STOP remains independent. Each ledger checks both that declaration and injected
 host policy. The [delivery contract](delivery-flow-contract.md) stages these
-codecs separately from the current Go/browser runtime until settlement is wired.
+codecs separately from the current Go/browser runtime. Settlement codecs and the
+Rust wire-to-ledger path are implemented; the next step is the minimal Cloudflare
+host with coordinated client flow-control activation.
 
 JOIN allocates a non-reused wire ID and reserves both directions before issuing
 either grant. Provisional sessions carry the E2E handshake under an absolute
@@ -67,6 +69,8 @@ Retirement revokes unused credit and requests queue discard before ordered
 settlement. Cleanup deadlines never renew. Session feedback checks only its two
 routes; settling a receiver does not close its shared sender or siblings.
 Lifecycle, handshake, session and settlement deadlines share one indexed schedule.
+`WS2N` freezes submitted totals; `WS2S` confirms consumption or discard, separately
+from `WS2B`. Ordinary feedback cannot acknowledge retirement or bypass queue discard.
 
 Recovery validates lifecycle authority before reinstating sessions and their
 delivery obligations. Checkpoints preserve original deadlines, exact connection
