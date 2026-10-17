@@ -1,4 +1,4 @@
-//! Irreversible STOP transactions and their durable cleanup obligations.
+//! Irreversible STOP transactions, independent of submitted delivery settlement.
 
 use crate::{
     identifiers::{ShareInstance, ShareRoute, StopId},
@@ -11,11 +11,12 @@ use super::{
     StoppedShare,
 };
 
-/// Exact host resources fenced by STOP. Cleanup must never resolve a newer
+/// Exact authority fenced by STOP. Cleanup must never resolve a newer
 /// connection by slot ID or remove the share's permanent stop evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StopCleanup {
-    /// No registration resources exist, including a grace already detached.
+    /// No current registration authority, including a grace already detached.
+    /// Older delivery generations can still have queues and unsettled occupancy.
     None,
     /// An unauthenticated handshake and its exact connection resources.
     Reservation(OperationId),
@@ -35,8 +36,8 @@ impl StopCleanup {
     }
 }
 
-/// The irrevocable stop fact and outstanding cleanup stored together, so a
-/// restart cannot confuse a durable STOP with completed participant retirement.
+/// The irrevocable stop fact and unfinished revocation barrier stored together.
+/// Delivery ledgers survive separately even after this transaction is complete.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PendingStop {
     pub(super) id: OperationId,
@@ -78,7 +79,8 @@ impl PendingStop {
         }
     }
 
-    /// Resources whose retirement must be confirmed before STOPPED.
+    /// Authority whose retirement must be confirmed before STOPPED.
+    /// This does not require release of submitted transport buffers.
     #[must_use]
     pub const fn cleanup(self) -> StopCleanup {
         self.cleanup
@@ -96,9 +98,9 @@ impl PendingStop {
 pub enum StopStep {
     /// Durably establish the stop fact and its cleanup obligation.
     Persist,
-    /// Finish exact participant cleanup and quiesce outstanding writes.
+    /// Confirm revoked authority, discarded queues and quiescent publication writes.
     Retire,
-    /// Durably record that cleanup is complete.
+    /// Durably record that the revocation barrier is complete, not settlement.
     Commit,
 }
 
@@ -117,9 +119,11 @@ pub enum StopWork {
     /// replace its record with `pending.record()`, preserving the exact cleanup
     /// obligation. Do not downgrade an identical final stopped record.
     Persist(PendingStop),
-    /// Retire `pending.cleanup()` and its relay sessions, discard unsent frames
-    /// and descriptor bytes, and quiesce all outstanding publication work.
-    /// Complete only when exact resources and writes are gone. Keep stop evidence.
+    /// Retire `pending.cleanup()` and all old relay authority, discard unsubmitted
+    /// queues (including detached generations), and quiesce publication work.
+    /// Submitted occupancy remains charged in independent delivery ledgers;
+    /// neither connection closure nor settlement is required to finish this step.
+    /// Keep stop evidence throughout cleanup.
     Retire(PendingStop),
     /// Replace only this pending record with `pending.stopped().record()`.
     /// An identical final record also confirms completion. Only confirmed
@@ -150,7 +154,7 @@ impl StopWork {
 /// Evidence for one STOP step, not for the whole transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StopResult {
-    /// The requested durable write or exact cleanup completed.
+    /// The requested durable write or revocation barrier completed.
     Complete,
     /// Failed or ambiguous work: retain the fence and retry this same step.
     Uncertain,
@@ -170,7 +174,8 @@ impl StopAcknowledgement {
         self.connection
     }
 
-    /// The STOPPED frame, available only after durability and cleanup.
+    /// The STOPPED frame, available after durability and the revocation barrier.
+    /// It makes no claim about delivery settlement or already-submitted bytes.
     #[must_use]
     pub const fn acknowledgement(self) -> Stopped {
         self.stopped

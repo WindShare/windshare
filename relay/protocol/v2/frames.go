@@ -275,6 +275,9 @@ func ParseStopProof(encoded []byte) (StopProof, error) {
 	return frame, nil
 }
 
+// Stopped confirms durable permanent revocation and unsubmitted-queue discard.
+// It does not acknowledge delivery settlement or recall already-submitted bytes.
+// StopID identifies the idempotent STOP transaction, not a delivery counter.
 type Stopped struct{ StopID StopID }
 
 func (f Stopped) MarshalBinary() ([]byte, error) {

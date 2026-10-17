@@ -45,8 +45,11 @@ confirmed. The lifecycle alone then permits REGISTERED, JOIN and forwarding;
 the aggregate executes writes and retries without a second readiness state.
 Owner loss enters a fixed grace; RESUME binds to the ownership observed before
 its challenge and replaces only that ownership. STOP immediately revokes
-forwarding, persists its intent, waits for exact participant closure and
-publication quiescence, then commits before acknowledging. The aggregate owns
+forwarding, persists its intent, waits for unsubmitted-queue discard across all
+generations and publication quiescence, then commits before acknowledging.
+Submitted occupancy settles independently; old network bytes can still arrive.
+`STOPPED` never releases capacity, and stopped checkpoints retain unsettled ledgers.
+The aggregate owns
 revocation fanout and ordered I/O; the lifecycle enforces the original activation
 deadline and rejects completions superseded by disconnect, expiry or STOP.
 
@@ -129,7 +132,8 @@ an explicit ownership contract before Cloudflare integration.
 ## Testing
 
 `make rust` runs formatting, Clippy, native coverage, doctests and the core Wasm
-build. Public aggregate scenarios cover durability barriers, STOP races, FIFO
+build. Public aggregate scenarios cover durability barriers, STOP with outstanding
+delivery, duplicate STOP, stopped recovery and late callbacks, FIFO
 handoff, uncertain results, stale callbacks, cancellation, capacity rollback and
 hibernated recovery using injected time without sleeps. Primitive tests retain
 focused protocol and state-machine coverage.

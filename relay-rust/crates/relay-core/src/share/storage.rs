@@ -46,10 +46,9 @@ enum Dispatch {
 }
 
 #[derive(Debug)]
-pub(super) struct StopRetirement {
+pub(super) struct StopBarrier {
     pub work: StopWork,
-    pub connections: Vec<ConnectionRef>,
-    pub quiescing: bool,
+    pub publication: Option<OperationId>,
 }
 
 impl<O: Observer> ShareRelay<O> {
@@ -185,8 +184,10 @@ impl<O: Observer> ShareRelay<O> {
             }
             TaskKind::Quiesce(id) => {
                 self.forget_publication(id);
-                if let Some(retirement) = &mut self.stop_retirement {
-                    retirement.quiescing = false;
+                if let Some(barrier) = &mut self.stop_barrier
+                    && barrier.publication == Some(id)
+                {
+                    barrier.publication = None;
                 }
             }
         }
@@ -220,18 +221,22 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn progress_stop(&mut self, now: UnixMillis, turn: &mut Turn) {
-        let ready = self.stop_retirement.as_ref().is_some_and(|retirement| {
-            !retirement.quiescing
-                && retirement
-                    .connections
-                    .iter()
-                    .all(|connection| !self.ledgers.contains_key(connection))
+        // STOP fences the whole share, including queues from older owners and
+        // detached generations. Settling ledgers keep their charge independently
+        // of this barrier; waiting for their removal would make STOP unfinishable
+        // on hosts that cannot prove transport-buffer release.
+        let ready = self.stop_barrier.as_ref().is_some_and(|barrier| {
+            barrier.publication.is_none()
+                && self
+                    .ledgers
+                    .values()
+                    .all(crate::flow::ConnectionLedger::queues_discarded)
         });
         if ready {
-            let retirement = self.stop_retirement.take().expect("ready cleanup");
+            let barrier = self.stop_barrier.take().expect("ready stop barrier");
             self.lifecycle_event(
                 Event::StopFinished {
-                    work: retirement.work,
+                    work: barrier.work,
                     result: StopResult::Complete,
                 },
                 None,

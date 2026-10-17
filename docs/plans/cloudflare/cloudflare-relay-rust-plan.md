@@ -20,7 +20,7 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 - **统一决策，不统一 I/O 机制。** Rust 引擎统一认证、所有权、会话、恢复、停止和截止时间，并用小型显式状态机约束持久化结果、资源清理与响应确认的处理顺序；原生与 Cloudflare 适配器分别实现最适合平台的转发、排队、背压和并发。不能为了复用代码把原生数据面降到最低共同能力。
 - **Cloudflare 载荷由适配器持有。** 已获许可的不透明数据帧可以在 Rust Worker 适配器中复制为有界 `Vec<u8>`；复制不构成协议语义，也不改变 E2EE 边界。普通数据帧仍不得进入 SQLite、结构化日志、无界应用队列或控制状态机；适配器解析固定头，通过共享内核检查许可与额度，并执行有界转发。零复制只作为后续优化方向。
 - **默认流程零新增操作。** Rust 重写本身不构成用户功能。个人中转首次部署和导入，后续按需同步更新；日常分享不增加操作，也不要求用户选择技术方案。
-- **主动退出即停止。** 发送端先停止本地服务，再使用 `StopAuthority` 有界清理各中转，不无限等待不可达候选。异常断开只保留有界恢复宽限，宽限结束后停止。STOP 仅在持久记录并清理旧代次后确认，且不可逆；提交结果不确定时禁止恢复或重新发布。
+- **主动退出即停止。** 发送端先停止本地服务，再使用 `StopAuthority` 有界清理各中转，不无限等待不可达候选。异常断开只保留有界恢复宽限，宽限结束后停止。STOP 在永久事实持久化、旧许可撤销、未提交队列丢弃和发布写入静止后确认；已提交数据仍可能到达，其占用独立结算。提交结果不确定时禁止恢复或重新发布。
 - **保留现有并行能力。** 保留当前多中转候选和多 Lane 能力；私人 Cloudflare relay 是可选候选。Cloudflare 可按自身容量限制并发，不降低原生服务器能力，也不增加每次分享的选择。
 - **持久化不进入载荷热路径。** SQLite 只保存有界生命周期状态、密封描述符和永久停止标记；不保存、排队或检查不透明内容帧，原生与 Cloudflare 数据帧转发都不执行数据库操作。
 - **以行为和基本负载决定切换。** 当前 Go 中转尚未作为已部署服务运行，不建立迁移、双栈或旧数据兼容义务。Rust 版本先通过真实端到端流程、协议向量、关键状态迁移、正常休眠、下载中部署/重启续传和基本慢连接测试；通过后在同一变更中替换并删除 Go 服务端。性能测量用于发现明显退化，不把未运行过的 Go 实现当作线上基准。
@@ -57,10 +57,14 @@ full release; unknown responsibility refuses restoration. An independent manifes
 detects missing generation records, and detached generations retain capacity until
 settlement or proven release. Restart and empty socket lists cannot refund occupancy.
 
-Next, separate STOP acknowledgement from background resource settlement, updating
-the kernel, protocol and both clients together. STOP cannot recall bytes already
-handed to the network. Before Cloudflare integration, establish how the host retains
-the latest manifest and responsibility records across attachment loss. Whole-share
+STOP acknowledgement now follows durable revocation, unsubmitted-queue discard
+and publication quiescence, independently of delivery settlement. Stopped recovery
+retains submitted occupancy and original deadlines; duplicate STOP and late callbacks
+cannot change that responsibility. Protocol and Go/TypeScript contracts preserve
+the existing wire format and explicitly allow already-submitted bytes to arrive.
+
+Next, establish how the host retains the latest manifest and responsibility records
+across attachment loss, before integrating the minimal Cloudflare host. Whole-share
 reset is a recovery mechanism, not routine isolation of one slow receiver.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。

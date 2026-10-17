@@ -128,7 +128,7 @@ pub enum Refusal {
     InvalidReceiver,
     /// The authenticated STOP names another published or stopping instance.
     StopMismatch,
-    /// STOP is not yet durably committed and fully cleaned up.
+    /// STOP's durable revocation and unsubmitted-queue barrier is incomplete.
     StopPending,
     /// The registration's mode is not the one this event handles.
     UnsupportedMode,
@@ -216,8 +216,9 @@ pub enum Action<'f> {
     /// Execute this STOP phase and report its exact work through
     /// `Event::StopFinished`. No phase authorizes a reply.
     Stop(StopWork),
-    /// Persistence and exact cleanup are complete. Send STOPPED only to this
-    /// connection generation; a lost response is recovered by authenticated retry.
+    /// Permanent revocation, queue discard and publication quiescence are durable.
+    /// Send STOPPED only to this generation; retry recovers a lost response.
+    /// Submitted delivery occupancy remains the independent ledger's responsibility.
     Stopped(StopAcknowledgement),
     /// Lifecycle permits receiver admission using these exact host resources.
     JoinReady(PublishedRegistration),

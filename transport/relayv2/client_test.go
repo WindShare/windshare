@@ -138,14 +138,26 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		<-receiver.Done()
 	})
 
-	t.Run("stop", func(t *testing.T) {
+	t.Run("stop confirms revocation while an old receiver can still drain", func(t *testing.T) {
+		receiverSocket := newScriptedSocket()
+		sessionID := relaySessionID(3)
+		delivery, _ := (v2.DescriptorDelivery{RelaySessionID: sessionID, Object: fixture.descriptor}).MarshalBinary()
+		receiverSocket.respond(delivery)
+		receiver, err := DialReceiver(context.Background(), ReceiverConfig{
+			RelayBaseURL: "https://relay.example", ShareID: fixture.fresh.ShareID,
+			Dial: DialOptions{SocketDialer: receiverSocket.dial},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = receiver.Close() }()
 		socket := newScriptedSocket()
 		socket.respond(challengeFrame(t, v2.ChallengeStop))
 		var stopID v2.StopID
 		stopID[0] = 9
 		stopped, _ := (v2.Stopped{StopID: stopID}).MarshalBinary()
 		socket.respond(stopped)
-		err := Stop(context.Background(), StopConfig{
+		err = Stop(context.Background(), StopConfig{
 			RelayBaseURL: "https://relay.example", ShareID: fixture.fresh.ShareID,
 			ShareInstance: fixture.fresh.ShareInstance, PKHash: fixture.fresh.PKHash,
 			StopID: stopID, SenderPrivateKey: fixture.privateKey,
@@ -156,6 +168,12 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		}
 		assertWriteMagic(t, socket, "WS2X")
 		assertWriteMagic(t, socket, "WS2V")
+		// Submission before remote revocation can outlive the separate STOP exchange.
+		late, _ := (v2.OpaqueRoute{RelaySessionID: sessionID, Ciphertext: []byte("already submitted")}).MarshalBinary()
+		receiverSocket.respond(late)
+		if frame := <-receiver.Channel().Recv(); string(frame) != "already submitted" {
+			t.Fatalf("late submitted frame = %q", frame)
+		}
 	})
 }
 

@@ -418,10 +418,12 @@ export function decodeV2Registered(encoded: Uint8Array): V2Registered {
   })
 }
 
+/** Confirms durable revocation and unsubmitted-queue discard, independently of delivery settlement. */
 export function encodeV2Stopped(stopId: Uint8Array): Uint8Array<ArrayBuffer> {
   return concatBytes([reservedPrefix('WS2Y'), requireBytes(stopId, 16, 'stop ID', true)])
 }
 
+/** Returns the STOP transaction ID; previously submitted bytes may still arrive on old connections. */
 export function decodeV2Stopped(encoded: Uint8Array): Uint8Array<ArrayBuffer> {
   if (encoded.byteLength !== FRAME_BYTES.stopped || !validPrefix(encoded, 'WS2Y')) {
     throw new V2RelayProtocolError('malformed', 'STOPPED has an invalid header or length')

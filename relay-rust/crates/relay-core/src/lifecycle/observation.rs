@@ -102,7 +102,7 @@ pub enum Decision {
         /// Exact old participants, including after a restore.
         cleanup: StopCleanup,
     },
-    /// Permitted STOPPED after all durable and cleanup evidence.
+    /// Permitted STOPPED after durable revocation and unsubmitted-queue discard.
     Stopped,
     /// Removed a grace route whose sender never resumed.
     Lapsed,

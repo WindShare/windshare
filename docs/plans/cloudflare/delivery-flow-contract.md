@@ -118,6 +118,20 @@ queue discard is confirmed, without retaining zero occupancy just to wait for
 `WS2S`; the ordered notice is still sent and its eventual acknowledgement is inert.
 Host/client runtime integration must preserve these ordering and discard rules.
 
+## Permanent STOP and outstanding delivery
+
+`STOPPED` confirms durable revocation, discarded unsubmitted queues and quiescent
+publication writes. It does not wait for `WS2B`, `WS2S` or transport-buffer release;
+already-submitted frames can still arrive. Its 24-byte `WS2Y` encoding carries only
+the existing stop ID, with the same meaning in Rust, Go and TypeScript.
+
+The STOP barrier checks all retained generations, including old owners and detached
+queues. Their settled/discarded state comes from the ledgers, not socket presence.
+Submitted occupancy survives acknowledgement, disconnect, timeout and restart until
+consumption, final settlement or proven release. A stopped record alone cannot
+replace a responsibility checkpoint. Authenticated duplicate STOP acknowledges the
+same permanent fact without changing budgets or reopening routes.
+
 ## Shared evidence
 
 `core/testvectors/v2-session.json` contains `relay-delivery-consumed`, generated

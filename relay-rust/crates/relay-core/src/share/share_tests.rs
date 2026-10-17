@@ -178,12 +178,12 @@ impl Fixture {
         (key, [flows[0], flows[1]])
     }
     fn prepare_stop(&self, relay: &mut Relay) {
+        self.prepare_stop_on(relay, connection(99));
+    }
+    fn prepare_stop_on(&self, relay: &mut Relay, target: ConnectionRef) {
         let at = UnixMillis(unix_seconds(self.text("stopExpiresAt")).start().0 - STOP_BUDGET - 1);
-        assert_eq!(
-            relay.handle(Input::Connected(connection(99)), at).refusal,
-            None
-        );
-        let turn = self.control(relay, connection(99), "stopInitB64", at);
+        assert_eq!(relay.handle(Input::Connected(target), at).refusal, None);
+        let turn = self.control(relay, target, "stopInitB64", at);
         assert!(matches!(
             turn.outputs.as_slice(),
             [Output::ChallengeNeeded(_)]
@@ -365,12 +365,12 @@ fn publication_waits_for_final_durability_and_retries_exact_work() {
 }
 
 #[test]
-fn stop_revokes_pending_receipts_and_acknowledges_only_after_physical_cleanup() {
+fn stop_revokes_pending_receipts_and_waits_for_unsubmitted_queue_discard() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.prepare_stop(&mut relay);
     fixture.register(&mut relay);
-    let (key, _) = fixture.join(&mut relay, 2);
+    let (key, flows) = fixture.join(&mut relay, 2);
     let receipt = receive(&mut relay, key, fixture.at);
     let stop = fixture.stop(&mut relay);
     assert!(
@@ -402,14 +402,21 @@ fn stop_revokes_pending_receipts_and_acknowledges_only_after_physical_cleanup() 
                 ..
             }
     )));
-    let first = relay.handle(Input::Closed(key.receiver()), fixture.at);
+    let disconnected = relay.handle(Input::Disconnected(key.sender()), fixture.at);
+    assert!(
+        !disconnected
+            .outputs
+            .iter()
+            .any(|output| matches!(output, Output::Work(_)))
+    );
+    let first = relay.handle(Input::Discarded(flows[0]), fixture.at);
     assert!(
         !first
             .outputs
             .iter()
             .any(|output| matches!(output, Output::Work(_)))
     );
-    let committed = work(&relay.handle(Input::Closed(key.sender()), fixture.at));
+    let committed = work(&relay.handle(Input::Discarded(flows[1]), fixture.at));
     let acknowledged = complete(&mut relay, &committed, fixture.at);
     assert!(acknowledged.outputs.iter().any(|output| matches!(output, Output::Send { connection: target, control: Control::Stopped(_) } if *target == connection(99))));
     assert!(
@@ -610,3 +617,6 @@ mod settlement;
 
 #[path = "responsibility_tests.rs"]
 mod responsibility;
+
+#[path = "stopping_tests.rs"]
+mod stopping;

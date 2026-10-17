@@ -42,14 +42,15 @@ socket list are not interchangeable with a physical-release receipt. `Restore::r
 also cannot turn unknown cleanup into evidence. Repeated reconnects must not reset
 old occupancy merely because its socket attachment disappeared.
 
-The next design must separate durable authorization revocation, disposal of
-application-owned queues and settlement of transport occupancy. STOP can forbid
-new submissions; it cannot recall bytes already handed to a network or client.
-Normal `WS2B` consumption and `WS2S` settlement remain the supported refund path.
-For unresponsive peers, retain unsettled responsibility until a supported release
-boundary exists, or explicitly change the resource/STOP contract in the kernel,
-protocol and both clients together. Merely renaming `Closed`, guessing a grace
-period or repeatedly resetting the whole share would hide the unresolved issue.
+The kernel now separates STOP's durable revocation and unsubmitted-queue discard
+from transport settlement. `STOPPED` cannot recall bytes already handed to a
+network or client, and does not refund their occupancy. The native probe now
+checks acknowledgement after queue discard and before joining transport tasks;
+the historical evidence above records the earlier completion boundary.
+Normal `WS2B` consumption, `WS2S` settlement and proven release remain the refund
+paths. Unresponsive peers retain responsibility across disconnect/restart.
+Next, establish host retention of the latest manifest and responsibility records
+across attachment loss; resetting the whole share cannot replace that evidence.
 
 The bridge is a tested reset mechanism for this pinned SDK, not a production
 termination policy. Source inspection suggests V8 termination interrupts an active

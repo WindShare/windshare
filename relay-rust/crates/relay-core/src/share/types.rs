@@ -78,10 +78,13 @@ pub enum Input<'a> {
         session: RelaySessionId,
         total: Counts,
     },
+    /// Confirms this exact retired flow's unsubmitted queue is physically gone.
+    /// This advances STOP's barrier without releasing submitted occupancy.
     Discarded(FlowKey),
     /// Communication ended; the generation's resource responsibility survives.
     Disconnected(ConnectionRef),
-    /// Unlike a disconnect notification, this confirms no transport buffer retains bytes.
+    /// Confirms all application queues and transport buffers for this generation
+    /// are released. A close API, socket disappearance or STOPPED is not evidence.
     Closed(ConnectionRef),
     Completed {
         id: WorkId,
@@ -157,7 +160,10 @@ pub enum Output {
     },
     /// Metadata receipt only. Payload ownership never moves into the engine.
     Received(ReceivedFrame),
+    /// Drop unsubmitted payloads, then report Discarded even if the socket is gone.
     Discard(FlowKey),
+    /// Request transport closure. Report Disconnected when communication ends;
+    /// report Closed only with independent evidence that all occupancy is released.
     Close(ConnectionRef),
     Work(Work),
     /// Retry this exact work with platform backoff; it is not automatically successful.
