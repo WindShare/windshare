@@ -1,11 +1,11 @@
-use super::Readiness;
+use super::RuntimeStatus;
 use super::{
-    ConnectionRef, Control, Key, Observer, OperationId, Output, Record, RelayDecision, Role,
-    ShareRelay, Storage, Turn, Work, WorkId, WorkResult,
+    ConnectionRef, Observer, OperationId, Output, Record, RelayDecision, ShareRelay, Storage, Turn,
+    Work, WorkId, WorkResult,
 };
 use crate::{
     clock::UnixMillis,
-    lifecycle::{Event, PublicationResult, PublishedRegistration, StopResult, StopWork},
+    lifecycle::{Event, PublicationResult, StopResult, StopWork},
 };
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AfterWrite {
     None,
-    Registered {
-        registration: PublishedRegistration,
+    Ownership {
+        id: OperationId,
         replaced: Option<ConnectionRef>,
     },
     Stop(StopWork),
@@ -70,7 +70,7 @@ impl<O: Observer> ShareRelay<O> {
             return;
         }
         let Some(sequence) = self.last_work.checked_add(1) else {
-            self.readiness = Readiness::ReloadRequired;
+            self.runtime = RuntimeStatus::ReloadRequired;
             turn.outputs.push(Output::Reload);
             return;
         };
@@ -201,36 +201,11 @@ impl<O: Observer> ShareRelay<O> {
     fn after_write(&mut self, after: AfterWrite, now: UnixMillis, turn: &mut Turn) {
         match after {
             AfterWrite::None => {}
-            AfterWrite::Registered {
-                registration,
-                replaced,
-            } => {
+            AfterWrite::Ownership { id, replaced } => {
                 if let Some(connection) = replaced {
                     self.close(connection, turn);
                 }
-                let connection = registration.owner.connection();
-                if self
-                    .lifecycle
-                    .check_session_owner(registration.owner)
-                    .is_ok()
-                    && self
-                        .connections
-                        .get(&connection)
-                        .is_some_and(|entry| !matches!(entry.role, Role::Closing))
-                {
-                    self.readiness = Readiness::Ready;
-                    let entry = self
-                        .connections
-                        .get_mut(&connection)
-                        .expect("live registration");
-                    entry.reservation = None;
-                    self.deadlines.set(Key::Handshake(connection), None);
-                    Self::send(
-                        turn,
-                        connection,
-                        Control::Registered(registration.acknowledgement()),
-                    );
-                }
+                self.lifecycle_event(Event::OwnershipCommitted(id), None, now, turn);
             }
             AfterWrite::Stop(work) => self.lifecycle_event(
                 Event::StopFinished {

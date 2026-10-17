@@ -1,4 +1,4 @@
-use super::Readiness;
+use super::RuntimeStatus;
 use super::{
     Admission, Connection, ConnectionRef, Control, ControlHandshake, Error, Key, Observer, Output,
     RelayDecision, Role, ShareRelay, Turn,
@@ -26,7 +26,7 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         now: UnixMillis,
     ) -> Result<(), Error> {
-        if self.readiness == Readiness::ReloadRequired {
+        if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         if self.connections.contains_key(&connection) {
@@ -70,7 +70,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        if self.readiness == Readiness::ReloadRequired {
+        if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         let entry = self
@@ -91,20 +91,12 @@ impl<O: Observer> ShareRelay<O> {
             return Err(Error::Unavailable);
         };
         self.checkpointing.changed(connection);
-        let original_deadline = handshake.deadline();
         let step = handshake.receive(frame, now);
         if handshake.phase() != crate::handshake::Phase::Finished {
             transcript.frame(now, frame)?;
         }
-        let deadline = if matches!(
-            step,
-            Step::Complete(Outcome::Publish(_) | Outcome::Resume(_))
-        ) {
-            original_deadline
-        } else {
-            handshake.deadline()
-        };
-        self.deadlines.set(Key::Handshake(connection), deadline);
+        self.deadlines
+            .set(Key::Handshake(connection), handshake.deadline());
         entry.role = Role::Handshake {
             handshake,
             transcript,

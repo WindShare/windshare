@@ -3,6 +3,9 @@
 //! [`crate::share::ShareRelay`] composes this state machine with sessions, delivery,
 //! deadlines and ordered storage completions. Direct users must preserve the
 //! ordering expressed by [`Effects`]; every event checks absolute deadlines.
+//! Publication and RESUME first enter activation: only confirmation of the
+//! exact ownership write makes the route serve and permits REGISTERED. The
+//! original handshake deadline also bounds this final confirmation.
 //!
 //! A publication that expires, loses its owner or has an uncertain result stays
 //! fenced until authoritative rollback. A late success cannot publish it.
@@ -17,6 +20,7 @@
 //! exact participants and publication work, then commits before acknowledging.
 //! The aggregate retains those obligations and applies revocation to sessions.
 
+mod activation;
 mod effect;
 mod observation;
 mod operation;
@@ -25,11 +29,12 @@ mod restoration;
 mod session;
 mod stopping;
 
+pub use activation::OwnershipCommit;
 pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationResult, Refusal};
 pub use observation::{Decision, Observation, ObservedEvent, Observer, Phase};
 pub use operation::{
     ConnectionRef, Incarnation, OperationId, OwnershipEpoch, OwnershipId, Publication,
-    PublishRequest, PublishedRegistration, Reservation, ResumeAttempt, Resumed, Resumption,
+    PublishRequest, PublishedRegistration, Reservation, ResumeAttempt, Resumption,
 };
 pub use record::{
     EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
@@ -61,6 +66,7 @@ enum State {
     Reserved(Pending),
     Publishing(Pending),
     Fenced(UnresolvedPublication),
+    Activating(OwnershipCommit),
     Published(PublishedRegistration),
     // Keeps the lost ownership, so a resume admitted while that owner was
     // live still commits after it disconnects.
@@ -179,6 +185,7 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Reserved(_) => Phase::Reserved,
             State::Publishing(_) => Phase::Publishing,
             State::Fenced(_) => Phase::Fenced,
+            State::Activating(_) => Phase::Activating,
             State::Published(_) => Phase::Published,
             State::Grace(_) => Phase::Grace,
             State::Stopping(_) => Phase::Stopping,
@@ -192,6 +199,7 @@ impl<O: Observer> ShareLifecycle<O> {
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
             State::Reserved(pending) | State::Publishing(pending) => Some(pending.deadline),
+            State::Activating(commit) => Some(commit.deadline),
             State::Grace(route) => Some(route.deadline),
             State::Vacant
             | State::Fenced(_)
@@ -219,7 +227,8 @@ impl<O: Observer> ShareLifecycle<O> {
             } => self.reserve(connection, init, deadline, now),
             Event::Publish(publication) => self.publish(publication),
             Event::PublicationFinished { id, result } => self.finish(id, result),
-            Event::Cancel { id, .. } => self.cancel(id),
+            Event::OwnershipCommitted(id) => self.ownership_committed(id),
+            Event::Cancel { id, .. } => self.cancel(id, now),
             Event::BeginResume {
                 connection,
                 init,
@@ -239,6 +248,7 @@ impl<O: Observer> ShareLifecycle<O> {
         let operation = match &action {
             Action::Reserved(reservation) => Some(reservation.id()),
             Action::ResumeAdmitted(attempt) => Some(attempt.id()),
+            Action::CommitOwnership(commit) => Some(commit.id()),
             Action::Joined(joined) => Some(joined.session.key().admission()),
             Action::Stop(work) => Some(work.pending().id()),
             _ => operation,
@@ -337,17 +347,19 @@ impl<O: Observer> ShareLifecycle<O> {
     }
 
     fn finish(&mut self, id: OperationId, result: PublicationResult) -> Action<'static> {
-        let (unresolved, publishing) = match self.state {
-            State::Publishing(pending) if pending.id == id => (pending.unresolved(), true),
-            State::Fenced(unresolved) if unresolved.id == id => (unresolved, false),
+        let (unresolved, deadline) = match self.state {
+            State::Publishing(pending) if pending.id == id => {
+                (pending.unresolved(), Some(pending.deadline))
+            }
+            State::Fenced(unresolved) if unresolved.id == id => (unresolved, None),
             _ => return Action::Refused(Refusal::StaleOperation),
         };
-        match result {
-            PublicationResult::Aborted => {
+        match (result, deadline) {
+            (PublicationResult::Aborted, _) => {
                 self.state = State::Vacant;
                 Action::Released(id)
             }
-            PublicationResult::Committed if publishing => {
+            (PublicationResult::Committed, Some(deadline)) => {
                 let route = PublishedRoute {
                     relay: self.relay,
                     registration: unresolved.registration,
@@ -356,17 +368,16 @@ impl<O: Observer> ShareLifecycle<O> {
                     owner: route.ownership(OwnershipEpoch::FIRST, id.connection),
                     route,
                 };
-                self.state = State::Published(published);
-                Action::Registered(published)
+                self.commit_ownership(id, published, deadline, None)
             }
-            PublicationResult::Committed | PublicationResult::Uncertain => {
+            (PublicationResult::Committed | PublicationResult::Uncertain, _) => {
                 self.state = State::Fenced(unresolved);
                 Action::Reconcile(id)
             }
         }
     }
 
-    fn cancel(&mut self, id: OperationId) -> Action<'static> {
+    fn cancel(&mut self, id: OperationId, now: UnixMillis) -> Action<'static> {
         match self.state {
             State::Reserved(pending) if pending.id == id => {
                 self.state = State::Vacant;
@@ -377,6 +388,7 @@ impl<O: Observer> ShareLifecycle<O> {
                 Action::Reconcile(id)
             }
             State::Fenced(unresolved) if unresolved.id == id => Action::Reconcile(id),
+            State::Activating(commit) if commit.id == id => self.detach(id.connection(), now),
             _ => Action::Refused(Refusal::StaleOperation),
         }
     }
@@ -403,6 +415,9 @@ impl<O: Observer> ShareLifecycle<O> {
             Ok(incumbent) => incumbent.map(|incumbent| incumbent.ownership),
             Err(refusal) => return Action::Refused(refusal),
         };
+        if matches!(self.state, State::Activating(_)) {
+            return Action::Refused(Refusal::Starting);
+        }
         let Some(sequence) = self.next_sequence() else {
             return Action::Refused(Refusal::SequenceExhausted);
         };
@@ -439,11 +454,12 @@ impl<O: Observer> ShareLifecycle<O> {
             owner: current.route.ownership(epoch, attempt.id.connection),
             route: current.route,
         };
-        self.state = State::Published(registration);
-        Action::Resumed(Resumed {
+        self.commit_ownership(
+            attempt.id,
             registration,
-            replaced: current.live.then_some(current.ownership.connection),
-        })
+            attempt.deadline,
+            current.live.then_some(current.ownership.connection),
+        )
     }
 
     /// Returns the ownership a resume of `registration` would replace now,
@@ -457,6 +473,14 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Fenced(unresolved) => {
                 (unresolved.registration, Err(Refusal::PublicationUncertain))
             }
+            State::Activating(commit) => (
+                commit.route.route.registration,
+                Ok(Incumbent {
+                    ownership: commit.route.ownership(),
+                    route: commit.route.route,
+                    live: true,
+                }),
+            ),
             State::Published(published) => (
                 published.route.registration,
                 Ok(Incumbent {
@@ -491,8 +515,10 @@ impl<O: Observer> ShareLifecycle<O> {
     }
 
     fn detach(&mut self, owner: ConnectionRef, now: UnixMillis) -> Action<'static> {
-        let State::Published(published) = self.state else {
-            return Action::Refused(Refusal::StaleOperation);
+        let published = match self.state {
+            State::Published(published) => published,
+            State::Activating(commit) => commit.registration(),
+            _ => return Action::Refused(Refusal::StaleOperation),
         };
         if published.owner.connection != owner {
             return Action::Refused(Refusal::StaleOperation);
@@ -512,7 +538,9 @@ impl<O: Observer> ShareLifecycle<O> {
         }
         match self.state {
             State::Vacant => Action::Refused(Refusal::NotFound),
-            State::Reserved(_) | State::Publishing(_) => Action::Refused(Refusal::Starting),
+            State::Reserved(_) | State::Publishing(_) | State::Activating(_) => {
+                Action::Refused(Refusal::Starting)
+            }
             State::Fenced(_) => Action::Refused(Refusal::PublicationUncertain),
             State::Published(published) => Action::JoinReady(published),
             State::Grace(_) => Action::Refused(Refusal::SenderDetached),
@@ -538,6 +566,20 @@ impl<O: Observer> ShareLifecycle<O> {
                     Some(pending.id),
                     Expiration::Reconcile(pending.id),
                     Decision::Reconcile,
+                )
+            }
+            State::Activating(commit) if now >= commit.deadline => {
+                let registration = commit.registration();
+                let grace = GraceRoute::new(
+                    registration.route,
+                    registration.owner,
+                    now.saturating_add(SENDER_GRACE),
+                );
+                self.state = State::Grace(grace);
+                (
+                    Some(commit.id),
+                    Expiration::Detached(grace),
+                    Decision::Detached,
                 )
             }
             State::Grace(route) if now >= route.deadline => {

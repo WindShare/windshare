@@ -364,14 +364,20 @@ fn resume_races_retire_only_the_owner_present_when_stop_wins() {
         let attempt = fixture.begin_resume(&mut engine, new_owner);
         let resumption = fixture.authenticate_resume(attempt);
         if resume_first {
-            let Action::Resumed(resumed) = engine
+            let Action::CommitOwnership(commit) = engine
                 .handle(Event::Resume(resumption), fixture.resume_at)
                 .action
             else {
                 panic!("resume wins");
             };
-            assert_eq!(resumed.replaced, Some(old.owner.connection()));
+            assert_eq!(commit.replaced(), Some(old.owner.connection()));
             let work = stop(&fixture, &mut engine, fixture.resume_at);
+            assert_eq!(
+                engine
+                    .handle(Event::OwnershipCommitted(commit.id()), fixture.resume_at)
+                    .action,
+                Action::Refused(Refusal::StaleOperation)
+            );
             assert_eq!(work.pending().cleanup(), StopCleanup::Owner(new_owner));
             assert_eq!(
                 engine

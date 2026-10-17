@@ -21,6 +21,7 @@ pub struct Joined {
 impl<O: Observer> ShareLifecycle<O> {
     pub(crate) const fn ownership_record(&self) -> Option<super::Record> {
         match self.state {
+            State::Activating(commit) => Some(commit.record()),
             State::Published(registration) => Some(registration.record()),
             State::Grace(route) => Some(route.record()),
             _ => None,
@@ -88,7 +89,7 @@ impl<O: Observer> ShareLifecycle<O> {
     /// Why sessions of any ownership other than the current one are retired.
     pub(super) const fn session_revocation_reason(&self) -> RetirementReason {
         match self.state {
-            State::Published(_) => RetirementReason::OwnerReplaced,
+            State::Activating(_) | State::Published(_) => RetirementReason::OwnerReplaced,
             State::Grace(_) => RetirementReason::OwnerDisconnected,
             State::Stopping(_) | State::Stopped(_) => RetirementReason::Stopped,
             State::Vacant | State::Reserved(_) | State::Publishing(_) | State::Fenced(_) => {

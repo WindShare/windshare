@@ -76,6 +76,12 @@ fn resume_revokes_old_permits_before_cleanup_and_late_callbacks_spare_the_succes
         old.check_forward(&engine, permit, fixture.resume_at)
             .is_err()
     );
+    let commit = ownership_commit(effects);
+    assert_eq!(
+        fixture.join(&mut engine, fixture.resume_at).action,
+        Action::Refused(Refusal::Starting)
+    );
+    committed_registration(&mut engine, commit.id(), fixture.resume_at);
     let mut fresh = join(
         &fixture,
         &mut engine,
@@ -225,7 +231,7 @@ fn losing_the_owner_revokes_every_old_session_without_waiting_for_grace() {
     );
     assert_eq!(engine.phase(), Phase::Grace);
     let resumed = fixture.resume(&mut engine, connection(1, 2));
-    assert!(matches!(resumed.action, Action::Resumed(_)));
+    assert!(matches!(resumed.action, Action::CommitOwnership(_)));
     // A delayed disconnect cleanup keeps its original cause after a resume.
     let delayed = second.handle(
         &engine,

@@ -200,6 +200,31 @@ impl Fixture {
             None
         );
     }
+    fn begin_resume(&self, relay: &mut Relay, slot: u64) -> UnixMillis {
+        let at = UnixMillis(
+            unix_seconds(self.text("resumeExpiresAt")).start().0 - REGISTRATION_BUDGET - 1,
+        );
+        let _ = relay.handle(Input::Connected(connection(slot)), at);
+        let _ = self.control(relay, connection(slot), "resumeInitB64", at);
+        let requested = self.control(relay, connection(slot), "resumeCredentialB64", at);
+        let seed = challenge_seed(
+            self.text("resumeChallengeIdB64"),
+            self.text("resumeChallengeNonceB64"),
+        );
+        assert_eq!(
+            relay
+                .handle(
+                    Input::Challenge {
+                        request: challenge(&requested),
+                        seed
+                    },
+                    at
+                )
+                .refusal,
+            None
+        );
+        at
+    }
     fn stop(&self, relay: &mut Relay) -> Turn {
         self.control(relay, connection(99), "stopProofB64", self.at)
     }
@@ -553,6 +578,9 @@ fn native_actor_can_move_between_executor_threads() {
 
 #[path = "ordering_tests.rs"]
 mod ordering;
+
+#[path = "ownership_tests.rs"]
+mod ownership;
 
 #[path = "handshake_restore_tests.rs"]
 mod handshakes;

@@ -1,4 +1,3 @@
-use super::Readiness;
 use super::{
     Admission, ConnectionRef, Control, Observer, OperationId, ShareRelay, StopRetirement, Turn,
     storage::{AfterWrite, TaskKind},
@@ -21,7 +20,6 @@ impl<O: Observer> ShareRelay<O> {
         let effects = self.lifecycle.handle(event, now);
         self.flush_lifecycle();
         if let Some(revocation) = effects.revocation {
-            self.readiness = Readiness::Hidden;
             let ids: Vec<_> = self.sessions.keys().copied().collect();
             for id in ids {
                 self.session_event(id, SessionEvent::Revoke(revocation), now, turn);
@@ -29,6 +27,10 @@ impl<O: Observer> ShareRelay<O> {
         }
         if let Some(expiration) = effects.expiration {
             match expiration {
+                Expiration::Detached(route) => {
+                    self.close(route.lost().connection(), turn);
+                    self.action(Action::Detached(route), None, now, turn);
+                }
                 Expiration::Released(id) => self.close(id.connection(), turn),
                 Expiration::Reconcile(id) => self.reconcile(id, turn),
                 Expiration::Lapsed(_) => self.enqueue(
@@ -71,34 +73,30 @@ impl<O: Observer> ShareRelay<O> {
                     turn,
                 );
             }
-            Action::Registered(registration) => {
-                self.readiness = Readiness::Hidden;
+            Action::CommitOwnership(commit) => {
                 self.enqueue(
                     TaskKind::Write {
-                        next: Some(registration.record()),
-                        after: AfterWrite::Registered {
-                            registration,
-                            replaced: None,
+                        next: Some(commit.record()),
+                        after: AfterWrite::Ownership {
+                            id: commit.id(),
+                            replaced: commit.replaced(),
                         },
                     },
                     turn,
                 );
             }
-            Action::Resumed(resumed) => {
-                self.readiness = Readiness::Hidden;
-                self.enqueue(
-                    TaskKind::Write {
-                        next: Some(resumed.registration.record()),
-                        after: AfterWrite::Registered {
-                            registration: resumed.registration,
-                            replaced: resumed.replaced,
-                        },
-                    },
-                    turn,
-                );
+            Action::Registered(registration) => {
+                let connection = registration.owner.connection();
+                if let Some(entry) = self.connections.get_mut(&connection) {
+                    entry.reservation = None;
+                    Self::send(
+                        turn,
+                        connection,
+                        Control::Registered(registration.acknowledgement()),
+                    );
+                }
             }
             Action::Detached(route) => {
-                self.readiness = Readiness::Hidden;
                 self.enqueue(
                     TaskKind::Write {
                         next: Some(route.record()),
@@ -138,7 +136,6 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     fn stop_work(&mut self, work: StopWork, now: UnixMillis, turn: &mut Turn) {
-        self.readiness = Readiness::Hidden;
         match work {
             StopWork::Persist(pending) => self.enqueue(
                 TaskKind::Write {
