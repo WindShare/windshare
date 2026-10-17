@@ -21,7 +21,7 @@ fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[key.sender(), key.receiver()],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },
@@ -89,7 +89,7 @@ fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() 
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[key.sender(), key.receiver()],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },
@@ -121,7 +121,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
             fixture.identity(2),
             Fixture::limits(),
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[connection(1)],
                 responsibility: Responsibility::Unknown
             },
@@ -136,7 +136,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
             fixture.identity(1),
             Fixture::limits(),
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[connection(1)],
                 responsibility: Responsibility::Checkpoint(&checkpoint)
             },

@@ -122,7 +122,12 @@ impl<O: Observer> ShareRelay<O> {
                                 .ledgers
                                 .values()
                                 .filter(|ledger| ledger.metadata_usage().retained_flows != 0)
-                                .count(),
+                                .count()
+                                + self
+                                    .unavailable
+                                    .values()
+                                    .filter(|bound| **bound != crate::flow::Counts::ZERO)
+                                    .count(),
                         },
                         now,
                     );

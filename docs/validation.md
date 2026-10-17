@@ -102,8 +102,10 @@ Metadata regressions cover lazy handshake allocation, asymmetric sender/receiver
 fanout, runtime slot bounds and sparse checkpoint identity/settlement recovery. Incremental
 attachment tests cover destination-only writes, admission transitions, replay/no-op suppression,
 partial write retries, close/high-water preservation, host byte budgets and joint recovery.
-Responsibility recovery tests cover missing sockets and manifests, detached-generation
-charges, repeated recovery without renewed budgets/deadlines, and old-generation settlement isolation.
+Recovery tests distinguish unknown authority/inventory from lost delivery records. Missing or
+invalid receiver records isolate dependent sessions, retain conservative risk and preserve sibling
+budgets/deadlines. They cover repeated recovery, risk exhaustion, new generations, old-feedback
+isolation, sender-loss fanout and permanent STOP despite delivery-record loss.
 Retirement scenarios cover repeated reconnects beside a healthy download, bidirectional queue
 discard, independent metadata/frame/byte limits, retained reverse-flow debt and host-injected grace.
 All use injected time; no live Cloudflare retention interval is inferred from them.
@@ -112,8 +114,8 @@ Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native write
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort
 controls and a TLS client with a bounded OS receive buffer. The
 [checkpoint probe](../spikes/relay-hosts/checkpoint-recovery.md) adds real-kernel
-hibernation, lost-attachment, detached-ledger and replacement-generation scenarios
-with an explicit SQLite mirror control. Their Cargo workspaces
+hibernation, two-receiver attachment-loss isolation, detached risk reservations and replacement
+generations with an explicit SQLite mirror control. Their Cargo workspaces
 and cloud runs are outside `make rust`; use the documented commands when changing
 host assumptions. A successful object restart is not proof of buffer release.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's

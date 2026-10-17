@@ -24,7 +24,7 @@ pub struct Image {
     pub manifest: Vec<u8>,
     pub records: BTreeMap<String, Vec<u8>>,
     pub writes: u64,
-    pub last_generation: [u64; 2],
+    pub last_generation: [u64; 3],
     pub pending: bool,
 }
 
@@ -36,7 +36,7 @@ impl Image {
             manifest: vec![],
             records: BTreeMap::new(),
             writes: 0,
-            last_generation: [0; 2],
+            last_generation: [0; 3],
             pending: false,
         }
     }
@@ -56,17 +56,26 @@ impl Image {
         let manifest =
             CheckpointManifest::decode(&self.manifest, fixture::limits()).map_err(failure)?;
         let mut records = Vec::new();
-        for &connection in manifest.generations() {
+        for connection in manifest.generations() {
             let bytes = if self.mode == Mode::SqliteMirror {
                 self.records.get(&tag(connection)).cloned()
             } else {
                 match socket(state, connection) {
-                    Some(ws) => read_attachment(&ws)?,
-                    None => self.records.get(&tag(connection)).cloned(),
+                    Some(ws) => read_attachment(&ws).ok().flatten(),
+                    None => None,
                 }
+            };
+            let decoded = bytes
+                .as_deref()
+                .and_then(|bytes| ConnectionCheckpoint::decode(bytes, fixture::limits()).ok());
+            if let Some(record) = decoded.filter(|record| record.connection() == connection) {
+                records.push(record);
+            } else {
+                worker::console_log!(
+                    "{}",
+                    serde_json::json!({"event":"checkpoint_delivery_unavailable", "connection":tag(connection)})
+                );
             }
-            .ok_or_else(|| failure(format!("MissingResponsibility: {}", tag(connection))))?;
-            records.push(ConnectionCheckpoint::decode(&bytes, fixture::limits()).map_err(failure)?);
         }
         Checkpoint::from_connections(&manifest, records, fixture::limits()).map_err(failure)
     }

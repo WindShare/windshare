@@ -29,7 +29,7 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
-        if self.ledgers.contains_key(&connection) {
+        if self.ledgers.contains_key(&connection) || self.unavailable.contains_key(&connection) {
             return Err(Error::UnknownConnection);
         }
         if self.connection_usage().admitted >= self.limits.connections {
@@ -374,6 +374,7 @@ impl<O: Observer> ShareRelay<O> {
                 .or_insert_with(|| self.limits.retirement.detached(now));
             if was_connected {
                 self.checkpointing.changed(connection);
+                self.checkpointing.retention_changed();
             }
         }
         self.progress_retirements(now);
@@ -381,6 +382,19 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn collect_ledger(&mut self, connection: ConnectionRef, now: UnixMillis) {
+        if self.unavailable.get(&connection) == Some(&crate::flow::Counts::ZERO)
+            && self.generation_quiescent(connection)
+            && matches!(
+                self.detached.get(&connection),
+                Some(super::Detached::Released | super::Detached::Retired)
+            )
+        {
+            self.unavailable.remove(&connection);
+            self.detached.remove(&connection);
+            self.deadlines.set(Key::Retirement(connection), None);
+            self.checkpointing.removed(connection);
+            self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
+        }
         if matches!(
             self.detached.get(&connection),
             Some(super::Detached::Retired | super::Detached::Released)
@@ -401,6 +415,11 @@ impl<O: Observer> ShareRelay<O> {
 
     pub(super) fn closed(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
         self.detach(connection, now, turn);
+        if let Some(bound) = self.unavailable.get_mut(&connection) {
+            *bound = crate::flow::Counts::ZERO;
+            self.detached.insert(connection, super::Detached::Released);
+            self.checkpointing.retention_changed();
+        }
         let affected: Vec<_> = self
             .ledgers
             .get(&connection)
@@ -416,6 +435,7 @@ impl<O: Observer> ShareRelay<O> {
         if self.ledgers.contains_key(&connection) {
             self.detached.insert(connection, super::Detached::Released);
             self.checkpointing.changed(connection);
+            self.checkpointing.retention_changed();
         }
         self.deadlines.set(Key::Retirement(connection), None);
         self.deadlines.set(Key::Handshake(connection), None);

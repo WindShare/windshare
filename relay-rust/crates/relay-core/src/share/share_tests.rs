@@ -605,6 +605,9 @@ mod handshakes;
 #[path = "recovery_tests.rs"]
 mod recovery;
 
+#[path = "partial_recovery_tests.rs"]
+mod partial_recovery;
+
 #[path = "capacity_tests.rs"]
 mod capacity;
 

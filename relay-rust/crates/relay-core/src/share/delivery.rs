@@ -241,6 +241,11 @@ impl<O: Observer> ShareRelay<O> {
         };
         self.flush_ledger(flow.destination(), now, turn);
         result.map_err(Error::Flow)?;
+        if self.detached.get(&connection) == Some(&super::Detached::Retired) {
+            // Retired receipts change a durable risk reservation, not the live
+            // forwarding ledger. Persist that release before capacity is reused.
+            self.checkpointing.retention_changed();
+        }
         let retirement_affected = self.detached.contains_key(&connection)
             || self.detached.contains_key(&flow.permit().source());
         self.collect_session(flow.session(), now, turn);

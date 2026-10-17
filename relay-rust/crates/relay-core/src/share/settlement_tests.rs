@@ -212,7 +212,7 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[key.sender(), key.receiver()],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },
