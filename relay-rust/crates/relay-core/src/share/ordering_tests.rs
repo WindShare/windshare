@@ -14,12 +14,8 @@ fn stopped_restore_waits_for_every_surviving_receiver_before_commit() {
             .refusal,
         None
     );
-    let checkpoint = Checkpoint::decode(
-        &relay.checkpoint().unwrap().encode(),
-        Fixture::limits(),
-        SLOTS,
-    )
-    .unwrap();
+    let checkpoint =
+        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let intent = work(&fixture.stop(&mut relay));
     let record = next_record(&intent);
     let (mut restored, turn) = Relay::restore(

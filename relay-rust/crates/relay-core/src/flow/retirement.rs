@@ -18,7 +18,7 @@ pub enum Feedback {
     Settled(Counts),
 }
 
-impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+impl<O: Observer> ConnectionLedger<O> {
     /// Applies session retirement to the direction targeting this connection.
     ///
     /// Revoked grants are immediately reusable. Accepted payloads remain charged
@@ -43,7 +43,6 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             let Some(mut entry) = ledger
                 .entries
                 .iter()
-                .flatten()
                 .find(|entry| entry.key.session() == retirement.session)
                 .copied()
             else {
@@ -226,7 +225,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
                 return Ok(Counts::ZERO);
             }
             let reclaimed = ledger.usage.total();
-            ledger.entries.fill(None);
+            ledger.entries.clear();
             ledger.usage = super::Usage::default();
             ledger.startup_used = Counts::ZERO;
             ledger.state = ConnectionState::Closed;

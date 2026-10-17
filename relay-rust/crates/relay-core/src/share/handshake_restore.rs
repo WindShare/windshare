@@ -9,7 +9,7 @@ use crate::{
 };
 use alloc::boxed::Box;
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn restore_handshakes(
         &mut self,
         restored: &Restore<'_>,

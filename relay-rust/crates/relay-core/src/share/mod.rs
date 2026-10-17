@@ -61,10 +61,10 @@ enum Role {
 }
 
 #[derive(Debug)]
-struct Connection<const N: usize> {
+struct Connection {
     role: Role,
     reservation: Option<OperationId>,
-    ledger: ConnectionLedger<N, Journal>,
+    ledger: ConnectionLedger<Journal>,
 }
 
 #[derive(Debug)]
@@ -76,11 +76,11 @@ struct AdmissionState {
 
 /// One owner of every control authority. Internal state machines remain independently testable.
 #[derive(Debug)]
-pub struct ShareRelay<const N: usize, O> {
+pub struct ShareRelay<O> {
     identity: Identity,
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
-    connections: BTreeMap<ConnectionRef, Connection<N>>,
+    connections: BTreeMap<ConnectionRef, Connection>,
     sessions: BTreeMap<RelaySessionId, AdmissionState>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
     deadlines: Deadlines,
@@ -93,7 +93,7 @@ pub struct ShareRelay<const N: usize, O> {
     observer: O,
 }
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     /// The caller injects time and serializes control inputs; no runtime is selected here.
     ///
     /// # Errors

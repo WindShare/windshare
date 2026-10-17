@@ -80,6 +80,13 @@ callbacks. Missing or invalid ledger state cannot authorize a surviving socket;
 restoration failure requires closing those sockets. Retired flows retain their
 charges and finish cleanup without recreating sessions or issuing new grants.
 
+Flow metadata uses runtime-bounded, lazily allocated slots. Handshakes allocate
+no slots; receiver connections allocate for their own flows, independently of
+sender fanout. Buffers grow on admission/recovery and are released when empty.
+Stable indices preserve delayed-work identity; checkpoints encode only retained
+flows and their indices. Delivery observations include retained flows, allocated
+slots and the bound, separately from payload occupancy.
+
 ## Testing
 
 `make rust` runs formatting, Clippy, native coverage, doctests and the core Wasm

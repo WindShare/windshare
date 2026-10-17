@@ -9,7 +9,7 @@ use super::{
     delivery::Delivery,
 };
 
-impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+impl<O: Observer> ConnectionLedger<O> {
     /// Reserves startup credit before the first frame, using a live session route.
     ///
     /// Hosts open both directions before advertising initial credit. If opening
@@ -36,7 +36,6 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             if ledger
                 .entries
                 .iter()
-                .flatten()
                 .any(|entry| entry.key.permit == permit)
             {
                 return Err(Refusal::AlreadyOpen);
@@ -56,11 +55,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             {
                 return Err(Refusal::StartupCapacity);
             }
-            let slot = ledger
-                .entries
-                .iter()
-                .position(Option::is_none)
-                .ok_or(Refusal::FlowCapacity)?;
+            let slot = ledger.entries.vacant()?;
             let flow = FlowKey { slot, permit };
             ledger.replace(slot, Some(Delivery::new(flow, credit, startup)));
             ledger.record(input, Decision::Opened(flow), now);

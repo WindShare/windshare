@@ -123,7 +123,7 @@ pub enum ConfigurationError {
     CapacityOrder,
     /// Unsettled resources require a finite, positive timeout.
     EmptyTimeout,
-    /// The host supplied no bounded flow storage.
+    /// The metadata bound must allow at least one retained flow.
     EmptyStorage,
 }
 

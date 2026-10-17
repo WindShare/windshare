@@ -9,7 +9,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 1;
+const FORMAT: u8 = 2;
 impl Checkpoint {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
@@ -43,7 +43,7 @@ impl Checkpoint {
     ///
     /// # Errors
     /// Rejects malformed or oversized checkpoint data. Restore additionally checks authority.
-    pub fn decode(bytes: &[u8], limits: Limits, flow_slots: usize) -> Result<Self, Error> {
+    pub fn decode(bytes: &[u8], limits: Limits) -> Result<Self, Error> {
         let mut body = Reader::new(bytes);
         if field::<1>(&mut body)? != [FORMAT] {
             return Err(Error::InvalidCheckpoint);
@@ -67,8 +67,8 @@ impl Checkpoint {
                 _ => return Err(Error::InvalidCheckpoint),
             };
             let maximum =
-                LedgerCheckpoint::maximum_bytes(flow_slots).ok_or(Error::InvalidCheckpoint)?;
-            let ledger = LedgerCheckpoint::decode(read_block(&mut body, maximum)?, flow_slots)
+                LedgerCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+            let ledger = LedgerCheckpoint::decode(read_block(&mut body, maximum)?, limits.sessions)
                 .map_err(|_| Error::InvalidCheckpoint)?;
             connections.push(ConnectionCheckpoint {
                 connection,
