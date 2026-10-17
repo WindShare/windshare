@@ -58,7 +58,7 @@ The [pressure experiment](../../../spikes/relay-hosts/pressure.md) kept healthy 
 working under 512 MiB open/close loads; it supports continuing Cloudflare integration,
 but establishes neither immediate physical release nor a finite retention deadline.
 
-结论：**保留共享 Rust 语义内核；退役与局部恢复已实现，接下来接通真实客户端下载。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+结论：**保留共享 Rust 语义内核；退役与局部恢复已实现。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 
@@ -110,7 +110,7 @@ Go REGISTER/RESUME/JOIN/STOP and browser JOIN now append the public `share_id` u
 the [relay routing contract](../../协议规范.md#4-分享与接收流程). Existing query bytes and `relay_identity`
 remain unchanged; preconfigured routing parameters are rejected. The Worker must select the
 ShareRelay DO from this hint, and the DO must reject a handshake whose share identity differs.
-The hint grants no authority. Cloudflare host routing and authentication integration remain pending.
+The hint grants no authority.
 
 Cloudflare 对应用队列、活跃连接与会话设置硬上限，并按共享 isolate 的内存峰值留余量。前置实验覆盖慢连接、反复断连及重建，观察残留累积、恢复与健康连接吞吐；未发生 OOM 不证明残留不占资源。容量估计须包含活跃窗口、残留期间旧代次的累计占用及运行时开销；缺少残留寿命上界时，限速不能提供总内存硬保证，重建也不得绕过残留风险控制。异常重连单独限速，不普遍缩小正常窗口；窗口和并发由实测确定，不照搬原生上限或引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建分享额度与恢复、STOP 分离；恢复仍遵守连接限额和异常重连限速，STOP 不受准入额度阻塞。账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
 
@@ -130,9 +130,9 @@ sets session admission and per-connection retained-flow limits to **32**, includ
 unsettled retired flows in each connection's bound, and
 reserves at least **512 bytes** for host serialization/metadata, leaving at most **15,872
 bytes** for the kernel record. `CheckpointBudget::check` verifies the worst encoded
-connection state against this allowance before tracking begins. Recheck the bound
-after the recovery refactor; do not spread accounting across unrelated sockets or
-write delivery counters to SQLite. Native capacities remain independent.
+connection state against this allowance before tracking begins. Do not spread
+accounting across unrelated sockets or write delivery counters to SQLite.
+Native capacities remain independent.
 
 The Worker must store the binary record as an ArrayBuffer/typed byte array and verify
 the actual wrapper's serialized size; a JavaScript number array or base64 expansion
@@ -140,8 +140,7 @@ cannot assume the same budget. Increase the reserved overhead or reduce the Clou
 profile if needed. `flush_checkpoints` replaces complete changed attachments synchronously
 after outputs finish. On partial failure, retain the batch for retry while active.
 If current delivery state cannot be recovered, retire affected generations rather
-than restoring stale credits or claiming physical release. Exercise this isolation
-and repeated reconnects through the real Worker binding before production integration.
+than restoring stale credits or claiming physical release.
 
 ## 部署体验
 

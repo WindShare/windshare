@@ -29,7 +29,7 @@ discard and physical-close confirmations. They preserve ordering on each
 connection and report storage results with the issued work ID. Socket readiness
 waits happen before `submit`; its handoff cannot await or cache authorization.
 Native hosts leave checkpoint tracking disabled and allocate no change journal.
-Production host persistence remains pending; forwarding must not write delivery counters to a database.
+Forwarding must not write delivery counters to a database.
 The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md) uses
 an intentionally per-event SQLite mirror as a control, not as production wiring.
 
@@ -156,8 +156,8 @@ only that receiver; its sibling continues downloading and the affected receiver 
 with a new generation/session. Repeated reconstruction and replayed old settlement retain
 loss reservations. Attachment forwarding performs no SQL writes. The per-event SQLite
 mirror remains a control. Normal hibernation retains exact ledgers; abrupt reset still
-disconnects the whole share. Next is a real client download through a production Rust
-adapter; these bounded fixture transfers do not establish that product flow.
+disconnects the whole share. These bounded fixture transfers do not establish that
+product flow.
 
 ## Testing
 
