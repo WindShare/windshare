@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-17T07:36:14.300Z",
+  "base_commit": "3b7543727cd5c8afb39c79eb46389e10ab48b7c7",
+  "scope": "Real Cloudflare Preview platform probes; no ShareRelay integration or production clients.",
+  "host": {
+    "os": "Windows",
+    "architecture": "x64",
+    "rust": "1.99.0",
+    "node": "24.16.0"
+  },
+  "source_sha256": {
+    "spikes/relay-hosts/cloudflare/src/lib.rs": "e1e57353cdb6a027b4c45bc415fcc6f460054cae000426baa24f7e45694bb104",
+    "spikes/relay-hosts/cloudflare/recovery-entry.mjs": "774a77774c576deb478f42ccbab77c8367fc74c559e2ab96c4923b20fdeff7f5",
+    "spikes/relay-hosts/cloudflare/reset-probe.mjs": "0f5a1712c9d89f90117b3da8b6577fb83bfd68759a7bbd18536ac7761e9c545e",
+    "spikes/relay-hosts/cloudflare/bounded-peer.mjs": "5fe0907406d63e874f4f3c9b7c48e890cd40adfc5e3c3b07f9a1901e999cf39c",
+    "spikes/relay-hosts/cloudflare/probe.mjs": "c97a22d20d8c995f8be1c2f5d45b42d02bca87317485dcddd09c7cba36df9909",
+    "spikes/relay-hosts/cloudflare/wrangler.toml": "0a9d3d1c0212b96192c87fa9c477a31f13eda9e12b785848f0847711b60deb6f",
+    "spikes/relay-hosts/cloudflare/Cargo.toml": "637232a6348afb47018eb49be7ec74cb40336d189be82a51a1bdbe0a8eacc01e",
+    "spikes/relay-hosts/cloudflare/Cargo.lock": "86f9d37d190bf07bc7ae30371ed1aae133bb50a00ff7fdf7742e1643b327100c",
+    "spikes/relay-hosts/cloudflare/package.json": "19738306a9eea94d36811cdcbdaf427fd6e64d6711cda1b9d3b5ba2c9cf18f70",
+    "spikes/relay-hosts/cloudflare/package-lock.json": "b1cf08232029ac8b0ba82fc92a7ef1c0340a689b0b528d7bd2460f1b843ca4b3",
+    "spikes/relay-hosts/native/src/cloudflare_slow_peer.rs": "dcc0dc55ddb0120511a9f5507721252241fc47b2b0606094737c7722bd49648e",
+    "spikes/relay-hosts/native/Cargo.toml": "68a9740e2137573cf59f9f838d6e9fcf8826e01122e7dcf1bf5aec5e1cb8ca6a",
+    "spikes/relay-hosts/native/Cargo.lock": "3d25ff089121ecd640ee888975506b0d63da636a6d1fcb3a2210974d9ed070f2"
+  },
+  "build_artifacts_sha256": {
+    "cloudflare/build/index_bg.wasm": "538355dfa7602c8d44bef335675b9167ba7845cc77e286525a7e3a4888842394",
+    "cloudflare/build/index.js": "cb4577d1881bb0260421aa0baa2dc1a6b119994a811505da14c73bd5914d90ca",
+    "native/.target/release/cloudflare-slow-peer.exe": "46989270dcc266fb37a037c268e2f08fdc8c61d8a3d23f4011de4c4071af5ce3"
+  },
+  "cloudflare": {
+    "worker": "windshare-relay-host-probe",
+    "deployment_id": "7b6653d1-2598-4f8c-b42e-824e66624619",
+    "deployment_created_at": "2026-10-17T07:13:52.312811Z",
+    "compatibility_date": "2026-10-17",
+    "compatibility_flags": [
+      "web_socket_auto_reply_to_close"
+    ],
+    "versions": {
+      "worker": "0.8.7",
+      "worker_build": "0.8.7",
+      "wasm_bindgen": "0.2.129",
+      "js_sys": "0.3.106",
+      "wrangler": "4.151.1",
+      "ws": "8.22.0"
+    },
+    "transport": "TLS WebSocket to a real Preview; native Rustls peer for bounded mode",
+    "frame_bytes": 65536,
+    "burst_frames": 128,
+    "bounded_peer": {
+      "paused_receive_bytes": 8192,
+      "resumed_receive_bytes": 2097152,
+      "drain_timeout_seconds": 20,
+      "tls_provider": "rustls 0.23.46 / ring 0.17.14"
+    },
+    "timing": "Client elapsed time includes reset and one status round trip; failed status has a five-second deadline. Not CPU time or an SLA.",
+    "runs": [
+      {
+        "run": "reset-292626a7-f3e6-4c83-9382-7bf9127512fd",
+        "started_at": "2026-10-17T07:26:28.582Z",
+        "finished_at": "2026-10-17T07:26:31.170Z",
+        "mode": "empty",
+        "route": "control",
+        "close_policy": "close",
+        "reset_http_status": 500,
+        "reset_and_first_status_probe_ms": 840.46,
+        "rust_or_control_status_recovered": true,
+        "before_socket_states": [],
+        "surviving_socket_count": 0,
+        "still_timed_out_after_client_teardown": false,
+        "fresh_object_status": 200,
+        "healthy_same_object_closed": null,
+        "physical_release_proven": false
+      },
+      {
+        "run": "reset-097cc4d2-a91c-4e3c-9b45-67d08c176401",
+        "started_at": "2026-10-17T07:26:31.275Z",
+        "finished_at": "2026-10-17T07:26:54.861Z",
+        "mode": "empty",
+        "route": "bridge-raw",
+        "close_policy": "close",
+        "reset_http_status": 500,
+        "reset_and_first_status_probe_ms": 5331.3875,
+        "rust_or_control_status_recovered": false,
+        "javascript_constructor_reentered": true,
+        "captured_callback_errors": [
+          {
+            "name": "Error",
+            "message": "closure invoked recursively or after being dropped"
+          }
+        ],
+        "before_socket_states": [],
+        "surviving_socket_count": 0,
+        "status_timeout": "TimeoutError: The operation was aborted due to timeout",
+        "still_timed_out_after_client_teardown": true,
+        "fresh_object_status": 200,
+        "healthy_same_object_closed": null,
+        "physical_release_proven": false
+      },
+      {
+        "run": "reset-d5c0ad2e-33b0-4923-bc1c-c14a6bda23d5",
+        "started_at": "2026-10-17T07:30:26.571Z",
+        "finished_at": "2026-10-17T07:30:29.658Z",
+        "mode": "empty",
+        "route": "bridge",
+        "close_policy": "close",
+        "reset_http_status": 500,
+        "reset_and_first_status_probe_ms": 710.9000000000001,
+        "rust_or_control_status_recovered": true,
+        "javascript_constructor_reentered": true,
+        "captured_callback_errors": [],
+        "before_socket_states": [],
+        "surviving_socket_count": 0,
+        "still_timed_out_after_client_teardown": false,
+        "fresh_object_status": 200,
+        "healthy_same_object_closed": null,
+        "physical_release_proven": false
+      },
+      {
+        "run": "reset-87b803f0-0e22-463b-a381-b63f813b7590",
+        "started_at": "2026-10-17T07:25:17.966Z",
+        "finished_at": "2026-10-17T07:25:33.743Z",
+        "mode": "bounded",
+        "route": "bridge",
+        "close_policy": "open",
+        "slow_receive_buffer_bytes": 8192,
+        "reset_http_status": 500,
+        "reset_and_first_status_probe_ms": 890.9241999999995,
+        "rust_or_control_status_recovered": true,
+        "javascript_constructor_reentered": true,
+        "captured_callback_errors": [],
+        "before_socket_states": [
+          {
+            "role": "healthy",
+            "ready_state": 1,
+            "buffered_amount": null
+          },
+          {
+            "role": "slow",
+            "ready_state": 1,
+            "buffered_amount": null
+          }
+        ],
+        "surviving_socket_count": 0,
+        "still_timed_out_after_client_teardown": false,
+        "fresh_object_status": 200,
+        "healthy_same_object_closed": true,
+        "replacement_socket_worked": true,
+        "other_object_socket_survived": true,
+        "old_peer_terminal": {
+          "detail": "WebSocket protocol error: Connection reset without closing handshake",
+          "kind": "error"
+        },
+        "old_peer_received_frames": 128,
+        "old_burst_fully_delivered": true,
+        "physical_release_proven": false
+      },
+      {
+        "run": "reset-80c28b02-bdd8-4041-8e2c-19d067fa95aa",
+        "started_at": "2026-10-17T07:30:29.740Z",
+        "finished_at": "2026-10-17T07:30:43.554Z",
+        "mode": "bounded",
+        "route": "bridge",
+        "close_policy": "close",
+        "slow_receive_buffer_bytes": 8192,
+        "reset_http_status": 500,
+        "reset_and_first_status_probe_ms": 794.0679,
+        "rust_or_control_status_recovered": true,
+        "javascript_constructor_reentered": true,
+        "captured_callback_errors": [],
+        "before_socket_states": [
+          {
+            "role": "healthy",
+            "ready_state": 1,
+            "buffered_amount": null
+          },
+          {
+            "role": "slow",
+            "ready_state": 2,
+            "buffered_amount": null
+          }
+        ],
+        "surviving_socket_count": 0,
+        "still_timed_out_after_client_teardown": false,
+        "fresh_object_status": 200,
+        "healthy_same_object_closed": true,
+        "replacement_socket_worked": true,
+        "other_object_socket_survived": true,
+        "old_peer_terminal": {
+          "detail": {
+            "code": 1000,
+            "reason": "probe close"
+          },
+          "kind": "close"
+        },
+        "old_peer_received_frames": 128,
+        "old_burst_fully_delivered": true,
+        "physical_release_proven": false
+      }
+    ],
+    "original_close_probe_regression": {
+      "run": "close-0b2a0321-dbfb-4a83-a901-67c26a216c47",
+      "result": "observed",
+      "healthy_delivery_ms": 714.5564999999997,
+      "slow_ready_state_at_deadline": 2,
+      "slow_received_frames": 128
+    },
+    "cleanup": {
+      "preview_deleted": true,
+      "command_exit_code": 0,
+      "production_deployment_changed": false
+    }
+  },
+  "conclusions": {
+    "reset_callback_failure": "JavaScript reconstruction succeeded while Rust asynchronous status failed with a captured closure error. Awaiting completion of the Rust future before JavaScript abort avoided the reproduced failure.",
+    "physical_release": "Unproven. All 8 MiB remained deliverable after reconstruction with an 8 KiB receive buffer, with and without a prior close request. The observations cannot locate buffered bytes within the forwarding path.",
+    "isolation": "Reset disconnected a healthy peer on the same object; another object and new connections continued working.",
+    "policy": "Do not map these events to Input::Closed or treat a missing attachment/restart as an occupancy refund. Separate authorization fencing, application queue disposal and transport settlement before production integration."
+  },
+  "source_review": {
+    "workerd_commit": "1568dcf0a34da009f0a5c86b31d3a7f832ede97e",
+    "js_sys_commit": "165586f854c852bcbc4d14d8a75a0a0e0d0abc12",
+    "caveat": "Inspected upstream source, not a verified deployed workerd revision. Interrupted Wasm callback cleanup is a mechanism hypothesis; the captured error and A/B outcomes are observed."
+  },
+  "validation": [
+    "native: cargo fmt --check",
+    "native: cargo clippy --all-targets --all-features --locked -- -D warnings",
+    "native: release build of the optional cloudflare-slow-peer binary",
+    "native: cargo run --release --locked; all three scenarios preserved stale-submission refusal and STOP acknowledgment after cleanup",
+    "cloudflare: cargo fmt --check",
+    "cloudflare: cargo clippy --target wasm32-unknown-unknown --locked -- -D warnings",
+    "node --check: probe.mjs, reset-probe.mjs, recovery-entry.mjs, bounded-peer.mjs",
+    "real Preview: JavaScript reset control, Rust raw reset reproduction, bridge empty/bounded controls and original close-probe regression"
+  ]
+}

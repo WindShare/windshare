@@ -3,6 +3,15 @@ name = "windshare-native-host-probe"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "windshare-native-host-probe"
+
+[features]
+cloud-client = ["dep:rustls", "tokio-tungstenite/rustls-tls-webpki-roots"]
+
+[[bin]]
+name = "cloudflare-slow-peer"
+path = "src/cloudflare_slow_peer.rs"
+required-features = ["cloud-client"]
 
 [workspace]
 
@@ -14,3 +23,4 @@ tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "net", "s
 tokio-tungstenite = "0.30.0"
 futures-util = { version = "0.3", features = ["sink"] }
 socket2 = "0.6"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }

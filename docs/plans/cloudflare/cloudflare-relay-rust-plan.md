@@ -44,12 +44,20 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 Implementation progress is tracked in [Rust relay implementation](overview.md).
 The [2026-10-17 host experiments](../../../spikes/relay-hosts/README.md) support
 keeping native synchronous submission: healthy receivers progressed while a real
-writer stalled. Cloudflare closure is still an unresolved platform boundary:
-`close()`, `CLOSED`, a close callback or an expired Alarm is not sufficient evidence
-for `Input::Closed`. The reset experiment also failed to establish recovery, even
-with an empty-object control. Preserve outstanding charges and STOP fencing until
-a supported release contract or an explicit ownership redesign resolves this;
-do not present timeout-triggered cleanup as implemented.
+writer stalled. Follow-up Preview controls located the reset failure in the Rust
+asynchronous callback path: aborting after the Rust future returns lets the object
+recover. This does not establish buffer release. With an 8 KiB client receive
+buffer, the old connection still delivered all 8 MiB after the new object answered;
+reset also disconnected a healthy peer on the same share. `close()`, `CLOSED`, an
+Alarm or an empty socket list cannot supply `Input::Closed` evidence.
+
+Before Cloudflare integration, separate durable authorization revocation, disposal
+of application-owned queues and transport-occupancy settlement. Preserve unsettled
+charges across disconnect/recovery; do not turn a missing attachment or runtime
+restart into a refund. STOP cannot recall bytes already handed to the network.
+A revised STOP/resource contract must change the kernel, protocol and both clients
+together; the probes have not made that change. Whole-share reset is a recovery
+mechanism, not routine isolation of one slow receiver.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
 
@@ -109,8 +117,11 @@ Each WebSocket attachment contains that destination's complete delivery ledger, 
 handshake and receiver-owned session snapshots. A small replicated share header retains
 the runtime identity and wire-session high-water mark. New admissions refresh the header
 on all surviving sockets; ordinary data and feedback update only affected connections.
-Closed sockets need no tombstone. Surviving sockets require a valid attachment, and the
-kernel validates the assembled state before restoring authority or issuing credit.
+Only connections with proven release need no tombstone. A missing socket attachment
+alone cannot erase unsettled transport responsibility; the Cloudflare ownership
+contract must resolve that case before this layout is integrated. Surviving sockets
+require a valid attachment, and the kernel validates the assembled state before
+restoring authority or issuing credit.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including
