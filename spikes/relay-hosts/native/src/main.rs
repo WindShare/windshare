@@ -63,8 +63,8 @@ async fn sockets(slow: bool) -> (Socket, Socket) {
     let server = async {
         let (stream, _) = listener.accept().await.unwrap();
         stream.set_nodelay(true).unwrap();
-        // STOP must discard queued TCP bytes as well as user-space buffers. Default
-        // TCP close can continue sending after the last application handle is dropped.
+        // Closed evidence requires releasing TCP buffers independently of STOP.
+        // Default TCP close can keep sending after application handles are dropped.
         SockRef::from(&stream)
             .set_linger(Some(Duration::ZERO))
             .unwrap();
@@ -312,7 +312,7 @@ async fn run(healthy: usize, with_slow: bool) -> Value {
         state.stop();
         assert!(
             !state.stop_acknowledged,
-            "no STOP ack before owned writers are gone"
+            "no STOP ack before unsubmitted queues are discarded"
         );
         let mut handed_off = false;
         let now = state.now;
@@ -341,14 +341,14 @@ async fn run(healthy: usize, with_slow: bool) -> Value {
         for flow in std::mem::take(&mut state.discard_requests) {
             state.handle(Input::Discarded(flow));
         }
+        assert!(
+            state.stop_acknowledged,
+            "STOP must not wait for transport release"
+        );
     }
     let cleanup_started = Instant::now();
     let mut paused_client = None;
     for connection in connections {
-        assert!(
-            !relay.lock().unwrap().stop_acknowledged,
-            "STOP acknowledged while a transport owner remained"
-        );
         connection.writer.abort();
         connection.reader.abort();
         joined(connection.writer.await);
@@ -394,7 +394,8 @@ async fn run(healthy: usize, with_slow: bool) -> Value {
         "stop_lock_wait_ns": stop_lock_wait.as_nanos() as u64,
         "stop_revoke_ns": revoke_elapsed.as_nanos() as u64,
         "joined_writer_cleanup_ns": cleanup_elapsed.as_nanos() as u64,
-        "stale_submission_refused": true, "stop_ack_after_cleanup": true,
+        "stale_submission_refused": true, "stop_ack_after_queue_discard": true,
+        "stop_ack_before_transport_release": true,
         "slow_state": slow_state, "slow_peer_terminal": slow_peer_terminal,
         "close_mode": "SO_LINGER=0 after joining both WebSocket halves",
         "milestone_observations": trace_count})

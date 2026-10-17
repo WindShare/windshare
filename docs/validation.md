@@ -81,8 +81,10 @@ consume `v2-session.json`. The per-connection handshake and single-share lifecyc
 reservation, authenticated publication, stale-operation fencing, uncertain host results, owner-loss
 grace and ownership-bound RESUME. The lifecycle's activation barrier keeps JOIN, forwarding and
 REGISTERED behind final persistence, including delayed confirmation, disconnect and STOP races.
-Aggregate JOIN tests preserve absent/stopped refusals. STOP tests cover ordered persistence/cleanup/final commit, uncertain results,
-retry identity, registration/RESUME races and late callbacks. Restoration covers every durable record,
+Aggregate JOIN tests preserve absent/stopped refusals. STOP tests cover ordered persistence/queue discard/final commit,
+acknowledgement with unsettled occupancy, duplicate STOP, uncertain writes, registration/RESUME races
+and late callbacks. Stopped recovery retains charges and deadlines without sockets; only consumption,
+settlement or proven release refunds them. Restoration covers every durable record,
 surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
 pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued
 permits and callbacks, and sibling isolation. Delivery-ledger tests cover startup reservations,

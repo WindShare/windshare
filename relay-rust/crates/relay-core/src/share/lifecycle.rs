@@ -1,5 +1,6 @@
 use super::{
-    Admission, ConnectionRef, Control, Observer, OperationId, ShareRelay, StopRetirement, Turn,
+    Admission, ConnectionRef, Control, Observer, OperationId, RelayDecision, ShareRelay,
+    StopBarrier, Turn,
     storage::{AfterWrite, TaskKind},
 };
 use crate::{
@@ -113,6 +114,22 @@ impl<O: Observer> ShareRelay<O> {
                         ack.connection(),
                         Control::Stopped(ack.acknowledgement()),
                     );
+                    self.trace(
+                        Some(ack.connection()),
+                        RelayDecision::StopAcknowledged {
+                            stop_id: ack.acknowledgement().stop_id(),
+                            unsettled_generations: self
+                                .ledgers
+                                .values()
+                                .filter(|ledger| ledger.metadata_usage().retained_flows != 0)
+                                .count(),
+                        },
+                        now,
+                    );
+                    // STOP has no delivery capacity or continuing control role.
+                    // Closing after the response also makes its recovery record
+                    // terminal instead of masquerading as a data participant.
+                    self.close(ack.connection(), turn);
                 }
             }
             Action::Joined(joined) => self.install_session(joined, now, turn),
@@ -193,10 +210,9 @@ impl<O: Observer> ShareRelay<O> {
                 for &connection in &connections {
                     self.close(connection, turn);
                 }
-                self.stop_retirement = Some(StopRetirement {
+                self.stop_barrier = Some(StopBarrier {
                     work,
-                    connections,
-                    quiescing: operation.is_some(),
+                    publication: operation,
                 });
                 if let Some(id) = operation {
                     self.enqueue(TaskKind::Quiesce(id), turn);
@@ -206,6 +222,6 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn cleanup_deferred(&self) -> bool {
-        self.lifecycle.phase() == Phase::Stopping && self.stop_retirement.is_none()
+        self.lifecycle.phase() == Phase::Stopping && self.stop_barrier.is_none()
     }
 }

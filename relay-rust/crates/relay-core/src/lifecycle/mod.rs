@@ -112,15 +112,15 @@ impl<O: Observer> ShareLifecycle<O> {
     /// only deadline a restore derives, which the host persists so no later
     /// restore extends it. A stored grace keeps its deadline, even a past one
     /// that the next event or timer lapses. A stopping record resumes exact
-    /// cleanup, including surviving connections, before final persistence and
-    /// STOPPED.
+    /// authority revocation and queue discard before final persistence and STOPPED.
+    /// Delivery settlement remains independent of this lifecycle, even when stopped.
     ///
     /// Before returning, `install` receives one [`SessionRestore`] for each
     /// surviving session snapshot, by its index. Only a snapshot of the
     /// re-adopted ownership whose receiver survived, whose admission is still
     /// within its original deadline and that no sibling contradicts becomes a
     /// `Session` again, keeping its permits; every other one is retired alone.
-    /// Delivery ledger restoration, still to come, belongs after this call:
+    /// Delivery ledger restoration belongs after this call:
     /// open flows then revalidate against reinstated sessions, and a retired
     /// snapshot's flows settle like any other retirement.
     ///

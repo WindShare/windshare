@@ -255,7 +255,8 @@ pub enum Record {
     /// Stored before STOP cleanup, retaining its exact participants across
     /// restart. It may become Stopped, never a live route or an absent record.
     Stopping(PendingStop),
-    /// Stored after STOP cleanup and before STOPPED; never removed.
+    /// Stored after the STOP revocation barrier and before STOPPED; never removed.
+    /// This record does not assert that delivery occupancy has been settled.
     Stopped(StoppedShare),
 }
 

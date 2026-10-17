@@ -119,7 +119,10 @@ impl StopProof {
     }
 }
 
-/// `STOPPED` (`WS2Y`): confirms that a STOP is durably committed.
+/// `STOPPED` (`WS2Y`): confirms durable permanent revocation.
+///
+/// Unsubmitted queues are discarded and publication writes are quiescent.
+/// Previously submitted bytes can still arrive; their responsibility settles independently.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Stopped {
     stop_id: StopId,
@@ -133,6 +136,11 @@ impl Stopped {
     #[must_use]
     pub const fn new(stop_id: StopId) -> Self {
         Self { stop_id }
+    }
+
+    #[must_use]
+    pub const fn stop_id(self) -> StopId {
+        self.stop_id
     }
 
     /// Encodes the confirmation sent to the sender.
