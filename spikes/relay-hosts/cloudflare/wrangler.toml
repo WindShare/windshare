@@ -38,6 +38,18 @@ class_name = "ResetControl"
 name = "BRIDGE_PROBE"
 class_name = "BridgeProbe"
 
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["CheckpointProbe"]
+
+[[durable_objects.bindings]]
+name = "CHECKPOINT_PROBE"
+class_name = "CheckpointProbe"
+
+[[previews.durable_objects.bindings]]
+name = "CHECKPOINT_PROBE"
+class_name = "CheckpointProbe"
+
 [previews.observability]
 enabled = true
 

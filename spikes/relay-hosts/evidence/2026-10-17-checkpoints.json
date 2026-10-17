@@ -1,0 +1,1040 @@
+{
+  "started_at": "2026-10-17T10:19:26.133Z",
+  "base": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev",
+  "frame_bytes": 1024,
+  "fixture_clock": "frozen",
+  "physical_release_proven": false,
+  "source": {
+    "sha256": "41d492e6f7330f95357f13b8d7647d06169ef981e28e21428a201839d3db625e",
+    "files": {
+      "core/testvectors/v2-session.json": "2a042c2e111707034dd4535292cd24c99ee8e2fa5173b421dc68375a2501478f",
+      "relay-rust/Cargo.toml": "ab0d4724bfaa9059f6af7688e69c342e5c3d3d5cced746b8b3c4b79bc1d01eae",
+      "relay-rust/crates/relay-core/Cargo.toml": "b78eb6b5a4fbcd7c944d9132667d95916ae8bb0ce7ae316fca1bee9f8117bc3c",
+      "relay-rust/crates/relay-core/src/authentication.rs": "9929f78bb2d1a837d0b869f9a3a53028b9e501c8717e797f573ad4abe974d094",
+      "relay-rust/crates/relay-core/src/challenge.rs": "798893316448ad1ea972d7756d27246b6734e05f9d0063e1acc27e6d15139ecd",
+      "relay-rust/crates/relay-core/src/clock.rs": "7367288a690f913dea40b17eb9af9086648eca3faf9bdc5f180c64a512cb0dbb",
+      "relay-rust/crates/relay-core/src/clock_tests.rs": "0b1f7f3990ed23da40ed0470d1484247bef6b2ea53b6f4610ea381c8d0ce8e03",
+      "relay-rust/crates/relay-core/src/control_vectors_tests.rs": "276191b30638aa7cc1a103df738ccfd638f137752101c41fe2a21c1ba38b7974",
+      "relay-rust/crates/relay-core/src/descriptor_upload.rs": "41ce7fecfa0d4fb9405ebee6259a99a5254b57dce70a5e885f7e9885fdc4ecd9",
+      "relay-rust/crates/relay-core/src/error_frame.rs": "85c748e3ddfa2a5f6ecb0918184c3737a758a4ec4d12e747b5e16be9b319bea5",
+      "relay-rust/crates/relay-core/src/error_frame_tests.rs": "3edb3f8372538c50acd392270cb3407db74fb786a1b27ca31a0a2a8496aae955",
+      "relay-rust/crates/relay-core/src/flow/accounting.rs": "30ae31ae9ad1a53d974dd74ee73ffd32f3a7785fc595c7fed6d5196d73146180",
+      "relay-rust/crates/relay-core/src/flow/capacity.rs": "4246597c8c6353f075c5608632314f365d72e219316eeadc44dd7c10beeac142",
+      "relay-rust/crates/relay-core/src/flow/checkpoint.rs": "62ffcc45a26e78d3c963d42b75fb129375a81c6312d417a524b3c7811e30f40f",
+      "relay-rust/crates/relay-core/src/flow/checkpoint_codec.rs": "5e502f22ea68e6c9f9dc59e67e729de800eae9d072ba4bf1510c59b9d3b6cd5e",
+      "relay-rust/crates/relay-core/src/flow/consumed.rs": "ccbdb9fd0d7110cfa2bf94bd4cdbac6974de7e4a90799036ddcded5fb90ee53a",
+      "relay-rust/crates/relay-core/src/flow/consumed_tests.rs": "03df35748b47db326471dfcfd854fdcc760659ab8d61d423cd95818b3764fca2",
+      "relay-rust/crates/relay-core/src/flow/delivery.rs": "322f3c52f17c807f37113be7965ad7ec63d924436719c21fa610a32d3535c3ef",
+      "relay-rust/crates/relay-core/src/flow/forwarding.rs": "c0d30c46f4d2c0998173d6ba2cd0348f0c91ad4aef1db3eeea29ee4dd7e9fd97",
+      "relay-rust/crates/relay-core/src/flow/mod.rs": "312cb356a482f01ca18ee74f7e48b430794b79027ef41c6d6b0b742815ff69fa",
+      "relay-rust/crates/relay-core/src/flow/observation.rs": "0505d2033227adfeea0b5002f6beec4394b5ed95670a9b0ed22c0efd1b52434f",
+      "relay-rust/crates/relay-core/src/flow/retirement.rs": "9eadc63f289212737cdc15d72dde248dd0ca2b672a20c7a9a377a3b785ac1ef1",
+      "relay-rust/crates/relay-core/src/flow/settlement.rs": "d28b5510d7d512d4e2bda5bf4f28e8341cf18bae4e9dfeee19d3043e00acf455",
+      "relay-rust/crates/relay-core/src/flow/settlement_tests.rs": "0a60e31a740438ac9617659eafaa3e2a1c0a8da635d678871f4ec1f35fc44c6a",
+      "relay-rust/crates/relay-core/src/flow/slots.rs": "caed4d42f54d6d8f2f4c9d5e8234a91527db5cc9f258d34afbeffe0fa40561e3",
+      "relay-rust/crates/relay-core/src/flow/slots_tests.rs": "42505c61ae384a54d1a37e92059b1d693ffc7c66e67f91eb0dc5457d284af4dc",
+      "relay-rust/crates/relay-core/src/flow/totals.rs": "0b058513f5f03f95025e10860a65a551675e0ad2df5afdbde9405104574cc4aa",
+      "relay-rust/crates/relay-core/src/handshake.rs": "da5d803ee8f37a369b9382d66fa4b7f53ea10a9533aeef67c5b8ed3d294e02e3",
+      "relay-rust/crates/relay-core/src/handshake_tests.rs": "234a99cee5cd72fcf9dc2f17043875e308421f4d056eac8ed81d71fdee9aac1d",
+      "relay-rust/crates/relay-core/src/identifiers.rs": "f88e342ddc9266310dd00ebe6bbe673ee0125e1bf84262e59e06a6a1b2f92e16",
+      "relay-rust/crates/relay-core/src/join.rs": "91382cf5f505259c53b1bce0c9c357987c3c35f1b0ac756787aae8ac094a8e2d",
+      "relay-rust/crates/relay-core/src/lib.rs": "cfeb2b6a76772dc5c1b04e079318268375ecb7d16ba710b92ebcb08c37429375",
+      "relay-rust/crates/relay-core/src/lifecycle/activation.rs": "1ea66e8fc5a64b35d988717adcca418cb59f2c5e1d95f9d916a79a12ed492e5a",
+      "relay-rust/crates/relay-core/src/lifecycle/activation_tests.rs": "545f1c6f66d49e671af6a6594b860aafb0f3fe9a3112cbfb1b0a0b6fe0d3e152",
+      "relay-rust/crates/relay-core/src/lifecycle/admission_tests.rs": "121ee6e361f50c993910c5821257cb82f59448514f57863085c8d18d4aa2685d",
+      "relay-rust/crates/relay-core/src/lifecycle/effect.rs": "357d1f5861c9e946882b93c2508f8769af7fb3fb4153a358e8c71b2e03b10691",
+      "relay-rust/crates/relay-core/src/lifecycle/flow_authority_tests.rs": "fe45b541b8ed711f6f75efd9504daac911a7761dd3569601da60412f7195035c",
+      "relay-rust/crates/relay-core/src/lifecycle/flow_capacity_tests.rs": "9ef5a4c921745437ed37a1b3721c5bdf2476bfff7fc69e9a7d41d1a80d196eb0",
+      "relay-rust/crates/relay-core/src/lifecycle/flow_retirement_tests.rs": "b8ddc1f9860991c4a190fdfa74aabac415b79d005acbe7d966a209d3afb7417e",
+      "relay-rust/crates/relay-core/src/lifecycle/flow_storage_tests.rs": "cac5f7bdc3de6197957fed2ecd4e0188bd5641c5b7ab9a7970187050f5e6567b",
+      "relay-rust/crates/relay-core/src/lifecycle/flow_tests.rs": "7df1bc24420d8231ee15213915b1aa9ec4cd83bbaac76ba1e5b3c3eef3b213d0",
+      "relay-rust/crates/relay-core/src/lifecycle/lifecycle_tests.rs": "a2c9f3ab805347d882f96e14956945850e1b73b8539fec2311b2597435b67889",
+      "relay-rust/crates/relay-core/src/lifecycle/mod.rs": "1e002e058d970b3853b82f36b014318d60b202554c2d2acce77404ef1eb1205e",
+      "relay-rust/crates/relay-core/src/lifecycle/observation.rs": "6015d09ff591979b1e3c93a16e863929f3493e422ebb7a10273f75ffa4268cce",
+      "relay-rust/crates/relay-core/src/lifecycle/operation.rs": "2d7a75b1af8e37e8ea76a504ee46d67bd3bd9c022dacc95b46b52c070911cbe5",
+      "relay-rust/crates/relay-core/src/lifecycle/ownership_tests.rs": "a14c4660309eeee19953f47f894fd50292731c3e3db22a3eca6b525141d2c6ef",
+      "relay-rust/crates/relay-core/src/lifecycle/publication_tests.rs": "4b73d99498ffd6d3d83a3ab8334be934c8ce68f3c08aa785665be8a06ff684df",
+      "relay-rust/crates/relay-core/src/lifecycle/record.rs": "cf3df2bfb3ec4301ae85e40bee9dd82569b81f19cfaddfffcc66844de26b53e0",
+      "relay-rust/crates/relay-core/src/lifecycle/record_tests.rs": "64bf75f50b589db77dd925d8f3380dae890bce070215abc8cd70bec1240bee9d",
+      "relay-rust/crates/relay-core/src/lifecycle/restoration.rs": "c87d01f372bc31613cff6af32fcb0d87410d3e0215e32802f0c91acd9f975db2",
+      "relay-rust/crates/relay-core/src/lifecycle/restoration_tests.rs": "6fbecdaf6eea73feb8a07b0c849dc6df4aa6579352782a58103fb2e2569e3050",
+      "relay-rust/crates/relay-core/src/lifecycle/session.rs": "ec8820b3e960c0c4a5cfc1d75c970dd2fae8cac262256f9f0d1740b5b4acb96f",
+      "relay-rust/crates/relay-core/src/lifecycle/session_authority_tests.rs": "d2ad0b99ea52ddb94743e9edc33ff5bc334551f0c35e6a2d4a0cd7fe429207c7",
+      "relay-rust/crates/relay-core/src/lifecycle/session_restoration_tests.rs": "7c96bdb1abd9c0b0134f04a165aa95a49b1462e47597e1b581900a27da779e80",
+      "relay-rust/crates/relay-core/src/lifecycle/session_revocation_tests.rs": "681d786b64b4eca1637e5c57a08480f778477490f7ec1d2358bd10b958c09519",
+      "relay-rust/crates/relay-core/src/lifecycle/session_tests.rs": "5f2767b7bbec8aeb2db4892dd3a21473e96e9bd423b786196f80c84cd8595b4f",
+      "relay-rust/crates/relay-core/src/lifecycle/stop_restoration_tests.rs": "557bb2e4e0b75ad32748078d0f6f0318760f921d38db99705c92272e6168095c",
+      "relay-rust/crates/relay-core/src/lifecycle/stopping.rs": "6b54af5ec9d80d1ca903eae3267bd394fd0efb0737491eb87da96f74bdc86e8a",
+      "relay-rust/crates/relay-core/src/lifecycle/stopping_tests.rs": "647758942932a4207a2334a707a4d97e3d0f183c1561e83266929545f2f99c15",
+      "relay-rust/crates/relay-core/src/observation.rs": "c4d44bd5c85e523920991f89c1b94a475c8f57baa6c80de3fa4b6d239decd356",
+      "relay-rust/crates/relay-core/src/registration.rs": "a7e8c409503b5187b2892bb625d32bff3fb44d294a8fcbed7cf16188f225a8a7",
+      "relay-rust/crates/relay-core/src/registration_tests.rs": "22ad4fc996d3fd69645f46da30248a04bc1357ce040af86cedd954baa5c0e0f8",
+      "relay-rust/crates/relay-core/src/sender_auth.rs": "d106c2a04ef4aba97871fced30bf844c4273a360e18f75248da00cc3ff5d10ab",
+      "relay-rust/crates/relay-core/src/sender_auth_tests.rs": "275ad284841776e515942b451fa8dd5746c1f5fbbff2dd0bb36e576094fc7f99",
+      "relay-rust/crates/relay-core/src/sessions/authority.rs": "fa52052bdf2f10c505b5510dbeb63bd7a818573ff889be32e29f90006e1aa919",
+      "relay-rust/crates/relay-core/src/sessions/effect.rs": "2df0a3a10229f5192b40e848d1e232ff3bbaebda47a31c32cbc434591f790e7b",
+      "relay-rust/crates/relay-core/src/sessions/frames.rs": "444a0bc0a3d2b409c3bed0f79010c9aa9753055ef0e4b4dfeec1a6c0f911b755",
+      "relay-rust/crates/relay-core/src/sessions/frames_tests.rs": "451ab1a219b6bc5a3904b0787bb45e4349a3f235698f46c09a1808ab998aa0c2",
+      "relay-rust/crates/relay-core/src/sessions/mod.rs": "f5eed359282c461d7f04f9f9cd2d5edd0860182da79f0377ea5693fd225373b9",
+      "relay-rust/crates/relay-core/src/sessions/observation.rs": "d8eab4c964e0d59a6d505f380719e6f16f3f2bf01837f8975a7d810afa001dbb",
+      "relay-rust/crates/relay-core/src/sessions/snapshot.rs": "fc97f440f90181692621740fa089afa55a385e23a9abdf6f59a128294189fab8",
+      "relay-rust/crates/relay-core/src/share/capacity_tests.rs": "b4b25043bb241d5e555883aca5b66f9b5ad11fff83659e5eb172560ea9e74160",
+      "relay-rust/crates/relay-core/src/share/checkpoint.rs": "14d38cad4153ca2e8698a5491371c8eff044e4735e63461be6740f5887b05dd7",
+      "relay-rust/crates/relay-core/src/share/checkpoint_codec.rs": "f9978b9cae5141b1de526731842dc19fdbf5e4cad8414fc5cca2e6bca83cacb3",
+      "relay-rust/crates/relay-core/src/share/checkpoint_tests.rs": "dec023cb892c66e4f82b09bf2cc162a74bdc8f75cff1ee2eaa37f58581a21311",
+      "relay-rust/crates/relay-core/src/share/checkpoint_tracking.rs": "3e32eb35fbd3e8461e310477cb4cb9dd5ff609f2722978b4072ecc5910593ccd",
+      "relay-rust/crates/relay-core/src/share/connections.rs": "7260a44d021014c677dea7571ab7f3e23c6932e8bb57e2b11cd9eab74f51421c",
+      "relay-rust/crates/relay-core/src/share/deadlines.rs": "3c0ae460626086d78c80cbfaaff470fe3ef9593339a7964e3ca32f4b1bed7394",
+      "relay-rust/crates/relay-core/src/share/delivery.rs": "6c29576a8848f2df423897fb69c19cb24280c9358bc95292bc13ae2ef54911cc",
+      "relay-rust/crates/relay-core/src/share/handshake_checkpoint.rs": "d085017c23acb60da84d97b1e405fe0376c5b06b3316021abec123314b69997e",
+      "relay-rust/crates/relay-core/src/share/handshake_restore.rs": "c3cabdffa71ff60bca04d1cefc00f6a9d0012ce95ac703dcb14f43bf401bccb2",
+      "relay-rust/crates/relay-core/src/share/handshake_restore_tests.rs": "88b33c6077564b65efb71d4a5fa71ea04e5e52ec38b96267aede4f8489c09866",
+      "relay-rust/crates/relay-core/src/share/lifecycle.rs": "2888d9821349449dcf7600dd5b9b386ddbcebd57b33da44419e9dba5824fb903",
+      "relay-rust/crates/relay-core/src/share/metadata_tests.rs": "afd572935b4b8e3441415f8ff44a2f8a8d0c850781cd3d0b4b540ab149012d54",
+      "relay-rust/crates/relay-core/src/share/mod.rs": "2bfccfd580c06a411a991af1258c1d19ae63e35b91935b182c751e40ba27a8f8",
+      "relay-rust/crates/relay-core/src/share/ordering_tests.rs": "68e506b52d2f7f86f7c189f5bf1f64d9042df8e279240362ad59c2b3a17da9af",
+      "relay-rust/crates/relay-core/src/share/ownership_tests.rs": "9e5451773a11be2e4850cda13af3e9327251d99394d6e5641ac4f864981410b8",
+      "relay-rust/crates/relay-core/src/share/recovery_tests.rs": "830ac86e2b565568ad9be00fe0e18715899b218713ecdf340581b1f378e858ad",
+      "relay-rust/crates/relay-core/src/share/responsibility.rs": "1b497f83606cc95bc448680f9e709774c34668aff7808e3ba221bfa68386a66b",
+      "relay-rust/crates/relay-core/src/share/responsibility_tests.rs": "5feed91443ec7c832dc30754236528dda024e3829a3e2cd3551a5e422716f92c",
+      "relay-rust/crates/relay-core/src/share/restoration.rs": "e6d8a4e73bc3e6653e38869c4f57fc5c4e96e96fcc27470ed79550c107910c52",
+      "relay-rust/crates/relay-core/src/share/sessions.rs": "5a9f2b33d8e81555701b959b583bb1bc8efd9c96b49dec31142403ea0fb32687",
+      "relay-rust/crates/relay-core/src/share/settlement_tests.rs": "0834eeb3fe090ae530f752df83a14abdb864e4cb61072001996ae2e68893fe9b",
+      "relay-rust/crates/relay-core/src/share/share_tests.rs": "89bde5c1bdd4273f0f0fcaa5028e82b520bcede4554dadf0c5879ab4e97f9f40",
+      "relay-rust/crates/relay-core/src/share/stopping_tests.rs": "c57d3cc0419ffd82bba109bd81630ff2ce8e56a08a39d1fb1a4a921076e29efb",
+      "relay-rust/crates/relay-core/src/share/storage.rs": "a1b22eaffb7c0bfbbae4ccb6a316df3c034fe115a440c78dbc9f743950b5ec7b",
+      "relay-rust/crates/relay-core/src/share/types.rs": "2844d9e5e9d3a5d60340cd4203b4c26bdb685ed2a823b1e66e4a6d0443919fb4",
+      "relay-rust/crates/relay-core/src/stop.rs": "401f631498e2596f628c208ea9c7a2e78e71d81bc59dd520a6f94b0a644e8d48",
+      "relay-rust/crates/relay-core/src/stop_tests.rs": "426c360c0acf742f9e7f992f04bb11b6697d881607e12b6476c920ab21d37240",
+      "relay-rust/crates/relay-core/src/test_vectors.rs": "f49117e88412a98a9117f1d0f330bc8c898d14c1bbc868f53e473979c87b2370",
+      "relay-rust/crates/relay-core/src/wire.rs": "bbf041b9b246c28707a3058fba8c9ccfe6090c457f16321409d7e54207f2fd10",
+      "spikes/relay-hosts/cloudflare/Cargo.lock": "c4dd60ba7bdc5cff01ed9d596b5d734facb4fe17b9a40309fd12a328ea40c45e",
+      "spikes/relay-hosts/cloudflare/Cargo.toml": "78dff8fe2022a268d1be9bc75996a79b4c6a6cd6b7a7190f72b632627be2eb35",
+      "spikes/relay-hosts/cloudflare/checkpoint-evidence.mjs": "98eec4ce6e1be89e1e4fa2893fd9e1eb98037bf236ba38618f6026076852323c",
+      "spikes/relay-hosts/cloudflare/checkpoint-probe.mjs": "9a844c38dcd8dd56dcf769fd72c06d4d88d3640ec192a1cc5e736294e709bfeb",
+      "spikes/relay-hosts/cloudflare/package-lock.json": "b1cf08232029ac8b0ba82fc92a7ef1c0340a689b0b528d7bd2460f1b843ca4b3",
+      "spikes/relay-hosts/cloudflare/package.json": "19738306a9eea94d36811cdcbdaf427fd6e64d6711cda1b9d3b5ba2c9cf18f70",
+      "spikes/relay-hosts/cloudflare/recovery-entry.mjs": "9f06f2f033350b0728222bbfb11e525c71e81a3d46c125c02dddc0aa1196674c",
+      "spikes/relay-hosts/cloudflare/src/checkpoint_probe/fixture.rs": "ada1123ad66432a8019c9d5b8a7f0f1e9f0d19a10d5dc5c9664b35b8fa6fde41",
+      "spikes/relay-hosts/cloudflare/src/checkpoint_probe/mod.rs": "82097f3ba236b007f7ac62e604874c53c21ae83fb29fbb179536859e1636aca1",
+      "spikes/relay-hosts/cloudflare/src/checkpoint_probe/persistence.rs": "d9eb19649fb81b5674ca4fde04e08293ad3c37a8e391860e0bd78c183c848a52",
+      "spikes/relay-hosts/cloudflare/src/checkpoint_probe/runtime.rs": "3ff1e13ca3ea161472ab184ca8d593361aa5b113d74097acac80218eed44d66a",
+      "spikes/relay-hosts/cloudflare/src/lib.rs": "168f2de34f73a3b04a893731112ca8d9a05e70c0114f534d0f8527d81e7e7a89",
+      "spikes/relay-hosts/cloudflare/wrangler.toml": "f54ec9d2b802f8f8e13146efd83b42aee549acaa4861a324576a659735dce68a"
+    }
+  },
+  "cases": [
+    {
+      "run": "checkpoint-b15947d9-ad85-4b5e-a603-4ae3e0ee9333",
+      "mode": "attachments",
+      "kind": "hibernate",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-b15947d9-ad85-4b5e-a603-4ae3e0ee9333",
+      "before_fault": {
+        "boot": "0.29137089815964623-1792232368382",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 7
+      },
+      "data_event_sql_writes": 0,
+      "natural_hibernation": true,
+      "after_idle": {
+        "boot": "0.22769358626132663-1792232386229",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 8
+      },
+      "after_reconstruction": {
+        "boot": "0.30463976761769473-1792232386511",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 9
+      },
+      "awaiting_settlement": {
+        "boot": "0.5994523072079297-1792232387847",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 1024,
+            "submitted_frames": 1
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 10
+      },
+      "after_settlement": {
+        "boot": "0.5994523072079297-1792232387847",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 12
+      },
+      "healthy_sender_progressed": true,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1000,
+            "reason": "kernel closure requested"
+          },
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-a3b486e1-f972-4e3f-a700-fda0d2e8caa8",
+      "mode": "attachments",
+      "kind": "attachment-loss",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-a3b486e1-f972-4e3f-a700-fda0d2e8caa8",
+      "before_fault": {
+        "boot": "0.8413661276214163-1792232388888",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 7
+      },
+      "data_event_sql_writes": 0,
+      "after_reconstruction": {
+        "boot": "0.730433082294456-1792232391742",
+        "physical_release_proven": false,
+        "ready": false,
+        "reason": "\"MissingResponsibility: c-2-1\"",
+        "sockets": 2
+      },
+      "healthy_sender_progressed": false,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": false,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-a29bf5ec-52fa-45b4-8b82-0243ec032f95",
+      "mode": "attachments",
+      "kind": "disconnect",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-a29bf5ec-52fa-45b4-8b82-0243ec032f95",
+      "before_fault": {
+        "boot": "0.8089099578829888-1792232392356",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 7
+      },
+      "data_event_sql_writes": 0,
+      "after_reconstruction": {
+        "boot": "0.5897292920748247-1792232395337",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 9
+      },
+      "after_sender_settlement": {
+        "boot": "0.5897292920748247-1792232395337",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 9
+      },
+      "receiver_settlement_available": false,
+      "after_replacement": {
+        "boot": "0.5897292920748247-1792232395337",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-2",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 11
+      },
+      "old_generation_retained_after_replayed_settlement": true,
+      "healthy_sender_progressed": true,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1000,
+            "reason": "probe acknowledged"
+          },
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": false,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-6e3e6d95-f850-43d8-a7fc-48145f90c049",
+      "mode": "attachments",
+      "kind": "reset",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-6e3e6d95-f850-43d8-a7fc-48145f90c049",
+      "before_fault": {
+        "boot": "0.42038605547731744-1792232398293",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "attachments",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 7
+      },
+      "data_event_sql_writes": 0,
+      "reset_response": "reset: 500 \n<!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]-->\n<head>\n<title>Worker threw exception | e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev | Cloudflare </title>\n\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/cf.errors.css\" />\n<!--[if lt IE 9]><link rel=\"stylesheet\" id='cf_styles-ie-css' href=\"/cdn-cgi/styles/cf.errors.ie.css\" /><![endif]-->\n<style>body{margin:0;padding:0}</style>\n\n<!--[if gte IE 10]><!-->\n<script>\n  if (!navigator.cookieEnabled) {\n    window.addEventListener('DOMContentLoaded', function () {\n      var cookieEl = document.getElementById('cookie-alert');\n      cookieEl.style.display = 'block';\n    })\n  }\n</script>\n<!--<![endif]-->\n\n</head>\n<body>\n  <div id=\"cf-wrapper\">\n    <div class=\"cf-alert cf-alert-error cf-cookie-error\" id=\"cookie-alert\" data-translate=\"enable_cookies\">Please enable cookies.</div>\n    <div id=\"cf-error-details\" class=\"cf-error-details-wrapper\">\n      <div class=\"cf-wrapper cf-header cf-error-overview\">\n        <h1>\n          <span class=\"cf-error-type\" data-translate=\"error\">Error</span>\n          <span class=\"cf-error-code\">1101</span>\n          <small class=\"heading-ray-id\">Ray ID: a4be917abea8cf9f &bull; 2026-10-17 10:20:01 UTC</small>\n        </h1>\n        <h2 class=\"cf-subheadline\" data-translate=\"error_desc\">Worker threw exception</h2>\n      </div><!-- /.header -->\n\n      <section></section><!-- spacer -->\n\n      <div class=\"cf-section cf-wrapper\">\n        <div class=\"cf-columns two\">\n          <div class=\"cf-column\">\n            <h2 data-translate=\"what_happened\">What happened?</h2>\n            <p>You've requested a page on a website (e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev) that is on the <a href=\"https://www.cloudflare.com/5xx-error-landing/\" target=\"_blank\">Cloudflare</a> network. An unknown error occurred while rendering the page.</p>\n          </div>\n\n          <div class=\"cf-column\">\n            <h2 data-translate=\"what_can_i_do\">What can I do?</h2>\n            <p><strong>If you are the owner of this website:</strong><br />you should <a href=\"https://www.cloudflare.com/login?utm_source=error_100x\" target=\"_blank\">login to Cloudflare</a> and check the error logs for e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev.</p>\n          </div>\n        </div>\n      </div><!-- /.section -->\n\n      \n<div class=\"cf-error-footer cf-wrapper w-240 lg:w-full py-10 sm:py-4 sm:px-8 mx-auto text-center sm:text-left border-solid border-0 border-t border-gray-300\">\n  <p class=\"text-13\">\n    <span class=\"cf-footer-item sm:block sm:mb-1\">Cloudflare Ray ID: <strong class=\"font-semibold\">a4be917abea8cf9f</strong></span>\n    <span class=\"cf-footer-separator sm:hidden\">&bull;</span>\n    <span id=\"cf-footer-item-ip\" class=\"cf-footer-item hidden sm:block sm:mb-1\">\n      Your IP:\n      <button type=\"button\" id=\"cf-footer-ip-reveal\" class=\"cf-footer-ip-reveal-btn\">Click to reveal</button>\n      <span class=\"hidden\" id=\"cf-footer-ip\">137.184.247.105</span>\n      <span class=\"cf-footer-separator sm:hidden\">&bull;</span>\n    </span>\n    <span class=\"cf-footer-item sm:block sm:mb-1\"><span>Performance &amp; security by</span> <a rel=\"noopener noreferrer\" href=\"https://www.cloudflare.com/5xx-error-landing\" id=\"brand_link\" target=\"_blank\">Cloudflare</a></span>\n  </p>\n  <script>(function(){function d(){var b=a.getElementById(\"cf-footer-item-ip\"),c=a.getElementById(\"cf-footer-ip-reveal\");b&&\"classList\"in b&&(b.classList.remove(\"hidden\"),c.addEventListener(\"click\",function(){c.classList.add(\"hidden\");a.getElementById(\"cf-footer-ip\").classList.remove(\"hidden\")}))}var a=document;document.addEventListener&&a.addEventListener(\"DOMContentLoaded\",d)})();</script>\n</div><!-- /.error-footer -->\n\n\n    </div><!-- /#cf-error-details -->\n  </div><!-- /#cf-wrapper -->\n</body>\n</html>\n",
+      "after_reset": {
+        "boot": "0.1374080892445525-1792232401643",
+        "physical_release_proven": false,
+        "ready": false,
+        "reason": "\"MissingResponsibility: c-1-1\"",
+        "sockets": 0
+      },
+      "healthy_sender_disconnected": true,
+      "receiver_settlement_available": false,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": true,
+          "close": {
+            "code": 1006,
+            "reason": ""
+          },
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1006,
+            "reason": ""
+          },
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-ea783f49-d5df-4c27-b690-3a99b44f9f15",
+      "mode": "sqlite_mirror",
+      "kind": "hibernate",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-ea783f49-d5df-4c27-b690-3a99b44f9f15",
+      "before_fault": {
+        "boot": "0.6909417496188348-1792232402123",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 21
+      },
+      "data_event_sql_writes": 4,
+      "natural_hibernation": true,
+      "after_idle": {
+        "boot": "0.7050340601468447-1792232420221",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 22
+      },
+      "after_reconstruction": {
+        "boot": "0.6165281088340391-1792232420495",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 23
+      },
+      "awaiting_settlement": {
+        "boot": "0.015843104815853715-1792232422003",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 1024,
+            "submitted_frames": 1
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 34
+      },
+      "after_settlement": {
+        "boot": "0.015843104815853715-1792232422003",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 44
+      },
+      "healthy_sender_progressed": true,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1000,
+            "reason": "kernel closure requested"
+          },
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-cbf35851-3e31-46cb-b34a-53a8ff3afcd5",
+      "mode": "sqlite_mirror",
+      "kind": "attachment-loss",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-cbf35851-3e31-46cb-b34a-53a8ff3afcd5",
+      "before_fault": {
+        "boot": "0.5243291056657357-1792232423028",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 21
+      },
+      "data_event_sql_writes": 4,
+      "after_reconstruction": {
+        "boot": "0.17244429992741983-1792232426055",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 22
+      },
+      "healthy_sender_progressed": true,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": false,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-e39bf5c4-0266-45f9-b70a-ec21c9c1830d",
+      "mode": "sqlite_mirror",
+      "kind": "disconnect",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-e39bf5c4-0266-45f9-b70a-ec21c9c1830d",
+      "before_fault": {
+        "boot": "0.5682777641445361-1792232426754",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 21
+      },
+      "data_event_sql_writes": 4,
+      "after_reconstruction": {
+        "boot": "0.04282903353492662-1792232429644",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 24
+      },
+      "after_sender_settlement": {
+        "boot": "0.04282903353492662-1792232429644",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 0,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 1,
+        "writes": 30
+      },
+      "receiver_settlement_available": false,
+      "after_replacement": {
+        "boot": "0.04282903353492662-1792232429644",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-2",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 49
+      },
+      "old_generation_retained_after_replayed_settlement": true,
+      "healthy_sender_progressed": true,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": false,
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1000,
+            "reason": "probe acknowledged"
+          },
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": false,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "run": "checkpoint-613b8508-e6d0-4701-9e26-beaa1a9c6574",
+      "mode": "sqlite_mirror",
+      "kind": "reset",
+      "endpoint": "https://e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-613b8508-e6d0-4701-9e26-beaa1a9c6574",
+      "before_fault": {
+        "boot": "0.2384090365384276-1792232432777",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": true,
+            "connection": "c-1-1",
+            "granted_frames": 7,
+            "submitted_bytes": 0,
+            "submitted_frames": 0
+          },
+          {
+            "communicating": true,
+            "connection": "c-2-1",
+            "granted_frames": 6,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": null,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 2,
+        "writes": 21
+      },
+      "data_event_sql_writes": 4,
+      "reset_response": "reset: 500 \n<!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]-->\n<head>\n<title>Worker threw exception | e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev | Cloudflare </title>\n\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/cf.errors.css\" />\n<!--[if lt IE 9]><link rel=\"stylesheet\" id='cf_styles-ie-css' href=\"/cdn-cgi/styles/cf.errors.ie.css\" /><![endif]-->\n<style>body{margin:0;padding:0}</style>\n\n<!--[if gte IE 10]><!-->\n<script>\n  if (!navigator.cookieEnabled) {\n    window.addEventListener('DOMContentLoaded', function () {\n      var cookieEl = document.getElementById('cookie-alert');\n      cookieEl.style.display = 'block';\n    })\n  }\n</script>\n<!--<![endif]-->\n\n</head>\n<body>\n  <div id=\"cf-wrapper\">\n    <div class=\"cf-alert cf-alert-error cf-cookie-error\" id=\"cookie-alert\" data-translate=\"enable_cookies\">Please enable cookies.</div>\n    <div id=\"cf-error-details\" class=\"cf-error-details-wrapper\">\n      <div class=\"cf-wrapper cf-header cf-error-overview\">\n        <h1>\n          <span class=\"cf-error-type\" data-translate=\"error\">Error</span>\n          <span class=\"cf-error-code\">1101</span>\n          <small class=\"heading-ray-id\">Ray ID: a4be925098c067f7 &bull; 2026-10-17 10:20:35 UTC</small>\n        </h1>\n        <h2 class=\"cf-subheadline\" data-translate=\"error_desc\">Worker threw exception</h2>\n      </div><!-- /.header -->\n\n      <section></section><!-- spacer -->\n\n      <div class=\"cf-section cf-wrapper\">\n        <div class=\"cf-columns two\">\n          <div class=\"cf-column\">\n            <h2 data-translate=\"what_happened\">What happened?</h2>\n            <p>You've requested a page on a website (e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev) that is on the <a href=\"https://www.cloudflare.com/5xx-error-landing/\" target=\"_blank\">Cloudflare</a> network. An unknown error occurred while rendering the page.</p>\n          </div>\n\n          <div class=\"cf-column\">\n            <h2 data-translate=\"what_can_i_do\">What can I do?</h2>\n            <p><strong>If you are the owner of this website:</strong><br />you should <a href=\"https://www.cloudflare.com/login?utm_source=error_100x\" target=\"_blank\">login to Cloudflare</a> and check the error logs for e6e2b633-windshare-relay-host-probe.doraemonkey.workers.dev.</p>\n          </div>\n        </div>\n      </div><!-- /.section -->\n\n      \n<div class=\"cf-error-footer cf-wrapper w-240 lg:w-full py-10 sm:py-4 sm:px-8 mx-auto text-center sm:text-left border-solid border-0 border-t border-gray-300\">\n  <p class=\"text-13\">\n    <span class=\"cf-footer-item sm:block sm:mb-1\">Cloudflare Ray ID: <strong class=\"font-semibold\">a4be925098c067f7</strong></span>\n    <span class=\"cf-footer-separator sm:hidden\">&bull;</span>\n    <span id=\"cf-footer-item-ip\" class=\"cf-footer-item hidden sm:block sm:mb-1\">\n      Your IP:\n      <button type=\"button\" id=\"cf-footer-ip-reveal\" class=\"cf-footer-ip-reveal-btn\">Click to reveal</button>\n      <span class=\"hidden\" id=\"cf-footer-ip\">137.184.247.105</span>\n      <span class=\"cf-footer-separator sm:hidden\">&bull;</span>\n    </span>\n    <span class=\"cf-footer-item sm:block sm:mb-1\"><span>Performance &amp; security by</span> <a rel=\"noopener noreferrer\" href=\"https://www.cloudflare.com/5xx-error-landing\" id=\"brand_link\" target=\"_blank\">Cloudflare</a></span>\n  </p>\n  <script>(function(){function d(){var b=a.getElementById(\"cf-footer-item-ip\"),c=a.getElementById(\"cf-footer-ip-reveal\");b&&\"classList\"in b&&(b.classList.remove(\"hidden\"),c.addEventListener(\"click\",function(){c.classList.add(\"hidden\");a.getElementById(\"cf-footer-ip\").classList.remove(\"hidden\")}))}var a=document;document.addEventListener&&a.addEventListener(\"DOMContentLoaded\",d)})();</script>\n</div><!-- /.error-footer -->\n\n\n    </div><!-- /#cf-error-details -->\n  </div><!-- /#cf-wrapper -->\n</body>\n</html>\n",
+      "after_reset": {
+        "boot": "0.4111477074184523-1792232435799",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 0,
+        "writes": 23
+      },
+      "after_second_reconstruction": {
+        "boot": "0.5623089236733932-1792232436025",
+        "clock": "frozen canonical fixture",
+        "generations": [
+          {
+            "communicating": false,
+            "connection": "c-2-1",
+            "granted_frames": 0,
+            "submitted_bytes": 2048,
+            "submitted_frames": 2
+          }
+        ],
+        "kernel_deadline_ms": 1700000029999,
+        "last_refusal": null,
+        "mode": "sqlite_mirror",
+        "physical_release_proven": false,
+        "ready": true,
+        "sockets": 0,
+        "writes": 24
+      },
+      "healthy_sender_disconnected": true,
+      "receiver_settlement_available": false,
+      "passed": true,
+      "peers": [
+        {
+          "role": "sender",
+          "closed": true,
+          "close": {
+            "code": 1006,
+            "reason": ""
+          },
+          "errors": []
+        },
+        {
+          "role": "receiver",
+          "closed": true,
+          "close": {
+            "code": 1006,
+            "reason": ""
+          },
+          "errors": []
+        }
+      ]
+    }
+  ],
+  "finished_at": "2026-10-17T10:20:34.54Z",
+  "preview": {
+    "account_id": "fb1b5468362a79b5545d660ace3e8f9d",
+    "name": "checkpoint-0e6de68f382c",
+    "deployment_id": "e6e2b633-c69c-4fd8-ac64-b78221f80bf1",
+    "worker": "windshare-relay-host-probe",
+    "deleted_after_evidence": true
+  },
+  "validation": {
+    "wrangler": "4.151.1",
+    "worker_check": "cargo clippy --target wasm32-unknown-unknown --locked -- -D warnings",
+    "rust_gate": "make rust",
+    "tests_passed": 180,
+    "line_coverage_percent": 95.33,
+    "workers_rs": "0.8.7"
+  },
+  "wasm_sha256": "5c86ad8d39fd3c01432565bc4a88e3ef33acc766119c77c529b22d5fc60b089c"
+}

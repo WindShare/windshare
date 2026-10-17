@@ -29,6 +29,8 @@ connection and report storage results with the issued work ID. Socket readiness
 waits happen before `submit`; its handoff cannot await or cache authorization.
 Native hosts leave checkpoint tracking disabled and allocate no change journal.
 Production host persistence remains pending; forwarding must not write delivery counters to a database.
+The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md) uses
+an intentionally per-event SQLite mirror as a control, not as production wiring.
 
 Go REGISTER/RESUME/JOIN/STOP and browser JOIN now derive a per-share dial URL with the public
 `share_id` query hint. Shared vectors preserve admission-query bytes and relay identity, and reject
@@ -130,9 +132,17 @@ Follow-up controls reproduced a Rust callback failure after reset and avoided it
 calling abort in JavaScript after the Rust future completes. The object recovered,
 but an old peer with an 8 KiB receive buffer still received the complete 8 MiB burst;
 a healthy peer on the same object disconnected. Reset is therefore not a verified
-buffer-release receipt or per-receiver isolation policy. Production adapters and
-client cutover remain pending; authorization fencing and occupancy release need
-an explicit ownership contract before Cloudflare integration.
+buffer-release receipt or per-receiver isolation policy.
+
+The checkpoint follow-up exercises the real kernel in the Worker. Normal
+hibernation preserves outstanding delivery and subsequent settlement. Lost live
+attachments reject the complete restore, including the healthy sender; a SQLite
+mirror recovers them at the cost of forwarding-path writes. Live disconnect
+callbacks can save detached ledgers, and a new receiver generation can progress
+without refunding the old one. Abrupt reset still disconnects the whole share.
+Persisted old responsibility has no authenticated settlement channel once that
+socket is gone. Production adapters and client cutover remain pending: resource
+ownership and failure isolation must be decided before integrating the full flow.
 
 ## Testing
 
