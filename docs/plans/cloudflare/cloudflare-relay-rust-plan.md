@@ -42,8 +42,11 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
-The current kernel still retains unreachable generations until settlement or proven
-release; the responsibility model below is a pending refactor.
+The kernel now separates admitted connections, retired-generation metadata and
+submitted residual risk. Host-injected retirement waits for revocation and both
+directions' queue discard; fixed grace and residual charges survive recovery.
+Physical release remains a separate host receipt. Dependency-scoped recovery is
+the next step; the complete-checkpoint requirement still applies.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
@@ -53,7 +56,7 @@ The [pressure experiment](../../../spikes/relay-hosts/pressure.md) kept healthy 
 working under 512 MiB open/close loads; it supports continuing Cloudflare integration,
 but establishes neither immediate physical release nor a finite retention deadline.
 
-结论：**保留共享 Rust 语义内核，先重构退役与局部恢复，再接通真实传输。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+结论：**保留共享 Rust 语义内核；退役已实现，接下来做局部恢复，再接通真实传输。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 

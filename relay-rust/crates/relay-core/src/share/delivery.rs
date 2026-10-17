@@ -215,6 +215,7 @@ impl<O: Observer> ShareRelay<O> {
         }
         self.collect_session(flow.session(), now, turn);
         self.collect_ledger(flow.destination(), now);
+        self.progress_retirements(now);
         Ok(())
     }
 
@@ -240,8 +241,13 @@ impl<O: Observer> ShareRelay<O> {
         };
         self.flush_ledger(flow.destination(), now, turn);
         result.map_err(Error::Flow)?;
+        let retirement_affected = self.detached.contains_key(&connection)
+            || self.detached.contains_key(&flow.permit().source());
         self.collect_session(flow.session(), now, turn);
         self.collect_ledger(flow.destination(), now);
+        if retirement_affected {
+            self.progress_retirements(now);
+        }
         Ok(())
     }
 }

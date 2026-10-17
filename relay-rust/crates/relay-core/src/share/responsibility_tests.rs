@@ -3,6 +3,9 @@ use crate::flow::Usage;
 
 const ONE_FRAME: Counts = Counts::new(1, 21);
 
+#[path = "retirement_tests.rs"]
+mod retirement;
+
 fn bounded_relay(fixture: &Fixture, generations: usize) -> Relay {
     let mut limits = Fixture::limits();
     limits.connections = generations;
@@ -123,7 +126,7 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
 }
 
 #[test]
-fn missing_socket_and_repeated_recovery_never_refund_or_renew_old_responsibility() {
+fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
     let fixture = Fixture::new();
     let mut relay = bounded_relay(&fixture, 2);
     let stored = fixture.register(&mut relay);
@@ -204,6 +207,7 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
     let _ = complete(&mut restored, &detached, fixture.at);
     discard_outputs(&mut restored, turn, fixture.at);
     assert!(restored.connections.is_empty());
+    let _ = restored.handle(Input::Closed(key.sender()), fixture.at);
     assert_eq!(
         restored.checkpoint_manifest().unwrap().generations(),
         &[key.receiver()]
@@ -229,7 +233,7 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
 #[test]
 fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
     let fixture = Fixture::new();
-    let mut relay = bounded_relay(&fixture, 3);
+    let mut relay = retirement::relay(&fixture, 2, 1, retirement::policy(2, Counts::new(2, 42)));
     let stored = fixture.register(&mut relay);
     let (old, _) = fixture.join(&mut relay, 2);
     deliver(&fixture, &mut relay, old);
@@ -290,11 +294,13 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         ));
     }
     assert!(!relay.ledgers.contains_key(&old.receiver()));
+    assert_eq!(relay.connection_usage().retired_generations, 0);
+    // Releasing an old generation cannot also release the replacement's admission slot.
     assert_eq!(
         relay
             .handle(Input::Connected(connection(3)), fixture.at)
             .refusal,
-        None
+        Some(Error::Capacity)
     );
 }
 

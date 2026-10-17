@@ -103,7 +103,7 @@ impl<O: Observer> ShareRelay<O> {
         budget: CheckpointBudget,
         now: UnixMillis,
     ) -> Result<(), Error> {
-        if let Err(error) = budget.check(self.limits.sessions) {
+        if let Err(error) = budget.check(self.limits.retained_flows_per_connection) {
             self.trace(None, RelayDecision::Rejected(error), now);
             return Err(error);
         }

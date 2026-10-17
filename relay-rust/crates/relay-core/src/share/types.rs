@@ -15,10 +15,13 @@ use alloc::vec::Vec;
 /// Platform capacity is supplied explicitly; the shared engine has no platform defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// Live connections plus detached generations with unsettled responsibility.
+    /// Admission slots, including generations still waiting for safe retirement.
     pub connections: usize,
-    /// Retained session bound, also bounding each destination's lazily backed flow slots.
+    /// Live/provisional sessions. Retired sessions cannot consume new admission.
     pub sessions: usize,
+    /// All live and unsettled retired flows in each destination ledger.
+    pub retained_flows_per_connection: usize,
+    pub retirement: super::RetirementPolicy,
     pub delivery: crate::flow::Limits,
 }
 
@@ -83,8 +86,10 @@ pub enum Input<'a> {
     Discarded(FlowKey),
     /// Communication ended; the generation's resource responsibility survives.
     Disconnected(ConnectionRef),
-    /// Confirms all application queues and transport buffers for this generation
-    /// are released. A close API, socket disappearance or STOPPED is not evidence.
+    /// Confirms this destination's application queues and transport buffers are
+    /// released. Queues sourced here but targeting other connections still need
+    /// their own Discarded receipts. A close API, socket disappearance or STOPPED
+    /// is not evidence of release.
     Closed(ConnectionRef),
     Completed {
         id: WorkId,

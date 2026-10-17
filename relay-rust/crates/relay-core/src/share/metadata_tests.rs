@@ -14,6 +14,7 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
     ] {
         let mut limits = Fixture::limits();
         limits.sessions = sessions;
+        limits.retained_flows_per_connection = sessions;
         let (mut relay, _) = Relay::restore(
             fixture.identity(1),
             limits,
@@ -49,6 +50,7 @@ fn sharing_allocates_sender_fanout_and_one_slot_per_receiver() {
     let fixture = Fixture::new();
     let mut limits = Fixture::limits();
     limits.sessions = LARGE_SESSION_LIMIT;
+    limits.retained_flows_per_connection = LARGE_SESSION_LIMIT;
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,

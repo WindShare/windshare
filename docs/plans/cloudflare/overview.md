@@ -16,6 +16,7 @@ injected; payloads, sockets, entropy, storage and scheduling remain outside it.
 | `restore(identity, limits, state, observer, now)` | Read authoritative lifecycle facts and validate surviving connections, sessions, ledgers and pending handshakes together. |
 | `handle(input, now)` | Expire due state, apply the input and return ordered commands, any refusal and the next absolute deadline. |
 | `submit(receipt, now, handoff)` | Recheck current authority and FIFO order, charge submission and synchronously hand off the payload under one exclusive borrow. |
+| `connection_usage()` | Report admitted slots, retired generations and outstanding residual frames/bytes separately. |
 | `checkpoint_connection(connection)` | Capture one generation's ledger and admissions, even after its socket disappears. |
 | `checkpoint_manifest()` | Capture the complete retained-generation inventory independently of socket discovery. |
 | `enable_checkpoints(budget, now)` / `flush_checkpoints(now, write)` | Write changed generation records, then the manifest when its membership or header changes. |
@@ -93,10 +94,19 @@ Recovery separates communicating sockets from resource responsibility. `Restore`
 `Responsibility::Checkpoint`, explicit host evidence of complete release (`Released`),
 or `Unknown`, which refuses restoration. Restart and empty socket lists do not prove release.
 Every checkpoint ledger is restored; only surviving, authorized connections regain sessions.
-Disconnected generations retain submitted occupancy and share `Limits::connections` with
-live connections until settlement or proven release. Queue discard and expiration cannot
-refund submitted bytes. Original deadlines, cumulative totals and wire-ID high-water marks
-survive repeated recovery; old-generation feedback cannot affect a replacement connection.
+`Limits::connections` bounds admission through unfinished retirement.
+`RetirementPolicy::PhysicalRelease` waits for `Closed` and discard of queues targeting
+other connections; `Bounded` permits logical retirement
+after revocation, both directions' queue discard and an injected fixed grace (possibly zero).
+Retired-generation count and submitted frames/bytes have independent limits. Exhaustion
+keeps that generation admitted without interrupting healthy peers; exact settlement or
+physical release retries waiting retirement. No timer refunds residual risk.
+
+`Limits::sessions` bounds live admissions. Retired session objects disappear after queue
+cleanup; their routes and debt remain in independently bounded
+`retained_flows_per_connection` slots until settlement. In particular, a healthy sender
+keeps its own outstanding reverse-flow debt. Original deadlines, cumulative totals and
+wire-ID high-water marks survive repeated recovery; old feedback cannot affect replacements.
 Pending handshakes retain their original ownership; fresh incarnations fence old storage
 and entropy callbacks.
 
@@ -111,7 +121,9 @@ preflights all changed records and writes a changed manifest last; partial failu
 the whole batch for retry. Closing sockets does not repair failed accounting writes. If
 latest responsibility cannot be recovered, the host must report `Unknown`. Old records
 may be deleted only after the updated manifest commits. `CheckpointBudget` bounds each
-generation record; the separately stored manifest is bounded by `Limits::connections`.
+generation record against the retained-flow bound; the separately stored manifest is
+bounded by admitted slots plus the retired-generation limit. Missing-record isolation
+remains pending; retirement does not relax the current completeness requirement.
 Native capacities are unchanged. See the
 [Cloudflare attachment budget](cloudflare-relay-rust-plan.md#attachment-budget).
 

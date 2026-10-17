@@ -27,7 +27,12 @@ impl<O: Observer> ShareRelay<O> {
         if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {
             return;
         }
-        if self.sessions.len() >= self.limits.sessions || self.last_session == u64::MAX {
+        let admitted = self
+            .sessions
+            .values()
+            .filter(|entry| entry.session.phase() != Phase::Retired)
+            .count();
+        if admitted >= self.limits.sessions || self.last_session == u64::MAX {
             Self::send(
                 turn,
                 connection,
@@ -245,35 +250,38 @@ impl<O: Observer> ShareRelay<O> {
     ) {
         // Feedback touches only its own two directions. Other sessions may share
         // the sender, but neither their routing nor their lifetime changes here.
+        let mut cleanup_pending = false;
         let mut retained = false;
         for destination in [key.sender(), key.receiver()] {
             let route = (destination, key.wire_id());
             if let Some(flow) = self.routes.get(&route) {
-                if self
+                if let Some(snapshot) = self
                     .ledgers
                     .get(&destination)
-                    .is_some_and(|ledger| ledger.snapshot(*flow).is_some())
+                    .and_then(|ledger| ledger.snapshot(*flow))
                 {
                     retained = true;
+                    cleanup_pending |= snapshot.phase != crate::flow::Phase::Settling;
                 } else {
                     self.routes.remove(&route);
                 }
             }
         }
-        if retained
+        if cleanup_pending
             || self
                 .sessions
                 .get(&key.wire_id())
-                .is_some_and(|entry| entry.session.phase() != Phase::Retired)
+                .is_some_and(|entry| entry.session.phase() != Phase::Retired || entry.deferred)
         {
             return;
         }
         self.sessions.remove(&key.wire_id());
         self.deadlines.set(Key::Session(key.wire_id()), None);
-        if self
-            .connections
-            .get(&key.receiver())
-            .is_some_and(|entry| !matches!(entry.role, super::Role::Closing))
+        if !retained
+            && self
+                .connections
+                .get(&key.receiver())
+                .is_some_and(|entry| !matches!(entry.role, super::Role::Closing))
         {
             self.close(key.receiver(), turn);
             self.trace(Some(key.receiver()), RelayDecision::Closing, now);

@@ -18,6 +18,9 @@ mod handshake_restore;
 mod lifecycle;
 mod responsibility;
 mod restoration;
+mod retirement;
+use retirement::Detached;
+pub use retirement::{ConnectionUsage, RetirementPolicy};
 mod sessions;
 mod storage;
 mod types;
@@ -86,9 +89,10 @@ pub struct ShareRelay<O> {
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
     connections: BTreeMap<ConnectionRef, Connection>,
-    // A host may lose a socket while its previously submitted bytes still exist.
-    // Retained generations share the admission bound with live connections.
+    // Delivery remains charged after logical retirement; only exact consumption
+    // or release evidence can remove the old generation's residual responsibility.
     ledgers: BTreeMap<ConnectionRef, ConnectionLedger<Journal>>,
+    detached: BTreeMap<ConnectionRef, Detached>,
     sessions: BTreeMap<RelaySessionId, AdmissionState>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
     deadlines: Deadlines,
@@ -254,6 +258,7 @@ impl<O: Observer> ShareRelay<O> {
                 Key::Session(id) => {
                     self.session_event(id, crate::sessions::Event::Tick, now, turn);
                 }
+                Key::Retirement(_) => self.progress_retirements(now),
                 Key::Ledger(connection) => {
                     if let Some(ledger) = self.ledgers.get_mut(&connection) {
                         let _ = ledger.tick(now);

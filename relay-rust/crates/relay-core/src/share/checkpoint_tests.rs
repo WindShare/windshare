@@ -374,9 +374,15 @@ fn host_budget_checks_worst_case_metadata_before_tracking_is_enabled() {
         Err(Error::CheckpointCapacity)
     );
     assert_eq!(ConnectionCheckpoint::maximum_bytes(usize::MAX), None);
-    let maximum = ConnectionCheckpoint::maximum_bytes(Fixture::limits().sessions).unwrap();
+    let maximum =
+        ConnectionCheckpoint::maximum_bytes(Fixture::limits().retained_flows_per_connection)
+            .unwrap();
     let exact = CheckpointBudget::new(maximum + HOST_ENVELOPE_BYTES, HOST_ENVELOPE_BYTES).unwrap();
-    assert!(exact.check(Fixture::limits().sessions).is_ok());
+    assert!(
+        exact
+            .check(Fixture::limits().retained_flows_per_connection)
+            .is_ok()
+    );
     let short = CheckpointBudget::new(maximum - 1, 0).unwrap();
     assert_eq!(
         relay.enable_checkpoints(short, fixture.at),
@@ -416,7 +422,12 @@ fn independent_checkpoint_codecs_reject_mixed_or_misassigned_state() {
         assert!(ConnectionCheckpoint::decode(bytes, Fixture::limits()).is_err());
     }
     let oversized =
-        vec![0; ConnectionCheckpoint::maximum_bytes(Fixture::limits().sessions).unwrap() + 1];
+        vec![
+            0;
+            ConnectionCheckpoint::maximum_bytes(Fixture::limits().retained_flows_per_connection)
+                .unwrap()
+                + 1
+        ];
     assert!(ConnectionCheckpoint::decode(&oversized, Fixture::limits()).is_err());
     assert!(Checkpoint::from_connections(&manifest, Vec::new(), Fixture::limits()).is_err());
     assert!(
@@ -501,14 +512,13 @@ fn manifest_failure_retries_generation_records_and_only_commits_removal_after_re
     let _ = relay.handle(Input::Disconnected(connection(1)), fixture.at);
     assert!(!host.bytes.is_empty());
     let flushed = host.flush(&mut relay, fixture.at);
+    assert_eq!(flushed.connections, 1);
+    assert!(!flushed.manifest);
+    let _ = relay.handle(Input::Closed(connection(1)), fixture.at);
+    let flushed = host.flush(&mut relay, fixture.at);
     assert_eq!(flushed.connections, 0);
     assert!(flushed.manifest);
     assert!(host.bytes.is_empty());
-    let _ = relay.handle(Input::Closed(connection(1)), fixture.at);
-    assert_eq!(
-        host.flush(&mut relay, fixture.at),
-        CheckpointFlush::default()
-    );
 }
 
 #[test]
@@ -530,7 +540,7 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
     let checkpoint = host.checkpoint();
     assert!(matches!(
         checkpoint.connections[0].role,
-        checkpoint::ConnectionRole::Detached
+        checkpoint::ConnectionRole::Detached(_)
     ));
     assert!(
         Relay::restore(
@@ -574,6 +584,11 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
             .refusal,
         None
     );
+    assert_eq!(
+        restored.delivery_usage(key.sender()).unwrap().submitted,
+        Counts::ZERO
+    );
+    let _ = restored.handle(Input::Closed(key.sender()), fixture.at);
     host.flush(&mut restored, fixture.at);
     assert!(
         !host

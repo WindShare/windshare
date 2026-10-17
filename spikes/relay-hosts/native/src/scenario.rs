@@ -19,6 +19,7 @@ use windshare_relay_core::{
 pub const FRAME_BYTES: usize = OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const WINDOW: usize = 8;
 const CONNECTION_CAPACITY: u64 = 16;
+const SESSION_LIMIT: usize = 24;
 const STARTUP_RESERVE: u64 = 2;
 const REGISTRATION_BUDGET: u64 = 5_000;
 const STOP_BUDGET: u64 = 10_000;
@@ -74,7 +75,9 @@ impl Scenario {
         let capacity = |frames| Counts::new(frames, frames * FRAME_BYTES as u64);
         let limits = Limits {
             connections: 32,
-            sessions: 24,
+            sessions: SESSION_LIMIT,
+            retained_flows_per_connection: SESSION_LIMIT,
+            retirement: windshare_relay_core::share::RetirementPolicy::PhysicalRelease,
             delivery: windshare_relay_core::flow::Limits::new(
                 capacity(CONNECTION_CAPACITY),
                 capacity(STARTUP_RESERVE),
