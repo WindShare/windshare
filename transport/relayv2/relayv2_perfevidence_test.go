@@ -115,7 +115,7 @@ func newRegistrationContractFixture(tb testing.TB) (registrationContractFixture,
 	if err != nil {
 		return registrationContractFixture{}, err
 	}
-	endpoint, err := v2.NormalizeRelayEndpoint(registrationRelayBaseURL)
+	endpoint, err := v2.RelayEndpointForShare(registrationRelayBaseURL, shareID)
 	if err != nil {
 		return registrationContractFixture{}, err
 	}

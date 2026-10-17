@@ -1,7 +1,7 @@
 import type { ChannelState, Frame, FrameChannel } from '../../contracts/channel'
 import { equalBytes } from '../../crypto/bytes'
 import type { Suite02CapabilityKey } from '../../crypto/suite02-link'
-import { canonicalV2RelayEndpoint, type V2RelayEndpoint } from './v2-endpoint'
+import { v2RelayEndpointForShare, type V2RelayEndpoint } from './v2-endpoint'
 import {
   decodeV2DescriptorDelivery,
   decodeV2OpaqueRoute,
@@ -78,9 +78,12 @@ export async function dialV2RelayReceiver(
   const deadline = relayJoinDeadline(options.signal)
   try {
     deadline.signal.throwIfAborted()
-    const endpoint = await canonicalV2RelayEndpoint(relayBase)
+    // Routing and JOIN must use the same identity across asynchronous URL preparation.
+    const shareId = capability.shareIdRaw.slice()
+    const join = encodeV2Join(shareId)
+    const endpoint = await v2RelayEndpointForShare(relayBase, shareId)
     return await dialV2RelayReceiverOnce(
-      endpoint, capability, options.socketFactory ?? browserWebSocketFactory,
+      endpoint, join, options.socketFactory ?? browserWebSocketFactory,
       deadline.signal, options.heartbeatTrace,
     )
   } finally {
@@ -90,7 +93,7 @@ export async function dialV2RelayReceiver(
 
 async function dialV2RelayReceiverOnce(
   endpoint: V2RelayEndpoint,
-  capability: Suite02CapabilityKey,
+  join: Uint8Array<ArrayBuffer>,
   socketFactory: V2WebSocketFactory,
   signal: AbortSignal,
   heartbeatTrace?: (event: RelayHeartbeatTrace) => void,
@@ -100,7 +103,7 @@ async function dialV2RelayReceiverOnce(
   socket.binaryType = 'arraybuffer'
   try {
     await awaitSocketOpen(socket, signal)
-    return await receiveDescriptor(socket, signal, () => socket.send(encodeV2Join(capability.shareIdRaw)), deliveryBytes => {
+    return await receiveDescriptor(socket, signal, () => socket.send(join), deliveryBytes => {
       const relayError = decodeRelayErrorIfPresent(deliveryBytes)
       if (relayError !== undefined) {
         throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })

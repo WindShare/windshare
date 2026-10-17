@@ -107,6 +107,36 @@ class FakeSocket implements V2WebSocketPort {
 afterEach(() => vi.useRealTimers())
 
 describe('v2 relay receiver ingress', () => {
+  it('routes the socket and JOIN with the same raw share identity', async () => {
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket)
+    const mutableCapability = { ...capability, shareIdRaw: capability.shareIdRaw.slice() }
+    const pending = dialV2RelayReceiver('https://relay.invalid/base?token=a%20b', mutableCapability, {
+      socketFactory,
+    })
+    mutableCapability.shareIdRaw.fill(9)
+    const connection = await pending
+    try {
+      expect(socketFactory).toHaveBeenCalledExactlyOnceWith(
+        'wss://relay.invalid/base/v2/ws?token=a%20b&share_id=AwMDAwMDAwMDAwMD',
+      )
+      expect(socket.sent[0]?.subarray(8)).toEqual(capability.shareIdRaw)
+      expect(connection.endpoint.relayIdentityEndpoint).toBe('wss://relay.invalid/base/v2/ws')
+    } finally {
+      await connection.close()
+    }
+  })
+
+  it.each(['share_id=other', 'share%5fid=AwMDAwMDAwMDAwMD', 'share_id=x&share_id=y'])(
+    'rejects a preconfigured route before opening a socket: %s', async query => {
+      const socketFactory = vi.fn(() => new FakeSocket())
+      await expect(dialV2RelayReceiver(`https://relay.invalid?${query}`, capability, {
+        socketFactory,
+      })).rejects.toThrow(/share_id/u)
+      expect(socketFactory).not.toHaveBeenCalled()
+    },
+  )
+
   it('fails a silently disconnected relay without waiting for a WebSocket close event', async () => {
     vi.useFakeTimers()
     const socket = new FakeSocket()

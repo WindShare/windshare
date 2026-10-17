@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -41,7 +42,7 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sender.Endpoint().DialURL != "wss://relay.example/base/v2/ws?token=x" {
+		if sender.Endpoint().DialURL != "wss://relay.example/base/v2/ws?token=x&share_id="+base64.RawURLEncoding.EncodeToString(fixture.fresh.ShareID[:]) {
 			t.Fatalf("dial URL = %q", sender.Endpoint().DialURL)
 		}
 		if stats := sender.RegistrationStats(); stats.BytesSent == 0 || stats.BytesReceived == 0 {

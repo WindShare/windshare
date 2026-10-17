@@ -1,8 +1,10 @@
-import { concatBytes } from '../../crypto/bytes'
+import { concatBytes, encodeBase64Url } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../../crypto/webcrypto'
+import { V2_RELAY_SHARE_ID_BYTES } from './v2-protocol'
 
 export const V2_RELAY_WEBSOCKET_PATH = '/v2/ws'
+export const V2_RELAY_SHARE_ROUTE_QUERY = 'share_id'
 
 const TEXT_ENCODER = new TextEncoder()
 const RELAY_IDENTITY_DOMAIN = TEXT_ENCODER.encode('windshare/v2 relay-identity\0')
@@ -213,5 +215,27 @@ export async function canonicalV2RelayEndpoint(
     dialEndpoint: canonical.dial,
     relayIdentityEndpoint: canonical.identity,
     relayIdentity,
+  })
+}
+
+export async function v2RelayEndpointForShare(
+  raw: string,
+  shareId: Uint8Array,
+  runtime: CryptoRuntime = defaultCryptoRuntime(),
+): Promise<V2RelayEndpoint> {
+  if (shareId.byteLength !== V2_RELAY_SHARE_ID_BYTES || !shareId.some(byte => byte !== 0)) {
+    throw new TypeError('v2 relay routing share ID is invalid')
+  }
+  const route = encodeBase64Url(shareId)
+  const endpoint = await canonicalV2RelayEndpoint(raw, runtime)
+  if (new URL(endpoint.dialEndpoint).searchParams.has(V2_RELAY_SHARE_ROUTE_QUERY)) {
+    // Even a matching value would make a deployment address share-specific.
+    throw new TypeError(`v2 relay base reserves ${V2_RELAY_SHARE_ROUTE_QUERY} for share routing`)
+  }
+  // Preserve admission query bytes: URLSearchParams serialization can change credentials.
+  const separator = endpoint.dialEndpoint.includes('?') ? '&' : '?'
+  return Object.freeze({
+    ...endpoint,
+    dialEndpoint: `${endpoint.dialEndpoint}${separator}${V2_RELAY_SHARE_ROUTE_QUERY}=${route}`,
   })
 }
