@@ -1,7 +1,9 @@
 //! An authenticated, bounded experiment for host closure evidence, not a relay.
 //! Nothing here interprets a WebSocket event as the kernel's physical-release receipt.
 mod checkpoint_probe;
+mod pressure_probe;
 pub use checkpoint_probe::CheckpointProbe;
+pub use pressure_probe::PressureSockets;
 
 use js_sys::{Date, Reflect};
 use serde::{Deserialize, Serialize};

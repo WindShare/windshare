@@ -3,6 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 import RustWorker, { CloseProbe as RustCloseProbe, CheckpointProbe as RustCheckpointProbe } from './build/index.js';
 
 export { RustCloseProbe as CloseProbe };
+export { PressureProbe } from './pressure-entry.mjs';
 
 const foreignErrors = [];
 addEventListener('error', event => {
@@ -103,7 +104,7 @@ export default class RecoveryEntrypoint extends RustWorker {
       return new Response('invalid probe route', { status: 400 });
     }
     if (segments[0] === 'probe') return super.fetch(request);
-    const binding = { checkpoint: 'CHECKPOINT_PROBE', direct: 'CLOSE_PROBE', bridge: 'BRIDGE_PROBE', 'bridge-raw': 'BRIDGE_PROBE', control: 'RESET_CONTROL' }[segments[0]];
+    const binding = { pressure: 'PRESSURE_PROBE', checkpoint: 'CHECKPOINT_PROBE', direct: 'CLOSE_PROBE', bridge: 'BRIDGE_PROBE', 'bridge-raw': 'BRIDGE_PROBE', control: 'RESET_CONTROL' }[segments[0]];
     if (!binding) return new Response('unknown probe', { status: 404 });
     return this.env[binding].getByName(segments[1]).fetch(request);
   }

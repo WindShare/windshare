@@ -25,7 +25,7 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 - **持久化不进入载荷热路径。** SQLite 只保存有界生命周期状态、密封描述符和永久停止标记；不保存、排队或检查不透明内容帧，原生与 Cloudflare 数据帧转发都不执行数据库操作。
 - **以行为和基本负载决定切换。** 当前 Go 中转尚未作为已部署服务运行，不建立迁移、双栈或旧数据兼容义务。两种宿主分别验证真实端到端流程、协议向量、关键状态迁移、下载中部署/重启续传和基本慢连接行为；Cloudflare 另验证正常休眠与反复断连。原生通过后在同一变更中替换并删除 Go 服务端，Cloudflare 未就绪不阻塞原生交付。性能测量用于发现明显退化，不把未运行过的 Go 实现当作线上基准。
 - **Go 服务端是参考，不是规范。** 契约是线协议、共享向量和客户端可见语义，不是 Go 的结构、常量或流程。移植时遇到 Go 不合理或有更好方案之处，应大胆改进而不是逐行复刻，例如 challenge 改由连接按值持有、取消进程级账本。改动影响客户端可见行为时，在同一变更中同步更新 Go／浏览器客户端、共享向量与协议文档。
-- **恢复复用现有续传。** 正常休眠保留连接和会话：运行时重建只隔离旧回调，不构成连接换代或会话退役，存活会话连同未结算额度经内核校验后恢复；部署、运行时重启或故障断连复用重连续传，允许短暂停顿和未确认数据重传。配额对账和远端清理可 best-effort，不持久化载荷或追求完全无感恢复。
+- **恢复复用现有续传。** 正常休眠恢复存活连接、会话、额度和原绝对截止时间；构造函数重跑不构成换代或退款。部署、重启导致的故障断连按新代次重连续传，允许短暂停顿及未确认数据重传，不清除客户端已保存进度。失联旧代次对账和远端清理可 best-effort，授权、永久 STOP 与活跃连接背压仍严格保证。
 
 ### 用户可见结果
 
@@ -49,18 +49,21 @@ submission. Cloudflare close/reset does not prove buffer release, and whole-obje
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
 verifies normal hibernation; its per-event SQLite mirror preserves counters but cannot
 settle an unreachable generation and is not the production design.
+The [pressure experiment](../../../spikes/relay-hosts/pressure.md) kept healthy peers
+working under 512 MiB open/close loads; it supports continuing Cloudflare integration,
+but establishes neither immediate physical release nor a finite retention deadline.
 
-结论：**保留共享 Rust 语义内核，先重构资源责任与故障隔离，再接完整传输流程。** 优先保证日常下载和常见断线续传，不为跨故障精确记账增加逐帧数据库写入，也不以重启整个分享清理单个慢连接。平台整体故障允许同分享短暂重连；若反复断连的资源表现仍不可控，暂缓 Cloudflare 交付，原生 Rust 独立推进。同步更新 Go／浏览器客户端、协议契约与构建入口。
+结论：**保留共享 Rust 语义内核，先重构退役与局部恢复，再接通真实传输。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 
-线协议将双向 `WS2B` 设为必选规则，Go／浏览器客户端与两种中转统一发送并遵守，不按平台协商开关。初始容量纳入现有握手，并从连接总预算预留新会话启动额度，避免首帧与窗口声明相互等待。采用流水发送和消费后的批量反馈，反馈阈值适配窗口，不逐帧等待确认；中转控制消息不受内容额度阻塞。Cloudflare 按目标端尚未预留的交付额度发放 `WS2W`，发放时预留对应容量，仅在目标客户端消费并反馈后补充。原生保留 socket 背压，独立设置窗口与并发，通过正常浏览、下载和多接收者请求测量排除明显退化。
+线协议将双向 `WS2B` 设为必选规则，Go／浏览器客户端与两种中转统一发送并遵守，不按平台协商开关。初始容量纳入现有握手，并从连接总预算预留新会话启动额度，避免首帧与窗口声明相互等待。保留按会话的消费反馈与 `WS2N/WS2S` 结算，采用流水发送和消费后的批量反馈，反馈阈值适配窗口，不逐帧等待确认；中转控制消息不受内容额度阻塞。连接级累计反馈须另行证明客户端缓冲有界、慢会话隔离及顺序记录可跨休眠恢复，不能把网络收到帧等同于消费。Cloudflare 按目标端尚未预留的交付额度发放 `WS2W`，发放时预留对应容量，仅在目标客户端消费并反馈后补充。原生保留 socket 背压，独立设置窗口与并发，通过正常浏览、下载和多接收者请求测量排除明显退化。
 
 资源模型区分活跃连接准入、应用持有队列和已提交宿主的数据。活跃连接内，已授未用额度、事件内临时载荷和未确认发送数据仍共用该代次的有界预算；`send()` 返回或单个会话退役不补充额度。应用队列与活跃预算必须有硬上限；Cloudflare 隐藏缓冲不承诺跨任意故障的精确占用或释放时限。
 
-取消立即撤权，结算在后台完成。可通信连接先丢弃未提交队列，再按序通知目标端，以其消费或丢弃后的最终帧数、字节数幂等结算。失联连接在撤权、停止新增提交和丢弃应用队列后，按明确的退役规则结束旧代次的应用记账责任，不永久挤占活跃连接名额。共享内核定义退役条件和有界元数据保留，平台适配器提供关闭与回收事实；逻辑退役不表示宿主缓冲已物理释放，不得伪造 `Input::Closed`。旧许可和迟到反馈不得影响新连接或复活会话。
+取消立即撤权并丢弃未提交队列；可通信连接按序通知目标端，以消费或丢弃后的最终计数幂等结算。失联代次须先撤权、停止新增提交并清除应用队列，再按宿主策略退役；活跃连接名额与残留风险保留分别限界。原生确认本代次应用队列与 socket 发送资源释放后立即退役；Cloudflare 的立即退役或固定宽限由下述残留实验决定，宽限不因重连延长。共享内核约束退役前置条件与元数据上限，适配器提供容量策略和回收事实。逻辑退役与重启均不证明物理释放，不得伪造 `Input::Closed`；旧许可和迟到反馈不得影响新连接。
 
-原生适配器按分享串行化控制状态，数据转发由独立连接任务并行执行，可使用 Tokio、有界公平队列和原生 WebSocket 背压。原生须明确提交点：许可复核与提交在同一同步临界区完成并与撤销线性化，撤销后不再新增提交；socket 等待留在控制锁外，慢接收者只阻塞自身会话。Cloudflare Rust 适配器使用休眠和平台发送语义；普通数据帧可以经过 Rust/Wasm 内存，复制必须有界并纳入 CPU、内存和吞吐测量。平台差异只能改变内部容量和故障触发点，不能改变帧顺序、会话隔离、所有权或客户端可见的安全语义。
+原生适配器按分享串行化控制状态，数据转发由独立连接任务并行执行，可使用 Tokio、有界公平队列和原生 WebSocket 背压。原生须明确提交点：许可复核与提交在同一同步临界区完成并与撤销线性化，撤销后不再新增提交；socket 与持久化等待留在转发临界区外，慢接收者只阻塞自身会话。Cloudflare Rust 适配器使用休眠和平台发送语义；普通数据帧可以经过 Rust/Wasm 内存，复制必须有界并纳入 CPU、内存和吞吐测量。平台差异只能改变内部容量和故障触发点，不能改变帧顺序、会话隔离、所有权或客户端可见的安全语义。
 
 两个适配器均承接注册、加入、密封描述符交付、初始 Relay Lane、P2P 信令、Relay Lane 恢复和不透明帧转发。原生版本还须保留当前 UDP STUN、独立健康检查和限流；STUN 不进入 Cloudflare 适配器。
 
@@ -68,7 +71,7 @@ settle an unreachable generation and is not the production design.
 
 浏览器保留 TypeScript 协议代码，Go 客户端保留 Go 编解码器，以共享向量保持三端协议一致。Rust 必须通过共享 `ed25519-acceptance.json`，按协议补齐严格校验，不能仅依赖库的 `verify_strict`；注册、恢复和 STOP 证明复用并补齐跨语言向量，逐字节核对签名 preimage。发送端对象向量继续约束 Go／TypeScript 接收端，不要求 Rust 中转复刻对象解析。除非实测收益明确，否则不迁移浏览器协议代码到 Wasm。
 
-Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。正常休眠按原额度与绝对截止时间恢复，不重置额度或延长宽限。交付记录缺失或不一致时，退役关联连接/会话并重连，保留其余健康连接的预算与服务；分享所有权或永久停止事实不确定时仍拒绝服务。当前整份账本恢复方式须据此重构。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
+Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。正常休眠按原额度与绝对截止时间恢复，不重置额度或延长宽限。交付记录缺失或不一致时，沿连接与会话依赖局部退役并重连，保留其余健康连接的预算与服务；分享所有权或永久停止事实不确定时仍拒绝服务。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
 
 Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方以同连接的合法入站消息刷新存活期限，空闲方向仍发送保活，不因单次回复排队超时断线。连接存活与业务进度分别判断，心跳和无关流量不得延长会话进度或资源结算期限。保留有界队列和原生控制优先调度，不靠缩小正常窗口迁就心跳。
 
@@ -76,9 +79,9 @@ Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方�
 
 ## 目标架构
 
-共享内核采用 `no_std + alloc`，由每分享 `share::ShareRelay` 统一持有生命周期、握手、连接、会话与交付账本。`handle(input, now)` 返回有序控制发送、存储、清理命令与下一截止时间；内核负责 wire ID 分配、撤销扇出、持久化屏障和恢复校验。同步 `submit` 在同一独占借用中完成许可复核、FIFO 记账与宿主提交，socket 等待放在调用之前。适配器只执行 I/O、提供容量与调度；休眠宿主在事件末刷新发生变化的连接附件，唤醒时将存活附件交给内核组合校验。原生不启用附件变更记录，热路径无需逐帧快照。交付元数据采用按需分配、有硬上限的稳定索引槽池，握手连接不预留 flow 槽位，快照仅保存仍需保留的 flow 及其索引；连接与会话上限不等于每连接的预分配长度。统一 `observation::Observer` 输出决策，平台仅补充运行环境字段。
+共享内核采用 `no_std + alloc`，由每分享 `share::ShareRelay` 统一持有生命周期、握手、连接、会话与交付账本。`handle(input, now)` 返回有序控制发送、存储、清理命令与下一截止时间；内核负责 wire ID 分配、撤销扇出、持久化屏障和恢复校验。同步 `submit` 在同一独占借用中完成许可复核、FIFO 记账与宿主提交，socket 等待放在调用之前。适配器只执行 I/O、提供容量与调度；休眠宿主在事件末刷新发生变化的连接附件，唤醒时由内核逐连接校验并恢复关联会话。原生不启用附件变更记录，热路径无需逐帧快照。交付元数据采用按需分配、有硬上限的稳定索引槽池，握手连接不预留 flow 槽位，快照仅保存仍需保留的 flow 及其索引；连接与会话上限不等于每连接的预分配长度。统一 `observation::Observer` 输出决策，平台仅补充运行环境字段。
 
-生命周期自身区分等待所有权持久化确认的 `Activating` 与已可服务的 `Published`。注册与 RESUME 复用同一提交屏障；确认事件必须匹配操作身份并满足原握手截止时间，才能允许 REGISTERED、JOIN 和转发。`ShareRelay` 负责执行、重试和清理，不另设可服务状态来重新解释生命周期。
+生命周期自身区分等待所有权持久化确认的 `Activating` 与已可服务的 `Published`。注册与 RESUME 复用同一提交屏障；确认事件必须匹配操作身份并满足原握手截止时间，才能允许 REGISTERED、JOIN 和转发。`ShareRelay` 负责提交顺序和失败隔离，不另设可服务状态来重新解释生命周期。Cloudflare 可利用同步 SQLite 与 [output gate](https://developers.cloudflare.com/durable-objects/reference/glossary/) 简化提交编排，但不能删除操作身份、提交屏障和 STOP 约束；原生仍须处理持久化结果不确定，存储 I/O 留在适配器。
 
 ```text
 Go CLI / 浏览器 / 未来客户端
@@ -104,26 +107,26 @@ remain unchanged; preconfigured routing parameters are rejected. The Worker must
 ShareRelay DO from this hint, and the DO must reject a handshake whose share identity differs.
 The hint grants no authority. Cloudflare host routing and authentication integration remain pending.
 
-Cloudflare 对应用队列、活跃连接与会话设置硬上限，并按共享 isolate 的实测内存峰值留余量。慢网与反复断连实验评估宿主缓冲风险，异常重连单独限速，不靠普遍缩小正常窗口处理故障。窗口和并发由多会话慢网测量确定，不照搬原生上限；必要时增加适配器内的 isolate 级在途计数，不引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建分享额度与恢复、STOP 分离；恢复仍遵守连接限额和异常重连限速，STOP 不受准入额度阻塞。账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
+Cloudflare 对应用队列、活跃连接与会话设置硬上限，并按共享 isolate 的内存峰值留余量。前置实验覆盖慢连接、反复断连及重建，观察残留累积、恢复与健康连接吞吐；未发生 OOM 不证明残留不占资源。容量估计须包含活跃窗口、残留期间旧代次的累计占用及运行时开销；缺少残留寿命上界时，限速不能提供总内存硬保证，重建也不得绕过残留风险控制。异常重连单独限速，不普遍缩小正常窗口；窗口和并发由实测确定，不照搬原生上限或引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建分享额度与恢复、STOP 分离；恢复仍遵守连接限额和异常重连限速，STOP 不受准入额度阻塞。账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
 
 ### Attachment budget
 
-Attachments preserve bounded live-connection ledgers, handshakes and sessions through
-normal hibernation. SQLite retains share authority, permanent STOP and generation
-fencing state, without forwarding-path delivery-counter writes. Lost delivery records
-retire affected generations under the rules above; unaffected survivors keep their
-budgets. Generation and session identities must not be reused after restart.
-The current `CheckpointManifest` and all-or-nothing restore require refactoring before
-production integration; the experiment's SQLite mirror remains a control only.
+Attachments preserve bounded live-connection state through normal hibernation.
+SQLite retains share authority, permanent STOP and generation fencing, without
+forwarding-path delivery-counter writes. Replace `CheckpointManifest` completeness
+checks and durable detached-generation ledgers with per-connection validation and
+dependency-scoped recovery. Lost records retire affected connections and sessions;
+unaffected survivors retain their budgets and deadlines. Restart never permits
+identity reuse. The SQLite mirror remains an experimental control only.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including
 unsettled retired flows in each connection's bound, and
 reserves at least **512 bytes** for host serialization/metadata, leaving at most **15,872
 bytes** for the kernel record. `CheckpointBudget::check` verifies the worst encoded
-connection state against this allowance before tracking begins. The sender's fanout
-therefore fits without spreading its accounting across unrelated sockets or writing
-delivery counters to SQLite. Native capacities remain independent.
+connection state against this allowance before tracking begins. Recheck the bound
+after the recovery refactor; do not spread accounting across unrelated sockets or
+write delivery counters to SQLite. Native capacities remain independent.
 
 The Worker must store the binary record as an ArrayBuffer/typed byte array and verify
 the actual wrapper's serialized size; a JavaScript number array or base64 expansion
