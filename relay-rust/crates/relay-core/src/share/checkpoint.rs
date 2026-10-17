@@ -1,6 +1,6 @@
 //! Inert, connection-owned recovery records. Storage layout does not confer authority.
 use super::{
-    ConnectionRef, Error, Identity, Observer, Readiness, Role, ShareRelay,
+    ConnectionRef, Error, Identity, Observer, Role, RuntimeStatus, ShareRelay,
     handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{flow::LedgerCheckpoint, sessions::SessionSnapshot};
@@ -143,7 +143,7 @@ impl Checkpoint {
 
 impl<O: Observer> ShareRelay<O> {
     pub(super) fn checkpoint_ready(&self) -> Result<(), Error> {
-        if self.readiness == Readiness::ReloadRequired
+        if self.runtime == RuntimeStatus::ReloadRequired
             || !self.tasks.is_empty()
             || self.stop_retirement.is_some()
         {

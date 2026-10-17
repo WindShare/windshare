@@ -250,6 +250,10 @@ impl<O: Observer> ShareLifecycle<O> {
                 published.route.registration,
                 StopCleanup::Owner(published.owner.connection),
             ),
+            State::Activating(commit) => (
+                commit.route.route.registration,
+                StopCleanup::Owner(commit.route.owner),
+            ),
             State::Grace(route) => (route.route.registration, StopCleanup::None),
             State::Stopping(_) | State::Stopped(_) => unreachable!(),
         };

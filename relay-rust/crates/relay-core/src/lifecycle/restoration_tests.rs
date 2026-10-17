@@ -77,14 +77,15 @@ fn a_published_route_re_adopts_its_surviving_ownership_without_a_write() {
     let fixture = Fixture::new();
     let mut original = fixture.engine();
     let publication = fixture.publish(&mut original).id;
-    let Action::Registered(published) = finish(
+    let Action::CommitOwnership(commit) = finish(
         &mut original,
         publication,
         PublicationResult::Committed,
         fixture.at,
     ) else {
-        panic!("publication must register");
+        panic!("publication must request the ownership commit");
     };
+    let published = committed_registration(&mut original, commit.id(), fixture.at);
     let owner = published.owner.connection();
     let (mut engine, action) = fixture
         .restore_at(

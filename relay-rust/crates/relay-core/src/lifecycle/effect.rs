@@ -11,8 +11,8 @@ use crate::{
 };
 
 use super::{
-    ConnectionRef, GraceRoute, Joined, OperationId, Publication, PublishRequest,
-    PublishedRegistration, PublishedRoute, Reservation, ResumeAttempt, Resumed, Resumption,
+    ConnectionRef, GraceRoute, Joined, OperationId, OwnershipCommit, Publication, PublishRequest,
+    PublishedRegistration, PublishedRoute, Reservation, ResumeAttempt, Resumption,
     StopAcknowledgement, StopResult, StopWork,
 };
 
@@ -20,8 +20,8 @@ use super::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicationResult {
     /// The unresolved record, descriptor bytes and connection preparation all
-    /// completed. The route remains hidden until the lifecycle returns
-    /// `Action::Registered`.
+    /// completed. The lifecycle next requests the final ownership commit;
+    /// the route remains unavailable until that commit is confirmed.
     Committed,
     /// No stored record, prepared resource, or outstanding write for this
     /// attempt remains. A failed write alone is insufficient evidence of an abort.
@@ -63,8 +63,12 @@ pub enum Event<'f> {
         /// Terminal evidence, or an explicit uncertain result.
         result: PublicationResult,
     },
-    /// Releases a pre-publication attempt, or fences its in-flight transaction.
-    /// A resume attempt reserves nothing and needs no cancellation.
+    /// Confirms the exact ownership record is durable. Failed or uncertain
+    /// writes keep the activation pending and retry the same host work.
+    OwnershipCommitted(OperationId),
+    /// Releases a pre-publication attempt, fences its in-flight transaction,
+    /// or detaches a pending activation. A resume handshake that has not yet
+    /// requested an ownership commit reserves nothing and needs no cancellation.
     Cancel {
         /// Never look this up again by connection ID after asynchronous work.
         id: OperationId,
@@ -198,18 +202,13 @@ pub enum Action<'f> {
     Reserved(Reservation),
     /// Execute the bounded host transaction before confirming publication.
     Publish(PublishRequest<'f>),
-    /// Replace only this operation's unresolved record with `record()`, then
-    /// send REGISTERED;
-    /// JOIN readiness follows. If that write fails or is uncertain, close the
-    /// share's connections and restore it from storage.
+    /// Persist this exact ownership change, close its replaced owner, then
+    /// report `Event::OwnershipCommitted`. No reply or admission is authorized.
+    CommitOwnership(OwnershipCommit),
+    /// Final persistence is confirmed and this owner may serve. Send REGISTERED.
     Registered(PublishedRegistration),
     /// Pass this attempt into the requesting handshake.
     ResumeAdmitted(ResumeAttempt),
-    /// Replace the stored record with `registration.record()`, close the
-    /// replaced owner and its relay sessions, then send REGISTERED; JOIN
-    /// readiness follows. If that write fails or is uncertain, close the
-    /// share's connections and restore it from storage.
-    Resumed(Resumed),
     /// The owner is gone without STOP: store `record()`, retire the owner's
     /// relay sessions and schedule `deadline()`. If that write fails, a
     /// restore from storage starts grace again.
@@ -244,6 +243,9 @@ pub enum Action<'f> {
 /// Deadline effects can accompany a new request for the same share.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Expiration {
+    /// The ownership write missed its handshake deadline. Close the pending
+    /// owner and persist this grace after the outstanding ownership write.
+    Detached(GraceRoute),
     /// Only a reservation existed; close its connection resources only if
     /// they still belong to this exact attempt.
     Released(OperationId),

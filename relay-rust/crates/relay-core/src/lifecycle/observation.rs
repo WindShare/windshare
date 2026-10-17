@@ -22,6 +22,8 @@ pub enum Phase {
     Publishing,
     /// An abandoned or uncertain publication must be reconciled.
     Fenced,
+    /// Authenticated ownership is waiting for its final durable confirmation.
+    Activating,
     /// A sender connection owns the visible route.
     Published,
     /// No connection serves the published route until its sender resumes or
@@ -46,6 +48,8 @@ pub enum ObservedEvent {
     Publish,
     /// Host publication or reconciliation result.
     PublicationFinished(PublicationResult),
+    /// The exact ownership record was durably confirmed.
+    OwnershipCommitted,
     /// The attempt lost its owner or failed.
     Cancel(Cancellation),
     /// A handshake asked to resume the route.
@@ -80,12 +84,15 @@ pub enum Decision {
     Reserved,
     /// Requested host publication.
     Publish,
-    /// Acknowledged publication.
+    /// Requested the final durability barrier for publication or resume.
+    CommitOwnership {
+        /// Exact former owner whose authority was revoked immediately.
+        replaced: Option<ConnectionRef>,
+    },
+    /// Confirmed durable ownership and permitted REGISTERED and JOIN.
     Registered,
     /// Bound a resume to the current ownership.
     ResumeAdmitted,
-    /// Transferred ownership to the resuming connection.
-    Resumed,
     /// Started the grace of a route whose owner is gone.
     Detached,
     /// Requested or retried one STOP phase.
@@ -168,6 +175,7 @@ impl<O: Observer> ShareLifecycle<O> {
                 share: self.share,
                 incarnation: self.incarnation,
                 ownership: match self.state {
+                    State::Activating(commit) => Some(commit.route.ownership()),
                     State::Published(published) => Some(published.owner),
                     State::Grace(route) => Some(route.lost()),
                     _ => None,
@@ -196,6 +204,11 @@ pub(super) const fn event_context(
         ),
         Event::PublicationFinished { id, result } => (
             ObservedEvent::PublicationFinished(*result),
+            Some(*id),
+            Some(id.connection()),
+        ),
+        Event::OwnershipCommitted(id) => (
+            ObservedEvent::OwnershipCommitted,
             Some(*id),
             Some(id.connection()),
         ),
@@ -240,8 +253,10 @@ pub(super) const fn decision(action: &Action<'_>) -> Decision {
         Action::Reserved(_) => Decision::Reserved,
         Action::Publish(_) => Decision::Publish,
         Action::Registered(_) => Decision::Registered,
+        Action::CommitOwnership(commit) => Decision::CommitOwnership {
+            replaced: commit.replaced(),
+        },
         Action::ResumeAdmitted(_) => Decision::ResumeAdmitted,
-        Action::Resumed(_) => Decision::Resumed,
         Action::Detached(_) => Decision::Detached,
         Action::Stop(work) => Decision::Stop {
             step: work.step(),

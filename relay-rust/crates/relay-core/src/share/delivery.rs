@@ -1,4 +1,4 @@
-use super::Readiness;
+use super::RuntimeStatus;
 use super::{
     ConnectionRef, Control, Error, Input, Observer, Output, RelayDecision, Role, ShareRelay,
     Submission, Turn,
@@ -51,7 +51,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        if self.readiness != Readiness::Ready {
+        if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         let id = header.session();
@@ -122,7 +122,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         handoff: impl FnOnce(FlowKey) -> Submission,
     ) -> Result<Submission, Error> {
-        if self.readiness != Readiness::Ready {
+        if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         let flow = receipt.flow();
@@ -155,7 +155,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        if self.readiness != Readiness::Ready {
+        if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         let entry = self

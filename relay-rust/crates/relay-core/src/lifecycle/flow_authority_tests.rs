@@ -228,6 +228,8 @@ fn resume_separates_old_and_new_destination_ledgers_until_old_closure_is_confirm
         old_ledger.retire(revoked.retirement.unwrap(), fixture.resume_at),
         Ok(Some(stale))
     );
+    let commit = ownership_commit(effects);
+    committed_registration(&mut engine, commit.id(), fixture.resume_at);
     let fresh = join(
         &fixture,
         &mut engine,
