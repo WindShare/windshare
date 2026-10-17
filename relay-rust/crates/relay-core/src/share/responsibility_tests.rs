@@ -79,6 +79,10 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
     let detached = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
     assert!(!relay.connections.contains_key(&key.receiver()));
     assert_eq!(
+        relay.delivery_usage(key.receiver()),
+        Some(relay.ledgers[&key.receiver()].usage())
+    );
+    assert_eq!(
         relay.ledgers[&key.receiver()].usage(),
         Usage {
             granted: Counts::ZERO,
@@ -109,6 +113,7 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
     );
     assert!(relay.checkpoint().is_ok());
     let _ = relay.handle(Input::Closed(key.receiver()), fixture.at);
+    assert_eq!(relay.delivery_usage(key.receiver()), None);
     assert_eq!(
         relay
             .handle(Input::Connected(connection(3)), fixture.at)

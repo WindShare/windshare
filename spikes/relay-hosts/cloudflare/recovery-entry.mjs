@@ -1,6 +1,6 @@
 // Isolate runtime abort from Rust/Wasm futures without duplicating relay policy.
 import { DurableObject } from 'cloudflare:workers';
-import RustWorker, { CloseProbe as RustCloseProbe } from './build/index.js';
+import RustWorker, { CloseProbe as RustCloseProbe, CheckpointProbe as RustCheckpointProbe } from './build/index.js';
 
 export { RustCloseProbe as CloseProbe };
 
@@ -63,6 +63,36 @@ export class BridgeProbe extends DurableObject {
   webSocketError(...args) { return this.rust.webSocketError(...args); }
 }
 
+// The bridge owns only runtime reconstruction/fault injection, never relay decisions.
+export class CheckpointProbe extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.rust = new RustCheckpointProbe(ctx, env);
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.split('/').at(-1);
+    if (request.method === 'POST' && action === 'reconstruct') {
+      await request.arrayBuffer();
+      this.rust = new RustCheckpointProbe(this.ctx, this.env);
+      url.pathname = url.pathname.replace(/\/reconstruct$/, '/status');
+      return this.rust.fetch(new Request(url, { method: 'GET' }));
+    }
+    if (request.method === 'POST' && action === 'reset') {
+      url.pathname = url.pathname.replace(/\/reset$/, '/prepare-reset');
+      const prepared = await this.rust.fetch(new Request(url, request));
+      if (!prepared.ok) return prepared;
+      this.ctx.abort('checkpoint probe abrupt reset', { retryAlarm: false });
+    }
+    return this.rust.fetch(request);
+  }
+
+  webSocketMessage(...args) { return this.rust.webSocketMessage(...args); }
+  webSocketClose(...args) { return this.rust.webSocketClose(...args); }
+  webSocketError(...args) { return this.rust.webSocketError(...args); }
+}
+
 export default class RecoveryEntrypoint extends RustWorker {
   async fetch(request) {
     const segments = new URL(request.url).pathname.split('/').filter(Boolean);
@@ -73,7 +103,7 @@ export default class RecoveryEntrypoint extends RustWorker {
       return new Response('invalid probe route', { status: 400 });
     }
     if (segments[0] === 'probe') return super.fetch(request);
-    const binding = { direct: 'CLOSE_PROBE', bridge: 'BRIDGE_PROBE', 'bridge-raw': 'BRIDGE_PROBE', control: 'RESET_CONTROL' }[segments[0]];
+    const binding = { checkpoint: 'CHECKPOINT_PROBE', direct: 'CLOSE_PROBE', bridge: 'BRIDGE_PROBE', 'bridge-raw': 'BRIDGE_PROBE', control: 'RESET_CONTROL' }[segments[0]];
     if (!binding) return new Response('unknown probe', { status: 404 });
     return this.env[binding].getByName(segments[1]).fetch(request);
   }

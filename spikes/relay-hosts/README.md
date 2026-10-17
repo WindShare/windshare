@@ -1,8 +1,13 @@
 # Relay host experiments
 
-These opt-in probes investigate the `ShareRelay::submit` critical section and the
-host evidence required by `Input::Closed`. Production adapters and the Go/browser
-protocol cutover remain unfinished.
+These opt-in probes investigate the `ShareRelay::submit` critical section,
+checkpoint recovery and the host evidence required by `Input::Closed`.
+Production adapters and the Go/browser protocol cutover remain unfinished.
+
+The [checkpoint experiment](checkpoint-recovery.md) now connects the real kernel
+to Cloudflare attachments and a SQLite mirror control. It distinguishes normal
+hibernation, missing attachments, disconnect callbacks and abrupt reset. Exact
+persistence does not solve unreachable-generation settlement.
 
 ## Findings — 2026-10-17
 
@@ -27,8 +32,9 @@ Windows process without TLS, disk, real clients, timer expiry or deployment load
 Its distributions cover completed healthy producers; the blocked producer is
 checked separately. Loopback rates are not product throughput estimates.
 
-The Worker probe exercises the platform without `ShareRelay`. It does not establish
-attachment recovery, peak memory, CPU cost or WindShare transfers. Elapsed client
+The original close/reset Worker probe exercises the platform without `ShareRelay`.
+The later checkpoint probe uses the kernel; neither establishes peak memory,
+CPU cost or full WindShare transfers. Elapsed client
 time includes network round trips; SQLite stores bounded metadata, never payloads.
 The bounded TLS peer waits without polling, then enlarges its receive buffer to
 drain. This is stronger than pausing Node's reader, but is not a platform memory
@@ -49,8 +55,11 @@ checks acknowledgement after queue discard and before joining transport tasks;
 the historical evidence above records the earlier completion boundary.
 Normal `WS2B` consumption, `WS2S` settlement and proven release remain the refund
 paths. Unresponsive peers retain responsibility across disconnect/restart.
-Next, establish host retention of the latest manifest and responsibility records
-across attachment loss; resetting the whole share cannot replace that evidence.
+The checkpoint experiment demonstrates retention with a per-event SQLite mirror
+and refusal when live attachment records are lost. It also exposes the independent
+lack of an old-generation settlement channel after disconnect. Resolve that
+responsibility boundary before production integration; resetting the whole share
+cannot replace evidence.
 
 The bridge is a tested reset mechanism for this pinned SDK, not a production
 termination policy. Source inspection suggests V8 termination interrupts an active
