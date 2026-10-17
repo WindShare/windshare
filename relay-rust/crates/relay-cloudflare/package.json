@@ -1,0 +1,13 @@
+{
+  "name": "windshare-relay-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "worker-build --release",
+    "dev": "wrangler dev",
+    "preview": "wrangler preview"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.1"
+  }
+}

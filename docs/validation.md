@@ -120,7 +120,12 @@ WebSockets with SQLite persistence. Its Go-codec scenario generates fresh keys a
 proofs, restarts the binary after registration, resumes, stops independently and
 restarts again to verify permanent refusal. Fault-injected host tests hold commits,
 lose receipts and race STOP with ownership publication. JOIN/forwarding, client
-runtime cutover and the production Cloudflare adapter remain unimplemented.
+runtime cutover remain unimplemented. The Cloudflare lifecycle adapter now uses the
+same authority-row transitions, real Worker entropy/time and SQLite. Injected host
+tests cover incomplete commits, permanent STOP, hibernation, partial attachment
+writes, lost-attachment isolation and absolute deadline/nonce preservation. Its
+[opt-in Preview scenario](../relay-rust/crates/relay-cloudflare/README.md#validation)
+uses the shared Go client and a separate fault-injection entry.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort
 controls and a TLS client with a bounded OS receive buffer. The
@@ -133,16 +138,20 @@ Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in 
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 
 `make rust` checks formatting, denies Clippy warnings across all native targets, runs native tests
-with **60% workspace and 50% per-package line-coverage minimums**, runs doctests, and builds the shared core for
-`wasm32-unknown-unknown`. `cargo-llvm-cov` measures production code, excluding test directories and
+with **60% workspace and 50% per-package line-coverage minimums**, runs doctests, and builds the shared core
+and Cloudflare adapter for `wasm32-unknown-unknown`, with Wasm Clippy for the adapter.
+`cargo-llvm-cov` measures production code, excluding test directories and
 `*_tests.rs` files. An empty scaffold reports no coverable lines; test or tool failures still fail the
-gate. Coverage runs the native tests once in `.target/coverage/`, preserving compiled dependencies
+gate. Cloudflare host orchestration is measured through native tests with injected
+I/O; platform bindings are checked by Wasm Clippy/build and opt-in Preview execution.
+Coverage runs the native tests once in `.target/coverage/`, preserving compiled dependencies
 while clearing stale workspace coverage. Doctests do not contribute to coverage.
 Package coverage sums production-file line counts from the same report using Cargo workspace
 membership and manifest directories; nested packages own their own sources. Measured source files
 must live inside their package directory. There is no per-file minimum or extra test run per package.
-Cargo.lock is committed and build/test gates use `--locked`. The Wasm build checks core portability,
-not Worker deployment. GitHub enforces the same gate on Linux and Windows, installing a prebuilt
+Cargo.lock is committed and build/test gates use `--locked`. The Wasm builds check
+core portability and the Cloudflare adapter, including its platform bindings;
+Worker bundling and real deployment remain opt-in. GitHub enforces the same gate on Linux and Windows, installing a prebuilt
 coverage tool to avoid compiling it during CI.
 
 The Rust gate also requires the Go toolchain from `go.mod` for native-host interoperability.
@@ -180,7 +189,7 @@ that field are incompatible with the current pre-release format.
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |
 | `make vectors-update` | Regenerate protocol vectors for review. |
-| `make rust` | Rust formatting, Clippy, native coverage (60% workspace / 50% per package), doctests, and shared-core Wasm build. |
+| `make rust` | Rust formatting, Clippy, native coverage (60% workspace / 50% per package), doctests, and core/Cloudflare Wasm checks. |
 | `make web` | ESLint with two workers, TypeScript/Vite build, and Vitest with two isolated workers. |
 | `make e2e` | Critical sender, relay, and receiver process path. |
 | `make browser` | Chromium relay smoke and short browser contracts with two workers. |
