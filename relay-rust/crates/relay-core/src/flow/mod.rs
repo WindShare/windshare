@@ -13,12 +13,16 @@
 //! without payloads. Aggregate recovery validates open routes against reinstated
 //! sessions and retains retired flows until cleanup. A surviving connection must
 //! never be assigned an empty replacement ledger. This module defines accounting
-//! contracts; delivery control wire codecs are a separate integration step.
+//! contracts; [`DeliveryConsumed`] freezes cumulative feedback bytes for the
+//! coordinated client cutover. Handshake capacity and settlement wire integration
+//! remain separate from this codec.
 
 mod accounting;
 mod checkpoint;
 mod checkpoint_codec;
 pub use checkpoint::{CheckpointError, LedgerCheckpoint};
+mod consumed;
+pub use consumed::DeliveryConsumed;
 mod delivery;
 mod forwarding;
 mod observation;

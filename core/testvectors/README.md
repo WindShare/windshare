@@ -61,7 +61,10 @@ acknowledgements, stale resume errors, and independent frame/byte credit deltas 
 both relay directions alongside registration and session bytes. Its relay control cases list
 every decoder refusal for REGISTER, RESUME, STOP and JOIN, and every proof-authentication boundary
 for REGISTER, RESUME and STOP. Go, browser and Rust decoders share the frame decisions; Go and
-Rust relays share the proof decisions.
+Rust relays share the proof decisions. `relay-delivery-consumed` freezes the staged
+32-byte cumulative `WS2B` contract across all three runtimes, including exact u64
+totals, complete-envelope bounds and malformed framing. The active receive-credit
+delta contract remains separate until the coordinated runtime cutover.
 Peer signaling schema 2 includes monotonic attempt
 sequences, the closed peer reason-to-recovery-scope mapping, and signed
 session-bound path controls. Path-control schema 2 also binds an opaque provider

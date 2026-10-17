@@ -46,6 +46,7 @@ export const V2_RELAY_STOP_ID_BYTES = 16
 export const V2_RELAY_SESSION_ID_BYTES = 8
 export const V2_RELAY_MAX_DESCRIPTOR_BYTES = 16 << 10
 export const V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES = 64 << 10
+export const V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES = 20
 export const V2_RELAY_SENDER_WINDOW_FRAMES = 64
 export const V2_RELAY_SENDER_WINDOW_BYTES = 4 << 20
 
@@ -94,7 +95,7 @@ const FRAME_BYTES = Object.freeze({
   descriptorUploadHeader: 12,
   descriptorDeliveryHeader: 20,
   error: 12,
-  opaqueHeader: 20,
+  opaqueHeader: V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES,
   sessionRetired: 16,
   sessionAdmitted: 16,
   sessionCredit: 24,

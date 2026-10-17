@@ -1391,6 +1391,323 @@
       "relaySessionIdB64": "4eLj5OXm5+g="
     },
     {
+      "counts": [
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAA=",
+          "name": "empty-prefix",
+          "totalEncodedBytes": "0",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABU=",
+          "name": "minimum-envelope",
+          "totalEncodedBytes": "21",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABQ=",
+          "name": "maximum-envelope",
+          "totalEncodedBytes": "65556",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "mixed-envelope-sizes",
+          "totalEncodedBytes": "100",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAEBAAAAAAEBFBQ=",
+          "name": "above-runtime-windows",
+          "totalEncodedBytes": "16847892",
+          "totalFrames": "257"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAEAAAAAAAAAFQAAAAA=",
+          "name": "above-u32",
+          "totalEncodedBytes": "90194313216",
+          "totalFrames": "4294967296"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAgAAAAAAABAqAAAAAAABU=",
+          "name": "above-javascript-safe-integer",
+          "totalEncodedBytes": "189151184349560853",
+          "totalFrames": "9007199254740993"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAA/+wBj+DD//////////8=",
+          "name": "maximum-bytes-minimum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571139"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6Awwwwwwwwww//////////8=",
+          "name": "maximum-bytes-maximum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359600"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAAAA=",
+          "name": "frames-without-bytes",
+          "totalEncodedBytes": "0",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAE=",
+          "name": "bytes-without-frames",
+          "totalEncodedBytes": "1",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABQ=",
+          "name": "below-minimum-envelope",
+          "totalEncodedBytes": "20",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABU=",
+          "name": "above-maximum-envelope",
+          "totalEncodedBytes": "65557",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAACk=",
+          "name": "batch-below-minimum",
+          "totalEncodedBytes": "41",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAACACk=",
+          "name": "batch-above-maximum",
+          "totalEncodedBytes": "131113",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAA/+wBj+DC//////////8=",
+          "name": "maximum-bytes-too-few-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571138"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6Awwwwwwwwwx//////////8=",
+          "name": "maximum-bytes-too-many-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359601"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6P////////////////////8=",
+          "name": "both-u64-maxima",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "18446744073709551615"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AwwwwwwwwwxAAAAAAAAABQ=",
+          "name": "multiplication-wraparound",
+          "totalEncodedBytes": "20",
+          "totalFrames": "878416384462359601"
+        }
+      ],
+      "malformed": [
+        {
+          "encodedB64": "",
+          "name": "truncated-at-0"
+        },
+        {
+          "encodedB64": "Vw==",
+          "name": "truncated-at-1"
+        },
+        {
+          "encodedB64": "V1M=",
+          "name": "truncated-at-2"
+        },
+        {
+          "encodedB64": "V1My",
+          "name": "truncated-at-3"
+        },
+        {
+          "encodedB64": "V1MyQg==",
+          "name": "truncated-at-4"
+        },
+        {
+          "encodedB64": "V1MyQgI=",
+          "name": "truncated-at-5"
+        },
+        {
+          "encodedB64": "V1MyQgIA",
+          "name": "truncated-at-6"
+        },
+        {
+          "encodedB64": "V1MyQgIAAA==",
+          "name": "truncated-at-7"
+        },
+        {
+          "encodedB64": "V1MyQgIAAAA=",
+          "name": "truncated-at-8"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh",
+          "name": "truncated-at-9"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4g==",
+          "name": "truncated-at-10"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uM=",
+          "name": "truncated-at-11"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk",
+          "name": "truncated-at-12"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5Q==",
+          "name": "truncated-at-13"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5eY=",
+          "name": "truncated-at-14"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn",
+          "name": "truncated-at-15"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6A==",
+          "name": "truncated-at-16"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AA=",
+          "name": "truncated-at-17"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAA",
+          "name": "truncated-at-18"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAA==",
+          "name": "truncated-at-19"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAA=",
+          "name": "truncated-at-20"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAA",
+          "name": "truncated-at-21"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAA==",
+          "name": "truncated-at-22"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAA=",
+          "name": "truncated-at-23"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAAC",
+          "name": "truncated-at-24"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAA==",
+          "name": "truncated-at-25"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAA=",
+          "name": "truncated-at-26"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAA",
+          "name": "truncated-at-27"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAA==",
+          "name": "truncated-at-28"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAA=",
+          "name": "truncated-at-29"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAA",
+          "name": "truncated-at-30"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAA==",
+          "name": "truncated-at-31"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQA",
+          "name": "trailing-byte"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGRXUzJCAgAAAOHi4+Tl5ufoAAAAAAAAAAIAAAAAAAAAZA==",
+          "name": "concatenated-controls"
+        },
+        {
+          "encodedB64": "VlMyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-0"
+        },
+        {
+          "encodedB64": "V1IyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-1"
+        },
+        {
+          "encodedB64": "V1MzQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-2"
+        },
+        {
+          "encodedB64": "V1MyQwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-3"
+        },
+        {
+          "encodedB64": "V1MyQgMAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-4"
+        },
+        {
+          "encodedB64": "V1MyQgIBAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-5"
+        },
+        {
+          "encodedB64": "V1MyQgIAAQDh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-6"
+        },
+        {
+          "encodedB64": "V1MyQgIAAAHh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-7"
+        },
+        {
+          "encodedB64": "V1MyQgIAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "zero-session-id"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAIAAABk",
+          "name": "current-runtime-u32-credit"
+        }
+      ],
+      "name": "relay-delivery-consumed",
+      "relaySessionIdB64": "4eLj5OXm5+g="
+    },
+    {
       "aadB64": "d2luZHNoYXJlL3YyIG9wZXJhdGlvbi1lbnZlbG9wZQACAUBBQkNERUZHSElKS0xNTk9vHp1SVrj46ZqRsazkfFYwAQIDBAAAAAAAAAAAAAAAAAAAAJQ=",
       "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEBBQkNERUZHSElKS0xNTk9vHp1SVrj46ZqRsazkfFYwAQIDBAAAAAABAAAAAAAAAAAKsLGys7S1tre4ubq7vL2+v3G7l64QKbC1Aw0HeVch6ztAprZhPGM3ycDHMKRkdHdw",
       "controlSignatureB64": "uuX0NewBr7XdPxBz6IhQBl0L0BynqizcB5kd1myEJuV4DXA7/6lWBL5hfiEXgNBGPXLXOfMQA7b/ucCqSrOpCg==",
