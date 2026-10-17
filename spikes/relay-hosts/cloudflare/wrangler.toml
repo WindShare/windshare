@@ -1,0 +1,27 @@
+name = "windshare-relay-host-probe"
+main = "build/index.js"
+compatibility_date = "2026-10-17"
+compatibility_flags = ["web_socket_auto_reply_to_close"]
+
+[build]
+command = "worker-build --release"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CloseProbe"]
+
+[[durable_objects.bindings]]
+name = "CLOSE_PROBE"
+class_name = "CloseProbe"
+
+[[previews.durable_objects.bindings]]
+name = "CLOSE_PROBE"
+class_name = "CloseProbe"
+
+[previews.observability]
+enabled = true
+
+[previews.observability.logs]
+enabled = true
+invocation_logs = true
+persist = true

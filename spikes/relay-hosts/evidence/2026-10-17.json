@@ -1,0 +1,645 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-17T06:57:38.033Z",
+  "base_commit": "ac9992364d7c263d1324c08a0b37fe4e215bbd2a",
+  "scope": "Opt-in host experiments, not production relay adapters or full WindShare transfers.",
+  "host": {
+    "os": "Windows",
+    "architecture": "x64",
+    "rust": "1.99.0",
+    "node": "24.16.0"
+  },
+  "source_sha256": {
+    "spikes/relay-hosts/cloudflare/src/lib.rs": "74fd2213758c3a6a5d20d184cd0aec546efe2bfeccfda970eb3e1d5c0151036d",
+    "spikes/relay-hosts/cloudflare/Cargo.toml": "637232a6348afb47018eb49be7ec74cb40336d189be82a51a1bdbe0a8eacc01e",
+    "spikes/relay-hosts/cloudflare/Cargo.lock": "86f9d37d190bf07bc7ae30371ed1aae133bb50a00ff7fdf7742e1643b327100c",
+    "spikes/relay-hosts/cloudflare/wrangler.toml": "099a7b6b63fd33acd6ce683bf67f93fa50534b3b5fdabd3c55b5d67474d9b856",
+    "spikes/relay-hosts/cloudflare/package.json": "19738306a9eea94d36811cdcbdaf427fd6e64d6711cda1b9d3b5ba2c9cf18f70",
+    "spikes/relay-hosts/cloudflare/package-lock.json": "b1cf08232029ac8b0ba82fc92a7ef1c0340a689b0b528d7bd2460f1b843ca4b3",
+    "spikes/relay-hosts/cloudflare/probe.mjs": "c97a22d20d8c995f8be1c2f5d45b42d02bca87317485dcddd09c7cba36df9909",
+    "spikes/relay-hosts/cloudflare/reset-probe.mjs": "e75029303065a788203ce2c830f6ed7924c34bf09b5d3617fcce6e47e16534dd",
+    "spikes/relay-hosts/cloudflare/.cargo/config.toml": "75e9dbad92fb71e9adc52f33c6e1c0b365445aabcea4399b8d715261fdce367e",
+    "spikes/relay-hosts/native/src/main.rs": "dff52ca0d93ff83da4477c690fd9e134c8f105f5ac2d2115876d834a6647c678",
+    "spikes/relay-hosts/native/src/scenario.rs": "3696e42782d22e75194464cfc808cca9ac9f3768a7569e4f04f94c2168ade5ac",
+    "spikes/relay-hosts/native/Cargo.toml": "626cb7c61814246649d03656ebc1dfc53a0168de13a70a0b10e7a996fe13c20c",
+    "spikes/relay-hosts/native/Cargo.lock": "f213f2ca5b19ee131eac00f663f95bd7ef3eba96ada0c4c53906bfcce12c07e5",
+    "spikes/relay-hosts/native/.cargo/config.toml": "75e9dbad92fb71e9adc52f33c6e1c0b365445aabcea4399b8d715261fdce367e",
+    "core/testvectors/v2-session.json": "6b022e7a2ede78fcb4cf0ec3c5ddf6b6dc03f4fb185f60fd0c3e4a6b87bf0e54"
+  },
+  "core_source_tree": {
+    "files": 95,
+    "sha256": "ac3d1905262eb82e1f0d50438cd85d013afb69193d951719d77666c3f62261f9",
+    "algorithm": "SHA256 of sorted repository path + NUL + file SHA256 + LF"
+  },
+  "native": {
+    "architecture": "x86_64",
+    "client_feedback_batch": 4,
+    "limitations": "Canonical fixture handshake and in-memory storage; not product throughput or durability certification.",
+    "platform": "windows",
+    "profile": "release",
+    "runs": [
+      {
+        "close_mode": "SO_LINGER=0 after joining both WebSocket halves",
+        "elapsed_ms": 50.256099999999996,
+        "encoded_frame_bytes": 65556,
+        "healthy_frames_per_receiver": 512,
+        "healthy_mib": 32.009765625,
+        "healthy_mib_per_s": 636.9329419712234,
+        "healthy_receivers": 1,
+        "joined_writer_cleanup_ns": 95300,
+        "lock_wait": {
+          "max_ns": 2500,
+          "p50_ns": 0,
+          "p95_ns": 100,
+          "p99_ns": 800,
+          "samples": 512
+        },
+        "milestone_observations": 38,
+        "receive_and_submit_critical_section": {
+          "max_ns": 10500,
+          "p50_ns": 1000,
+          "p95_ns": 3200,
+          "p99_ns": 4200,
+          "samples": 512
+        },
+        "slow_peer_terminal": null,
+        "slow_receiver": false,
+        "slow_state": null,
+        "stale_submission_refused": true,
+        "stop_ack_after_cleanup": true,
+        "stop_lock_wait_ns": 3000,
+        "stop_revoke_ns": 88500,
+        "submit": {
+          "max_ns": 8100,
+          "p50_ns": 300,
+          "p95_ns": 2100,
+          "p99_ns": 2500,
+          "samples": 512
+        }
+      },
+      {
+        "close_mode": "SO_LINGER=0 after joining both WebSocket halves",
+        "elapsed_ms": 42.979000000000006,
+        "encoded_frame_bytes": 65556,
+        "healthy_frames_per_receiver": 512,
+        "healthy_mib": 32.009765625,
+        "healthy_mib_per_s": 744.7768823146187,
+        "healthy_receivers": 1,
+        "joined_writer_cleanup_ns": 203900,
+        "lock_wait": {
+          "max_ns": 5400,
+          "p50_ns": 0,
+          "p95_ns": 100,
+          "p99_ns": 1700,
+          "samples": 512
+        },
+        "milestone_observations": 52,
+        "receive_and_submit_critical_section": {
+          "max_ns": 4200,
+          "p50_ns": 1000,
+          "p95_ns": 3000,
+          "p99_ns": 3500,
+          "samples": 512
+        },
+        "slow_peer_terminal": "IO error: 远程主机强迫关闭了一个现有的连接。 (os error 10054)",
+        "slow_receiver": true,
+        "slow_state": {
+          "configured_socket_buffer_bytes": 8192,
+          "submitted": 6,
+          "writer_queue_used": 2,
+          "writes_completed": 3
+        },
+        "stale_submission_refused": true,
+        "stop_ack_after_cleanup": true,
+        "stop_lock_wait_ns": 100,
+        "stop_revoke_ns": 106200,
+        "submit": {
+          "max_ns": 2800,
+          "p50_ns": 300,
+          "p95_ns": 2000,
+          "p99_ns": 2300,
+          "samples": 512
+        }
+      },
+      {
+        "close_mode": "SO_LINGER=0 after joining both WebSocket halves",
+        "elapsed_ms": 73.5372,
+        "encoded_frame_bytes": 65556,
+        "healthy_frames_per_receiver": 512,
+        "healthy_mib": 128.0390625,
+        "healthy_mib_per_s": 1741.146827728007,
+        "healthy_receivers": 4,
+        "joined_writer_cleanup_ns": 502100,
+        "lock_wait": {
+          "max_ns": 45700,
+          "p50_ns": 0,
+          "p95_ns": 100,
+          "p99_ns": 700,
+          "samples": 2048
+        },
+        "milestone_observations": 94,
+        "receive_and_submit_critical_section": {
+          "max_ns": 11700,
+          "p50_ns": 600,
+          "p95_ns": 2300,
+          "p99_ns": 3600,
+          "samples": 2048
+        },
+        "slow_peer_terminal": "IO error: 远程主机强迫关闭了一个现有的连接。 (os error 10054)",
+        "slow_receiver": true,
+        "slow_state": {
+          "configured_socket_buffer_bytes": 8192,
+          "submitted": 6,
+          "writer_queue_used": 2,
+          "writes_completed": 3
+        },
+        "stale_submission_refused": true,
+        "stop_ack_after_cleanup": true,
+        "stop_lock_wait_ns": 100,
+        "stop_revoke_ns": 114500,
+        "submit": {
+          "max_ns": 3200,
+          "p50_ns": 200,
+          "p95_ns": 600,
+          "p99_ns": 1000,
+          "samples": 2048
+        }
+      }
+    ],
+    "transport": "loopback TCP WebSocket",
+    "worker_threads": 4,
+    "writer_queue_frames": 2,
+    "recorded_at": "2026-10-17T06:57:20.531Z"
+  },
+  "cloudflare": {
+    "worker": "windshare-relay-host-probe",
+    "compatibility_date": "2026-10-17",
+    "compatibility_flags": [
+      "web_socket_auto_reply_to_close"
+    ],
+    "versions": {
+      "worker": "0.8.7",
+      "worker_build": "0.8.7",
+      "wrangler": "4.151.1",
+      "ws": "8.22.0"
+    },
+    "deployment_artifact_sha256": {
+      "wasm": "e0adc6c964ed03ec7d940387cdc261554aa371b6d1515d3972f162a3864cf20d",
+      "javascript": "cb4577d1881bb0260421aa0baa2dc1a6b119994a811505da14c73bd5914d90ca"
+    },
+    "close": {
+      "run": "close-c9f46c7a-2d61-400e-9230-c782b97a8003",
+      "started_at": "2026-10-17T06:51:01.656Z",
+      "finished_at": "2026-10-17T06:51:13.903Z",
+      "healthy_delivery_ms": 480.0078000000003,
+      "healthy_delivery_metric": "HTTP request plus 8 x 65536-byte client delivery; not CPU time or a throughput benchmark",
+      "slow_ready_state_at_deadline": 2,
+      "slow_received_frames": 128,
+      "snapshots": [
+        {
+          "stage": "paused_receiver_after_deadline",
+          "observed_at": "2026-10-17T06:51:11.459Z",
+          "boot": 1792219863312,
+          "sockets": [
+            {
+              "role": "healthy",
+              "ready_state": 1,
+              "buffered_amount": null
+            },
+            {
+              "role": "slow",
+              "ready_state": 2,
+              "buffered_amount": null
+            }
+          ]
+        },
+        {
+          "stage": "receiver_resumed_and_close_completed",
+          "observed_at": "2026-10-17T06:51:12.039Z",
+          "boot": 1792219863312,
+          "sockets": [
+            {
+              "role": "healthy",
+              "ready_state": 1,
+              "buffered_amount": null
+            }
+          ]
+        },
+        {
+          "stage": "all_clients_closed",
+          "observed_at": "2026-10-17T06:51:13.903Z",
+          "boot": 1792219863312,
+          "sockets": []
+        }
+      ],
+      "events": [
+        {
+          "event": "connected",
+          "at_ms": 1792219863312,
+          "boot": 1792219863312,
+          "details": {
+            "role": "slow",
+            "sockets": [
+              {
+                "role": "slow",
+                "ready_state": 1,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "connected",
+          "at_ms": 1792219864020,
+          "boot": 1792219863312,
+          "details": {
+            "role": "healthy",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 1,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "send_returned",
+          "at_ms": 1792219865102,
+          "boot": 1792219863312,
+          "details": {
+            "bytes": 8388608,
+            "frames": 128,
+            "role": "slow",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 1,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "close_requested",
+          "at_ms": 1792219865102,
+          "boot": 1792219863312,
+          "details": {
+            "role": "slow",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 2,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "send_returned",
+          "at_ms": 1792219865598,
+          "boot": 1792219863312,
+          "details": {
+            "bytes": 524288,
+            "frames": 8,
+            "role": "healthy",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 2,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "close_deadline",
+          "at_ms": 1792219870104,
+          "boot": 1792219863312,
+          "details": {
+            "decision": "retain_unproven_occupancy",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 2,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "close_callback",
+          "at_ms": 1792219872569,
+          "boot": 1792219863312,
+          "details": {
+            "code": 1000,
+            "ready_state": 3,
+            "reason": "probe close",
+            "role": "slow",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "slow",
+                "ready_state": 3,
+                "buffered_amount": null
+              }
+            ],
+            "was_clean": true
+          }
+        },
+        {
+          "event": "close_callback_returning",
+          "at_ms": 1792219872569,
+          "boot": 1792219863312,
+          "details": {
+            "ready_state": 3,
+            "role": "slow"
+          }
+        },
+        {
+          "event": "connected",
+          "at_ms": 1792219873727,
+          "boot": 1792219863312,
+          "details": {
+            "role": "peer-close",
+            "sockets": [
+              {
+                "role": "peer-close",
+                "ready_state": 1,
+                "buffered_amount": null
+              },
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              }
+            ]
+          }
+        },
+        {
+          "event": "close_callback",
+          "at_ms": 1792219874008,
+          "boot": 1792219863312,
+          "details": {
+            "code": 1000,
+            "ready_state": 2,
+            "reason": "client initiated",
+            "role": "peer-close",
+            "sockets": [
+              {
+                "role": "peer-close",
+                "ready_state": 2,
+                "buffered_amount": null
+              },
+              {
+                "role": "healthy",
+                "ready_state": 1,
+                "buffered_amount": null
+              }
+            ],
+            "was_clean": true
+          }
+        },
+        {
+          "event": "close_callback_returning",
+          "at_ms": 1792219874008,
+          "boot": 1792219863312,
+          "details": {
+            "ready_state": 3,
+            "role": "peer-close"
+          }
+        },
+        {
+          "event": "close_callback",
+          "at_ms": 1792219874232,
+          "boot": 1792219863312,
+          "details": {
+            "code": 1000,
+            "ready_state": 2,
+            "reason": "probe complete",
+            "role": "healthy",
+            "sockets": [
+              {
+                "role": "healthy",
+                "ready_state": 2,
+                "buffered_amount": null
+              }
+            ],
+            "was_clean": true
+          }
+        },
+        {
+          "event": "close_callback_returning",
+          "at_ms": 1792219874232,
+          "boot": 1792219863312,
+          "details": {
+            "ready_state": 3,
+            "role": "healthy"
+          }
+        }
+      ],
+      "physical_release_proven": false
+    },
+    "reset": [
+      {
+        "run": "reset-0cc99542-9df3-48c9-853d-e7f2e4eec648",
+        "mode": "empty",
+        "started_at": "2026-10-17T06:50:24.314Z",
+        "finished_at": "2026-10-17T06:50:47.095Z",
+        "before": {
+          "boot": 1792219826052,
+          "sockets": [],
+          "events": []
+        },
+        "reset_http_status": 500,
+        "reset_probe_ms": 5295.302599999999,
+        "reset_observed_before_client_teardown": false,
+        "healthy_peer_closed_before_client_teardown": null,
+        "status_error_while_paused": "TimeoutError: The operation was aborted due to timeout",
+        "client_teardown_at": "2026-10-17T06:50:30.525Z",
+        "status_error_after_client_teardown": "TimeoutError: The operation was aborted due to timeout",
+        "fresh_object_control_status": 200,
+        "physical_release_proven": false
+      },
+      {
+        "run": "reset-feb693de-18dc-4636-8e3a-5c422bc5d44b",
+        "mode": "paused",
+        "started_at": "2026-10-17T06:51:14.001Z",
+        "finished_at": "2026-10-17T06:51:44.271Z",
+        "before": {
+          "boot": 1792219875536,
+          "sockets": [
+            {
+              "role": "healthy",
+              "ready_state": 1,
+              "buffered_amount": null
+            },
+            {
+              "role": "slow",
+              "ready_state": 2,
+              "buffered_amount": null
+            }
+          ],
+          "events": [
+            {
+              "event": "connected",
+              "at_ms": 1792219875536,
+              "boot": 1792219875536,
+              "details": {
+                "role": "slow",
+                "sockets": [
+                  {
+                    "role": "slow",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  }
+                ]
+              }
+            },
+            {
+              "event": "connected",
+              "at_ms": 1792219876154,
+              "boot": 1792219875536,
+              "details": {
+                "role": "healthy",
+                "sockets": [
+                  {
+                    "role": "healthy",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  },
+                  {
+                    "role": "slow",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  }
+                ]
+              }
+            },
+            {
+              "event": "send_returned",
+              "at_ms": 1792219876812,
+              "boot": 1792219875536,
+              "details": {
+                "bytes": 8388608,
+                "frames": 128,
+                "role": "slow",
+                "sockets": [
+                  {
+                    "role": "healthy",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  },
+                  {
+                    "role": "slow",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  }
+                ]
+              }
+            },
+            {
+              "event": "close_requested",
+              "at_ms": 1792219876812,
+              "boot": 1792219875536,
+              "details": {
+                "role": "slow",
+                "sockets": [
+                  {
+                    "role": "healthy",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  },
+                  {
+                    "role": "slow",
+                    "ready_state": 2,
+                    "buffered_amount": null
+                  }
+                ]
+              }
+            },
+            {
+              "event": "close_deadline",
+              "at_ms": 1792219881813,
+              "boot": 1792219875536,
+              "details": {
+                "decision": "retain_unproven_occupancy",
+                "sockets": [
+                  {
+                    "role": "healthy",
+                    "ready_state": 1,
+                    "buffered_amount": null
+                  },
+                  {
+                    "role": "slow",
+                    "ready_state": 2,
+                    "buffered_amount": null
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "reset_http_status": 500,
+        "reset_probe_ms": 5282.1998,
+        "reset_observed_before_client_teardown": false,
+        "healthy_peer_closed_before_client_teardown": true,
+        "status_error_while_paused": "TimeoutError: The operation was aborted due to timeout",
+        "client_teardown_at": "2026-10-17T06:51:27.777Z",
+        "status_error_after_client_teardown": "TimeoutError: The operation was aborted due to timeout",
+        "fresh_object_control_status": 200,
+        "physical_release_proven": false
+      }
+    ],
+    "reset_conclusion": "Neither mode established recovery within bounded queries. Empty-object failure means the symptom cannot be attributed to buffered payloads. Fresh-object controls succeeded; root cause remains unresolved.",
+    "cleanup": {
+      "status": "deleted",
+      "confirmed_at": "2026-10-17T06:55:52.633Z",
+      "method": "wrangler preview delete for the owned probe"
+    }
+  },
+  "sources": {
+    "workerd_commit": "1568dcf0a34da009f0a5c86b31d3a7f832ede97e",
+    "workerd_caveat": "Inspected upstream source, not a verified revision of the deployed Cloudflare service.",
+    "close_callback": "https://developers.cloudflare.com/durable-objects/api/base/#websocketclose",
+    "state_api": "https://developers.cloudflare.com/durable-objects/api/state/",
+    "native_abortive_close": "https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-closesocket"
+  },
+  "validation": {
+    "make_rust": "passed: 167 tests, 95.09% core line coverage, format, Clippy, doctests, Wasm build",
+    "native": "format, Clippy -D warnings and release probe passed",
+    "cloudflare": "Wasm Clippy, release Worker deployment and close/reset probes executed",
+    "npm_audit": "zero vulnerabilities",
+    "ordinary_ci_impact": "No added automatic probe runs"
+  },
+  "publication_note": "Account identifiers, personal deployment URLs and precise hardware model omitted. Exact deployment metadata remains in ignored local evidence; source and artifact hashes identify the tested build."
+}
