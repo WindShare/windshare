@@ -402,12 +402,16 @@ impl ControlHandshake {
         match frame.first_chunk().copied() {
             Some(REGISTER_INIT_MAGIC) => Ok(self.registration(RegisterInit::decode(frame)?, now)),
             Some(STOP_INIT_MAGIC) => self.stop(StopInit::decode(frame)?, now),
-            Some(JOIN_MAGIC) => Ok(Step::Complete(Outcome::Join(JoinRequest::new(
-                self.relay,
-                self.connection,
-                Join::decode(frame)?.share_id(),
-                now,
-            )))),
+            Some(JOIN_MAGIC) => {
+                let join = Join::decode(frame)?;
+                Ok(Step::Complete(Outcome::Join(JoinRequest::new(
+                    self.relay,
+                    self.connection,
+                    join.share_id(),
+                    join.receive_capacity(),
+                    now,
+                ))))
+            }
             _ => Err(CloseReason::Malformed(FrameError::Header)),
         }
     }

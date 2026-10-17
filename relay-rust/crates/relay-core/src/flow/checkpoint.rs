@@ -1,6 +1,7 @@
 //! A connection's complete delivery responsibility, including retired flows.
 use super::{
-    ConnectionLedger, ConnectionState, Counts, Delivery, FlowKey, Limits, Observer, delivery::State,
+    ConnectionLedger, ConnectionState, Counts, Delivery, FlowKey, Limits, Observer,
+    ReceiveCapacity, delivery::State,
 };
 use crate::{clock::UnixMillis, identifiers::RelayIdentity, lifecycle::ConnectionRef};
 use alloc::vec::Vec;
@@ -11,6 +12,7 @@ pub struct LedgerCheckpoint {
     pub(super) destination: ConnectionRef,
     pub(super) entries: Vec<Option<Delivery>>,
     pub(super) state: ConnectionState,
+    pub(super) receive_capacity: Option<ReceiveCapacity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +48,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             destination: self.destination,
             entries: self.entries.to_vec(),
             state: self.state,
+            receive_capacity: self.receive_capacity,
         })
     }
 
@@ -70,6 +73,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
         }
         let mut ledger = Self::new(relay, destination, limits, observer)
             .map_err(|_| CheckpointError::Capacity)?;
+        ledger.receive_capacity = checkpoint.receive_capacity;
         for (slot, entry) in checkpoint.entries.iter().enumerate() {
             if let Some(entry) = entry {
                 validate_entry(*entry, relay, destination, slot)?;
@@ -90,7 +94,10 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
                     .startup_used
                     .checked_add(entry.startup_used())
                     .ok_or(CheckpointError::Accounting)?;
-                if !limits.total.covers(total)
+                if !checkpoint
+                    .receive_capacity
+                    .is_some_and(|capacity| capacity.counts().covers(total))
+                    || !limits.total.covers(total)
                     || !limits.startup_reserve.covers(startup)
                     || !limits.regular().covers(total.sub(startup))
                 {

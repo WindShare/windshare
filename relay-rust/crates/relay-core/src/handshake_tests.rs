@@ -103,7 +103,7 @@ struct HandshakeVector {
 
 impl HandshakeVector {
     fn load() -> Self {
-        session_case("fresh-relay-registration-proof")
+        session_case("relay-capacity-registration")
     }
 
     fn relay(&self) -> RelayIdentity {
@@ -260,6 +260,7 @@ fn join_completes_without_sender_authority() {
             vector.relay(),
             connection(),
             init.registration().route().share_id(),
+            init.receive_capacity(),
             OPENED_AT
         )))
     );
@@ -269,7 +270,7 @@ fn join_completes_without_sender_authority() {
 #[test]
 fn handshakes_publish_only_the_committed_descriptor() {
     let vector = HandshakeVector::load();
-    let uploads: UploadAuthorizationVector = session_case("relay-descriptor-upload-authorization");
+    let uploads: UploadAuthorizationVector = session_case("relay-capacity-descriptor-upload");
     let relay = relay_identity(&uploads.relay_identity_b64);
     let at = started_for(&vector.expires_at, REGISTRATION_TIMEOUT);
     for case in uploads.cases {

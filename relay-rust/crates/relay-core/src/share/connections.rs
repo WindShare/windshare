@@ -256,6 +256,9 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
         };
         match request {
             AdmissionRequest::Registration(init) => {
+                if !self.declare_capacity(connection, init.receive_capacity(), now, turn) {
+                    return;
+                }
                 let event = match init.mode() {
                     RegistrationMode::Fresh => Event::Reserve {
                         connection,
@@ -278,6 +281,32 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
                 }
             }
         }
+    }
+
+    pub(super) fn declare_capacity(
+        &mut self,
+        connection: ConnectionRef,
+        capacity: crate::flow::ReceiveCapacity,
+        now: UnixMillis,
+        turn: &mut Turn,
+    ) -> bool {
+        let result = self
+            .connections
+            .get_mut(&connection)
+            .ok_or(Error::UnknownConnection)
+            .and_then(|entry| {
+                entry
+                    .ledger
+                    .declare_capacity(capacity, now)
+                    .map_err(Error::Flow)
+            });
+        self.flush_ledger(connection, now, turn);
+        if let Err(error) = result {
+            self.trace(Some(connection), RelayDecision::Rejected(error), now);
+            self.disconnect(connection, now, turn);
+            return false;
+        }
+        true
     }
 
     pub(super) fn close(&mut self, connection: ConnectionRef, turn: &mut Turn) {

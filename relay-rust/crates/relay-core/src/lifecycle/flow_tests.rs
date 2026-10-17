@@ -33,7 +33,16 @@ fn ledger<const N: usize>(
     fixture: &Fixture,
     destination: ConnectionRef,
 ) -> ConnectionLedger<N, FlowTrace> {
-    ConnectionLedger::new(fixture.relay(), destination, limits(), FlowTrace::default()).unwrap()
+    let mut ledger =
+        ConnectionLedger::new(fixture.relay(), destination, limits(), FlowTrace::default())
+            .unwrap();
+    ledger
+        .declare_capacity(
+            crate::flow::ReceiveCapacity::new(u64::MAX, u64::MAX).unwrap(),
+            fixture.at,
+        )
+        .unwrap();
+    ledger
 }
 
 fn restore_ledger<const N: usize>(

@@ -10,6 +10,7 @@ use crate::{
     challenge::{Challenge, ChallengePurpose},
     clock::UnixMillis,
     descriptor_upload::{AuthorizedDescriptor, DescriptorDigestMismatch, DescriptorUpload},
+    flow::ReceiveCapacity,
     identifiers::{
         DescriptorDigest, RelayIdentity, ResumeToken, ResumeTokenHash, ShareId, ShareInstance,
         ShareRoute,
@@ -25,8 +26,9 @@ const REGISTERED_MAGIC: Magic = *b"WS2K";
 const REGISTER_DOMAIN: &[u8] = b"windshare/v2 relay-register\0";
 const RESUME_DOMAIN: &[u8] = b"windshare/v2 relay-resume\0";
 // Share ID, instance, pkHash, descriptor digest, resume token hash, relay
-// identity, then the challenge ID, nonce and big-endian expiry.
-const SIGNED_FIELD_BYTES: usize = 12 + 16 + 16 + 32 + 32 + 32 + 16 + 32 + 8;
+// identity, then the challenge ID, nonce, big-endian expiry and receive capacity.
+const SIGNED_FIELD_BYTES: usize =
+    12 + 16 + 16 + 32 + 32 + 32 + 16 + 32 + 8 + ReceiveCapacity::ENCODED_BYTES;
 const PREIMAGE_CAPACITY: usize = REGISTER_DOMAIN.len() + SIGNED_FIELD_BYTES;
 const _: () = assert!(RESUME_DOMAIN.len() <= REGISTER_DOMAIN.len());
 
@@ -121,9 +123,30 @@ impl Registration {
 pub struct RegisterInit {
     mode: RegistrationMode,
     registration: Registration,
+    receive_capacity: ReceiveCapacity,
 }
 
 impl RegisterInit {
+    pub const ENCODED_BYTES: usize = 116 + ReceiveCapacity::ENCODED_BYTES;
+
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::ENCODED_BYTES] {
+        let mut out = Writer::with_header(
+            REGISTER_INIT_MAGIC,
+            match self.mode {
+                RegistrationMode::Fresh => 0,
+                RegistrationMode::Resume => 1,
+            },
+        );
+        out.put(self.registration.route.share_id().as_bytes())
+            .put(self.registration.share_instance.as_bytes())
+            .put(self.registration.route.pk_hash().as_bytes())
+            .put(self.registration.descriptor_digest.as_bytes())
+            .put(self.registration.resume_token_hash.as_bytes());
+        self.receive_capacity.put(&mut out);
+        out.into_frame()
+    }
+
     /// Decodes one complete `WS2R` frame.
     ///
     /// # Errors
@@ -139,9 +162,11 @@ impl RegisterInit {
         let pk_hash = body.array()?;
         let descriptor_digest = body.array()?;
         let resume_token_hash = body.array()?;
+        let receive_capacity = ReceiveCapacity::read(&mut body)?;
         body.finish()?;
         Ok(Self {
             mode,
+            receive_capacity,
             registration: Registration::new(
                 ShareRoute::from_wire(share_id, pk_hash)?,
                 ShareInstance::new(share_instance).ok_or(FrameError::Field)?,
@@ -163,6 +188,12 @@ impl RegisterInit {
         &self.registration
     }
 
+    /// This connection's receive bound; it is not part of durable share ownership.
+    #[must_use]
+    pub const fn receive_capacity(&self) -> ReceiveCapacity {
+        self.receive_capacity
+    }
+
     fn preimage(&self, challenge: &Challenge, relay: &RelayIdentity) -> Writer<PREIMAGE_CAPACITY> {
         let registration = &self.registration;
         let mut preimage = Writer::new();
@@ -175,6 +206,7 @@ impl RegisterInit {
             .put(registration.resume_token_hash.as_bytes())
             .put(relay.as_bytes());
         challenge.put_body(&mut preimage);
+        self.receive_capacity.put(&mut preimage);
         preimage
     }
 }

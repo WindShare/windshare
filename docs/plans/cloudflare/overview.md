@@ -51,6 +51,11 @@ grace, stopping or permanent stopped facts.
 
 ## Delivery and recovery
 
+REGISTER, RESUME and JOIN bind immutable receive capacity to the connection;
+STOP remains independent. Each ledger checks both that declaration and injected
+host policy. The [delivery contract](delivery-flow-contract.md) stages these
+codecs separately from the current Go/browser runtime until settlement is wired.
+
 JOIN allocates a non-reused wire ID and reserves both directions before issuing
 either grant. Provisional sessions carry the E2E handshake under an absolute
 admission deadline; active sessions have no relay-idle timeout. Ledgers bound
@@ -65,7 +70,7 @@ Lifecycle, handshake, session and settlement deadlines share one indexed schedul
 
 Recovery validates lifecycle authority before reinstating sessions and their
 delivery obligations. Checkpoints preserve original deadlines, exact connection
-generations, cumulative credit, unsettled occupancy and the wire-ID high-water
+generations, receive capacity, cumulative credit, unsettled occupancy and the wire-ID high-water
 mark. Pending handshakes replay a bounded transcript and reverify proofs against
 their original ownership. Fresh incarnations fence old storage and entropy
 callbacks. Missing or invalid ledger state cannot authorize a surviving socket;

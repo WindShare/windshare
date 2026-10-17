@@ -43,6 +43,7 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
             if entry.ledger.checkpoint_flows().next().is_some() {
                 return Err(Error::InvalidCheckpoint);
             }
+            let declared_capacity = entry.ledger.receive_capacity();
             let handshake =
                 ControlHandshake::open(self.identity.relay, connection, transcript.opened);
             self.deadlines
@@ -79,6 +80,14 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
                     }
                     _ => return Err(Error::InvalidCheckpoint),
                 }
+            }
+            if self
+                .connections
+                .get(&connection)
+                .and_then(|entry| entry.ledger.receive_capacity())
+                != declared_capacity
+            {
+                return Err(Error::InvalidCheckpoint);
             }
             if matches!(
                 self.connections.get(&connection).map(|entry| &entry.role),

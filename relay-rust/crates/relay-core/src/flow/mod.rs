@@ -1,8 +1,8 @@
 //! Bounded delivery accounting for one destination connection generation.
 //!
 //! [`crate::share::ShareRelay`] composes this ledger with live session authority,
-//! FIFO submission, retirement and deadline scheduling. Hosts choose capacities
-//! and retain payloads; every grant reserves both frame and byte capacity.
+//! FIFO submission, retirement and deadline scheduling. Hosts choose policy and
+//! retain payloads; every grant also fits the destination's handshake capacity.
 //!
 //! Retirement revokes unused credit immediately. Unsubmitted payloads remain
 //! charged until discard confirmation, and submitted bytes remain charged until
@@ -14,10 +14,12 @@
 //! sessions and retains retired flows until cleanup. A surviving connection must
 //! never be assigned an empty replacement ledger. This module defines accounting
 //! contracts; [`DeliveryConsumed`] freezes cumulative feedback bytes for the
-//! coordinated client cutover. Handshake capacity and settlement wire integration
-//! remain separate from this codec.
+//! coordinated client cutover. Handshake declarations bind each ledger before
+//! any grant; settlement wire integration remains a separate stage.
 
 mod accounting;
+mod capacity;
+pub use capacity::ReceiveCapacity;
 mod checkpoint;
 mod checkpoint_codec;
 pub use checkpoint::{CheckpointError, LedgerCheckpoint};
@@ -56,6 +58,10 @@ pub struct CloseRequest {
 /// Why an accounting operation was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
+    /// No REGISTER/RESUME/JOIN capacity declaration has bound this connection.
+    CapacityUndeclared,
+    /// A surviving connection cannot renegotiate or reset its receive budget.
+    CapacityChanged,
     /// The authorization or feedback names a different relay/destination lifetime.
     WrongDestination,
     /// The flow handle was removed or its metadata slot now holds another route.
@@ -112,6 +118,7 @@ pub struct ConnectionLedger<const N: usize, O> {
     relay: RelayIdentity,
     destination: ConnectionRef,
     limits: Limits,
+    receive_capacity: Option<ReceiveCapacity>,
     entries: [Option<Delivery>; N],
     usage: Usage,
     startup_used: Counts,
@@ -126,6 +133,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
     }
 
     /// Starts accounting for a newly opened physical connection, never a live reset.
+    /// No delivery grant is possible until its handshake declares receive capacity.
     ///
     /// # Errors
     ///
@@ -143,6 +151,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             relay,
             destination,
             limits,
+            receive_capacity: None,
             entries: [None; N],
             usage: Usage::default(),
             startup_used: Counts::ZERO,
@@ -255,6 +264,11 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
         }
         debug_assert!(self.limits.startup_reserve.covers(self.startup_used));
         debug_assert!(self.limits.regular().covers(self.regular_used()));
+        debug_assert!(
+            self.receive_capacity
+                .is_some_and(|capacity| capacity.counts().covers(self.usage.total()))
+                || self.usage.total() == Counts::ZERO
+        );
     }
 
     fn record(&mut self, input: Input, decision: Decision, now: UnixMillis) {

@@ -38,7 +38,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let vector: Vector = session_case("fresh-relay-registration-proof");
+        let vector: Vector = session_case("relay-capacity-registration");
         Self {
             relay: relay_identity(&vector.relay_identity),
             register_init: bytes(&vector.register_init),
@@ -129,7 +129,10 @@ impl Fixture {
 #[test]
 fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_order() {
     let fixture = Fixture::new();
-    let registration_body = fixture.register_init.len() - FRAME_HEADER_BYTES;
+    // Capacity belongs to the socket, not the durable registration record.
+    let registration_body = fixture.register_init.len()
+        - FRAME_HEADER_BYTES
+        - crate::flow::ReceiveCapacity::ENCODED_BYTES;
     let connection = [&0x0102_u64.to_be_bytes()[..], &3_u64.to_be_bytes()].concat();
     let operation = [&[7; 16][..], &connection, &u64::MAX.to_be_bytes()].concat();
     let ownership = [&OWNER_EPOCH.to_be_bytes()[..], &connection].concat();

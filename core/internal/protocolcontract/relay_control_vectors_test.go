@@ -45,11 +45,12 @@ const (
 )
 
 type relayControlFixture struct {
-	f             *fixture
-	descriptor    []byte
-	relayIdentity []byte
-	resumeHash    []byte
-	expires       uint64
+	receiveCapacity []byte
+	f               *fixture
+	descriptor      []byte
+	relayIdentity   []byte
+	resumeHash      []byte
+	expires         uint64
 }
 
 type relayChallenge struct {
@@ -70,6 +71,7 @@ func (c relayChallenge) withPurpose(purpose byte) relayChallenge {
 }
 
 type relayRegistration struct {
+	receiveCapacity                                    []byte
 	mode                                               byte
 	shareID, shareInstance, pkHash, digest, resumeHash []byte
 }
@@ -78,6 +80,7 @@ func (r relayRegistration) encode() []byte {
 	return slices.Concat(
 		[]byte("WS2R"), []byte{wireVersion, r.mode, 0, 0},
 		r.shareID, r.shareInstance, r.pkHash, r.digest, r.resumeHash,
+		r.receiveCapacity,
 	)
 }
 
@@ -85,6 +88,7 @@ func (r relayRegistration) preimage(domain string, relayIdentity []byte, c relay
 	return slices.Concat(
 		[]byte(domain), r.shareID, r.shareInstance, r.pkHash, r.digest, r.resumeHash,
 		relayIdentity, c.signedFields(),
+		r.receiveCapacity,
 	)
 }
 
@@ -116,7 +120,8 @@ func relayErrorFrame(code uint16, retryMilliseconds uint32) []byte {
 
 func (r relayControlFixture) registration(mode byte) relayRegistration {
 	return relayRegistration{
-		mode: mode, shareID: r.f.shareIDRaw, shareInstance: r.f.shareInstance,
+		receiveCapacity: r.receiveCapacity,
+		mode:            mode, shareID: r.f.shareIDRaw, shareInstance: r.f.shareInstance,
 		pkHash: r.f.pkHash, digest: hash(r.descriptor), resumeHash: r.resumeHash,
 	}
 }

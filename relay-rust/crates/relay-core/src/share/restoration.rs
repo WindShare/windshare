@@ -159,6 +159,11 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
                 Journal::default(),
             )
             .map_err(|_| Error::InvalidCheckpoint)?;
+            if matches!(snapshot.role, ConnectionRole::Established)
+                && ledger.receive_capacity().is_none()
+            {
+                return Err(Error::InvalidCheckpoint);
+            }
             for (flow, _) in ledger.checkpoint_flows() {
                 if self
                     .routes
