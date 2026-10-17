@@ -238,7 +238,7 @@ fn duplicate_completion_or_handshake_cancellation_cannot_undo_a_published_regist
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
     let request = fixture.publish(&mut engine);
-    let Action::Registered(published) = finish(
+    let Action::CommitOwnership(commit) = finish(
         &mut engine,
         request.id,
         PublicationResult::Committed,
@@ -246,8 +246,9 @@ fn duplicate_completion_or_handshake_cancellation_cannot_undo_a_published_regist
     )
     .action
     else {
-        panic!("first commit must publish");
+        panic!("publication must request the ownership commit");
     };
+    let published = committed_registration(&mut engine, commit.id(), fixture.at);
     for result in [
         PublicationResult::Committed,
         PublicationResult::Aborted,

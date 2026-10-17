@@ -38,12 +38,15 @@ Strict sender-key validation and control authentication use the shared
 `ed25519-acceptance.json` and `v2-session.json` vectors. Descriptor authorization
 checks the signed digest without parsing end-to-end object contents.
 
-Fresh publication remains hidden until its final durable record is confirmed.
+Publication and RESUME enter `Activating` until the exact ownership commit is
+confirmed. The lifecycle alone then permits REGISTERED, JOIN and forwarding;
+the aggregate executes writes and retries without a second readiness state.
 Owner loss enters a fixed grace; RESUME binds to the ownership observed before
 its challenge and replaces only that ownership. STOP immediately revokes
 forwarding, persists its intent, waits for exact participant closure and
 publication quiescence, then commits before acknowledging. The aggregate owns
-revocation fanout and these barriers, including deadlines while writes are pending.
+revocation fanout and ordered I/O; the lifecycle enforces the original activation
+deadline and rejects completions superseded by disconnect, expiry or STOP.
 
 Storage commands serialize publication, conditional record replacement and
 operation-scoped cleanup. Uncertain work stays fenced and retries the exact

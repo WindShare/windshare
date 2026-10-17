@@ -309,7 +309,7 @@ pub struct PublishRequest<'f> {
 }
 
 impl PublishRequest<'_> {
-    /// The record the transaction stores. Until REGISTERED replaces it, a
+    /// The record the transaction stores. Until the ownership commit replaces it, a
     /// restart restores this attempt fenced, so a commit the lifecycle never
     /// acknowledged cannot become visible.
     #[must_use]
@@ -400,7 +400,7 @@ pub struct PublishedRegistration {
 }
 
 impl PublishedRegistration {
-    /// Only `Action::Registered` and `Action::Resumed` authorize this reply.
+    /// Only `Action::Registered` authorizes this reply after final persistence.
     #[must_use]
     pub const fn acknowledgement(self) -> Registered {
         Registered::new(&self.route.registration)
@@ -415,14 +415,4 @@ impl PublishedRegistration {
             owner: self.owner.connection,
         })
     }
-}
-
-/// A committed resume: the route's new owner, and the owner it replaced.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Resumed {
-    /// The resuming connection now owns the route.
-    pub registration: PublishedRegistration,
-    /// The owner still connected when the resume committed. Close exactly
-    /// this lifetime and its relay sessions; later events naming it are stale.
-    pub replaced: Option<ConnectionRef>,
 }

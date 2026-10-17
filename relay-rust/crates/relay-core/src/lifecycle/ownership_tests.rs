@@ -1,13 +1,5 @@
 use super::*;
 
-fn resumed(effects: Effects<'static>) -> Resumed {
-    assert_eq!(effects.expiration, None);
-    match effects.action {
-        Action::Resumed(resumed) => resumed,
-        action => panic!("expected a committed resume: {action:?}"),
-    }
-}
-
 #[test]
 fn losing_the_owner_starts_one_grace_and_its_lapse_reopens_the_share() {
     let fixture = Fixture::new();
@@ -117,9 +109,9 @@ fn resume_takes_over_a_live_or_lost_owner_and_answers_like_a_publication() {
             ));
         }
         let successor = connection(2, 1);
-        let committed = resumed(fixture.resume(&mut engine, successor));
-        assert_eq!(committed.replaced, (!owner_lost).then_some(owner));
-        let registration = committed.registration;
+        let commit = ownership_commit(fixture.resume(&mut engine, successor));
+        assert_eq!(commit.replaced(), (!owner_lost).then_some(owner));
+        let registration = committed_registration(&mut engine, commit.id(), fixture.resume_at);
         assert_eq!(registration.owner.connection(), successor);
         assert_eq!(registration.route, published.route);
         // Each committed resume is the route's next ownership.
@@ -153,7 +145,7 @@ fn resume_takes_over_a_live_or_lost_owner_and_answers_like_a_publication() {
             .observer
             .0
             .iter()
-            .find(|observation| observation.decision == Decision::Resumed)
+            .find(|observation| observation.event == ObservedEvent::Resume)
             .unwrap();
         assert_eq!(
             (observation.ownership, observation.connection),
@@ -179,7 +171,7 @@ fn a_resume_commits_only_over_the_ownership_it_observed() {
     ));
     let resumption = fixture.authenticate_resume(attempt);
     assert_eq!(
-        resumed(engine.handle(Event::Resume(resumption), at)).replaced,
+        ownership_commit(engine.handle(Event::Resume(resumption), at)).replaced(),
         None
     );
 
@@ -189,14 +181,16 @@ fn a_resume_commits_only_over_the_ownership_it_observed() {
     let first = fixture.begin_resume(&mut engine, connection(2, 1));
     let second = fixture.begin_resume(&mut engine, connection(3, 1));
     let second = fixture.authenticate_resume(second);
-    let winner = resumed(engine.handle(Event::Resume(fixture.authenticate_resume(first)), at));
+    let winner =
+        ownership_commit(engine.handle(Event::Resume(fixture.authenticate_resume(first)), at));
     assert_eq!(
         engine.handle(Event::Resume(second), at).action,
         Action::Refused(Refusal::ResumeStale)
     );
+    let registration = committed_registration(&mut engine, winner.id(), at);
     assert_eq!(
         fixture.join(&mut engine, at).action,
-        Action::JoinReady(winner.registration)
+        Action::JoinReady(registration)
     );
 
     // A resume admitted before the route existed cannot replace its owner.
@@ -235,9 +229,11 @@ fn a_resume_commits_only_over_the_ownership_it_observed() {
                 at,
             )
             .unwrap();
-        let committed =
-            resumed(restored.handle(Event::Resume(fixture.authenticate_resume(attempt)), at));
-        assert_eq!(committed.replaced, owner_survives.then_some(owner));
+        let commit = ownership_commit(
+            restored.handle(Event::Resume(fixture.authenticate_resume(attempt)), at),
+        );
+        assert_eq!(commit.replaced(), owner_survives.then_some(owner));
+        committed_registration(&mut restored, commit.id(), at);
     }
 
     // Lapsed routes restart their epochs, so the owner's exact lifetime keeps

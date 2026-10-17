@@ -1,4 +1,3 @@
-use super::Readiness;
 use super::{
     AdmissionState, ConnectionRef, Control, Error, Key, Observer, Output, RelayDecision,
     RelaySessionId, Session, ShareRelay, Turn,
@@ -28,15 +27,12 @@ impl<O: Observer> ShareRelay<O> {
         if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {
             return;
         }
-        let refused = if self.readiness != Readiness::Ready {
-            Some(ErrorFrame::Starting(ADMISSION_RETRY))
-        } else if self.sessions.len() >= self.limits.sessions || self.last_session == u64::MAX {
-            Some(ErrorFrame::Admission(ADMISSION_RETRY))
-        } else {
-            None
-        };
-        if let Some(frame) = refused {
-            Self::send(turn, connection, Control::Error(frame));
+        if self.sessions.len() >= self.limits.sessions || self.last_session == u64::MAX {
+            Self::send(
+                turn,
+                connection,
+                Control::Error(ErrorFrame::Admission(ADMISSION_RETRY)),
+            );
             self.disconnect(connection, now, turn);
             return;
         }

@@ -239,11 +239,13 @@ fn a_lost_or_stopped_owner_retires_every_surviving_session() {
         assert_eq!(grace.lost(), published.owner);
         // Grace keeps the lost ownership's epoch for its successor.
         let resumed = fixture.resume(&mut woken_engine, connection(1, 2));
-        let Action::Resumed(resumed) = resumed.action else {
+        let Action::CommitOwnership(commit) = resumed.action else {
             panic!("the sender resumes its lost route");
         };
-        assert_eq!(resumed.replaced, None);
-        assert_eq!(resumed.registration.owner.epoch().get().get(), 2);
+        assert_eq!(commit.replaced(), None);
+        let registration =
+            committed_registration(&mut woken_engine, commit.id(), fixture.resume_at);
+        assert_eq!(registration.owner.epoch().get().get(), 2);
     }
 }
 

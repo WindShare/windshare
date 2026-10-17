@@ -42,10 +42,10 @@ use alloc::collections::{BTreeMap, VecDeque};
 use deadlines::{Deadlines, Key};
 use storage::{StopRetirement, Task};
 
+// Work-ID exhaustion fences this runtime even when its stored ownership is valid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Readiness {
-    Hidden,
-    Ready,
+enum RuntimeStatus {
+    Running,
     ReloadRequired,
 }
 
@@ -89,7 +89,7 @@ pub struct ShareRelay<O> {
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
     deadlines: Deadlines,
     stored: Option<Record>,
-    readiness: Readiness,
+    runtime: RuntimeStatus,
     last_session: u64,
     last_work: u64,
     tasks: VecDeque<Task>,

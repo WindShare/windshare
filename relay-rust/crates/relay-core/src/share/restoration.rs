@@ -1,5 +1,5 @@
 use super::Checkpoint;
-use super::Readiness;
+use super::RuntimeStatus;
 use super::checkpoint::ConnectionRole;
 use super::{
     AdmissionState, Connection, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer,
@@ -94,7 +94,7 @@ impl<O: Observer> ShareRelay<O> {
             routes: BTreeMap::new(),
             deadlines: Deadlines::default(),
             stored: restored.record,
-            readiness: Readiness::Hidden,
+            runtime: RuntimeStatus::Running,
             last_session: restored
                 .checkpoint
                 .map_or(0, |checkpoint| checkpoint.last_session),
@@ -103,11 +103,6 @@ impl<O: Observer> ShareRelay<O> {
             stop_retirement: None,
             checkpointing: super::checkpoint_tracking::Checkpointing::Disabled,
             observer,
-        };
-        relay.readiness = if relay.lifecycle.phase() == crate::lifecycle::Phase::Published {
-            Readiness::Ready
-        } else {
-            Readiness::Hidden
         };
         relay.flush_lifecycle();
         relay.restore_connections(restored)?;

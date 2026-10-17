@@ -38,6 +38,28 @@ fn connection(id: u64, generation: u64) -> ConnectionRef {
     }
 }
 
+fn ownership_commit(effects: Effects<'_>) -> OwnershipCommit {
+    assert_eq!(effects.expiration, None);
+    match effects.action {
+        Action::CommitOwnership(commit) => commit,
+        action => panic!("expected ownership persistence: {action:?}"),
+    }
+}
+
+fn committed_registration(
+    engine: &mut ShareLifecycle<Recorder>,
+    id: OperationId,
+    at: UnixMillis,
+) -> PublishedRegistration {
+    let effects = engine.handle(Event::OwnershipCommitted(id), at);
+    assert_eq!(effects.expiration, None);
+    assert_eq!(effects.revocation, None);
+    match effects.action {
+        Action::Registered(registration) => registration,
+        action => panic!("expected durable registration: {action:?}"),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Vector {
@@ -219,10 +241,8 @@ impl Fixture {
             id: request.id,
             result: PublicationResult::Committed,
         };
-        match engine.handle(finished, self.at).action {
-            Action::Registered(published) => published,
-            action => panic!("publication must register: {action:?}"),
-        }
+        let commit = ownership_commit(engine.handle(finished, self.at));
+        committed_registration(engine, commit.id(), self.at)
     }
 
     fn join(&self, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) -> Effects<'static> {
@@ -360,7 +380,7 @@ fn publication_requires_host_commit_and_preparation_before_join_or_registered() 
     // The fake host retains both resources before returning committed evidence.
     let stored_descriptor = request.descriptor.to_vec();
     let prepared_connection = request.id.connection();
-    let Action::Registered(published) = engine
+    let Action::CommitOwnership(commit) = engine
         .handle(
             Event::PublicationFinished {
                 id,
@@ -370,8 +390,16 @@ fn publication_requires_host_commit_and_preparation_before_join_or_registered() 
         )
         .action
     else {
-        panic!("confirmed publication must acknowledge the sender");
+        panic!("confirmed publication must request the ownership commit");
     };
+    assert_eq!(engine.phase(), Phase::Activating);
+    assert_eq!(engine.deadline(), Some(deadline));
+    assert_eq!(commit.record(), commit.registration().record());
+    assert_eq!(
+        fixture.join(&mut engine, UnixMillis(deadline.0 - 1)).action,
+        Action::Refused(Refusal::Starting)
+    );
+    let published = committed_registration(&mut engine, commit.id(), UnixMillis(deadline.0 - 1));
     assert_eq!(
         published.acknowledgement().encode().as_slice(),
         bytes(&fixture.vector.registered_b64)
@@ -429,7 +457,7 @@ fn competing_registration_never_changes_the_incumbent() {
                 fixture.at
             )
             .action,
-        Action::Registered(_)
+        Action::CommitOwnership(_)
     ));
     assert_eq!(
         engine
@@ -598,6 +626,9 @@ fn structured_observations_correlate_expiry_and_the_replacement() {
 
 #[path = "publication_tests.rs"]
 mod publication;
+
+#[path = "activation_tests.rs"]
+mod activation;
 
 #[path = "admission_tests.rs"]
 mod admission;

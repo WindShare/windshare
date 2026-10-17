@@ -79,8 +79,9 @@ with no I/O or async runtime dependencies. Sender-key and signature checks consu
 Go/browser Ed25519 acceptance vectors; REGISTER/RESUME/STOP frames, preimages, proofs and refusals
 consume `v2-session.json`. The per-connection handshake and single-share lifecycle cover
 reservation, authenticated publication, stale-operation fencing, uncertain host results, owner-loss
-grace and ownership-bound RESUME. JOIN readiness and REGISTERED wait for confirmed persistence and
-connection preparation. STOP tests cover ordered persistence/cleanup/final commit, uncertain results,
+grace and ownership-bound RESUME. The lifecycle's activation barrier keeps JOIN, forwarding and
+REGISTERED behind final persistence, including delayed confirmation, disconnect and STOP races.
+Aggregate JOIN tests preserve absent/stopped refusals. STOP tests cover ordered persistence/cleanup/final commit, uncertain results,
 retry identity, registration/RESUME races and late callbacks. Restoration covers every durable record,
 surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
 pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued

@@ -127,32 +127,6 @@ fn awaiting_descriptor_reauthenticates_proof_after_hibernation() {
     );
 }
 
-fn begin_resume(fixture: &Fixture, relay: &mut Relay, slot: u64) -> UnixMillis {
-    let at = UnixMillis(
-        unix_seconds(fixture.text("resumeExpiresAt")).start().0 - REGISTRATION_BUDGET - 1,
-    );
-    let _ = relay.handle(Input::Connected(connection(slot)), at);
-    let _ = fixture.control(relay, connection(slot), "resumeInitB64", at);
-    let requested = fixture.control(relay, connection(slot), "resumeCredentialB64", at);
-    let seed = challenge_seed(
-        fixture.text("resumeChallengeIdB64"),
-        fixture.text("resumeChallengeNonceB64"),
-    );
-    assert_eq!(
-        relay
-            .handle(
-                Input::Challenge {
-                    request: challenge(&requested),
-                    seed
-                },
-                at
-            )
-            .refusal,
-        None
-    );
-    at
-}
-
 #[test]
 fn resume_declares_a_new_connection_capacity_without_reclaiming_the_old_owner() {
     let fixture = Fixture::new();
@@ -167,7 +141,7 @@ fn resume_declares_a_new_connection_capacity_without_reclaiming_the_old_owner() 
         None
     );
     let old_capacity = relay.connections[&connection(1)].ledger.receive_capacity();
-    let at = begin_resume(&fixture, &mut relay, 3);
+    let at = fixture.begin_resume(&mut relay, 3);
     let resumption = work(&fixture.control(&mut relay, connection(3), "resumeProofB64", at));
     let _ = complete(&mut relay, &resumption, at);
     let new_capacity = RegisterInit::decode(&fixture.frame("resumeInitB64"))
@@ -193,8 +167,8 @@ fn pending_resume_never_rebinds_to_a_replacement_owner_on_wake() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.register(&mut relay);
-    begin_resume(&fixture, &mut relay, 3);
-    let at = begin_resume(&fixture, &mut relay, 4);
+    fixture.begin_resume(&mut relay, 3);
+    let at = fixture.begin_resume(&mut relay, 4);
     let resume = work(&fixture.control(&mut relay, connection(4), "resumeProofB64", at));
     let stored = next_record(&resume);
     let _ = complete(&mut relay, &resume, at);
