@@ -31,7 +31,13 @@ mod observation;
 mod retirement;
 mod settlement;
 pub use settlement::{SettlementAck, SettlementNotice};
+mod slots;
+#[cfg(test)]
+#[path = "slots_tests.rs"]
+mod slots_tests;
 mod totals;
+use slots::DeliverySlots;
+pub use slots::MetadataUsage;
 
 pub use accounting::{ConfigurationError, Counts, Limits, Usage};
 pub use delivery::{FlowKey, Grant, Phase, ReceivedFrame, Settlement, Snapshot};
@@ -77,6 +83,8 @@ pub enum Refusal {
     AlreadyOpen,
     /// Bounded metadata storage is full.
     FlowCapacity,
+    /// The allocator could not back another slot within the configured bound.
+    FlowAllocation,
     /// Neither protected startup nor spare ordinary capacity can fund admission.
     StartupCapacity,
     /// Ordinary grants would exceed their separate portion of the total bound.
@@ -112,17 +120,17 @@ enum ConnectionState {
     Closed,
 }
 
-/// One move-only ledger; `N` is host-selected bounded metadata storage.
+/// One move-only ledger with a runtime metadata bound and lazily allocated slots.
 ///
 /// Lookup on the forwarding path is constant time through opaque `FlowKey`
 /// slots. Only admission, retirement lookup and deadline selection scan storage.
 #[derive(Debug)]
-pub struct ConnectionLedger<const N: usize, O> {
+pub struct ConnectionLedger<O> {
     relay: RelayIdentity,
     destination: ConnectionRef,
     limits: Limits,
     receive_capacity: Option<ReceiveCapacity>,
-    entries: [Option<Delivery>; N],
+    entries: DeliverySlots,
     usage: Usage,
     startup_used: Counts,
     state: ConnectionState,
@@ -130,13 +138,14 @@ pub struct ConnectionLedger<const N: usize, O> {
     observer: O,
 }
 
-impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+impl<O: Observer> ConnectionLedger<O> {
     pub(crate) const fn observer_mut(&mut self) -> &mut O {
         &mut self.observer
     }
 
     /// Starts accounting for a newly opened physical connection, never a live reset.
     /// No delivery grant is possible until its handshake declares receive capacity.
+    /// The metadata bound reserves no slots; backing storage grows on flow admission.
     ///
     /// # Errors
     ///
@@ -145,17 +154,16 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
         relay: RelayIdentity,
         destination: ConnectionRef,
         limits: Limits,
+        max_flows: usize,
         observer: O,
     ) -> Result<Self, ConfigurationError> {
-        if N == 0 {
-            return Err(ConfigurationError::EmptyStorage);
-        }
+        let entries = DeliverySlots::new(max_flows)?;
         Ok(Self {
             relay,
             destination,
             limits,
             receive_capacity: None,
-            entries: [None; N],
+            entries,
             usage: Usage::default(),
             startup_used: Counts::ZERO,
             state: ConnectionState::Open,
@@ -168,6 +176,12 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
     #[must_use]
     pub const fn usage(&self) -> Usage {
         self.usage
+    }
+
+    /// Retained flows and allocated slots, separate from payload capacity.
+    #[must_use]
+    pub const fn metadata_usage(&self) -> MetadataUsage {
+        self.entries.usage()
     }
 
     /// Occupied part of the protected startup pool.
@@ -197,8 +211,6 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
     fn delivery(&self, flow: FlowKey) -> Result<Delivery, Refusal> {
         self.entries
             .get(flow.slot)
-            .copied()
-            .flatten()
             .filter(|entry| entry.key == flow)
             .ok_or(Refusal::StaleFlow)
     }
@@ -239,7 +251,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
     }
 
     fn replace(&mut self, slot: usize, next: Option<Delivery>) {
-        let before = self.entries[slot];
+        let before = self.entries.get(slot);
         self.usage = self.usage.replace(
             before.map_or_else(Usage::default, Delivery::usage),
             next.map_or_else(Usage::default, Delivery::usage),
@@ -248,14 +260,13 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
             .startup_used
             .sub(before.map_or(Counts::ZERO, Delivery::startup_used))
             .add(next.map_or(Counts::ZERO, Delivery::startup_used));
-        self.entries[slot] = next;
+        self.entries.replace(slot, next);
         if before.and_then(Delivery::deadline) != next.and_then(Delivery::deadline) {
             // Only retirement/settlement changes deadlines. Forwarding and
             // consumption keep constant-time event-entry expiration checks.
             self.next_expiration = self
                 .entries
                 .iter()
-                .flatten()
                 .filter_map(|entry| {
                     entry.deadline().map(|deadline| CloseRequest {
                         destination: self.destination,
@@ -284,6 +295,7 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
                 decision,
                 usage: self.usage,
                 startup_used: self.startup_used,
+                metadata: self.metadata_usage(),
             }
             .into(),
         );

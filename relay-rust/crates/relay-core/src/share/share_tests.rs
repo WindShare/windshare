@@ -13,7 +13,7 @@ use crate::{
 use core::{num::NonZeroU64, time::Duration};
 use std::vec::Vec;
 
-const SLOTS: usize = 8;
+const SESSION_LIMIT: usize = 8;
 const REGISTRATION_BUDGET: u64 = 5_000;
 const STOP_BUDGET: u64 = 10_000;
 const SETTLEMENT_BUDGET: u64 = 5_000;
@@ -25,7 +25,7 @@ impl Observer for Trace {
         self.0.push(observation);
     }
 }
-type Relay = ShareRelay<SLOTS, Trace>;
+type Relay = ShareRelay<Trace>;
 
 struct Fixture {
     data: serde_json::Value,
@@ -58,7 +58,7 @@ impl Fixture {
             |frames| Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES));
         Limits {
             connections: 16,
-            sessions: SLOTS,
+            sessions: SESSION_LIMIT,
             delivery: crate::flow::Limits::new(
                 capacity(16),
                 capacity(8),
@@ -562,6 +562,9 @@ mod recovery;
 
 #[path = "capacity_tests.rs"]
 mod capacity;
+
+#[path = "metadata_tests.rs"]
+mod metadata;
 
 #[path = "settlement_tests.rs"]
 mod settlement;

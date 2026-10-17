@@ -9,7 +9,7 @@ use crate::{
     sessions::{Action, Event as SessionEvent, OpaqueHeader},
 };
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn delivery_control(
         &mut self,
         connection: ConnectionRef,

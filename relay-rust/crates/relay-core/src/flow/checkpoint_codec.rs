@@ -12,10 +12,11 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 2;
+const FORMAT: u8 = 3;
 const KEY_BYTES: usize = crate::sessions::MAX_SNAPSHOT_BYTES - size_of::<u64>();
 const COUNTERS: usize = 5;
-const ENTRY_BYTES: usize = 1 + KEY_BYTES + COUNTERS * 16 + 1 + 8;
+const SLOT_BYTES: usize = size_of::<u64>();
+const ENTRY_BYTES: usize = SLOT_BYTES + 1 + KEY_BYTES + COUNTERS * 16 + 1 + 8;
 
 impl LedgerCheckpoint {
     #[must_use]
@@ -41,35 +42,36 @@ impl LedgerCheckpoint {
         }
         out.extend_from_slice(&(self.entries.len() as u64).to_be_bytes());
         for entry in &self.entries {
-            out.push(u8::from(entry.is_some()));
-            if let Some(entry) = entry {
-                encode_permit(&mut out, entry.key);
-                for count in [
-                    entry.startup,
-                    entry.granted,
-                    entry.received,
-                    entry.submitted,
-                    entry.consumed,
-                ] {
-                    out.extend_from_slice(&count.frames.to_be_bytes());
-                    out.extend_from_slice(&count.encoded_bytes.to_be_bytes());
-                }
-                let kind = match entry.state {
-                    State::Open => 0,
-                    State::Discarding { .. } => 1,
-                    State::Settling { .. } => 2,
-                };
-                out.push(kind);
-                out.extend_from_slice(&entry.deadline().map_or(0, |at| at.0).to_be_bytes());
+            // Persist identity, not the empty capacity around it. Recovery keeps
+            // the issued index even when earlier slots have already settled.
+            out.extend_from_slice(&(entry.key.slot as u64).to_be_bytes());
+            encode_permit(&mut out, entry.key);
+            for count in [
+                entry.startup,
+                entry.granted,
+                entry.received,
+                entry.submitted,
+                entry.consumed,
+            ] {
+                out.extend_from_slice(&count.frames.to_be_bytes());
+                out.extend_from_slice(&count.encoded_bytes.to_be_bytes());
             }
+            let kind = match entry.state {
+                State::Open => 0,
+                State::Discarding { .. } => 1,
+                State::Settling { .. } => 2,
+            };
+            out.push(kind);
+            out.extend_from_slice(&entry.deadline().map_or(0, |at| at.0).to_be_bytes());
         }
         out
     }
 
-    /// The configured slot bound is checked before allocating or reading entries.
+    /// Bounds and complete record bytes are checked before allocating entries.
     ///
     /// # Errors
-    /// Rejects unknown layouts, truncated records, invalid identities and excessive slots.
+    /// Rejects unknown layouts, truncated records, duplicate/unordered indices,
+    /// invalid identities and slots outside the configured bound.
     pub fn decode(bytes: &[u8], max_slots: usize) -> Result<Self, CheckpointError> {
         let mut body = Reader::new(bytes);
         let [format, kind] = field(&mut body)?;
@@ -87,11 +89,7 @@ impl LedgerCheckpoint {
         let state = match kind {
             0 => ConnectionState::Open,
             1 => {
-                let slot = usize::try_from(u64::from_be_bytes(field(&mut body)?))
-                    .map_err(|_| CheckpointError::Capacity)?;
-                if slot >= max_slots {
-                    return Err(CheckpointError::Capacity);
-                }
+                let slot = read_slot(&mut body, max_slots)?;
                 let flow = FlowKey {
                     slot,
                     permit: decode_permit(&mut body)?,
@@ -107,16 +105,19 @@ impl LedgerCheckpoint {
         };
         let count = usize::try_from(u64::from_be_bytes(field(&mut body)?))
             .map_err(|_| CheckpointError::Capacity)?;
-        if count > max_slots || count > body.remainder().len() {
+        if count > max_slots || count > body.remainder().len() / ENTRY_BYTES {
             return Err(CheckpointError::Capacity);
         }
-        let mut entries = Vec::with_capacity(count);
-        for slot in 0..count {
-            entries.push(match field::<1>(&mut body)? {
-                [0] => None,
-                [1] => Some(decode_entry(&mut body, slot)?),
-                _ => return Err(CheckpointError::Format),
-            });
+        let mut entries: Vec<Delivery> = Vec::new();
+        entries
+            .try_reserve_exact(count)
+            .map_err(|_| CheckpointError::StorageAllocation)?;
+        for _ in 0..count {
+            let slot = read_slot(&mut body, max_slots)?;
+            if entries.last().is_some_and(|entry| entry.key.slot >= slot) {
+                return Err(CheckpointError::Identity);
+            }
+            entries.push(decode_entry(&mut body, slot)?);
         }
         body.finish().map_err(|_| CheckpointError::Format)?;
         Ok(Self {
@@ -131,12 +132,21 @@ impl LedgerCheckpoint {
     #[must_use]
     pub fn maximum_bytes(slots: usize) -> Option<usize> {
         slots
-            .checked_mul(1 + ENTRY_BYTES)?
+            .checked_mul(ENTRY_BYTES)?
             .checked_add(
                 2 + 32 + ConnectionRef::ENCODED_BYTES + 1 + ReceiveCapacity::ENCODED_BYTES + 8,
             )?
-            .checked_add(8 + 1 + KEY_BYTES + 8)
+            .checked_add(SLOT_BYTES + 1 + KEY_BYTES + 8)
     }
+}
+
+fn read_slot(body: &mut Reader<'_>, maximum: usize) -> Result<usize, CheckpointError> {
+    let slot =
+        usize::try_from(u64::from_be_bytes(field(body)?)).map_err(|_| CheckpointError::Capacity)?;
+    if slot >= maximum {
+        return Err(CheckpointError::Capacity);
+    }
+    Ok(slot)
 }
 
 fn encode_permit(out: &mut Vec<u8>, flow: FlowKey) {

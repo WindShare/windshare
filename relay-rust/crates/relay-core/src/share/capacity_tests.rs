@@ -143,12 +143,8 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
     );
     activate(&mut relay, up.session(), fixture.at);
     let before = relay.connections[&up.destination()].ledger.usage();
-    let checkpoint = Checkpoint::decode(
-        &relay.checkpoint().unwrap().encode(),
-        Fixture::limits(),
-        SLOTS,
-    )
-    .unwrap();
+    let checkpoint =
+        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let (mut restored, turn) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
