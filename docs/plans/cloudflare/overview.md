@@ -55,8 +55,7 @@ REGISTER, RESUME and JOIN bind immutable receive capacity to the connection;
 STOP remains independent. Each ledger checks both that declaration and injected
 host policy. The [delivery contract](delivery-flow-contract.md) stages these
 codecs separately from the current Go/browser runtime. Settlement codecs and the
-Rust wire-to-ledger path are implemented; the next step is the minimal Cloudflare
-host with coordinated client flow-control activation.
+Rust wire-to-ledger path are implemented.
 
 JOIN allocates a non-reused wire ID and reserves both directions before issuing
 either grant. Provisional sessions carry the E2E handshake under an absolute
