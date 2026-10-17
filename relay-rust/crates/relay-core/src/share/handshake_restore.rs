@@ -1,8 +1,8 @@
 use super::{
     ChallengeRequest, Error, Output, Restore, Role, ShareRelay, Turn,
+    checkpoint::ConnectionRole,
     deadlines::Key,
     handshake_checkpoint::{HandshakeCheckpoint, Step},
-    restoration::ConnectionRole,
 };
 use crate::{
     challenge::ChallengeSeed, clock::UnixMillis, handshake::ControlHandshake, observation::Observer,

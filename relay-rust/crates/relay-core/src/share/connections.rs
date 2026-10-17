@@ -58,6 +58,7 @@ impl<O: Observer> ShareRelay<O> {
                 ledger,
             },
         );
+        self.checkpointing.changed(connection);
         self.trace(Some(connection), RelayDecision::Connected, now);
         Ok(())
     }
@@ -89,6 +90,7 @@ impl<O: Observer> ShareRelay<O> {
             self.disconnect(connection, now, turn);
             return Err(Error::Unavailable);
         };
+        self.checkpointing.changed(connection);
         let original_deadline = handshake.deadline();
         let step = handshake.receive(frame, now);
         if handshake.phase() != crate::handshake::Phase::Finished {
@@ -132,6 +134,7 @@ impl<O: Observer> ShareRelay<O> {
             entry.role = role;
             return Err(Error::Unavailable);
         };
+        self.checkpointing.changed(connection);
         transcript.challenge(now, seed.checkpoint())?;
         let step = handshake.admit(*admission, seed, now);
         self.deadlines
@@ -170,6 +173,7 @@ impl<O: Observer> ShareRelay<O> {
             admission: Box::new(admission),
             transcript,
         };
+        self.checkpointing.changed(connection);
         turn.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
             connection,
             incarnation: self.identity.incarnation,
@@ -194,6 +198,7 @@ impl<O: Observer> ShareRelay<O> {
             Step::Complete(outcome) => {
                 if let Some(entry) = self.connections.get_mut(&connection) {
                     entry.role = Role::Established;
+                    self.checkpointing.changed(connection);
                 }
                 if matches!(outcome, Outcome::Join(_) | Outcome::Stop(_)) {
                     self.deadlines.set(Key::Handshake(connection), None);
@@ -319,6 +324,7 @@ impl<O: Observer> ShareRelay<O> {
                 return;
             }
             entry.role = Role::Closing;
+            self.checkpointing.changed(connection);
             self.deadlines.set(Key::Handshake(connection), None);
             turn.outputs.push(Output::Close(connection));
         }
@@ -391,6 +397,7 @@ impl<O: Observer> ShareRelay<O> {
             }
         }
         self.connections.remove(&connection);
+        self.checkpointing.removed(connection);
         self.deadlines.set(Key::Handshake(connection), None);
         self.deadlines.set(Key::Ledger(connection), None);
         for key in affected {

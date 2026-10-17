@@ -1,37 +1,37 @@
 use super::{Checkpoint, ConnectionCheckpoint, ConnectionRef, Error, Identity, Limits};
-use super::{handshake_checkpoint::HandshakeCheckpoint, restoration::ConnectionRole};
-use crate::lifecycle::Incarnation;
+use super::{checkpoint::ConnectionRole, handshake_checkpoint::HandshakeCheckpoint};
 use crate::{
     flow::LedgerCheckpoint,
     identifiers::{RelayIdentity, ShareId},
+    lifecycle::Incarnation,
     sessions::SessionSnapshot,
     wire::Reader,
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 2;
-impl Checkpoint {
+const FORMAT: u8 = 3;
+const CONNECTION_FORMAT: u8 = 1;
+const LENGTH_BYTES: usize = size_of::<u64>();
+const IDENTITY_BYTES: usize = 32 + 12 + 16;
+const CONNECTION_HEADER_BYTES: usize =
+    1 + IDENTITY_BYTES + LENGTH_BYTES + ConnectionRef::ENCODED_BYTES + 1 + 2 * LENGTH_BYTES;
+
+impl ConnectionCheckpoint {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.push(FORMAT);
-        out.extend_from_slice(self.identity.relay.as_bytes());
-        out.extend_from_slice(self.identity.share.as_bytes());
-        out.extend_from_slice(self.identity.incarnation.as_bytes());
-        out.extend_from_slice(&self.last_session.to_be_bytes());
-        out.extend_from_slice(&(self.connections.len() as u64).to_be_bytes());
-        for connection in &self.connections {
-            out.extend_from_slice(&connection.connection.encode());
-            match &connection.role {
-                ConnectionRole::Established => out.push(0),
-                ConnectionRole::Closing => out.push(1),
-                ConnectionRole::Handshake(handshake) => {
-                    out.push(2);
-                    block(&mut out, &handshake.encode());
-                }
+        out.push(CONNECTION_FORMAT);
+        put_header(&mut out, self.identity, self.last_session);
+        out.extend_from_slice(&self.connection.encode());
+        match &self.role {
+            ConnectionRole::Established => out.push(0),
+            ConnectionRole::Closing => out.push(1),
+            ConnectionRole::Handshake(handshake) => {
+                out.push(2);
+                block(&mut out, &handshake.encode());
             }
-            block(&mut out, &connection.ledger.encode());
         }
+        block(&mut out, &self.ledger.encode());
         out.extend_from_slice(&(self.sessions.len() as u64).to_be_bytes());
         for session in &self.sessions {
             block(&mut out, session.encode().as_bytes());
@@ -39,43 +39,46 @@ impl Checkpoint {
         out
     }
 
-    /// Limits are checked before allocating collections or nested ledger records.
-    ///
+    /// Maximum binary size for this configured retained-session bound.
+    /// A handshake cannot own flows/admissions; established sockets may retain
+    /// the full sender fanout, including retired delivery obligations.
+    #[must_use]
+    pub fn maximum_bytes(session_limit: usize) -> Option<usize> {
+        let established = LedgerCheckpoint::maximum_bytes(session_limit)?.checked_add(
+            session_limit.checked_mul(LENGTH_BYTES + crate::sessions::MAX_SNAPSHOT_BYTES)?,
+        )?;
+        let handshake = LedgerCheckpoint::maximum_bytes(0)?
+            .checked_add(LENGTH_BYTES + HandshakeCheckpoint::MAX_ENCODED_BYTES)?;
+        CONNECTION_HEADER_BYTES.checked_add(established.max(handshake))
+    }
+
     /// # Errors
-    /// Rejects malformed or oversized checkpoint data. Restore additionally checks authority.
+    /// Rejects oversized, malformed or misassigned records before recovery authorizes them.
     pub fn decode(bytes: &[u8], limits: Limits) -> Result<Self, Error> {
-        let mut body = Reader::new(bytes);
-        if field::<1>(&mut body)? != [FORMAT] {
+        let maximum = Self::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+        if bytes.len() > maximum {
             return Err(Error::InvalidCheckpoint);
         }
-        let relay = RelayIdentity::new(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
-        let share = ShareId::new(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
-        let incarnation = Incarnation::new(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
-        let last_session = u64::from_be_bytes(field(&mut body)?);
-        let count = bounded_count(&mut body, limits.connections)?;
-        let mut connections = Vec::with_capacity(count);
-        for _ in 0..count {
-            let connection =
-                ConnectionRef::decode(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
-            let role = match field::<1>(&mut body)? {
-                [0] => ConnectionRole::Established,
-                [1] => ConnectionRole::Closing,
-                [2] => ConnectionRole::Handshake(HandshakeCheckpoint::decode(read_block(
-                    &mut body,
-                    HandshakeCheckpoint::MAX_ENCODED_BYTES,
-                )?)?),
-                _ => return Err(Error::InvalidCheckpoint),
-            };
-            let maximum =
-                LedgerCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
-            let ledger = LedgerCheckpoint::decode(read_block(&mut body, maximum)?, limits.sessions)
-                .map_err(|_| Error::InvalidCheckpoint)?;
-            connections.push(ConnectionCheckpoint {
-                connection,
-                role,
-                ledger,
-            });
+        let mut body = Reader::new(bytes);
+        if field::<1>(&mut body)? != [CONNECTION_FORMAT] {
+            return Err(Error::InvalidCheckpoint);
         }
+        let (identity, last_session) = read_header(&mut body)?;
+        let connection =
+            ConnectionRef::decode(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
+        let role = match field::<1>(&mut body)? {
+            [0] => ConnectionRole::Established,
+            [1] => ConnectionRole::Closing,
+            [2] => ConnectionRole::Handshake(HandshakeCheckpoint::decode(read_block(
+                &mut body,
+                HandshakeCheckpoint::MAX_ENCODED_BYTES,
+            )?)?),
+            _ => return Err(Error::InvalidCheckpoint),
+        };
+        let maximum =
+            LedgerCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+        let ledger = LedgerCheckpoint::decode(read_block(&mut body, maximum)?, limits.sessions)
+            .map_err(|_| Error::InvalidCheckpoint)?;
         let count = bounded_count(&mut body, limits.sessions)?;
         let mut sessions = Vec::with_capacity(count);
         for _ in 0..count {
@@ -88,17 +91,79 @@ impl Checkpoint {
             );
         }
         body.finish().map_err(|_| Error::InvalidCheckpoint)?;
-        Ok(Self {
-            identity: Identity {
-                relay,
-                share,
-                incarnation,
-            },
+        let checkpoint = Self {
+            identity,
+            last_session,
+            connection,
+            role,
+            ledger,
+            sessions,
+        };
+        checkpoint.validate(limits)?;
+        Ok(checkpoint)
+    }
+}
+
+impl Checkpoint {
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(FORMAT);
+        put_header(&mut out, self.identity, self.last_session);
+        out.extend_from_slice(&(self.connections.len() as u64).to_be_bytes());
+        for connection in &self.connections {
+            block(&mut out, &connection.encode());
+        }
+        out
+    }
+
+    /// # Errors
+    /// Rejects malformed, mixed or oversized collections. Restore additionally checks authority.
+    pub fn decode(bytes: &[u8], limits: Limits) -> Result<Self, Error> {
+        let mut body = Reader::new(bytes);
+        if field::<1>(&mut body)? != [FORMAT] {
+            return Err(Error::InvalidCheckpoint);
+        }
+        let (identity, last_session) = read_header(&mut body)?;
+        let count = bounded_count(&mut body, limits.connections)?;
+        let mut connections = Vec::with_capacity(count);
+        let maximum =
+            ConnectionCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+        for _ in 0..count {
+            connections.push(ConnectionCheckpoint::decode(
+                read_block(&mut body, maximum)?,
+                limits,
+            )?);
+        }
+        body.finish().map_err(|_| Error::InvalidCheckpoint)?;
+        let checkpoint = Self {
+            identity,
             last_session,
             connections,
-            sessions,
-        })
+        };
+        checkpoint.validate(limits)?;
+        Ok(checkpoint)
     }
+}
+
+fn put_header(out: &mut Vec<u8>, identity: Identity, last_session: u64) {
+    out.extend_from_slice(identity.relay.as_bytes());
+    out.extend_from_slice(identity.share.as_bytes());
+    out.extend_from_slice(identity.incarnation.as_bytes());
+    out.extend_from_slice(&last_session.to_be_bytes());
+}
+fn read_header(body: &mut Reader<'_>) -> Result<(Identity, u64), Error> {
+    let relay = RelayIdentity::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
+    let share = ShareId::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
+    let incarnation = Incarnation::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
+    Ok((
+        Identity {
+            relay,
+            share,
+            incarnation,
+        },
+        u64::from_be_bytes(field(body)?),
+    ))
 }
 fn block(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
