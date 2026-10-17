@@ -87,7 +87,7 @@ func relayCapacityDecodingVectors(r relayControlFixture) map[string]any {
 			rejectedFrame("zero-bytes", withZeroField(canonical, len(base)+8, 8)),
 			rejectedFrame("zero-share-id", withZeroField(canonical, relayHeaderBytes, relayShareIDBytes)),
 		}
-		for length := 0; length < len(canonical); length++ {
+		for length := range len(canonical) {
 			variants = append(variants, rejectedFrame(fmt.Sprintf("length-%d", length), canonical[:length]))
 		}
 		for _, capacity := range [][2]uint64{{1, 1}, {1, ^uint64(0)}, {^uint64(0), 1}, {1<<53 + 1, 1<<53 + 3}, {^uint64(0), ^uint64(0)}} {

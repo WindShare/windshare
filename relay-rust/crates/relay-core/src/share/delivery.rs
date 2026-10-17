@@ -1,15 +1,49 @@
 use super::Readiness;
 use super::{
-    ConnectionRef, Control, Error, Observer, Output, RelayDecision, Role, ShareRelay, Submission,
-    Turn,
+    ConnectionRef, Control, Error, Input, Observer, Output, RelayDecision, Role, ShareRelay,
+    Submission, Turn,
 };
 use crate::{
     clock::UnixMillis,
-    flow::{Counts, FlowKey, ReceivedFrame},
+    flow::{Counts, DeliveryConsumed, FlowKey, ReceivedFrame, SettlementAck},
     sessions::{Action, Event as SessionEvent, OpaqueHeader},
 };
 
 impl<const N: usize, O: Observer> ShareRelay<N, O> {
+    pub(super) fn delivery_control(
+        &mut self,
+        connection: ConnectionRef,
+        frame: &[u8],
+        now: UnixMillis,
+        turn: &mut Turn,
+    ) -> Result<(), Error> {
+        // The socket supplies authority; payload fields can never choose a different
+        // connection generation or turn a retirement receipt into ordinary credit.
+        let input = match frame.first_chunk::<4>() {
+            Some(&DeliveryConsumed::MAGIC) => {
+                let feedback = DeliveryConsumed::decode(frame).map_err(Error::Frame)?;
+                Input::Consumed {
+                    connection,
+                    session: feedback.session(),
+                    total: feedback.total(),
+                }
+            }
+            Some(&SettlementAck::MAGIC) => {
+                let acknowledgement = SettlementAck::decode(frame).map_err(Error::Frame)?;
+                Input::Settled {
+                    connection,
+                    session: acknowledgement.session(),
+                    total: acknowledgement.total(),
+                }
+            }
+            _ => {
+                self.disconnect(connection, now, turn);
+                return Err(Error::Unavailable);
+            }
+        };
+        self.apply(input, now, turn)
+    }
+
     pub(super) fn receive(
         &mut self,
         source: ConnectionRef,
@@ -163,7 +197,11 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
         let result = connection.ledger.discarded(flow, now).map_err(Error::Flow);
         self.flush_ledger(flow.destination(), now, turn);
         if let Some(notice) = result? {
-            Self::send(turn, flow.destination(), Control::Settlement(notice));
+            Self::send(
+                turn,
+                flow.destination(),
+                Control::Settlement(notice.try_into().map_err(Error::Frame)?),
+            );
         }
         self.collect_session(flow.session(), now, turn);
         Ok(())

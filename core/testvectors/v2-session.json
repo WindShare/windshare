@@ -4744,9 +4744,667 @@
         {
           "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAIAAABk",
           "name": "current-runtime-u32-credit"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2N"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2S"
         }
       ],
       "name": "relay-delivery-consumed",
+      "relaySessionIdB64": "4eLj5OXm5+g="
+    },
+    {
+      "counts": [
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAA=",
+          "name": "empty-prefix",
+          "totalEncodedBytes": "0",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABU=",
+          "name": "minimum-envelope",
+          "totalEncodedBytes": "21",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABQ=",
+          "name": "maximum-envelope",
+          "totalEncodedBytes": "65556",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "mixed-envelope-sizes",
+          "totalEncodedBytes": "100",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAEBAAAAAAEBFBQ=",
+          "name": "above-runtime-windows",
+          "totalEncodedBytes": "16847892",
+          "totalFrames": "257"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAEAAAAAAAAAFQAAAAA=",
+          "name": "above-u32",
+          "totalEncodedBytes": "90194313216",
+          "totalFrames": "4294967296"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAgAAAAAAABAqAAAAAAABU=",
+          "name": "above-javascript-safe-integer",
+          "totalEncodedBytes": "189151184349560853",
+          "totalFrames": "9007199254740993"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAA/+wBj+DD//////////8=",
+          "name": "maximum-bytes-minimum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571139"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6Awwwwwwwwww//////////8=",
+          "name": "maximum-bytes-maximum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359600"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAAAA=",
+          "name": "frames-without-bytes",
+          "totalEncodedBytes": "0",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAE=",
+          "name": "bytes-without-frames",
+          "totalEncodedBytes": "1",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABQ=",
+          "name": "below-minimum-envelope",
+          "totalEncodedBytes": "20",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABU=",
+          "name": "above-maximum-envelope",
+          "totalEncodedBytes": "65557",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAACk=",
+          "name": "batch-below-minimum",
+          "totalEncodedBytes": "41",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAACACk=",
+          "name": "batch-above-maximum",
+          "totalEncodedBytes": "131113",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAA/+wBj+DC//////////8=",
+          "name": "maximum-bytes-too-few-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571138"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6Awwwwwwwwwx//////////8=",
+          "name": "maximum-bytes-too-many-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359601"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6P////////////////////8=",
+          "name": "both-u64-maxima",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "18446744073709551615"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AwwwwwwwwwxAAAAAAAAABQ=",
+          "name": "multiplication-wraparound",
+          "totalEncodedBytes": "20",
+          "totalFrames": "878416384462359601"
+        }
+      ],
+      "malformed": [
+        {
+          "encodedB64": "",
+          "name": "truncated-at-0"
+        },
+        {
+          "encodedB64": "Vw==",
+          "name": "truncated-at-1"
+        },
+        {
+          "encodedB64": "V1M=",
+          "name": "truncated-at-2"
+        },
+        {
+          "encodedB64": "V1My",
+          "name": "truncated-at-3"
+        },
+        {
+          "encodedB64": "V1MyTg==",
+          "name": "truncated-at-4"
+        },
+        {
+          "encodedB64": "V1MyTgI=",
+          "name": "truncated-at-5"
+        },
+        {
+          "encodedB64": "V1MyTgIA",
+          "name": "truncated-at-6"
+        },
+        {
+          "encodedB64": "V1MyTgIAAA==",
+          "name": "truncated-at-7"
+        },
+        {
+          "encodedB64": "V1MyTgIAAAA=",
+          "name": "truncated-at-8"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh",
+          "name": "truncated-at-9"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4g==",
+          "name": "truncated-at-10"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uM=",
+          "name": "truncated-at-11"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk",
+          "name": "truncated-at-12"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5Q==",
+          "name": "truncated-at-13"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5eY=",
+          "name": "truncated-at-14"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn",
+          "name": "truncated-at-15"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6A==",
+          "name": "truncated-at-16"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AA=",
+          "name": "truncated-at-17"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAA",
+          "name": "truncated-at-18"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAA==",
+          "name": "truncated-at-19"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAA=",
+          "name": "truncated-at-20"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAA",
+          "name": "truncated-at-21"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAA==",
+          "name": "truncated-at-22"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAA=",
+          "name": "truncated-at-23"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAAC",
+          "name": "truncated-at-24"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAA==",
+          "name": "truncated-at-25"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAA=",
+          "name": "truncated-at-26"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAA",
+          "name": "truncated-at-27"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAA==",
+          "name": "truncated-at-28"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAA=",
+          "name": "truncated-at-29"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAA",
+          "name": "truncated-at-30"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAA==",
+          "name": "truncated-at-31"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQA",
+          "name": "trailing-byte"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGRXUzJOAgAAAOHi4+Tl5ufoAAAAAAAAAAIAAAAAAAAAZA==",
+          "name": "concatenated-controls"
+        },
+        {
+          "encodedB64": "VlMyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-0"
+        },
+        {
+          "encodedB64": "V1IyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-1"
+        },
+        {
+          "encodedB64": "V1MzTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-2"
+        },
+        {
+          "encodedB64": "V1MyTwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-3"
+        },
+        {
+          "encodedB64": "V1MyTgMAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-4"
+        },
+        {
+          "encodedB64": "V1MyTgIBAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-5"
+        },
+        {
+          "encodedB64": "V1MyTgIAAQDh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-6"
+        },
+        {
+          "encodedB64": "V1MyTgIAAAHh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-7"
+        },
+        {
+          "encodedB64": "V1MyTgIAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "zero-session-id"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAIAAABk",
+          "name": "current-runtime-u32-credit"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2B"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2S"
+        }
+      ],
+      "name": "relay-settlement-notice",
+      "relaySessionIdB64": "4eLj5OXm5+g="
+    },
+    {
+      "counts": [
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAA=",
+          "name": "empty-prefix",
+          "totalEncodedBytes": "0",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABU=",
+          "name": "minimum-envelope",
+          "totalEncodedBytes": "21",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABQ=",
+          "name": "maximum-envelope",
+          "totalEncodedBytes": "65556",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "mixed-envelope-sizes",
+          "totalEncodedBytes": "100",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAEBAAAAAAEBFBQ=",
+          "name": "above-runtime-windows",
+          "totalEncodedBytes": "16847892",
+          "totalFrames": "257"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAEAAAAAAAAAFQAAAAA=",
+          "name": "above-u32",
+          "totalEncodedBytes": "90194313216",
+          "totalFrames": "4294967296"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAgAAAAAAABAqAAAAAAABU=",
+          "name": "above-javascript-safe-integer",
+          "totalEncodedBytes": "189151184349560853",
+          "totalFrames": "9007199254740993"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAA/+wBj+DD//////////8=",
+          "name": "maximum-bytes-minimum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571139"
+        },
+        {
+          "accepted": true,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6Awwwwwwwwww//////////8=",
+          "name": "maximum-bytes-maximum-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359600"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAAAA=",
+          "name": "frames-without-bytes",
+          "totalEncodedBytes": "0",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAAAAAAAAAAAAAE=",
+          "name": "bytes-without-frames",
+          "totalEncodedBytes": "1",
+          "totalFrames": "0"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAAAABQ=",
+          "name": "below-minimum-envelope",
+          "totalEncodedBytes": "20",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAABAAAAAAABABU=",
+          "name": "above-maximum-envelope",
+          "totalEncodedBytes": "65557",
+          "totalFrames": "1"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAACk=",
+          "name": "batch-below-minimum",
+          "totalEncodedBytes": "41",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAACACk=",
+          "name": "batch-above-maximum",
+          "totalEncodedBytes": "131113",
+          "totalFrames": "2"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAA/+wBj+DC//////////8=",
+          "name": "maximum-bytes-too-few-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "281389103571138"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6Awwwwwwwwwx//////////8=",
+          "name": "maximum-bytes-too-many-frames",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "878416384462359601"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6P////////////////////8=",
+          "name": "both-u64-maxima",
+          "totalEncodedBytes": "18446744073709551615",
+          "totalFrames": "18446744073709551615"
+        },
+        {
+          "accepted": false,
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AwwwwwwwwwxAAAAAAAAABQ=",
+          "name": "multiplication-wraparound",
+          "totalEncodedBytes": "20",
+          "totalFrames": "878416384462359601"
+        }
+      ],
+      "malformed": [
+        {
+          "encodedB64": "",
+          "name": "truncated-at-0"
+        },
+        {
+          "encodedB64": "Vw==",
+          "name": "truncated-at-1"
+        },
+        {
+          "encodedB64": "V1M=",
+          "name": "truncated-at-2"
+        },
+        {
+          "encodedB64": "V1My",
+          "name": "truncated-at-3"
+        },
+        {
+          "encodedB64": "V1MyUw==",
+          "name": "truncated-at-4"
+        },
+        {
+          "encodedB64": "V1MyUwI=",
+          "name": "truncated-at-5"
+        },
+        {
+          "encodedB64": "V1MyUwIA",
+          "name": "truncated-at-6"
+        },
+        {
+          "encodedB64": "V1MyUwIAAA==",
+          "name": "truncated-at-7"
+        },
+        {
+          "encodedB64": "V1MyUwIAAAA=",
+          "name": "truncated-at-8"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh",
+          "name": "truncated-at-9"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4g==",
+          "name": "truncated-at-10"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uM=",
+          "name": "truncated-at-11"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk",
+          "name": "truncated-at-12"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5Q==",
+          "name": "truncated-at-13"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5eY=",
+          "name": "truncated-at-14"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn",
+          "name": "truncated-at-15"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6A==",
+          "name": "truncated-at-16"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AA=",
+          "name": "truncated-at-17"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAA",
+          "name": "truncated-at-18"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAA==",
+          "name": "truncated-at-19"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAA=",
+          "name": "truncated-at-20"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAA",
+          "name": "truncated-at-21"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAA==",
+          "name": "truncated-at-22"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAA=",
+          "name": "truncated-at-23"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAAC",
+          "name": "truncated-at-24"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAA==",
+          "name": "truncated-at-25"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAA=",
+          "name": "truncated-at-26"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAA",
+          "name": "truncated-at-27"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAA==",
+          "name": "truncated-at-28"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAA=",
+          "name": "truncated-at-29"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAA",
+          "name": "truncated-at-30"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAA==",
+          "name": "truncated-at-31"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQA",
+          "name": "trailing-byte"
+        },
+        {
+          "encodedB64": "V1MyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGRXUzJTAgAAAOHi4+Tl5ufoAAAAAAAAAAIAAAAAAAAAZA==",
+          "name": "concatenated-controls"
+        },
+        {
+          "encodedB64": "VlMyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-0"
+        },
+        {
+          "encodedB64": "V1IyUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-1"
+        },
+        {
+          "encodedB64": "V1MzUwIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-2"
+        },
+        {
+          "encodedB64": "V1MyUgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-3"
+        },
+        {
+          "encodedB64": "V1MyUwMAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-4"
+        },
+        {
+          "encodedB64": "V1MyUwIBAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-5"
+        },
+        {
+          "encodedB64": "V1MyUwIAAQDh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-6"
+        },
+        {
+          "encodedB64": "V1MyUwIAAAHh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "invalid-prefix-byte-7"
+        },
+        {
+          "encodedB64": "V1MyUwIAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "zero-session-id"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAIAAABk",
+          "name": "current-runtime-u32-credit"
+        },
+        {
+          "encodedB64": "V1MyQgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2B"
+        },
+        {
+          "encodedB64": "V1MyTgIAAADh4uPk5ebn6AAAAAAAAAACAAAAAAAAAGQ=",
+          "name": "different-control-WS2N"
+        }
+      ],
+      "name": "relay-settlement-ack",
       "relaySessionIdB64": "4eLj5OXm5+g="
     },
     {

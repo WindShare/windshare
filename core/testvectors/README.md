@@ -68,6 +68,8 @@ delta contract remains separate until the coordinated runtime cutover.
 The staged `relay-capacity-*` families pin REGISTER/RESUME/JOIN declarations,
 capacity-bound signatures and strict framing. Rust uses these handshake vectors;
 Go/browser expose separate delivery-handshake codecs pending runtime activation.
+`relay-settlement-notice` and `relay-settlement-ack` pin distinct `WS2N`/`WS2S`
+headers, cumulative u64 totals and cross-message rejection in all three languages.
 Peer signaling schema 2 includes monotonic attempt
 sequences, the closed peer reason-to-recovery-scope mapping, and signed
 session-bound path controls. Path-control schema 2 also binds an opaque provider

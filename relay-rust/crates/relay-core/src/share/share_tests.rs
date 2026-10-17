@@ -562,3 +562,6 @@ mod recovery;
 
 #[path = "capacity_tests.rs"]
 mod capacity;
+
+#[path = "settlement_tests.rs"]
+mod settlement;

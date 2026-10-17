@@ -1,12 +1,13 @@
 # Relay delivery flow contract
 
-Handshake capacity and cumulative `WS2B` codecs have shared Rust/Go/TypeScript
-vectors. The Rust kernel binds capacity to each connection ledger. This remains
+Handshake capacity, cumulative `WS2B` and final settlement controls have shared
+Rust/Go/TypeScript vectors. The Rust kernel binds capacity to each connection
+ledger and routes wire feedback into consumption or settlement. This remains
 staged: current Go/browser connections use capacity-less handshakes and 24-byte
-receive-credit deltas. Add settlement controls before the coordinated runtime
-cutover, then delete the old codecs. Never select a mode by frame length or fall
-back between meanings. Go `DeliveryRegisterInit` / `DeliveryJoin` and browser
-`delivery-handshake-codec.ts` are explicit staged entry points.
+receive-credit deltas. Next, connect the minimal Cloudflare host and client flow
+control together, then delete the old codecs. Never select a mode by frame length
+or fall back between meanings. Go `DeliveryRegisterInit` / `DeliveryJoin` and
+browser `delivery-handshake-codec.ts` remain explicit staged entry points.
 
 ## Four distinct responsibilities
 
@@ -15,7 +16,7 @@ back between meanings. Go `DeliveryRegisterInit` / `DeliveryJoin` and browser
 | Initial capacity | REGISTER / RESUME / JOIN declare connection capacity. Admission reserves both directions' startup allowance before granting either, so the first frame never waits for consumption feedback. |
 | `WS2W` sending allowance | The relay grants frame/byte deltas to the source, reserving destination capacity at grant time. Grants, accepted queues and submitted-but-unconsumed data share that capacity. Grants are not consumption. |
 | Cumulative `WS2B` | Either endpoint reports the complete inbound `WS2O` prefix its application has consumed. Only newly consumed resources can be reclaimed; feedback neither declares capacity nor grants permission to send. |
-| Final settlement (wire integration pending) | After retirement, revocation and unsent-queue discard, the relay orders a notice behind submitted frames. The destination consumes or discards that prefix and acknowledges exactly the frozen submitted totals. Settlement releases connection capacity without reopening the session. |
+| Final settlement (`WS2N` / `WS2S`) | After retirement, revocation and unsent-queue discard, the relay orders a notice behind submitted frames. The destination consumes or discards that prefix and acknowledges exactly the frozen submitted totals. Settlement releases connection capacity without reopening the session. |
 
 Socket submission alone never refunds delivery capacity. Runtime window sizes,
 startup reservations and batching thresholds are capacity/scheduling policy,
@@ -84,6 +85,39 @@ beyond submission are refused. Decoding the same bytes twice is not itself an
 idempotence guarantee. Final settlement additionally requires retirement ordering
 and exact frozen totals; ordinary `WS2B` does not acknowledge a settlement notice.
 
+## Final settlement
+
+This boundary is relay-session retirement, not cancellation of an individual
+download. A download can stop while its relay session continues serving other
+work; that live flow still accounts for dequeued frames through ordinary `WS2B`.
+
+`WS2N` (relay → destination) and `WS2S` (destination → relay) use the same 32-byte
+layout and complete-envelope count bounds as cumulative `WS2B`, with distinct
+magic bytes. Bytes 5–7 stay zero. Both carry the nonzero session ID, final frame
+count and final full encoded byte count; they carry no direction or generation.
+The authenticated socket selects that exact destination flow. Zero totals are
+valid when the relay submitted no frames.
+
+The relay revokes grants, confirms unsent-queue discard, then sends `WS2N` through
+the destination's ordered writer behind all submitted frames. It bypasses content
+credit but cannot overtake those frames. The client processes or discards that
+entire prefix before echoing the exact notice totals in `WS2S`; merely receiving
+the notice is insufficient when application work remains queued. Repeated notices
+may repeat the same acknowledgement. Counters never reset or reopen the session.
+
+`ShareRelay` emits an encodable `SettlementNotice` and decodes `WS2S` from
+`Input::Control` into the existing `Input::Settled` path. Premature or mismatched
+acknowledgements release nothing. Earlier consumption is subtracted only once;
+duplicate acknowledgements and receipts for removed flows cannot touch siblings
+or reused slots. A receipt arriving after the fixed cleanup deadline cannot undo
+the connection's close obligation, including after hibernation.
+
+Ordinary `WS2B` proves application consumption, never unsent-queue discard or
+receipt of `WS2N`. Fully consumed flows can release their remaining metadata once
+queue discard is confirmed, without retaining zero occupancy just to wait for
+`WS2S`; the ordered notice is still sent and its eventual acknowledgement is inert.
+Host/client runtime integration must preserve these ordering and discard rules.
+
 ## Shared evidence
 
 `core/testvectors/v2-session.json` contains `relay-delivery-consumed`, generated
@@ -93,6 +127,10 @@ envelope limits, totals above runtime windows/u32/JavaScript safe integers,
 u64 arithmetic boundaries, every truncated length, trailing bytes, bad prefixes,
 zero IDs and the old 24-byte layout. Existing Rust ledger/aggregate tests retain
 ownership of duplicate feedback, stale generations and settlement behavior.
+`relay-settlement-notice` and `relay-settlement-ack` share those boundaries and
+reject each other's headers and `WS2B`. Aggregate tests exercise encoded controls
+through retirement ordering, partial consumption, wrong totals, replay, slot reuse
+and hibernated deadline expiry.
 The `relay-capacity-*` families pin exact handshake bytes, both signed capacity
 axes, independent u64 limits, truncated/old layouts and different RESUME capacity.
 Rust aggregate tests cover asymmetric budgets, startup rollback and hibernation
