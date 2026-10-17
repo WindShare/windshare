@@ -4,8 +4,7 @@ Handshake capacity, cumulative `WS2B` and final settlement controls have shared
 Rust/Go/TypeScript vectors. The Rust kernel binds capacity to each connection
 ledger and routes wire feedback into consumption or settlement. This remains
 staged: current Go/browser connections use capacity-less handshakes and 24-byte
-receive-credit deltas. Next, connect the minimal Cloudflare host and client flow
-control together, then delete the old codecs. Never select a mode by frame length
+receive-credit deltas. Never select a mode by frame length
 or fall back between meanings. Go `DeliveryRegisterInit` / `DeliveryJoin` and
 browser `delivery-handshake-codec.ts` remain explicit staged entry points.
 
