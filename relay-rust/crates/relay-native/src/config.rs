@@ -4,7 +4,13 @@ use std::time::Duration;
 use windshare_relay_core::{flow, identifiers::RelayIdentity, share};
 
 pub const MAILBOX_CAPACITY: usize = 32;
-pub const WRITE_QUEUE_CAPACITY: usize = 8;
+pub const CONTROL_QUEUE_FRAMES: usize = 8;
+pub const DATA_QUEUE_FRAMES: usize = 64;
+pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
+pub const SUBMITTED_DATA_FRAMES: usize = 2;
+pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
+const MAX_DATA_BYTES: usize =
+    windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_CONNECTIONS: usize = 256;
 pub const MAX_RESIDENT_SHARES: usize = 1024;
 pub const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
@@ -93,7 +99,7 @@ pub fn limits() -> share::Limits {
         retained_flows_per_connection: 64,
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
-            capacity(64),
+            flow::Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
             capacity(2),
             capacity(1),
             Duration::from_secs(5),

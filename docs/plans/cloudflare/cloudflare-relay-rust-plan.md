@@ -45,8 +45,11 @@ Implementation progress is tracked in [Rust relay implementation](overview.md).
 The [native lifecycle host](../../../relay-rust/crates/relay-native/README.md) now
 executes real REGISTER/RESUME/STOP connections with SQLite authority, OS entropy
 and host timers. Its Go-codec process scenario verifies ownership recovery and
-permanent STOP across restarts. JOIN/data forwarding and the coordinated client
-runtime cutover remain pending; the Go relay is still the product entry point.
+permanent STOP across restarts. Native connections now supervise separate reader/writer
+tasks, bound output by frames and bytes, and synchronize permit rechecks with the
+kernel-to-writer handoff. Discard and physical-release receipts follow actual queue
+cleanup and joined transport teardown. JOIN/data ingress, delivery recovery and the
+coordinated client runtime cutover remain pending; Go is still the product entry point.
 The [Cloudflare lifecycle host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, uses Worker entropy and time, executes the
 same authority-row transitions as native SQLite, and restores binary socket

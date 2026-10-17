@@ -105,3 +105,51 @@ async fn go_capacity_client_drives_native_io_and_process_restart() {
     success(&result);
     stopped(&database);
 }
+
+#[tokio::test]
+async fn shutdown_joins_connected_sockets_and_incomplete_upgrades() {
+    use futures_util::StreamExt;
+    use std::time::Duration;
+    use tokio::{io::AsyncReadExt, net::TcpStream, time::timeout};
+
+    const SHUTDOWN_BUDGET: Duration = Duration::from_secs(3);
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let endpoint = format!("ws://{address}/v2/ws");
+    let server = Server::open(
+        Endpoint::parse(&endpoint).unwrap(),
+        &directory.path().join("shutdown.sqlite"),
+    )
+    .unwrap();
+    let (shutdown, ended) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        server
+            .serve(listener, async {
+                let _ = ended.await;
+            })
+            .await
+    });
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("{endpoint}?share_id=AQEBAQEBAQEBAQEB"))
+            .await
+            .unwrap();
+    let mut upgrading = TcpStream::connect(address).await.unwrap();
+    shutdown.send(()).unwrap();
+    timeout(SHUTDOWN_BUDGET, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        timeout(SHUTDOWN_BUDGET, socket.next())
+            .await
+            .unwrap()
+            .is_none_or(|value| value.is_err())
+    );
+    let mut byte = [0; 1];
+    let received = timeout(SHUTDOWN_BUDGET, upgrading.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(received.is_err() || received.unwrap() == 0);
+}
