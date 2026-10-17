@@ -72,18 +72,7 @@ callbacks. Missing or invalid ledger state cannot authorize a surviving socket;
 restoration failure requires closing those sockets. Retired flows retain their
 charges and finish cleanup without recreating sessions or issuing new grants.
 
-## Remaining integration
-
-Rust, Go and TypeScript now share the 32-byte cumulative `WS2B` codec and
-`relay-delivery-consumed` vectors. The [delivery flow contract](delivery-flow-contract.md)
-separates initial capacity, sending allowance, consumption and final settlement.
-This codec is staged; existing Go/browser connections still use receive-credit deltas.
-
-Handshake capacities, settlement controls, both platform adapters and the
-coordinated relay/client runtime cutover remain to be implemented. Replace the
-old delta format at that cutover; do not add wire-length negotiation or fallback.
-Adapters must retain the existing host-neutral `WS2H/WS2A` liveness
-contract in the [protocol specification](../../协议规范.md).
+## Testing
 
 `make rust` runs formatting, Clippy, native coverage, doctests and the core Wasm
 build. Public aggregate scenarios cover durability barriers, STOP races, FIFO
