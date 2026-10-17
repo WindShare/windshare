@@ -15,7 +15,7 @@ use super::{OwnedRoute, PublishedRoute, Record, UnresolvedPublication};
 ///
 /// Records, session snapshots and surviving sockets name exact lifetimes, so a
 /// host never reuses a reference while any of them can still name it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ConnectionRef {
     /// Host-local socket slot or identifier.
     pub id: NonZeroU64,

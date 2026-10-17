@@ -76,11 +76,10 @@ pub enum AdmissionRequest {
     Stop(StopInit),
 }
 
-/// The host's decision for the exact admission request.
+/// The share authority's decision for the exact admission request.
 ///
-/// Fresh registration and RESUME require their share lifecycle's admission;
-/// STOP retains an independent admission path until its lifecycle stage is
-/// implemented.
+/// Fresh registration and RESUME consume lifecycle admission. STOP authenticates
+/// independently so a sender can stop an absent route or unfinished publication.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Admission {
     /// Consume the share's reservation for this connection and deadline.

@@ -74,7 +74,7 @@ Go coverage is blocking:
 
 ## Rust relay checks
 
-`relay-rust/` is an independent Cargo workspace. Its `windshare-relay-core` crate uses `no_std`,
+`relay-rust/` is an independent Cargo workspace. Its `windshare-relay-core` crate uses `no_std + alloc`,
 with no I/O or async runtime dependencies. Sender-key and signature checks consume the shared
 Go/browser Ed25519 acceptance vectors; REGISTER/RESUME/STOP frames, preimages, proofs and refusals
 consume `v2-session.json`. The per-connection handshake and single-share lifecycle cover
@@ -87,8 +87,11 @@ pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revo
 permits and callbacks, and sibling isolation. Delivery-ledger tests cover startup reservations,
 frame/byte bounds, FIFO submission, cancellation/discard/settlement ordering, cumulative feedback,
 stale generations and fixed cleanup deadlines using injected time. WS2O/WS2M codecs consume shared
-vectors and reject malformed framing. Delivery wire changes, platform adapters and hibernated
-session/ledger restoration remain unimplemented.
+vectors and reject malformed framing. Public `ShareRelay` scenarios exercise final durability
+barriers, serialized retries, synchronous handoff, stale callbacks, capacity rollback and sibling
+isolation. Hibernation tests restore sessions, pending handshakes, delivery credit and unsettled
+occupancy together without renewing deadlines. Delivery wire changes and platform adapters remain
+unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 

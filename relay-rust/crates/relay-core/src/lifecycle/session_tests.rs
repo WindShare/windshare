@@ -15,7 +15,10 @@ use crate::{
 struct SessionTrace(Vec<sessions::Observation>);
 
 impl sessions::Observer for SessionTrace {
-    fn observe(&mut self, observation: sessions::Observation) {
+    fn observe(&mut self, observation: crate::observation::Observation) {
+        let crate::observation::Observation::Session(observation) = observation else {
+            panic!("unexpected domain observation");
+        };
         self.0.push(observation);
     }
 }

@@ -43,6 +43,15 @@ pub struct SessionSnapshot {
     pub(super) stage: Stage,
 }
 
+impl SessionKey {
+    pub(crate) const fn checkpoint_key(self) -> SessionSnapshot {
+        SessionSnapshot {
+            key: self,
+            stage: Stage::Active,
+        }
+    }
+}
+
 impl SessionSnapshot {
     /// The admission this snapshot claims.
     #[must_use]

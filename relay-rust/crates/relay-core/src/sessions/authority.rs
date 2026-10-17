@@ -127,6 +127,10 @@ pub struct ForwardPermit {
 }
 
 impl ForwardPermit {
+    pub(crate) const fn restored(session: SessionKey, direction: Direction) -> Self {
+        Self { session, direction }
+    }
+
     /// Includes relay, share, session, ownership epoch, admission and both
     /// connection generations.
     #[must_use]

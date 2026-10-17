@@ -19,6 +19,14 @@ pub struct Joined {
 }
 
 impl<O: Observer> ShareLifecycle<O> {
+    pub(crate) const fn ownership_record(&self) -> Option<super::Record> {
+        match self.state {
+            State::Published(registration) => Some(registration.record()),
+            State::Grace(route) => Some(route.record()),
+            _ => None,
+        }
+    }
+
     #[expect(
         clippy::needless_pass_by_value,
         reason = "JOIN consumes the connection-bound handshake outcome"

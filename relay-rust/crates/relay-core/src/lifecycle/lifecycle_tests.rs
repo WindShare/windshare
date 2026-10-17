@@ -23,7 +23,10 @@ const INIT_INSTANCE_OFFSET: usize = 8 + 12;
 struct Recorder(Vec<Observation>);
 
 impl Observer for Recorder {
-    fn observe(&mut self, observation: Observation) {
+    fn observe(&mut self, observation: crate::observation::Observation) {
+        let crate::observation::Observation::Lifecycle(observation) = observation else {
+            panic!("unexpected domain observation");
+        };
         self.0.push(observation);
     }
 }

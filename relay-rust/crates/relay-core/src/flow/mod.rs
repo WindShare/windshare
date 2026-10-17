@@ -1,28 +1,24 @@
 //! Bounded delivery accounting for one destination connection generation.
 //!
-//! Hosts choose capacities and the number of metadata slots, own payloads/queues,
-//! and serialize this ledger with session authority and destination submission.
-//! Open each direction with live authority before issuing its initial grant.
-//! Recheck authority for every later grant, receive and FIFO submission. Charge
-//! submission immediately before the host write; even an uncertain/failed write
-//! stays charged until consumption, settlement or confirmed connection closure.
+//! [`crate::share::ShareRelay`] composes this ledger with live session authority,
+//! FIFO submission, retirement and deadline scheduling. Hosts choose capacities
+//! and retain payloads; every grant reserves both frame and byte capacity.
 //!
-//! Session retirement revokes unused grants immediately. Accepted unsent payloads
-//! stay charged until the host confirms discarding them; submitted bytes survive
-//! both steps. Cumulative feedback binds to the exact session, direction and
-//! destination generation, so retries cannot refund twice. Retired slots are
-//! reusable only after all occupancy is gone. Hosts retain their existing bounded
-//! wire-session lookup for late traffic; stale handles never recreate a flow.
+//! Retirement revokes unused credit immediately. Unsubmitted payloads remain
+//! charged until discard confirmation, and submitted bytes remain charged until
+//! consumption, settlement or confirmed physical closure. Cumulative feedback
+//! binds to exact session, direction and destination generations.
 //!
-//! Schedule `deadline()`, and act on `close_request()` after every event. All
-//! inputs also check absolute deadlines, including consumption. Timeout fences
-//! new work but does not refund memory before physical closure.
-//!
-//! This is an in-memory accounting contract, not a new wire codec. A live
-//! connection must never be given a fresh empty ledger. Hibernated restoration
-//! needs a future validated snapshot contract; otherwise close that generation.
+//! [`LedgerCheckpoint`] preserves cumulative accounting and original deadlines
+//! without payloads. Aggregate recovery validates open routes against reinstated
+//! sessions and retains retired flows until cleanup. A surviving connection must
+//! never be assigned an empty replacement ledger. This module defines accounting
+//! contracts; delivery control wire codecs are a separate integration step.
 
 mod accounting;
+mod checkpoint;
+mod checkpoint_codec;
+pub use checkpoint::{CheckpointError, LedgerCheckpoint};
 mod delivery;
 mod forwarding;
 mod observation;
@@ -121,6 +117,10 @@ pub struct ConnectionLedger<const N: usize, O> {
 }
 
 impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+    pub(crate) const fn observer_mut(&mut self) -> &mut O {
+        &mut self.observer
+    }
+
     /// Starts accounting for a newly opened physical connection, never a live reset.
     ///
     /// # Errors
@@ -254,15 +254,18 @@ impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
     }
 
     fn record(&mut self, input: Input, decision: Decision, now: UnixMillis) {
-        self.observer.observe(Observation {
-            at: now,
-            relay: self.relay,
-            destination: self.destination,
-            input,
-            decision,
-            usage: self.usage,
-            startup_used: self.startup_used,
-        });
+        self.observer.observe(
+            Observation {
+                at: now,
+                relay: self.relay,
+                destination: self.destination,
+                input,
+                decision,
+                usage: self.usage,
+                startup_used: self.startup_used,
+            }
+            .into(),
+        );
     }
 
     fn run<T>(

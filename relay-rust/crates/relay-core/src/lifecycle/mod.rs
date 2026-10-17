@@ -1,36 +1,21 @@
 //! Single-share route authority, independent of storage and sockets.
 //!
-//! Hosts serialize events, apply every part of each `Effects`, and schedule
-//! `deadline()` as an absolute timer/alarm. Every event checks that deadline,
-//! so late timers never extend ownership. The engine retains only bounded
-//! metadata; descriptor bytes belong to the host transaction. Hosts finish
-//! record/cleanup effects without a completion event before applying another
-//! input. Publication and STOP work instead report their explicit completions;
-//! all asynchronous writes and deletes are conditional on the exact record.
+//! [`crate::share::ShareRelay`] composes this state machine with sessions, delivery,
+//! deadlines and ordered storage completions. Direct users must preserve the
+//! ordering expressed by [`Effects`]; every event checks absolute deadlines.
 //!
-//! A publication that expires, loses its owner or has an uncertain result is
-//! fenced. Only authoritative rollback can reopen the route. A late success
-//! cannot publish it, and cleanup always names the exact operation.
+//! A publication that expires, loses its owner or has an uncertain result stays
+//! fenced until authoritative rollback. A late success cannot publish it.
+//! Owner loss starts a fixed grace; RESUME replaces only the ownership observed
+//! before its challenge, never an owner it did not authenticate against.
 //!
-//! A published route has at most one owner connection, identified by a
-//! durable ownership epoch and that exact connection lifetime. Losing it
-//! without STOP starts a grace whose absolute deadline the host persists, and
-//! the route lapses unless its sender resumes in time. An authenticated RESUME
-//! replaces a live or lost owner, but only the ownership it observed before
-//! its challenge, so it never retires an owner it did not authenticate against.
+//! [`ShareLifecycle::restore`] takes the authoritative [`Record`], preventing an
+//! empty actor from replacing a registration, unresolved publication or STOP.
+//! Surviving sockets retain their ownership and validated session identities.
 //!
-//! [`ShareLifecycle::restore`] is the only constructor, and it takes whatever
-//! [`Record`] storage holds for the share, so an actor can never start empty
-//! over a registration, unresolved publication or STOP. Hosts store exactly
-//! the records lifecycle outputs name. Rebuilding the actor is neither an
-//! ownership change nor a connection replacement: over surviving sockets it
-//! keeps the stored ownership and reinstalls validated session snapshots.
-//!
-//! STOP fences the route immediately, persists its cleanup obligation, retires
-//! exact participants and outstanding publication work, then commits the final
-//! record before acknowledging. Receiver JOIN creates a session bound to this
-//! ownership; revocations name the exact old ownership for session cleanup.
-//! Hosts retain session authorities in their own bounded resource storage.
+//! STOP revokes authority immediately, persists its cleanup obligation, retires
+//! exact participants and publication work, then commits before acknowledging.
+//! The aggregate retains those obligations and applies revocation to sessions.
 
 mod effect;
 mod observation;
@@ -105,6 +90,10 @@ pub struct ShareLifecycle<O> {
 }
 
 impl<O: Observer> ShareLifecycle<O> {
+    pub(crate) const fn observer_mut(&mut self) -> &mut O {
+        &mut self.observer
+    }
+
     /// Constructs the share actor for `relay` and `share` from `restoration`:
     /// the stored record and whatever outlived the previous actor. Every
     /// restore, including a replacement inside one process, needs a fresh

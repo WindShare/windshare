@@ -1,0 +1,161 @@
+//! A connection's complete delivery responsibility, including retired flows.
+use super::{
+    ConnectionLedger, ConnectionState, Counts, Delivery, FlowKey, Limits, Observer, delivery::State,
+};
+use crate::{clock::UnixMillis, identifiers::RelayIdentity, lifecycle::ConnectionRef};
+use alloc::vec::Vec;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LedgerCheckpoint {
+    pub(super) relay: RelayIdentity,
+    pub(super) destination: ConnectionRef,
+    pub(super) entries: Vec<Option<Delivery>>,
+    pub(super) state: ConnectionState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckpointError {
+    Format,
+    Capacity,
+    Identity,
+    Accounting,
+    PendingPayload,
+}
+
+impl LedgerCheckpoint {
+    #[must_use]
+    pub const fn destination(&self) -> ConnectionRef {
+        self.destination
+    }
+    pub(crate) fn flows(&self) -> impl Iterator<Item = FlowKey> + '_ {
+        self.entries.iter().flatten().map(|entry| entry.key)
+    }
+}
+
+impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+    /// A hibernating host cannot retain an application payload queue.
+    ///
+    /// # Errors
+    /// Refuses snapshots while accepted, unsubmitted payloads remain.
+    pub fn checkpoint(&self) -> Result<LedgerCheckpoint, CheckpointError> {
+        if self.usage.received != Counts::ZERO {
+            return Err(CheckpointError::PendingPayload);
+        }
+        Ok(LedgerCheckpoint {
+            relay: self.relay,
+            destination: self.destination,
+            entries: self.entries.to_vec(),
+            state: self.state,
+        })
+    }
+
+    /// Restores accounting before any capacity can be issued on a surviving socket.
+    /// Shape validation is separate from route authorization; callers retire the
+    /// returned unauthorized flows through the same cleanup path as live retirement.
+    ///
+    /// # Errors
+    /// Rejects foreign identity, impossible counters, duplicate routes and reduced capacity.
+    pub fn restore(
+        relay: RelayIdentity,
+        destination: ConnectionRef,
+        limits: Limits,
+        checkpoint: &LedgerCheckpoint,
+        observer: O,
+    ) -> Result<Self, CheckpointError> {
+        if checkpoint.relay != relay || checkpoint.destination != destination {
+            return Err(CheckpointError::Identity);
+        }
+        if checkpoint.entries.len() != N {
+            return Err(CheckpointError::Capacity);
+        }
+        let mut ledger = Self::new(relay, destination, limits, observer)
+            .map_err(|_| CheckpointError::Capacity)?;
+        for (slot, entry) in checkpoint.entries.iter().enumerate() {
+            if let Some(entry) = entry {
+                validate_entry(*entry, relay, destination, slot)?;
+                if checkpoint.entries[..slot]
+                    .iter()
+                    .flatten()
+                    .any(|prior| prior.key.permit == entry.key.permit)
+                {
+                    return Err(CheckpointError::Identity);
+                }
+                let usage = entry.usage();
+                let total = ledger
+                    .usage
+                    .total()
+                    .checked_add(usage.total())
+                    .ok_or(CheckpointError::Accounting)?;
+                let startup = ledger
+                    .startup_used
+                    .checked_add(entry.startup_used())
+                    .ok_or(CheckpointError::Accounting)?;
+                if !limits.total.covers(total)
+                    || !limits.startup_reserve.covers(startup)
+                    || !limits.regular().covers(total.sub(startup))
+                {
+                    return Err(CheckpointError::Capacity);
+                }
+                ledger.replace(slot, Some(*entry));
+            }
+        }
+        match checkpoint.state {
+            ConnectionState::Closing(request)
+                if request.destination != destination
+                    || request.flow.destination() != destination
+                    || request.flow.session().relay() != relay
+                    || request.flow.slot >= N
+                    || request.deadline.0 == 0 =>
+            {
+                return Err(CheckpointError::Identity);
+            }
+            ConnectionState::Closed if checkpoint.entries.iter().any(Option::is_some) => {
+                return Err(CheckpointError::Accounting);
+            }
+            _ => {}
+        }
+        // A final receipt may have removed the last flow after closure was requested.
+        // That does not rescind the pending close or reopen a confirmed closed lifetime.
+        ledger.state = checkpoint.state;
+        Ok(ledger)
+    }
+
+    pub(crate) fn checkpoint_flows(&self) -> impl Iterator<Item = (FlowKey, bool)> + '_ {
+        self.entries
+            .iter()
+            .flatten()
+            .map(|entry| (entry.key, entry.state == State::Open))
+    }
+}
+
+fn validate_entry(
+    entry: Delivery,
+    relay: RelayIdentity,
+    destination: ConnectionRef,
+    slot: usize,
+) -> Result<(), CheckpointError> {
+    if entry.key.slot != slot
+        || entry.key.session().relay() != relay
+        || entry.key.destination() != destination
+    {
+        return Err(CheckpointError::Identity);
+    }
+    if !entry.granted.covers(entry.received)
+        || !entry.received.covers(entry.submitted)
+        || !entry.submitted.covers(entry.consumed)
+        || !entry.granted.covers(entry.startup)
+        || !entry.received.is_envelope_batch()
+        || !entry.submitted.is_envelope_batch()
+        || !entry.consumed.is_envelope_batch()
+        || !entry.submitted.sub(entry.consumed).is_envelope_batch()
+    {
+        return Err(CheckpointError::Accounting);
+    }
+    if entry.usage().received != Counts::ZERO {
+        return Err(CheckpointError::PendingPayload);
+    }
+    if matches!(entry.deadline(), Some(UnixMillis(0))) {
+        return Err(CheckpointError::Accounting);
+    }
+    Ok(())
+}
