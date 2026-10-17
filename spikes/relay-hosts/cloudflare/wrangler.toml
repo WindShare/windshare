@@ -1,5 +1,5 @@
 name = "windshare-relay-host-probe"
-main = "build/index.js"
+main = "recovery-entry.mjs"
 compatibility_date = "2026-10-17"
 compatibility_flags = ["web_socket_auto_reply_to_close"]
 
@@ -10,13 +10,33 @@ command = "worker-build --release"
 tag = "v1"
 new_sqlite_classes = ["CloseProbe"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ResetControl", "BridgeProbe"]
+
 [[durable_objects.bindings]]
 name = "CLOSE_PROBE"
 class_name = "CloseProbe"
 
+[[durable_objects.bindings]]
+name = "RESET_CONTROL"
+class_name = "ResetControl"
+
+[[durable_objects.bindings]]
+name = "BRIDGE_PROBE"
+class_name = "BridgeProbe"
+
 [[previews.durable_objects.bindings]]
 name = "CLOSE_PROBE"
 class_name = "CloseProbe"
+
+[[previews.durable_objects.bindings]]
+name = "RESET_CONTROL"
+class_name = "ResetControl"
+
+[[previews.durable_objects.bindings]]
+name = "BRIDGE_PROBE"
+class_name = "BridgeProbe"
 
 [previews.observability]
 enabled = true

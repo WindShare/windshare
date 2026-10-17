@@ -113,9 +113,13 @@ The [bounded host probes](../../../spikes/relay-hosts/README.md) exercise the re
 kernel with native TCP/WebSocket writers and a separate Rust Worker in Cloudflare
 Previews. Native slow-writer isolation and STOP cleanup passed on Windows; the
 probe joins both transport tasks and uses abortive TCP close before `Closed`.
-Cloudflare exposes closure events but no verified buffer-release receipt; resetting
-even an empty probe object left bounded status requests timing out. Production
-adapters and client cutover remain pending; these experiments do not complete them.
+Follow-up controls reproduced a Rust callback failure after reset and avoided it by
+calling abort in JavaScript after the Rust future completes. The object recovered,
+but an old peer with an 8 KiB receive buffer still received the complete 8 MiB burst;
+a healthy peer on the same object disconnected. Reset is therefore not a verified
+buffer-release receipt or per-receiver isolation policy. Production adapters and
+client cutover remain pending; authorization fencing and occupancy release need
+an explicit ownership contract before Cloudflare integration.
 
 ## Testing
 

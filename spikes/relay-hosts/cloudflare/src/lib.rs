@@ -194,7 +194,7 @@ impl DurableObject for CloseProbe {
                 Response::from_websocket(pair.client)
             }
             (Method::Post, "burst") => self.burst(req).await,
-            (Method::Post, "reset") => {
+            (Method::Post, "reset" | "prepare-reset") => {
                 if self
                     .state
                     .storage()
@@ -207,6 +207,9 @@ impl DurableObject for CloseProbe {
                 self.state.storage().put("reset-issued", true).await?;
                 self.record("reset_requested", json!({"sockets": self.sockets()}))?;
                 self.state.storage().sync().await?;
+                if url.path().ends_with("/prepare-reset") {
+                    return Response::ok("reset prepared; Rust future may finish before abort");
+                }
                 // workers-rs has no high-level binding for this platform teardown primitive.
                 let raw = self.state.as_raw();
                 let abort =
