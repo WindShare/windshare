@@ -22,6 +22,29 @@ startup reservations and batching thresholds are capacity/scheduling policy,
 independent of the cumulative counters' encoding limits. Relay control frames
 bypass content credit; feedback is batched without requiring per-frame round trips.
 
+## Go client receive ledger
+
+The staged [receive ledger](../../../transport/relayv2/internal/receiveledger/ledger.go)
+serves either endpoint role without sockets, goroutines or payload ownership.
+One connection shares frame/byte capacity and a retained-session bound. Immutable
+receipts bind each full envelope to its local session lifetime and FIFO position.
+Arrival charges capacity; application handoff and retirement discard are distinct.
+A discarded hole stops ordinary consumption's prefix, even if later frames are consumed.
+
+Local retirement retains accounting and accepts in-flight frames until an ordered
+`WS2N` exactly matches received totals. Only consuming/discarding that whole prefix
+permits `WS2S`; repeated notices cannot refund twice. Metadata stays charged until
+the acknowledgement is issued and the owner explicitly forgets the session.
+
+Batch readiness combines pending consumption across sessions and adapts to both
+window axes; a ready batch drains fairly, including its below-threshold tail.
+The future adapter must serialize ledger access, retain receipts with payloads,
+flush sparse consumption at a bounded deadline, and submit returned controls in
+order outside content credit. Failed control writes end the connection generation.
+No event implicitly admits a session; delayed callbacks retain their original
+session token. Current Go/browser runtime handshakes and credit semantics remain
+unchanged until coordinated host integration.
+
 ## Initial receive capacity
 
 Append two unsigned, network-order 64-bit integers to `WS2R` (both REGISTER and

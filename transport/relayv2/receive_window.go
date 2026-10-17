@@ -7,8 +7,9 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-// Only a receiver owns the relay's delivery window. Its socket reader remains
-// free to process heartbeat/retirement controls while the application is idle.
+// The current delta-credit protocol only gives receivers a delivery window.
+// Keep its wire meaning intact until the coordinated cutover to internal/receiveledger.
+// The socket reader remains free to process controls while the application is idle.
 func (c *Channel) receiveLoop() {
 	defer close(c.receiveDone)
 	defer close(c.recv)
