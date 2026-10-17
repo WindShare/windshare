@@ -141,7 +141,7 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
             fixture.identity(incarnation),
             relay.limits,
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[key.sender()],
                 responsibility: Responsibility::Checkpoint(&checkpoint),
             },
@@ -209,7 +209,11 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
     assert!(restored.connections.is_empty());
     let _ = restored.handle(Input::Closed(key.sender()), fixture.at);
     assert_eq!(
-        restored.checkpoint_manifest().unwrap().generations(),
+        restored
+            .checkpoint_manifest()
+            .unwrap()
+            .generations()
+            .collect::<Vec<_>>(),
         &[key.receiver()]
     );
     assert_eq!(
@@ -244,7 +248,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         fixture.identity(2),
         relay.limits,
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[old.sender()],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },
@@ -326,7 +330,7 @@ fn absent_responsibility_never_means_a_fresh_budget() {
             fixture.identity(2),
             Fixture::limits(),
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[connection(1)],
                 responsibility: Responsibility::Released
             },
@@ -336,8 +340,17 @@ fn absent_responsibility_never_means_a_fresh_budget() {
         Err(Error::InvalidCheckpoint)
     ));
     let manifest = relay.checkpoint_manifest().unwrap();
-    assert!(matches!(
-        Checkpoint::from_connections(&manifest, Vec::new(), Fixture::limits()),
-        Err(Error::MissingResponsibility)
-    ));
+    let partial = Checkpoint::from_connections(&manifest, Vec::new(), Fixture::limits()).unwrap();
+    let (recovered, _) = Relay::restore(
+        fixture.identity(2),
+        Fixture::limits(),
+        &Restore::restarted(Some(stored), Responsibility::Checkpoint(&partial)),
+        Trace::default(),
+        fixture.at,
+    )
+    .unwrap();
+    assert_eq!(
+        recovered.unavailable_reservation(connection(1)),
+        Some(Fixture::limits().delivery.total())
+    );
 }

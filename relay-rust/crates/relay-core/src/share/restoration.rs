@@ -18,8 +18,19 @@ use alloc::{
 };
 
 #[derive(Clone, Copy, Debug)]
+// This cold-path input already carries Record by value; keep absence/uncertainty
+// allocation-free instead of boxing every successful authority read.
+#[allow(clippy::large_enum_variant)]
+pub enum Authority {
+    /// A completed authoritative read; None proves the share has no stored record.
+    Known(Option<Record>),
+    /// Ownership or permanent STOP may have committed; no delivery record can repair this.
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Restore<'a> {
-    pub record: Option<Record>,
+    pub authority: Authority,
     /// Only these exact connection generations can still communicate.
     pub surviving: &'a [ConnectionRef],
     pub responsibility: Responsibility<'a>,
@@ -28,7 +39,8 @@ pub struct Restore<'a> {
 /// Host evidence about all previous generations, independent of socket discovery.
 #[derive(Clone, Copy, Debug)]
 pub enum Responsibility<'a> {
-    /// The latest complete image, including generations with no surviving socket.
+    /// An authoritative reservation inventory plus independently validated records.
+    /// Missing delivery records are isolated using their retained risk reservation.
     Checkpoint(&'a Checkpoint),
     /// The host proves that all prior application queues and transport buffers
     /// are released (or that this share has never had any). Socket disappearance,
@@ -42,7 +54,7 @@ impl<'a> Restore<'a> {
     #[must_use]
     pub const fn restarted(record: Option<Record>, responsibility: Responsibility<'a>) -> Self {
         Self {
-            record,
+            authority: Authority::Known(record),
             surviving: &[],
             responsibility,
         }
@@ -57,7 +69,7 @@ impl<'a> Restore<'a> {
 }
 
 impl<O: Observer> ShareRelay<O> {
-    /// Validates complete responsibility independently of surviving socket authority.
+    /// Restores authority independently of delivery-record availability.
     ///
     /// # Errors
     /// Missing responsibility or invalid checkpoints never authorize sockets or
@@ -70,6 +82,9 @@ impl<O: Observer> ShareRelay<O> {
         observer: O,
         now: UnixMillis,
     ) -> Result<(Self, Turn), Error> {
+        let Authority::Known(record) = restored.authority else {
+            return Err(Error::MissingAuthority);
+        };
         if limits.connections == 0
             || limits.sessions == 0
             || limits.retained_flows_per_connection == 0
@@ -102,7 +117,7 @@ impl<O: Observer> ShareRelay<O> {
             identity.relay,
             identity.share,
             Restoration {
-                record: restored.record,
+                record,
                 connections: &live,
                 sessions: &snapshots,
             },
@@ -118,15 +133,16 @@ impl<O: Observer> ShareRelay<O> {
             lifecycle,
             connections: BTreeMap::new(),
             ledgers: BTreeMap::new(),
+            unavailable: BTreeMap::new(),
             detached: BTreeMap::new(),
             sessions: BTreeMap::new(),
             routes: BTreeMap::new(),
             deadlines: Deadlines::default(),
-            stored: restored.record,
+            stored: record,
             runtime: RuntimeStatus::Running,
             last_session: restored
                 .checkpoint()
-                .map_or(0, |checkpoint| checkpoint.last_session),
+                .map_or(0, |checkpoint| checkpoint.manifest.last_session),
             last_work: 0,
             tasks: VecDeque::new(),
             stop_barrier: None,
@@ -136,6 +152,11 @@ impl<O: Observer> ShareRelay<O> {
         relay.flush_lifecycle();
         relay.restore_connections(restored, now)?;
         let mut turn = Turn::default();
+        for &connection in restored.surviving {
+            if !relay.connections.contains_key(&connection) {
+                turn.outputs.push(Output::Close(connection));
+            }
+        }
         relay.restore_sessions(decisions, now, &mut turn);
         relay.action(action, None, now, &mut turn);
         relay.restore_handshakes(restored, now, &mut turn)?;
@@ -148,7 +169,7 @@ impl<O: Observer> ShareRelay<O> {
             None,
             RelayDecision::Restored {
                 connections: relay.connections.len(),
-                retained_generations: relay.ledgers.len(),
+                retained_generations: relay.ledgers.len() + relay.unavailable.len(),
             },
             now,
         );
@@ -190,7 +211,8 @@ impl<O: Observer> ShareRelay<O> {
             }
             self.deadlines
                 .set(Key::Ledger(connection), ledger.deadline());
-            let communicating = restored.surviving.contains(&connection);
+            let communicating = restored.surviving.contains(&connection)
+                && !matches!(snapshot.role, ConnectionRole::Detached(_));
             self.trace(
                 Some(connection),
                 RelayDecision::ResponsibilityRestored {
@@ -227,6 +249,28 @@ impl<O: Observer> ShareRelay<O> {
                     },
                 );
             }
+        }
+        for reservation in &checkpoint.manifest.reservations {
+            if self.ledgers.contains_key(&reservation.connection) {
+                continue;
+            }
+            let state = match reservation.state {
+                super::responsibility::GenerationState::Connected => {
+                    self.limits.retirement.detached(now)
+                }
+                super::responsibility::GenerationState::Detached(state)
+                | super::responsibility::GenerationState::Unavailable(state) => state,
+            };
+            self.unavailable
+                .insert(reservation.connection, reservation.bound);
+            self.detached.insert(reservation.connection, state);
+            self.trace(
+                Some(reservation.connection),
+                RelayDecision::RecoveryIsolated {
+                    reserved: reservation.bound,
+                },
+                now,
+            );
         }
         self.validate_retirements()
     }
@@ -330,21 +374,13 @@ fn validate_restore(
         }
     }
     if let Some(checkpoint) = restored.checkpoint() {
-        if checkpoint.identity.relay != identity.relay
-            || checkpoint.identity.share != identity.share
-            || checkpoint.identity.incarnation == identity.incarnation
+        if checkpoint.manifest.identity.relay != identity.relay
+            || checkpoint.manifest.identity.share != identity.share
+            || checkpoint.manifest.identity.incarnation == identity.incarnation
         {
             return Err(Error::InvalidCheckpoint);
         }
         checkpoint.validate(limits)?;
-        for connection in restored.surviving {
-            if !checkpoint.connections.iter().any(|entry| {
-                entry.connection == *connection
-                    && !matches!(entry.role, ConnectionRole::Detached(_))
-            }) {
-                return Err(Error::InvalidCheckpoint);
-            }
-        }
     } else if matches!(restored.responsibility, Responsibility::Unknown) {
         return Err(Error::MissingResponsibility);
     } else if !restored.surviving.is_empty() {

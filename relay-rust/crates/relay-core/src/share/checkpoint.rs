@@ -9,21 +9,17 @@ use alloc::vec::Vec;
 /// Complete metadata for recovery/testing; hot-path hosts use connection checkpoints.
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
-    pub(super) identity: Identity,
-    pub(super) last_session: u64,
+    pub(super) manifest: CheckpointManifest,
     pub(super) connections: Vec<ConnectionCheckpoint>,
 }
 
 /// One generation's complete responsibility, including receiver-owned admissions.
 ///
-/// The small share header is replicated so losing any socket cannot lose the
-/// wire-ID high-water mark. Admission changes refresh every retained record;
-/// ordinary delivery changes only the affected generation. Detached generations
-/// must remain recoverable independently of their former socket's attachment.
+/// Session-ID fencing belongs to the independent manifest, so admitting a new
+/// receiver never rewrites unrelated receivers' attachments.
 #[derive(Clone, Debug)]
 pub struct ConnectionCheckpoint {
     pub(super) identity: Identity,
-    pub(super) last_session: u64,
     pub(super) connection: ConnectionRef,
     pub(super) role: ConnectionRole,
     pub(super) ledger: LedgerCheckpoint,
@@ -83,13 +79,10 @@ impl ConnectionCheckpoint {
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
         if self.connection != self.ledger.destination()
             || self.sessions.len() > limits.sessions
-            || self.ledger.flows().any(|flow| {
-                u64::from_be_bytes(*flow.session().wire_id().as_bytes()) > self.last_session
-            })
-            || self.sessions.iter().any(|session| {
-                session.key().receiver() != self.connection
-                    || u64::from_be_bytes(*session.key().wire_id().as_bytes()) > self.last_session
-            })
+            || self
+                .sessions
+                .iter()
+                .any(|session| session.key().receiver() != self.connection)
             || matches!(self.role, ConnectionRole::Detached(_)) && !self.sessions.is_empty()
             || matches!(self.role, ConnectionRole::Handshake(_))
                 && (!self.sessions.is_empty() || self.ledger.flows().next().is_some())
@@ -101,11 +94,12 @@ impl ConnectionCheckpoint {
 }
 
 impl Checkpoint {
-    /// Assemble records against an independently retained, complete inventory.
+    /// Recover each record against independently retained generation reservations.
     ///
     /// # Errors
-    /// Rejects missing, unexpected, duplicate, foreign or mixed-header generations.
-    /// The host must recover the latest manifest independently of socket discovery.
+    /// Refuses an invalid manifest. Missing, duplicate or invalid delivery records
+    /// remain reserved but cannot authorize a connection or any dependent session.
+    /// Hosts omit records that could not be read; they must never substitute stale ones.
     pub fn from_connections(
         manifest: &CheckpointManifest,
         mut connections: Vec<ConnectionCheckpoint>,
@@ -113,18 +107,21 @@ impl Checkpoint {
     ) -> Result<Self, Error> {
         manifest.validate(limits)?;
         connections.sort_unstable_by_key(|entry| entry.connection);
-        if !manifest
-            .generations()
-            .iter()
-            .copied()
-            .eq(connections.iter().map(|entry| entry.connection))
-        {
-            return Err(Error::MissingResponsibility);
+        let mut accepted = Vec::new();
+        for reservation in &manifest.reservations {
+            let mut candidates = connections
+                .iter()
+                .filter(|entry| entry.connection == reservation.connection);
+            if let Some(entry) = candidates.next()
+                && candidates.next().is_none()
+                && manifest.accepts(entry, limits)
+            {
+                accepted.push(entry.clone());
+            }
         }
         let checkpoint = Self {
-            identity: manifest.identity,
-            last_session: manifest.last_session,
-            connections,
+            manifest: manifest.clone(),
+            connections: accepted,
         };
         checkpoint.validate(limits)?;
         Ok(checkpoint)
@@ -132,17 +129,7 @@ impl Checkpoint {
 
     #[must_use]
     pub fn manifest(&self) -> CheckpointManifest {
-        let mut generations: Vec<_> = self
-            .connections
-            .iter()
-            .map(|entry| entry.connection)
-            .collect();
-        generations.sort_unstable();
-        CheckpointManifest {
-            identity: self.identity,
-            last_session: self.last_session,
-            generations,
-        }
+        self.manifest.clone()
     }
 
     pub(super) fn sessions(&self) -> impl Iterator<Item = &SessionSnapshot> {
@@ -150,26 +137,12 @@ impl Checkpoint {
     }
 
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
-        let retired = self
-            .connections
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.role,
-                    ConnectionRole::Detached(super::Detached::Retired)
-                )
-            })
-            .count();
-        if self.connections.len() > limits.generation_limit()?
-            || retired > limits.retirement.generations()
-            || self.connections.len() - retired > limits.connections
-            || self.sessions().count() > limits.sessions
-        {
+        self.manifest.validate(limits)?;
+        if self.sessions().count() > limits.sessions {
             return Err(Error::InvalidCheckpoint);
         }
         for (index, entry) in self.connections.iter().enumerate() {
-            if entry.identity != self.identity
-                || entry.last_session != self.last_session
+            if !self.manifest.accepts(entry, limits)
                 || self.connections[..index]
                     .iter()
                     .any(|prior| prior.connection == entry.connection)
@@ -217,7 +190,6 @@ impl<O: Observer> ShareRelay<O> {
             .collect();
         Ok(ConnectionCheckpoint {
             identity: self.identity,
-            last_session: self.last_session,
             connection,
             role: match self.connections.get(&connection).map(|entry| &entry.role) {
                 None => ConnectionRole::Detached(
@@ -244,8 +216,7 @@ impl<O: Observer> ShareRelay<O> {
     pub fn checkpoint(&self) -> Result<Checkpoint, Error> {
         self.checkpoint_ready()?;
         Ok(Checkpoint {
-            identity: self.identity,
-            last_session: self.last_session,
+            manifest: self.checkpoint_manifest()?,
             connections: self
                 .ledgers
                 .keys()

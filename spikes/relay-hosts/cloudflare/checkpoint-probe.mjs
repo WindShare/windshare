@@ -153,27 +153,81 @@ async function scenario(mode, kind) {
       assert.equal(usage(result.after_settlement)?.submitted_frames ?? 0, 0);
       result.healthy_sender_progressed = true;
     } else if (kind === 'attachment-loss') {
+      const sibling = await connect('receiver2');
+      await until(() => sibling.messages.some(value => value.event === 'joined'), 'second receiver joined');
+      const siblingSession = sibling.messages.find(value => value.event === 'joined').session;
+      assert.equal(siblingSession, 2);
+      sibling.socket.send(opaque(0, siblingSession));
+      await until(() => sender.binary.some(frame => frame.toString('ascii', 0, 4) === 'WS2O'
+        && frame.readBigUInt64BE(8) === 2n), 'second receiver bootstrap');
+      sender.socket.send(admitted(siblingSession));
+      sender.socket.send(control('WS2B', 1, FRAME_BYTES, siblingSession));
+      sender.socket.send(opaque(0, siblingSession));
+      sender.socket.send(opaque(1, siblingSession));
+      await until(() => sibling.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O').length === 2, 'sibling download');
+      result.before_loss = await request('status');
       await request('lose-attachment', {});
       result.after_reconstruction = await request('reconstruct', {});
-      const recoverable = mode === 'sqlite_mirror';
-      assert.equal(result.after_reconstruction.ready, recoverable);
-      if (recoverable) assert.equal(usage(result.after_reconstruction).submitted_frames, 2);
-      else assert.match(result.after_reconstruction.reason, /MissingResponsibility/);
-      await ping(sender, recoverable);
-      result.healthy_sender_progressed = recoverable;
+      assert.equal(result.after_reconstruction.ready, true);
+      assert.deepEqual(usage(result.after_reconstruction, 3), usage(result.before_loss, 3));
+      assert.equal(result.after_reconstruction.kernel_deadline_ms, result.before_loss.kernel_deadline_ms);
+      if (mode === 'attachments') {
+        await until(() => receiver.closed, 'only affected receiver closed');
+        assert.equal(usage(result.after_reconstruction).accounting, 'unavailable');
+        assert.equal(usage(result.after_reconstruction).submitted_frames, null);
+        assert.equal(usage(result.after_reconstruction).reserved_frames, 16);
+      } else assert.equal(usage(result.after_reconstruction).submitted_frames, 2);
+      assert.equal(sender.closed, false);
+      assert.equal(sibling.closed, false);
+      await ping(sender);
+      settle(sender);
+      await ping(sender);
+      result.after_second_reconstruction = await request('reconstruct', {});
+      assert.deepEqual(usage(result.after_second_reconstruction, 3), usage(result.before_loss, 3));
+      sender.socket.send(opaque(2, siblingSession));
+      await until(() => sibling.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O').length === 3, 'healthy download after loss');
+      assert.deepEqual(sibling.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O'),
+        [opaque(0, siblingSession), opaque(1, siblingSession), opaque(2, siblingSession)]);
+      sibling.socket.send(control('WS2B', 3, 3 * FRAME_BYTES, siblingSession));
+      await ping(sibling);
+      if (mode === 'attachments') {
+        const replacement = await connect('receiver');
+        await until(() => replacement.messages.some(value => value.event === 'joined'), 'affected receiver rejoined');
+        const session = replacement.messages.find(value => value.event === 'joined').session;
+        assert.equal(session, 3);
+        replacement.socket.send(opaque(0, session));
+        await until(() => sender.binary.some(frame => frame.toString('ascii', 0, 4) === 'WS2O'
+          && frame.readBigUInt64BE(8) === 3n), 'replacement bootstrap');
+        sender.socket.send(admitted(session));
+        sender.socket.send(control('WS2B', 1, FRAME_BYTES, session));
+        sender.socket.send(opaque(0, session));
+        await until(() => replacement.binary.some(frame => frame.toString('ascii', 0, 4) === 'WS2O'), 'replacement download');
+        replacement.socket.send(control('WS2S', 2, 2 * FRAME_BYTES, 1));
+        await ping(replacement);
+        result.after_replacement = await request('status');
+        assert.equal(usage(result.after_replacement).reserved_frames, 16);
+        assert.equal(result.after_replacement.generations.find(row => row.connection === 'c-2-2').submitted_frames, 1);
+        result.new_generation = 'c-2-2';
+        result.new_session = session;
+        result.old_feedback_did_not_refund = true;
+      }
+      assert.equal(sender.closed, false);
+      assert.equal(sibling.closed, false);
+      result.healthy_receiver_progressed = true;
+      result.healthy_sender_progressed = true;
     } else if (kind === 'disconnect') {
       receiver.socket.close();
       await until(() => receiver.closed, 'receiver closed');
       await delay(250);
       result.after_reconstruction = await request('reconstruct', {});
       assert.equal(result.after_reconstruction.ready, true);
-      assert.equal(usage(result.after_reconstruction).submitted_frames, 2);
+      assert.equal(usage(result.after_reconstruction)[mode === 'attachments' ? 'reserved_frames' : 'submitted_frames'], 2);
       assert.equal(usage(result.after_reconstruction).communicating, false);
       await ping(sender);
       settle(sender);
       await ping(sender);
       result.after_sender_settlement = await request('status');
-      assert.equal(usage(result.after_sender_settlement).submitted_frames, 2);
+      assert.equal(usage(result.after_sender_settlement)[mode === 'attachments' ? 'reserved_frames' : 'submitted_frames'], 2);
       result.receiver_settlement_available = false;
       const replacement = await connect('receiver');
       await until(() => replacement.messages.some(value => value.event === 'joined'), 'replacement joined');
@@ -192,7 +246,7 @@ async function scenario(mode, kind) {
       replacement.socket.send(control('WS2S', 2, 2 * FRAME_BYTES));
       await ping(replacement);
       result.after_replacement = await request('status');
-      assert.equal(usage(result.after_replacement).submitted_frames, 2);
+      assert.equal(usage(result.after_replacement)[mode === 'attachments' ? 'reserved_frames' : 'submitted_frames'], 2);
       assert.equal(result.after_replacement.generations.find(row => row.connection === 'c-2-2').submitted_frames, 0);
       result.old_generation_retained_after_replayed_settlement = true;
       await ping(sender);
@@ -201,15 +255,13 @@ async function scenario(mode, kind) {
       try { await request('reset', {}); } catch (error) { result.reset_response = error.message; }
       await until(() => peers.every(peer => peer.closed), 'reset disconnects sockets');
       result.after_reset = await request('status');
-      const recoverable = mode === 'sqlite_mirror';
-      assert.equal(result.after_reset.ready, recoverable);
-      if (recoverable) {
-        assert.equal(usage(result.after_reset).submitted_frames, 2);
-        assert.equal(result.after_reset.sockets, 0);
-        result.after_second_reconstruction = await request('reconstruct', {});
-        assert.equal(usage(result.after_second_reconstruction).submitted_frames, 2);
-        assert.equal(result.after_second_reconstruction.kernel_deadline_ms, result.after_reset.kernel_deadline_ms);
-      } else assert.match(result.after_reset.reason, /MissingResponsibility/);
+      assert.equal(result.after_reset.ready, true);
+      const field = mode === 'attachments' ? 'reserved_frames' : 'submitted_frames';
+      assert.equal(usage(result.after_reset)[field], mode === 'attachments' ? 16 : 2);
+      assert.equal(result.after_reset.sockets, 0);
+      result.after_second_reconstruction = await request('reconstruct', {});
+      assert.equal(usage(result.after_second_reconstruction)[field], mode === 'attachments' ? 16 : 2);
+      assert.equal(result.after_second_reconstruction.kernel_deadline_ms, result.after_reset.kernel_deadline_ms);
       result.healthy_sender_disconnected = sender.closed;
       result.receiver_settlement_available = false;
     } else throw new Error('unknown scenario ' + kind);
