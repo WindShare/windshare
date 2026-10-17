@@ -1,4 +1,7 @@
 //! A real TLS client whose OS receive window is bounded while the cloud probe resets.
+#[path = "../../payload.rs"]
+mod payload;
+
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use socket2::SockRef;
@@ -62,15 +65,20 @@ async fn main() {
     SockRef::from(&stream)
         .set_recv_buffer_size(PAUSED_RECEIVE_BYTES)
         .unwrap();
-    let (mut socket, _) = client_async_tls_with_config(request, stream, None, None)
+    let (mut socket, response) = client_async_tls_with_config(request, stream, None, None)
         .await
         .unwrap();
     emit(
-        json!({"event": "ready", "receive_buffer_bytes": SockRef::from(tcp(socket.get_ref())).recv_buffer_size().unwrap()}),
+        json!({"event": "ready", "receive_buffer_bytes": SockRef::from(tcp(socket.get_ref())).recv_buffer_size().unwrap(),
+            "extensions": response.headers().get("sec-websocket-extensions").and_then(|v| v.to_str().ok())}),
     );
 
     // Intentionally do not poll the socket while paused. Only the parent can resume it.
+    let paused_at = std::time::Instant::now();
     assert_eq!(read_command().trim(), "resume");
+    let paused_ms = paused_at.elapsed().as_millis();
+    let resumed_at = std::time::Instant::now();
+    let mut expected = vec![0; payload::FRAME_BYTES];
     SockRef::from(tcp(socket.get_ref()))
         .set_recv_buffer_size(DRAIN_RECEIVE_BYTES)
         .unwrap();
@@ -81,8 +89,17 @@ async fn main() {
                 Ok(Message::Binary(bytes)) => {
                     assert_eq!(bytes.len(), FRAME_BYTES);
                     assert_eq!(u64::from_be_bytes(bytes[..8].try_into().unwrap()), frames);
-                    assert!(bytes[8..].iter().all(|byte| *byte == 0x5a));
+                    if input["payload"] == payload::PAYLOAD_FORMAT {
+                        payload::fill_frame(&mut expected, frames);
+                        assert_eq!(&bytes[..], &expected[..]);
+                    } else {
+                        assert!(bytes[8..].iter().all(|byte| *byte == 0x5a));
+                    }
                     frames += 1;
+                    if input["stop_after_frames"].as_u64() == Some(frames) {
+                        socket.close(None).await.ok();
+                        return json!({"kind":"frames_complete_client_close"});
+                    }
                 }
                 Ok(Message::Close(close)) => {
                     return json!({"kind": "close", "detail": close.map(|c| json!({"code": u16::from(c.code), "reason": c.reason.to_string()}))});
@@ -97,5 +114,8 @@ async fn main() {
         Ok(value) => value,
         Err(_) => json!({"kind": "timeout"}),
     };
-    emit(json!({"event": "terminal", "frames": frames, "terminal": terminal}));
+    emit(
+        json!({"event": "terminal", "frames": frames, "terminal": terminal,
+        "paused_ms":paused_ms, "drain_ms":resumed_at.elapsed().as_millis()}),
+    );
 }

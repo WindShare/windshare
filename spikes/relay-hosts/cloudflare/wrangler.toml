@@ -50,6 +50,18 @@ class_name = "CheckpointProbe"
 name = "CHECKPOINT_PROBE"
 class_name = "CheckpointProbe"
 
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["PressureProbe"]
+
+[[durable_objects.bindings]]
+name = "PRESSURE_PROBE"
+class_name = "PressureProbe"
+
+[[previews.durable_objects.bindings]]
+name = "PRESSURE_PROBE"
+class_name = "PressureProbe"
+
 [previews.observability]
 enabled = true
 

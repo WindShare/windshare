@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 // Keep the receive-window control outside Node: pausing ws does not cap the OS buffer.
-export async function boundedPeer(url, token) {
+export async function boundedPeer(url, token, options = {}) {
   const binary = new URL('../native/.target/release/cloudflare-slow-peer' +
     (process.platform === 'win32' ? '.exe' : ''), import.meta.url);
   const child = spawn(fileURLToPath(binary), [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -37,7 +37,7 @@ export async function boundedPeer(url, token) {
     await exited;
     lines.close();
   }
-  child.stdin.write(JSON.stringify({ url, token }) + '\n');
+  child.stdin.write(JSON.stringify({ ...options, url, token }) + '\n');
   try {
     const ready = await wait('ready', 20_000);
     return { ready, terminate, async resume() {

@@ -9,6 +9,10 @@ to Cloudflare attachments and a SQLite mirror control. It distinguishes normal
 hibernation, missing attachments, disconnect callbacks and abrupt reset. Exact
 persistence does not solve unreachable-generation settlement.
 
+The [pressure experiment](pressure.md) adds 512 MiB open/close/reset groups,
+independent memory controls and real Preview memory/outcome metrics. It supports
+continuing Cloudflare work, without proving physical release or a finite TTL.
+
 ## Findings — 2026-10-17
 
 [Initial evidence](evidence/2026-10-17.json) records native and cloud closure runs.
