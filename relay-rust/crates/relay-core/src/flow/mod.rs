@@ -14,8 +14,8 @@
 //! sessions and retains retired flows until cleanup. A surviving connection must
 //! never be assigned an empty replacement ledger. This module defines accounting
 //! contracts; [`DeliveryConsumed`] freezes cumulative feedback bytes for the
-//! coordinated client cutover. Handshake declarations bind each ledger before
-//! any grant; settlement wire integration remains a separate stage.
+//! coordinated client cutover. [`SettlementNotice`] and [`SettlementAck`] carry
+//! frozen retirement totals separately from ordinary consumption.
 
 mod accounting;
 mod capacity;
@@ -29,6 +29,9 @@ mod delivery;
 mod forwarding;
 mod observation;
 mod retirement;
+mod settlement;
+pub use settlement::{SettlementAck, SettlementNotice};
+mod totals;
 
 pub use accounting::{ConfigurationError, Counts, Limits, Usage};
 pub use delivery::{FlowKey, Grant, Phase, ReceivedFrame, Settlement, Snapshot};
