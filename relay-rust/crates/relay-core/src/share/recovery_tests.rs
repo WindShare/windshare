@@ -23,7 +23,7 @@ fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
         &Restore {
             record: Some(stored),
             surviving: &[key.sender(), key.receiver()],
-            checkpoint: Some(&checkpoint),
+            responsibility: Responsibility::Checkpoint(&checkpoint),
         },
         Trace::default(),
         fixture.at,
@@ -91,7 +91,7 @@ fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() 
         &Restore {
             record: Some(stored),
             surviving: &[key.sender(), key.receiver()],
-            checkpoint: Some(&checkpoint),
+            responsibility: Responsibility::Checkpoint(&checkpoint),
         },
         Trace::default(),
         UnixMillis(fixture.at.0 + 100),
@@ -123,7 +123,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
             &Restore {
                 record: Some(stored),
                 surviving: &[connection(1)],
-                checkpoint: None
+                responsibility: Responsibility::Unknown
             },
             Trace::default(),
             fixture.at
@@ -138,7 +138,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
             &Restore {
                 record: Some(stored),
                 surviving: &[connection(1)],
-                checkpoint: Some(&checkpoint)
+                responsibility: Responsibility::Checkpoint(&checkpoint)
             },
             Trace::default(),
             fixture.at

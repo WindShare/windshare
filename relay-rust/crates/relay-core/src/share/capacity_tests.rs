@@ -51,7 +51,7 @@ fn insufficient_receiver_capacity_rolls_back_both_startup_directions() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None),
+        &Restore::restarted(None, Responsibility::Released),
         Trace::default(),
         fixture.at,
     )
@@ -67,17 +67,8 @@ fn insufficient_receiver_capacity_rolls_back_both_startup_directions() {
             |output| matches!(output, Output::Close(value) if *value == connection(receiver))
         ));
         for destination in [connection(1), connection(receiver)] {
-            assert_eq!(
-                relay.connections[&destination].ledger.usage(),
-                Usage::default()
-            );
-            assert_eq!(
-                relay.connections[&destination]
-                    .ledger
-                    .checkpoint_flows()
-                    .count(),
-                0
-            );
+            assert_eq!(relay.ledgers[&destination].usage(), Usage::default());
+            assert_eq!(relay.ledgers[&destination].checkpoint_flows().count(), 0);
         }
     }
     assert_eq!(
@@ -108,17 +99,14 @@ fn asymmetric_connection_capacity_and_host_policy_both_bound_grants() {
     }
     for flow in [up, down] {
         for credit in [Counts::new(1, 0), Counts::new(0, 1)] {
-            let before = relay.connections[&flow.destination()].ledger.usage();
+            let before = relay.ledgers[&flow.destination()].usage();
             assert_eq!(
                 relay
                     .handle(Input::Grant { flow, credit }, fixture.at)
                     .refusal,
                 Some(Error::Flow(Refusal::DeliveryCapacity))
             );
-            assert_eq!(
-                relay.connections[&flow.destination()].ledger.usage(),
-                before
-            );
+            assert_eq!(relay.ledgers[&flow.destination()].usage(), before);
         }
     }
     // Two one-frame receivers can share a sender; declarations do not resize the share.
@@ -142,7 +130,7 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
         None
     );
     activate(&mut relay, up.session(), fixture.at);
-    let before = relay.connections[&up.destination()].ledger.usage();
+    let before = relay.ledgers[&up.destination()].usage();
     let checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let (mut restored, turn) = Relay::restore(
@@ -151,21 +139,17 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
         &Restore {
             record: Some(stored),
             surviving: &[connection(1), connection(2)],
-            checkpoint: Some(&checkpoint),
+            responsibility: Responsibility::Checkpoint(&checkpoint),
         },
         Trace::default(),
         fixture.at,
     )
     .unwrap();
     assert!(turn.outputs.is_empty());
-    assert_eq!(
-        restored.connections[&up.destination()].ledger.usage(),
-        before
-    );
+    assert_eq!(restored.ledgers[&up.destination()].usage(), before);
     assert_eq!(before.submitted, Counts::new(1, 21));
     assert_eq!(
-        restored.connections[&down.destination()]
-            .ledger
+        restored.ledgers[&down.destination()]
             .receive_capacity()
             .unwrap()
             .counts(),
@@ -183,11 +167,7 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
             .refusal,
         Some(Error::Flow(Refusal::DeliveryCapacity))
     );
-    let ledger = &mut restored
-        .connections
-        .get_mut(&down.destination())
-        .unwrap()
-        .ledger;
+    let ledger = restored.ledgers.get_mut(&down.destination()).unwrap();
     let original = ledger.receive_capacity().unwrap();
     let usage = ledger.usage();
     assert_eq!(ledger.declare_capacity(original, fixture.at), Ok(()));
@@ -203,13 +183,7 @@ fn stop_and_unclassified_connections_never_acquire_delivery_capacity() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
-    assert_eq!(
-        relay.connections[&connection(1)].ledger.receive_capacity(),
-        None
-    );
+    assert_eq!(relay.ledgers[&connection(1)].receive_capacity(), None);
     fixture.prepare_stop(&mut relay);
-    assert_eq!(
-        relay.connections[&connection(99)].ledger.receive_capacity(),
-        None
-    );
+    assert_eq!(relay.ledgers[&connection(99)].receive_capacity(), None);
 }

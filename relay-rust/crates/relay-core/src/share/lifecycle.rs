@@ -157,8 +157,8 @@ impl<O: Observer> ShareRelay<O> {
                     StopCleanup::None => None,
                     StopCleanup::Owner(connection) => {
                         connections.push(connection);
-                        for entry in self.connections.values() {
-                            connections.extend(entry.ledger.checkpoint_flows().filter_map(
+                        for ledger in self.ledgers.values() {
+                            connections.extend(ledger.checkpoint_flows().filter_map(
                                 |(flow, _)| {
                                     (flow.session().sender() == connection)
                                         .then_some(flow.session().receiver())

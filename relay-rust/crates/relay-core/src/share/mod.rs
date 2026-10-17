@@ -16,6 +16,7 @@ mod delivery;
 mod handshake_checkpoint;
 mod handshake_restore;
 mod lifecycle;
+mod responsibility;
 mod restoration;
 mod sessions;
 mod storage;
@@ -26,8 +27,9 @@ mod types;
 mod tests;
 
 pub use checkpoint::{Checkpoint, CheckpointBudget, ConnectionCheckpoint};
-pub use checkpoint_tracking::{CheckpointFlush, CheckpointWriteError};
-pub use restoration::Restore;
+pub use checkpoint_tracking::{CheckpointFlush, CheckpointTarget, CheckpointWriteError};
+pub use responsibility::CheckpointManifest;
+pub use restoration::{Responsibility, Restore};
 pub use types::*;
 
 use crate::{
@@ -68,7 +70,6 @@ enum Role {
 struct Connection {
     role: Role,
     reservation: Option<OperationId>,
-    ledger: ConnectionLedger<Journal>,
 }
 
 #[derive(Debug)]
@@ -85,6 +86,9 @@ pub struct ShareRelay<O> {
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
     connections: BTreeMap<ConnectionRef, Connection>,
+    // A host may lose a socket while its previously submitted bytes still exist.
+    // Retained generations share the admission bound with live connections.
+    ledgers: BTreeMap<ConnectionRef, ConnectionLedger<Journal>>,
     sessions: BTreeMap<RelaySessionId, AdmissionState>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
     deadlines: Deadlines,
@@ -159,7 +163,7 @@ impl<O: Observer> ShareRelay<O> {
             } => self.feedback(connection, session, total, true, now, turn),
             Input::Discarded(flow) => self.discarded(flow, now, turn),
             Input::Disconnected(connection) => {
-                self.disconnect(connection, now, turn);
+                self.detach(connection, now, turn);
                 Ok(())
             }
             Input::Closed(connection) => {
@@ -202,16 +206,16 @@ impl<O: Observer> ShareRelay<O> {
         now: crate::clock::UnixMillis,
         turn: &mut Turn,
     ) {
-        if let Some(entry) = self.connections.get_mut(&connection) {
-            if self.checkpointing.enabled() && entry.ledger.take_checkpoint_change() {
+        if let Some(ledger) = self.ledgers.get_mut(&connection) {
+            if self.checkpointing.enabled() && ledger.take_checkpoint_change() {
                 self.checkpointing.changed(connection);
             }
-            for item in entry.ledger.observer_mut().0.drain(..) {
+            for item in ledger.observer_mut().0.drain(..) {
                 self.observer.observe(item);
             }
             self.deadlines
-                .set(Key::Ledger(connection), entry.ledger.deadline());
-            if entry.ledger.close_request().is_some() && !self.cleanup_deferred() {
+                .set(Key::Ledger(connection), ledger.deadline());
+            if ledger.close_request().is_some() && !self.cleanup_deferred() {
                 self.disconnect(connection, now, turn);
             }
         }
@@ -251,8 +255,8 @@ impl<O: Observer> ShareRelay<O> {
                     self.session_event(id, crate::sessions::Event::Tick, now, turn);
                 }
                 Key::Ledger(connection) => {
-                    if let Some(entry) = self.connections.get_mut(&connection) {
-                        let _ = entry.ledger.tick(now);
+                    if let Some(ledger) = self.ledgers.get_mut(&connection) {
+                        let _ = ledger.tick(now);
                     }
                     self.flush_ledger(connection, now, turn);
                 }

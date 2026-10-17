@@ -1,6 +1,6 @@
-//! Inert, connection-owned recovery records. Storage layout does not confer authority.
+//! Inert generation recovery records. Storage layout does not confer authority.
 use super::{
-    ConnectionRef, Error, Identity, Observer, Role, RuntimeStatus, ShareRelay,
+    CheckpointManifest, ConnectionRef, Error, Identity, Observer, Role, RuntimeStatus, ShareRelay,
     handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{flow::LedgerCheckpoint, sessions::SessionSnapshot};
@@ -14,11 +14,12 @@ pub struct Checkpoint {
     pub(super) connections: Vec<ConnectionCheckpoint>,
 }
 
-/// One socket's complete attachment, including receiver-owned admissions.
+/// One generation's complete responsibility, including receiver-owned admissions.
 ///
 /// The small share header is replicated so losing any socket cannot lose the
-/// wire-ID high-water mark. Admission changes refresh every surviving attachment;
-/// ordinary delivery changes only the affected connection.
+/// wire-ID high-water mark. Admission changes refresh every retained record;
+/// ordinary delivery changes only the affected generation. Detached generations
+/// must remain recoverable independently of their former socket's attachment.
 #[derive(Clone, Debug)]
 pub struct ConnectionCheckpoint {
     pub(super) identity: Identity,
@@ -33,6 +34,7 @@ pub struct ConnectionCheckpoint {
 pub(super) enum ConnectionRole {
     Established,
     Closing,
+    Detached,
     Handshake(HandshakeCheckpoint),
 }
 
@@ -98,23 +100,48 @@ impl ConnectionCheckpoint {
 }
 
 impl Checkpoint {
-    /// Assemble independent attachments before the kernel's joint authority/accounting check.
+    /// Assemble records against an independently retained, complete inventory.
     ///
     /// # Errors
-    /// Rejects empty, duplicate, foreign or mixed-header collections. With no surviving
-    /// sockets use `Restore::restarted`; a missing attachment never means an empty ledger.
+    /// Rejects missing, unexpected, duplicate, foreign or mixed-header generations.
+    /// The host must recover the latest manifest independently of socket discovery.
     pub fn from_connections(
-        connections: Vec<ConnectionCheckpoint>,
+        manifest: &CheckpointManifest,
+        mut connections: Vec<ConnectionCheckpoint>,
         limits: super::Limits,
     ) -> Result<Self, Error> {
-        let first = connections.first().ok_or(Error::InvalidCheckpoint)?;
+        manifest.validate(limits)?;
+        connections.sort_unstable_by_key(|entry| entry.connection);
+        if !manifest
+            .generations()
+            .iter()
+            .copied()
+            .eq(connections.iter().map(|entry| entry.connection))
+        {
+            return Err(Error::MissingResponsibility);
+        }
         let checkpoint = Self {
-            identity: first.identity,
-            last_session: first.last_session,
+            identity: manifest.identity,
+            last_session: manifest.last_session,
             connections,
         };
         checkpoint.validate(limits)?;
         Ok(checkpoint)
+    }
+
+    #[must_use]
+    pub fn manifest(&self) -> CheckpointManifest {
+        let mut generations: Vec<_> = self
+            .connections
+            .iter()
+            .map(|entry| entry.connection)
+            .collect();
+        generations.sort_unstable();
+        CheckpointManifest {
+            identity: self.identity,
+            last_session: self.last_session,
+            generations,
+        }
     }
 
     pub(super) fn sessions(&self) -> impl Iterator<Item = &SessionSnapshot> {
@@ -152,7 +179,7 @@ impl<O: Observer> ShareRelay<O> {
         Ok(())
     }
 
-    /// Capture only this connection's ledger and admissions, without scanning sibling sessions.
+    /// Capture this generation, including when its socket is no longer present.
     ///
     /// # Errors
     /// Rejects unknown connections, unfinished durable work and unsubmitted payloads.
@@ -161,12 +188,11 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
     ) -> Result<ConnectionCheckpoint, Error> {
         self.checkpoint_ready()?;
-        let entry = self
-            .connections
+        let ledger = self
+            .ledgers
             .get(&connection)
             .ok_or(Error::UnknownConnection)?;
-        let sessions = entry
-            .ledger
+        let sessions = ledger
             .checkpoint_flows()
             .filter_map(|(flow, _)| {
                 let key = flow.session();
@@ -179,17 +205,15 @@ impl<O: Observer> ShareRelay<O> {
             identity: self.identity,
             last_session: self.last_session,
             connection,
-            role: match &entry.role {
-                Role::Closing => ConnectionRole::Closing,
-                Role::Established => ConnectionRole::Established,
-                Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. } => {
+            role: match self.connections.get(&connection).map(|entry| &entry.role) {
+                None => ConnectionRole::Detached,
+                Some(Role::Closing) => ConnectionRole::Closing,
+                Some(Role::Established) => ConnectionRole::Established,
+                Some(Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. }) => {
                     ConnectionRole::Handshake(transcript.clone())
                 }
             },
-            ledger: entry
-                .ledger
-                .checkpoint()
-                .map_err(|_| Error::CheckpointBusy)?,
+            ledger: ledger.checkpoint().map_err(|_| Error::CheckpointBusy)?,
             sessions,
         })
     }
@@ -204,7 +228,7 @@ impl<O: Observer> ShareRelay<O> {
             identity: self.identity,
             last_session: self.last_session,
             connections: self
-                .connections
+                .ledgers
                 .keys()
                 .map(|&connection| self.checkpoint_connection(connection))
                 .collect::<Result<_, _>>()?,

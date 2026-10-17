@@ -17,7 +17,7 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
         let (mut relay, _) = Relay::restore(
             fixture.identity(1),
             limits,
-            &Restore::restarted(None),
+            &Restore::restarted(None, Responsibility::Released),
             Trace::default(),
             fixture.at,
         )
@@ -29,7 +29,7 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
                     .refusal,
                 None
             );
-            let usage = relay.connections[&connection(id)].ledger.metadata_usage();
+            let usage = relay.ledgers[&connection(id)].metadata_usage();
             assert_eq!(usage.retained_flows, 0);
             assert_eq!(usage.allocated_slots, 0);
             assert_eq!(usage.limit, sessions);
@@ -52,33 +52,30 @@ fn sharing_allocates_sender_fanout_and_one_slot_per_receiver() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None),
+        &Restore::restarted(None, Responsibility::Released),
         Trace::default(),
         fixture.at,
     )
     .unwrap();
     fixture.register(&mut relay);
     assert_eq!(
-        relay.connections[&connection(1)]
-            .ledger
+        relay.ledgers[&connection(1)]
             .metadata_usage()
             .allocated_slots,
         0
     );
     for receiver in 2..=RECEIVERS as u64 + 1 {
         fixture.join(&mut relay, receiver);
-        let usage = relay.connections[&connection(receiver)]
-            .ledger
-            .metadata_usage();
+        let usage = relay.ledgers[&connection(receiver)].metadata_usage();
         assert_eq!(usage.retained_flows, 1);
         assert_eq!(usage.allocated_slots, 1);
     }
-    let usage = relay.connections[&connection(1)].ledger.metadata_usage();
+    let usage = relay.ledgers[&connection(1)].metadata_usage();
     assert_eq!(usage.retained_flows, RECEIVERS);
     let allocated: usize = relay
-        .connections
+        .ledgers
         .values()
-        .map(|connection| connection.ledger.metadata_usage().allocated_slots)
+        .map(|ledger| ledger.metadata_usage().allocated_slots)
         .sum();
     assert_eq!(allocated, RECEIVERS * 2);
 }
