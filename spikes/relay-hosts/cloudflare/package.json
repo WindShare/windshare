@@ -1,0 +1,14 @@
+{
+  "name": "windshare-cloudflare-close-probe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "worker-build --release",
+    "dev": "wrangler dev",
+    "preview": "wrangler preview"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.1",
+    "ws": "8.22.0"
+  }
+}

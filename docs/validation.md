@@ -100,7 +100,10 @@ Metadata regressions cover lazy handshake allocation, asymmetric sender/receiver
 fanout, runtime slot bounds and sparse checkpoint identity/settlement recovery. Incremental
 attachment tests cover destination-only writes, admission transitions, replay/no-op suppression,
 partial write retries, close/high-water preservation, host byte budgets and joint recovery.
-Client runtime cutover and platform adapters remain unimplemented.
+Client runtime cutover and production platform adapters remain unimplemented.
+Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
+Cloudflare Preview closure separately. Their Cargo workspaces and cloud runs are
+outside `make rust`; use the documented commands when changing host assumptions.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.
 
