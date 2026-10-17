@@ -207,8 +207,9 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
         .snapshot(flow)
         .unwrap()
         .deadline;
-    for participant in [key.sender(), key.receiver(), connection(99)] {
-        let _ = relay.handle(Input::Disconnected(participant), fixture.at);
+    let _ = relay.handle(Input::Disconnected(key.sender()), fixture.at);
+    for participant in [key.receiver(), connection(99)] {
+        let _ = relay.handle(Input::Closed(participant), fixture.at);
     }
     let mut checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
@@ -262,6 +263,7 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
         },
         late,
     );
+    let _ = relay.handle(Input::Closed(key.sender()), late);
     assert_eq!(
         relay
             .handle(Input::Connected(connection(200)), late)

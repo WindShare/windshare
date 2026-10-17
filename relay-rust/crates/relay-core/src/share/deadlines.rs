@@ -7,6 +7,7 @@ pub(super) enum Key {
     Handshake(ConnectionRef),
     Session(RelaySessionId),
     Ledger(ConnectionRef),
+    Retirement(ConnectionRef),
 }
 
 // Updating one connection must not scan every session on each forwarded frame.

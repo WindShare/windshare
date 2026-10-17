@@ -9,8 +9,8 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 4;
-const CONNECTION_FORMAT: u8 = 2;
+const FORMAT: u8 = 5;
+const CONNECTION_FORMAT: u8 = 3;
 const LENGTH_BYTES: usize = size_of::<u64>();
 const IDENTITY_BYTES: usize = 32 + 12 + 16;
 const CONNECTION_HEADER_BYTES: usize =
@@ -26,7 +26,13 @@ impl ConnectionCheckpoint {
         match &self.role {
             ConnectionRole::Established => out.push(0),
             ConnectionRole::Closing => out.push(1),
-            ConnectionRole::Detached => out.push(3),
+            ConnectionRole::Detached(super::Detached::AwaitingRelease) => out.push(3),
+            ConnectionRole::Detached(super::Detached::Released) => out.push(6),
+            ConnectionRole::Detached(super::Detached::Quiescing { not_before }) => {
+                out.push(4);
+                out.extend_from_slice(&not_before.0.to_be_bytes());
+            }
+            ConnectionRole::Detached(super::Detached::Retired) => out.push(5),
             ConnectionRole::Handshake(handshake) => {
                 out.push(2);
                 block(&mut out, &handshake.encode());
@@ -40,23 +46,26 @@ impl ConnectionCheckpoint {
         out
     }
 
-    /// Maximum binary size for this configured retained-session bound.
+    /// Maximum binary size for this configured retained-flow bound.
     /// A handshake cannot own flows/admissions; established sockets may retain
     /// the full sender fanout, including retired delivery obligations.
     #[must_use]
-    pub fn maximum_bytes(session_limit: usize) -> Option<usize> {
-        let established = LedgerCheckpoint::maximum_bytes(session_limit)?.checked_add(
-            session_limit.checked_mul(LENGTH_BYTES + crate::sessions::MAX_SNAPSHOT_BYTES)?,
+    pub fn maximum_bytes(retained_flow_limit: usize) -> Option<usize> {
+        let established = LedgerCheckpoint::maximum_bytes(retained_flow_limit)?.checked_add(
+            retained_flow_limit.checked_mul(LENGTH_BYTES + crate::sessions::MAX_SNAPSHOT_BYTES)?,
         )?;
         let handshake = LedgerCheckpoint::maximum_bytes(0)?
             .checked_add(LENGTH_BYTES + HandshakeCheckpoint::MAX_ENCODED_BYTES)?;
-        CONNECTION_HEADER_BYTES.checked_add(established.max(handshake))
+        let detached =
+            LedgerCheckpoint::maximum_bytes(retained_flow_limit)?.checked_add(LENGTH_BYTES)?;
+        CONNECTION_HEADER_BYTES.checked_add(established.max(handshake).max(detached))
     }
 
     /// # Errors
     /// Rejects oversized, malformed or misassigned records before recovery authorizes them.
     pub fn decode(bytes: &[u8], limits: Limits) -> Result<Self, Error> {
-        let maximum = Self::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+        let maximum = Self::maximum_bytes(limits.retained_flows_per_connection)
+            .ok_or(Error::InvalidCheckpoint)?;
         if bytes.len() > maximum {
             return Err(Error::InvalidCheckpoint);
         }
@@ -70,17 +79,25 @@ impl ConnectionCheckpoint {
         let role = match field::<1>(&mut body)? {
             [0] => ConnectionRole::Established,
             [1] => ConnectionRole::Closing,
-            [3] => ConnectionRole::Detached,
+            [3] => ConnectionRole::Detached(super::Detached::AwaitingRelease),
+            [6] => ConnectionRole::Detached(super::Detached::Released),
+            [4] => ConnectionRole::Detached(super::Detached::Quiescing {
+                not_before: crate::clock::UnixMillis(u64::from_be_bytes(field(&mut body)?)),
+            }),
+            [5] => ConnectionRole::Detached(super::Detached::Retired),
             [2] => ConnectionRole::Handshake(HandshakeCheckpoint::decode(read_block(
                 &mut body,
                 HandshakeCheckpoint::MAX_ENCODED_BYTES,
             )?)?),
             _ => return Err(Error::InvalidCheckpoint),
         };
-        let maximum =
-            LedgerCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
-        let ledger = LedgerCheckpoint::decode(read_block(&mut body, maximum)?, limits.sessions)
-            .map_err(|_| Error::InvalidCheckpoint)?;
+        let maximum = LedgerCheckpoint::maximum_bytes(limits.retained_flows_per_connection)
+            .ok_or(Error::InvalidCheckpoint)?;
+        let ledger = LedgerCheckpoint::decode(
+            read_block(&mut body, maximum)?,
+            limits.retained_flows_per_connection,
+        )
+        .map_err(|_| Error::InvalidCheckpoint)?;
         let count = bounded_count(&mut body, limits.sessions)?;
         let mut sessions = Vec::with_capacity(count);
         for _ in 0..count {
@@ -127,10 +144,10 @@ impl Checkpoint {
             return Err(Error::InvalidCheckpoint);
         }
         let (identity, last_session) = read_header(&mut body)?;
-        let count = bounded_count(&mut body, limits.connections)?;
+        let count = bounded_count(&mut body, limits.generation_limit()?)?;
         let mut connections = Vec::with_capacity(count);
-        let maximum =
-            ConnectionCheckpoint::maximum_bytes(limits.sessions).ok_or(Error::InvalidCheckpoint)?;
+        let maximum = ConnectionCheckpoint::maximum_bytes(limits.retained_flows_per_connection)
+            .ok_or(Error::InvalidCheckpoint)?;
         for _ in 0..count {
             connections.push(ConnectionCheckpoint::decode(
                 read_block(&mut body, maximum)?,

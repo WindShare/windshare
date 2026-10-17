@@ -44,7 +44,7 @@ impl CheckpointManifest {
             return Err(Error::InvalidCheckpoint);
         }
         let (identity, last_session) = read_header(&mut body)?;
-        let count = bounded_count(&mut body, limits.connections)?;
+        let count = bounded_count(&mut body, limits.generation_limit()?)?;
         let mut generations = Vec::with_capacity(count);
         for _ in 0..count {
             generations
@@ -61,7 +61,7 @@ impl CheckpointManifest {
     }
 
     pub(super) fn validate(&self, limits: Limits) -> Result<(), Error> {
-        if self.generations.len() > limits.connections
+        if self.generations.len() > limits.generation_limit()?
             || self.generations.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(Error::InvalidCheckpoint);
