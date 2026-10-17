@@ -81,11 +81,4 @@ pub struct Observation {
 }
 
 /// A host selects a synchronous structured tracing backend.
-pub trait Observer {
-    /// Must not re-enter the ledger.
-    fn observe(&mut self, observation: Observation);
-}
-
-impl Observer for () {
-    fn observe(&mut self, _: Observation) {}
-}
+pub use crate::observation::Observer;

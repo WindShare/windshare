@@ -39,14 +39,7 @@ pub struct Observation {
 }
 
 /// Hosts choose the synchronous tracing backend; steady forwarding emits no trace.
-pub trait Observer {
-    /// Records one bounded milestone without re-entering session authority.
-    fn observe(&mut self, observation: Observation);
-}
-
-impl Observer for () {
-    fn observe(&mut self, _: Observation) {}
-}
+pub use crate::observation::Observer;
 
 pub(super) const fn decision(action: Action, changed: bool) -> Option<Decision> {
     match action {

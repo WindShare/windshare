@@ -13,7 +13,10 @@ const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 struct FlowTrace(Vec<flow::Observation>);
 
 impl flow::Observer for FlowTrace {
-    fn observe(&mut self, observation: flow::Observation) {
+    fn observe(&mut self, observation: crate::observation::Observation) {
+        let crate::observation::Observation::Delivery(observation) = observation else {
+            panic!("unexpected domain observation");
+        };
         self.0.push(observation);
     }
 }
@@ -31,6 +34,23 @@ fn ledger<const N: usize>(
     destination: ConnectionRef,
 ) -> ConnectionLedger<N, FlowTrace> {
     ConnectionLedger::new(fixture.relay(), destination, limits(), FlowTrace::default()).unwrap()
+}
+
+fn restore_ledger<const N: usize>(
+    fixture: &Fixture,
+    destination: ConnectionRef,
+    ledger: &ConnectionLedger<N, FlowTrace>,
+) -> ConnectionLedger<N, FlowTrace> {
+    let encoded = ledger.checkpoint().unwrap().encode();
+    let checkpoint = flow::LedgerCheckpoint::decode(&encoded, N).unwrap();
+    ConnectionLedger::restore(
+        fixture.relay(),
+        destination,
+        limits(),
+        &checkpoint,
+        FlowTrace::default(),
+    )
+    .unwrap()
 }
 
 fn open<const N: usize>(
