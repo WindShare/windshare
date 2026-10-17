@@ -13,7 +13,7 @@ use windshare_relay_core::{
     identifiers::RelaySessionId,
     lifecycle::ConnectionRef,
     sessions::SessionAdmitted,
-    share::{Input, Responsibility, Restore, ShareRelay},
+    share::{Authority, Input, Responsibility, Restore, ShareRelay},
 };
 use worker::worker_sys::ext::WebSocketExt;
 use worker::*;
@@ -89,7 +89,7 @@ impl CheckpointProbe {
             .map(|ws| self.connection(ws))
             .collect::<Result<_>>()?;
         let restored = Restore {
-            record: image.record()?,
+            authority: Authority::Known(image.record()?),
             surviving: &surviving,
             responsibility: checkpoint
                 .as_ref()
@@ -240,7 +240,8 @@ impl DurableObject for CheckpointProbe {
                 let id = match role.as_str() {
                     "sender" => fixture::SENDER,
                     "receiver" => fixture::RECEIVER,
-                    _ => return Response::error("sender or receiver required", 400),
+                    "receiver2" => fixture::SECOND_RECEIVER,
+                    _ => return Response::error("sender, receiver or receiver2 required", 400),
                 };
                 if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {
                     return Response::error("websocket required", 400);

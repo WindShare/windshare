@@ -102,6 +102,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                uncertain: Counts::ZERO,
                 admitted: 2,
                 retired_generations: usize::try_from(attempt).unwrap() + 1,
                 residual: Counts::new(attempt + 1, (attempt + 1) * ONE_FRAME.encoded_bytes),
@@ -159,6 +160,7 @@ fn generation_frame_and_byte_residual_limits_each_block_only_further_admission()
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                uncertain: Counts::ZERO,
                 admitted: 3,
                 retired_generations: 1,
                 residual: ONE_FRAME,
@@ -193,6 +195,7 @@ fn generation_frame_and_byte_residual_limits_each_block_only_further_admission()
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                uncertain: Counts::ZERO,
                 admitted: 2,
                 retired_generations: 1,
                 residual: ONE_FRAME,
@@ -322,7 +325,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
             fixture.identity(incarnation),
             relay.limits,
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[lost.sender()],
                 responsibility: Responsibility::Checkpoint(&checkpoint),
             },
@@ -345,6 +348,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
     assert_eq!(
         relay.connection_usage(),
         ConnectionUsage {
+            uncertain: Counts::ZERO,
             admitted: 1,
             retired_generations: 1,
             residual: ONE_FRAME,
@@ -356,7 +360,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
         fixture.identity(5),
         relay.limits,
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[lost.sender()],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },
@@ -477,7 +481,7 @@ fn retired_checkpoints_cannot_hide_excess_risk_or_live_authority() {
                     ..relay.limits
                 },
                 &Restore {
-                    record: Some(stored),
+                    authority: Authority::Known(Some(stored)),
                     surviving: &[key.sender()],
                     responsibility: Responsibility::Checkpoint(&checkpoint),
                 },
@@ -500,7 +504,7 @@ fn retired_checkpoints_cannot_hide_excess_risk_or_live_authority() {
             fixture.identity(2),
             relay.limits,
             &Restore {
-                record: Some(stored),
+                authority: Authority::Known(Some(stored)),
                 surviving: &[key.sender()],
                 responsibility: Responsibility::Checkpoint(&forged),
             },

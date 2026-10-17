@@ -137,7 +137,7 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(stored),
+            authority: Authority::Known(Some(stored)),
             surviving: &[connection(1), connection(2)],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },

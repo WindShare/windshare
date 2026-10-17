@@ -25,6 +25,9 @@ pub enum RelayDecision {
     Disconnected,
     Closed,
     ResponsibilityReleased,
+    RecoveryIsolated {
+        reserved: flow::Counts,
+    },
     Retired {
         residual: flow::Counts,
     },

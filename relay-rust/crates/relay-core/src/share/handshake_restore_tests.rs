@@ -13,7 +13,7 @@ fn wake(
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: stored,
+            authority: Authority::Known(stored),
             surviving,
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },

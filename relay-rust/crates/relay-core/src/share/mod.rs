@@ -32,7 +32,7 @@ mod tests;
 pub use checkpoint::{Checkpoint, CheckpointBudget, ConnectionCheckpoint};
 pub use checkpoint_tracking::{CheckpointFlush, CheckpointTarget, CheckpointWriteError};
 pub use responsibility::CheckpointManifest;
-pub use restoration::{Responsibility, Restore};
+pub use restoration::{Authority, Responsibility, Restore};
 pub use types::*;
 
 use crate::{
@@ -92,6 +92,8 @@ pub struct ShareRelay<O> {
     // Delivery remains charged after logical retirement; only exact consumption
     // or release evidence can remove the old generation's residual responsibility.
     ledgers: BTreeMap<ConnectionRef, ConnectionLedger<Journal>>,
+    // Missing delivery records retain an upper bound, never invented exact counters.
+    unavailable: BTreeMap<ConnectionRef, crate::flow::Counts>,
     detached: BTreeMap<ConnectionRef, Detached>,
     sessions: BTreeMap<RelaySessionId, AdmissionState>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,

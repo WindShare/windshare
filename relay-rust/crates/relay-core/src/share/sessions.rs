@@ -42,8 +42,7 @@ impl<O: Observer> ShareRelay<O> {
             return;
         }
         self.last_session += 1;
-        self.checkpointing
-            .header_changed(self.ledgers.keys().copied());
+        self.checkpointing.retention_changed();
         let session =
             RelaySessionId::new(self.last_session.to_be_bytes()).expect("nonzero sequence");
         self.lifecycle_event(

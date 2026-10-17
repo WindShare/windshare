@@ -71,6 +71,49 @@ fn stop_with_occupancy(fixture: &Fixture) -> (Relay, SessionKey, FlowKey, Work) 
 }
 
 #[test]
+fn missing_delivery_records_cannot_erase_permanent_stop() {
+    let fixture = Fixture::new();
+    let (original, key, _, commit) = stop_with_occupancy(&fixture);
+    let checkpoint = Checkpoint::from_connections(
+        &original.checkpoint_manifest().unwrap(),
+        Vec::new(),
+        original.limits,
+    )
+    .unwrap();
+    let (mut recovered, _) = Relay::restore(
+        fixture.identity(2),
+        original.limits,
+        &Restore::restarted(
+            Some(next_record(&commit)),
+            Responsibility::Checkpoint(&checkpoint),
+        ),
+        Trace::default(),
+        fixture.at,
+    )
+    .unwrap();
+    assert_eq!(recovered.lifecycle.phase(), Phase::Stopped);
+    assert_eq!(
+        recovered.unavailable_reservation(key.sender()),
+        Some(original.limits.delivery.total())
+    );
+    assert_eq!(
+        recovered
+            .handle(Input::Connected(connection(5)), fixture.at)
+            .refusal,
+        None
+    );
+    let turn = fixture.control(&mut recovered, connection(5), "joinB64", fixture.at);
+    assert!(turn.outputs.iter().any(|output| matches!(
+        output,
+        Output::Send {
+            control: Control::Error(ErrorFrame::Stopped),
+            ..
+        }
+    )));
+    assert!(recovered.sessions.is_empty());
+}
+
+#[test]
 fn stopped_retains_submitted_occupancy_until_independent_evidence() {
     enum Evidence {
         Consumed,
@@ -184,7 +227,7 @@ fn stopped_response_connection_can_be_checkpointed_until_disconnected() {
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(next_record(&commit)),
+            authority: Authority::Known(Some(next_record(&commit))),
             surviving: &[key.sender(), key.receiver(), connection(99)],
             responsibility: Responsibility::Checkpoint(&checkpoint),
         },

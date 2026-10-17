@@ -1,78 +1,61 @@
 # Cloudflare checkpoint recovery experiment
 
-The [evidence](evidence/2026-10-17-checkpoints.json) uses a real Rust
-`ShareRelay`, Workers WebSockets and SQLite in an isolated Preview. One sender
-and one receiver exchange bounded binary frames. Authentication uses canonical
-fixtures and a frozen kernel clock; this is not the production relay or a
-WindShare file-transfer test.
+The [partial-recovery evidence](evidence/2026-10-17-partial-recovery.json) uses the
+real Rust `ShareRelay`, Workers WebSockets and SQLite in an isolated Preview.
+Authentication uses canonical fixtures and a frozen kernel clock. These are
+bounded binary-frame transfers, not production clients or a WindShare file download.
 
-## Storage choices
+## Recovery boundary
 
-Cloudflare documents that [attachments last only while their WebSocket survives](https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocketserializeattachment).
-Both modes persist the lifecycle record, complete manifest and connection-generation
-allocator in the `checkpoint_image` SQLite row. Each event calls
-`flush_checkpoints`; the attachment binding receives a raw `Uint8Array`, with
-round-trip verification and the kernel's attachment budget.
+SQLite retains authoritative lifecycle facts, the generation allocator and a
+`CheckpointManifest` of generation reservations and the session-ID high-water mark.
+Live delivery counters stay in bounded binary WebSocket attachments. A lost or
+invalid record closes only its connection and revokes dependent sessions. Its
+reservation survives independently, without inventing exact submitted counts.
 
-| Mode | Live generation records | Detached generation records |
+The probe uses three admitted connections and two retired generations. Its experimental
+zero-grace policy allows retirement only after revocation and queue discard. Retired
+risk is bounded by two connection budgets. Missing live records reserve the full
+connection capacity; records lost after retirement reserve the submitted bound
+persisted at retirement. Neither reservation expires or proves physical release.
+This profile demonstrates isolation, not a production retention policy.
+
+| Mode | Live records | After a socket disappears |
 | --- | --- | --- |
-| `attachments` | WebSocket attachments; ordinary forwarding performs no SQL writes. | Saved to SQLite when a live runtime observes disconnect. A missing attachment during cold restoration has no fallback. |
-| `sqlite_mirror` | Attachments plus a complete SQLite image after each event. | The same SQLite image, independent of sockets. |
+| `attachments` | WebSocket attachments; ordinary forwarding performs no SQL writes. | No durable delivery ledger. Missing records become conservative reservations. |
+| `sqlite_mirror` | Attachments plus a complete SQLite image per event. | Exact records remain recoverable as an experimental control. |
 
-The mirror is an experimental control, **not the production persistence design**.
-It writes a pending marker before mutation and atomically replaces the coherent
-manifest/record image afterward. A failed event cannot knowingly fall back to
-an older clean image. Two single-frame events caused four application SQL writes.
-This measures application writes, not billed rows or transactions. Payloads never
-enter SQLite.
+The mirror uses a pending marker and atomic row replacement. Two single-frame
+events cause four application SQL writes; attachment mode causes zero. Payloads
+never enter SQLite. The mirror is not the production persistence design.
 
-## What the runs establish
+## Observed behavior
 
-- Natural hibernation reruns the constructor while both sockets remain connected.
-  Exact outstanding counts and unused grants survive; forwarding, `WS2B`
-  consumption and ordered `WS2N/WS2S` settlement continue.
-- Erasing the receiver's attachment and reconstructing Rust fails with
-  `MissingResponsibility` in attachment mode. The same object's healthy sender
-  then cannot progress. The mirror restores the missing record and keeps the sender usable.
-- A disconnect callback processed by a live runtime can preserve its detached
-  ledger in either mode. The healthy sender remains usable; its settlement cannot
-  refund the detached receiver's outstanding bytes.
-- A replacement receiver gets a new connection generation and wire session.
-  It can transfer while the old ledger remains charged; replaying the old session's
-  settlement from that replacement cannot release the old generation.
-- Abrupt object reset loses both sockets. Attachment mode refuses restoration;
-  the mirror retains the old submitted occupancy across repeated reconstruction
-  without renewing its deadline. The healthy sender is disconnected too.
-- Persisting the old ledger supplies no new delivery receipt. After socket loss,
-  the present wire protocol has no authenticated old-generation settlement path.
-  No test sends `Input::Closed` or treats reset as release evidence.
+- Normal Cloudflare hibernation preserves grants, outstanding counts and absolute
+  deadlines; forwarding, `WS2B` consumption and ordered `WS2N/WS2S` settlement resume.
+- With one sender and two receivers, erasing one receiver's attachment closes only
+  that receiver. The sender and sibling keep their sockets; the sibling's unchanged
+  grants and outstanding counts survive reconstruction and its download continues.
+- A second reconstruction preserves the missing generation's reservation. The affected
+  receiver rejoins as `c-2-2` with session 3 while session 2 continues. Replaying session
+  1 settlement cannot refund either the old reservation or the replacement's debt.
+- Live disconnect can establish a smaller retirement reservation before the exact
+  record disappears. A reconstruction keeps that bound; sender settlement cannot
+  refund the missing receiver.
+- Abrupt whole-object reset still disconnects every socket. Recovery retains old
+  responsibility and the original persisted deadline. It is not per-receiver cleanup.
+- The SQLite mirror restores the erased record without forcing that receiver to
+  reconnect. It remains useful as a control, at the cost of forwarding-path writes.
 
-Natural hibernation, controlled Rust reconstruction with surviving sockets, and
-`ctx.abort()` are separate cases. The bridge finishes the Rust future before
-aborting, using the existing host-probe workaround. Forced reset is a failure
-injection, not a per-receiver cleanup strategy.
-
-## Design consequence
-
-The proposed ordering is useful, but connecting `flush_checkpoints` and `restore`
-does not resolve the resource model. Exact persistence beyond all socket lifetimes
-needs an independent durable update; attachments alone cannot provide it.
-Moreover, durable counters do not make a disconnected receiver able to settle.
-
-Before production integration, separate live connection admission, application-owned
-queues, and already-submitted delivery responsibility. Define the authority and
-bound for retiring an unreachable generation without claiming remote bytes were
-physically erased. Keeping unreachable ledgers forever consumes the existing finite
-connection/session limits; a timeout or restart is not a release receipt.
-The shared kernel's strict contract remains intact in this experiment. Neither
-tested mode meets all three original requirements, so the next task is this
-ownership decision, before the full client flow-control cutover.
+The [earlier complete-checkpoint experiment](evidence/2026-10-17-checkpoints.json)
+rejected attachment loss with `MissingResponsibility`, blocking the healthy sender.
+The kernel now isolates delivery-record loss; missing or uncertain authority and
+reservation inventory still refuse recovery. No run synthesizes `Input::Closed`.
 
 ## Reproduce
 
 From `cloudflare/`, follow the [Preview runbook](../../docs/skills/cloudflare-worker-previews-skill.md).
-Use the URL returned by the **latest** deploy or secret update; secret updates
-create a new immutable deployment URL.
+Use the latest deployment URL; updating secrets creates a new immutable URL.
 
 ```powershell
 cargo fmt --check
@@ -80,9 +63,8 @@ cargo clippy --target wasm32-unknown-unknown --locked -- -D warnings
 node checkpoint-probe.mjs <Preview-URL> all
 ```
 
-The client reads `PROBE_TOKEN` or ignored `.evidence/token`, creates fresh object
-names, asserts the outcomes and saves source hashes plus snapshots under
-`.evidence/`. Scenarios may also be selected individually: `hibernate`,
-`attachment-loss`, `disconnect`, or `reset`. Local Wrangler runs cover the same
-behavior, but only Preview evidence establishes actual Cloudflare hibernation.
-Cleanup deletes only the Preview created for the run.
+The client reads `PROBE_TOKEN` or ignored `.evidence/token`, creates fresh objects,
+checks payload bytes and writes source hashes plus snapshots under `.evidence/`.
+Individual scenarios: `hibernate`, `attachment-loss`, `disconnect`, `reset`.
+Local Wrangler runs cover the same behavior; only Preview runs establish real
+Cloudflare hibernation. Delete only the Preview created for the run.

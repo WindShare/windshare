@@ -170,7 +170,7 @@ impl Runtime {
                         if let Some(ws) = &socket {
                             persistence::write_attachment(ws, bytes)?;
                         }
-                        if next.mode == Mode::SqliteMirror || socket.is_none() {
+                        if next.mode == Mode::SqliteMirror {
                             next.records
                                 .insert(persistence::tag(connection), bytes.to_vec());
                             durable_changed = true;
@@ -185,12 +185,8 @@ impl Runtime {
             })
             .map_err(failure)?;
         let manifest = self.relay.checkpoint_manifest().map_err(failure)?;
-        next.records.retain(|key, _| {
-            manifest
-                .generations()
-                .iter()
-                .any(|c| persistence::tag(*c) == *key)
-        });
+        next.records
+            .retain(|key, _| manifest.generations().any(|c| persistence::tag(c) == *key));
         next.pending = false;
         if durable_changed {
             persistence::save(state, &mut next)?;
@@ -268,16 +264,23 @@ impl Runtime {
 
     pub fn status(&self, state: &State) -> Result<Value> {
         let manifest = self.relay.checkpoint_manifest().map_err(failure)?;
-        let usage: Vec<_> = manifest.generations().iter().map(|&connection| {
-            let used = self.relay.delivery_usage(connection).unwrap();
+        let usage: Vec<_> = manifest.generations().map(|connection| {
+            let used = self.relay.delivery_usage(connection);
+            let reservation = self.relay.unavailable_reservation(connection);
             json!({"connection":persistence::tag(connection),
                 "communicating":persistence::socket(state, connection).is_some(),
-                "granted_frames":used.granted.frames,
-                "submitted_frames":used.submitted.frames, "submitted_bytes":used.submitted.encoded_bytes})
+                "accounting":if used.is_some() { "exact" } else { "unavailable" },
+                "reserved_frames":reservation.map(|bound| bound.frames),
+                "reserved_bytes":reservation.map(|bound| bound.encoded_bytes),
+                "granted_frames":used.map(|used| used.granted.frames),
+                "submitted_frames":used.map(|used| used.submitted.frames), "submitted_bytes":used.map(|used| used.submitted.encoded_bytes)})
         }).collect();
+        let admission = self.relay.connection_usage();
         Ok(
             json!({"ready":true, "mode":self.image.mode, "writes":self.image.writes,
             "generations":usage, "last_refusal":self.last_refusal,
+            "admitted":admission.admitted, "retired_generations":admission.retired_generations,
+            "residual_frames":admission.residual.frames, "residual_bytes":admission.residual.encoded_bytes,
             "kernel_deadline_ms":self.relay.deadline().map(|at| at.0),
             "physical_release_proven":false, "clock":"frozen canonical fixture"}),
         )

@@ -35,6 +35,7 @@ pub enum Error {
     Configuration,
     Restore(crate::lifecycle::RestoreError),
     InvalidCheckpoint,
+    MissingAuthority,
     MissingResponsibility,
     CheckpointBusy,
     CheckpointDisabled,
@@ -46,6 +47,8 @@ pub enum Error {
 
 #[derive(Debug)]
 pub enum Input<'a> {
+    /// The host allocates a never-reused lifetime before accepting this socket.
+    /// Hibernating hosts must persist their generation allocator independently.
     Connected(ConnectionRef),
     Control {
         connection: ConnectionRef,

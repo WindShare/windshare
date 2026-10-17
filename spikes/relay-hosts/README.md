@@ -59,11 +59,12 @@ checks acknowledgement after queue discard and before joining transport tasks;
 the historical evidence above records the earlier completion boundary.
 Normal `WS2B` consumption, `WS2S` settlement and proven release remain the refund
 paths. Unresponsive peers retain responsibility across disconnect/restart.
-The checkpoint experiment demonstrates retention with a per-event SQLite mirror
-and refusal when live attachment records are lost. It also exposes the independent
-lack of an old-generation settlement channel after disconnect. Resolve that
-responsibility boundary before production integration; resetting the whole share
-cannot replace evidence.
+The [checkpoint follow-up](checkpoint-recovery.md) demonstrates partial recovery with
+one sender and two receivers: a lost attachment isolates that receiver while its sibling
+continues downloading. Missing live records retain full-budget risk reservations; missing
+retired records retain their retirement bound. Replacements use new identities and cannot
+settle that uncertainty. The per-event SQLite mirror remains a control. Whole-share reset
+still disconnects everyone and supplies no release evidence.
 
 The bridge is a tested reset mechanism for this pinned SDK, not a production
 termination policy. Source inspection suggests V8 termination interrupts an active
@@ -89,7 +90,7 @@ Checked 2026-10-17; none is a confirmed fix for this probe.
   Their triggers differ from this probe; neither explains the retained burst yet.
 
 Next: check the 0.8.7 reinitialization path against our reset reproduction.
-Transport-occupancy ownership still needs an independent design resolution.
+Production host risk policy and a real client download remain the integration work.
 
 ## Run locally
 

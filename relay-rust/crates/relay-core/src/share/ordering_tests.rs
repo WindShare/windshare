@@ -23,7 +23,7 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
             fixture.identity(2),
             Fixture::limits(),
             &Restore {
-                record: Some(record),
+                authority: Authority::Known(Some(record)),
                 surviving,
                 responsibility: Responsibility::Checkpoint(&checkpoint),
             },
@@ -218,7 +218,7 @@ fn stale_completion_and_generation_feedback_cannot_release_new_occupancy() {
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
-            record: Some(next_record(&durable)),
+            authority: Authority::Known(Some(next_record(&durable))),
             surviving: &[key.sender(), key.receiver()],
             responsibility: Responsibility::Checkpoint(&snapshot),
         },

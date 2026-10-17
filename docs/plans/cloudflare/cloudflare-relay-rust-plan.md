@@ -45,8 +45,10 @@ Implementation progress is tracked in [Rust relay implementation](overview.md).
 The kernel now separates admitted connections, retired-generation metadata and
 submitted residual risk. Host-injected retirement waits for revocation and both
 directions' queue discard; fixed grace and residual charges survive recovery.
-Physical release remains a separate host receipt. Dependency-scoped recovery is
-the next step; the complete-checkpoint requirement still applies.
+Physical release remains a separate host receipt. Dependency-scoped recovery now
+isolates missing/invalid delivery records while preserving healthy sessions.
+Independent generation reservations retain conservative loss charges and fixed grace;
+ownership, permanent STOP and the reservation inventory still require authoritative reads.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
@@ -56,7 +58,7 @@ The [pressure experiment](../../../spikes/relay-hosts/pressure.md) kept healthy 
 working under 512 MiB open/close loads; it supports continuing Cloudflare integration,
 but establishes neither immediate physical release nor a finite retention deadline.
 
-结论：**保留共享 Rust 语义内核；退役已实现，接下来做局部恢复，再接通真实传输。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+结论：**保留共享 Rust 语义内核；退役与局部恢复已实现，接下来接通真实客户端下载。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 
@@ -115,12 +117,13 @@ Cloudflare 对应用队列、活跃连接与会话设置硬上限，并按共享
 ### Attachment budget
 
 Attachments preserve bounded live-connection state through normal hibernation.
-SQLite retains share authority, permanent STOP and generation fencing, without
-forwarding-path delivery-counter writes. Replace `CheckpointManifest` completeness
-checks and durable detached-generation ledgers with per-connection validation and
-dependency-scoped recovery. Lost records retire affected connections and sessions;
-unaffected survivors retain their budgets and deadlines. Restart never permits
-identity reuse. The SQLite mirror remains an experimental control only.
+SQLite retains share authority, permanent STOP and generation reservations, without
+forwarding-path delivery-counter writes. `CheckpointManifest` now fences identities and
+retirement risk independently of connection records. Missing live records reserve a full
+connection budget; missing retired records preserve their retirement reservation.
+Recovery revokes only dependent sessions; healthy survivors retain their budgets and
+deadlines. Restart never permits identity reuse. Detached delivery ledgers are optional;
+the SQLite mirror remains an experimental control only.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including

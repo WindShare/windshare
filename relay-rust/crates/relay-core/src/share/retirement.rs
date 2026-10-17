@@ -53,6 +53,8 @@ pub struct ConnectionUsage {
     pub admitted: usize,
     pub retired_generations: usize,
     pub residual: Counts,
+    /// Conservative reservations across admitted and retired unavailable generations.
+    pub uncertain: Counts,
 }
 
 impl Limits {
@@ -67,17 +69,37 @@ impl<O: Observer> ShareRelay<O> {
     #[must_use]
     pub fn connection_usage(&self) -> ConnectionUsage {
         let mut usage = ConnectionUsage::default();
+        for bound in self.unavailable.values() {
+            usage.uncertain.frames = usage.uncertain.frames.saturating_add(bound.frames);
+            usage.uncertain.encoded_bytes = usage
+                .uncertain
+                .encoded_bytes
+                .saturating_add(bound.encoded_bytes);
+        }
         for (&connection, state) in &self.detached {
             if *state == Detached::Retired {
                 usage.retired_generations += 1;
-                let residual = self.ledgers[&connection].usage().submitted;
+                let residual = self.residual_bound(connection);
                 // Each transition checked the sum against the injected risk budget.
                 usage.residual.frames += residual.frames;
                 usage.residual.encoded_bytes += residual.encoded_bytes;
             }
         }
-        usage.admitted = self.ledgers.len() - usage.retired_generations;
+        usage.admitted = self.ledgers.len() + self.unavailable.len() - usage.retired_generations;
         usage
+    }
+
+    /// None means exact delivery accounting is available or no responsibility remains.
+    #[must_use]
+    pub fn unavailable_reservation(&self, connection: ConnectionRef) -> Option<Counts> {
+        self.unavailable.get(&connection).copied()
+    }
+
+    pub(super) fn residual_bound(&self, connection: ConnectionRef) -> Counts {
+        self.unavailable
+            .get(&connection)
+            .copied()
+            .unwrap_or_else(|| self.ledgers[&connection].usage().submitted)
     }
 
     pub(super) fn generation_quiescent(&self, connection: ConnectionRef) -> bool {
@@ -101,13 +123,17 @@ impl<O: Observer> ShareRelay<O> {
                 (Detached::AwaitingRelease, RetirementPolicy::PhysicalRelease)
                 | (Detached::Quiescing { .. }, RetirementPolicy::Bounded { .. }) => {}
                 (Detached::Released, _)
-                    if self.ledgers[&connection].metadata_usage().retained_flows == 0 => {}
+                    if self.unavailable.get(&connection) == Some(&Counts::ZERO)
+                        || self
+                            .ledgers
+                            .get(&connection)
+                            .is_some_and(|ledger| ledger.metadata_usage().retained_flows == 0) => {}
                 (Detached::Retired, RetirementPolicy::Bounded { .. }) => {
                     if !self.generation_quiescent(connection) {
                         return Err(Error::InvalidCheckpoint);
                     }
                     retained += 1;
-                    let submitted = self.ledgers[&connection].usage().submitted;
+                    let submitted = self.residual_bound(connection);
                     residual.frames = residual
                         .frames
                         .checked_add(submitted.frames)
@@ -159,7 +185,7 @@ impl<O: Observer> ShareRelay<O> {
             if now < not_before || !self.generation_quiescent(connection) {
                 continue;
             }
-            let residual = self.ledgers[&connection].usage().submitted;
+            let residual = self.residual_bound(connection);
             let usage = self.connection_usage();
             let RetirementPolicy::Bounded {
                 generations,
@@ -192,7 +218,10 @@ impl<O: Observer> ShareRelay<O> {
                 continue;
             }
             self.detached.insert(connection, Detached::Retired);
-            self.checkpointing.changed(connection);
+            self.checkpointing.retention_changed();
+            if self.ledgers.contains_key(&connection) {
+                self.checkpointing.changed(connection);
+            }
             self.trace(Some(connection), RelayDecision::Retired { residual }, now);
             self.collect_ledger(connection, now);
         }

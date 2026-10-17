@@ -14,10 +14,12 @@ use windshare_relay_core::{
 
 pub const SENDER: u64 = 1;
 pub const RECEIVER: u64 = 2;
+pub const SECOND_RECEIVER: u64 = 3;
 pub const WINDOW_FRAMES: u64 = 8;
 pub const ATTACHMENT_BYTES: usize = 16_384;
 pub const ENVELOPE_BYTES: usize = 512;
-const CONNECTION_LIMIT: usize = 4;
+const CONNECTION_LIMIT: usize = 3;
+const RETIRED_GENERATIONS: usize = 2;
 const SESSION_LIMIT: usize = 2;
 const CONNECTION_FRAMES: u64 = 16;
 const REGISTRATION_BUDGET_MS: u64 = 5_000;
@@ -91,8 +93,12 @@ pub fn limits() -> Limits {
         connections: CONNECTION_LIMIT,
         sessions: SESSION_LIMIT,
         retained_flows_per_connection: SESSION_LIMIT,
-        // The probe establishes no release TTL; it does not select a production risk policy.
-        retirement: windshare_relay_core::share::RetirementPolicy::PhysicalRelease,
+        // Experimental risk allowance, not evidence of physical release or a production default.
+        retirement: windshare_relay_core::share::RetirementPolicy::Bounded {
+            grace: Duration::ZERO,
+            generations: RETIRED_GENERATIONS,
+            residual: capacity(CONNECTION_FRAMES * RETIRED_GENERATIONS as u64),
+        },
         delivery: windshare_relay_core::flow::Limits::new(
             capacity(CONNECTION_FRAMES),
             capacity(2),

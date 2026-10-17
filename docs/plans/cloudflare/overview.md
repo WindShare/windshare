@@ -18,9 +18,9 @@ injected; payloads, sockets, entropy, storage and scheduling remain outside it.
 | `submit(receipt, now, handoff)` | Recheck current authority and FIFO order, charge submission and synchronously hand off the payload under one exclusive borrow. |
 | `connection_usage()` | Report admitted slots, retired generations and outstanding residual frames/bytes separately. |
 | `checkpoint_connection(connection)` | Capture one generation's ledger and admissions, even after its socket disappears. |
-| `checkpoint_manifest()` | Capture the complete retained-generation inventory independently of socket discovery. |
+| `checkpoint_manifest()` | Capture generation reservations, retirement state and the session-ID fence independently of delivery records. |
 | `enable_checkpoints(budget, now)` / `flush_checkpoints(now, write)` | Write changed generation records, then the manifest when its membership or header changes. |
-| `Checkpoint::from_connections(manifest, records, limits)` | Require exactly the generations named by the independently recovered manifest. |
+| `Checkpoint::from_connections(manifest, records, limits)` | Validate records individually; missing, duplicate or invalid records retain reservations and lose routing authority. |
 | `checkpoint()` / `Checkpoint::encode()` | Capture a full image for recovery tools and tests. |
 
 Commands request control sends, entropy, payload discard, exact connection
@@ -90,10 +90,12 @@ Lifecycle, handshake, session and settlement deadlines share one indexed schedul
 `WS2N` freezes submitted totals; `WS2S` confirms consumption or discard, separately
 from `WS2B`. Ordinary feedback cannot acknowledge retirement or bypass queue discard.
 
-Recovery separates communicating sockets from resource responsibility. `Restore` requires
-`Responsibility::Checkpoint`, explicit host evidence of complete release (`Released`),
-or `Unknown`, which refuses restoration. Restart and empty socket lists do not prove release.
-Every checkpoint ledger is restored; only surviving, authorized connections regain sessions.
+Recovery separates ownership/STOP authority, communicating sockets and delivery responsibility.
+`Restore::authority` explicitly distinguishes `Known` facts from `Unknown`, which refuses service.
+`Responsibility` requires an authoritative checkpoint inventory or proof of complete release;
+unknown inventory also refuses recovery. Missing delivery records isolate their connections and
+dependent sessions, while healthy ledgers keep their grants, submitted debt and absolute deadlines.
+Restart and empty socket lists never prove release.
 `Limits::connections` bounds admission through unfinished retirement.
 `RetirementPolicy::PhysicalRelease` waits for `Closed` and discard of queues targeting
 other connections; `Bounded` permits logical retirement
@@ -110,21 +112,23 @@ wire-ID high-water marks survive repeated recovery; old feedback cannot affect r
 Pending handshakes retain their original ownership; fresh incarnations fence old storage
 and entropy callbacks.
 
-Each generation record contains its ledger, handshake and receiver-side admissions.
-The independent `CheckpointManifest` lists every retained generation, including detached
-ones; recovery rejects missing records, duplicates and mixed headers. Hosts must preserve
-the latest coherent inventory and records beyond attachment loss. The kernel validates
-completeness against that inventory, but cannot prove that host storage is current.
+Each connection record contains its ledger, handshake and receiver-side admissions.
+The independent `CheckpointManifest` retains generation identity, retirement state, a risk
+reservation and the session-ID high-water mark. Admission no longer rewrites unrelated
+receiver attachments. Missing live records reserve the entire configured connection budget;
+missing retired records retain the submitted bound established at retirement. These are
+explicit uncertain reservations, not fabricated delivery counters. Old feedback cannot
+release them; physical release can. Risk exhaustion blocks further retirement/admission,
+without revoking healthy sessions. Repeated recovery preserves fixed grace and loss status.
 
-Hibernating hosts enable tracking after restore and flush after applying outputs. Flush
-preflights all changed records and writes a changed manifest last; partial failure retains
-the whole batch for retry. Closing sockets does not repair failed accounting writes. If
-latest responsibility cannot be recovered, the host must report `Unknown`. Old records
-may be deleted only after the updated manifest commits. `CheckpointBudget` bounds each
-generation record against the retained-flow bound; the separately stored manifest is
-bounded by admitted slots plus the retired-generation limit. Missing-record isolation
-remains pending; retirement does not relax the current completeness requirement.
-Native capacities are unchanged. See the
+Hibernating hosts enable tracking after restore and flush after outputs. Flush preflights
+changed records and writes a changed manifest last; partial failures retain the batch for
+retry. Hosts must omit unavailable records instead of replaying stale credits, and preserve
+authoritative lifecycle/reservation facts. Manifest changes cover admission, retirement and
+retired-risk release, never ordinary forwarding counters. Generation allocation must be
+persisted before accepting a new socket; removed IDs cannot be reused. `CheckpointBudget`
+still bounds connection records, including retained flows. Native capacities are unchanged.
+See the
 [Cloudflare attachment budget](cloudflare-relay-rust-plan.md#attachment-budget).
 
 Flow metadata uses runtime-bounded, lazily allocated slots. Handshakes allocate
@@ -146,15 +150,14 @@ but an old peer with an 8 KiB receive buffer still received the complete 8 MiB b
 a healthy peer on the same object disconnected. Reset is therefore not a verified
 buffer-release receipt or per-receiver isolation policy.
 
-The checkpoint follow-up exercises the real kernel in the Worker. Normal
-hibernation preserves outstanding delivery and subsequent settlement. Lost live
-attachments reject the complete restore, including the healthy sender; a SQLite
-mirror recovers them at the cost of forwarding-path writes. Live disconnect
-callbacks can save detached ledgers, and a new receiver generation can progress
-without refunding the old one. Abrupt reset still disconnects the whole share.
-Persisted old responsibility has no authenticated settlement channel once that
-socket is gone. Production adapters and client cutover remain pending: resource
-ownership and failure isolation must be decided before integrating the full flow.
+The [checkpoint follow-up](../../../spikes/relay-hosts/checkpoint-recovery.md) now
+verifies one sender and two receivers in a real Preview. Losing one attachment closes
+only that receiver; its sibling continues downloading and the affected receiver rejoins
+with a new generation/session. Repeated reconstruction and replayed old settlement retain
+loss reservations. Attachment forwarding performs no SQL writes. The per-event SQLite
+mirror remains a control. Normal hibernation retains exact ledgers; abrupt reset still
+disconnects the whole share. Next is a real client download through a production Rust
+adapter; these bounded fixture transfers do not establish that product flow.
 
 ## Testing
 

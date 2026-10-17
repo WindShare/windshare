@@ -15,6 +15,11 @@ pub(super) enum Checkpointing {
 }
 
 impl Checkpointing {
+    pub(super) const fn retention_changed(&mut self) {
+        if let Self::Enabled { manifest_dirty, .. } = self {
+            *manifest_dirty = true;
+        }
+    }
     pub(super) const fn enabled(&self) -> bool {
         matches!(self, Self::Enabled { .. })
     }
@@ -45,18 +50,6 @@ impl Checkpointing {
         } = self
         {
             dirty.remove(&connection);
-            *manifest_dirty = true;
-        }
-    }
-
-    pub(super) fn header_changed(&mut self, connections: impl Iterator<Item = ConnectionRef>) {
-        if let Self::Enabled {
-            dirty,
-            manifest_dirty,
-            ..
-        } = self
-        {
-            dirty.extend(connections);
             *manifest_dirty = true;
         }
     }
@@ -134,11 +127,10 @@ impl<O: Observer> ShareRelay<O> {
     /// the entire batch for idempotent retry, even if earlier writes succeeded.
     ///
     /// # Errors
-    /// On error the host must retain responsibility and retry before ending the
-    /// event. Closing sockets does not repair stale accounting. If the latest state
-    /// cannot be recovered, restore with unknown responsibility, never old budgets.
-    /// Hosts must retain records independently of lost attachments, publish a
-    /// coherent recovery state and enforce their serialization limits. Removed
+    /// Retry a failed batch before ending the event. If a delivery write cannot
+    /// be recovered, omit that generation's record instead of replaying stale credit.
+    /// The independent manifest and lifecycle facts must remain authoritative;
+    /// uncertainty there still refuses recovery. Enforce serialization limits. Removed
     /// generations may be deleted only after the new manifest is committed.
     pub fn flush_checkpoints<E>(
         &mut self,
