@@ -16,6 +16,7 @@
 extern crate alloc;
 
 pub mod authentication;
+pub mod authority;
 pub mod challenge;
 pub mod clock;
 pub mod descriptor_upload;

@@ -25,7 +25,7 @@ fn client() -> (tempfile::TempDir, PathBuf) {
         .env("GOWORK", "off")
         .args(["build", "-o"])
         .arg(&binary)
-        .arg("./relay-rust/crates/relay-native/tests/_goclient")
+        .arg("./relay-rust/tests/_goclient")
         .output()
         .unwrap();
     success(&output);

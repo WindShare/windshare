@@ -1,0 +1,415 @@
+use super::{
+    config,
+    runtime::{Host, Runtime},
+};
+use anyhow::{Result, bail};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
+use windshare_relay_core::{
+    authority::{self, StoredAuthority},
+    challenge::ChallengeSeed,
+    clock::UnixMillis,
+    identifiers::RelayIdentity,
+    lifecycle::{ConnectionRef, Incarnation, Record},
+    registration::RegisterInit,
+    share::{
+        Checkpoint, CheckpointManifest, CheckpointTarget, ConnectionCheckpoint, Identity, Input,
+        Storage,
+    },
+};
+
+#[path = "recovery_tests.rs"]
+mod recovery;
+
+struct Fixture(serde_json::Value);
+impl Fixture {
+    fn new() -> Self {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../core/testvectors/v2-session.json"))
+                .unwrap();
+        Self(
+            vectors["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["name"] == "relay-capacity-registration")
+                .unwrap()
+                .clone(),
+        )
+    }
+    fn frame(&self, key: &str) -> Vec<u8> {
+        STANDARD.decode(self.0[key].as_str().unwrap()).unwrap()
+    }
+    fn time(&self, prefix: &str) -> UnixMillis {
+        let key = if prefix.is_empty() {
+            "expiresAt"
+        } else if prefix == "stop" {
+            "stopExpiresAt"
+        } else {
+            "resumeExpiresAt"
+        };
+        let budget = if prefix == "stop" { 10_000 } else { 5_000 };
+        UnixMillis(self.0[key].as_str().unwrap().parse::<u64>().unwrap() * 1000 - budget - 1)
+    }
+    fn seed(&self, prefix: &str) -> ChallengeSeed {
+        let id = if prefix.is_empty() {
+            "challengeIdB64".to_owned()
+        } else {
+            format!("{prefix}ChallengeIdB64")
+        };
+        let nonce = if prefix.is_empty() {
+            "challengeNonceB64".to_owned()
+        } else {
+            format!("{prefix}ChallengeNonceB64")
+        };
+        ChallengeSeed::new(
+            self.frame(&id).try_into().unwrap(),
+            self.frame(&nonce).try_into().unwrap(),
+        )
+        .unwrap()
+    }
+    fn identity(&self, boot: u8) -> Identity {
+        Identity {
+            relay: RelayIdentity::new(self.frame("relayIdentityB64").try_into().unwrap()).unwrap(),
+            share: RegisterInit::decode(&self.frame("registerInitB64"))
+                .unwrap()
+                .registration()
+                .route()
+                .share_id(),
+            incarnation: Incarnation::new([boot; 16]).unwrap(),
+        }
+    }
+}
+fn connection(id: u64) -> ConnectionRef {
+    ConnectionRef {
+        id: NonZeroU64::new(id).unwrap(),
+        generation: NonZeroU64::MIN,
+    }
+}
+
+struct Memory {
+    identity: Identity,
+    time: UnixMillis,
+    seed: Option<ChallengeSeed>,
+    stored: Option<StoredAuthority>,
+    manifest: Option<Vec<u8>>,
+    attachments: BTreeMap<ConnectionRef, Vec<u8>>,
+    live: BTreeSet<ConnectionRef>,
+    sent: Vec<(ConnectionRef, Vec<u8>)>,
+    writes: usize,
+    fail_write: Option<(usize, bool)>,
+    failed_attachments: usize,
+    manifest_writes: usize,
+}
+impl Memory {
+    fn new(f: &Fixture) -> Self {
+        Self {
+            identity: f.identity(1),
+            time: f.time(""),
+            seed: Some(f.seed("")),
+            stored: None,
+            manifest: None,
+            attachments: BTreeMap::new(),
+            live: BTreeSet::new(),
+            sent: Vec::new(),
+            writes: 0,
+            fail_write: None,
+            failed_attachments: 0,
+            manifest_writes: 0,
+        }
+    }
+    fn restore(&mut self, boot: u8) -> Result<Runtime<()>> {
+        self.identity.incarnation = Incarnation::new([boot; 16]).unwrap();
+        let checkpoint = self.manifest.as_ref().map(|bytes| {
+            let manifest = CheckpointManifest::decode(bytes, config::limits()).unwrap();
+            Checkpoint::from_connections(
+                &manifest,
+                self.attachments
+                    .values()
+                    .filter_map(|bytes| ConnectionCheckpoint::decode(bytes, config::limits()).ok())
+                    .collect(),
+                config::limits(),
+            )
+            .unwrap()
+        });
+        let surviving: Vec<_> = self.live.iter().copied().collect();
+        Runtime::restore(
+            self,
+            self.identity,
+            self.stored.as_ref().map(StoredAuthority::record),
+            checkpoint.as_ref(),
+            &surviving,
+            (),
+        )
+    }
+    fn open(&mut self, runtime: &mut Runtime<()>, id: u64) {
+        self.live.insert(connection(id));
+        runtime
+            .event(self, Input::Connected(connection(id)))
+            .unwrap();
+    }
+    fn frame(&mut self, runtime: &mut Runtime<()>, f: &Fixture, id: u64, key: &str) {
+        runtime
+            .control(self, connection(id), &f.frame(key), true)
+            .unwrap();
+    }
+    fn registered(&mut self, runtime: &mut Runtime<()>, f: &Fixture) {
+        self.open(runtime, 1);
+        for key in ["registerInitB64", "registerProofB64", "descriptorUploadB64"] {
+            self.frame(runtime, f, 1, key);
+        }
+        assert!(matches!(
+            self.stored.as_ref().unwrap().record(),
+            Record::Published(_)
+        ));
+        assert!(
+            self.sent
+                .iter()
+                .any(|(_, bytes)| bytes == &f.frame("registeredB64"))
+        );
+    }
+}
+impl Host for Memory {
+    fn now(&self) -> UnixMillis {
+        self.time
+    }
+    fn challenge(&mut self) -> Result<ChallengeSeed> {
+        Ok(self.seed.take().expect("one challenge"))
+    }
+    fn execute(&mut self, operation: &Storage) -> Result<()> {
+        self.writes += 1;
+        let failure = self.fail_write.filter(|(index, _)| *index == self.writes);
+        if failure == Some((self.writes, false)) {
+            bail!("injected before commit");
+        }
+        self.stored = authority::apply(
+            self.identity.relay,
+            self.identity.share,
+            self.stored.as_ref(),
+            operation,
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        if let Some(stored) = &self.stored {
+            let row = crate::persistence::AuthorityRow::new(stored);
+            let row: crate::persistence::AuthorityRow =
+                serde_json::from_slice(&serde_json::to_vec(&row)?)?;
+            self.stored = Some(row.decode(self.identity.relay, self.identity.share)?);
+        }
+        if failure.is_some() {
+            bail!("injected lost receipt");
+        }
+        Ok(())
+    }
+    fn send(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()> {
+        if !self.live.contains(&connection) {
+            bail!("disconnected");
+        }
+        self.sent.push((connection, bytes.to_vec()));
+        Ok(())
+    }
+    fn close(&mut self, connection: ConnectionRef) -> Result<()> {
+        self.live.remove(&connection);
+        self.attachments.remove(&connection);
+        Ok(())
+    }
+    fn checkpoint(&mut self, target: CheckpointTarget, bytes: &[u8]) -> Result<()> {
+        match target {
+            CheckpointTarget::Manifest => {
+                self.manifest = Some(bytes.to_vec());
+                self.manifest_writes += 1;
+            }
+            CheckpointTarget::Generation(connection) => {
+                if self.failed_attachments > 0 {
+                    self.failed_attachments -= 1;
+                    bail!("attachment write failed");
+                }
+                if self.live.contains(&connection) {
+                    self.attachments.insert(connection, bytes.to_vec());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn hibernation_retains_nonce_and_absolute_deadline_without_sql_heartbeat_writes() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.registered(&mut runtime, &f);
+    host.frame(&mut runtime, &f, 1, "connectionProbeB64");
+    let deadline = runtime.deadline();
+    host.time.0 += 10_000;
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    assert_eq!(runtime.deadline(), deadline);
+    let writes = host.manifest_writes;
+    let nonce = f.0["connectionProbeNonce"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap()
+        + 1;
+    let frame =
+        windshare_relay_core::heartbeat::ConnectionProbe::new(NonZeroU64::new(nonce).unwrap())
+            .encode();
+    runtime
+        .control(&mut host, connection(1), &frame, false)
+        .unwrap();
+    assert_eq!(host.manifest_writes, writes);
+    assert_eq!(&host.sent.last().unwrap().1[..4], b"WS2A");
+    drop(runtime);
+    let mut runtime = host.restore(3).unwrap();
+    runtime
+        .control(&mut host, connection(1), &frame, false)
+        .unwrap();
+    assert!(
+        !host.live.contains(&connection(1)),
+        "hibernation must not forget the nonce"
+    );
+}
+
+#[test]
+fn pending_handshake_and_partial_attachment_write_recover_without_new_deadline() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.failed_attachments = 1;
+    host.open(&mut runtime, 1);
+    host.frame(&mut runtime, &f, 1, "registerInitB64");
+    let deadline = runtime.deadline();
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    assert_eq!(runtime.deadline(), deadline);
+    host.frame(&mut runtime, &f, 1, "registerProofB64");
+    host.frame(&mut runtime, &f, 1, "descriptorUploadB64");
+    assert!(matches!(
+        host.stored.as_ref().unwrap().record(),
+        Record::Published(_)
+    ));
+}
+
+#[test]
+fn expiry_is_processed_before_a_late_heartbeat_and_grace_survives_reconstruction() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.registered(&mut runtime, &f);
+    host.time = runtime.deadline().unwrap();
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    assert!(host.live.is_empty());
+    assert!(matches!(
+        host.stored.as_ref().unwrap().record(),
+        Record::Grace(_)
+    ));
+    let grace = runtime.deadline();
+    runtime
+        .control(
+            &mut host,
+            connection(1),
+            &f.frame("connectionProbeB64"),
+            false,
+        )
+        .unwrap();
+    assert_eq!(runtime.deadline(), grace);
+    drop(runtime);
+    let runtime = host.restore(3).unwrap();
+    assert_eq!(runtime.deadline(), grace);
+}
+
+#[test]
+fn uncertain_publication_never_acknowledges_and_recovers_from_authoritative_sql() {
+    let f = Fixture::new();
+    for (write, committed) in [(1, false), (1, true), (2, false), (2, true)] {
+        let mut host = Memory::new(&f);
+        let mut runtime = host.restore(1).unwrap();
+        host.open(&mut runtime, 1);
+        host.frame(&mut runtime, &f, 1, "registerInitB64");
+        host.frame(&mut runtime, &f, 1, "registerProofB64");
+        host.fail_write = Some((write, committed));
+        assert!(
+            runtime
+                .control(
+                    &mut host,
+                    connection(1),
+                    &f.frame("descriptorUploadB64"),
+                    true
+                )
+                .is_err()
+        );
+        assert!(
+            !host
+                .sent
+                .iter()
+                .any(|(_, bytes)| bytes == &f.frame("registeredB64"))
+        );
+        drop(runtime);
+        host.live.clear();
+        host.attachments.clear();
+        host.fail_write = None;
+        let _runtime = host.restore(2).unwrap();
+        assert!(
+            host.stored
+                .as_ref()
+                .is_none_or(|row| matches!(row.record(), Record::Grace(_)))
+        );
+    }
+}
+
+#[test]
+fn stop_persists_before_ack_and_survives_empty_socket_reconstruction() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    host.time = f.time("stop");
+    host.seed = Some(f.seed("stop"));
+    let mut runtime = host.restore(1).unwrap();
+    host.open(&mut runtime, 2);
+    host.frame(&mut runtime, &f, 2, "stopInitB64");
+    host.time = f.time("");
+    host.seed = Some(f.seed(""));
+    host.registered(&mut runtime, &f);
+    runtime
+        .control(&mut host, connection(2), &f.frame("stopProofB64"), false)
+        .unwrap();
+    assert!(matches!(
+        host.stored.as_ref().unwrap().record(),
+        Record::Stopped(_)
+    ));
+    assert!(host.stored.as_ref().unwrap().descriptor().is_none());
+    assert!(
+        host.sent
+            .iter()
+            .any(|(_, bytes)| bytes == &f.frame("stoppedB64"))
+    );
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    host.open(&mut runtime, 3);
+    host.frame(&mut runtime, &f, 3, "registerInitB64");
+    assert!(
+        host.sent
+            .iter()
+            .any(|(c, bytes)| *c == connection(3) && bytes == &f.frame("stoppedErrorB64"))
+    );
+}
+
+#[test]
+fn deployment_permission_and_delivery_boundary_precede_admission() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.open(&mut runtime, 1);
+    runtime
+        .control(&mut host, connection(1), &f.frame("registerInitB64"), false)
+        .unwrap();
+    assert!(host.stored.is_none());
+    assert!(!host.live.contains(&connection(1)));
+    host.open(&mut runtime, 2);
+    host.frame(&mut runtime, &f, 2, "joinB64");
+    assert!(!host.live.contains(&connection(2)));
+    assert!(host.stored.is_none());
+}

@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -62,11 +64,19 @@ func require(ok bool, message string) {
 }
 
 func dial(endpoint string, share v2.ShareID) (*websocket.Conn, v2.RelayEndpoint) {
+	return dialWithCredential(endpoint, share, true)
+}
+
+func dialWithCredential(endpoint string, share v2.ShareID, credential bool) (*websocket.Conn, v2.RelayEndpoint) {
 	route, err := v2.RelayEndpointForShare(strings.TrimSuffix(endpoint, v2.WebSocketPath), share)
 	check(err)
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
-	connection, _, err := websocket.Dial(ctx, route.DialURL, nil)
+	headers := http.Header{}
+	if secret := os.Getenv("WINDSHARE_RELAY_REGISTRATION_SECRET"); credential && secret != "" {
+		headers.Set("Authorization", "Bearer "+secret)
+	}
+	connection, _, err := websocket.Dial(ctx, route.DialURL, &websocket.DialOptions{HTTPHeader: headers})
 	check(err)
 	connection.SetReadLimit(v2.MaxDescriptorBytes + v2.DescriptorUploadHeaderBytes)
 	return connection, route
@@ -107,7 +117,7 @@ func proof(f fixture, init v2.DeliveryRegisterInit, challenge v2.Challenge, iden
 }
 
 func register(endpoint string, f fixture, resume bool) *websocket.Conn {
-	connection, route := dial(endpoint, f.init.Registration.ShareID)
+	connection, route := dialWithCredential(endpoint, f.init.Registration.ShareID, !resume)
 	init := f.init
 	if resume {
 		init.Registration.Mode = v2.RegistrationResume
@@ -133,7 +143,7 @@ func register(endpoint string, f fixture, resume bool) *websocket.Conn {
 }
 
 func stop(endpoint string, f fixture) {
-	connection, route := dial(endpoint, f.init.Registration.ShareID)
+	connection, route := dialWithCredential(endpoint, f.init.Registration.ShareID, false)
 	defer connection.CloseNow()
 	registration := f.init.Registration
 	init := v2.StopInit{ShareID: registration.ShareID, ShareInstance: registration.ShareInstance,
