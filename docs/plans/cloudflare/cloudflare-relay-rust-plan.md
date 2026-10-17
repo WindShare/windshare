@@ -42,10 +42,6 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
-Handshake capacity, cumulative consumption and final settlement wire contracts
-now have Rust/Go/TypeScript codecs and shared vectors, with settlement routed into
-the Rust kernel. Next: the minimal Cloudflare host and coordinated client flow
-control, exercised through real sharing, downloading and cancellation.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
 
