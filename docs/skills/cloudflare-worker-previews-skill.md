@@ -66,7 +66,9 @@ See [Preview lifecycle and URLs](https://developers.cloudflare.com/workers/previ
 
 ## Exercise WindShare and inspect evidence
 
-Before product integration, use the [bounded host probes](../../spikes/relay-hosts/README.md) to investigate platform contracts. Close callbacks and `CLOSED` do not by themselves satisfy the kernel's buffer-release contract; retain negative and inconclusive results. A platform probe is not a WindShare transfer test.
+Before product integration, use the [bounded host probes](../../spikes/relay-hosts/README.md) to investigate platform contracts. Close callbacks, `CLOSED`, constructor re-entry and an empty socket list do not prove buffer release. Retain negative and inconclusive results; a platform probe is not a WindShare transfer test.
+
+For reset failures, compare a JavaScript control with abort inside and outside the Rust future. With workers-rs 0.8.7, finishing the Rust future before the JavaScript host calls `ctx.abort()` avoided a reproduced callback failure. Check recovery while the stalled client remains connected, then resume it and inspect old data. Whole-object reset also disconnects healthy peers on that object; test another object's connection separately. Use the bounded TLS peer when an OS receive-window limit matters: pausing Node alone does not impose one.
 
 Use bounded real sender/browser runs against the Preview: registration, browsing and download; actual relay fallback; disconnect/reconnect; hibernation/wakeup; connection replacement; and irreversible STOP across redeployment. Select the scenarios relevant to the change instead of building a large test matrix.
 
