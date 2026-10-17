@@ -167,8 +167,13 @@ The Go capacity-codec scenario signs live challenges, restarts the binary after
 registration, resumes ownership, stops independently and verifies stopped refusal
 after another restart. JOIN, opaque forwarding, STUN and operational endpoints remain
 pending; current Go/browser transport runtimes and the Go server are unchanged.
-This control-only schema proves no payload responsibility was acquired. It does not
-establish a future native data-plane buffer-release policy.
+The native connection layer now owns independent reader/writer tasks, frame/byte-bounded
+queues and a synchronous kernel-to-writer handoff. Unsubmitted queues are discarded
+before receipts; transport release follows joined task cancellation and abortive TCP
+teardown. Ordered terminal replies have one bounded drain interval. These primitives
+are tested with real kernel receipts; network JOIN/data ingress remains disabled.
+The control-only schema still proves no payload responsibility was acquired on restart;
+delivery recovery remains part of the next integration step.
 
 ## Cloudflare lifecycle host
 

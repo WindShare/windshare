@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{Semaphore, mpsc},
+    sync::{Semaphore, mpsc, watch},
     task::{AbortHandle, JoinSet},
 };
 use windshare_relay_core::{
@@ -131,6 +131,7 @@ impl Server {
     ) -> Result<()> {
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let mut tasks = JoinSet::new();
+        let (stop_connections, stopping) = watch::channel(false);
         let mut next_connection = NonZeroU64::MIN;
         tokio::pin!(shutdown);
         let result = loop {
@@ -156,18 +157,21 @@ impl Server {
                         id,
                         generation: self.registry.store.generation(),
                     };
+                    let endpoint = self.registry.endpoint.clone();
                     let registry = Arc::clone(&self.registry);
-                    let endpoint = registry.endpoint.clone();
+                    let stopping = stopping.clone();
                     tasks.spawn(async move {
                         let _slot = slot;
-                        if let Err(error) = socket::serve(stream, endpoint, registry, connection).await {
+                        if let Err(error) = socket::serve(stream, endpoint, registry, connection, stopping).await {
                             tracing::debug!(event = "socket_ended", ?connection, %peer, %error);
                         }
                     });
                 }
             }
         };
-        tasks.abort_all();
+        // Supervisors must join their own reader/writer tasks and return release
+        // receipts before actors disappear. Aborting supervisors would skip that work.
+        stop_connections.send_replace(true);
         while tasks.join_next().await.is_some() {}
         self.registry
             .actors

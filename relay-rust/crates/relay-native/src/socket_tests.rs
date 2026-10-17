@@ -20,7 +20,4 @@ fn upgrade_hint_is_single_canonical_share_and_never_authority() {
     ] {
         assert!(route(&request(uri), &endpoint).is_err());
     }
-    assert!(!supported_control(b"WS2J"));
-    assert!(!supported_control(b"WS2O"));
-    assert!(supported_control(b"WS2X"));
 }

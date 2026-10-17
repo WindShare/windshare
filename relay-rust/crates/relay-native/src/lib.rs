@@ -1,8 +1,9 @@
-//! Native control-plane host. JOIN and payload forwarding await the coordinated
-//! delivery-runtime cutover; this host never accepts or submits opaque payloads.
+//! Native lifecycle host with bounded connection I/O. Network JOIN and opaque
+//! ingress await delivery recovery and coordinated client runtime integration.
 
 mod actor;
 mod config;
+mod connection;
 mod environment;
 mod registry;
 mod socket;

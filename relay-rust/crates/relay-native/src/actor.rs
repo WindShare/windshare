@@ -1,5 +1,6 @@
 use crate::{
     config::{STORAGE_RETRY, limits},
+    connection::Outbox,
     environment::{Environment, Trace},
     storage::Persistence,
 };
@@ -13,7 +14,11 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::Instant,
+};
 use windshare_relay_core::{
     lifecycle::ConnectionRef,
     share::{
@@ -23,9 +28,12 @@ use windshare_relay_core::{
 };
 
 pub enum Event {
-    Connected(ConnectionRef, mpsc::Sender<Vec<u8>>),
+    Connected(ConnectionRef, Outbox),
     Control(ConnectionRef, Vec<u8>),
-    Closed(ConnectionRef),
+    Unsupported(ConnectionRef),
+    Writable(ConnectionRef),
+    Disconnected(ConnectionRef),
+    Closed(ConnectionRef, oneshot::Sender<()>),
 }
 
 type Commit = JoinHandle<(WorkId, Result<()>)>;
@@ -35,7 +43,7 @@ pub struct Actor<S, E> {
     identity: Identity,
     store: S,
     environment: E,
-    ports: BTreeMap<ConnectionRef, mpsc::Sender<Vec<u8>>>,
+    ports: BTreeMap<ConnectionRef, Outbox>,
     inbox: mpsc::Receiver<Event>,
     commit: Option<Commit>,
     retry: Option<(Instant, WorkId)>,
@@ -71,14 +79,22 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         };
         actor.outputs(initial)?;
         let result = actor.run().await;
-        // A failed actor cannot be replaced while one of its writes might still
-        // commit. Keep its mailbox alive until the blocking obligation quiesces.
-        if let Some(commit) = actor.commit.take() {
-            let (_, completion) = commit.await?;
+        actor.ports.clear();
+        // A failed actor cannot be replaced while a write might still commit.
+        // Drain its mailbox while that obligation quiesces: socket cleanup must
+        // not deadlock behind a full inbox, and newly attached ports must abort.
+        if let Some(mut commit) = actor.commit.take() {
+            let (_, completion) = loop {
+                tokio::select! {
+                    completion = &mut commit => break completion?,
+                    Some(event) = actor.inbox.recv() => drop(event),
+                }
+            };
             if let Err(error) = completion {
                 tracing::error!(event = "shutdown_storage_uncertain", %error);
             }
         }
+        drop(actor);
         result
     }
 
@@ -141,7 +157,6 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     now,
                 );
                 if turn.refusal.is_some() {
-                    self.ports.remove(&connection);
                     turn.outputs.extend(
                         self.relay
                             .handle(Input::Disconnected(connection), now)
@@ -150,11 +165,34 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 }
                 turn
             }
-            Event::Closed(connection) => {
+            Event::Unsupported(connection) => {
+                let mut turn = Turn::default();
+                turn.outputs.push(Output::Send {
+                    connection,
+                    control: Control::Error(
+                        windshare_relay_core::error_frame::ErrorFrame::UnsupportedMode,
+                    ),
+                });
+                turn.outputs.push(Output::Close(connection));
+                turn
+            }
+            Event::Writable(connection) => self
+                .ports
+                .get_mut(&connection)
+                .and_then(|port| port.submit_next(&mut self.relay, now))
+                .unwrap_or_default(),
+            Event::Disconnected(connection) => {
                 self.ports.remove(&connection);
-                // The connection task has dropped its writer and queues. No data
-                // was submitted in this lifecycle-only host, so no debt is refunded.
-                self.relay.handle(Input::Closed(connection), now)
+                self.relay.handle(Input::Disconnected(connection), now)
+            }
+            Event::Closed(connection, applied) => {
+                self.ports.remove(&connection);
+                // The supervisor joined both halves and released the transport;
+                // removing this port also drops every unsubmitted destination frame.
+                tracing::debug!(event = "connection_released", share = ?self.identity.share, ?connection);
+                let turn = self.relay.handle(Input::Closed(connection), now);
+                let _ = applied.send(());
+                turn
             }
         }
     }
@@ -174,11 +212,16 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     connection,
                     control,
                 } => {
+                    let probe = matches!(control, Control::ProbeAck(_));
                     let bytes = encode(control)?;
-                    let sent = self
-                        .ports
-                        .get(&connection)
-                        .is_some_and(|writer| writer.try_send(bytes).is_ok());
+                    let sent = self.ports.get(&connection).is_some_and(|writer| {
+                        if probe {
+                            writer.probe(bytes)
+                        } else {
+                            writer.control(bytes)
+                        }
+                        .is_ok()
+                    });
                     if sent {
                         None
                     } else {
@@ -191,9 +234,11 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     }
                 }
                 Output::Close(connection) => {
-                    // Dropping the sender drains already-ordered responses before
-                    // transport closure, including STOPPED immediately before Close.
-                    self.ports.remove(&connection);
+                    // Only an explicit kernel close drains ordered replies. Failure,
+                    // overflow and actor teardown abort instead of keeping writers alive.
+                    if let Some(port) = self.ports.remove(&connection) {
+                        port.finish();
+                    }
                     None
                 }
                 Output::Work(work) => {
@@ -215,10 +260,18 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     self.retry = Some((Instant::now() + STORAGE_RETRY, id));
                     None
                 }
-                Output::Discard(flow) => Some(
-                    self.relay
-                        .handle(Input::Discarded(flow), self.environment.now()),
-                ),
+                Output::Discard(flow) => {
+                    if let Some(port) = self.ports.get_mut(&flow.destination()) {
+                        port.discard(flow);
+                    }
+                    // All unsubmitted ownership is in the destination port, never
+                    // in a writer future. A missing port has already dropped its queue.
+                    tracing::debug!(event = "flow_queue_discarded", share = ?self.identity.share, ?flow);
+                    Some(
+                        self.relay
+                            .handle(Input::Discarded(flow), self.environment.now()),
+                    )
+                }
                 Output::Received(_) => bail!("payload reached lifecycle-only host"),
                 Output::Reload => bail!("kernel requires authoritative reload"),
             };
