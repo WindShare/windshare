@@ -792,6 +792,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 		relayControlFrameDecodingVectors(relayControls),
 		relayControlProofVectors(relayControls),
 		relaySessionCreditVectors(opaqueRelaySessionID),
+		relayDeliveryConsumedVectors(opaqueRelaySessionID),
 		map[string]any{
 			"name": "sender-signed-operation-error", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": laneID, "laneEpoch": uint32(0), "sequence": "0",
