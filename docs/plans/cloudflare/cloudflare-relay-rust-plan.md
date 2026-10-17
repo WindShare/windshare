@@ -20,10 +20,10 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 - **统一决策，不统一 I/O 机制。** Rust 引擎统一认证、所有权、会话、恢复、停止和截止时间，并用小型显式状态机约束持久化结果、资源清理与响应确认的处理顺序；原生与 Cloudflare 适配器分别实现最适合平台的转发、排队、背压和并发。不能为了复用代码把原生数据面降到最低共同能力。
 - **Cloudflare 载荷由适配器持有。** 已获许可的不透明数据帧可以在 Rust Worker 适配器中复制为有界 `Vec<u8>`；复制不构成协议语义，也不改变 E2EE 边界。普通数据帧仍不得进入 SQLite、结构化日志、无界应用队列或控制状态机；适配器解析固定头，通过共享内核检查许可与额度，并执行有界转发。零复制只作为后续优化方向。
 - **默认流程零新增操作。** Rust 重写本身不构成用户功能。个人中转首次部署和导入，后续按需同步更新；日常分享不增加操作，也不要求用户选择技术方案。
-- **主动退出即停止。** 发送端先停止本地服务，再使用 `StopAuthority` 有界清理各中转，不无限等待不可达候选。异常断开只保留有界恢复宽限，宽限结束后停止。STOP 在永久事实持久化、旧许可撤销、未提交队列丢弃和发布写入静止后确认；已提交数据仍可能到达，其占用独立结算。提交结果不确定时禁止恢复或重新发布。
+- **主动退出即停止。** 发送端先停止本地服务，再使用 `StopAuthority` 有界清理各中转，不无限等待不可达候选。异常断开只保留有界恢复宽限，宽限结束后停止。STOP 在永久事实持久化、旧许可撤销、未提交队列丢弃和发布写入静止后确认；已提交数据仍可能到达，其交付责任独立处理。所有权或 STOP 的持久化提交结果不确定时禁止恢复或重新发布。
 - **保留现有并行能力。** 保留当前多中转候选和多 Lane 能力；私人 Cloudflare relay 是可选候选。Cloudflare 可按自身容量限制并发，不降低原生服务器能力，也不增加每次分享的选择。
 - **持久化不进入载荷热路径。** SQLite 只保存有界生命周期状态、密封描述符和永久停止标记；不保存、排队或检查不透明内容帧，原生与 Cloudflare 数据帧转发都不执行数据库操作。
-- **以行为和基本负载决定切换。** 当前 Go 中转尚未作为已部署服务运行，不建立迁移、双栈或旧数据兼容义务。Rust 版本先通过真实端到端流程、协议向量、关键状态迁移、正常休眠、下载中部署/重启续传和基本慢连接测试；通过后在同一变更中替换并删除 Go 服务端。性能测量用于发现明显退化，不把未运行过的 Go 实现当作线上基准。
+- **以行为和基本负载决定切换。** 当前 Go 中转尚未作为已部署服务运行，不建立迁移、双栈或旧数据兼容义务。两种宿主分别验证真实端到端流程、协议向量、关键状态迁移、下载中部署/重启续传和基本慢连接行为；Cloudflare 另验证正常休眠与反复断连。原生通过后在同一变更中替换并删除 Go 服务端，Cloudflare 未就绪不阻塞原生交付。性能测量用于发现明显退化，不把未运行过的 Go 实现当作线上基准。
 - **Go 服务端是参考，不是规范。** 契约是线协议、共享向量和客户端可见语义，不是 Go 的结构、常量或流程。移植时遇到 Go 不合理或有更好方案之处，应大胆改进而不是逐行复刻，例如 challenge 改由连接按值持有、取消进程级账本。改动影响客户端可见行为时，在同一变更中同步更新 Go／浏览器客户端、共享向量与协议文档。
 - **恢复复用现有续传。** 正常休眠保留连接和会话：运行时重建只隔离旧回调，不构成连接换代或会话退役，存活会话连同未结算额度经内核校验后恢复；部署、运行时重启或故障断连复用重连续传，允许短暂停顿和未确认数据重传。配额对账和远端清理可 best-effort，不持久化载荷或追求完全无感恢复。
 
@@ -42,36 +42,23 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
-The [2026-10-17 host experiments](../../../spikes/relay-hosts/README.md) support
-keeping native synchronous submission: healthy receivers progressed while a real
-writer stalled. Follow-up Preview controls located the reset failure in the Rust
-asynchronous callback path: aborting after the Rust future returns lets the object
-recover. This does not establish buffer release. With an 8 KiB client receive
-buffer, the old connection still delivered all 8 MiB after the new object answered;
-reset also disconnected a healthy peer on the same share. `close()`, `CLOSED`, an
-Alarm or an empty socket list cannot supply `Input::Closed` evidence.
+The current kernel still retains unreachable generations until settlement or proven
+release; the responsibility model below is a pending refactor.
+The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
+submission. Cloudflare close/reset does not prove buffer release, and whole-object
+reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
+verifies normal hibernation; its per-event SQLite mirror preserves counters but cannot
+settle an unreachable generation and is not the production design.
 
-The kernel now retains delivery ledgers independently of communicating sockets.
-Recovery requires a complete responsibility checkpoint or explicit host evidence of
-full release; unknown responsibility refuses restoration. An independent manifest
-detects missing generation records, and detached generations retain capacity until
-settlement or proven release. Restart and empty socket lists cannot refund occupancy.
-
-STOP acknowledgement now follows durable revocation, unsubmitted-queue discard
-and publication quiescence, independently of delivery settlement. Stopped recovery
-retains submitted occupancy and original deadlines; duplicate STOP and late callbacks
-cannot change that responsibility. Protocol and Go/TypeScript contracts preserve
-the existing wire format and explicitly allow already-submitted bytes to arrive.
-
-结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
+结论：**保留共享 Rust 语义内核，先重构资源责任与故障隔离，再接完整传输流程。** 优先保证日常下载和常见断线续传，不为跨故障精确记账增加逐帧数据库写入，也不以重启整个分享清理单个慢连接。平台整体故障允许同分享短暂重连；若反复断连的资源表现仍不可控，暂缓 Cloudflare 交付，原生 Rust 独立推进。同步更新 Go／浏览器客户端、协议契约与构建入口。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 
 线协议将双向 `WS2B` 设为必选规则，Go／浏览器客户端与两种中转统一发送并遵守，不按平台协商开关。初始容量纳入现有握手，并从连接总预算预留新会话启动额度，避免首帧与窗口声明相互等待。采用流水发送和消费后的批量反馈，反馈阈值适配窗口，不逐帧等待确认；中转控制消息不受内容额度阻塞。Cloudflare 按目标端尚未预留的交付额度发放 `WS2W`，发放时预留对应容量，仅在目标客户端消费并反馈后补充。原生保留 socket 背压，独立设置窗口与并发，通过正常浏览、下载和多接收者请求测量排除明显退化。
 
-Cloudflare 的已授未用额度、事件内临时载荷和宿主未确认发送数据共用目标连接代次的有界预算；`send()` 返回或会话退役不释放已提交宿主的未确认占用。
+资源模型区分活跃连接准入、应用持有队列和已提交宿主的数据。活跃连接内，已授未用额度、事件内临时载荷和未确认发送数据仍共用该代次的有界预算；`send()` 返回或单个会话退役不补充额度。应用队列与活跃预算必须有硬上限；Cloudflare 隐藏缓冲不承诺跨任意故障的精确占用或释放时限。
 
-退役先撤销许可并丢弃未提交队列，再按序通知目标端。目标端消费或丢弃此前帧后反馈最终帧数、字节数；按连接代次、会话和方向幂等结算，仅回收连接预算，不复活会话。取消立即生效，结算在后台完成；结算无法推进时请求终止异常连接；只有独立的资源释放证据才能回收剩余占用。Cloudflare 当前不提供已验证的这种证据，因而不能据此承诺有界回收。
+取消立即撤权，结算在后台完成。可通信连接先丢弃未提交队列，再按序通知目标端，以其消费或丢弃后的最终帧数、字节数幂等结算。失联连接在撤权、停止新增提交和丢弃应用队列后，按明确的退役规则结束旧代次的应用记账责任，不永久挤占活跃连接名额。共享内核定义退役条件和有界元数据保留，平台适配器提供关闭与回收事实；逻辑退役不表示宿主缓冲已物理释放，不得伪造 `Input::Closed`。旧许可和迟到反馈不得影响新连接或复活会话。
 
 原生适配器按分享串行化控制状态，数据转发由独立连接任务并行执行，可使用 Tokio、有界公平队列和原生 WebSocket 背压。原生须明确提交点：许可复核与提交在同一同步临界区完成并与撤销线性化，撤销后不再新增提交；socket 等待留在控制锁外，慢接收者只阻塞自身会话。Cloudflare Rust 适配器使用休眠和平台发送语义；普通数据帧可以经过 Rust/Wasm 内存，复制必须有界并纳入 CPU、内存和吞吐测量。平台差异只能改变内部容量和故障触发点，不能改变帧顺序、会话隔离、所有权或客户端可见的安全语义。
 
@@ -81,7 +68,7 @@ Cloudflare 的已授未用额度、事件内临时载荷和宿主未确认发送
 
 浏览器保留 TypeScript 协议代码，Go 客户端保留 Go 编解码器，以共享向量保持三端协议一致。Rust 必须通过共享 `ed25519-acceptance.json`，按协议补齐严格校验，不能仅依赖库的 `verify_strict`；注册、恢复和 STOP 证明复用并补齐跨语言向量，逐字节核对签名 preimage。发送端对象向量继续约束 Go／TypeScript 接收端，不要求 Rust 中转复刻对象解析。除非实测收益明确，否则不迁移浏览器协议代码到 Wasm。
 
-Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。唤醒后恢复状态并检查绝对截止时间，不重置额度或延长宽限；状态不一致时的目标是仅影响对应会话；当前完整账本恢复遇到缺失记录会拒绝整个分享，须先解决这个隔离缺口，不能把重连视为已落地的恢复策略。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
+Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。正常休眠按原额度与绝对截止时间恢复，不重置额度或延长宽限。交付记录缺失或不一致时，退役关联连接/会话并重连，保留其余健康连接的预算与服务；分享所有权或永久停止事实不确定时仍拒绝服务。当前整份账本恢复方式须据此重构。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
 
 Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方以同连接的合法入站消息刷新存活期限，空闲方向仍发送保活，不因单次回复排队超时断线。连接存活与业务进度分别判断，心跳和无关流量不得延长会话进度或资源结算期限。保留有界队列和原生控制优先调度，不靠缩小正常窗口迁就心跳。
 
@@ -117,24 +104,17 @@ remain unchanged; preconfigured routing parameters are rejected. The Worker must
 ShareRelay DO from this hint, and the DO must reject a handshake whose share identity differs.
 The hint grants no authority. Cloudflare host routing and authentication integration remain pending.
 
-Cloudflare 保留每连接、每分享的资源硬上限，并按共享 isolate 的内存峰值（含 Wasm/JS、复制和宿主缓冲）留余量。窗口和并发由多会话慢网测量确定，不照搬原生上限；必要时增加适配器内的 isolate 级在途计数，不引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建准入额度不阻止已有分享恢复或 STOP；账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
+Cloudflare 对应用队列、活跃连接与会话设置硬上限，并按共享 isolate 的实测内存峰值留余量。慢网与反复断连实验评估宿主缓冲风险，异常重连单独限速，不靠普遍缩小正常窗口处理故障。窗口和并发由多会话慢网测量确定，不照搬原生上限；必要时增加适配器内的 isolate 级在途计数，不引入逐帧跨 DO 协调。首版不设 `DeploymentControl`：边缘 Worker 无状态校验发送端注册凭据，ShareRelay 限制每分享资源，用量统计使用 Cloudflare 自带分析。此方案不提供部署级统一新建限额或总容量硬保证，统计不参与实时准入。新建分享额度与恢复、STOP 分离；恢复仍遵守连接限额和异常重连限速，STOP 不受准入额度阻塞。账户配额耗尽不在保证内。确需部署级硬上限时，再引入具备幂等申请、释放与过期规则的容量预留。
 
 ### Attachment budget
 
-Each generation record contains its complete ledger, handshake and receiver-owned
-session snapshots. A replicated header retains runtime identity and the wire-session
-high-water mark. New admissions refresh all retained records; ordinary delivery and
-feedback update only affected generations. A separately retained `CheckpointManifest`
-names every required record, including disconnected generations. Missing records or
-unknown responsibility cannot authorize recovery. The host must preserve the latest
-coherent manifest and records independently of socket attachments.
-The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
-now supplies two concrete controls: SQLite stores the manifest and detached records,
-while live records use either binary attachments or an additional per-event SQLite
-mirror. Attachment-only recovery fails after record loss; the mirror recovers exact
-counts but violates the no-database-on-forwarding rule. Neither supplies an
-old-generation settlement channel after disconnect. Production persistence and
-resource ownership therefore remain unresolved; this is more than adapter wiring.
+Attachments preserve bounded live-connection ledgers, handshakes and sessions through
+normal hibernation. SQLite retains share authority, permanent STOP and generation
+fencing state, without forwarding-path delivery-counter writes. Lost delivery records
+retire affected generations under the rules above; unaffected survivors keep their
+budgets. Generation and session identities must not be reused after restart.
+The current `CheckpointManifest` and all-or-nothing restore require refactoring before
+production integration; the experiment's SQLite mirror remains a control only.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including
@@ -149,12 +129,10 @@ The Worker must store the binary record as an ArrayBuffer/typed byte array and v
 the actual wrapper's serialized size; a JavaScript number array or base64 expansion
 cannot assume the same budget. Increase the reserved overhead or reduce the Cloudflare
 profile if needed. `flush_checkpoints` replaces complete changed attachments synchronously
-after outputs finish. On partial failure, retry the retained batch while active;
-closing sockets does not repair stale delivery accounting. If no current coherent
-image remains recoverable, report unknown responsibility rather than accepting
-an older image. The current aggregate refuses the entire restore in that case,
-including healthy siblings; production isolation needs an explicit redesign.
-Deployment validation must exercise this path through the real Worker binding.
+after outputs finish. On partial failure, retain the batch for retry while active.
+If current delivery state cannot be recovered, retire affected generations rather
+than restoring stale credits or claiming physical release. Exercise this isolation
+and repeated reconnects through the real Worker binding before production integration.
 
 ## 部署体验
 
