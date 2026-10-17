@@ -87,7 +87,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           WINDSHARE_RELEASE_ASSETS: ${{ runner.temp }}/release-assets
         run: bash scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: ${{ runner.temp }}/release-assets/*
@@ -146,7 +146,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           WINDSHARE_RELEASE_ASSETS: ${{ runner.temp }}/release-assets
         run: ./scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: ${{ runner.temp }}/release-assets/*
