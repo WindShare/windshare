@@ -17,7 +17,7 @@ injected; payloads, sockets, entropy, storage and scheduling remain outside it.
 | `handle(input, now)` | Expire due state, apply the input and return ordered commands, any refusal and the next absolute deadline. |
 | `submit(receipt, now, handoff)` | Recheck current authority and FIFO order, charge submission and synchronously hand off the payload under one exclusive borrow. |
 | `connection_usage()` | Report admitted slots, retired generations and outstanding residual frames/bytes separately. |
-| `checkpoint_connection(connection)` | Capture one generation's ledger and admissions, even after its socket disappears. |
+| `checkpoint_connection(connection)` | Capture one generation's ledger, admissions and live connection state, retaining delivery responsibility after its socket disappears. |
 | `checkpoint_manifest()` | Capture generation reservations, retirement state and the session-ID fence independently of delivery records. |
 | `enable_checkpoints(budget, now)` / `flush_checkpoints(now, write)` | Write changed generation records, then the manifest when its membership or header changes. |
 | `Checkpoint::from_connections(manifest, records, limits)` | Validate records individually; missing, duplicate or invalid records retain reservations and lose routing authority. |
@@ -88,9 +88,17 @@ final settlement or confirmed physical closure; failed sends do not refund.
 Retirement revokes unused credit and requests queue discard before ordered
 settlement. Cleanup deadlines never renew. Session feedback checks only its two
 routes; settling a receiver does not close its shared sender or siblings.
-Lifecycle, handshake, session and settlement deadlines share one indexed schedule.
+Lifecycle, handshake, connection liveness, session and settlement deadlines share one indexed schedule.
 `WS2N` freezes submitted totals; `WS2S` confirms consumption or discard, separately
 from `WS2B`. Ordinary feedback cannot acknowledge retirement or bypass queue discard.
+
+Clients send increasing `WS2H` nonces; the relay only emits `Control::ProbeAck` (`WS2A`).
+Hosts prioritize these replies outside content-credit waits and may coalesce to the newest nonce.
+Accepted inbound controls and content refresh only their source connection's 45-second silence
+deadline. Ignored stale routes, invalid frames, outbound sends and host receipts do not refresh it.
+Silence revokes routing and requests closure without claiming physical release. It never renews
+handshake, admission, settlement or recovery grace. Hosts schedule `Turn::deadline`; overdue
+liveness is checked before new inputs and synchronous submission.
 
 Recovery separates ownership/STOP authority, communicating sockets and delivery responsibility.
 `Restore::authority` explicitly distinguishes `Known` facts from `Unknown`, which refuses service.
@@ -114,7 +122,9 @@ wire-ID high-water marks survive repeated recovery; old feedback cannot affect r
 Pending handshakes retain their original ownership; fresh incarnations fence old storage
 and entropy callbacks.
 
-Each connection record contains its ledger, handshake and receiver-side admissions.
+Each connection record contains its ledger, handshake and receiver-side admissions. Established
+connections also retain their last probe nonce, last accepted inbound time and absolute silence
+deadline; restoration checks the original expiry before accepting traffic.
 The independent `CheckpointManifest` retains generation identity, retirement state, a risk
 reservation and the session-ID high-water mark. Admission no longer rewrites unrelated
 receiver attachments. Missing live records reserve the entire configured connection budget;
@@ -127,7 +137,9 @@ Hibernating hosts enable tracking after restore and flush after outputs. Flush p
 changed records and writes a changed manifest last; partial failures retain the batch for
 retry. Hosts must omit unavailable records instead of replaying stale credits, and preserve
 authoritative lifecycle/reservation facts. Manifest changes cover admission, retirement and
-retired-risk release, never ordinary forwarding counters. Generation allocation must be
+retired-risk release, never ordinary forwarding counters or liveness refreshes. Inbound data can
+change both source liveness and destination accounting; unrelated attachments remain untouched.
+Generation allocation must be
 persisted before accepting a new socket; removed IDs cannot be reused. `CheckpointBudget`
 still bounds connection records, including retained flows. Native capacities are unchanged.
 See the

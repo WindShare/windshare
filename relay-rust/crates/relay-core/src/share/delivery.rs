@@ -1,11 +1,11 @@
 use super::RuntimeStatus;
 use super::{
-    ConnectionRef, Control, Error, Input, Observer, Output, RelayDecision, Role, ShareRelay,
-    Submission, Turn,
+    ConnectionRef, Control, Error, Observer, Output, RelayDecision, Role, ShareRelay, Submission,
+    Turn,
 };
 use crate::{
     clock::UnixMillis,
-    flow::{Counts, DeliveryConsumed, FlowKey, ReceivedFrame, SettlementAck},
+    flow::{Counts, Feedback, FlowKey, ReceivedFrame},
     sessions::{Action, Event as SessionEvent, OpaqueHeader},
 };
 
@@ -17,40 +17,6 @@ impl<O: Observer> ShareRelay<O> {
         self.ledgers
             .get(&connection)
             .map(crate::flow::ConnectionLedger::usage)
-    }
-
-    pub(super) fn delivery_control(
-        &mut self,
-        connection: ConnectionRef,
-        frame: &[u8],
-        now: UnixMillis,
-        turn: &mut Turn,
-    ) -> Result<(), Error> {
-        // The socket supplies authority; payload fields can never choose a different
-        // connection generation or turn a retirement receipt into ordinary credit.
-        let input = match frame.first_chunk::<4>() {
-            Some(&DeliveryConsumed::MAGIC) => {
-                let feedback = DeliveryConsumed::decode(frame).map_err(Error::Frame)?;
-                Input::Consumed {
-                    connection,
-                    session: feedback.session(),
-                    total: feedback.total(),
-                }
-            }
-            Some(&SettlementAck::MAGIC) => {
-                let acknowledgement = SettlementAck::decode(frame).map_err(Error::Frame)?;
-                Input::Settled {
-                    connection,
-                    session: acknowledgement.session(),
-                    total: acknowledgement.total(),
-                }
-            }
-            _ => {
-                self.disconnect(connection, now, turn);
-                return Err(Error::Unavailable);
-            }
-        };
-        self.apply(input, now, turn)
     }
 
     pub(super) fn receive(
@@ -87,6 +53,7 @@ impl<O: Observer> ShareRelay<O> {
             .map_err(Error::Flow);
         self.flush_ledger(destination, now, turn);
         turn.outputs.push(Output::Received(result?));
+        self.accepted_inbound(source, now);
         Ok(())
     }
 
@@ -240,7 +207,9 @@ impl<O: Observer> ShareRelay<O> {
             ledger.consume(flow, connection, total, now)
         };
         self.flush_ledger(flow.destination(), now, turn);
-        result.map_err(Error::Flow)?;
+        if result.map_err(Error::Flow)? != Feedback::Stale {
+            self.accepted_inbound(connection, now);
+        }
         if self.detached.get(&connection) == Some(&super::Detached::Retired) {
             // Retired receipts change a durable risk reservation, not the live
             // forwarding ledger. Persist that release before capacity is reused.

@@ -124,6 +124,7 @@ impl Runtime {
                     } => {
                         if let Some(ws) = persistence::socket(state, connection) {
                             match control {
+                                Control::ProbeAck(ack) => ws.send_with_bytes(ack.encode())?,
                                 Control::Settlement(notice) => ws.send_with_bytes(notice.encode())?,
                                 Control::Descriptor { session, .. } => ws.send_with_str(json!({
                                     "event":"joined", "session":u64::from_be_bytes(*session.wire_id().as_bytes()),

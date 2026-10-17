@@ -5,6 +5,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 pub(super) enum Key {
     Lifecycle,
     Handshake(ConnectionRef),
+    Liveness(ConnectionRef),
     Session(RelaySessionId),
     Ledger(ConnectionRef),
     Retirement(ConnectionRef),

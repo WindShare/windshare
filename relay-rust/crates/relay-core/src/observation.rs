@@ -24,6 +24,18 @@ pub enum RelayDecision {
     Closing,
     Disconnected,
     Closed,
+    ProbeAccepted {
+        nonce: u64,
+    },
+    ProbeRejected {
+        nonce: u64,
+        last_nonce: u64,
+    },
+    ConnectionSilent {
+        last_probe_nonce: u64,
+        last_inbound: UnixMillis,
+        deadline: UnixMillis,
+    },
     ResponsibilityReleased,
     RecoveryIsolated {
         reserved: flow::Counts,

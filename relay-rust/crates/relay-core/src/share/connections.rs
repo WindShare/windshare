@@ -11,6 +11,7 @@ use crate::{
     clock::UnixMillis,
     flow::ConnectionLedger,
     handshake::{AdmissionRequest, Outcome, Step},
+    heartbeat::Liveness,
     lifecycle::{Cancellation, Event},
     observation::Journal,
     registration::RegistrationMode,
@@ -77,10 +78,10 @@ impl<O: Observer> ShareRelay<O> {
             .connections
             .get_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
-        if matches!(entry.role, Role::Established | Role::Closing) {
-            return self.delivery_control(connection, frame, now, turn);
+        if matches!(entry.role, Role::Established(_) | Role::Closing) {
+            return self.connection_control(connection, frame, now, turn);
         }
-        let role = mem::replace(&mut entry.role, Role::Established);
+        let role = mem::replace(&mut entry.role, Role::Closing);
         let Role::Handshake {
             mut handshake,
             mut transcript,
@@ -116,7 +117,7 @@ impl<O: Observer> ShareRelay<O> {
             .connections
             .get_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
-        let role = mem::replace(&mut entry.role, Role::Established);
+        let role = mem::replace(&mut entry.role, Role::Closing);
         let Role::Admitting {
             mut handshake,
             admission,
@@ -148,11 +149,13 @@ impl<O: Observer> ShareRelay<O> {
         let Some(entry) = self.connections.get_mut(&connection) else {
             return;
         };
+        let role = mem::replace(&mut entry.role, Role::Closing);
         let Role::Handshake {
             handshake,
             mut transcript,
-        } = mem::replace(&mut entry.role, Role::Established)
+        } = role
         else {
+            entry.role = role;
             return;
         };
         if matches!(admission, Admission::Resume(_)) {
@@ -189,7 +192,10 @@ impl<O: Observer> ShareRelay<O> {
             }
             Step::Complete(outcome) => {
                 if let Some(entry) = self.connections.get_mut(&connection) {
-                    entry.role = Role::Established;
+                    let liveness = Liveness::established(now);
+                    self.deadlines
+                        .set(Key::Liveness(connection), Some(liveness.deadline()));
+                    entry.role = Role::Established(liveness);
                     self.checkpointing.changed(connection);
                 }
                 if matches!(outcome, Outcome::Join(_) | Outcome::Stop(_)) {
@@ -313,6 +319,7 @@ impl<O: Observer> ShareRelay<O> {
             entry.role = Role::Closing;
             self.checkpointing.changed(connection);
             self.deadlines.set(Key::Handshake(connection), None);
+            self.deadlines.set(Key::Liveness(connection), None);
             turn.outputs.push(Output::Close(connection));
         }
     }
@@ -368,6 +375,7 @@ impl<O: Observer> ShareRelay<O> {
         self.disconnect(connection, now, turn);
         let was_connected = self.connections.remove(&connection).is_some();
         self.deadlines.set(Key::Handshake(connection), None);
+        self.deadlines.set(Key::Liveness(connection), None);
         if self.ledgers.contains_key(&connection) {
             self.detached
                 .entry(connection)

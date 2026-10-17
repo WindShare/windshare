@@ -385,7 +385,15 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
         ONE_FRAME
     );
     assert_eq!(relay.connection_usage().retired_generations, 1);
-    assert!(relay.deadline().is_none());
+    assert_eq!(
+        relay.deadline(),
+        Some(
+            fixture
+                .at
+                .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
+        )
+    );
+    assert!(relay.ledgers[&lost.receiver()].deadline().is_none());
 }
 
 #[test]

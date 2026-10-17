@@ -13,6 +13,7 @@ use crate::{
     sessions::{Retirement, RetirementReason},
 };
 use alloc::{
+    boxed::Box,
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
@@ -107,7 +108,7 @@ impl<O: Observer> ShareRelay<O> {
                 restored.checkpoint().is_some_and(|checkpoint| {
                     checkpoint.connections.iter().any(|entry| {
                         entry.connection == *connection
-                            && matches!(entry.role, ConnectionRole::Established)
+                            && matches!(entry.role, ConnectionRole::Established(_))
                     })
                 })
             })
@@ -195,7 +196,7 @@ impl<O: Observer> ShareRelay<O> {
                 Journal::default(),
             )
             .map_err(|_| Error::InvalidCheckpoint)?;
-            if matches!(snapshot.role, ConnectionRole::Established)
+            if matches!(snapshot.role, ConnectionRole::Established(_))
                 && ledger.receive_capacity().is_none()
             {
                 return Err(Error::InvalidCheckpoint);
@@ -237,17 +238,7 @@ impl<O: Observer> ShareRelay<O> {
                 self.detached.insert(connection, state);
             }
             if communicating {
-                self.connections.insert(
-                    connection,
-                    Connection {
-                        role: if matches!(snapshot.role, ConnectionRole::Closing) {
-                            Role::Closing
-                        } else {
-                            Role::Established
-                        },
-                        reservation: None,
-                    },
-                );
+                self.restore_socket(connection, &snapshot.role);
             }
         }
         for reservation in &checkpoint.manifest.reservations {
@@ -273,6 +264,33 @@ impl<O: Observer> ShareRelay<O> {
             );
         }
         self.validate_retirements()
+    }
+
+    fn restore_socket(&mut self, connection: ConnectionRef, role: &ConnectionRole) {
+        let role = match role {
+            ConnectionRole::Established(liveness) => {
+                self.deadlines
+                    .set(Key::Liveness(connection), Some(liveness.deadline()));
+                Role::Established(*liveness)
+            }
+            ConnectionRole::Handshake(transcript) => Role::Handshake {
+                handshake: Box::new(crate::handshake::ControlHandshake::open(
+                    self.identity.relay,
+                    connection,
+                    transcript.opened,
+                )),
+                transcript: transcript.clone(),
+            },
+            ConnectionRole::Closing => Role::Closing,
+            ConnectionRole::Detached(_) => return,
+        };
+        self.connections.insert(
+            connection,
+            Connection {
+                role,
+                reservation: None,
+            },
+        );
     }
 
     fn restore_sessions(

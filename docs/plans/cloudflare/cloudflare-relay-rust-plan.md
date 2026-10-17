@@ -42,6 +42,9 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
+Connection liveness is implemented in the kernel: client `WS2H` probes receive
+`WS2A`, accepted inbound traffic refreshes the independent silence deadline,
+and connection checkpoints preserve the nonce, last inbound time and original expiry.
 The kernel now separates admitted connections, retired-generation metadata and
 submitted residual risk. Host-injected retirement waits for revocation and both
 directions' queue discard; fixed grace and residual charges survive recovery.
@@ -82,7 +85,7 @@ but establishes neither immediate physical release nor a finite retention deadli
 
 Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。正常休眠按原额度与绝对截止时间恢复，不重置额度或延长宽限。交付记录缺失或不一致时，沿连接与会话依赖局部退役并重连，保留其余健康连接的预算与服务；分享所有权或永久停止事实不确定时仍拒绝服务。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
 
-Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方以同连接的合法入站消息刷新存活期限，空闲方向仍发送保活，不因单次回复排队超时断线。连接存活与业务进度分别判断，心跳和无关流量不得延长会话进度或资源结算期限。保留有界队列和原生控制优先调度，不靠缩小正常窗口迁就心跳。
+Go 与浏览器对两种中转统一每 15 秒发送递增 nonce 的 `WS2H`，中转只回复 `WS2A`，不主动探测。双方以同连接的合法入站消息刷新 45 秒静默期限，不因单次回复排队超时断线。连接存活与业务进度分别判断，心跳和无关流量不得延长会话进度或资源结算期限。休眠保存 nonce、最近合法入站时间和原绝对截止时间；恢复先处理过期，再接收入站事件。保留有界队列和原生控制优先调度，不靠缩小正常窗口迁就心跳。
 
 引擎输出下一绝对截止时间；原生使用定时器，Cloudflare 合并 Alarm 并在事件入口复核。有截止时间时，仅在无待触发 Alarm 或最早截止时间早于已设 Alarm 时设置；延后则保留旧 Alarm，触发后按最新状态重排，避免每帧或每次心跳重写且不放宽超时。为握手、会话准入、连接存活和断线恢复安排必要检查；正常浏览、暂停操作和 P2P 传输不因中转无数据而超时。单条中转失联只触发该连接恢复，不终止其他健康路径。
 

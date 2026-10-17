@@ -605,6 +605,9 @@ mod handshakes;
 #[path = "recovery_tests.rs"]
 mod recovery;
 
+#[path = "liveness_tests.rs"]
+mod liveness;
+
 #[path = "partial_recovery_tests.rs"]
 mod partial_recovery;
 
