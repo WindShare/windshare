@@ -71,10 +71,9 @@ impl<O: Observer> ShareRelay<O> {
             .map_err(Error::Forward)?;
         let destination = flow.destination();
         let result = self
-            .connections
+            .ledgers
             .get_mut(&destination)
             .ok_or(Error::UnknownConnection)?
-            .ledger
             .receive(flow, &route, header, now)
             .map_err(Error::Flow);
         self.flush_ledger(destination, now, turn);
@@ -136,13 +135,14 @@ impl<O: Observer> ShareRelay<O> {
             .map_err(Error::Forward)?;
         let connection = self
             .connections
-            .get_mut(&flow.destination())
+            .get(&flow.destination())
             .ok_or(Error::UnknownConnection)?;
         if matches!(connection.role, Role::Closing) {
             return Err(Error::Unavailable);
         }
-        connection
-            .ledger
+        self.ledgers
+            .get_mut(&flow.destination())
+            .ok_or(Error::UnknownConnection)?
             .submit(&route, receipt, now)
             .map_err(Error::Flow)?;
         Ok(handoff(flow))
@@ -167,10 +167,9 @@ impl<O: Observer> ShareRelay<O> {
             .check_forward(&self.lifecycle, flow.permit(), now)
             .map_err(Error::Forward)?;
         let result = self
-            .connections
+            .ledgers
             .get_mut(&flow.destination())
             .ok_or(Error::UnknownConnection)?
-            .ledger
             .grant(flow, &route, credit, now)
             .map_err(Error::Flow);
         self.flush_ledger(flow.destination(), now, turn);
@@ -191,12 +190,14 @@ impl<O: Observer> ShareRelay<O> {
         {
             return Err(Error::Unavailable);
         }
-        let Some(connection) = self.connections.get_mut(&flow.destination()) else {
+        let Some(ledger) = self.ledgers.get_mut(&flow.destination()) else {
             return Ok(());
         };
-        let result = connection.ledger.discarded(flow, now).map_err(Error::Flow);
+        let result = ledger.discarded(flow, now).map_err(Error::Flow);
         self.flush_ledger(flow.destination(), now, turn);
-        if let Some(notice) = result? {
+        if let Some(notice) = result?
+            && self.connections.contains_key(&flow.destination())
+        {
             Self::send(
                 turn,
                 flow.destination(),
@@ -204,6 +205,7 @@ impl<O: Observer> ShareRelay<O> {
             );
         }
         self.collect_session(flow.session(), now, turn);
+        self.collect_ledger(flow.destination(), now);
         Ok(())
     }
 
@@ -219,17 +221,18 @@ impl<O: Observer> ShareRelay<O> {
         let Some(&flow) = self.routes.get(&(connection, session)) else {
             return Ok(());
         };
-        let Some(entry) = self.connections.get_mut(&flow.destination()) else {
+        let Some(ledger) = self.ledgers.get_mut(&flow.destination()) else {
             return Ok(());
         };
         let result = if final_receipt {
-            entry.ledger.settle(flow, connection, total, now)
+            ledger.settle(flow, connection, total, now)
         } else {
-            entry.ledger.consume(flow, connection, total, now)
+            ledger.consume(flow, connection, total, now)
         };
         self.flush_ledger(flow.destination(), now, turn);
         result.map_err(Error::Flow)?;
         self.collect_session(flow.session(), now, turn);
+        self.collect_ledger(flow.destination(), now);
         Ok(())
     }
 }

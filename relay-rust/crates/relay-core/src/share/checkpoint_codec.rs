@@ -9,8 +9,8 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 3;
-const CONNECTION_FORMAT: u8 = 1;
+const FORMAT: u8 = 4;
+const CONNECTION_FORMAT: u8 = 2;
 const LENGTH_BYTES: usize = size_of::<u64>();
 const IDENTITY_BYTES: usize = 32 + 12 + 16;
 const CONNECTION_HEADER_BYTES: usize =
@@ -26,6 +26,7 @@ impl ConnectionCheckpoint {
         match &self.role {
             ConnectionRole::Established => out.push(0),
             ConnectionRole::Closing => out.push(1),
+            ConnectionRole::Detached => out.push(3),
             ConnectionRole::Handshake(handshake) => {
                 out.push(2);
                 block(&mut out, &handshake.encode());
@@ -69,6 +70,7 @@ impl ConnectionCheckpoint {
         let role = match field::<1>(&mut body)? {
             [0] => ConnectionRole::Established,
             [1] => ConnectionRole::Closing,
+            [3] => ConnectionRole::Detached,
             [2] => ConnectionRole::Handshake(HandshakeCheckpoint::decode(read_block(
                 &mut body,
                 HandshakeCheckpoint::MAX_ENCODED_BYTES,
@@ -146,13 +148,13 @@ impl Checkpoint {
     }
 }
 
-fn put_header(out: &mut Vec<u8>, identity: Identity, last_session: u64) {
+pub(super) fn put_header(out: &mut Vec<u8>, identity: Identity, last_session: u64) {
     out.extend_from_slice(identity.relay.as_bytes());
     out.extend_from_slice(identity.share.as_bytes());
     out.extend_from_slice(identity.incarnation.as_bytes());
     out.extend_from_slice(&last_session.to_be_bytes());
 }
-fn read_header(body: &mut Reader<'_>) -> Result<(Identity, u64), Error> {
+pub(super) fn read_header(body: &mut Reader<'_>) -> Result<(Identity, u64), Error> {
     let relay = RelayIdentity::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
     let share = ShareId::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
     let incarnation = Incarnation::new(field(body)?).ok_or(Error::InvalidCheckpoint)?;
@@ -169,10 +171,10 @@ fn block(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
     out.extend_from_slice(bytes);
 }
-fn field<const N: usize>(body: &mut Reader<'_>) -> Result<[u8; N], Error> {
+pub(super) fn field<const N: usize>(body: &mut Reader<'_>) -> Result<[u8; N], Error> {
     body.array().map_err(|_| Error::InvalidCheckpoint)
 }
-fn bounded_count(body: &mut Reader<'_>, maximum: usize) -> Result<usize, Error> {
+pub(super) fn bounded_count(body: &mut Reader<'_>, maximum: usize) -> Result<usize, Error> {
     let value =
         usize::try_from(u64::from_be_bytes(field(body)?)).map_err(|_| Error::InvalidCheckpoint)?;
     if value > maximum || value > body.remainder().len() {

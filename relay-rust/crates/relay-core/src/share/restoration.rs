@@ -20,26 +20,49 @@ use alloc::{
 #[derive(Clone, Copy, Debug)]
 pub struct Restore<'a> {
     pub record: Option<Record>,
+    /// Only these exact connection generations can still communicate.
     pub surviving: &'a [ConnectionRef],
-    pub checkpoint: Option<&'a Checkpoint>,
+    pub responsibility: Responsibility<'a>,
 }
-impl Restore<'static> {
+
+/// Host evidence about all previous generations, independent of socket discovery.
+#[derive(Clone, Copy, Debug)]
+pub enum Responsibility<'a> {
+    /// The latest complete image, including generations with no surviving socket.
+    Checkpoint(&'a Checkpoint),
+    /// The host proves that all prior application queues and transport buffers
+    /// are released (or that this share has never had any). Socket disappearance,
+    /// an empty attachment list and a runtime restart are not such evidence.
+    Released,
+    /// Recovery cannot establish the old responsibility. Refuse new admission.
+    Unknown,
+}
+
+impl<'a> Restore<'a> {
     #[must_use]
-    pub const fn restarted(record: Option<Record>) -> Self {
+    pub const fn restarted(record: Option<Record>, responsibility: Responsibility<'a>) -> Self {
         Self {
             record,
             surviving: &[],
-            checkpoint: None,
+            responsibility,
+        }
+    }
+
+    pub(super) const fn checkpoint(&self) -> Option<&'a Checkpoint> {
+        match self.responsibility {
+            Responsibility::Checkpoint(checkpoint) => Some(checkpoint),
+            Responsibility::Released | Responsibility::Unknown => None,
         }
     }
 }
 
 impl<O: Observer> ShareRelay<O> {
-    /// Restores lifecycle, then sessions, then delivery responsibility in that order.
+    /// Validates complete responsibility independently of surviving socket authority.
     ///
     /// # Errors
-    /// Invalid checkpoints never authorize surviving sockets; close those sockets
-    /// if restoration fails. A fresh incarnation fences all old host completions.
+    /// Missing responsibility or invalid checkpoints never authorize sockets or
+    /// fresh budgets. The host must retain recovery evidence even if it closes
+    /// surviving sockets. A fresh incarnation fences old storage completions.
     pub fn restore(
         identity: Identity,
         limits: Limits,
@@ -52,7 +75,7 @@ impl<O: Observer> ShareRelay<O> {
         }
         validate_restore(identity, limits, restored)?;
         let snapshots: Vec<_> = restored
-            .checkpoint
+            .checkpoint()
             .into_iter()
             .flat_map(Checkpoint::sessions)
             .copied()
@@ -62,7 +85,7 @@ impl<O: Observer> ShareRelay<O> {
             .iter()
             .copied()
             .filter(|connection| {
-                restored.checkpoint.is_some_and(|checkpoint| {
+                restored.checkpoint().is_some_and(|checkpoint| {
                     checkpoint.connections.iter().any(|entry| {
                         entry.connection == *connection
                             && matches!(entry.role, ConnectionRole::Established)
@@ -90,13 +113,14 @@ impl<O: Observer> ShareRelay<O> {
             limits,
             lifecycle,
             connections: BTreeMap::new(),
+            ledgers: BTreeMap::new(),
             sessions: BTreeMap::new(),
             routes: BTreeMap::new(),
             deadlines: Deadlines::default(),
             stored: restored.record,
             runtime: RuntimeStatus::Running,
             last_session: restored
-                .checkpoint
+                .checkpoint()
                 .map_or(0, |checkpoint| checkpoint.last_session),
             last_work: 0,
             tasks: VecDeque::new(),
@@ -105,7 +129,7 @@ impl<O: Observer> ShareRelay<O> {
             observer,
         };
         relay.flush_lifecycle();
-        relay.restore_connections(restored)?;
+        relay.restore_connections(restored, now)?;
         let mut turn = Turn::default();
         relay.restore_sessions(decisions, now, &mut turn);
         relay.action(action, None, now, &mut turn);
@@ -114,21 +138,27 @@ impl<O: Observer> ShareRelay<O> {
         relay.progress_stop(now, &mut turn);
         relay.start_work(now, &mut turn);
         turn.deadline = relay.deadline();
-        relay.trace(None, RelayDecision::Restored, now);
+        relay.trace(
+            None,
+            RelayDecision::Restored {
+                connections: relay.connections.len(),
+                retained_generations: relay.ledgers.len(),
+            },
+            now,
+        );
         Ok((relay, turn))
     }
 
-    fn restore_connections(&mut self, restored: &Restore<'_>) -> Result<(), Error> {
-        for &connection in restored.surviving {
-            let snapshot = restored
-                .checkpoint
-                .and_then(|checkpoint| {
-                    checkpoint
-                        .connections
-                        .iter()
-                        .find(|entry| entry.connection == connection)
-                })
-                .ok_or(Error::InvalidCheckpoint)?;
+    fn restore_connections(
+        &mut self,
+        restored: &Restore<'_>,
+        now: UnixMillis,
+    ) -> Result<(), Error> {
+        let Some(checkpoint) = restored.checkpoint() else {
+            return Ok(());
+        };
+        for snapshot in &checkpoint.connections {
+            let connection = snapshot.connection;
             let ledger = ConnectionLedger::restore(
                 self.identity.relay,
                 connection,
@@ -154,18 +184,29 @@ impl<O: Observer> ShareRelay<O> {
             }
             self.deadlines
                 .set(Key::Ledger(connection), ledger.deadline());
-            self.connections.insert(
-                connection,
-                Connection {
-                    role: if matches!(snapshot.role, ConnectionRole::Closing) {
-                        Role::Closing
-                    } else {
-                        Role::Established
-                    },
-                    reservation: None,
-                    ledger,
+            let communicating = restored.surviving.contains(&connection);
+            self.trace(
+                Some(connection),
+                RelayDecision::ResponsibilityRestored {
+                    communicating,
+                    usage: ledger.usage(),
                 },
+                now,
             );
+            self.ledgers.insert(connection, ledger);
+            if communicating {
+                self.connections.insert(
+                    connection,
+                    Connection {
+                        role: if matches!(snapshot.role, ConnectionRole::Closing) {
+                            Role::Closing
+                        } else {
+                            Role::Established
+                        },
+                        reservation: None,
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -204,12 +245,9 @@ impl<O: Observer> ShareRelay<O> {
                 }
             }
         }
-        let destinations: Vec<_> = self.connections.keys().copied().collect();
+        let destinations: Vec<_> = self.ledgers.keys().copied().collect();
         for destination in destinations {
-            let flows: Vec<_> = self.connections[&destination]
-                .ledger
-                .checkpoint_flows()
-                .collect();
+            let flows: Vec<_> = self.ledgers[&destination].checkpoint_flows().collect();
             for (flow, open) in flows {
                 let valid = self
                     .sessions
@@ -221,17 +259,18 @@ impl<O: Observer> ShareRelay<O> {
                             .is_ok()
                     });
                 if !valid || !open {
-                    if let Some(connection) = self.connections.get_mut(&destination) {
+                    if let Some(ledger) = self.ledgers.get_mut(&destination) {
                         let retirement = Retirement {
                             session: flow.session(),
                             reason: RetirementReason::OwnerUnavailable,
                         };
-                        let _ = connection.ledger.retire(retirement, now);
+                        let _ = ledger.retire(retirement, now);
                     }
                     turn.outputs.push(Output::Discard(flow));
                 }
             }
             self.flush_ledger(destination, now, turn);
+            self.collect_ledger(destination, now);
             if self
                 .connections
                 .get(&destination)
@@ -248,9 +287,8 @@ impl<O: Observer> ShareRelay<O> {
 
     fn session_flows(&self, key: crate::sessions::SessionKey) -> Option<[crate::flow::FlowKey; 2]> {
         let find = |destination| {
-            self.connections
+            self.ledgers
                 .get(&destination)?
-                .ledger
                 .checkpoint_flows()
                 .find_map(|(flow, open)| (flow.session() == key && open).then_some(flow))
         };
@@ -271,7 +309,7 @@ fn validate_restore(
             return Err(Error::InvalidCheckpoint);
         }
     }
-    if let Some(checkpoint) = restored.checkpoint {
+    if let Some(checkpoint) = restored.checkpoint() {
         if checkpoint.identity.relay != identity.relay
             || checkpoint.identity.share != identity.share
             || checkpoint.identity.incarnation == identity.incarnation
@@ -279,6 +317,15 @@ fn validate_restore(
             return Err(Error::InvalidCheckpoint);
         }
         checkpoint.validate(limits)?;
+        for connection in restored.surviving {
+            if !checkpoint.connections.iter().any(|entry| {
+                entry.connection == *connection && !matches!(entry.role, ConnectionRole::Detached)
+            }) {
+                return Err(Error::InvalidCheckpoint);
+            }
+        }
+    } else if matches!(restored.responsibility, Responsibility::Unknown) {
+        return Err(Error::MissingResponsibility);
     } else if !restored.surviving.is_empty() {
         return Err(Error::InvalidCheckpoint);
     }

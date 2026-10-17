@@ -225,7 +225,7 @@ impl<O: Observer> ShareRelay<O> {
                 && retirement
                     .connections
                     .iter()
-                    .all(|connection| !self.connections.contains_key(connection))
+                    .all(|connection| !self.ledgers.contains_key(connection))
         });
         if ready {
             let retirement = self.stop_retirement.take().expect("ready cleanup");

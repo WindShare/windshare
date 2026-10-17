@@ -99,10 +99,7 @@ fn wire_ack_requires_retirement_discard_and_exact_frozen_totals() {
     );
     assert!(notices.iter().any(|notice| notice.total() == TWO_FRAMES));
     assert!(notices.iter().any(|notice| notice.total() == Counts::ZERO));
-    let before = relay.connections[&key.sender()]
-        .ledger
-        .snapshot(flow)
-        .unwrap();
+    let before = relay.ledgers[&key.sender()].snapshot(flow).unwrap();
     assert_eq!(before.usage.submitted, ONE_FRAME);
     for total in [
         Counts::ZERO,
@@ -115,10 +112,7 @@ fn wire_ack_requires_retirement_discard_and_exact_frozen_totals() {
             wire(&mut relay, key.sender(), &wrong, fixture.at).refusal,
             Some(Error::Flow(Refusal::InvalidSettlement))
         );
-        assert_eq!(
-            relay.connections[&key.sender()].ledger.snapshot(flow),
-            Some(before)
-        );
+        assert_eq!(relay.ledgers[&key.sender()].snapshot(flow), Some(before));
     }
     assert!(matches!(
         wire(&mut relay, key.sender(), &ack[..ack.len() - 1], fixture.at).refusal,
@@ -132,10 +126,7 @@ fn wire_ack_requires_retirement_discard_and_exact_frozen_totals() {
         wire(&mut relay, wrong_generation, &ack, fixture.at).refusal,
         Some(Error::UnknownConnection)
     );
-    assert_eq!(
-        relay.connections[&key.sender()].ledger.snapshot(flow),
-        Some(before)
-    );
+    assert_eq!(relay.ledgers[&key.sender()].snapshot(flow), Some(before));
     let settled = wire(&mut relay, key.sender(), &ack, fixture.at);
     assert_eq!(settled.refusal, None);
     assert!(
@@ -144,12 +135,7 @@ fn wire_ack_requires_retirement_discard_and_exact_frozen_totals() {
             .iter()
             .any(|output| matches!(output, Output::Close(target) if *target == key.sender()))
     );
-    assert!(
-        relay.connections[&key.sender()]
-            .ledger
-            .snapshot(flow)
-            .is_none()
-    );
+    assert!(relay.ledgers[&key.sender()].snapshot(flow).is_none());
 }
 
 #[test]
@@ -181,10 +167,7 @@ fn consumed_cannot_prove_queue_discard_and_replayed_ack_cannot_touch_reused_slot
         wire(&mut relay, key.sender(), &consumed, fixture.at).refusal,
         None
     );
-    let retained = relay.connections[&key.sender()]
-        .ledger
-        .snapshot(flow)
-        .unwrap();
+    let retained = relay.ledgers[&key.sender()].snapshot(flow).unwrap();
     assert_eq!(retained.usage.received, ONE_FRAME);
     assert_eq!(retained.usage.submitted, ONE_FRAME);
     drop(queued);
@@ -197,12 +180,7 @@ fn consumed_cannot_prove_queue_discard_and_replayed_ack_cannot_touch_reused_slot
         wire(&mut relay, key.sender(), &ack, fixture.at).refusal,
         None
     );
-    assert!(
-        relay.connections[&key.sender()]
-            .ledger
-            .snapshot(flow)
-            .is_none()
-    );
+    assert!(relay.ledgers[&key.sender()].snapshot(flow).is_none());
     for _ in 0..2 {
         let duplicate = wire(&mut relay, key.sender(), &ack, fixture.at);
         assert_eq!(duplicate.refusal, None);
@@ -210,14 +188,11 @@ fn consumed_cannot_prove_queue_discard_and_replayed_ack_cannot_touch_reused_slot
     }
     let (next, _) = fixture.join(&mut relay, 3);
     let next_flow = submit_one(&mut relay, next, fixture.at);
-    let before = relay.connections[&next.sender()].ledger.snapshot(next_flow);
+    let before = relay.ledgers[&next.sender()].snapshot(next_flow);
     let stale = wire(&mut relay, key.sender(), &ack, fixture.at);
     assert_eq!(stale.refusal, None);
     assert!(stale.outputs.is_empty());
-    assert_eq!(
-        relay.connections[&next.sender()].ledger.snapshot(next_flow),
-        before
-    );
+    assert_eq!(relay.ledgers[&next.sender()].snapshot(next_flow), before);
     assert_ne!(next.wire_id(), key.wire_id());
 }
 
@@ -239,7 +214,7 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
         &Restore {
             record: Some(stored),
             surviving: &[key.sender(), key.receiver()],
-            checkpoint: Some(&checkpoint),
+            responsibility: Responsibility::Checkpoint(&checkpoint),
         },
         Trace::default(),
         fixture.at,
@@ -256,12 +231,7 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
             .iter()
             .any(|output| matches!(output, Output::Close(target) if *target == key.sender()))
     );
-    assert!(
-        restored.connections[&key.sender()]
-            .ledger
-            .close_request()
-            .is_some()
-    );
+    assert!(restored.ledgers[&key.sender()].close_request().is_some());
     assert!(matches!(
         restored.connections[&key.sender()].role,
         Role::Closing

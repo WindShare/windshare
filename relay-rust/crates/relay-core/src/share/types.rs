@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 /// Platform capacity is supplied explicitly; the shared engine has no platform defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Live connections plus detached generations with unsettled responsibility.
     pub connections: usize,
     /// Retained session bound, also bounding each destination's lazily backed flow slots.
     pub sessions: usize,
@@ -31,6 +32,7 @@ pub enum Error {
     Configuration,
     Restore(crate::lifecycle::RestoreError),
     InvalidCheckpoint,
+    MissingResponsibility,
     CheckpointBusy,
     CheckpointDisabled,
     CheckpointCapacity,
@@ -77,6 +79,7 @@ pub enum Input<'a> {
         total: Counts,
     },
     Discarded(FlowKey),
+    /// Communication ended; the generation's resource responsibility survives.
     Disconnected(ConnectionRef),
     /// Unlike a disconnect notification, this confirms no transport buffer retains bytes.
     Closed(ConnectionRef),

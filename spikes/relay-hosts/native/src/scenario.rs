@@ -11,7 +11,8 @@ use windshare_relay_core::{
     registration::RegisterInit,
     sessions::{OpaqueHeader, SessionAdmitted},
     share::{
-        Control, Identity, Input, Limits, Output, Restore, ShareRelay, Submission, Turn, WorkResult,
+        Control, Identity, Input, Limits, Output, Responsibility, Restore, ShareRelay, Submission,
+        Turn, WorkResult,
     },
 };
 
@@ -93,7 +94,7 @@ impl Scenario {
         let (relay, initial) = ShareRelay::restore(
             identity,
             limits,
-            &Restore::restarted(None),
+            &Restore::restarted(None, Responsibility::Released),
             Trace::default(),
             now,
         )
