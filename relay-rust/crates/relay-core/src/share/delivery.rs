@@ -10,6 +10,15 @@ use crate::{
 };
 
 impl<O: Observer> ShareRelay<O> {
+    /// Current responsibility for this exact generation, including detached sockets.
+    /// Hosts use this for diagnostics; it does not grant forwarding or release authority.
+    #[must_use]
+    pub fn delivery_usage(&self, connection: ConnectionRef) -> Option<crate::flow::Usage> {
+        self.ledgers
+            .get(&connection)
+            .map(crate::flow::ConnectionLedger::usage)
+    }
+
     pub(super) fn delivery_control(
         &mut self,
         connection: ConnectionRef,

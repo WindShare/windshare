@@ -107,7 +107,10 @@ charges, repeated recovery without renewed budgets/deadlines, and old-generation
 Client runtime cutover and production platform adapters remain unimplemented.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort
-controls and a TLS client with a bounded OS receive buffer. Their Cargo workspaces
+controls and a TLS client with a bounded OS receive buffer. The
+[checkpoint probe](../spikes/relay-hosts/checkpoint-recovery.md) adds real-kernel
+hibernation, lost-attachment, detached-ledger and replacement-generation scenarios
+with an explicit SQLite mirror control. Their Cargo workspaces
 and cloud runs are outside `make rust`; use the documented commands when changing
 host assumptions. A successful object restart is not proof of buffer release.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's

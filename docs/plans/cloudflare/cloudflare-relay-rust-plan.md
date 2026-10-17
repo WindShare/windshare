@@ -71,7 +71,7 @@ the existing wire format and explicitly allow already-submitted bytes to arrive.
 
 Cloudflare 的已授未用额度、事件内临时载荷和宿主未确认发送数据共用目标连接代次的有界预算；`send()` 返回或会话退役不释放已提交宿主的未确认占用。
 
-退役先撤销许可并丢弃未提交队列，再按序通知目标端。目标端消费或丢弃此前帧后反馈最终帧数、字节数；按连接代次、会话和方向幂等结算，仅回收连接预算，不复活会话。取消立即生效，结算在后台完成；结算无法推进时有界终止异常连接，确认终止后回收剩余占用。
+退役先撤销许可并丢弃未提交队列，再按序通知目标端。目标端消费或丢弃此前帧后反馈最终帧数、字节数；按连接代次、会话和方向幂等结算，仅回收连接预算，不复活会话。取消立即生效，结算在后台完成；结算无法推进时请求终止异常连接；只有独立的资源释放证据才能回收剩余占用。Cloudflare 当前不提供已验证的这种证据，因而不能据此承诺有界回收。
 
 原生适配器按分享串行化控制状态，数据转发由独立连接任务并行执行，可使用 Tokio、有界公平队列和原生 WebSocket 背压。原生须明确提交点：许可复核与提交在同一同步临界区完成并与撤销线性化，撤销后不再新增提交；socket 等待留在控制锁外，慢接收者只阻塞自身会话。Cloudflare Rust 适配器使用休眠和平台发送语义；普通数据帧可以经过 Rust/Wasm 内存，复制必须有界并纳入 CPU、内存和吞吐测量。平台差异只能改变内部容量和故障触发点，不能改变帧顺序、会话隔离、所有权或客户端可见的安全语义。
 
@@ -81,7 +81,7 @@ Cloudflare 的已授未用额度、事件内临时载荷和宿主未确认发送
 
 浏览器保留 TypeScript 协议代码，Go 客户端保留 Go 编解码器，以共享向量保持三端协议一致。Rust 必须通过共享 `ed25519-acceptance.json`，按协议补齐严格校验，不能仅依赖库的 `verify_strict`；注册、恢复和 STOP 证明复用并补齐跨语言向量，逐字节核对签名 preimage。发送端对象向量继续约束 Go／TypeScript 接收端，不要求 Rust 中转复刻对象解析。除非实测收益明确，否则不迁移浏览器协议代码到 Wasm。
 
-Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。唤醒后恢复状态并检查绝对截止时间，不重置额度或延长宽限；状态不一致时仅结束受影响会话并重连。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
+Cloudflare 优先使用高层 `workers-rs` API，先验证回调前复制的峰值内存；仅在超出预算时补复制前的大小检查，不预先引入零复制框架。SQLite 保存生命周期事实；WebSocket 附件保存有界的角色、握手/准入状态、连接/会话/许可代次、credit、待结算占用、最近入站时间及待发控制状态，并在事件结束前更新。唤醒后恢复状态并检查绝对截止时间，不重置额度或延长宽限；状态不一致时的目标是仅影响对应会话；当前完整账本恢复遇到缺失记录会拒绝整个分享，须先解决这个隔离缺口，不能把重连视为已落地的恢复策略。每次事件结束时不得遗留应用数据帧待发队列；获准帧在事件内提交宿主，发送失败时明确结束受影响通道并重连。
 
 Go 与浏览器对两种中转统一使用 `WS2H/WS2A` 并保留 nonce；双方以同连接的合法入站消息刷新存活期限，空闲方向仍发送保活，不因单次回复排队超时断线。连接存活与业务进度分别判断，心跳和无关流量不得延长会话进度或资源结算期限。保留有界队列和原生控制优先调度，不靠缩小正常窗口迁就心跳。
 
@@ -127,8 +127,14 @@ high-water mark. New admissions refresh all retained records; ordinary delivery 
 feedback update only affected generations. A separately retained `CheckpointManifest`
 names every required record, including disconnected generations. Missing records or
 unknown responsibility cannot authorize recovery. The host must preserve the latest
-coherent manifest and records independently of socket attachments; the Cloudflare
-storage mechanism remains unresolved and must be established before integration.
+coherent manifest and records independently of socket attachments.
+The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)
+now supplies two concrete controls: SQLite stores the manifest and detached records,
+while live records use either binary attachments or an additional per-event SQLite
+mirror. Attachment-only recovery fails after record loss; the mirror recovers exact
+counts but violates the no-database-on-forwarding rule. Neither supplies an
+old-generation settlement channel after disconnect. Production persistence and
+resource ownership therefore remain unresolved; this is more than adapter wiring.
 
 Cloudflare's serialized attachment limit is **16,384 bytes**. The initial host profile
 sets session admission and per-connection retained-flow limits to **32**, including
@@ -143,8 +149,11 @@ The Worker must store the binary record as an ArrayBuffer/typed byte array and v
 the actual wrapper's serialized size; a JavaScript number array or base64 expansion
 cannot assume the same budget. Increase the reserved overhead or reduce the Cloudflare
 profile if needed. `flush_checkpoints` replaces complete changed attachments synchronously
-after outputs finish. On partial failure, retry the retained batch while active or close
-affected sockets before returning; never hibernate with stale delivery accounting.
+after outputs finish. On partial failure, retry the retained batch while active;
+closing sockets does not repair stale delivery accounting. If no current coherent
+image remains recoverable, report unknown responsibility rather than accepting
+an older image. The current aggregate refuses the entire restore in that case,
+including healthy siblings; production isolation needs an explicit redesign.
 Deployment validation must exercise this path through the real Worker binding.
 
 ## 部署体验
