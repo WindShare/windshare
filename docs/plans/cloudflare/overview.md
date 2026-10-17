@@ -107,6 +107,16 @@ Stable indices preserve delayed-work identity; checkpoints encode only retained
 flows and their indices. Delivery observations include retained flows, allocated
 slots and the bound, separately from payload occupancy.
 
+## Host evidence
+
+The [bounded host probes](../../../spikes/relay-hosts/README.md) exercise the real
+kernel with native TCP/WebSocket writers and a separate Rust Worker in Cloudflare
+Previews. Native slow-writer isolation and STOP cleanup passed on Windows; the
+probe joins both transport tasks and uses abortive TCP close before `Closed`.
+Cloudflare exposes closure events but no verified buffer-release receipt; resetting
+even an empty probe object left bounded status requests timing out. Production
+adapters and client cutover remain pending; these experiments do not complete them.
+
 ## Testing
 
 `make rust` runs formatting, Clippy, native coverage, doctests and the core Wasm

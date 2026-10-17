@@ -42,6 +42,14 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
+The [2026-10-17 host experiments](../../../spikes/relay-hosts/README.md) support
+keeping native synchronous submission: healthy receivers progressed while a real
+writer stalled. Cloudflare closure is still an unresolved platform boundary:
+`close()`, `CLOSED`, a close callback or an expired Alarm is not sufficient evidence
+for `Input::Closed`. The reset experiment also failed to establish recovery, even
+with an empty-object control. Preserve outstanding charges and STOP fencing until
+a supported release contract or an explicit ownership redesign resolves this;
+do not present timeout-triggered cleanup as implemented.
 
 结论：**采用共享 Rust 语义内核与两个平台适配器。** 先明确启动额度、失联判断与缓冲回收，跑通 Cloudflare 真实分享、下载和恢复，再完成原生替换。同步调整 Go／浏览器客户端、测试夹具和构建发布入口。
 
