@@ -12,7 +12,7 @@ pub const WIRE_VERSION: u8 = 2;
 
 pub type Magic = [u8; 4];
 
-const HEADER_BYTES: usize = 8;
+pub const HEADER_BYTES: usize = 8;
 
 /// Why a received control frame was refused before any authority check.
 ///

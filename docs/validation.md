@@ -100,7 +100,7 @@ Rust/Go/TypeScript vectors. Aggregate wire tests cover retirement/discard orderi
 exact totals after partial consumption, replay, slot reuse and hibernated expiry.
 Metadata regressions cover lazy handshake allocation, asymmetric sender/receiver
 fanout, runtime slot bounds and sparse checkpoint identity/settlement recovery. Incremental
-attachment tests cover destination-only writes, admission transitions, replay/no-op suppression,
+attachment tests cover source liveness and destination accounting writes, admission transitions, no-op suppression,
 partial write retries, close/high-water preservation, host byte budgets and joint recovery.
 Recovery tests distinguish unknown authority/inventory from lost delivery records. Missing or
 invalid receiver records isolate dependent sessions, retain conservative risk and preserve sibling
@@ -108,6 +108,9 @@ budgets/deadlines. They cover repeated recovery, risk exhaustion, new generation
 isolation, sender-loss fanout and permanent STOP despite delivery-record loss.
 Retirement scenarios cover repeated reconnects beside a healthy download, bidirectional queue
 discard, independent metadata/frame/byte limits, retained reverse-flow debt and host-injected grace.
+Connection-liveness tests consume shared WS2H/WS2A vectors and cover monotonic nonces, content-credit
+bypass, accepted inbound activity, silence isolation and expiry before handoff. Repeated hibernation
+preserves nonces and absolute deadlines; heartbeats cannot extend handshake, admission or settlement.
 All use injected time; no live Cloudflare retention interval is inferred from them.
 Go and browser socket-free receive-ledger tests cover shared connection bounds, FIFO
 receipts, frame/byte-aware batching across sessions, sparse flush, counter exhaustion,

@@ -28,7 +28,7 @@ pub struct ConnectionCheckpoint {
 
 #[derive(Clone, Debug)]
 pub(super) enum ConnectionRole {
-    Established,
+    Established(crate::heartbeat::Liveness),
     Closing,
     Detached(super::Detached),
     Handshake(HandshakeCheckpoint),
@@ -199,7 +199,7 @@ impl<O: Observer> ShareRelay<O> {
                         .ok_or(Error::InvalidCheckpoint)?,
                 ),
                 Some(Role::Closing) => ConnectionRole::Closing,
-                Some(Role::Established) => ConnectionRole::Established,
+                Some(Role::Established(liveness)) => ConnectionRole::Established(*liveness),
                 Some(Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. }) => {
                     ConnectionRole::Handshake(transcript.clone())
                 }

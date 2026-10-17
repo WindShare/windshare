@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
+fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let stored = fixture.register(&mut relay);
@@ -30,7 +30,14 @@ fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
     )
     .unwrap();
     assert!(turn.outputs.is_empty());
-    assert_eq!(turn.deadline, None);
+    assert_eq!(
+        turn.deadline,
+        Some(
+            fixture
+                .at
+                .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
+        )
+    );
     let duplicate = restored.submit(&receipt, fixture.at, |_| panic!("old receipt resubmitted"));
     assert_eq!(
         duplicate.refusal,
@@ -52,11 +59,10 @@ fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
     let (new_key, _) = fixture.join(&mut restored, 3);
     assert_ne!(new_key.wire_id(), key.wire_id());
     assert_eq!(
-        restored
-            .handle(Input::Tick, UnixMillis(fixture.at.0 + 1_000_000))
-            .refusal,
-        None
+        restored.sessions[&key.wire_id()].session.phase(),
+        crate::sessions::Phase::Active
     );
+    assert_eq!(restored.sessions[&key.wire_id()].session.deadline(), None);
 }
 
 #[test]

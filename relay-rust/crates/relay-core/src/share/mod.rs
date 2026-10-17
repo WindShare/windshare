@@ -16,6 +16,7 @@ mod delivery;
 mod handshake_checkpoint;
 mod handshake_restore;
 mod lifecycle;
+mod liveness;
 mod responsibility;
 mod restoration;
 mod retirement;
@@ -65,7 +66,7 @@ enum Role {
         admission: Box<Admission>,
         transcript: handshake_checkpoint::HandshakeCheckpoint,
     },
-    Established,
+    Established(crate::heartbeat::Liveness),
     Closing,
 }
 
@@ -257,6 +258,7 @@ impl<O: Observer> ShareRelay<O> {
                     self.lifecycle_event(crate::lifecycle::Event::Tick, None, now, turn);
                 }
                 Key::Handshake(connection) => self.disconnect(connection, now, turn),
+                Key::Liveness(connection) => self.expire_liveness(connection, now, turn),
                 Key::Session(id) => {
                     self.session_event(id, crate::sessions::Event::Tick, now, turn);
                 }

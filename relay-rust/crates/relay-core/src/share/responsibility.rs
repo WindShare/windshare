@@ -206,7 +206,7 @@ impl CheckpointManifest {
         let state_matches = match (reservation.state, &entry.role) {
             (
                 GenerationState::Connected,
-                ConnectionRole::Established
+                ConnectionRole::Established(_)
                 | ConnectionRole::Closing
                 | ConnectionRole::Handshake(_),
             ) => true,
@@ -226,7 +226,7 @@ impl CheckpointManifest {
             return false;
         };
         state_matches
-            && (!matches!(entry.role, ConnectionRole::Established)
+            && (!matches!(entry.role, ConnectionRole::Established(_))
                 || ledger.receive_capacity().is_some())
             && (!matches!(entry.role, ConnectionRole::Detached(Detached::Retired))
                 || ledger.queues_discarded())

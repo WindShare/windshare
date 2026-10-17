@@ -220,6 +220,9 @@ impl<O: Observer> ShareRelay<O> {
         if matches!(action, Some(Action::Refused(_))) {
             return Err(Error::Unavailable);
         }
+        if matches!(action, Some(Action::None)) {
+            self.accepted_inbound(participant, now);
+        }
         Ok(())
     }
 
@@ -236,7 +239,10 @@ impl<O: Observer> ShareRelay<O> {
             now,
             turn,
         ) {
-            Some(Action::Active | Action::None) => Ok(()),
+            Some(Action::Active | Action::None) => {
+                self.accepted_inbound(sender, now);
+                Ok(())
+            }
             _ => Err(Error::Unavailable),
         }
     }
