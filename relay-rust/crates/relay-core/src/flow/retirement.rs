@@ -19,6 +19,15 @@ pub enum Feedback {
 }
 
 impl<O: Observer> ConnectionLedger<O> {
+    /// Every route is retired and its unsubmitted queue has been discarded.
+    /// Submitted occupancy may still await consumption, settlement or release.
+    #[must_use]
+    pub fn queues_discarded(&self) -> bool {
+        self.entries
+            .iter()
+            .all(|entry| matches!(entry.state, State::Settling { .. }))
+    }
+
     /// Applies session retirement to the direction targeting this connection.
     ///
     /// Revoked grants are immediately reusable. Accepted payloads remain charged

@@ -29,6 +29,10 @@ pub enum RelayDecision {
         communicating: bool,
         usage: flow::Usage,
     },
+    StopAcknowledged {
+        stop_id: crate::identifiers::StopId,
+        unsettled_generations: usize,
+    },
     Capacity,
     StaleCompletion(crate::share::WorkId),
     StorageUncertain(crate::share::WorkId),

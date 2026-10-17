@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn stopped_restore_waits_for_retained_generations_even_without_surviving_sockets() {
+fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.prepare_stop(&mut relay);
@@ -53,18 +53,30 @@ fn stopped_restore_waits_for_retained_generations_even_without_surviving_sockets
                     .any(|output| matches!(output, Output::Work(_)))
             );
         }
-        let sender_closed = restored.handle(Input::Closed(key.sender()), fixture.at);
+        let discards: Vec<_> = turn
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Discard(flow) => Some(*flow),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(discards.len(), 2);
+        let first = restored.handle(Input::Discarded(discards[0]), fixture.at);
         assert!(
-            !sender_closed
+            !first
                 .outputs
                 .iter()
                 .any(|output| matches!(output, Output::Work(_)))
         );
-        let receiver_closed = restored.handle(Input::Closed(key.receiver()), fixture.at);
-        assert!(matches!(
-            next_record(&work(&receiver_closed)),
-            Record::Stopped(_)
-        ));
+        let commit = work(&restored.handle(Input::Discarded(discards[1]), fixture.at));
+        assert!(matches!(next_record(&commit), Record::Stopped(_)));
+        let _ = complete(&mut restored, &commit, fixture.at);
+        assert_eq!(
+            restored.ledgers[&key.sender()].usage().submitted,
+            Counts::new(1, 21)
+        );
+        assert!(restored.checkpoint().is_ok());
     }
 }
 
@@ -121,7 +133,6 @@ fn uncertain_publication_is_reconciled_before_a_queued_stop_selects_its_record()
     );
     let cleanup = complete(&mut relay, &intent, fixture.at);
     let quiesce = work(&cleanup);
-    let _ = relay.handle(Input::Closed(connection(1)), fixture.at);
     let commit = work(&complete(&mut relay, &quiesce, fixture.at));
     assert!(matches!(next_record(&commit), Record::Stopped(_)));
 }

@@ -172,7 +172,7 @@ impl<O: Observer> ShareRelay<O> {
     pub(super) fn checkpoint_ready(&self) -> Result<(), Error> {
         if self.runtime == RuntimeStatus::ReloadRequired
             || !self.tasks.is_empty()
-            || self.stop_retirement.is_some()
+            || self.stop_barrier.is_some()
         {
             return Err(Error::CheckpointBusy);
         }

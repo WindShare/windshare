@@ -97,7 +97,7 @@ fn stop_during_uncertain_ownership_commit_never_acknowledges_registration() {
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == connection(1)))
     );
-    let commit = work(&relay.handle(Input::Closed(connection(1)), fixture.at));
+    let commit = work(&cleanup);
     let stopped = complete(&mut relay, &commit, fixture.at);
     assert!(stopped.outputs.iter().any(|output| matches!(
         output,

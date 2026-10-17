@@ -124,7 +124,7 @@ impl<O: Observer> ShareRelay<O> {
                 .map_or(0, |checkpoint| checkpoint.last_session),
             last_work: 0,
             tasks: VecDeque::new(),
-            stop_retirement: None,
+            stop_barrier: None,
             checkpointing: super::checkpoint_tracking::Checkpointing::Disabled,
             observer,
         };

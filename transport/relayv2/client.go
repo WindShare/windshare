@@ -321,6 +321,10 @@ type StopConfig struct {
 	Dial             DialOptions
 }
 
+// Stop confirms permanent relay revocation, including durable stop evidence,
+// discarded unsubmitted queues and fenced publication/resume work. Success does
+// not imply delivery settlement: bytes previously submitted to the network may
+// still arrive on old connections. A lost response can be retried with the same ID.
 func Stop(ctx context.Context, config StopConfig) error {
 	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
 	if err != nil {
