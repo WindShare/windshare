@@ -22,12 +22,14 @@ startup reservations and batching thresholds are capacity/scheduling policy,
 independent of the cumulative counters' encoding limits. Relay control frames
 bypass content credit; feedback is batched without requiring per-frame round trips.
 
-## Go client receive ledger
+## Client receive ledgers
 
-The staged [receive ledger](../../../transport/relayv2/internal/receiveledger/ledger.go)
-serves either endpoint role without sockets, goroutines or payload ownership.
-One connection shares frame/byte capacity and a retained-session bound. Immutable
-receipts bind each full envelope to its local session lifetime and FIFO position.
+The staged [Go ledger](../../../transport/relayv2/internal/receiveledger/ledger.go) and
+[browser ledger](../../../web/src/transport/relay/receive-ledger/index.ts) serve either
+endpoint role without sockets, timers or payload ownership. One connection shares
+frame/byte capacity and a retained-session bound. Immutable receipts bind each full
+envelope to its local session lifetime and FIFO position. Browser counters use
+`bigint`; opaque tokens and weakly held receipts isolate connection generations.
 Arrival charges capacity; application handoff and retirement discard are distinct.
 A discarded hole stops ordinary consumption's prefix, even if later frames are consumed.
 
