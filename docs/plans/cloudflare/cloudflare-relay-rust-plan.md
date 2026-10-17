@@ -49,6 +49,9 @@ Physical release remains a separate host receipt. Dependency-scoped recovery now
 isolates missing/invalid delivery records while preserving healthy sessions.
 Independent generation reservations retain conservative loss charges and fixed grace;
 ownership, permanent STOP and the reservation inventory still require authoritative reads.
+The Go client now has a socket-free receive ledger for both endpoint roles, shared
+connection capacity and ordered settlement. Its [delivery contract](delivery-flow-contract.md#go-client-receive-ledger)
+keeps runtime activation coupled to Rust host integration; current wire semantics are unchanged.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

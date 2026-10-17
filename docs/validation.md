@@ -109,6 +109,9 @@ isolation, sender-loss fanout and permanent STOP despite delivery-record loss.
 Retirement scenarios cover repeated reconnects beside a healthy download, bidirectional queue
 discard, independent metadata/frame/byte limits, retained reverse-flow debt and host-injected grace.
 All use injected time; no live Cloudflare retention interval is inferred from them.
+Go's socket-free receive-ledger tests cover shared connection bounds, FIFO receipts,
+frame/byte-aware batching across sessions, sparse flush, counter exhaustion, retirement
+settlement, replay and stale-generation isolation without timers or sockets.
 Client runtime cutover and production platform adapters remain unimplemented.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort
