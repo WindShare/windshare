@@ -41,6 +41,8 @@ impl<O: Observer> ShareRelay<O> {
             return;
         }
         self.last_session += 1;
+        self.checkpointing
+            .header_changed(self.connections.keys().copied());
         let session =
             RelaySessionId::new(self.last_session.to_be_bytes()).expect("nonzero sequence");
         self.lifecycle_event(
@@ -55,6 +57,7 @@ impl<O: Observer> ShareRelay<O> {
         let key = joined.session.key();
         match self.open_directions(&joined.session, now, turn) {
             Ok(grants) => {
+                self.checkpointing.changed(key.receiver());
                 for grant in grants {
                     self.routes
                         .insert((grant.flow.destination(), key.wire_id()), grant.flow);
@@ -143,9 +146,16 @@ impl<O: Observer> ShareRelay<O> {
     ) -> Option<Action> {
         let deferred = self.cleanup_deferred();
         let entry = self.sessions.get_mut(&id)?;
+        let before = self
+            .checkpointing
+            .enabled()
+            .then(|| entry.session.snapshot());
         let effects = entry
             .session
             .handle(&self.lifecycle, event, now, &mut self.observer);
+        if before.is_some_and(|snapshot| snapshot != entry.session.snapshot()) {
+            self.checkpointing.changed(entry.session.key().receiver());
+        }
         self.deadlines
             .set(Key::Session(id), entry.session.deadline());
         if let Some(retirement) = effects.retirement {

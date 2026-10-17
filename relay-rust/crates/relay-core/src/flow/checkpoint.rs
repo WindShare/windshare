@@ -36,6 +36,11 @@ impl LedgerCheckpoint {
 }
 
 impl<O: Observer> ConnectionLedger<O> {
+    // The aggregate drains this after each operation, independently of diagnostic logging.
+    pub(crate) const fn take_checkpoint_change(&mut self) -> bool {
+        core::mem::replace(&mut self.checkpoint_changed, false)
+    }
+
     /// A hibernating host cannot retain an application payload queue.
     ///
     /// # Errors
@@ -133,6 +138,7 @@ impl<O: Observer> ConnectionLedger<O> {
         // A final receipt may have removed the last flow after closure was requested.
         // That does not rescind the pending close or reopen a confirmed closed lifetime.
         ledger.state = checkpoint.state;
+        ledger.checkpoint_changed = false;
         Ok(ledger)
     }
 

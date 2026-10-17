@@ -32,6 +32,8 @@ pub enum Error {
     Restore(crate::lifecycle::RestoreError),
     InvalidCheckpoint,
     CheckpointBusy,
+    CheckpointDisabled,
+    CheckpointCapacity,
     Flow(crate::flow::Refusal),
     Frame(crate::wire::FrameError),
     Forward(crate::sessions::ForwardRefusal),

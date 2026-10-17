@@ -34,6 +34,14 @@ pub enum RelayDecision {
     HandshakeClosed(crate::handshake::CloseReason),
     Restored,
     InvalidSnapshot,
+    CheckpointingEnabled {
+        payload_bytes: usize,
+    },
+    CheckpointsFlushed {
+        connections: usize,
+        encoded_bytes: usize,
+    },
+    CheckpointWriteFailed,
     Rejected(crate::share::Error),
 }
 
