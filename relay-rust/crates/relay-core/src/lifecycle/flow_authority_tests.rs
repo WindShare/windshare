@@ -7,7 +7,7 @@ fn stale_feedback_and_cleanup_cannot_touch_a_reused_slot_or_sibling() {
     fixture.register(&mut engine);
     let mut old = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let sibling = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
-    let mut ledger = ledger::<2>(&fixture, old.key().sender());
+    let mut ledger = ledger(2, &fixture, old.key().sender());
     let stale = open(&mut ledger, &engine, &old, Direction::ToSender, fixture.at);
     let sibling_flow = open(
         &mut ledger,
@@ -68,8 +68,8 @@ fn routes_headers_generations_and_feedback_directions_are_checked_before_mutatio
     fixture.register(&mut engine);
     let first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
-    let mut sender = ledger::<3>(&fixture, first.key().sender());
-    let mut receiver = ledger::<2>(&fixture, first.key().receiver());
+    let mut sender = ledger(3, &fixture, first.key().sender());
+    let mut receiver = ledger(2, &fixture, first.key().receiver());
     let flow = open(
         &mut sender,
         &engine,
@@ -146,7 +146,7 @@ fn stop_fences_submission_before_durable_cleanup_and_keeps_submitted_occupancy()
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, session.key().sender());
+    let mut ledger = ledger(1, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -203,7 +203,7 @@ fn resume_separates_old_and_new_destination_ledgers_until_old_closure_is_confirm
     fixture.register(&mut engine);
     let mut old = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     activate(&engine, &mut old, fixture.at);
-    let mut old_ledger = ledger::<1>(&fixture, old.key().sender());
+    let mut old_ledger = ledger(1, &fixture, old.key().sender());
     let stale = open(
         &mut old_ledger,
         &engine,
@@ -235,7 +235,7 @@ fn resume_separates_old_and_new_destination_ledgers_until_old_closure_is_confirm
         2,
         fixture.resume_at,
     );
-    let mut new_ledger = ledger::<1>(&fixture, fresh.key().sender());
+    let mut new_ledger = ledger(1, &fixture, fresh.key().sender());
     let new_flow = open(
         &mut new_ledger,
         &engine,
@@ -281,7 +281,7 @@ fn expired_provisional_routes_cannot_issue_startup_credit_or_submit_queued_frame
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, session.key().sender());
+    let mut ledger = ledger(1, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,

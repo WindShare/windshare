@@ -36,8 +36,7 @@ fn capacity_configuration_requires_room_for_startup_and_bounded_cleanup() {
     assert_eq!(limits().startup_grant(), counts(1));
     let fixture = Fixture::new();
     assert_eq!(
-        ConnectionLedger::<0, ()>::new(fixture.relay(), connection(1, 1), limits(), ())
-            .unwrap_err(),
+        ConnectionLedger::new(fixture.relay(), connection(1, 1), limits(), 0, ()).unwrap_err(),
         ConfigurationError::EmptyStorage
     );
 }
@@ -52,8 +51,7 @@ fn a_host_policy_alone_cannot_authorize_delivery_before_the_handshake() {
         .check_route(&engine, Direction::ToSender, fixture.at)
         .unwrap();
     let mut ledger =
-        ConnectionLedger::<1, _>::new(fixture.relay(), session.key().sender(), limits(), ())
-            .unwrap();
+        ConnectionLedger::new(fixture.relay(), session.key().sender(), limits(), 1, ()).unwrap();
     assert_eq!(
         ledger.open(&route, fixture.at),
         Err(FlowRefusal::CapacityUndeclared)
@@ -66,7 +64,7 @@ fn unused_startup_bytes_do_not_block_admission_when_ordinary_capacity_is_free() 
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
     let published = fixture.register(&mut engine);
-    let mut ledger = ledger::<3>(&fixture, published.owner.connection());
+    let mut ledger = ledger(3, &fixture, published.owner.connection());
     for id in 2..4 {
         let mut session = join(&fixture, &mut engine, connection(id, 1), id, fixture.at);
         let flow = open(
@@ -128,7 +126,7 @@ fn metadata_capacity_is_bounded_independently_of_available_delivery_memory() {
     fixture.register(&mut engine);
     let mut first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, first.key().sender());
+    let mut ledger = ledger(1, &fixture, first.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -162,10 +160,11 @@ fn cumulative_counters_cannot_wrap_after_capacity_is_reclaimed() {
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let total = Counts::new(u64::MAX, u64::MAX);
     let settings = Limits::new(total, counts(1), counts(1), SETTLEMENT_TIMEOUT).unwrap();
-    let mut ledger = ConnectionLedger::<1, _>::new(
+    let mut ledger = ConnectionLedger::new(
         fixture.relay(),
         session.key().sender(),
         settings,
+        1,
         FlowTrace::default(),
     )
     .unwrap();
@@ -230,7 +229,7 @@ fn startup_and_regular_charges_follow_fifo_prefixes_across_varying_frame_sizes()
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, session.key().sender());
+    let mut ledger = ledger(1, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,

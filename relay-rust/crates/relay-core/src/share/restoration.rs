@@ -55,7 +55,7 @@ impl Restore<'static> {
     }
 }
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     /// Restores lifecycle, then sessions, then delivery responsibility in that order.
     ///
     /// # Errors
@@ -68,7 +68,7 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
         observer: O,
         now: UnixMillis,
     ) -> Result<(Self, Turn), Error> {
-        if N == 0 || limits.connections == 0 || limits.sessions == 0 || limits.sessions > N {
+        if limits.connections == 0 || limits.sessions == 0 {
             return Err(Error::Configuration);
         }
         validate_restore(identity, limits, restored)?;
@@ -155,6 +155,7 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
                 self.identity.relay,
                 connection,
                 self.limits.delivery,
+                self.limits.sessions,
                 &snapshot.ledger,
                 Journal::default(),
             )

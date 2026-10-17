@@ -95,6 +95,8 @@ consume shared count-boundary and malformed-frame vectors, independently of runt
 Handshake capacity and distinct WS2N/WS2S settlement controls also consume shared
 Rust/Go/TypeScript vectors. Aggregate wire tests cover retirement/discard ordering,
 exact totals after partial consumption, replay, slot reuse and hibernated expiry.
+Metadata regressions cover lazy handshake allocation, asymmetric sender/receiver
+fanout, runtime slot bounds and sparse checkpoint identity/settlement recovery.
 Client runtime cutover and platform adapters remain unimplemented.
 Run Cargo inside `relay-rust/`; its `.cargo/config.toml` places build output in `.target/` so Go's
 repository-wide package discovery skips the generated tree. The Make gate uses the same directory.

@@ -20,7 +20,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::mem;
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn connect(
         &mut self,
         connection: ConnectionRef,
@@ -43,6 +43,7 @@ impl<const N: usize, O: Observer> ShareRelay<N, O> {
             self.identity.relay,
             connection,
             self.limits.delivery,
+            self.limits.sessions,
             Journal::default(),
         )
         .map_err(|_| Error::Configuration)?;

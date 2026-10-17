@@ -10,7 +10,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn lifecycle_event(
         &mut self,
         event: Event<'_>,

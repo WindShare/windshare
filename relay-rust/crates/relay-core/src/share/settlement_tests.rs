@@ -231,12 +231,8 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
     cancel(&mut relay, key, fixture.at);
     discard(&mut relay, &flows, fixture.at);
     let deadline = relay.deadline().unwrap();
-    let checkpoint = Checkpoint::decode(
-        &relay.checkpoint().unwrap().encode(),
-        Fixture::limits(),
-        SLOTS,
-    )
-    .unwrap();
+    let checkpoint =
+        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let (mut restored, _) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),

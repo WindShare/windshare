@@ -8,7 +8,7 @@ fn wake(
     at: UnixMillis,
 ) -> (Relay, Turn) {
     let bytes = relay.checkpoint().unwrap().encode();
-    let checkpoint = Checkpoint::decode(&bytes, Fixture::limits(), SLOTS).unwrap();
+    let checkpoint = Checkpoint::decode(&bytes, Fixture::limits()).unwrap();
     Relay::restore(
         fixture.identity(2),
         Fixture::limits(),

@@ -16,7 +16,7 @@ fn hibernation_preserves_credit_receipts_identity_and_quiet_active_sessions() {
     );
     activate(&mut relay, key, fixture.at);
     let encoded = relay.checkpoint().unwrap().encode();
-    let checkpoint = Checkpoint::decode(&encoded, Fixture::limits(), SLOTS).unwrap();
+    let checkpoint = Checkpoint::decode(&encoded, Fixture::limits()).unwrap();
     let (mut restored, turn) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
@@ -83,12 +83,8 @@ fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() 
         let _ = relay.handle(Input::Discarded(flow), fixture.at);
     }
     let deadline = relay.deadline().unwrap();
-    let checkpoint = Checkpoint::decode(
-        &relay.checkpoint().unwrap().encode(),
-        Fixture::limits(),
-        SLOTS,
-    )
-    .unwrap();
+    let checkpoint =
+        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let (mut restored, _) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
@@ -118,7 +114,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
     let stored = fixture.register(&mut relay);
     let bytes = relay.checkpoint().unwrap().encode();
     for truncated in [&bytes[..0], &bytes[..1], &bytes[..bytes.len() - 1]] {
-        assert!(Checkpoint::decode(truncated, Fixture::limits(), SLOTS).is_err());
+        assert!(Checkpoint::decode(truncated, Fixture::limits()).is_err());
     }
     assert!(
         Relay::restore(
@@ -134,7 +130,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
         )
         .is_err()
     );
-    let checkpoint = Checkpoint::decode(&bytes, Fixture::limits(), SLOTS).unwrap();
+    let checkpoint = Checkpoint::decode(&bytes, Fixture::limits()).unwrap();
     assert!(
         Relay::restore(
             fixture.identity(1),

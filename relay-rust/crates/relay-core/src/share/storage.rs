@@ -52,7 +52,7 @@ pub(super) struct StopRetirement {
     pub quiescing: bool,
 }
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn enqueue(&mut self, kind: TaskKind, _turn: &mut Turn) {
         if !self.tasks.iter().any(|task| task.kind == kind) {
             self.tasks.push_back(Task {

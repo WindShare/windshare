@@ -6,7 +6,7 @@ fn cancellation_retains_payloads_until_queue_discard_and_final_settlement() {
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<2>(&fixture, session.key().sender());
+    let mut ledger = ledger(2, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -96,7 +96,7 @@ fn consumption_can_finish_retirement_without_waiting_for_a_redundant_final_ack()
         let receiver = connection(if consume_before_cleanup { 2 } else { 3 }, 1);
         let id = receiver.id.get();
         let mut session = join(&fixture, &mut engine, receiver, id, fixture.at);
-        let mut ledger = ledger::<1>(&fixture, session.key().sender());
+        let mut ledger = ledger(1, &fixture, session.key().sender());
         let flow = open(
             &mut ledger,
             &engine,
@@ -139,7 +139,7 @@ fn retirement_before_any_submission_releases_capacity_only_after_cleanup_confirm
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, session.key().sender());
+    let mut ledger = ledger(1, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -179,7 +179,7 @@ fn stalled_cleanup_requests_closure_without_refunding_and_retries_do_not_extend_
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let sibling = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
-    let mut ledger = ledger::<3>(&fixture, session.key().sender());
+    let mut ledger = ledger(3, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -256,7 +256,7 @@ fn partial_consumption_and_cleanup_retries_cannot_delay_the_oldest_retirement() 
     fixture.register(&mut engine);
     let mut first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let mut second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
-    let mut ledger = ledger::<2>(&fixture, first.key().sender());
+    let mut ledger = ledger(2, &fixture, first.key().sender());
     let one = open(
         &mut ledger,
         &engine,

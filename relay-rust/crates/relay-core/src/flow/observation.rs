@@ -7,7 +7,7 @@ use crate::{
     sessions::{ForwardPermit, OpaqueHeader, Retirement},
 };
 
-use super::{CloseRequest, Counts, FlowKey, ReceiveCapacity, Refusal, Usage};
+use super::{CloseRequest, Counts, FlowKey, MetadataUsage, ReceiveCapacity, Refusal, Usage};
 
 /// Input correlation retained on refusals and resource lifecycle transitions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +92,8 @@ pub struct Observation {
     pub usage: Usage,
     /// Portion still charged to the protected startup pool.
     pub startup_used: Counts,
+    /// Flow-slot pressure and allocation, including pending retirement.
+    pub metadata: MetadataUsage,
 }
 
 /// A host selects a synchronous structured tracing backend.

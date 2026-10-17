@@ -22,7 +22,7 @@ const ADMISSION_RETRY: RetryAfter = match RetryAfter::from_millis(250) {
     None => unreachable!(),
 };
 
-impl<const N: usize, O: Observer> ShareRelay<N, O> {
+impl<O: Observer> ShareRelay<O> {
     pub(super) fn join(&mut self, request: JoinRequest, now: UnixMillis, turn: &mut Turn) {
         let connection = request.connection();
         if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {

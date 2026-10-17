@@ -42,7 +42,7 @@ impl ReceiveCapacity {
     }
 }
 
-impl<const N: usize, O: Observer> ConnectionLedger<N, O> {
+impl<O: Observer> ConnectionLedger<O> {
     /// Binds the first handshake declaration to this physical connection lifetime.
     /// Exact replay is harmless; neither replay nor a later handshake can reset usage.
     ///

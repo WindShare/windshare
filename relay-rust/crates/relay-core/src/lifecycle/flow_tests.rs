@@ -29,13 +29,19 @@ fn limits() -> Limits {
     Limits::new(counts(8), counts(2), counts(1), SETTLEMENT_TIMEOUT).unwrap()
 }
 
-fn ledger<const N: usize>(
+fn ledger(
+    max_flows: usize,
     fixture: &Fixture,
     destination: ConnectionRef,
-) -> ConnectionLedger<N, FlowTrace> {
-    let mut ledger =
-        ConnectionLedger::new(fixture.relay(), destination, limits(), FlowTrace::default())
-            .unwrap();
+) -> ConnectionLedger<FlowTrace> {
+    let mut ledger = ConnectionLedger::new(
+        fixture.relay(),
+        destination,
+        limits(),
+        max_flows,
+        FlowTrace::default(),
+    )
+    .unwrap();
     ledger
         .declare_capacity(
             crate::flow::ReceiveCapacity::new(u64::MAX, u64::MAX).unwrap(),
@@ -45,25 +51,27 @@ fn ledger<const N: usize>(
     ledger
 }
 
-fn restore_ledger<const N: usize>(
+fn restore_ledger(
     fixture: &Fixture,
     destination: ConnectionRef,
-    ledger: &ConnectionLedger<N, FlowTrace>,
-) -> ConnectionLedger<N, FlowTrace> {
+    ledger: &ConnectionLedger<FlowTrace>,
+) -> ConnectionLedger<FlowTrace> {
     let encoded = ledger.checkpoint().unwrap().encode();
-    let checkpoint = flow::LedgerCheckpoint::decode(&encoded, N).unwrap();
+    let checkpoint =
+        flow::LedgerCheckpoint::decode(&encoded, ledger.metadata_usage().limit).unwrap();
     ConnectionLedger::restore(
         fixture.relay(),
         destination,
         limits(),
+        ledger.metadata_usage().limit,
         &checkpoint,
         FlowTrace::default(),
     )
     .unwrap()
 }
 
-fn open<const N: usize>(
-    ledger: &mut ConnectionLedger<N, FlowTrace>,
+fn open(
+    ledger: &mut ConnectionLedger<FlowTrace>,
     engine: &ShareLifecycle<Recorder>,
     session: &Session,
     direction: Direction,
@@ -85,8 +93,8 @@ fn header(session: &Session, ciphertext: u32) -> OpaqueHeader {
     OpaqueHeader::decode(&bytes).unwrap()
 }
 
-fn receive<const N: usize>(
-    ledger: &mut ConnectionLedger<N, FlowTrace>,
+fn receive(
+    ledger: &mut ConnectionLedger<FlowTrace>,
     engine: &ShareLifecycle<Recorder>,
     session: &mut Session,
     flow: FlowKey,
@@ -104,8 +112,8 @@ fn receive<const N: usize>(
     ledger.receive(flow, &route, header, at).unwrap()
 }
 
-fn submit<const N: usize>(
-    ledger: &mut ConnectionLedger<N, FlowTrace>,
+fn submit(
+    ledger: &mut ConnectionLedger<FlowTrace>,
     engine: &ShareLifecycle<Recorder>,
     session: &Session,
     receipt: &ReceivedFrame,
@@ -135,8 +143,8 @@ fn startup_credit_precedes_frames_in_both_directions_without_advancing_admission
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut sender = ledger::<2>(&fixture, session.key().sender());
-    let mut receiver = ledger::<2>(&fixture, session.key().receiver());
+    let mut sender = ledger(2, &fixture, session.key().sender());
+    let mut receiver = ledger(2, &fixture, session.key().receiver());
     let up = open(
         &mut sender,
         &engine,
@@ -184,7 +192,7 @@ fn busy_sessions_cannot_spend_new_session_startup_capacity() {
     let first = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
     let second = join(&fixture, &mut engine, connection(3, 1), 2, fixture.at);
     let third = join(&fixture, &mut engine, connection(4, 1), 3, fixture.at);
-    let mut ledger = ledger::<3>(&fixture, published.owner.connection());
+    let mut ledger = ledger(3, &fixture, published.owner.connection());
     let flow = open(
         &mut ledger,
         &engine,
@@ -229,7 +237,7 @@ fn received_and_submitted_payloads_do_not_refund_credit_and_fifo_is_enforced() {
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<2>(&fixture, session.key().sender());
+    let mut ledger = ledger(2, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -288,7 +296,7 @@ fn frame_and_byte_grants_exhaust_independently_and_replenishment_never_uses_star
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<2>(&fixture, session.key().sender());
+    let mut ledger = ledger(2, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -338,7 +346,7 @@ fn malformed_consumption_cannot_create_capacity() {
     let mut engine = fixture.engine();
     fixture.register(&mut engine);
     let mut session = join(&fixture, &mut engine, connection(2, 1), 1, fixture.at);
-    let mut ledger = ledger::<1>(&fixture, session.key().sender());
+    let mut ledger = ledger(1, &fixture, session.key().sender());
     let flow = open(
         &mut ledger,
         &engine,
@@ -397,3 +405,6 @@ mod authority;
 
 #[path = "flow_capacity_tests.rs"]
 mod capacity;
+
+#[path = "flow_storage_tests.rs"]
+mod storage;

@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub connections: usize,
+    /// Retained session bound, also bounding each destination's lazily backed flow slots.
     pub sessions: usize,
     pub delivery: crate::flow::Limits,
 }
