@@ -152,6 +152,24 @@ Stable indices preserve delayed-work identity; checkpoints encode only retained
 flows and their indices. Delivery observations include retained flows, allocated
 slots and the bound, separately from payload occupancy.
 
+## Native lifecycle host
+
+[`relay-native`](../../../relay-rust/crates/relay-native/README.md) now executes
+REGISTER, RESUME, STOP and heartbeat controls on real WebSockets. Per-share actors
+consume `ShareRelay` commands; OS entropy, monotonic Unix-based time, bounded socket
+writers and SQLite transactions supply host evidence. Ownership and permanent STOP
+acknowledgements remain behind kernel commit barriers. Conditional writes and
+operation-scoped descriptor cleanup are idempotent; uncertain receipts remain fenced.
+An exclusive database lease and persisted connection generation prevent overlapping
+hosts and reused lifetimes. Startup reconciles unresolved publication and STOP work.
+
+The Go capacity-codec scenario signs live challenges, restarts the binary after
+registration, resumes ownership, stops independently and verifies stopped refusal
+after another restart. JOIN, opaque forwarding, STUN and operational endpoints remain
+pending; current Go/browser transport runtimes and the Go server are unchanged.
+This control-only schema proves no payload responsibility was acquired. It does not
+establish a future native data-plane buffer-release policy.
+
 ## Host evidence
 
 The [bounded host probes](../../../spikes/relay-hosts/README.md) exercise the real

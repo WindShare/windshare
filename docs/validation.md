@@ -115,7 +115,12 @@ All use injected time; no live Cloudflare retention interval is inferred from th
 Go and browser socket-free receive-ledger tests cover shared connection bounds, FIFO
 receipts, frame/byte-aware batching across sessions, sparse flush, counter exhaustion,
 retirement settlement, replay and stale-generation isolation without timers or sockets.
-Client runtime cutover and production platform adapters remain unimplemented.
+The native lifecycle host now runs REGISTER/RESUME/STOP and heartbeats on real
+WebSockets with SQLite persistence. Its Go-codec scenario generates fresh keys and
+proofs, restarts the binary after registration, resumes, stops independently and
+restarts again to verify permanent refusal. Fault-injected host tests hold commits,
+lose receipts and race STOP with ownership publication. JOIN/forwarding, client
+runtime cutover and the production Cloudflare adapter remain unimplemented.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and
 Cloudflare Preview closure/recovery separately, including Rust/JavaScript abort
 controls and a TLS client with a bounded OS receive buffer. The
@@ -139,6 +144,8 @@ must live inside their package directory. There is no per-file minimum or extra 
 Cargo.lock is committed and build/test gates use `--locked`. The Wasm build checks core portability,
 not Worker deployment. GitHub enforces the same gate on Linux and Windows, installing a prebuilt
 coverage tool to avoid compiling it during CI.
+
+The Rust gate also requires the Go toolchain from `go.mod` for native-host interoperability.
 
 Install prerequisites explicitly before running local gates:
 
