@@ -22,6 +22,7 @@ pub mod descriptor_upload;
 pub mod error_frame;
 pub mod flow;
 pub mod handshake;
+pub mod heartbeat;
 pub mod identifiers;
 pub mod join;
 pub mod lifecycle;

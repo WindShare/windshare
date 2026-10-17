@@ -32,6 +32,7 @@ pub enum Error {
     UnknownSession,
     Unavailable,
     SequenceExhausted,
+    ProbeNonce,
     Configuration,
     Restore(crate::lifecycle::RestoreError),
     InvalidCheckpoint,
@@ -189,6 +190,8 @@ pub enum Control {
         record: Box<Record>,
     },
     Grant(Grant),
+    /// Bypasses content credit and queued forwarding; hosts may coalesce to the newest nonce.
+    ProbeAck(crate::heartbeat::ConnectionProbeAck),
     /// Shares the destination's ordered writer with submitted opaque frames.
     Settlement(SettlementNotice),
     Stopped(Stopped),

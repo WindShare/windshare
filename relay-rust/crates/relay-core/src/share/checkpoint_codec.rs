@@ -4,6 +4,7 @@ use super::{
 use super::{checkpoint::ConnectionRole, handshake_checkpoint::HandshakeCheckpoint};
 use crate::{
     flow::LedgerCheckpoint,
+    heartbeat::Liveness,
     identifiers::{RelayIdentity, ShareId},
     lifecycle::Incarnation,
     sessions::SessionSnapshot,
@@ -11,8 +12,8 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const FORMAT: u8 = 6;
-const CONNECTION_FORMAT: u8 = 4;
+const FORMAT: u8 = 7;
+const CONNECTION_FORMAT: u8 = 5;
 const LENGTH_BYTES: usize = size_of::<u64>();
 const IDENTITY_BYTES: usize = 32 + 12 + 16;
 const CONNECTION_HEADER_BYTES: usize =
@@ -26,7 +27,10 @@ impl ConnectionCheckpoint {
         put_identity(&mut out, self.identity);
         out.extend_from_slice(&self.connection.encode());
         match &self.role {
-            ConnectionRole::Established => out.push(0),
+            ConnectionRole::Established(liveness) => {
+                out.push(0);
+                out.extend_from_slice(&liveness.encode());
+            }
             ConnectionRole::Closing => out.push(1),
             ConnectionRole::Detached(super::Detached::AwaitingRelease) => out.push(3),
             ConnectionRole::Detached(super::Detached::Released) => out.push(6),
@@ -53,9 +57,12 @@ impl ConnectionCheckpoint {
     /// the full sender fanout, including retired delivery obligations.
     #[must_use]
     pub fn maximum_bytes(retained_flow_limit: usize) -> Option<usize> {
-        let established = LedgerCheckpoint::maximum_bytes(retained_flow_limit)?.checked_add(
-            retained_flow_limit.checked_mul(LENGTH_BYTES + crate::sessions::MAX_SNAPSHOT_BYTES)?,
-        )?;
+        let established = LedgerCheckpoint::maximum_bytes(retained_flow_limit)?
+            .checked_add(
+                retained_flow_limit
+                    .checked_mul(LENGTH_BYTES + crate::sessions::MAX_SNAPSHOT_BYTES)?,
+            )?
+            .checked_add(Liveness::ENCODED_BYTES)?;
         let handshake = LedgerCheckpoint::maximum_bytes(0)?
             .checked_add(LENGTH_BYTES + HandshakeCheckpoint::MAX_ENCODED_BYTES)?;
         let detached =
@@ -79,7 +86,10 @@ impl ConnectionCheckpoint {
         let connection =
             ConnectionRef::decode(field(&mut body)?).ok_or(Error::InvalidCheckpoint)?;
         let role = match field::<1>(&mut body)? {
-            [0] => ConnectionRole::Established,
+            [0] => ConnectionRole::Established(
+                Liveness::decode(&field::<{ Liveness::ENCODED_BYTES }>(&mut body)?)
+                    .map_err(|_| Error::InvalidCheckpoint)?,
+            ),
             [1] => ConnectionRole::Closing,
             [3] => ConnectionRole::Detached(super::Detached::AwaitingRelease),
             [6] => ConnectionRole::Detached(super::Detached::Released),

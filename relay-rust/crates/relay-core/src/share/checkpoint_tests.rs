@@ -105,7 +105,7 @@ fn native_hosts_do_not_allocate_an_attachment_journal() {
 }
 
 #[test]
-fn data_and_feedback_update_only_the_destination_and_replay_writes_nothing() {
+fn same_instant_data_and_feedback_only_update_accounting_and_replay_writes_nothing() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let stored = fixture.register(&mut relay);
@@ -194,6 +194,125 @@ fn data_and_feedback_update_only_the_destination_and_replay_writes_nothing() {
         restored.sessions[&sibling.wire_id()].session.phase(),
         crate::sessions::Phase::Active
     );
+}
+
+#[test]
+fn later_inbound_data_and_probes_persist_source_liveness_without_rewriting_siblings() {
+    use crate::heartbeat::{
+        CONNECTION_PROBE_INTERVAL, CONNECTION_SILENCE_TIMEOUT, ConnectionProbe,
+    };
+
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    let stored = fixture.register(&mut relay);
+    let (key, _) = active(&mut relay, &fixture, 2);
+    let (sibling, _) = active(&mut relay, &fixture, 3);
+    relay.enable_checkpoints(budget(), fixture.at).unwrap();
+    let mut host = Attachments::default();
+    host.flush(&mut relay, fixture.at);
+    let sibling_bytes = host.bytes[&sibling.receiver()].clone();
+    let at = fixture.at.saturating_add(CONNECTION_PROBE_INTERVAL);
+    let receipt = receive_from(&mut relay, key, key.sender(), at);
+    assert_eq!(
+        relay.submit(&receipt, at, |_| Submission::Complete).refusal,
+        None
+    );
+    let flushed = host.flush(&mut relay, at);
+    assert_eq!(host.written, [key.sender(), key.receiver()]);
+    assert!(!flushed.manifest);
+    assert_eq!(host.bytes[&sibling.receiver()], sibling_bytes);
+
+    let frame = ConnectionProbe::new(NonZeroU64::new(1).unwrap()).encode();
+    let turn = relay.handle(
+        Input::Control {
+            connection: key.sender(),
+            frame: &frame,
+        },
+        at,
+    );
+    assert_eq!(turn.refusal, None);
+    assert_eq!(host.flush(&mut relay, at).connections, 1);
+    assert_eq!(host.written, [key.sender()]);
+    let checkpoint = host.checkpoint();
+    let (mut restored, _) = Relay::restore(
+        fixture.identity(2),
+        Fixture::limits(),
+        &Restore {
+            authority: Authority::Known(Some(stored)),
+            surviving: &[key.sender(), key.receiver(), sibling.receiver()],
+            responsibility: Responsibility::Checkpoint(&checkpoint),
+        },
+        Trace::default(),
+        at,
+    )
+    .unwrap();
+    let Role::Established(live) = restored.connections[&key.sender()].role else {
+        panic!("lost sender");
+    };
+    assert_eq!(live.last_probe_nonce(), 1);
+    assert_eq!(live.last_inbound(), at);
+    assert_eq!(
+        live.deadline(),
+        at.saturating_add(CONNECTION_SILENCE_TIMEOUT)
+    );
+    assert_eq!(
+        restored
+            .handle(
+                Input::Control {
+                    connection: key.sender(),
+                    frame: &frame
+                },
+                at
+            )
+            .refusal,
+        Some(Error::ProbeNonce)
+    );
+}
+
+#[test]
+fn accepted_repeated_feedback_updates_liveness_without_releasing_credit_twice() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let (key, _) = active(&mut relay, &fixture, 2);
+    relay.enable_checkpoints(budget(), fixture.at).unwrap();
+    let mut host = Attachments::default();
+    host.flush(&mut relay, fixture.at);
+    let frame = crate::flow::DeliveryConsumed::new(key.wire_id(), Counts::new(1, 21))
+        .unwrap()
+        .encode();
+    assert_eq!(
+        relay
+            .handle(
+                Input::Control {
+                    connection: key.sender(),
+                    frame: &frame
+                },
+                fixture.at
+            )
+            .refusal,
+        None
+    );
+    host.flush(&mut relay, fixture.at);
+    let usage = relay.delivery_usage(key.sender());
+    let at = fixture
+        .at
+        .saturating_add(crate::heartbeat::CONNECTION_PROBE_INTERVAL);
+    assert_eq!(
+        relay
+            .handle(
+                Input::Control {
+                    connection: key.sender(),
+                    frame: &frame
+                },
+                at
+            )
+            .refusal,
+        None
+    );
+    assert_eq!(relay.delivery_usage(key.sender()), usage);
+    assert!(!host.flush(&mut relay, at).manifest);
+    assert_eq!(host.written, [key.sender()]);
 }
 
 #[test]

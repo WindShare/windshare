@@ -184,7 +184,15 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
             .refusal,
         Some(Error::Capacity)
     );
-    assert!(relay.deadline().is_none());
+    assert_eq!(
+        relay.deadline(),
+        Some(
+            fixture
+                .at
+                .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
+        )
+    );
+    assert!(relay.ledgers[&key.receiver()].deadline().is_none());
 }
 
 #[test]
@@ -294,7 +302,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         );
         assert!(matches!(
             relay.connections[&next_connection].role,
-            Role::Established
+            Role::Established(_)
         ));
     }
     assert!(!relay.ledgers.contains_key(&old.receiver()));
