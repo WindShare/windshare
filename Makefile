@@ -73,7 +73,8 @@ rust:
 	node --test scripts/ci/rust/line-coverage.test.mjs
 	node scripts/ci/rust/check-coverage.mjs "$(RUST_WORKSPACE)" $(RUST_COVERAGE_MIN) $(RUST_COVERAGE_PACKAGE_MIN) $(RUST_BUILD_JOBS)
 	cd $(RUST_WORKSPACE) && $(RUST_CARGO) test --workspace --doc --locked --jobs $(RUST_BUILD_JOBS)
-	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) clippy -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS) -- -D warnings
+	cd $(RUST_WORKSPACE) && $(RUST_CARGO) build -p windshare-relay-core -p windshare-relay-cloudflare --target wasm32-unknown-unknown --locked --jobs $(RUST_BUILD_JOBS)
 	@echo "== rust: PASS =="
 
 $(PLATFORM_TARGETS):

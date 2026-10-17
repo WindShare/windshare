@@ -8,14 +8,13 @@ use std::{
     time::Duration,
 };
 use windshare_relay_core::{
-    descriptor_upload::MAX_DESCRIPTOR_BYTES,
-    identifiers::{DescriptorDigest, RelayIdentity, ShareId},
-    lifecycle::{OperationId, Record},
+    identifiers::{RelayIdentity, ShareId},
+    lifecycle::Record,
     share::Storage,
 };
 
 mod transactions;
-use transactions::{read, validate_record};
+use transactions::read;
 
 const SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -99,12 +98,11 @@ impl Database {
                     .map_err(|_| anyhow!("invalid share key"))?,
             )
             .ok_or_else(|| anyhow!("zero share key"))?;
-            let stored =
-                read(&connection, share)?.ok_or_else(|| anyhow!("authority disappeared"))?;
-            validate_record(self.0.relay, share, &stored)?;
-            if !matches!(stored.record, Record::Stopped(_)) {
+            let stored = read(&connection, self.0.relay, share)?
+                .ok_or_else(|| anyhow!("authority disappeared"))?;
+            if !matches!(stored.record(), Record::Stopped(_)) {
                 ensure!(records.len() < limit, "recovering share capacity exhausted");
-                records.push(stored.record);
+                records.push(stored.record());
             }
         }
         drop(statement);
@@ -120,14 +118,9 @@ impl Persistence for Database {
             .connection
             .lock()
             .map_err(|_| anyhow!("database lock poisoned"))?;
-        let stored = read(&connection, share)?;
+        let stored = read(&connection, self.0.relay, share)?;
         drop(connection);
-        stored
-            .map(|stored| {
-                validate_record(self.0.relay, share, &stored)?;
-                Ok(stored.record)
-            })
-            .transpose()
+        Ok(stored.map(|stored| stored.record()))
     }
 
     fn execute(&self, share: ShareId, operation: &Storage) -> Result<()> {
@@ -194,14 +187,6 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
     )?;
     transaction.commit()?;
     NonZeroU64::new(u64::try_from(generation)?).ok_or_else(|| anyhow!("invalid generation"))
-}
-
-fn operation_key(operation: OperationId) -> Vec<u8> {
-    let mut bytes = operation.incarnation().as_bytes().to_vec();
-    bytes.extend_from_slice(&operation.connection().id.get().to_be_bytes());
-    bytes.extend_from_slice(&operation.connection().generation.get().to_be_bytes());
-    bytes.extend_from_slice(&operation.sequence().get().to_be_bytes());
-    bytes
 }
 
 #[cfg(test)]

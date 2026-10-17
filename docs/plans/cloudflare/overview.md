@@ -35,8 +35,8 @@ an intentionally per-event SQLite mirror as a control, not as production wiring.
 
 Go REGISTER/RESUME/JOIN/STOP and browser JOIN now derive a per-share dial URL with the public
 `share_id` query hint. Shared vectors preserve admission-query bytes and relay identity, and reject
-preconfigured routing parameters. The future Cloudflare host must validate that hint against the
-handshake's share identity; client routing does not resolve host recovery storage.
+preconfigured routing parameters. Both lifecycle hosts validate that hint against the
+handshake's share identity; the Cloudflare host also binds its Durable Object and stored endpoint.
 
 `observation::Observer` is the single observation interface for lifecycle,
 sessions, delivery and orchestration. Typed decisions carry operation/session
@@ -170,6 +170,23 @@ pending; current Go/browser transport runtimes and the Go server are unchanged.
 This control-only schema proves no payload responsibility was acquired. It does not
 establish a future native data-plane buffer-release policy.
 
+## Cloudflare lifecycle host
+
+[`relay-cloudflare`](../../../relay-rust/crates/relay-cloudflare/README.md) runs the
+same lifecycle on a real Worker and SQLite Durable Object. The Worker routes by
+`share_id` and gates fresh registration with a deployment credential; RESUME and
+STOP authenticate independently. `authority::apply` supplies the same atomic row
+transitions to both SQL hosts.
+
+Typed binary socket attachments preserve pending handshakes and established
+liveness. The independent manifest and persisted allocator fence lost generations.
+Alarms are coalesced without extending deadlines; recovery expires state before
+accepting traffic. The lifecycle-only schema has never acquired payload debt;
+enabling delivery requires replacing that explicit recovery assumption.
+The [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
+passed fresh signatures, normal hibernation, fault RESUME, permanent STOP and Alarm expiry.
+JOIN/forwarding and the Go/browser runtime cutover remain pending.
+
 ## Host evidence
 
 The [bounded host probes](../../../spikes/relay-hosts/README.md) exercise the real
@@ -193,8 +210,9 @@ product flow.
 
 ## Testing
 
-`make rust` runs formatting, Clippy, native coverage, doctests and the core Wasm
-build. Public aggregate scenarios cover durability barriers, STOP with outstanding
+`make rust` runs formatting, Clippy, native coverage, doctests, the core and
+Cloudflare Wasm builds, and Cloudflare Wasm Clippy. Public aggregate scenarios
+cover durability barriers, STOP with outstanding
 delivery, duplicate STOP, stopped recovery and late callbacks, FIFO
 handoff, uncertain results, stale callbacks, cancellation, capacity rollback and
 hibernated recovery using injected time without sleeps. Primitive tests retain

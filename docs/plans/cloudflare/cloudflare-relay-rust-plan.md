@@ -47,6 +47,11 @@ executes real REGISTER/RESUME/STOP connections with SQLite authority, OS entropy
 and host timers. Its Go-codec process scenario verifies ownership recovery and
 permanent STOP across restarts. JOIN/data forwarding and the coordinated client
 runtime cutover remain pending; the Go relay is still the product entry point.
+The [Cloudflare lifecycle host](../../../relay-rust/crates/relay-cloudflare/README.md)
+now routes real upgrades by `share_id`, uses Worker entropy and time, executes the
+same authority-row transitions as native SQLite, and restores binary socket
+attachments with the independent manifest. Coalesced Alarms enforce original
+deadlines. Registration permission is separate from signed RESUME/STOP.
 Connection liveness is implemented in the kernel: client `WS2H` probes receive
 `WS2A`, accepted inbound traffic refreshes the independent silence deadline,
 and connection checkpoints preserve the nonce, last inbound time and original expiry.
