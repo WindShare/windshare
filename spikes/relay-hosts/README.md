@@ -56,6 +56,27 @@ termination policy. Source inspection suggests V8 termination interrupts an acti
 Wasm callback's cleanup; the exact internal failure mechanism remains an inference.
 The control results and captured callback error are direct observations.
 
+## Related upstream reports
+
+Checked 2026-10-17; none is a confirmed fix for this probe.
+
+- [wasm-bindgen #5379](https://github.com/wasm-bindgen/wasm-bindgen/pull/5379)
+  (draft, unmerged) describes executor stalls and the same callback error after
+  host termination. Its trigger is CPU exhaustion; ours is `ctx.abort()`.
+  The [maintainer requests a workers-rs 0.8 retest](https://github.com/wasm-bindgen/wasm-bindgen/pull/5379#issuecomment-6224062714);
+  that reporter used 0.7.5, while this probe already uses 0.8.7. A shared cause
+  remains unconfirmed.
+- [workerd #988](https://github.com/cloudflare/workerd/issues/988) (open) tracks
+  missing `WebSocket.bufferedAmount` and backpressure support. It provides no
+  buffer-release guarantee.
+- [workerd #7595](https://github.com/cloudflare/workerd/issues/7595) and
+  [#7566](https://github.com/cloudflare/workerd/issues/7566) (open) report sockets
+  returning to `OPEN` after closing and hibernation, or delayed connection closure.
+  Their triggers differ from this probe; neither explains the retained burst yet.
+
+Next: check the 0.8.7 reinitialization path against our reset reproduction.
+Transport-occupancy ownership still needs an independent design resolution.
+
 ## Run locally
 
 The probes are separate Cargo workspaces, excluded from ordinary gates. From
