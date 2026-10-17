@@ -7,19 +7,29 @@ use crate::{
     sessions::{ForwardPermit, OpaqueHeader, Retirement},
 };
 
-use super::{CloseRequest, Counts, FlowKey, Refusal, Usage};
+use super::{CloseRequest, Counts, FlowKey, ReceiveCapacity, Refusal, Usage};
 
 /// Input correlation retained on refusals and resource lifecycle transitions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input {
+    DeclareCapacity(ReceiveCapacity),
     /// Attempt to reserve the initial delivery window before receiving any frame.
     Open(ForwardPermit),
     /// Ordinary source allowance, backed by the non-startup capacity.
-    Grant { flow: FlowKey, credit: Counts },
+    Grant {
+        flow: FlowKey,
+        credit: Counts,
+    },
     /// Only decoded routing metadata; the host retains the actual bytes.
-    Receive { flow: FlowKey, header: OpaqueHeader },
+    Receive {
+        flow: FlowKey,
+        header: OpaqueHeader,
+    },
     /// FIFO handoff to the destination host.
-    Submit { flow: FlowKey, ordinal: u64 },
+    Submit {
+        flow: FlowKey,
+        ordinal: u64,
+    },
     /// Cumulative application consumption, never socket-write completion.
     Consume {
         flow: FlowKey,
@@ -45,6 +55,10 @@ pub enum Input {
 /// Milestones only; ordinary forwarding and consumption do not trace per frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Decision {
+    CapacityDeclared {
+        capacity: ReceiveCapacity,
+        effective: Counts,
+    },
     /// Startup capacity was reserved before issuing the first allowance.
     Opened(FlowKey),
     /// An operation was refused without changing its accounting.

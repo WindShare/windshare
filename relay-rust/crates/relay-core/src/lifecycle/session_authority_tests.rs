@@ -31,6 +31,8 @@ fn join_refusals_do_not_mint_a_session_or_extend_its_budget() {
         RelayIdentity::new([99; 32]).unwrap(),
         connection(2, 1),
         fixture.share(),
+        crate::flow::ReceiveCapacity::new(16, 16 * u64::from(OpaqueHeader::MAX_ENCODED_BYTES))
+            .unwrap(),
         fixture.at,
     );
     assert_eq!(

@@ -25,6 +25,9 @@ const ADMISSION_RETRY: RetryAfter = match RetryAfter::from_millis(250) {
 impl<const N: usize, O: Observer> ShareRelay<N, O> {
     pub(super) fn join(&mut self, request: JoinRequest, now: UnixMillis, turn: &mut Turn) {
         let connection = request.connection();
+        if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {
+            return;
+        }
         let refused = if self.readiness != Readiness::Ready {
             Some(ErrorFrame::Starting(ADMISSION_RETRY))
         } else if self.sessions.len() >= self.limits.sessions || self.last_session == u64::MAX {
