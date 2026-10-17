@@ -12,7 +12,7 @@ const SHARE_ID_DOMAIN: &[u8] = b"windshare/v2 share-id\0";
 macro_rules! nonzero_identifier {
     ($(#[$meta:meta])* $name:ident, $width:literal) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
         pub struct $name([u8; $width]);
 
         impl $name {
@@ -35,7 +35,7 @@ macro_rules! nonzero_identifier {
 macro_rules! digest_identifier {
     ($(#[$meta:meta])* $name:ident, $width:literal) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
         pub struct $name([u8; $width]);
 
         impl $name {
@@ -127,7 +127,7 @@ impl DescriptorDigest {
 ///
 /// Only matching pairs are representable, so a frame can never route one
 /// sender's proof under another share's identity.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct ShareRoute {
     share_id: ShareId,
     pk_hash: PkHash,

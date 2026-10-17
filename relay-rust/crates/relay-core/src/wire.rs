@@ -83,11 +83,20 @@ impl<'a> Reader<'a> {
         Ok(*field)
     }
 
+    pub fn take(&mut self, length: usize) -> Result<&'a [u8], FrameError> {
+        let (value, rest) = self
+            .rest
+            .split_at_checked(length)
+            .ok_or(FrameError::Length)?;
+        self.rest = rest;
+        Ok(value)
+    }
+
     pub fn u32(&mut self) -> Result<u32, FrameError> {
         self.array().map(u32::from_be_bytes)
     }
 
-    pub const fn remainder(self) -> &'a [u8] {
+    pub const fn remainder(&self) -> &'a [u8] {
         self.rest
     }
 

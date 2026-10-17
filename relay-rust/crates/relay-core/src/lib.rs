@@ -1,22 +1,19 @@
-//! Shared relay control semantics for native and Cloudflare hosts.
+//! Shared relay semantics for native and Cloudflare hosts, using `no_std + alloc`.
 //!
-//! Hosts own clocks, persistence, sockets, and opaque payload forwarding so that
-//! platform limits and I/O mechanisms cannot become implicit control decisions.
-//! This crate decodes the control frames a relay receives, encodes the ones it
-//! sends, drives connection handshakes and single-share registration, resume
-//! and owner-loss grace, and turns sender proofs into move-only authorities.
-//! Irreversible STOP persists its cleanup obligation across restart, then waits
-//! for exact retirement and final durable confirmation before replying.
-//! Publication remains hidden until the host confirms persistence and
-//! connection preparation, and a share lifecycle is constructed only from the
-//! durable record its host stores. Rebuilding it over surviving sockets keeps
-//! the stored ownership and reinstalls validated session snapshots. Receiver
-//! sessions keep an absolute admission budget and issue routing permits checked
-//! against live session and share authority immediately before submission. Connection delivery ledgers reserve
-//! startup and ordinary capacity, retaining submitted occupancy through retirement
-//! until consumption, settlement or confirmed closure. Payloads remain host-owned.
+//! [`share::ShareRelay`] owns each share's lifecycle, handshakes, sessions, delivery
+//! ledgers and deadlines. It emits ordered I/O obligations and consumes exact
+//! completions, keeping publication and irreversible STOP barriers in one place.
+//! Its synchronous submission boundary rechecks authority and charges delivery
+//! before host handoff; retirement cannot refund bytes still held by a transport.
+//!
+//! Hosts provide time, entropy, capacity and I/O. Opaque payloads never enter the
+//! engine. Aggregate checkpoints restore surviving authority and outstanding
+//! delivery together; lower-level state machines remain independently testable.
+//! All decisions use [`observation::Observer`].
 
 #![no_std]
+
+extern crate alloc;
 
 pub mod authentication;
 pub mod challenge;
@@ -28,9 +25,11 @@ pub mod handshake;
 pub mod identifiers;
 pub mod join;
 pub mod lifecycle;
+pub mod observation;
 pub mod registration;
 pub mod sender_auth;
 pub mod sessions;
+pub mod share;
 pub mod stop;
 mod wire;
 

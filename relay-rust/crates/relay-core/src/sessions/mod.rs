@@ -1,22 +1,13 @@
 //! Receiver admission and revocable routing, independent of host storage or I/O.
 //!
-//! A lifecycle JOIN creates one move-only `Session`. Hosts reserve bounded
-//! session capacity and allocate a nonzero wire ID before JOIN; IDs must never
-//! be reused while either participant connection survives. Hosts store sessions
-//! beside their platform's connection resources, retaining retired identities
-//! for bounded late-frame handling. This module owns all session decisions.
+//! A lifecycle JOIN creates one move-only [`Session`]. [`crate::share::ShareRelay`]
+//! owns bounded session storage, non-reused wire IDs, revocation fanout, cleanup
+//! and deadline scheduling. STOP delays physical cleanup until its intent is
+//! durable, while send-time checks fence forwarding immediately.
 //!
-//! Hosts apply lifecycle `Effects::revocation` to the old owner's sessions,
-//! retain each retirement until host cleanup finishes, and combine session
-//! deadlines with handshake/lifecycle deadlines. STOP performs physical cleanup
-//! only after its intent is durable. Send-time checks consult the live lifecycle
-//! too: deferred cleanup cannot prolong forwarding authority.
-//!
-//! No payload, queue, timer, allocator or platform capacity lives here. The
-//! session itself is not cloneable. Hosts whose sockets outlive the actor, such
-//! as hibernated ones, record `Session::snapshot` beside them after every input;
-//! a snapshot is inert data that only `ShareLifecycle::restore` validates and
-//! turns back into the same session.
+//! Session snapshots are inert metadata. Aggregate recovery validates their
+//! lifecycle authority together with both participants' delivery ledgers before
+//! restoring a route. Payloads, transport queues and timers remain outside it.
 
 mod authority;
 mod effect;
@@ -182,14 +173,17 @@ impl Session {
             |retirement| Some(Decision::Retired(retirement.reason)),
         );
         if let Some(decision) = decision {
-            observer.observe(Observation {
-                at: now,
-                session: self.key,
-                event,
-                before,
-                after: self.phase(),
-                decision,
-            });
+            observer.observe(
+                Observation {
+                    at: now,
+                    session: self.key,
+                    event,
+                    before,
+                    after: self.phase(),
+                    decision,
+                }
+                .into(),
+            );
         }
         effects
     }

@@ -149,14 +149,7 @@ pub struct Observation {
 
 /// Static-dispatch boundary for platform trace sinks. Calls are synchronous;
 /// implementations must not re-enter the lifecycle or retain payload buffers.
-pub trait Observer {
-    /// Records one structured decision.
-    fn observe(&mut self, observation: Observation);
-}
-
-impl Observer for () {
-    fn observe(&mut self, _: Observation) {}
-}
+pub use crate::observation::Observer;
 
 impl<O: Observer> ShareLifecycle<O> {
     pub(super) fn observe(
@@ -168,23 +161,26 @@ impl<O: Observer> ShareLifecycle<O> {
         before: Phase,
         decision: Decision,
     ) {
-        self.observer.observe(Observation {
-            at,
-            relay: self.relay,
-            share: self.share,
-            incarnation: self.incarnation,
-            ownership: match self.state {
-                State::Published(published) => Some(published.owner),
-                State::Grace(route) => Some(route.lost()),
-                _ => None,
-            },
-            operation,
-            connection,
-            event,
-            before,
-            after: self.phase(),
-            decision,
-        });
+        self.observer.observe(
+            Observation {
+                at,
+                relay: self.relay,
+                share: self.share,
+                incarnation: self.incarnation,
+                ownership: match self.state {
+                    State::Published(published) => Some(published.owner),
+                    State::Grace(route) => Some(route.lost()),
+                    _ => None,
+                },
+                operation,
+                connection,
+                event,
+                before,
+                after: self.phase(),
+                decision,
+            }
+            .into(),
+        );
     }
 }
 
