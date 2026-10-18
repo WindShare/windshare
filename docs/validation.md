@@ -7,7 +7,9 @@ Go process E2E, `integration/relayv2` and browser product scenarios build Rust
 the installed stable Rust toolchain; browser scenarios also need browser prerequisites.
 Cargo retains its incremental cache; each suite runs its own executable copy.
 Go relay fixtures share `internal/testrelaynative` for isolated SQLite, readiness
-and bounded process ownership. Short Go tests do not build Rust.
+and bounded process ownership. `integration/relayv2` also owns relay-set candidate
+isolation, exact-lane reconnection and session shutdown scenarios. Short relay-set
+tests inject dials and clocks; short Go tests do not build Rust.
 Go race instrumentation applies only to Go children.
 
 ## Local gates

@@ -22,13 +22,13 @@ var relayTraceOutput struct {
 	err  error
 }
 
-func startRelayScenario(t *testing.T) (*testscenario.Trace, testrun.Identity) {
+func startRelayScenario(t *testing.T, scenario string) (*testscenario.Trace, testrun.Identity) {
 	t.Helper()
 	run, err := testrun.PackageRun()
 	if err != nil {
 		t.Fatalf("resolve relay integration run: %v", err)
 	}
-	operation, err := run.NewOperation(relayWebSocketScenario)
+	operation, err := run.NewOperation(scenario)
 	if err != nil {
 		t.Fatalf("create relay integration operation: %v", err)
 	}
