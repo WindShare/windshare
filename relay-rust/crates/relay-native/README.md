@@ -4,7 +4,7 @@ This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulativ
 consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
 real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
 production Go/browser clients still await the coordinated cutover. The Go relay remains
-the product server until client integration, STUN and remaining operational interfaces are ready.
+the product server until client integration and remaining operational interfaces are ready.
 
 From `relay-rust/`:
 
@@ -25,6 +25,12 @@ when the public WebSocket endpoint has a base path. Unknown paths return 404 and
 unsupported methods return 405. HTTP bodies are rejected; ordinary replies close
 the connection. HTTP ingress has 64 concurrent slots, a 5-second read/write deadline,
 and a 16 KiB / 64-header limit, separate from relay admission.
+
+Independent UDP STUN Binding listeners default to `0.0.0.0:3478` and `[::]:3478`;
+their private health/metrics HTTP listener defaults to `127.0.0.1:8081`.
+UDP/admin failures leave relay traffic available. Ctrl-C (or SIGTERM on Unix)
+joins STUN and relay teardown. See [STUN configuration](../../../docs/stun.md#native-rust-host)
+for flags, protocol boundaries, limits and health semantics.
 
 Browser WebSocket access requires `--origins https://app.example,https://other.example`.
 Entries are full HTTP(S) origins without paths, credentials, queries or fragments;
@@ -91,7 +97,9 @@ Recovery evidence depends on the boundary:
 Previously submitted network bytes may still arrive; release does not mean delivery
 or recall. These native ownership guarantees do not apply to Cloudflare buffers.
 
-`make rust` covers HTTP routing, Origin policy, bounded headers, virtual-time HTTP
+`make rust` covers STUN Binding with Pion on IPv4/IPv6, malformed/oversized datagrams,
+virtual-time limits and I/O deadlines, listener/admin fault isolation and socket release.
+It also covers HTTP routing, Origin policy, bounded headers, virtual-time HTTP
 read/write deadlines, capacity isolation and upgrade handoff, plus blocked-write ingress,
 bounded queues, STOP submission fencing,
 joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,

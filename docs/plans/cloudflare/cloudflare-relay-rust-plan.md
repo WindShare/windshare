@@ -59,9 +59,11 @@ confirmed authority transactions; opaque forwarding performs no SQL.
 Native HTTP ingress now provides root `GET/HEAD /healthz`, an explicit browser
 Origin allowlist and opt-in localhost access. HTTP concurrency and read/write deadlines
 are independent of relay admission; validated upgrades transfer transport ownership
-and pre-read bytes into the existing connection supervisor. The coordinated production
-client cutover, STUN and remaining operational interfaces remain pending; Go is still
-the product entry point.
+and pre-read bytes into the existing connection supervisor. Independent native UDP
+STUN now provides IPv4/IPv6 Binding, bounded source/rate budgets, separate health/metrics
+and joined shutdown; Pion verifies its responses across native process restarts.
+The coordinated production client cutover and remaining operational interfaces remain
+pending; Go is still the product entry point.
 The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, executes JOIN with confirmed descriptors,
 and forwards opaque envelopes synchronously through kernel submission. Cumulative

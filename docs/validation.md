@@ -128,6 +128,10 @@ HTTP tests cover root health routing, Origin policy and startup validation, inde
 HTTP/relay capacity, bounded headers, pre-read frame handoff and joined shutdown.
 Incomplete reads and blocked responses use virtual time to verify absolute deadlines
 and admission release without increasing wall-clock timeout waits.
+STUN tests cover RFC 5769 address/fingerprint vectors, malformed and oversized UDP,
+injected-time source/rate bounds, read/write failures, independent admin health and
+joined socket release. The existing Go helper also verifies IPv4/IPv6 Binding with
+Pion before and after native restarts, without another helper build.
 Its Go-codec scenario transfers beyond asymmetric windows, replays feedback, verifies
 maximum frames and descriptors, restarts and resumes delivery, then stops with submitted
 debt and verifies permanent refusal across another restart. Connection tests block actual WebSocket

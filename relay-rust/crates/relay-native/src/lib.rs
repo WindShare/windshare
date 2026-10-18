@@ -9,6 +9,7 @@ mod http;
 mod registry;
 mod socket;
 mod storage;
+pub mod stun;
 
 pub use config::Endpoint;
 pub use http::OriginPolicy;
