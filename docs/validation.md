@@ -126,6 +126,9 @@ The native host runs REGISTER/RESUME, JOIN, bidirectional forwarding, cumulative
 feedback, settlement, STOP and heartbeats on real WebSockets with SQLite persistence.
 HTTP tests cover root health routing, Origin policy and startup validation, independent
 HTTP/relay capacity, bounded headers, pre-read frame handoff and joined shutdown.
+Native admission tests cover source isolation, IPv4-mapped identity, proxy trust,
+atomic reservation/transition failures, last-owner release and STOP with full business
+budgets; rejected identities and capacity failures do not spend attempt tokens.
 Incomplete reads and blocked responses use virtual time to verify absolute deadlines
 and admission release without increasing wall-clock timeout waits.
 STUN tests cover RFC 5769 address/fingerprint vectors, malformed and oversized UDP,

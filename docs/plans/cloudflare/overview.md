@@ -132,6 +132,9 @@ Bounded HTTP reads/writes use separate capacity; upgrades preserve pre-read byte
 existing connection teardown. Independent UDP STUN now supplies IPv4/IPv6 Binding,
 bounded per-listener/source rates, fault-isolated health/metrics and joined teardown.
 The native process scenario verifies responses with Pion across restarts.
+Global and per-source connection budgets now share atomic admission and teardown;
+separate control budgets preserve STOP under business saturation. Explicit proxy trust
+resolves source IPs without accepting arbitrary forwarding headers.
 Remaining operational interfaces and the production client cutover remain pending;
 Go is still the product entry point.
 

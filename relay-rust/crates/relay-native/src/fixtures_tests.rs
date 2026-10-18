@@ -160,12 +160,15 @@ pub fn connection(id: u64) -> ConnectionRef {
 
 pub fn socket_admission() -> std::sync::Arc<crate::connection::Admission> {
     crate::connection::Capacity::new(
-        crate::config::MAX_BUSINESS_CONNECTIONS,
-        crate::config::MAX_CONTROL_CONNECTIONS,
+        crate::connection::ConnectionLimits::default(),
         crate::config::CONNECTION_ATTEMPTS,
         windshare_relay_core::clock::UnixMillis(0),
     )
     .unwrap()
-    .accept(windshare_relay_core::clock::UnixMillis(0))
+    .accept(
+        "127.0.0.1".parse().unwrap(),
+        connection(1),
+        windshare_relay_core::clock::UnixMillis(0),
+    )
     .unwrap()
 }

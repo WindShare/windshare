@@ -22,6 +22,7 @@ use tokio_tungstenite::{
         protocol::{Role, WebSocketConfig},
     },
 };
+use windshare_relay_core::clock::UnixMillis;
 
 const TEST_BUDGET: Duration = Duration::from_secs(3);
 const PIPE_BYTES: usize = 16;
@@ -199,9 +200,28 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
     registry.shutdown().await.unwrap();
 }
 
+fn two_source_capacity(now: UnixMillis) -> Arc<Capacity> {
+    Capacity::new(
+        ConnectionLimits {
+            controls: 2,
+            controls_per_source: 1,
+            ..ConnectionLimits::default()
+        },
+        CONNECTION_ATTEMPTS,
+        now,
+    )
+    .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() {
     let (directory, registry, fixture) = registry();
+    let now = registry.environment.now();
+    let capacity = two_source_capacity(now);
+    let source = "192.0.2.1".parse().unwrap();
+    let admission = capacity
+        .accept(source, reference(1), registry.environment.now())
+        .unwrap();
     let old = registry.attach(fixture.identity().share).unwrap();
     let (server, client) = tokio::io::duplex(PIPE_BYTES);
     let blocked = Arc::new(Notify::new());
@@ -230,7 +250,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
                     reference(1),
                     stopping,
                     old.generation.clone(),
-                    crate::test_support::socket_admission(),
+                    admission,
                 ),
             )
             .unwrap(),
@@ -250,6 +270,28 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
             .is_cancelled()
     );
     let actor = old.task.clone();
+    assert!(
+        capacity
+            .accept(source, reference(2), registry.environment.now())
+            .is_err()
+    );
+    let other = capacity
+        .accept(
+            "192.0.2.2".parse().unwrap(),
+            reference(3),
+            registry.environment.now(),
+        )
+        .unwrap();
+    assert!(
+        capacity
+            .accept(
+                "192.0.2.3".parse().unwrap(),
+                reference(4),
+                registry.environment.now()
+            )
+            .is_err()
+    );
+    drop(other);
     drop(old);
     drop(registry);
     actor.abort();
@@ -272,4 +314,5 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
     .await
     .unwrap();
     assert!(reopened.generation() > NonZeroU64::MIN);
+    assert!(capacity.accept(source, reference(5), now).is_ok());
 }
