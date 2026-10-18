@@ -1,4 +1,4 @@
-import { emitRelayHeartbeat } from '../../src/diagnostics/trace/connection-payload'
+import { emitRelayHeartbeat, emitRelayDelivery } from '../../src/diagnostics/trace/connection-payload'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createV2PeerPathIdentityValue,
@@ -357,6 +357,36 @@ it('exports connection probes with available session identity and bounded queue 
   }
   expect(() => emitRelayHeartbeat({ current: () => { throw new Error('observer failed') } }, event,
     'https://relay.invalid', context)).not.toThrow()
+})
+
+it('exports relay receipt totals without losing uint64 precision or confusing discard with consumption', () => {
+  const composition = productionComposition()
+  const source = createProtocolTraceSource(composition.trace)
+  const context = vi.fn(() => ({ correlation: {}, shareId: 'share' }))
+  const received = { frames: 1n << 53n, encodedBytes: 21n << 53n }
+  const consumed = { frames: received.frames - 1n, encodedBytes: received.encodedBytes - 21n }
+  const zero = { frames: 0n, encodedBytes: 0n }
+  const event = {
+    connectionId: 'relay-receiver-4', sessionId: '0100000000000001', action: 'settlement' as const,
+    capacity: { frames: 256n, encodedBytes: 16n * 1024n * 1024n },
+    failure: undefined, usage: { held: zero, outstanding: zero, pendingConsumed: zero, retainedSessions: 1 },
+    progress: { phase: 'settled' as const, received, consumed, consumedPrefix: consumed, discarded: { frames: 1n, encodedBytes: 21n } },
+  }
+  emitRelayDelivery(source, event, 'https://relay.invalid', context)
+  expect(context).not.toHaveBeenCalled()
+  composition.runtime.enable()
+  emitRelayDelivery(source, event, 'https://relay.invalid', context)
+  const records = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+    .filter(line => line.record?.event === 'relay_delivery').map(line => line.record)
+  expect(records).toHaveLength(1)
+  expect(records[0].payload.progress).toMatchObject({
+    received: { frames: received.frames.toString(), encoded_bytes: received.encodedBytes.toString() },
+    consumed: { frames: consumed.frames.toString(), encoded_bytes: consumed.encodedBytes.toString() },
+    discarded: { frames: '1', encoded_bytes: '21' },
+  })
+  expect(() => validateTraceEventPayloadV2('relay_delivery', records[0].payload)).not.toThrow()
+  expect(() => validateTraceEventPayloadV2('relay_delivery', { ...records[0].payload, held: { frames: '-1', encoded_bytes: '0' } })).toThrow()
+  expect(composition.runtime.status().health.trace_dropped_count).toBe('0')
 })
 
 it('exports operation recovery decisions with session and local operation correlation', () => {

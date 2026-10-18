@@ -1,4 +1,4 @@
-import type { TraceEventObservationV2 } from './model'
+import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from './model'
 import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 
 export type TraceRetention = 'recent' | 'milestone' | 'outcome'
@@ -86,6 +86,19 @@ const CONNECTION_RECOVERY_RETENTION = {
   connected: 'milestone', terminal: 'outcome', retry_requested: 'recent',
 } as const
 
+function relayDeliveryRetention(payload: TraceEventPayloadByNameV2['relay_delivery']): TraceRetention {
+  if (payload.failure !== undefined) return 'outcome'
+  switch (payload.action) {
+    case 'feedback':
+    case 'receive':
+    case 'consume':
+    case 'discard':
+      return 'recent'
+    default:
+      return 'milestone'
+  }
+}
+
 export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
     case 'sender_verification':
@@ -107,6 +120,8 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
       }
     case 'relay_heartbeat':
       return HEARTBEAT_RETENTION[event.payload.stage]
+    case 'relay_delivery':
+      return relayDeliveryRetention(event.payload)
     case 'connection_recovery':
       return CONNECTION_RECOVERY_RETENTION[event.payload.transition]
     case 'lease_retirement':

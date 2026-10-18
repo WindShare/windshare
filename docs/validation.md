@@ -2,6 +2,9 @@
 
 WindShare's validation entry points are local `make` gates, ordinary GitHub CI, weekly suites, and a manual release workflow.
 
+Browser product scenarios build Go `wind` and Rust `relay-native` once per suite;
+they require the installed stable Rust toolchain as well as Go and browser prerequisites.
+
 ## Local gates
 
 Make targets operate on the repository root and use the installed Go, Rust, Node.js, pnpm, browser, and analysis tools. Platform targets run `scripts/ci/linux/<target>.sh` or `scripts/ci/windows/<target>.ps1`.

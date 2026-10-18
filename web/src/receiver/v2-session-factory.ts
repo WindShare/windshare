@@ -10,7 +10,7 @@ import {
 
 import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from './relay-race'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
-import { emitRelayHeartbeat } from '../diagnostics/trace/connection-payload'
+import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
 
 export const V2_RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
 
@@ -196,6 +196,11 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     currentSession: () => V2ReceiverSessionRuntime | undefined,
   ): Promise<V2RelayReceiverConnection> {
     const relay = await this.#dialRelay(relayBase, this.#capability, { signal,
+      receiveTrace: event => emitRelayDelivery(this.#protocolTrace, event, relayBase, () => {
+        const session = currentSession()
+        return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+          shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }
+      }),
       heartbeatTrace: event => emitRelayHeartbeat(this.#protocolTrace, event, relayBase, () => {
         const session = currentSession()
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },

@@ -65,10 +65,10 @@ deadline; active sessions have no relay-idle timeout. Submitted occupancy
 survives cancellation until consumption, settlement or confirmed physical
 closure, and failed sends do not refund. The
 [delivery contract](delivery-flow-contract.md) is active in the Go `relayv2`
-runtime: declaration and local buffers share one capacity, both roles await
+runtime and browser receiver: declaration and local buffers share one capacity, both roles await
 explicit grants, sparse consumption wakes the ordered writer immediately, and
 settlement follows queue release.
-The browser ledger remains staged. Smaller declarations now preserve startup
+Smaller declarations preserve startup
 capacity within their effective host/client bound, including after restore.
 
 Retirement revokes unused credit and requests queue discard before ordered
@@ -139,9 +139,9 @@ The native process scenario verifies responses with Pion across restarts.
 Global and per-source connection budgets now share atomic admission and teardown;
 separate control budgets preserve STOP under business saturation. Explicit proxy trust
 resolves source IPs without accepting arbitrary forwarding headers.
-Browser activation, remaining operational interfaces and default server/build
-entry points remain pending. The new Go client requires a Rust host; the old Go
-server and its product integration suites have not been switched.
+Browser product fixtures now use Go `wind` and Rust `relay-native`, including
+the 17 MiB download/hash scenario. Remaining operational interfaces, default
+server/release entry points and Go product integration suites have not been switched.
 
 ## Cloudflare host
 
@@ -162,7 +162,7 @@ remains enforced. This is an admission policy, not a physical buffer TTL. The
 [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
 passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hibernation
 with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
-Browser activation and real Go-client validation against Cloudflare remain pending.
+Real Go-client and browser validation against Cloudflare remain pending.
 
 ## Host evidence
 
