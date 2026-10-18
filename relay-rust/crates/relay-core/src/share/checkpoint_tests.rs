@@ -781,7 +781,8 @@ fn retired_feedback_updates_its_record_and_manifest_as_one_accounting_change() {
     let fixture = Fixture::new();
     let limits = Limits {
         retirement: RetirementPolicy::Bounded {
-            grace: Duration::ZERO,
+            admission_grace: Duration::ZERO,
+            risk_retention: Duration::from_millis(SETTLEMENT_BUDGET),
             generations: 1,
             residual: TWO,
         },

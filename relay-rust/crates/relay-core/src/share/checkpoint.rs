@@ -103,6 +103,9 @@ impl ConnectionCheckpoint {
     }
 
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
+        if let ConnectionRole::Detached(state) = self.role {
+            state.validate(limits.retirement)?;
+        }
         if let ConnectionRole::Handshake(transcript) = &self.role {
             let business = transcript.steps.first().is_some_and(|step| {
                 matches!(step, super::handshake_checkpoint::Step::Frame { bytes, .. }

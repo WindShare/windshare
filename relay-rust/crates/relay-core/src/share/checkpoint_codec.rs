@@ -1,11 +1,13 @@
 use super::{
-    Checkpoint, CheckpointManifest, ConnectionCheckpoint, ConnectionRef, Error, Identity, Limits,
+    Checkpoint, CheckpointManifest, ConnectionCheckpoint, ConnectionRef, Detached, Error, Identity,
+    Limits,
 };
 use super::{
     checkpoint::{ConnectionResources, ConnectionRole},
     handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{
+    clock::UnixMillis,
     flow::LedgerCheckpoint,
     heartbeat::Liveness,
     identifiers::{RelayIdentity, ShareId},
@@ -15,8 +17,8 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 
-const FORMAT: u8 = 8;
-const CONNECTION_FORMAT: u8 = 6;
+const FORMAT: u8 = 9;
+const CONNECTION_FORMAT: u8 = 7;
 const LENGTH_BYTES: usize = size_of::<u64>();
 const IDENTITY_BYTES: usize = 32 + 12 + 16;
 const CONNECTION_HEADER_BYTES: usize =
@@ -36,13 +38,10 @@ impl ConnectionCheckpoint {
             }
             ConnectionRole::Closing => out.push(1),
             ConnectionRole::Stopping => out.push(7),
-            ConnectionRole::Detached(super::Detached::AwaitingRelease) => out.push(3),
-            ConnectionRole::Detached(super::Detached::Released) => out.push(6),
-            ConnectionRole::Detached(super::Detached::Quiescing { not_before }) => {
-                out.push(4);
-                out.extend_from_slice(&not_before.0.to_be_bytes());
+            ConnectionRole::Detached(state) => {
+                out.push(3);
+                put_detached(&mut out, *state);
             }
-            ConnectionRole::Detached(super::Detached::Retired) => out.push(5),
             ConnectionRole::Handshake(handshake) => {
                 out.push(2);
                 block(&mut out, &handshake.encode());
@@ -78,8 +77,8 @@ impl ConnectionCheckpoint {
             .checked_add(Liveness::ENCODED_BYTES)?;
         let handshake = LedgerCheckpoint::maximum_bytes(0)?
             .checked_add(LENGTH_BYTES + HandshakeCheckpoint::MAX_ENCODED_BYTES)?;
-        let detached =
-            LedgerCheckpoint::maximum_bytes(retained_flow_limit)?.checked_add(LENGTH_BYTES)?;
+        let detached = LedgerCheckpoint::maximum_bytes(retained_flow_limit)?
+            .checked_add(1 + 2 * LENGTH_BYTES)?;
         CONNECTION_HEADER_BYTES.checked_add(established.max(handshake).max(detached))
     }
 
@@ -105,12 +104,7 @@ impl ConnectionCheckpoint {
             ),
             [1] => ConnectionRole::Closing,
             [7] => ConnectionRole::Stopping,
-            [3] => ConnectionRole::Detached(super::Detached::AwaitingRelease),
-            [6] => ConnectionRole::Detached(super::Detached::Released),
-            [4] => ConnectionRole::Detached(super::Detached::Quiescing {
-                not_before: crate::clock::UnixMillis(u64::from_be_bytes(field(&mut body)?)),
-            }),
-            [5] => ConnectionRole::Detached(super::Detached::Retired),
+            [3] => ConnectionRole::Detached(read_detached(&mut body)?),
             [2] => ConnectionRole::Handshake(HandshakeCheckpoint::decode(read_block(
                 &mut body,
                 HandshakeCheckpoint::MAX_ENCODED_BYTES,
@@ -203,6 +197,42 @@ impl Checkpoint {
 pub(super) fn put_header(out: &mut Vec<u8>, identity: Identity, last_session: u64) {
     put_identity(out, identity);
     out.extend_from_slice(&last_session.to_be_bytes());
+}
+
+// Both records describe the same state; a missing attachment must not change
+// the meaning or origin of the manifest's absolute retirement deadlines.
+pub(super) fn put_detached(out: &mut Vec<u8>, state: Detached) {
+    match state {
+        Detached::AwaitingRelease => out.push(0),
+        Detached::Released => out.push(1),
+        Detached::Quiescing {
+            retire_at,
+            risk_expires_at,
+        } => {
+            out.push(2);
+            out.extend_from_slice(&retire_at.0.to_be_bytes());
+            out.extend_from_slice(&risk_expires_at.0.to_be_bytes());
+        }
+        Detached::RiskRetained { expires_at } => {
+            out.push(3);
+            out.extend_from_slice(&expires_at.0.to_be_bytes());
+        }
+    }
+}
+
+pub(super) fn read_detached(body: &mut Reader<'_>) -> Result<Detached, Error> {
+    match field::<1>(body)? {
+        [0] => Ok(Detached::AwaitingRelease),
+        [1] => Ok(Detached::Released),
+        [2] => Ok(Detached::Quiescing {
+            retire_at: UnixMillis(u64::from_be_bytes(field(body)?)),
+            risk_expires_at: UnixMillis(u64::from_be_bytes(field(body)?)),
+        }),
+        [3] => Ok(Detached::RiskRetained {
+            expires_at: UnixMillis(u64::from_be_bytes(field(body)?)),
+        }),
+        _ => Err(Error::InvalidCheckpoint),
+    }
 }
 fn put_identity(out: &mut Vec<u8>, identity: Identity) {
     out.extend_from_slice(identity.relay.as_bytes());

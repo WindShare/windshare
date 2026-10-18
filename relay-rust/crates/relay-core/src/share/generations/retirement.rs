@@ -8,16 +8,18 @@ use crate::{clock::UnixMillis, flow::Counts};
 use alloc::vec::Vec;
 use core::time::Duration;
 
-/// The host chooses when a quiescent, unreachable generation can leave admission.
-/// No policy supplies a physical-release receipt or an expiry for submitted bytes.
+/// The host bounds admission risk after loss, independently of physical release.
+/// Expiry ends a reservation; it never acknowledges consumption or freed buffers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetirementPolicy {
     /// Native hosts can join their writers and prove release with `Input::Closed`.
     PhysicalRelease,
-    /// A fixed grace starts at communication loss, never at reconnect or recovery.
-    /// Both limits apply independently; exhaustion leaves the generation admitted.
+    /// Both intervals start at the first observed loss, never at retirement or recovery.
+    /// Risk retention must cover admission grace. Cleanup remains mandatory even
+    /// after expiry; capacity exhaustion cannot postpone the original expiry.
     Bounded {
-        grace: Duration,
+        admission_grace: Duration,
+        risk_retention: Duration,
         generations: usize,
         residual: Counts,
     },
@@ -28,16 +30,26 @@ pub(in crate::share) enum Detached {
     AwaitingRelease,
     // Destination buffers are gone; queues sourced here may remain elsewhere.
     Released,
-    Quiescing { not_before: UnixMillis },
-    Retired,
+    Quiescing {
+        retire_at: UnixMillis,
+        risk_expires_at: UnixMillis,
+    },
+    RiskRetained {
+        expires_at: UnixMillis,
+    },
 }
 
 impl RetirementPolicy {
     pub(in crate::share) fn detached(self, now: UnixMillis) -> Detached {
         match self {
             Self::PhysicalRelease => Detached::AwaitingRelease,
-            Self::Bounded { grace, .. } => Detached::Quiescing {
-                not_before: now.saturating_add(grace),
+            Self::Bounded {
+                admission_grace,
+                risk_retention,
+                ..
+            } => Detached::Quiescing {
+                retire_at: now.saturating_add(admission_grace),
+                risk_expires_at: now.saturating_add(risk_retention),
             },
         }
     }
@@ -46,6 +58,37 @@ impl RetirementPolicy {
         match self {
             Self::PhysicalRelease => 0,
             Self::Bounded { generations, .. } => generations,
+        }
+    }
+
+    pub(in crate::share) fn validate(self) -> Result<(), Error> {
+        if let Self::Bounded {
+            admission_grace,
+            risk_retention,
+            ..
+        } = self
+            && risk_retention < admission_grace
+        {
+            return Err(Error::Configuration);
+        }
+        Ok(())
+    }
+}
+
+impl Detached {
+    pub(in crate::share) fn validate(self, policy: RetirementPolicy) -> Result<(), Error> {
+        match (self, policy) {
+            (Self::Released, _)
+            | (Self::AwaitingRelease, RetirementPolicy::PhysicalRelease)
+            | (Self::RiskRetained { .. }, RetirementPolicy::Bounded { .. }) => Ok(()),
+            (
+                Self::Quiescing {
+                    retire_at,
+                    risk_expires_at,
+                },
+                RetirementPolicy::Bounded { .. },
+            ) if retire_at <= risk_expires_at => Ok(()),
+            _ => Err(Error::InvalidCheckpoint),
         }
     }
 }
@@ -66,12 +109,18 @@ pub(in crate::share) enum RetirementProgress {
     Waiting,
     Retired {
         residual: Counts,
+        expires_at: UnixMillis,
+    },
+    RiskExpired {
+        residual: Counts,
+        expires_at: UnixMillis,
     },
     Blocked {
         usage: ConnectionUsage,
         residual: Counts,
         generation_limit: usize,
         residual_limit: Counts,
+        expires_at: UnixMillis,
     },
 }
 
@@ -110,7 +159,7 @@ impl Generations {
             match entry {
                 Generation::Control { .. } => usage.controls += 1,
                 Generation::Detached {
-                    state: Detached::Retired,
+                    state: Detached::RiskRetained { .. },
                     ..
                 } => {
                     usage.retired_generations += 1;
@@ -166,48 +215,76 @@ impl Generations {
         now: UnixMillis,
         deadlines: &mut Deadlines,
     ) -> Vec<ConnectionRef> {
-        let mut due = Vec::new();
+        let mut expiring = Vec::new();
+        let mut retiring = Vec::new();
         for (&connection, entry) in &self.entries {
-            if let Generation::Detached {
-                state: Detached::Quiescing { not_before },
-                ..
-            } = entry
-            {
-                deadlines.set(
-                    Key::Retirement(connection),
-                    (now < *not_before).then_some(*not_before),
-                );
-                if now >= *not_before {
-                    due.push(connection);
-                }
+            let (retire_at, expires_at) = match entry {
+                Generation::Detached {
+                    state:
+                        Detached::Quiescing {
+                            retire_at,
+                            risk_expires_at,
+                        },
+                    ..
+                } => (Some(*retire_at), *risk_expires_at),
+                Generation::Detached {
+                    state: Detached::RiskRetained { expires_at },
+                    ..
+                } => (None, *expires_at),
+                _ => continue,
+            };
+            let next = retire_at
+                .filter(|at| now < *at)
+                .or_else(|| (now < expires_at).then_some(expires_at));
+            deadlines.set(Key::Retirement(connection), next);
+            if now >= expires_at {
+                expiring.push(connection);
+            } else if retire_at.is_some_and(|at| now >= at) {
+                retiring.push(connection);
             }
         }
-        due
+        // Free expired reservations before retrying blocked retirements, regardless
+        // of connection-ID order. One alarm must suffice to restore admission.
+        expiring.extend(retiring);
+        expiring
     }
 
     /// Cross-connection queue cleanup is established by the share before this call.
     /// The generation owns the remaining timing, risk-budget and persistence rules.
-    pub(in crate::share) fn retire(
+    pub(in crate::share) fn progress_retirement(
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
         checkpointing: &mut Checkpointing,
+        deadlines: &mut Deadlines,
     ) -> RetirementProgress {
-        let Some(
-            entry @ Generation::Detached {
-                state: Detached::Quiescing { not_before },
-                ..
-            },
-        ) = self.entries.get(&connection)
-        else {
+        let Some(entry @ Generation::Detached { state, .. }) = self.entries.get(&connection) else {
             return RetirementProgress::Waiting;
         };
-        if now < *not_before
+        let (retire_at, expires_at) = match *state {
+            Detached::Quiescing {
+                retire_at,
+                risk_expires_at,
+            } => (retire_at, risk_expires_at),
+            Detached::RiskRetained { expires_at } => (expires_at, expires_at),
+            _ => return RetirementProgress::Waiting,
+        };
+        if now < retire_at
             || entry
                 .ledger()
                 .is_some_and(|ledger| !ledger.queues_discarded())
         {
             return RetirementProgress::Waiting;
+        }
+        let residual = entry.residual_bound();
+        if now >= expires_at {
+            // Drop only the unreachable destination's accounting. Do not settle
+            // its flows or refund debt submitted to a still-communicating peer.
+            self.remove_detached(connection, checkpointing, deadlines);
+            return RetirementProgress::RiskExpired {
+                residual,
+                expires_at,
+            };
         }
         let RetirementPolicy::Bounded {
             generations,
@@ -217,7 +294,6 @@ impl Generations {
         else {
             return RetirementProgress::Waiting;
         };
-        let residual = entry.residual_bound();
         let usage = self.usage();
         if residual != Counts::ZERO
             && (usage.retired_generations >= generations
@@ -232,16 +308,21 @@ impl Generations {
                 residual,
                 generation_limit: generations,
                 residual_limit: limit,
+                expires_at,
             };
         }
         if let Some(Generation::Detached { state, delivery }) = self.entries.get_mut(&connection) {
-            *state = Detached::Retired;
+            *state = Detached::RiskRetained { expires_at };
             checkpointing.retention_changed();
             if matches!(delivery, Delivery::Exact(_)) {
                 checkpointing.changed(connection);
             }
         }
-        RetirementProgress::Retired { residual }
+        deadlines.set(Key::Retirement(connection), Some(expires_at));
+        RetirementProgress::Retired {
+            residual,
+            expires_at,
+        }
     }
 
     pub(in crate::share) fn validate_retirements(
@@ -254,15 +335,15 @@ impl Generations {
             let Generation::Detached { state, .. } = entry else {
                 continue;
             };
-            match (*state, self.limits.retirement) {
-                (Detached::AwaitingRelease, RetirementPolicy::PhysicalRelease)
-                | (Detached::Quiescing { .. }, RetirementPolicy::Bounded { .. }) => {}
-                (Detached::Released, _)
+            state.validate(self.limits.retirement)?;
+            match *state {
+                Detached::AwaitingRelease | Detached::Quiescing { .. } => {}
+                Detached::Released
                     if entry.residual_bound() == Counts::ZERO
                         && entry
                             .ledger()
                             .is_none_or(|ledger| ledger.metadata_usage().retained_flows == 0) => {}
-                (Detached::Retired, RetirementPolicy::Bounded { .. }) => {
+                Detached::RiskRetained { .. } => {
                     if !quiescent(connection) {
                         return Err(Error::InvalidCheckpoint);
                     }
@@ -277,7 +358,7 @@ impl Generations {
                         .checked_add(bound.encoded_bytes)
                         .ok_or(Error::InvalidCheckpoint)?;
                 }
-                _ => return Err(Error::InvalidCheckpoint),
+                Detached::Released => return Err(Error::InvalidCheckpoint),
             }
         }
         if let RetirementPolicy::Bounded {

@@ -42,12 +42,19 @@ pub enum RelayDecision {
     },
     Retired {
         residual: flow::Counts,
+        expires_at: UnixMillis,
+    },
+    /// Policy accounting ended without a consumption or physical-release receipt.
+    RetirementRiskExpired {
+        residual: flow::Counts,
+        expires_at: UnixMillis,
     },
     RetirementBlocked {
         usage: crate::share::ConnectionUsage,
         residual: flow::Counts,
         generation_limit: usize,
         residual_limit: flow::Counts,
+        expires_at: UnixMillis,
     },
     ResponsibilityRestored {
         communicating: bool,

@@ -40,19 +40,16 @@ impl<O: Observer> Runtime<O> {
         surviving: &[ConnectionRef],
         observer: O,
     ) -> Result<Self> {
-        let previous = checkpoint.map(Checkpoint::manifest);
         let restored = Restore {
             authority: Authority::Known(record),
             surviving,
-            // This storage profile cannot have delivery debt. With no surviving
-            // sockets there is no liveness/transcript to preserve either.
-            responsibility: if surviving.is_empty() {
-                // Zero delivery debt does not reset admission-rate history.
-                Responsibility::Released {
-                    previous: previous.as_ref(),
-                }
-            } else {
-                checkpoint.map_or(Responsibility::Unknown, Responsibility::Checkpoint)
+            // The manifest owns loss deadlines even when every socket/attachment
+            // disappears. Only an absent inventory in this lifecycle-only schema
+            // can establish that no prior delivery responsibility exists.
+            responsibility: match checkpoint {
+                Some(checkpoint) => Responsibility::Checkpoint(checkpoint),
+                None if surviving.is_empty() => Responsibility::Released { previous: None },
+                None => Responsibility::Unknown,
             },
         };
         let (mut relay, turn) =

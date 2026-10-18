@@ -1,6 +1,8 @@
 //! Independent admission reservations fence records that may disappear.
 use super::checkpoint::{ConnectionResources, ConnectionRole};
-use super::checkpoint_codec::{bounded_count, field, put_header, read_header};
+use super::checkpoint_codec::{
+    bounded_count, field, put_detached, put_header, read_detached, read_header,
+};
 use super::{
     AttemptLimiter, ConnectionCheckpoint, ConnectionRef, Detached, Error, Identity, Limits,
     Observer, ShareRelay, admission::AttemptState,
@@ -12,7 +14,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const MANIFEST_FORMAT: u8 = 3;
+const MANIFEST_FORMAT: u8 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GenerationState {
@@ -79,15 +81,7 @@ impl CheckpointManifest {
                     };
                     out.push(kind);
                     if let Some(state) = detached {
-                        match state {
-                            Detached::AwaitingRelease => out.push(0),
-                            Detached::Released => out.push(1),
-                            Detached::Quiescing { not_before } => {
-                                out.push(2);
-                                out.extend_from_slice(&not_before.0.to_be_bytes());
-                            }
-                            Detached::Retired => out.push(3),
-                        }
+                        put_detached(&mut out, state);
                     }
                 }
             }
@@ -125,15 +119,7 @@ impl CheckpointManifest {
                     let state = if kind == 0 {
                         GenerationState::Connected
                     } else {
-                        let detached = match field::<1>(&mut body)? {
-                            [0] => Detached::AwaitingRelease,
-                            [1] => Detached::Released,
-                            [2] => Detached::Quiescing {
-                                not_before: UnixMillis(u64::from_be_bytes(field(&mut body)?)),
-                            },
-                            [3] => Detached::Retired,
-                            _ => return Err(Error::InvalidCheckpoint),
-                        };
+                        let detached = read_detached(&mut body)?;
                         match kind {
                             1 => GenerationState::Detached(detached),
                             2 => GenerationState::Unavailable(detached),
@@ -181,9 +167,14 @@ impl CheckpointManifest {
             {
                 return Err(Error::InvalidCheckpoint);
             }
+            if let GenerationState::Detached(detached) | GenerationState::Unavailable(detached) =
+                state
+            {
+                detached.validate(limits.retirement)?;
+            }
             match state {
-                GenerationState::Detached(Detached::Retired)
-                | GenerationState::Unavailable(Detached::Retired) => {
+                GenerationState::Detached(Detached::RiskRetained { .. })
+                | GenerationState::Unavailable(Detached::RiskRetained { .. }) => {
                     retired += 1;
                     residual.frames = residual
                         .frames
@@ -276,8 +267,10 @@ impl CheckpointManifest {
         state_matches
             && (!matches!(entry.role, ConnectionRole::Established(_))
                 || ledger.receive_capacity().is_some())
-            && (!matches!(entry.role, ConnectionRole::Detached(Detached::Retired))
-                || ledger.queues_discarded())
+            && (!matches!(
+                entry.role,
+                ConnectionRole::Detached(Detached::RiskRetained { .. })
+            ) || ledger.queues_discarded())
             && ledger.usage().total().frames <= bound.frames
             && ledger.usage().total().encoded_bytes <= bound.encoded_bytes
     }
