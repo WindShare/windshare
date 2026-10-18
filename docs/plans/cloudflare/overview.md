@@ -114,16 +114,20 @@ bounds connection records including retained flows; checkpoints encode only
 retained flows and stable indices. See the
 [Cloudflare attachment budget](cloudflare-relay-rust-plan.md#attachment-budget).
 
-## Native lifecycle host
+## Native host
 
 [`relay-native`](../../../relay-rust/crates/relay-native/README.md) executes
-REGISTER, RESUME, STOP and heartbeats on real WebSockets. Per-share actors consume
+REGISTER, RESUME, JOIN, bidirectional opaque delivery, cumulative consumption,
+settlement, STOP and heartbeats on real WebSockets. Per-share actors consume
 `ShareRelay` commands; OS entropy, monotonic time, bounded socket writers and
 SQLite transactions supply host evidence. An exclusive database lease and
 persisted generation prevent overlapping hosts and reused lifetimes; startup
-recovers committed ownership and interrupted STOP. JOIN, forwarding, STUN,
-operational endpoints and client integration remain pending; Go is still the
-product entry point.
+recovers committed ownership and interrupted STOP. Confirmed authority supplies
+the sealed JOIN descriptor without another SQL read. Native scheduling replenishes
+windows from kernel occupancy and defers grants until control-writer space is available.
+The Go-codec process scenario covers asymmetric windows, feedback replay, STOP with
+outstanding delivery and restart/RESUME. STUN, operational endpoints and the production
+client cutover remain pending; Go is still the product entry point.
 
 ## Cloudflare lifecycle host
 

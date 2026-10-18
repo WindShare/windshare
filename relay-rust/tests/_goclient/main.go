@@ -28,25 +28,31 @@ func main() {
 		defer func() { process.kill() }()
 		endpoint = process.endpoint
 	}
-	f := newFixture()
+	f := newDeliveryFixture()
 	rejectInvalidProofs(endpoint, f)
+	rejectJoin(endpoint, f, v2.ErrorNotFound)
 	sender := register(endpoint, f, false)
 	defer sender.CloseNow()
 	duplicate, _ := dial(endpoint, f.init.Registration.ShareID)
 	send(duplicate, f.init)
 	refusal(duplicate, v2.ErrorAlreadyRegistered)
 	_ = duplicate.CloseNow()
+	delivery := transfer(endpoint, f, sender)
+	defer func() { delivery.close() }()
 
 	if process != nil {
 		address := process.address
 		process.kill()
+		delivery.close()
 		_ = sender.CloseNow()
 		process = start(*binary, *database, address)
 		require(endpoint == process.endpoint, "public identity changed during restart")
 		sender = register(endpoint, f, true)
 		defer sender.CloseNow()
+		delivery = transfer(endpoint, f, sender)
 	}
 	stop(endpoint, f)
+	delivery.stopped()
 	if process != nil {
 		address := process.address
 		process.kill()
@@ -65,7 +71,7 @@ func main() {
 		_ = stopped.CloseNow()
 	}
 	stop(endpoint, f)
-	fmt.Println("PASS: live challenges, proofs, descriptor, heartbeat, durable ownership, STOP, restart fencing")
+	fmt.Println("PASS: live challenges, JOIN, bidirectional delivery beyond capacity, cumulative feedback replay, ordered STOP, restart/resume fencing")
 }
 
 func rejectInvalidProofs(endpoint string, f fixture) {
@@ -87,15 +93,17 @@ func rejectInvalidProofs(endpoint string, f fixture) {
 	closed(corrupt)
 	_ = corrupt.CloseNow()
 
-	join, _ := dial(endpoint, f.init.Registration.ShareID)
-	send(join, v2.DeliveryJoin{ShareID: f.init.Registration.ShareID, ReceiveCapacity: f.init.ReceiveCapacity})
-	refusal(join, v2.ErrorUnsupportedMode)
-	_ = join.CloseNow()
-
 	wrong := newFixture()
 	mismatch, _ := dial(endpoint, wrong.init.Registration.ShareID)
 	send(mismatch, f.init)
 	// The public routing hint cannot authorize another share's registration.
 	refusal(mismatch, v2.ErrorNotFound)
 	_ = mismatch.CloseNow()
+}
+
+func rejectJoin(endpoint string, f fixture, code v2.ErrorCode) {
+	join, _ := dial(endpoint, f.init.Registration.ShareID)
+	defer join.CloseNow()
+	send(join, v2.DeliveryJoin{ShareID: f.init.Registration.ShareID, ReceiveCapacity: f.init.ReceiveCapacity})
+	refusal(join, code)
 }

@@ -21,7 +21,10 @@ pub use authority::{
 pub use effect::{
     Action, Effects, EndReason, Event, Refusal, Retirement, RetirementReason, SnapshotFault,
 };
-pub use frames::{MAX_OPAQUE_CIPHERTEXT_BYTES, OpaqueHeader, SessionAdmitted};
+pub use frames::{
+    DESCRIPTOR_HEADER_BYTES, MAX_OPAQUE_CIPHERTEXT_BYTES, OpaqueHeader, SessionAdmitted,
+    encode_descriptor,
+};
 pub use observation::{Decision, Observation, Observer};
 pub use snapshot::{EncodedSnapshot, MAX_SNAPSHOT_BYTES, SessionSnapshot};
 

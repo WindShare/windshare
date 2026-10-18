@@ -3,6 +3,7 @@ use crate::{
     clock::UnixMillis,
     flow::{DeliveryConsumed, SettlementAck},
     heartbeat::ConnectionProbe,
+    sessions::SessionAdmitted,
 };
 
 impl<O: Observer> ShareRelay<O> {
@@ -15,6 +16,10 @@ impl<O: Observer> ShareRelay<O> {
     ) -> Result<(), Error> {
         // Authority comes from this socket generation, never from payload fields.
         match frame.first_chunk::<4>() {
+            Some(&SessionAdmitted::MAGIC) => {
+                let admitted = SessionAdmitted::decode(frame).map_err(Error::Frame)?;
+                self.admit_session(connection, admitted, now, turn)
+            }
             Some(&ConnectionProbe::MAGIC) => {
                 let result = ConnectionProbe::decode(frame)
                     .map_err(Error::Frame)

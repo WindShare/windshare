@@ -81,6 +81,27 @@ impl<O: Observer> ConnectionLedger<O> {
         self.receive_capacity
     }
 
+    /// Additional ordinary credit needed to maintain a host-selected outstanding
+    /// window. This is an advisory view, never a reservation or forwarding permit.
+    #[must_use]
+    pub fn window_credit(&self, flow: super::FlowKey, target: Counts) -> Option<Counts> {
+        self.ensure_open().ok()?;
+        let entry = self.delivery(flow).ok()?;
+        if entry.phase() != super::Phase::Open {
+            return None;
+        }
+        let occupied = entry.usage().total();
+        let missing = Counts::new(
+            target.frames.saturating_sub(occupied.frames),
+            target.encoded_bytes.saturating_sub(occupied.encoded_bytes),
+        );
+        Some(
+            missing
+                .min(self.receive_available().ok()?)
+                .min(self.limits.regular().sub(self.regular_used())),
+        )
+    }
+
     pub(super) fn receive_available(&self) -> Result<Counts, Refusal> {
         let capacity = self.receive_capacity.ok_or(Refusal::CapacityUndeclared)?;
         Ok(capacity

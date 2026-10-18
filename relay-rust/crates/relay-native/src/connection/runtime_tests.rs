@@ -162,6 +162,22 @@ async fn blocked_write_does_not_block_inbound_and_abort_joins_both_halves() {
         .unwrap();
     assert!(matches!(&event, Event::Control(_, bytes) if bytes == b"WS2H-inbound"));
     drop(event);
+    for magic in [b"WS2J", b"WS2M", b"WS2B", b"WS2S"] {
+        host.client
+            .send(Message::Binary(magic.to_vec().into()))
+            .await
+            .unwrap();
+        assert!(
+            matches!(host.events.recv().await, Some(Event::Control(_, bytes)) if bytes == magic)
+        );
+    }
+    // The actor validates the opaque header; the reader preserves its full bytes.
+    let payload = b"WS2O-opaque";
+    host.client
+        .send(Message::Binary(payload.to_vec().into()))
+        .await
+        .unwrap();
+    assert!(matches!(host.events.recv().await, Some(Event::Frame(_, bytes)) if bytes == payload));
     assert!(!host.dropped.load(Ordering::Acquire));
     drop(port);
     host.released().await.unwrap();
@@ -172,7 +188,7 @@ async fn blocked_write_does_not_block_inbound_and_abort_joins_both_halves() {
 async fn unsupported_ingress_and_terminal_reply_drain_before_release() {
     let (mut host, port) = Harness::new().await;
     host.client
-        .send(Message::Binary(b"WS2J".to_vec().into()))
+        .send(Message::Binary(b"WS2Z".to_vec().into()))
         .await
         .unwrap();
     assert!(matches!(

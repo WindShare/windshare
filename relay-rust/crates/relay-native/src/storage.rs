@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use windshare_relay_core::{
+    authority::StoredAuthority,
     identifiers::{RelayIdentity, ShareId},
     lifecycle::Record,
     share::Storage,
@@ -20,8 +21,8 @@ const SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub trait Persistence: Clone + Send + Sync + 'static {
-    fn load(&self, share: ShareId) -> Result<Option<Record>>;
-    fn execute(&self, share: ShareId, operation: &Storage) -> Result<()>;
+    fn load(&self, share: ShareId) -> Result<Option<StoredAuthority>>;
+    fn execute(&self, share: ShareId, operation: &Storage) -> Result<Option<StoredAuthority>>;
 }
 
 struct State {
@@ -113,7 +114,7 @@ impl Database {
 }
 
 impl Persistence for Database {
-    fn load(&self, share: ShareId) -> Result<Option<Record>> {
+    fn load(&self, share: ShareId) -> Result<Option<StoredAuthority>> {
         let connection = self
             .0
             .connection
@@ -121,21 +122,21 @@ impl Persistence for Database {
             .map_err(|_| anyhow!("database lock poisoned"))?;
         let stored = read(&connection, self.0.relay, share)?;
         drop(connection);
-        Ok(stored.map(|stored| stored.record()))
+        Ok(stored)
     }
 
-    fn execute(&self, share: ShareId, operation: &Storage) -> Result<()> {
+    fn execute(&self, share: ShareId, operation: &Storage) -> Result<Option<StoredAuthority>> {
         let mut connection = self
             .0
             .connection
             .lock()
             .map_err(|_| anyhow!("database lock poisoned"))?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transactions::apply(&transaction, self.0.relay, share, operation)?;
+        let stored = transactions::apply(&transaction, self.0.relay, share, operation)?;
         // Complete is evidence of a committed transaction, never of an attempted write.
         transaction.commit()?;
         drop(connection);
-        Ok(())
+        Ok(stored)
     }
 }
 

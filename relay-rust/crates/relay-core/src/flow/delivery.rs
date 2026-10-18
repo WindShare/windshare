@@ -51,6 +51,28 @@ pub struct Grant {
     pub credit: Counts,
 }
 
+impl Grant {
+    pub const ENCODED_BYTES: usize = 8 + 8 + 4 + 4;
+
+    /// Encode a reserved allowance, independently of host window policy.
+    ///
+    /// # Errors
+    /// Rejects empty grants or increments wider than the wire's u32 fields.
+    pub fn encode(self) -> Result<[u8; Self::ENCODED_BYTES], crate::FrameError> {
+        use crate::{FrameError, wire::Writer};
+        if self.credit == Counts::ZERO {
+            return Err(FrameError::Field);
+        }
+        let frames = u32::try_from(self.credit.frames).map_err(|_| FrameError::Field)?;
+        let bytes = u32::try_from(self.credit.encoded_bytes).map_err(|_| FrameError::Field)?;
+        let mut out = Writer::with_header(*b"WS2W", 0);
+        out.put(self.flow.session().wire_id().as_bytes())
+            .put(&frames.to_be_bytes())
+            .put(&bytes.to_be_bytes());
+        Ok(out.into_frame())
+    }
+}
+
 /// Receipt for one accepted frame; it cannot be cloned into multiple submissions.
 #[derive(Debug, Eq, PartialEq)]
 #[must_use = "retain with the payload until submission or confirmed retirement cleanup"]

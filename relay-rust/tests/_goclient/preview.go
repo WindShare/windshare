@@ -38,6 +38,7 @@ func cloudflare(endpoint string, idle time.Duration) {
 	refusal(unauthorized, v2.ErrorInvalidProof)
 	_ = unauthorized.CloseNow()
 	rejectInvalidProofs(endpoint, f)
+	rejectJoin(endpoint, f, v2.ErrorUnsupportedMode)
 
 	sender := register(endpoint, f, false)
 	defer sender.CloseNow()
