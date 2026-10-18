@@ -15,6 +15,7 @@ pub fn api<T>(result: worker::Result<T>) -> Result<T> {
     result.map_err(|error| anyhow!("{error}"))
 }
 
+#[derive(Clone)]
 pub struct Database(SqlStorage);
 
 impl Database {
@@ -60,17 +61,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn image(&self, fresh: Option<&crate::config::Route>) -> Result<Image> {
-        if let Some(image) = self.get::<Image>(IMAGE)? {
-            return Ok(image);
-        }
+    pub fn new_image(&self, fresh: Option<&crate::config::Route>) -> Result<Image> {
         ensure!(
             self.bytes(AUTHORITY)?.is_none() && self.bytes(MANIFEST)?.is_none(),
             "identity missing from nonempty storage"
         );
-        let image = Image::new(fresh.ok_or_else(|| anyhow!("uninitialized object"))?);
-        self.put(IMAGE, &image)?;
-        Ok(image)
+        Ok(Image::new(
+            fresh.ok_or_else(|| anyhow!("uninitialized object"))?,
+        ))
     }
 
     pub fn authority(&self, identity: Identity) -> Result<Option<StoredAuthority>> {
@@ -79,23 +77,27 @@ impl Database {
             .transpose()
     }
 
-    pub fn execute(&self, identity: Identity, operation: &Storage) -> Result<()> {
+    pub fn execute(
+        &self,
+        identity: Identity,
+        operation: &Storage,
+    ) -> Result<Option<StoredAuthority>> {
         let current = self.authority(identity)?;
         let next = authority::apply(identity.relay, identity.share, current.as_ref(), operation)
             .map_err(|error| anyhow!("authority transition: {error:?}"))?;
         if current == next {
-            return Ok(());
+            return Ok(current);
         }
         // A complete row is replaced by one synchronous SQL statement. Automatic
         // transactions/output gates couple this write to all later sends in the event.
-        if let Some(next) = next {
-            self.put(AUTHORITY, &AuthorityRow::new(&next))?;
+        if let Some(next) = &next {
+            self.put(AUTHORITY, &AuthorityRow::new(next))?;
         } else {
             api(self.0.exec(
                 "DELETE FROM relay_lifecycle WHERE key=?",
                 Some(vec![AUTHORITY.into()]),
             ))?;
         }
-        Ok(())
+        Ok(next)
     }
 }

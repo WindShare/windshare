@@ -1,4 +1,4 @@
-//! Cloudflare lifecycle adapter. Native tests inject I/O into the same host logic.
+//! Cloudflare relay adapter. Native tests inject I/O into the same host logic.
 #[cfg(any(target_arch = "wasm32", test))]
 mod config;
 #[cfg(any(target_arch = "wasm32", test))]

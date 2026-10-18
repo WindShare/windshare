@@ -1,10 +1,12 @@
-# Cloudflare relay lifecycle host
+# Cloudflare relay host
 
 This Worker routes `/v2/ws?share_id=...` to one SQLite Durable Object per share.
 The object binds its stored endpoint and share to that route, rejects mismatched
 upgrades without evicting healthy connections, and passes real
-REGISTER, RESUME, STOP and heartbeat controls to `ShareRelay`. JOIN and payload
-forwarding return `UnsupportedMode`; this is not yet a download relay.
+REGISTER, RESUME, JOIN, session admission, cumulative consumption, settlement, STOP
+and heartbeat controls to `ShareRelay`. Opaque envelopes remain event-owned and pass
+through the kernel's synchronous `submit` before WebSocket delivery in either direction.
+Descriptors come only from confirmed authority rows. Production client cutover is still pending.
 
 Fresh REGISTER requires `Authorization: Bearer <REGISTRATION_SECRET>` on the
 upgrade. The edge overwrites its internal permission header and stores permission
@@ -15,13 +17,16 @@ control concurrency, attempt-rate and absolute deadlines still apply.
 
 SQLite stores endpoint identity, a never-reused connection allocator, authority
 and the checkpoint manifest. Binary WebSocket attachments retain handshake state,
-capacity, heartbeat nonce and original deadlines. Heartbeats update attachments,
-not SQL delivery counters. Alarms only move earlier; each event expires overdue
-state before processing new controls. REGISTER atomically writes ownership and
+capacity, delivery ledgers, heartbeat nonce and original deadlines. Payloads and feedback
+update attachments, not SQL counters. Window replenishment reads kernel occupancy,
+so duplicate feedback and hibernation cannot refund submitted debt. Each flow targets
+two maximum-sized envelopes within the destination's declared capacity and the host's
+16-frame connection budget. Alarms are read once per wake and only move earlier;
+each event expires overdue state before processing new input. REGISTER atomically writes ownership and
 descriptor in one SQL operation; exact completion and the Cloudflare output gate
 keep acknowledgements behind that commit and permanent STOP. Uncertain events require
 authoritative recovery before more controls. Recovery retains committed ownership even
-when its receipt was lost, entering grace if the owner is gone. Lifecycle schema version 2
+when its receipt was lost, entering grace if the owner is gone. Storage schema version 3
 rejects older storage.
 
 A close callback reports communication loss, never physical buffer release.
@@ -32,8 +37,10 @@ The experiments establish no safer physical-buffer TTL; their 30-second interval
 is not a release guarantee. A positive host retention interval also expires through
 the shared Alarm schedule, without renewing on recovery or retry. Unreadable
 authority or inventory refuses recovery; individual attachment loss is isolated.
-Only absent inventory in this lifecycle-only schema proves no prior payload debt.
-No descriptor or payload appears in traces.
+Only a newly created identity with empty storage and no sockets permits an empty
+responsibility baseline. Existing identities require a manifest even without authority
+or surviving sockets. Cleanup-generated settlement notices run before subsequent
+close commands. No descriptor or payload appears in traces.
 
 From this directory, with the Rust Wasm target and `worker-build` installed:
 
@@ -53,7 +60,8 @@ Worker. Do not delete storage to update code: that would erase permanent STOP.
 `make rust` includes native fault-injected host tests and Wasm compilation/Clippy.
 The shared Go codec client is at `relay-rust/tests/_goclient`.
 [Recorded Preview evidence](tests/preview-evidence.md) covers live signatures,
-normal hibernation, fault recovery, permanent STOP and Alarm expiry.
+bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP
+and Alarm expiry.
 
 For an isolated real-cloud run, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
 Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate
@@ -73,9 +81,10 @@ environment, then run:
 go run ./relay-rust/tests/_goclient -preview -endpoint wss://<stable-preview-host>/v2/ws
 ```
 
-The client signs fresh challenges, rejects invalid signatures and route mismatches,
-observes constructor re-entry with the same open socket/attachment, rejects an
-alternate endpoint while preserving that socket before and after restore, resumes after
-an actual object abort, verifies permanent STOP after another abort, and waits for
-Alarm-driven handshake expiry. It keeps its hibernation interval below the original
-silence deadline. Delete only the run's Preview after retaining evidence.
+The client checks signatures, endpoint isolation and Alarm expiry, then transfers
+mixed-size frames in both directions beyond asymmetric windows with duplicate feedback.
+It observes constructor re-entry with unchanged sockets/attachments and unconsumed
+delivery debt, resumes transfer after consumption, aborts the object and transfers again
+after signed RESUME. STOP must deliver exact settlement prefixes before closure and
+remain permanent across another abort. Hibernation stays within the original silence
+deadline. Delete only the run's Preview after retaining evidence.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"time"
 
 	"github.com/coder/websocket"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -12,6 +13,10 @@ import (
 
 const transferFrames = 80
 const maximumEnvelopeBytes = v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes
+
+// This covers many feedback round trips on a remote Preview. Individual I/O
+// operations retain their short deadline; local scenarios finish immediately.
+const deliveryTimeout = 30 * time.Second
 
 func newDeliveryFixture() fixture {
 	f := newFixture()
@@ -28,8 +33,11 @@ type deliveryPeer struct {
 	granted    v2.DeliveryConsumed
 	sent       v2.DeliveryConsumed
 	received   v2.DeliveryConsumed
+	consumed   v2.DeliveryConsumed
 	settled    bool
 	closed     bool
+	probeNonce uint64
+	probeAck   uint64
 }
 
 type deliveryEvent struct {
@@ -39,14 +47,21 @@ type deliveryEvent struct {
 }
 
 type deliverySession struct {
-	peers  [2]*deliveryPeer
-	events chan deliveryEvent
-	cancel context.CancelFunc
+	peers          [2]*deliveryPeer
+	events         chan deliveryEvent
+	cancel         context.CancelFunc
+	consumeThrough uint64
 }
 
 // Both directions exceed every declared window. Alternating tiny and maximum
 // envelopes detects implementations that replenish only one resource dimension.
 func transfer(endpoint string, f fixture, sender *websocket.Conn) *deliverySession {
+	session := beginDelivery(endpoint, f, sender)
+	session.through(transferFrames + 1)
+	return session
+}
+
+func beginDelivery(endpoint string, f fixture, sender *websocket.Conn) *deliverySession {
 	receiver, _ := dial(endpoint, f.init.Registration.ShareID)
 	capacity := v2.ReceiveCapacity{Frames: 4, EncodedBytes: 2 * maximumEnvelopeBytes}
 	send(receiver, v2.DeliveryJoin{ShareID: f.init.Registration.ShareID, ReceiveCapacity: capacity})
@@ -55,7 +70,7 @@ func transfer(endpoint string, f fixture, sender *websocket.Conn) *deliverySessi
 	require(bytes.Equal(descriptor.Object, f.descriptor), "JOIN descriptor differs from committed bytes")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	session := &deliverySession{events: make(chan deliveryEvent, 32), cancel: cancel}
+	session := &deliverySession{events: make(chan deliveryEvent, 32), cancel: cancel, consumeThrough: transferFrames}
 	for index, connection := range []*websocket.Conn{sender, receiver} {
 		peer := &deliveryPeer{
 			connection: connection, session: descriptor.RelaySessionID, side: byte(index),
@@ -68,18 +83,23 @@ func transfer(endpoint string, f fixture, sender *websocket.Conn) *deliverySessi
 		session.peers[index] = peer
 		go session.read(ctx, peer)
 	}
-	session.until(func() bool {
-		return session.peers[0].received.TotalFrames == transferFrames &&
-			session.peers[1].received.TotalFrames == transferFrames
-	}, transferFrames)
-
-	// Keep real submitted debt outstanding when STOP arrives. Submission and
-	// application receipt alone must not be mistaken for consumption.
-	session.until(func() bool {
-		return session.peers[0].received.TotalFrames == transferFrames+1 &&
-			session.peers[1].received.TotalFrames == transferFrames+1
-	}, transferFrames+1)
 	return session
+}
+
+func (s *deliverySession) through(target uint64) {
+	s.until(func() bool {
+		return s.peers[0].received.TotalFrames == target && s.peers[1].received.TotalFrames == target
+	}, target)
+}
+
+func (s *deliverySession) barrier(nonce uint64) {
+	for _, peer := range s.peers {
+		peer.probeNonce = nonce
+		send(peer.connection, v2.ConnectionProbe{Nonce: nonce})
+	}
+	s.until(func() bool {
+		return s.peers[0].probeAck == nonce && s.peers[1].probeAck == nonce
+	}, s.peers[0].sent.TotalFrames)
 }
 
 func (s *deliverySession) read(ctx context.Context, peer *deliveryPeer) {
@@ -105,26 +125,14 @@ func ciphertext(side byte, ordinal uint64) []byte {
 }
 
 func (s *deliverySession) until(done func() bool, target uint64) {
-	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), deliveryTimeout)
 	defer cancel()
 	for !done() {
+		s.pump(target)
 		select {
 		case event := <-s.events:
 			check(event.err)
 			s.accept(event, false)
-			for _, peer := range s.peers {
-				for peer.sent.TotalFrames < target {
-					payload := ciphertext(peer.side, peer.sent.TotalFrames)
-					cost := uint64(v2.OpaqueRouteHeaderBytes + len(payload))
-					if peer.granted.TotalFrames == peer.sent.TotalFrames ||
-						peer.granted.TotalEncodedBytes-peer.sent.TotalEncodedBytes < cost {
-						break
-					}
-					send(peer.connection, v2.OpaqueRoute{RelaySessionID: peer.session, Ciphertext: payload})
-					peer.sent.TotalFrames++
-					peer.sent.TotalEncodedBytes += cost
-				}
-			}
 		case <-ctx.Done():
 			panic(fmt.Sprintf("delivery stalled beyond initial window: sender=%+v receiver=%+v",
 				s.peers[0], s.peers[1]))
@@ -132,10 +140,38 @@ func (s *deliverySession) until(done func() bool, target uint64) {
 	}
 }
 
+func (s *deliverySession) pump(target uint64) {
+	for _, peer := range s.peers {
+		for peer.sent.TotalFrames < target {
+			payload := ciphertext(peer.side, peer.sent.TotalFrames)
+			cost := uint64(v2.OpaqueRouteHeaderBytes + len(payload))
+			if peer.granted.TotalFrames == peer.sent.TotalFrames ||
+				peer.granted.TotalEncodedBytes-peer.sent.TotalEncodedBytes < cost {
+				break
+			}
+			send(peer.connection, v2.OpaqueRoute{RelaySessionID: peer.session, Ciphertext: payload})
+			peer.sent.TotalFrames++
+			peer.sent.TotalEncodedBytes += cost
+		}
+	}
+}
+
+func (peer *deliveryPeer) consume() {
+	peer.consumed = peer.received
+	send(peer.connection, peer.consumed)
+	// Exact replays are legal but must never mint another allowance.
+	send(peer.connection, peer.consumed)
+}
+
 func (s *deliverySession) accept(event deliveryEvent, stopping bool) {
 	peer := event.peer
 	require(len(event.bytes) >= 4, "short relay output")
 	switch string(event.bytes[:4]) {
+	case "WS2A":
+		ack, err := v2.ParseConnectionProbeAck(event.bytes)
+		check(err)
+		require(ack.Nonce == peer.probeNonce, "delivery heartbeat nonce mismatch")
+		peer.probeAck = ack.Nonce
 	case v2.SessionCreditMagic:
 		grant, err := v2.ParseSessionCredit(event.bytes)
 		check(err)
@@ -143,12 +179,7 @@ func (s *deliverySession) accept(event deliveryEvent, stopping bool) {
 		peer.granted.TotalFrames += uint64(grant.Frames)
 		peer.granted.TotalEncodedBytes += uint64(grant.Bytes)
 		destination := s.peers[1-int(peer.side)]
-		consumed := destination.received
-		// The last held frame has deliberately not been consumed.
-		if consumed.TotalFrames > transferFrames {
-			consumed.TotalFrames--
-			consumed.TotalEncodedBytes -= uint64(v2.OpaqueRouteHeaderBytes + len(ciphertext(peer.side, transferFrames)))
-		}
+		consumed := destination.consumed
 		require(peer.granted.TotalFrames-consumed.TotalFrames <= destination.capacity.Frames &&
 			peer.granted.TotalEncodedBytes-consumed.TotalEncodedBytes <= destination.capacity.EncodedBytes,
 			"feedback replay over-granted destination capacity")
@@ -164,10 +195,8 @@ func (s *deliverySession) accept(event deliveryEvent, stopping bool) {
 		}
 		peer.received.TotalFrames++
 		peer.received.TotalEncodedBytes += uint64(len(event.bytes))
-		if peer.received.TotalFrames <= transferFrames && peer.received.TotalFrames%2 == 0 {
-			send(peer.connection, peer.received)
-			// Exact replays are legal but must never mint another allowance.
-			send(peer.connection, peer.received)
+		if peer.received.TotalFrames <= s.consumeThrough && peer.received.TotalFrames%2 == 0 {
+			peer.consume()
 		}
 	case v2.SettlementNoticeMagic:
 		require(stopping, "session retired during transfer")

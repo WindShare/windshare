@@ -58,11 +58,15 @@ grants only when their bounded control writer is available. Descriptors come fro
 confirmed authority transactions; opaque forwarding performs no SQL.
 The coordinated production client cutover, STUN and operational endpoints remain
 pending; Go is still the product entry point.
-The [Cloudflare lifecycle host](../../../relay-rust/crates/relay-cloudflare/README.md)
-now routes real upgrades by `share_id`, uses Worker entropy and time, executes the
-same authority-row transitions as native SQLite, and restores binary socket
-attachments with the independent manifest. Coalesced Alarms enforce original
-deadlines. Registration permission is separate from signed RESUME/STOP.
+The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)
+now routes real upgrades by `share_id`, executes JOIN with confirmed descriptors,
+and forwards opaque envelopes synchronously through kernel submission. Cumulative
+consumption replenishes windows from kernel occupancy, including after hibernation;
+cleanup-generated settlement precedes closure. Binary attachments retain delivery state,
+while existing identities require the independent manifest even without sockets or
+authority. Only first creation establishes empty responsibility. Cached SQLite handles
+and coalesced Alarms avoid per-frame database operations. Registration permission remains
+separate from signed RESUME/STOP.
 Connection liveness is implemented in the kernel: client `WS2H` probes receive
 `WS2A`, accepted inbound traffic refreshes the independent silence deadline,
 and connection checkpoints preserve the nonce, last inbound time and original expiry.
@@ -98,7 +102,7 @@ Some close-requested old peers still deliver complete bursts after more than ten
 minutes; the experiment cannot locate those bytes within the forwarding path.
 The kernel now gives retired risk an explicit policy-based end without restoring
 old authority or resetting healthy peers. Deterministic tests cover saturation,
-automatic recovery and stale feedback; production data forwarding remains pending.
+automatic recovery and stale feedback; production client cutover remains pending.
 
 结论：**保留共享 Rust 语义内核；有限风险退出、退役与局部恢复已实现。** Cloudflare 选择清理完成后立即结束风险预留，实验不支持将等待时间解释为物理释放保证。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。注册已合并为单次原子保存，保留提交确认屏障；消费反馈简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 

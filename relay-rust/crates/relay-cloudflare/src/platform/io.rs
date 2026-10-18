@@ -1,9 +1,13 @@
-use super::storage::{Database, MANIFEST, api};
+use super::{
+    storage::{Database, MANIFEST, api},
+    trace::Trace,
+};
 use crate::{config, persistence, runtime::Host};
 use anyhow::{Result, anyhow, ensure};
 use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
 use windshare_relay_core::{
+    authority::StoredAuthority,
     challenge::ChallengeSeed,
     clock::UnixMillis,
     lifecycle::{ConnectionRef, Incarnation},
@@ -103,13 +107,28 @@ impl Host for CloudflareHost<'_> {
         ChallengeSeed::new(random()?, random()?).ok_or_else(|| anyhow!("zero challenge entropy"))
     }
 
-    fn execute(&mut self, operation: &Storage) -> Result<()> {
+    fn execute(&mut self, operation: &Storage) -> Result<Option<StoredAuthority>> {
         self.database.execute(self.identity, operation)
     }
 
     fn send(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()> {
-        let ws = socket(self.state, connection).ok_or_else(|| anyhow!("socket unavailable"))?;
-        api(ws.send_with_bytes(bytes))
+        let result = socket(self.state, connection)
+            .ok_or_else(|| anyhow!("socket unavailable"))
+            .and_then(|ws| api(ws.send_with_bytes(bytes)));
+        if let Err(error) = &result {
+            Trace {
+                object: self.state.id().to_string(),
+                identity: self.identity,
+            }
+            .event(
+                "socket_send_failed",
+                &serde_json::json!({
+                    "connection": format!("{connection:?}"),
+                    "encoded_bytes": bytes.len(), "reason": error.to_string(),
+                }),
+            );
+        }
+        result
     }
 
     fn close(&mut self, connection: ConnectionRef) -> Result<()> {

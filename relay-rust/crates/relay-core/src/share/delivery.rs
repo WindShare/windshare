@@ -30,6 +30,16 @@ impl<O: Observer> ShareRelay<O> {
             .window_credit(flow, target)
     }
 
+    /// Enumerate current open flows without a host-maintained copy of routing state.
+    /// Hibernating hosts can resume scheduling from restored ledgers; this view
+    /// grants no credit and must still be rechecked through `Input::Grant`.
+    pub fn delivery_flows(&self) -> impl Iterator<Item = FlowKey> + '_ {
+        self.routes
+            .values()
+            .copied()
+            .filter(|flow| self.delivery_window(*flow, Counts::ZERO).is_some())
+    }
+
     pub(super) fn receive(
         &mut self,
         source: ConnectionRef,

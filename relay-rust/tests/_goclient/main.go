@@ -14,7 +14,7 @@ func main() {
 	binary := flag.String("binary", "", "native process to restart")
 	database := flag.String("database", "", "durable authority database")
 	external := flag.String("endpoint", "", "Rust host endpoint")
-	preview := flag.Bool("preview", false, "Cloudflare Preview lifecycle scenario")
+	preview := flag.Bool("preview", false, "Cloudflare Preview delivery and recovery scenario")
 	idle := flag.Duration("hibernate-idle", 20*time.Second, "bounded hibernation observation interval")
 	flag.Parse()
 	if *preview {
