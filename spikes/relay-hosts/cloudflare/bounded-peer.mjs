@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export async function boundedPeer(url, token, options = {}) {
   const binary = new URL('../native/.target/release/cloudflare-slow-peer' +
     (process.platform === 'win32' ? '.exe' : ''), import.meta.url);
-  const child = spawn(fileURLToPath(binary), [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(process.env.CLOUDFLARE_SLOW_PEER_BINARY ?? fileURLToPath(binary), [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   const messages = [];
   let failure;
   let stderr = '';
@@ -40,7 +40,12 @@ export async function boundedPeer(url, token, options = {}) {
   child.stdin.write(JSON.stringify({ ...options, url, token }) + '\n');
   try {
     const ready = await wait('ready', 20_000);
-    return { ready, terminate, async resume() {
+    return { ready, terminate, async abort() {
+      child.stdin.write('abort\n');
+      const result = await wait('terminal', 5000);
+      await exited;
+      return result;
+    }, async resume() {
       child.stdin.write('resume\n');
       return wait('terminal', 25_000);
     } };

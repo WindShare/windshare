@@ -70,12 +70,27 @@ async fn main() {
         .unwrap();
     emit(
         json!({"event": "ready", "receive_buffer_bytes": SockRef::from(tcp(socket.get_ref())).recv_buffer_size().unwrap(),
-            "extensions": response.headers().get("sec-websocket-extensions").and_then(|v| v.to_str().ok())}),
+            "extensions": response.headers().get("sec-websocket-extensions").and_then(|v| v.to_str().ok()),
+            "cf_ray": response.headers().get("cf-ray").and_then(|v| v.to_str().ok()),
+            "remote_address": tcp(socket.get_ref()).peer_addr().unwrap().to_string()}),
     );
 
     // Intentionally do not poll the socket while paused. Only the parent can resume it.
     let paused_at = std::time::Instant::now();
-    assert_eq!(read_command().trim(), "resume");
+    let command = read_command();
+    if command.trim() == "abort" {
+        // Force an actual TCP reset without reading or acknowledging a WebSocket Close.
+        SockRef::from(tcp(socket.get_ref()))
+            .set_linger(Some(Duration::ZERO))
+            .unwrap();
+        drop(socket);
+        emit(
+            json!({"event":"terminal","frames":0,"terminal":{"kind":"abortive_client_close"},
+            "paused_ms":paused_at.elapsed().as_millis()}),
+        );
+        return;
+    }
+    assert_eq!(command.trim(), "resume");
     let paused_ms = paused_at.elapsed().as_millis();
     let resumed_at = std::time::Instant::now();
     let mut expected = vec![0; payload::FRAME_BYTES];

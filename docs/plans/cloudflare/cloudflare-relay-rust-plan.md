@@ -80,6 +80,14 @@ settle an unreachable generation and is not the production design.
 The [pressure experiment](../../../spikes/relay-hosts/pressure.md) kept healthy peers
 working under 512 MiB open/close loads; it supports continuing Cloudflare integration,
 but establishes neither immediate physical release nor a finite retention deadline.
+The [retirement follow-up](../../../spikes/relay-hosts/retirement.md) reproduces
+admission exhaustion after verified payload consumption loses feedback, even with
+an exact SQLite mirror. Separate platform probes sustain replacement admissions
+with immediate or 30-second risk expiry; neither is a physical-release receipt.
+Some close-requested old peers still deliver complete bursts after more than ten
+minutes; the experiment cannot locate those bytes within the forwarding path.
+Production integration must give retired risk an explicit policy-based end,
+without restoring old authority or making ordinary reconnects wait for a global reset.
 
 结论：**保留共享 Rust 语义内核；退役与局部恢复已实现。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
@@ -89,7 +97,7 @@ but establishes neither immediate physical release nor a finite retention deadli
 
 资源模型区分活跃连接准入、应用持有队列和已提交宿主的数据。活跃连接内，已授未用额度、事件内临时载荷和未确认发送数据仍共用该代次的有界预算；`send()` 返回或单个会话退役不补充额度。应用队列与活跃预算必须有硬上限；Cloudflare 隐藏缓冲不承诺跨任意故障的精确占用或释放时限。
 
-取消立即撤权并丢弃未提交队列；可通信连接按序通知目标端，以消费或丢弃后的最终计数幂等结算。失联代次须先撤权、停止新增提交并清除应用队列，再按宿主策略退役；活跃连接名额与残留风险保留分别限界。原生确认本代次应用队列与 socket 发送资源释放后立即退役；Cloudflare 的立即退役或固定宽限由下述残留实验决定，宽限不因重连延长。共享内核约束退役前置条件与元数据上限，适配器提供容量策略和回收事实。逻辑退役与重启均不证明物理释放，不得伪造 `Input::Closed`；旧许可和迟到反馈不得影响新连接。
+取消立即撤权并丢弃未提交队列；可通信连接按序通知目标端，以消费或丢弃后的最终计数幂等结算。失联代次须先撤权、停止新增提交并清除应用队列，再按宿主策略退役；活跃连接名额与残留风险保留分别限界。原生确认本代次应用队列与 socket 发送资源释放后立即退役；Cloudflare 的风险预留须有独立、有限的策略退出与饱和后自动恢复路径；立即退出或固定宽限按残留实验及重连体验决定，期限不因重连或重建延长。实验中的 30 秒不是平台释放保证。共享内核约束退役前置条件与元数据上限，适配器提供容量策略和回收事实。逻辑退役与重启均不证明物理释放，不得伪造 `Input::Closed`；旧许可和迟到反馈不得影响新连接。
 
 原生适配器按分享串行化控制状态，数据转发由独立连接任务并行执行，可使用 Tokio、有界公平队列和原生 WebSocket 背压。原生须明确提交点：许可复核与提交在同一同步临界区完成并与撤销线性化，撤销后不再新增提交；socket 与持久化等待留在转发临界区外，慢接收者只阻塞自身会话。Cloudflare Rust 适配器使用休眠和平台发送语义；普通数据帧可以经过 Rust/Wasm 内存，复制必须有界并纳入 CPU、内存和吞吐测量。平台差异只能改变内部容量和故障触发点，不能改变帧顺序、会话隔离、所有权或客户端可见的安全语义。
 

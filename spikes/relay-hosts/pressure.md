@@ -31,8 +31,10 @@ benchmarks. A sibling object remained reachable during repeated resets.
 ## Memory attribution
 
 The delayed GraphQL `durableObjectsPeriodicGroups` results are scoped to this
-Preview's namespace and each run's object ID. Their sampled maxima are not
-continuous process RSS or a complete accounting of the network path.
+Preview's namespace and each run's object ID. Each sample covers the entire V8 isolate hosting that object, potentially including
+siblings. Their sampled maxima are not continuous process RSS or a complete
+accounting of the network path. The [retirement follow-up](retirement.md) adds
+longer holds and explicit admission-risk policies.
 
 Independent controls retained 192 MiB of ArrayBuffers or Wasm memory; reported
 memory reached about 196 MiB. Incremental JS double arrays caused reconstruction
