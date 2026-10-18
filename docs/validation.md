@@ -8,8 +8,10 @@ the installed stable Rust toolchain; browser scenarios also need browser prerequ
 Cargo retains its incremental cache; each suite runs its own executable copy.
 Go relay fixtures share `internal/testrelaynative` for isolated SQLite, readiness
 and bounded process ownership. `integration/relayv2` also owns relay-set candidate
-isolation, exact-lane reconnection and session shutdown scenarios. Short relay-set
-tests inject dials and clocks; short Go tests do not build Rust.
+isolation, exact-lane reconnection, session shutdown and receive recovery with one
+download job and output reservation. Process E2E verifies STOP independently on
+two relays before and after restart. CLI cancellation tests inject relay cleanup;
+short relay-set tests inject dials and clocks. Short Go tests do not build Rust.
 Go race instrumentation applies only to Go children.
 
 ## Local gates

@@ -25,7 +25,6 @@ import (
 const (
 	v2CriticalRelayTransferScenario = "v2-critical-relay-transfer"
 	v2SenderReconnectScenario       = "v2-sender-relay-reconnect"
-	v2ExplicitStopScenario          = "v2-explicit-stop-tombstone"
 	v2CriticalPayload               = "critical sender-relay-receiver\n"
 
 	v2SenderRelayRecoveryMilestone  = "sender_relay_recovery"
@@ -34,7 +33,6 @@ const (
 	v2SenderStopMilestone           = "sender_stop"
 	v2ReceiverDirectLaneMilestone   = "receiver_direct_lane"
 	v2ReceiverRelayContentMilestone = "receiver_relay_content"
-	v2ReceiverJoinStoppedMilestone  = "receiver_join_stopped"
 )
 
 func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
@@ -173,68 +171,6 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 		)
 	}
 	assertV2File(t, filepath.Join(output, filepath.Base(source)), payload)
-	scenario.requireSuccess(t)
-}
-
-func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
-	requireV2ProcessScenario(t)
-	scenario := startV2Scenario(t, v2ExplicitStopScenario)
-	binaries := loadE2EBinaries(t)
-	proxy := startRelayPauseProxy(t, scenario)
-	fixture := newV2RelayFixture(t, scenario, proxy.Endpoint())
-	firstRelay := startLifecycleRelay(t, fixture, proxy)
-
-	source := filepath.Join(t.TempDir(), "stopped-share.txt")
-	if err := os.WriteFile(source, []byte("must never be available after STOP"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	share := startTracedV2Process(
-		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", firstRelay.baseURL,
-	)
-	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
-	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
-	share.forbidStderr(capabilitySecrets...)
-	share.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source))...)
-	share.interrupt(t)
-	waitV2ProcessTrace(t, share, v2SenderStopMilestone, testrun.OutcomeSucceeded)
-	if err := share.wait(t); err != nil {
-		t.Fatalf("sender failed while committing STOP: %v; stderr=%q", err, share.stderr.String())
-	}
-
-	// Reloading the same relay state behind the stable proxy proves the verdict is
-	// a durable route tombstone, not merely a closed in-memory sender connection.
-	pauseContext, cancelPause := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
-	if err := scenario.observe(v2RelayProxyPauseMilestone, nil, func() error {
-		return proxy.Pause(pauseContext)
-	}); err != nil {
-		cancelPause()
-		t.Fatal(err)
-	}
-	cancelPause()
-	firstRelay.stop(t)
-	startV2RelayBehindPausedProxy(t, fixture, proxy)
-	if err := scenario.observe(v2RelayProxyResumeMilestone, nil, func() error {
-		proxy.Resume()
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	for attempt := 1; attempt <= 2; attempt++ {
-		output := testoutputroot.New(t).RootPath
-		receiver := startTracedV2Process(
-			t, scenario, v2GetCommandComponent, binaries.wind,
-			"get", shareLink, "-o", output, "--connectivity", "relay-only",
-		)
-		receiver.forbidStderr(capabilitySecrets...)
-		receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
-		if err := receiver.wait(t); err == nil {
-			t.Fatalf("post-STOP receiver %d unexpectedly succeeded", attempt)
-		}
-		events := drainV2ProcessTraces(t, receiver)
-		requireV2EventCount(t, events, v2ReceiverJoinStoppedMilestone, testrun.OutcomeFailed, 1)
-	}
 	scenario.requireSuccess(t)
 }
 

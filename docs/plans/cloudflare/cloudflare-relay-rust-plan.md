@@ -97,11 +97,14 @@ capacity-bearing handshakes, explicit send grants, cumulative consumption on
 writer readiness and ordered settlement. Browser product fixtures build Rust
 `relay-native` and Go `wind`, including the 17 MiB download/hash scenario. Go process
 E2E uses the same binaries with isolated SQLite and stable endpoint identity across
-restarts, covering reconnect, permanent STOP and receiver-crash recovery.
+restarts, covering reconnect, permanent STOP on both relay candidates before and
+after restart, and receiver-crash recovery.
 `integration/relayv2` shares the native test host with Go process E2E, covering
 registration, descriptors, bidirectional frames, independent relay candidates,
-exact-lane reconnection and session shutdown. `connectivity/relayset` no longer
-uses Go server fixtures; short tests inject dials and clocks.
+exact-lane reconnection, session shutdown and receive recovery preserving one job
+and output reservation. CLI cancellation tests inject relay cleanup and retain exit
+code and trace checks. `connectivity/relayset` no longer uses Go server fixtures;
+short tests inject dials and clocks.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
 the remaining cutover: default server/release entry points and other Go relay
 fixtures still target the incompatible old Go relay.

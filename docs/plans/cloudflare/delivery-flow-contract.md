@@ -5,9 +5,11 @@ handshakes, cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). Go process E
 and browser product fixtures build Go `wind` and Rust `relay-native`; the native
 process scenario uses real `DialSender`/`DialReceiver`/`Channel` APIs.
 `integration/relayv2` shares the native test host with Go process E2E, including
-multi-relay isolation and exact-lane recovery. `connectivity/relayset` short tests
-are server-free. Default server/release entry points and other Go relay fixtures
-still target the incompatible legacy Go server. There is no wire-format fallback.
+multi-relay isolation, exact-lane recovery and receive job/output continuity.
+Process E2E checks STOP on each candidate before and after restart. CLI cancellation
+and `connectivity/relayset` short tests are server-free. Default server/release entry
+points and other Go relay fixtures still target the incompatible legacy Go server.
+There is no wire-format fallback.
 
 Capacity is declared per direction at admission and consumed by per-grant
 allowances. Admission reserves both startup allowances before granting either, so

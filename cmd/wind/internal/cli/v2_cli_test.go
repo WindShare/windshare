@@ -7,8 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"github.com/windshare/windshare/engine"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,16 +17,14 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/internal/testoutputroot"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/testrun"
-	"github.com/windshare/windshare/relay/httpapi"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
-	"github.com/windshare/windshare/relay/signaling/v2endpoint"
-	"github.com/windshare/windshare/relay/signaling/v2route"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -96,11 +92,30 @@ func mustCLIFault(value transferfault.Fault, err error) transferfault.Fault {
 	return value
 }
 
-func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
-	store := &memoryStopStore{}
-	server := newCLIRelayServer(t, store)
-	secondaryStore := &memoryStopStore{}
-	secondaryServer := newCLIRelayServer(t, secondaryStore)
+const cliShareCancellationTimeout = 10 * time.Second
+
+func TestShareCancellationWaitsForCleanupAndRecordsTraces(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		cleanupError error
+		exitCode     int
+		stopOutcome  testrun.Outcome
+	}{
+		{name: "stopped", exitCode: ExitOK, stopOutcome: testrun.OutcomeSucceeded},
+		{name: "cleanup failed", cleanupError: errors.New("relay stop failed"), exitCode: ExitNetwork, stopOutcome: testrun.OutcomeFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testShareCancellation(t, test.cleanupError, test.exitCode, test.stopOutcome)
+		})
+	}
+}
+
+func testShareCancellation(t *testing.T, cleanupError error, exitCode int, stopOutcome testrun.Outcome) {
+	t.Helper()
+	relays := &cliShareRelays{
+		stopped: make(chan struct{}), cleanupStarted: make(chan context.Context, 1),
+		cleanupRelease: make(chan struct{}), cleanupError: cleanupError,
+	}
 
 	file := filepath.Join(t.TempDir(), "file.txt")
 	if err := os.WriteFile(file, []byte("stop contract"), 0o600); err != nil {
@@ -111,7 +126,7 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	userTrace := newRecordingUserTrace()
 	userTracePath := filepath.Join(t.TempDir(), "share.ndjson")
 	privateSink := newRecordingV2ProcessTraceSink()
-	privateOperation, err := testrun.NewOperation("run-v2-cli", "operation-v2-cli", "share-session-retirement")
+	privateOperation, err := testrun.NewOperation("run-v2-cli", "operation-v2-cli", "share-cancellation")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +142,12 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	app := &App{
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
 		processTrace: privateTrace,
+		engineConfig: engine.Config{Share: engine.ShareDependencies{
+			Relays: func(context.Context, []string, relayset.SenderFactory) (engine.ShareRelays, error) {
+				return relays, nil
+			},
+			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
+		}},
 		openUserTrace: func(
 			target runtrace.Target,
 			command clievent.Command,
@@ -142,81 +163,106 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	shareContext, cancelShare := context.WithCancel(context.Background())
 	result := make(chan int, 1)
+	finished := make(chan struct{})
+	releaseCleanup := sync.OnceFunc(func() { close(relays.cleanupRelease) })
+	t.Cleanup(func() {
+		cancelShare()
+		releaseCleanup()
+		select {
+		case <-finished:
+		case <-time.After(cliShareCancellationTimeout):
+			t.Error("share command did not settle during cleanup")
+		}
+	})
 	go func() {
-		result <- app.Run(shareContext, []string{"share", file, "--relay", server.URL, "--relay", secondaryServer.URL, "--trace", userTracePath})
+		defer close(finished)
+		result <- app.Run(shareContext, []string{"share", file, "--relay", relays.ReadyRelayURL(), "--trace", userTracePath})
 	}()
-	linkLine := waitTestLine(t, stdout, "Link: ")
-	capability, err := link.Parse(strings.TrimPrefix(linkLine, "Link: "))
-	if err != nil {
-		t.Fatal(err)
-	}
-	shareIDBytes, _ := base64.RawURLEncoding.Strict().DecodeString(capability.ShareID)
-	shareID, _ := v2.ShareIDFromBytes(shareIDBytes)
-	if len(capability.Relays) != 2 {
-		t.Fatalf("advertised relays=%v", capability.Relays)
-	}
-	for _, relayURL := range []string{server.URL, secondaryServer.URL} {
-		deadline := time.Now().Add(time.Second)
-		for {
-			joined, joinErr := relayv2.DialReceiver(context.Background(), relayv2.ReceiverConfig{RelayBaseURL: relayURL, ShareID: shareID})
-			if joinErr == nil {
-				_ = joined.Close()
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("configured relay never registered: %v", joinErr)
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}
-	secondaryCapability := capability
-	secondaryCapability.Relays = []string{secondaryServer.URL}
-	secondaryURL, err := secondaryCapability.URL(secondaryServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(secondaryURL, "?") {
-		t.Fatal("same-origin receiver scenario did not produce a compact link")
-	}
-	for index, arguments := range [][]string{
-		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath},
-		{"get", secondaryURL, "-o", testoutputroot.New(t).RootPath, "--only", filepath.Base(file)},
-	} {
-		getOutput := &lockedTestBuffer{}
-		getErrors := &lockedTestBuffer{}
-		getApp := &App{Stdout: getOutput, Stderr: getErrors, Stdin: strings.NewReader("")}
-		if code := getApp.Run(context.Background(), arguments); code != ExitOK {
-			t.Fatalf("get %d exit=%d stderr=%q", index, code, getErrors.String())
-		}
-	}
-	// Receiver success and sender-side channel retirement are intentionally
-	// asynchronous. Stop only after both completed sessions have relinquished
-	// sender authority, so this test isolates the durable relay STOP contract.
-	waitV2PrivateMilestones(t, privateSink, processTraceSenderSessionRetired, 2)
+	waitV2PrivateMilestones(t, privateSink, processTraceSenderReady, 1)
 	cancelShare()
 	select {
-	case code := <-result:
-		if code != ExitOK {
-			t.Fatalf("share cancellation exit=%d stderr=%q", code, stderr.String())
+	case cleanupContext := <-relays.cleanupStarted:
+		if err := cleanupContext.Err(); err != nil {
+			t.Fatalf("share cancellation revoked cleanup: %v", err)
 		}
-	case <-time.After(10 * time.Second):
+		if _, bounded := cleanupContext.Deadline(); !bounded {
+			t.Fatal("relay cleanup has no deadline")
+		}
+	case <-time.After(cliShareCancellationTimeout):
+		t.Fatal("share cancellation did not start cleanup")
+	}
+	select {
+	case code := <-result:
+		t.Fatalf("share returned %d before cleanup completed", code)
+	default:
+	}
+	releaseCleanup()
+	select {
+	case code := <-result:
+		if code != exitCode {
+			t.Fatalf("share cancellation exit=%d want=%d stderr=%q", code, exitCode, stderr.String())
+		}
+	case <-time.After(cliShareCancellationTimeout):
 		t.Fatal("share did not complete explicit stop")
 	}
 	if err := privateTrace.close(); err != nil {
 		t.Fatal(err)
 	}
-	if userTrace.eventCount() == 0 {
-		t.Fatal("user trace received no events while the private process trace was active")
+	for _, outcome := range []testrun.Outcome{testrun.OutcomeStarted, stopOutcome} {
+		if count, _ := privateSink.milestoneSnapshot(processTraceSenderStop, outcome); count != 1 {
+			t.Fatalf("private stop trace %s count=%d", outcome, count)
+		}
 	}
-	if store.Count() != 1 || secondaryStore.Count() != 1 {
-		t.Fatalf("independent durable STOP writes = %d/%d", store.Count(), secondaryStore.Count())
+	userTrace.mu.Lock()
+	defer userTrace.mu.Unlock()
+	stoppedEvents := 0
+	for _, event := range userTrace.events {
+		if stopped, ok := event.(clievent.SharingStopped); ok {
+			stoppedEvents++
+			if code, valid := stopped.Result().ExitCode().ProcessCode(); !valid || code != exitCode {
+				t.Fatalf("user trace stop exit=%d valid=%v want=%d", code, valid, exitCode)
+			}
+		}
 	}
-	_, err = relayv2.DialReceiver(context.Background(), relayv2.ReceiverConfig{
-		RelayBaseURL: server.URL, ShareID: shareID,
-	})
-	var relayError *relayv2.RelayError
-	if !errors.As(err, &relayError) || relayError.Code != v2.ErrorStopped {
-		t.Fatalf("join after explicit stop = %v", err)
+	if stoppedEvents != 1 {
+		t.Fatalf("user trace stop events=%d while private trace was active", stoppedEvents)
+	}
+}
+
+type cliShareRelays struct {
+	stopped        chan struct{}
+	stopOnce       sync.Once
+	cleanupStarted chan context.Context
+	cleanupRelease chan struct{}
+	cleanupError   error
+}
+
+func (relays *cliShareRelays) Accept(ctx context.Context) (*relayv2.Channel, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-relays.stopped:
+		return nil, context.Canceled
+	}
+}
+
+func (*cliShareRelays) WaitReady(context.Context) error                       { return nil }
+func (*cliShareRelays) ReadyRelayURL() string                                 { return "https://relay.example" }
+func (*cliShareRelays) ObserveAvailability(func(relayset.SenderAvailability)) {}
+func (*cliShareRelays) Wake()                                                 {}
+func (relays *cliShareRelays) StopRecovery() {
+	relays.stopOnce.Do(func() { close(relays.stopped) })
+}
+func (relays *cliShareRelays) Cleanup(ctx context.Context) error {
+	select {
+	case relays.cleanupStarted <- ctx:
+	default:
+	}
+	select {
+	case <-relays.cleanupRelease:
+		return relays.cleanupError
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -235,21 +281,6 @@ func (buffer *lockedTestBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.buffer.String()
-}
-
-func waitTestLine(t *testing.T, output *lockedTestBuffer, prefix string) string {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		for line := range strings.SplitSeq(output.String(), "\n") {
-			if strings.HasPrefix(line, prefix) {
-				return line
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %q in %q", prefix, output.String())
-	return ""
 }
 
 type recordingUserTrace struct {
@@ -280,12 +311,6 @@ func (*recordingUserTrace) Path() string                                  { retu
 
 func (*recordingUserTrace) Close() runtrace.Status { return runtrace.Status{Complete: true} }
 
-func (trace *recordingUserTrace) eventCount() int {
-	trace.mu.Lock()
-	defer trace.mu.Unlock()
-	return len(trace.events)
-}
-
 type recordingV2ProcessTraceSink struct {
 	mu      sync.Mutex
 	events  []testrun.Event
@@ -309,12 +334,13 @@ func (*recordingV2ProcessTraceSink) Close() error { return nil }
 
 func (sink *recordingV2ProcessTraceSink) milestoneSnapshot(
 	milestone testrun.Milestone,
+	outcome testrun.Outcome,
 ) (int, <-chan struct{}) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	count := 0
 	for _, event := range sink.events {
-		if event.Milestone == string(milestone) && event.Outcome == string(testrun.OutcomeSucceeded) {
+		if event.Milestone == string(milestone) && event.Outcome == string(outcome) {
 			count++
 		}
 	}
@@ -328,10 +354,10 @@ func waitV2PrivateMilestones(
 	count int,
 ) {
 	t.Helper()
-	timer := time.NewTimer(10 * time.Second)
+	timer := time.NewTimer(cliShareCancellationTimeout)
 	defer timer.Stop()
 	for {
-		observed, changed := sink.milestoneSnapshot(milestone)
+		observed, changed := sink.milestoneSnapshot(milestone, testrun.OutcomeSucceeded)
 		if observed >= count {
 			return
 		}
@@ -341,38 +367,6 @@ func waitV2PrivateMilestones(
 			t.Fatalf("timed out waiting for %d %q private milestones; observed=%d", count, milestone, observed)
 		}
 	}
-}
-
-type memoryStopStore struct {
-	mu     sync.Mutex
-	values []v2route.Tombstone
-}
-
-func (store *memoryStopStore) Lookup(_ context.Context, shareID v2.ShareID) (v2route.Tombstone, bool, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	for _, record := range store.values {
-		if record.ShareID == shareID {
-			return record, true, nil
-		}
-	}
-	return v2route.Tombstone{}, false, nil
-}
-
-func (store *memoryStopStore) Commit(
-	_ context.Context,
-	value v2route.Tombstone,
-) (v2route.CommitOutcome, error) {
-	store.mu.Lock()
-	store.values = append(store.values, value)
-	store.mu.Unlock()
-	return v2route.CommitCommitted, nil
-}
-
-func (store *memoryStopStore) Count() int {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return len(store.values)
 }
 
 func testApp(stdin string) *App {
@@ -387,44 +381,6 @@ func TestRegistrationMaterialUsesEd25519Width(t *testing.T) {
 	if len(privateKey) != ed25519.PrivateKeySize || catalog.IdentityBytes != v2.ShareInstanceBytes {
 		t.Fatal("suite-02 identity widths diverged")
 	}
-}
-
-func newCLIRelayServer(t *testing.T, store *memoryStopStore) *httptest.Server {
-	t.Helper()
-	server := httptest.NewUnstartedServer(nil)
-	endpointIdentity, err := v2.NormalizeRelayEndpoint("http://" + server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry, err := v2route.New(context.Background(), v2route.Config{
-		MaxRoutes: 8, MaxSessions: 8, MaxSessionsPerShare: 4, Random: rand.Reader, Tombstones: store,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	challenges, err := v2.NewChallengeLedger(v2.ChallengeLedgerConfig{Capacity: 16, Random: rand.Reader})
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoint, err := v2endpoint.New(v2endpoint.Config{
-		Registry: registry, Challenges: challenges, RelayIdentity: endpointIdentity.Identity,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.Config.Handler = httpapi.NewV2Handler(httpapi.V2Config{
-		Server: endpoint, AllowLocalhost: true,
-		AdmitConnection: func(string) (func(), bool) { return func() {}, true },
-	})
-	server.Start()
-	t.Cleanup(func() {
-		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = endpoint.Shutdown(shutdown)
-		cancel()
-		server.Close()
-	})
-
-	return server
 }
 
 func projectTestGetResult(input engine.ReceiveSettlementInput) (clievent.TransferResult, error) {
