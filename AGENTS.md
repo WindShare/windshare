@@ -13,7 +13,7 @@
 
 ### docs
 
-- Doc Maintenance: Keep concise, avoid redundancy, clean up outdated content promptly to reduce AI context usage. Update docs promptly whenever code or design changes make them stale.
+- Doc Maintenance: Keep concise, avoid redundancy, clean up outdated content promptly to reduce AI context usage. Keep only what is needed to understand the system's shape and vocabulary; added detail is a regression, not an improvement.
 - Use English as much as possible to make it easier for international developers.
 
 ### Go Specifics
