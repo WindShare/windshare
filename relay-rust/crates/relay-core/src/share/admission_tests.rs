@@ -76,16 +76,16 @@ fn full_business_budget_allows_authenticated_stop_without_refunding_delivery() {
     fixture.prepare_stop(&mut relay);
     assert_eq!(relay.connection_usage().controls, 1);
     assert_eq!(relay.connection_usage().business, 2);
-    assert!(!relay.ledgers.contains_key(&connection(99)));
+    assert!(relay.generations.ledger(&connection(99)).is_none());
     let stop = fixture.stop(&mut relay);
     assert!(finish_stop(&mut relay, stop, fixture.at));
     assert_eq!(
-        relay.ledgers[&session.sender()].usage().submitted,
+        ledger_of(&relay, session.sender()).usage().submitted,
         ONE_FRAME
     );
     assert_eq!(relay.connection_usage().business, 2);
     assert!(matches!(
-        relay.connections[&connection(99)].role,
+        relay.generations.connection(&connection(99)).unwrap().role,
         Role::Closing
     ));
     let _ = relay.handle(Input::Closed(connection(99)), fixture.at);
@@ -106,7 +106,7 @@ fn hibernation_preserves_stop_capacity_beside_unreleased_business_generations() 
         }
     }
     fixture.prepare_stop(&mut relay);
-    let deadline = relay.controls[&connection(99)];
+    let deadline = relay.generations.control_deadline(&connection(99)).unwrap();
     let checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), relay.limits).unwrap();
     let (mut restored, _) = Relay::restore(
@@ -123,11 +123,17 @@ fn hibernation_preserves_stop_capacity_beside_unreleased_business_generations() 
     .unwrap();
     assert_eq!(restored.connection_usage().business, 2);
     assert_eq!(restored.connection_usage().controls, 1);
-    assert_eq!(restored.controls[&connection(99)], deadline);
+    assert_eq!(
+        restored
+            .generations
+            .control_deadline(&connection(99))
+            .unwrap(),
+        deadline
+    );
     let stop = fixture.stop(&mut restored);
     assert!(finish_stop(&mut restored, stop, fixture.at));
     assert_eq!(
-        restored.ledgers[&session.sender()].usage().submitted,
+        ledger_of(&restored, session.sender()).usage().submitted,
         ONE_FRAME
     );
 }
@@ -273,7 +279,7 @@ fn pending_stop_storage_cannot_hold_a_control_socket_indefinitely() {
     let mut relay = bounded(&fixture, 1, 1);
     fixture.register(&mut relay);
     fixture.prepare_stop(&mut relay);
-    let deadline = relay.controls[&connection(99)];
+    let deadline = relay.generations.control_deadline(&connection(99)).unwrap();
     let initial = fixture.stop(&mut relay);
     let expired = relay.handle(Input::Tick, deadline);
     assert!(

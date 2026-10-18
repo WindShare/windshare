@@ -80,13 +80,13 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
     );
     let queued = receive_from(&mut relay, key, key.sender(), fixture.at);
     let detached = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
-    assert!(!relay.connections.contains_key(&key.receiver()));
+    assert!(relay.generations.connection(&key.receiver()).is_none());
     assert_eq!(
         relay.delivery_usage(key.receiver()),
-        Some(relay.ledgers[&key.receiver()].usage())
+        Some(ledger_of(&relay, key.receiver()).usage())
     );
     assert_eq!(
-        relay.ledgers[&key.receiver()].usage(),
+        ledger_of(&relay, key.receiver()).usage(),
         Usage {
             granted: Counts::ZERO,
             received: ONE_FRAME,
@@ -102,7 +102,7 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
     assert!(matches!(relay.checkpoint(), Err(Error::CheckpointBusy)));
     discard_outputs(&mut relay, detached, fixture.at);
     assert_eq!(
-        relay.ledgers[&key.receiver()].usage(),
+        ledger_of(&relay, key.receiver()).usage(),
         Usage {
             submitted: ONE_FRAME,
             ..Usage::default()
@@ -153,10 +153,10 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
         )));
         discard_outputs(&mut restored, turn, now);
         assert_eq!(
-            restored.ledgers[&key.receiver()].usage().submitted,
+            ledger_of(&restored, key.receiver()).usage().submitted,
             ONE_FRAME
         );
-        assert!(!restored.connections.contains_key(&key.receiver()));
+        assert!(restored.generations.connection(&key.receiver()).is_none());
         if let Some(original) = deadline {
             assert_eq!(restored.deadline(), Some(original));
         } else {
@@ -167,7 +167,10 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
     }
     let deadline = deadline.unwrap();
     let _ = relay.handle(Input::Tick, deadline);
-    assert_eq!(relay.ledgers[&key.receiver()].usage().submitted, ONE_FRAME);
+    assert_eq!(
+        ledger_of(&relay, key.receiver()).usage().submitted,
+        ONE_FRAME
+    );
     assert_business_capacity_refused(&fixture, &mut relay, connection(3), deadline);
     assert_eq!(
         relay.deadline(),
@@ -177,7 +180,7 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
                 .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
         )
     );
-    assert!(relay.ledgers[&key.receiver()].deadline().is_none());
+    assert!(ledger_of(&relay, key.receiver()).deadline().is_none());
 }
 
 #[test]
@@ -199,7 +202,7 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
     let detached = work(&turn);
     let _ = complete(&mut restored, &detached, fixture.at);
     discard_outputs(&mut restored, turn, fixture.at);
-    assert!(restored.connections.is_empty());
+    assert_eq!(restored.generations.connected_count(), 0);
     let _ = restored.handle(Input::Closed(key.sender()), fixture.at);
     assert_eq!(
         restored
@@ -210,7 +213,7 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
         &[key.receiver()]
     );
     assert_eq!(
-        restored.ledgers[&key.receiver()].usage().submitted,
+        ledger_of(&restored, key.receiver()).usage().submitted,
         ONE_FRAME
     );
     assert_eq!(
@@ -253,7 +256,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
     };
     let (next, _) = fixture.join_connection(&mut relay, next_connection);
     deliver(&fixture, &mut relay, next);
-    let before = relay.ledgers[&next_connection].checkpoint().unwrap();
+    let before = ledger_of(&relay, next_connection).checkpoint().unwrap();
     let _ = relay.handle(
         Input::Settled {
             connection: next_connection,
@@ -262,7 +265,10 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         },
         fixture.at,
     );
-    assert_eq!(relay.ledgers[&old.receiver()].usage().submitted, ONE_FRAME);
+    assert_eq!(
+        ledger_of(&relay, old.receiver()).usage().submitted,
+        ONE_FRAME
+    );
     for _ in 0..2 {
         assert_eq!(
             relay
@@ -279,15 +285,15 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         );
         let _ = relay.handle(Input::Closed(old.receiver()), fixture.at);
         assert_eq!(
-            relay.ledgers[&next_connection].checkpoint().unwrap(),
+            ledger_of(&relay, next_connection).checkpoint().unwrap(),
             before
         );
         assert!(matches!(
-            relay.connections[&next_connection].role,
+            relay.generations.connection(&next_connection).unwrap().role,
             Role::Established(_)
         ));
     }
-    assert!(!relay.ledgers.contains_key(&old.receiver()));
+    assert!(relay.generations.ledger(&old.receiver()).is_none());
     assert_eq!(relay.connection_usage().retired_generations, 0);
     // Releasing an old generation cannot also release the replacement's admission slot.
     assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);

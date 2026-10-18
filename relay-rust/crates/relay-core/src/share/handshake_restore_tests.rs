@@ -139,7 +139,7 @@ fn resume_declares_a_new_connection_capacity_without_reclaiming_the_old_owner() 
             .refusal,
         None
     );
-    let old_capacity = relay.ledgers[&connection(1)].receive_capacity();
+    let old_capacity = ledger_of(&relay, connection(1)).receive_capacity();
     let at = fixture.begin_resume(&mut relay, 3);
     let resumption = work(&fixture.control(&mut relay, connection(3), "resumeProofB64", at));
     let _ = complete(&mut relay, &resumption, at);
@@ -147,16 +147,16 @@ fn resume_declares_a_new_connection_capacity_without_reclaiming_the_old_owner() 
         .unwrap()
         .receive_capacity();
     assert_eq!(
-        relay.ledgers[&connection(3)].receive_capacity(),
+        ledger_of(&relay, connection(3)).receive_capacity(),
         Some(new_capacity)
     );
     assert_ne!(old_capacity, Some(new_capacity));
     assert_eq!(
-        relay.ledgers[&connection(1)].receive_capacity(),
+        ledger_of(&relay, connection(1)).receive_capacity(),
         old_capacity
     );
     assert_eq!(
-        relay.ledgers[&connection(1)].usage().submitted,
+        ledger_of(&relay, connection(1)).usage().submitted,
         Counts::new(1, 21)
     );
 }

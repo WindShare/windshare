@@ -30,8 +30,13 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
                     .refusal,
                 None
             );
-            assert!(!relay.ledgers.contains_key(&connection(id)));
-            assert!(relay.controls.contains_key(&connection(id)));
+            assert!(relay.generations.ledger(&connection(id)).is_none());
+            assert!(
+                relay
+                    .generations
+                    .control_deadline(&connection(id))
+                    .is_some()
+            );
         }
         let encoded = relay.checkpoint().unwrap().encode();
         if let Some(expected) = &checkpoint_bytes {
@@ -59,22 +64,22 @@ fn sharing_allocates_sender_fanout_and_one_slot_per_receiver() {
     .unwrap();
     fixture.register(&mut relay);
     assert_eq!(
-        relay.ledgers[&connection(1)]
+        ledger_of(&relay, connection(1))
             .metadata_usage()
             .allocated_slots,
         0
     );
     for receiver in 2..=RECEIVERS as u64 + 1 {
         fixture.join(&mut relay, receiver);
-        let usage = relay.ledgers[&connection(receiver)].metadata_usage();
+        let usage = ledger_of(&relay, connection(receiver)).metadata_usage();
         assert_eq!(usage.retained_flows, 1);
         assert_eq!(usage.allocated_slots, 1);
     }
-    let usage = relay.ledgers[&connection(1)].metadata_usage();
+    let usage = ledger_of(&relay, connection(1)).metadata_usage();
     assert_eq!(usage.retained_flows, RECEIVERS);
     let allocated: usize = relay
-        .ledgers
-        .values()
+        .generations
+        .ledgers()
         .map(|ledger| ledger.metadata_usage().allocated_slots)
         .sum();
     assert_eq!(allocated, RECEIVERS * 2);

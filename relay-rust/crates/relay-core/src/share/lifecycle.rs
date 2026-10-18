@@ -54,7 +54,7 @@ impl<O: Observer> ShareRelay<O> {
         match action {
             Action::Reserved(reservation) => {
                 let connection = reservation.id().connection();
-                if let Some(entry) = self.connections.get_mut(&connection) {
+                if let Some(entry) = self.generations.connection_mut(&connection) {
                     entry.reservation = Some(reservation.id());
                 }
                 self.offer_admission(connection, Admission::Fresh(reservation), turn);
@@ -85,7 +85,7 @@ impl<O: Observer> ShareRelay<O> {
             }
             Action::Registered(registration) => {
                 let connection = registration.owner.connection();
-                if let Some(entry) = self.connections.get_mut(&connection) {
+                if let Some(entry) = self.generations.connection_mut(&connection) {
                     entry.reservation = None;
                     Self::send(
                         turn,
@@ -105,7 +105,7 @@ impl<O: Observer> ShareRelay<O> {
             }
             Action::Stop(work) => self.stop_work(work, now, turn),
             Action::Stopped(ack) => {
-                if self.connections.contains_key(&ack.connection()) {
+                if self.generations.connection(&ack.connection()).is_some() {
                     Self::send(
                         turn,
                         ack.connection(),
@@ -115,16 +115,7 @@ impl<O: Observer> ShareRelay<O> {
                         Some(ack.connection()),
                         RelayDecision::StopAcknowledged {
                             stop_id: ack.acknowledgement().stop_id(),
-                            unsettled_generations: self
-                                .ledgers
-                                .values()
-                                .filter(|ledger| ledger.metadata_usage().retained_flows != 0)
-                                .count()
-                                + self
-                                    .unavailable
-                                    .values()
-                                    .filter(|bound| **bound != crate::flow::Counts::ZERO)
-                                    .count(),
+                            unsettled_generations: self.generations.unsettled_count(),
                         },
                         now,
                     );
@@ -170,7 +161,7 @@ impl<O: Observer> ShareRelay<O> {
                     StopCleanup::None => {}
                     StopCleanup::Owner(connection) => {
                         connections.push(connection);
-                        for ledger in self.ledgers.values() {
+                        for ledger in self.generations.ledgers() {
                             connections.extend(ledger.checkpoint_flows().filter_map(
                                 |(flow, _)| {
                                     (flow.session().sender() == connection)

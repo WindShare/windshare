@@ -66,7 +66,7 @@ fn stop_with_occupancy(fixture: &Fixture) -> (Relay, SessionKey, FlowKey, Work) 
     let commit = discard_queues(&mut relay, &cleanup, fixture.at);
     let stopped = complete(&mut relay, &commit, fixture.at);
     assert!(acknowledged(&stopped, connection(99)));
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
     (relay, key, flows[0], commit)
 }
 
@@ -126,6 +126,7 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
         fixture.prepare_stop(&mut relay);
         fixture.register(&mut relay);
         let (key, flows) = fixture.join(&mut relay, 2);
+        let sender = key.sender();
         submit_frames(&mut relay, key, flows[0], 2, fixture.at);
         let intent = work(&fixture.stop(&mut relay));
         let cleanup = complete(&mut relay, &intent, fixture.at);
@@ -133,7 +134,7 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
         let stopped = complete(&mut relay, &commit, fixture.at);
         assert!(acknowledged(&stopped, connection(99)));
         assert_eq!(relay.lifecycle.phase(), Phase::Stopped);
-        let snapshot = relay.ledgers[&key.sender()].snapshot(flows[0]).unwrap();
+        let snapshot = ledger_of(&relay, sender).snapshot(flows[0]).unwrap();
         assert_eq!(snapshot.phase, FlowPhase::Settling);
         assert_eq!(snapshot.usage.submitted, TWO_FRAMES);
         assert!(relay.observer().0.iter().any(|observation| matches!(
@@ -160,7 +161,7 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
         );
         let deadline = snapshot.deadline.unwrap();
         let _ = relay.handle(Input::Tick, deadline);
-        assert_eq!(relay.ledgers[&key.sender()].usage().submitted, TWO_FRAMES);
+        assert_eq!(ledger_of(&relay, sender).usage().submitted, TWO_FRAMES);
 
         // Even after STOP and deadline expiry, only newly consumed bytes refund.
         let consumed = crate::flow::DeliveryConsumed::new(key.wire_id(), ONE_FRAME)
@@ -171,7 +172,7 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
                 relay
                     .handle(
                         Input::Control {
-                            connection: key.sender(),
+                            connection: sender,
                             frame: &consumed
                         },
                         deadline
@@ -179,26 +180,26 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
                     .refusal,
                 None
             );
-            assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+            assert_eq!(ledger_of(&relay, sender).usage().submitted, ONE_FRAME);
         }
         let input = match evidence {
             Evidence::Consumed => Input::Consumed {
-                connection: key.sender(),
+                connection: sender,
                 session: key.wire_id(),
                 total: TWO_FRAMES,
             },
             Evidence::Settled => Input::Settled {
-                connection: key.sender(),
+                connection: sender,
                 session: key.wire_id(),
                 total: TWO_FRAMES,
             },
-            Evidence::Released => Input::Closed(key.sender()),
+            Evidence::Released => Input::Closed(sender),
         };
         assert_eq!(relay.handle(input, deadline).refusal, None);
         assert!(
             relay
-                .ledgers
-                .get(&key.sender())
+                .generations
+                .ledger(&sender)
                 .is_none_or(|ledger| ledger.usage().submitted == Counts::ZERO)
         );
         assert_eq!(relay.lifecycle.phase(), Phase::Stopped);
@@ -206,7 +207,7 @@ fn stopped_retains_submitted_occupancy_until_independent_evidence() {
             relay
                 .handle(
                     Input::Settled {
-                        connection: key.sender(),
+                        connection: sender,
                         session: key.wire_id(),
                         total: TWO_FRAMES
                     },
@@ -237,7 +238,7 @@ fn stopped_response_connection_can_be_checkpointed_until_disconnected() {
     .unwrap();
     assert_eq!(surviving.lifecycle.phase(), Phase::Stopped);
     assert_eq!(
-        surviving.ledgers[&key.sender()].usage().submitted,
+        ledger_of(&surviving, key.sender()).usage().submitted,
         ONE_FRAME
     );
 }
@@ -246,7 +247,7 @@ fn stopped_response_connection_can_be_checkpointed_until_disconnected() {
 fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
     let fixture = Fixture::new();
     let (mut relay, key, flow, commit) = stop_with_occupancy(&fixture);
-    let deadline = relay.ledgers[&key.sender()]
+    let deadline = ledger_of(&relay, key.sender())
         .snapshot(flow)
         .unwrap()
         .deadline;
@@ -274,13 +275,16 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
         .unwrap();
         assert_eq!(restored.lifecycle.phase(), Phase::Stopped);
         assert_eq!(
-            restored.ledgers[&key.sender()]
+            ledger_of(&restored, key.sender())
                 .snapshot(flow)
                 .unwrap()
                 .deadline,
             deadline
         );
-        assert_eq!(restored.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+        assert_eq!(
+            ledger_of(&restored, key.sender()).usage().submitted,
+            ONE_FRAME
+        );
         assert_business_capacity_refused(&fixture, &mut restored, connection(200), fixture.at);
         assert!(
             complete(&mut restored, &commit, fixture.at)
@@ -292,7 +296,7 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
     }
     let late = deadline.unwrap();
     let _ = relay.handle(Input::Tick, late);
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
     let _ = relay.handle(
         Input::Settled {
             connection: key.sender(),
@@ -358,7 +362,7 @@ fn duplicate_stop_and_uncertain_commit_do_not_settle_or_reopen_the_share() {
         fixture.at,
     );
     assert!(matches!(uncertain.outputs.as_slice(), [Output::Retry(id)] if *id == commit.id));
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
     assert_eq!(
         work(&relay.handle(Input::Retry(commit.id), fixture.at)),
         commit
@@ -376,7 +380,7 @@ fn duplicate_stop_and_uncertain_commit_do_not_settle_or_reopen_the_share() {
             .iter()
             .any(|output| matches!(output, Output::Work(_)))
     );
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
     assert!(
         relay
             .submit(&receipt, fixture.at, |_| panic!(
@@ -386,7 +390,7 @@ fn duplicate_stop_and_uncertain_commit_do_not_settle_or_reopen_the_share() {
             .is_some()
     );
     let _ = relay.handle(Input::Discarded(flows[0]), fixture.at);
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
 }
 
 #[test]
@@ -419,13 +423,13 @@ fn stop_from_grace_waits_for_old_generation_queues_without_refunding_submission(
             .is_some()
     );
     let _ = relay.handle(Input::Discarded(flows[0]), fixture.at);
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
     let commit = work(&relay.handle(Input::Discarded(flows[1]), fixture.at));
     assert!(acknowledged(
         &complete(&mut relay, &commit, fixture.at),
         connection(99)
     ));
-    assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
+    assert_eq!(ledger_of(&relay, key.sender()).usage().submitted, ONE_FRAME);
 }
 
 #[path = "admission_tests.rs"]

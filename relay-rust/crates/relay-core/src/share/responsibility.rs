@@ -290,50 +290,11 @@ impl<O: Observer> ShareRelay<O> {
     /// Unfinished lifecycle work must complete before capturing recovery state.
     pub fn checkpoint_manifest(&self) -> Result<CheckpointManifest, Error> {
         self.checkpoint_ready()?;
-        let mut reservations: Vec<_> = self
-            .ledgers
-            .iter()
-            .map(|(&connection, ledger)| {
-                let state = self.detached.get(&connection).copied();
-                let bound = match state {
-                    Some(Detached::Retired) => ledger.usage().submitted,
-                    Some(Detached::Released) => Counts::ZERO,
-                    _ => self.limits.delivery.total(),
-                };
-                Reservation {
-                    connection,
-                    kind: ReservationKind::Business {
-                        bound,
-                        state: state.map_or(GenerationState::Connected, GenerationState::Detached),
-                    },
-                }
-            })
-            .collect();
-        reservations.extend(
-            self.unavailable
-                .iter()
-                .map(|(&connection, &bound)| Reservation {
-                    connection,
-                    kind: ReservationKind::Business {
-                        bound,
-                        state: GenerationState::Unavailable(self.detached[&connection]),
-                    },
-                }),
-        );
-        reservations.extend(
-            self.controls
-                .iter()
-                .map(|(&connection, &deadline)| Reservation {
-                    connection,
-                    kind: ReservationKind::Control { deadline },
-                }),
-        );
-        reservations.sort_unstable_by_key(|entry| entry.connection);
         Ok(CheckpointManifest {
             identity: self.identity,
             last_session: self.last_session,
             attempts: self.handshake_rate.state(),
-            reservations,
+            reservations: self.generations.reservations(),
         })
     }
 }

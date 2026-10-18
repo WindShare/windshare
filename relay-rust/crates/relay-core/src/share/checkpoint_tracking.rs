@@ -102,17 +102,10 @@ impl<O: Observer> ShareRelay<O> {
         }
         // Native ledgers leave their change bit latched. The initial full flush
         // establishes a new baseline without imposing comparisons on native forwarding.
-        for ledger in self.ledgers.values_mut() {
-            let _ = ledger.take_checkpoint_change();
-        }
+        self.generations.reset_ledger_changes();
         self.checkpointing = Checkpointing::Enabled {
             budget,
-            dirty: self
-                .ledgers
-                .keys()
-                .chain(self.controls.keys())
-                .copied()
-                .collect(),
+            dirty: self.generations.record_ids().collect(),
             manifest_dirty: true,
         };
         self.trace(
@@ -203,12 +196,12 @@ impl<O: Observer> ShareRelay<O> {
         // Clean ledgers have not changed since a successful flush, so only dirty
         // connections can contain payloads that would make this event unsafe to end.
         for connection in dirty {
-            if self.controls.contains_key(connection) {
+            if self.generations.control_deadline(connection).is_some() {
                 continue;
             }
             let ledger = self
-                .ledgers
-                .get(connection)
+                .generations
+                .ledger(connection)
                 .ok_or(Error::UnknownConnection)?;
             if ledger.usage().received != Counts::ZERO {
                 return Err(Error::CheckpointBusy);

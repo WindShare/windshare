@@ -14,8 +14,8 @@ impl<O: Observer> ShareRelay<O> {
     /// Hosts use this for diagnostics; it does not grant forwarding or release authority.
     #[must_use]
     pub fn delivery_usage(&self, connection: ConnectionRef) -> Option<crate::flow::Usage> {
-        self.ledgers
-            .get(&connection)
+        self.generations
+            .ledger(&connection)
             .map(crate::flow::ConnectionLedger::usage)
     }
 
@@ -46,12 +46,17 @@ impl<O: Observer> ShareRelay<O> {
             .map_err(Error::Forward)?;
         let destination = flow.destination();
         let result = self
-            .ledgers
-            .get_mut(&destination)
+            .generations
+            .update_ledger(
+                destination,
+                |ledger| ledger.receive(flow, &route, header, now),
+                &mut self.checkpointing,
+                &mut self.deadlines,
+                &mut self.observer,
+            )
             .ok_or(Error::UnknownConnection)?
-            .receive(flow, &route, header, now)
             .map_err(Error::Flow);
-        self.flush_ledger(destination, now, turn);
+        self.apply_delivery_close(destination, now, turn);
         turn.outputs.push(Output::Received(result?));
         self.accepted_inbound(source, now);
         Ok(())
@@ -76,7 +81,7 @@ impl<O: Observer> ShareRelay<O> {
         if result == Ok(Submission::Uncertain) {
             self.disconnect(receipt.flow().destination(), now, &mut turn);
         }
-        self.flush_ledger(receipt.flow().destination(), now, &mut turn);
+        self.apply_delivery_close(receipt.flow().destination(), now, &mut turn);
         self.progress_stop(now, &mut turn);
         self.start_work(now, &mut turn);
         turn.deadline = self.deadlines.next();
@@ -110,16 +115,21 @@ impl<O: Observer> ShareRelay<O> {
             .check_forward(&self.lifecycle, flow.permit(), now)
             .map_err(Error::Forward)?;
         let connection = self
-            .connections
-            .get(&flow.destination())
+            .generations
+            .connection(&flow.destination())
             .ok_or(Error::UnknownConnection)?;
         if matches!(connection.role, Role::Closing) {
             return Err(Error::Unavailable);
         }
-        self.ledgers
-            .get_mut(&flow.destination())
+        self.generations
+            .update_ledger(
+                flow.destination(),
+                |ledger| ledger.submit(&route, receipt, now),
+                &mut self.checkpointing,
+                &mut self.deadlines,
+                &mut self.observer,
+            )
             .ok_or(Error::UnknownConnection)?
-            .submit(&route, receipt, now)
             .map_err(Error::Flow)?;
         Ok(handoff(flow))
     }
@@ -143,12 +153,17 @@ impl<O: Observer> ShareRelay<O> {
             .check_forward(&self.lifecycle, flow.permit(), now)
             .map_err(Error::Forward)?;
         let result = self
-            .ledgers
-            .get_mut(&flow.destination())
+            .generations
+            .update_ledger(
+                flow.destination(),
+                |ledger| ledger.grant(flow, &route, credit, now),
+                &mut self.checkpointing,
+                &mut self.deadlines,
+                &mut self.observer,
+            )
             .ok_or(Error::UnknownConnection)?
-            .grant(flow, &route, credit, now)
             .map_err(Error::Flow);
-        self.flush_ledger(flow.destination(), now, turn);
+        self.apply_delivery_close(flow.destination(), now, turn);
         Self::send(turn, flow.permit().source(), Control::Grant(result?));
         Ok(())
     }
@@ -166,13 +181,19 @@ impl<O: Observer> ShareRelay<O> {
         {
             return Err(Error::Unavailable);
         }
-        let Some(ledger) = self.ledgers.get_mut(&flow.destination()) else {
+        let Some(result) = self.generations.update_ledger(
+            flow.destination(),
+            |ledger| ledger.discarded(flow, now),
+            &mut self.checkpointing,
+            &mut self.deadlines,
+            &mut self.observer,
+        ) else {
             return Ok(());
         };
-        let result = ledger.discarded(flow, now).map_err(Error::Flow);
-        self.flush_ledger(flow.destination(), now, turn);
+        let result = result.map_err(Error::Flow);
+        self.apply_delivery_close(flow.destination(), now, turn);
         if let Some(notice) = result?
-            && self.connections.contains_key(&flow.destination())
+            && self.generations.connection(&flow.destination()).is_some()
         {
             Self::send(
                 turn,
@@ -198,25 +219,30 @@ impl<O: Observer> ShareRelay<O> {
         let Some(&flow) = self.routes.get(&(connection, session)) else {
             return Ok(());
         };
-        let Some(ledger) = self.ledgers.get_mut(&flow.destination()) else {
+        let Some(result) = self.generations.update_ledger(
+            flow.destination(),
+            |ledger| {
+                if final_receipt {
+                    ledger.settle(flow, connection, total, now)
+                } else {
+                    ledger.consume(flow, connection, total, now)
+                }
+            },
+            &mut self.checkpointing,
+            &mut self.deadlines,
+            &mut self.observer,
+        ) else {
             return Ok(());
         };
-        let result = if final_receipt {
-            ledger.settle(flow, connection, total, now)
-        } else {
-            ledger.consume(flow, connection, total, now)
-        };
-        self.flush_ledger(flow.destination(), now, turn);
+        self.apply_delivery_close(flow.destination(), now, turn);
         if result.map_err(Error::Flow)? != Feedback::Stale {
             self.accepted_inbound(connection, now);
         }
-        if self.detached.get(&connection) == Some(&super::Detached::Retired) {
-            // Retired receipts change a durable risk reservation, not the live
-            // forwarding ledger. Persist that release before capacity is reused.
-            self.checkpointing.retention_changed();
-        }
-        let retirement_affected = self.detached.contains_key(&connection)
-            || self.detached.contains_key(&flow.permit().source());
+        let retirement_affected = self.generations.retirement_state(&connection).is_some()
+            || self
+                .generations
+                .retirement_state(&flow.permit().source())
+                .is_some();
         self.collect_session(flow.session(), now, turn);
         self.collect_ledger(flow.destination(), now);
         if retirement_affected {

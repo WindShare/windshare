@@ -109,11 +109,17 @@ impl<O: Observer> ShareRelay<O> {
                 .map_err(Error::Forward)?;
             let destination = route.permit().destination();
             let result = self
-                .ledgers
-                .get_mut(&destination)
+                .generations
+                .update_ledger(
+                    destination,
+                    |ledger| ledger.open(&route, now),
+                    &mut self.checkpointing,
+                    &mut self.deadlines,
+                    &mut self.observer,
+                )
                 .ok_or(Error::UnknownConnection)
-                .and_then(|ledger| ledger.open(&route, now).map_err(Error::Flow));
-            self.flush_ledger(destination, now, turn);
+                .and_then(|result| result.map_err(Error::Flow));
+            self.apply_delivery_close(destination, now, turn);
             match result {
                 Ok(grant) => grants.push(grant),
                 Err(error) => {
@@ -124,11 +130,17 @@ impl<O: Observer> ShareRelay<O> {
                         reason: RetirementReason::Ended(EndReason::HostFailed),
                     };
                     for grant in grants {
-                        if let Some(ledger) = self.ledgers.get_mut(&grant.flow.destination()) {
-                            let _ = ledger.retire(retirement, now);
-                            let _ = ledger.discarded(grant.flow, now);
-                        }
-                        self.flush_ledger(grant.flow.destination(), now, turn);
+                        self.generations.update_ledger(
+                            grant.flow.destination(),
+                            |ledger| {
+                                let _ = ledger.retire(retirement, now);
+                                let _ = ledger.discarded(grant.flow, now);
+                            },
+                            &mut self.checkpointing,
+                            &mut self.deadlines,
+                            &mut self.observer,
+                        );
+                        self.apply_delivery_close(grant.flow.destination(), now, turn);
                     }
                     return Err(error);
                 }
@@ -162,10 +174,14 @@ impl<O: Observer> ShareRelay<O> {
             entry.deferred = deferred;
             let flows = entry.flows;
             for flow in flows {
-                if let Some(ledger) = self.ledgers.get_mut(&flow.destination()) {
-                    let _ = ledger.retire(retirement, now);
-                }
-                self.flush_ledger(flow.destination(), now, turn);
+                let _ = self.generations.update_ledger(
+                    flow.destination(),
+                    |ledger| ledger.retire(retirement, now),
+                    &mut self.checkpointing,
+                    &mut self.deadlines,
+                    &mut self.observer,
+                );
+                self.apply_delivery_close(flow.destination(), now, turn);
             }
             if !deferred {
                 self.release_cleanup(id, now, turn);
@@ -184,8 +200,8 @@ impl<O: Observer> ShareRelay<O> {
             entry.deferred = false;
             for flow in entry.flows {
                 if self
-                    .ledgers
-                    .get(&flow.destination())
+                    .generations
+                    .ledger(&flow.destination())
                     .is_some_and(|ledger| ledger.snapshot(flow).is_some())
                 {
                     turn.outputs.push(Output::Discard(flow));
@@ -261,8 +277,8 @@ impl<O: Observer> ShareRelay<O> {
             let route = (destination, key.wire_id());
             if let Some(flow) = self.routes.get(&route) {
                 if let Some(snapshot) = self
-                    .ledgers
-                    .get(&destination)
+                    .generations
+                    .ledger(&destination)
                     .and_then(|ledger| ledger.snapshot(*flow))
                 {
                     retained = true;
@@ -284,8 +300,8 @@ impl<O: Observer> ShareRelay<O> {
         self.deadlines.set(Key::Session(key.wire_id()), None);
         if !retained
             && self
-                .connections
-                .get(&key.receiver())
+                .generations
+                .connection(&key.receiver())
                 .is_some_and(|entry| !matches!(entry.role, super::Role::Closing))
         {
             self.close(key.receiver(), turn);

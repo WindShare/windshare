@@ -1,12 +1,9 @@
 use super::RuntimeStatus;
 use super::{
-    Admission, Connection, ConnectionRef, Control, ControlHandshake, Error, Key, Observer, Output,
-    RelayDecision, Role, ShareRelay, Turn,
+    Admission, ConnectionRef, Control, Error, Key, Observer, Output, RelayDecision, Role,
+    ShareRelay, Turn,
 };
-use super::{
-    ChallengeRequest,
-    handshake_checkpoint::{Binding, HandshakeCheckpoint},
-};
+use super::{ChallengeRequest, handshake_checkpoint::Binding};
 use crate::{
     clock::UnixMillis,
     handshake::{AdmissionRequest, Outcome, Step},
@@ -28,20 +25,17 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
-        if self.connections.contains_key(&connection)
-            || self.ledgers.contains_key(&connection)
-            || self.unavailable.contains_key(&connection)
-        {
-            return Err(Error::UnknownConnection);
-        }
-        let usage = self.connection_usage();
-        if usage.controls >= self.limits.handshakes.concurrent {
-            self.trace(
-                Some(connection),
-                RelayDecision::ControlCapacity { usage },
-                now,
-            );
-            return Err(Error::Capacity);
+        if let Err(error) = self.generations.check_control_admission(connection) {
+            if error == Error::Capacity {
+                self.trace(
+                    Some(connection),
+                    RelayDecision::ControlCapacity {
+                        usage: self.connection_usage(),
+                    },
+                    now,
+                );
+            }
+            return Err(error);
         }
         let previous = self.handshake_rate.state();
         let accepted = self.handshake_rate.attempt(now);
@@ -52,23 +46,12 @@ impl<O: Observer> ShareRelay<O> {
             self.trace(Some(connection), RelayDecision::HandshakeRateLimited, now);
             return Err(Error::HandshakeRate);
         }
-        let handshake = ControlHandshake::open(self.identity.relay, connection, now);
-        self.deadlines
-            .set(Key::Handshake(connection), handshake.deadline());
-        let deadline = now.saturating_add(super::admission::CONTROL_LIFETIME);
-        self.controls.insert(connection, deadline);
-        self.deadlines.set(Key::Control(connection), Some(deadline));
-        self.connections.insert(
+        self.generations.connect(
             connection,
-            Connection {
-                role: Role::Handshake {
-                    handshake: Box::new(handshake),
-                    transcript: HandshakeCheckpoint::new(now),
-                },
-                reservation: None,
-            },
-        );
-        self.checkpointing.inserted(connection);
+            now,
+            &mut self.checkpointing,
+            &mut self.deadlines,
+        )?;
         self.trace(Some(connection), RelayDecision::Connected, now);
         Ok(())
     }
@@ -83,12 +66,15 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
-        let first = self.connections.get(&connection).is_some_and(|entry| {
-            matches!(
-                &entry.role, Role::Handshake { handshake, .. }
-                    if handshake.phase() == crate::handshake::Phase::AwaitingFirstFrame
-            )
-        });
+        let first = self
+            .generations
+            .connection(&connection)
+            .is_some_and(|entry| {
+                matches!(
+                    &entry.role, Role::Handshake { handshake, .. }
+                        if handshake.phase() == crate::handshake::Phase::AwaitingFirstFrame
+                )
+            });
         if first
             && crate::handshake::Initiation::decode(frame)
                 .is_ok_and(|intent| intent.uses_business_capacity())
@@ -105,8 +91,8 @@ impl<O: Observer> ShareRelay<O> {
             return Err(error);
         }
         let entry = self
-            .connections
-            .get_mut(&connection)
+            .generations
+            .connection_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
         if matches!(
             entry.role,
@@ -147,8 +133,8 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) -> Result<(), Error> {
         let entry = self
-            .connections
-            .get_mut(&connection)
+            .generations
+            .connection_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
         let role = mem::replace(&mut entry.role, Role::Closing);
         let Role::Admitting {
@@ -179,7 +165,7 @@ impl<O: Observer> ShareRelay<O> {
         admission: Admission,
         turn: &mut Turn,
     ) {
-        let Some(entry) = self.connections.get_mut(&connection) else {
+        let Some(entry) = self.generations.connection_mut(&connection) else {
             return;
         };
         let role = mem::replace(&mut entry.role, Role::Closing);
@@ -224,7 +210,7 @@ impl<O: Observer> ShareRelay<O> {
                 self.request_admission(connection, request, now, turn);
             }
             Step::Complete(outcome) => {
-                if let Some(entry) = self.connections.get_mut(&connection) {
+                if let Some(entry) = self.generations.connection_mut(&connection) {
                     if matches!(outcome, Outcome::Stop(_)) {
                         entry.role = Role::Stopping;
                     } else {
@@ -287,13 +273,13 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) {
-        let deadline = self
-            .connections
-            .get(&connection)
-            .and_then(|entry| match &entry.role {
-                Role::Handshake { handshake, .. } => handshake.deadline(),
-                _ => None,
-            });
+        let deadline =
+            self.generations
+                .connection(&connection)
+                .and_then(|entry| match &entry.role {
+                    Role::Handshake { handshake, .. } => handshake.deadline(),
+                    _ => None,
+                });
         let Some(deadline) = deadline else {
             self.disconnect(connection, now, turn);
             return;
@@ -335,11 +321,17 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) -> bool {
         let result = self
-            .ledgers
-            .get_mut(&connection)
+            .generations
+            .update_ledger(
+                connection,
+                |ledger| ledger.declare_capacity(capacity, now),
+                &mut self.checkpointing,
+                &mut self.deadlines,
+                &mut self.observer,
+            )
             .ok_or(Error::UnknownConnection)
-            .and_then(|ledger| ledger.declare_capacity(capacity, now).map_err(Error::Flow));
-        self.flush_ledger(connection, now, turn);
+            .and_then(|result| result.map_err(Error::Flow));
+        self.apply_delivery_close(connection, now, turn);
         if let Err(error) = result {
             self.trace(Some(connection), RelayDecision::Rejected(error), now);
             self.disconnect(connection, now, turn);
@@ -349,15 +341,10 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn close(&mut self, connection: ConnectionRef, turn: &mut Turn) {
-        if let Some(entry) = self.connections.get_mut(&connection) {
-            if matches!(entry.role, Role::Closing) {
-                return;
-            }
-            entry.role = Role::Closing;
-            self.checkpointing.changed(connection);
-            self.deadlines.set(Key::Handshake(connection), None);
-            self.deadlines.set(Key::Control(connection), None);
-            self.deadlines.set(Key::Liveness(connection), None);
+        if self
+            .generations
+            .close(connection, &mut self.checkpointing, &mut self.deadlines)
+        {
             turn.outputs.push(Output::Close(connection));
         }
     }
@@ -368,7 +355,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) {
-        let Some(entry) = self.connections.get(&connection) else {
+        let Some(entry) = self.generations.connection(&connection) else {
             return;
         };
         if matches!(entry.role, Role::Closing) {
@@ -411,84 +398,35 @@ impl<O: Observer> ShareRelay<O> {
 
     pub(super) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
         self.disconnect(connection, now, turn);
-        let was_connected = self.connections.remove(&connection).is_some();
-        // Control sockets never submitted opaque data; losing communication can
-        // release their logical admission without asserting transport-byte release.
-        self.release_control(connection);
-        self.deadlines.set(Key::Handshake(connection), None);
-        self.deadlines.set(Key::Liveness(connection), None);
-        if self.ledgers.contains_key(&connection) {
-            self.detached
-                .entry(connection)
-                .or_insert_with(|| self.limits.retirement.detached(now));
-            if was_connected {
-                self.checkpointing.changed(connection);
-                self.checkpointing.retention_changed();
-            }
-        }
+        self.generations.detach(
+            connection,
+            now,
+            &mut self.checkpointing,
+            &mut self.deadlines,
+        );
         self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Disconnected, now);
     }
 
     pub(super) fn collect_ledger(&mut self, connection: ConnectionRef, now: UnixMillis) {
-        if self.unavailable.get(&connection) == Some(&crate::flow::Counts::ZERO)
-            && self.generation_quiescent(connection)
-            && matches!(
-                self.detached.get(&connection),
-                Some(super::Detached::Released | super::Detached::Retired)
-            )
-        {
-            self.unavailable.remove(&connection);
-            self.detached.remove(&connection);
-            self.deadlines.set(Key::Retirement(connection), None);
-            self.checkpointing.removed(connection);
-            self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
-        }
-        if matches!(
-            self.detached.get(&connection),
-            Some(super::Detached::Retired | super::Detached::Released)
-        ) && self.generation_quiescent(connection)
+        if self.generation_quiescent(connection)
             && self
-                .ledgers
-                .get(&connection)
-                .is_some_and(|ledger| ledger.metadata_usage().retained_flows == 0)
+                .generations
+                .collect(connection, &mut self.checkpointing, &mut self.deadlines)
         {
-            self.ledgers.remove(&connection);
-            self.detached.remove(&connection);
-            self.deadlines.set(Key::Retirement(connection), None);
-            self.checkpointing.removed(connection);
-            self.deadlines.set(Key::Ledger(connection), None);
             self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
         }
     }
 
     pub(super) fn closed(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
         self.detach(connection, now, turn);
-        if let Some(bound) = self.unavailable.get_mut(&connection) {
-            *bound = crate::flow::Counts::ZERO;
-            self.detached.insert(connection, super::Detached::Released);
-            self.checkpointing.retention_changed();
-        }
-        let affected: Vec<_> = self
-            .ledgers
-            .get(&connection)
-            .into_iter()
-            .flat_map(|ledger| ledger.checkpoint_flows().map(|(flow, _)| flow.session()))
-            .collect();
-        if let Some(ledger) = self.ledgers.get_mut(&connection) {
-            let _ = ledger.confirm_closed(connection, now);
-            for event in ledger.observer_mut().0.drain(..) {
-                self.observer.observe(event);
-            }
-        }
-        if self.ledgers.contains_key(&connection) {
-            self.detached.insert(connection, super::Detached::Released);
-            self.checkpointing.changed(connection);
-            self.checkpointing.retention_changed();
-        }
-        self.deadlines.set(Key::Retirement(connection), None);
-        self.deadlines.set(Key::Handshake(connection), None);
-        self.deadlines.set(Key::Ledger(connection), None);
+        let affected = self.generations.release(
+            connection,
+            now,
+            &mut self.checkpointing,
+            &mut self.deadlines,
+            &mut self.observer,
+        );
         for key in affected {
             self.collect_session(key, now, turn);
         }

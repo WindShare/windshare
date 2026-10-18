@@ -1,20 +1,17 @@
 use super::Checkpoint;
 use super::RuntimeStatus;
-use super::checkpoint::{ConnectionResources, ConnectionRole};
-use super::responsibility::ReservationKind;
+use super::checkpoint::ConnectionRole;
 use super::{
-    AdmissionState, Connection, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer,
-    Output, Record, RelayDecision, Role, ShareLifecycle, ShareRelay, Turn,
+    AdmissionState, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer, Output,
+    Record, RelayDecision, Role, ShareLifecycle, ShareRelay, Turn,
 };
 use crate::{
     clock::UnixMillis,
-    flow::ConnectionLedger,
     lifecycle::{Restoration, SessionRestore},
     observation::Journal,
     sessions::{Retirement, RetirementReason},
 };
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
@@ -149,17 +146,13 @@ impl<O: Observer> ShareRelay<O> {
             identity,
             limits,
             lifecycle,
-            connections: BTreeMap::new(),
-            controls: BTreeMap::new(),
+            generations: super::Generations::new(identity, limits),
             handshake_rate: match restored.manifest() {
                 Some(manifest) => {
                     super::AttemptLimiter::restore(limits.handshakes.attempts, manifest.attempts)?
                 }
                 None => super::AttemptLimiter::new(limits.handshakes.attempts, now)?,
             },
-            ledgers: BTreeMap::new(),
-            unavailable: BTreeMap::new(),
-            detached: BTreeMap::new(),
             sessions: BTreeMap::new(),
             routes: BTreeMap::new(),
             deadlines: Deadlines::default(),
@@ -179,8 +172,8 @@ impl<O: Observer> ShareRelay<O> {
         let mut turn = Turn::default();
         for &connection in restored.surviving {
             if relay
-                .connections
-                .get(&connection)
+                .generations
+                .connection(&connection)
                 .is_none_or(|entry| matches!(entry.role, Role::Closing))
             {
                 turn.outputs.push(Output::Close(connection));
@@ -197,8 +190,8 @@ impl<O: Observer> ShareRelay<O> {
         relay.trace(
             None,
             RelayDecision::Restored {
-                connections: relay.connections.len(),
-                retained_generations: relay.ledgers.len() + relay.unavailable.len(),
+                connections: relay.generations.connected_count(),
+                retained_generations: relay.generations.retained_count(),
             },
             now,
         );
@@ -215,128 +208,49 @@ impl<O: Observer> ShareRelay<O> {
         };
         for snapshot in &checkpoint.connections {
             let connection = snapshot.connection;
-            let ConnectionResources::Business {
-                ledger: saved_ledger,
-                ..
-            } = &snapshot.resources
-            else {
-                let ConnectionResources::Control { deadline } = snapshot.resources else {
-                    unreachable!()
-                };
-                if restored.surviving.contains(&connection) {
-                    self.controls.insert(connection, deadline);
-                    self.deadlines.set(Key::Control(connection), Some(deadline));
-                    self.restore_socket(connection, &snapshot.role);
-                }
-                continue;
-            };
-            let ledger = ConnectionLedger::restore(
-                self.identity.relay,
-                connection,
-                self.limits.delivery,
-                self.limits.retained_flows_per_connection,
-                saved_ledger,
-                Journal::default(),
-            )
-            .map_err(|_| Error::InvalidCheckpoint)?;
-            if matches!(snapshot.role, ConnectionRole::Established(_))
-                && ledger.receive_capacity().is_none()
-            {
-                return Err(Error::InvalidCheckpoint);
-            }
-            for (flow, _) in ledger.checkpoint_flows() {
-                if self
-                    .routes
-                    .insert((connection, flow.session().wire_id()), flow)
-                    .is_some()
-                {
-                    return Err(Error::InvalidCheckpoint);
-                }
-            }
-            self.deadlines
-                .set(Key::Ledger(connection), ledger.deadline());
-            let communicating = restored.surviving.contains(&connection)
-                && !matches!(snapshot.role, ConnectionRole::Detached(_));
-            self.trace(
-                Some(connection),
-                RelayDecision::ResponsibilityRestored {
-                    communicating,
-                    usage: ledger.usage(),
-                },
+            self.generations.restore_record(
+                snapshot,
+                restored.surviving.contains(&connection),
                 now,
-            );
-            if matches!(
-                snapshot.role,
-                ConnectionRole::Detached(super::Detached::Retired)
-            ) && !ledger.queues_discarded()
-            {
-                return Err(Error::InvalidCheckpoint);
-            }
-            self.ledgers.insert(connection, ledger);
-            if !communicating {
-                let state = match snapshot.role {
-                    ConnectionRole::Detached(state) => state,
-                    _ => self.limits.retirement.detached(now),
-                };
-                self.detached.insert(connection, state);
-            }
-            if communicating {
-                self.restore_socket(connection, &snapshot.role);
+                &mut self.deadlines,
+            )?;
+            if let Some(ledger) = self.generations.ledger(&connection) {
+                for (flow, _) in ledger.checkpoint_flows() {
+                    if self
+                        .routes
+                        .insert((connection, flow.session().wire_id()), flow)
+                        .is_some()
+                    {
+                        return Err(Error::InvalidCheckpoint);
+                    }
+                }
+                let usage = ledger.usage();
+                let communicating = self.generations.connection(&connection).is_some();
+                self.trace(
+                    Some(connection),
+                    RelayDecision::ResponsibilityRestored {
+                        communicating,
+                        usage,
+                    },
+                    now,
+                );
             }
         }
-        for reservation in &checkpoint.manifest.reservations {
-            if self.ledgers.contains_key(&reservation.connection) {
-                continue;
+        for &reservation in &checkpoint.manifest.reservations {
+            if self.generations.restore_missing(reservation, now) {
+                let reserved = self
+                    .generations
+                    .unavailable_reservation(reservation.connection)
+                    .expect("restored conservative reservation");
+                self.trace(
+                    Some(reservation.connection),
+                    RelayDecision::RecoveryIsolated { reserved },
+                    now,
+                );
             }
-            let ReservationKind::Business { bound, state } = reservation.kind else {
-                // A lost control record grants no authority and never becomes a
-                // full payload reservation. Surviving sockets are closed above.
-                continue;
-            };
-            let state = match state {
-                super::responsibility::GenerationState::Connected => {
-                    self.limits.retirement.detached(now)
-                }
-                super::responsibility::GenerationState::Detached(state)
-                | super::responsibility::GenerationState::Unavailable(state) => state,
-            };
-            self.unavailable.insert(reservation.connection, bound);
-            self.detached.insert(reservation.connection, state);
-            self.trace(
-                Some(reservation.connection),
-                RelayDecision::RecoveryIsolated { reserved: bound },
-                now,
-            );
         }
-        self.validate_retirements()
-    }
-
-    fn restore_socket(&mut self, connection: ConnectionRef, role: &ConnectionRole) {
-        let role = match role {
-            ConnectionRole::Established(liveness) => {
-                self.deadlines
-                    .set(Key::Liveness(connection), Some(liveness.deadline()));
-                Role::Established(*liveness)
-            }
-            ConnectionRole::Handshake(transcript) => Role::Handshake {
-                handshake: Box::new(crate::handshake::ControlHandshake::open(
-                    self.identity.relay,
-                    connection,
-                    transcript.opened,
-                )),
-                transcript: transcript.clone(),
-            },
-            ConnectionRole::Closing => Role::Closing,
-            ConnectionRole::Stopping => Role::Stopping,
-            ConnectionRole::Detached(_) => return,
-        };
-        self.connections.insert(
-            connection,
-            Connection {
-                role,
-                reservation: None,
-            },
-        );
+        self.generations
+            .validate_retirements(|connection| self.generation_quiescent(connection))
     }
 
     fn restore_sessions(
@@ -373,9 +287,14 @@ impl<O: Observer> ShareRelay<O> {
                 }
             }
         }
-        let destinations: Vec<_> = self.ledgers.keys().copied().collect();
+        let destinations: Vec<_> = self.generations.ledger_ids().collect();
         for destination in destinations {
-            let flows: Vec<_> = self.ledgers[&destination].checkpoint_flows().collect();
+            let flows: Vec<_> = self
+                .generations
+                .ledger(&destination)
+                .unwrap()
+                .checkpoint_flows()
+                .collect();
             for (flow, open) in flows {
                 let valid = self
                     .sessions
@@ -387,21 +306,29 @@ impl<O: Observer> ShareRelay<O> {
                             .is_ok()
                     });
                 if !valid || !open {
-                    if let Some(ledger) = self.ledgers.get_mut(&destination) {
-                        let retirement = Retirement {
-                            session: flow.session(),
-                            reason: RetirementReason::OwnerUnavailable,
-                        };
-                        let _ = ledger.retire(retirement, now);
-                    }
+                    let _ = self.generations.update_ledger(
+                        destination,
+                        |ledger| {
+                            ledger.retire(
+                                Retirement {
+                                    session: flow.session(),
+                                    reason: RetirementReason::OwnerUnavailable,
+                                },
+                                now,
+                            )
+                        },
+                        &mut self.checkpointing,
+                        &mut self.deadlines,
+                        &mut self.observer,
+                    );
                     turn.outputs.push(Output::Discard(flow));
                 }
             }
-            self.flush_ledger(destination, now, turn);
+            self.apply_delivery_close(destination, now, turn);
             self.collect_ledger(destination, now);
             if self
-                .connections
-                .get(&destination)
+                .generations
+                .connection(&destination)
                 .is_some_and(|entry| matches!(entry.role, Role::Closing))
                 && !turn
                     .outputs
@@ -415,8 +342,8 @@ impl<O: Observer> ShareRelay<O> {
 
     fn session_flows(&self, key: crate::sessions::SessionKey) -> Option<[crate::flow::FlowKey; 2]> {
         let find = |destination| {
-            self.ledgers
-                .get(&destination)?
+            self.generations
+                .ledger(&destination)?
                 .checkpoint_flows()
                 .find_map(|(flow, open)| (flow.session() == key && open).then_some(flow))
         };

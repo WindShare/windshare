@@ -37,12 +37,12 @@ impl<O: Observer> ShareRelay<O> {
             }
             let connection = snapshot.connection;
             let declared_capacity = self
-                .ledgers
-                .get(&connection)
+                .generations
+                .ledger(&connection)
                 .and_then(crate::flow::ConnectionLedger::receive_capacity);
             let entry = self
-                .connections
-                .get_mut(&connection)
+                .generations
+                .connection_mut(&connection)
                 .ok_or(Error::InvalidCheckpoint)?;
             let handshake =
                 ControlHandshake::open(self.identity.relay, connection, transcript.opened);
@@ -67,7 +67,11 @@ impl<O: Observer> ShareRelay<O> {
                         self.challenge(connection, seed, *at, &mut replay)?;
                     }
                 }
-                match self.connections.get(&connection).map(|entry| &entry.role) {
+                match self
+                    .generations
+                    .connection(&connection)
+                    .map(|entry| &entry.role)
+                {
                     Some(Role::Handshake { .. } | Role::Admitting { .. }) => {}
                     Some(Role::Closing) => {
                         turn.outputs.extend(
@@ -82,15 +86,17 @@ impl<O: Observer> ShareRelay<O> {
                 }
             }
             if self
-                .ledgers
-                .get(&connection)
+                .generations
+                .ledger(&connection)
                 .and_then(crate::flow::ConnectionLedger::receive_capacity)
                 != declared_capacity
             {
                 return Err(Error::InvalidCheckpoint);
             }
             if matches!(
-                self.connections.get(&connection).map(|entry| &entry.role),
+                self.generations
+                    .connection(&connection)
+                    .map(|entry| &entry.role),
                 Some(Role::Admitting { .. })
             ) {
                 turn.outputs.push(Output::ChallengeNeeded(ChallengeRequest {

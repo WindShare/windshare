@@ -19,7 +19,8 @@ fn assert_ack(turn: &Turn, connection: ConnectionRef, nonce: u64) {
 }
 
 fn deadline(relay: &Relay, connection: ConnectionRef) -> UnixMillis {
-    let Role::Established(liveness) = relay.connections[&connection].role else {
+    let Role::Established(liveness) = relay.generations.connection(&connection).unwrap().role
+    else {
         panic!("expected an established connection");
     };
     liveness.deadline()
@@ -203,7 +204,7 @@ fn nonce_validation_is_strict_connection_local_and_does_not_wrap() {
                 )
             );
             assert!(matches!(
-                relay.connections[&key.sender()].role,
+                relay.generations.connection(&key.sender()).unwrap().role,
                 Role::Established(_)
             ));
         } else {
@@ -437,7 +438,12 @@ fn a_silent_receiver_loses_authority_without_refunding_debt_or_closing_siblings(
         relay.delivery_usage(silent.receiver()).unwrap().submitted,
         before.submitted
     );
-    assert!(!relay.detached.contains_key(&silent.receiver()));
+    assert!(
+        relay
+            .generations
+            .retirement_state(&silent.receiver())
+            .is_none()
+    );
     assert!(
         relay
             .submit(
