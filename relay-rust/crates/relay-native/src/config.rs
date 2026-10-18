@@ -11,8 +11,19 @@ pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
-pub const MAX_CONNECTIONS: usize = 256;
+pub const MAX_BUSINESS_CONNECTIONS: usize = 256;
+pub const MAX_CONTROL_CONNECTIONS: usize = 32;
+pub const CONNECTION_ATTEMPTS: share::AttemptRate = share::AttemptRate {
+    burst: 512,
+    refill: Duration::from_millis(10),
+};
 pub const MAX_RESIDENT_SHARES: usize = 1024;
+const SHARE_BUSINESS_CONNECTIONS: usize = 32;
+const SHARE_CONTROL_CONNECTIONS: usize = 8;
+const SHARE_CONNECTION_ATTEMPTS: share::AttemptRate = share::AttemptRate {
+    burst: 64,
+    refill: Duration::from_millis(100),
+};
 pub const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 pub const STORAGE_RETRY: Duration = Duration::from_millis(250);
 pub const MAX_CONTROL_BYTES: usize =
@@ -94,7 +105,11 @@ pub fn limits() -> share::Limits {
     let frame_bytes = u64::from(windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES);
     let capacity = |frames| flow::Counts::new(frames, frames * frame_bytes);
     share::Limits {
-        connections: 32,
+        business_connections: SHARE_BUSINESS_CONNECTIONS,
+        handshakes: share::HandshakeLimits {
+            concurrent: SHARE_CONTROL_CONNECTIONS,
+            attempts: SHARE_CONNECTION_ATTEMPTS,
+        },
         sessions: 64,
         retained_flows_per_connection: 64,
         retirement: share::RetirementPolicy::PhysicalRelease,

@@ -23,7 +23,7 @@ impl Scenario {
         let (mut relay, _) = ShareRelay::restore(
             fixture.identity(),
             limits(),
-            &Restore::restarted(None, Responsibility::Released),
+            &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace,
             fixture.now(true),
         )

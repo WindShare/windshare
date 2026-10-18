@@ -81,7 +81,10 @@ impl Recovery {
                     cause = "actor_cleanup");
             }
         }
-        Ok(Restore::restarted(record, Responsibility::Released))
+        Ok(Restore::restarted(
+            record,
+            Responsibility::Released { previous: None },
+        ))
     }
 }
 

@@ -1,6 +1,7 @@
 use super::Checkpoint;
 use super::RuntimeStatus;
-use super::checkpoint::ConnectionRole;
+use super::checkpoint::{ConnectionResources, ConnectionRole};
+use super::responsibility::ReservationKind;
 use super::{
     AdmissionState, Connection, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer,
     Output, Record, RelayDecision, Role, ShareLifecycle, ShareRelay, Turn,
@@ -46,7 +47,11 @@ pub enum Responsibility<'a> {
     /// The host proves that all prior application queues and transport buffers
     /// are released (or that this share has never had any). Socket disappearance,
     /// an empty attachment list and a runtime restart are not such evidence.
-    Released,
+    Released {
+        /// Preserve available admission history: release does not replenish
+        /// attempt tokens or reset the session-ID fence.
+        previous: Option<&'a super::CheckpointManifest>,
+    },
     /// Recovery cannot establish the old responsibility. Refuse new admission.
     Unknown,
 }
@@ -61,10 +66,33 @@ impl<'a> Restore<'a> {
         }
     }
 
+    pub(super) const fn manifest(&self) -> Option<&'a super::CheckpointManifest> {
+        match self.responsibility {
+            Responsibility::Checkpoint(checkpoint) => Some(&checkpoint.manifest),
+            Responsibility::Released { previous } => previous,
+            Responsibility::Unknown => None,
+        }
+    }
+
+    fn established(&self) -> Vec<ConnectionRef> {
+        self.surviving
+            .iter()
+            .copied()
+            .filter(|connection| {
+                self.checkpoint().is_some_and(|checkpoint| {
+                    checkpoint.connections.iter().any(|entry| {
+                        entry.connection == *connection
+                            && matches!(entry.role, ConnectionRole::Established(_))
+                    })
+                })
+            })
+            .collect()
+    }
+
     pub(super) const fn checkpoint(&self) -> Option<&'a Checkpoint> {
         match self.responsibility {
             Responsibility::Checkpoint(checkpoint) => Some(checkpoint),
-            Responsibility::Released | Responsibility::Unknown => None,
+            Responsibility::Released { .. } | Responsibility::Unknown => None,
         }
     }
 }
@@ -86,7 +114,8 @@ impl<O: Observer> ShareRelay<O> {
         let Authority::Known(record) = restored.authority else {
             return Err(Error::MissingAuthority);
         };
-        if limits.connections == 0
+        if limits.business_connections == 0
+            || limits.handshakes.concurrent == 0
             || limits.sessions == 0
             || limits.retained_flows_per_connection == 0
             || limits.generation_limit().is_err()
@@ -100,19 +129,7 @@ impl<O: Observer> ShareRelay<O> {
             .flat_map(Checkpoint::sessions)
             .copied()
             .collect();
-        let live: Vec<_> = restored
-            .surviving
-            .iter()
-            .copied()
-            .filter(|connection| {
-                restored.checkpoint().is_some_and(|checkpoint| {
-                    checkpoint.connections.iter().any(|entry| {
-                        entry.connection == *connection
-                            && matches!(entry.role, ConnectionRole::Established(_))
-                    })
-                })
-            })
-            .collect();
+        let live = restored.established();
         let mut decisions = Vec::new();
         let (lifecycle, action) = ShareLifecycle::restore(
             identity.relay,
@@ -133,6 +150,13 @@ impl<O: Observer> ShareRelay<O> {
             limits,
             lifecycle,
             connections: BTreeMap::new(),
+            controls: BTreeMap::new(),
+            handshake_rate: match restored.manifest() {
+                Some(manifest) => {
+                    super::AttemptLimiter::restore(limits.handshakes.attempts, manifest.attempts)?
+                }
+                None => super::AttemptLimiter::new(limits.handshakes.attempts, now)?,
+            },
             ledgers: BTreeMap::new(),
             unavailable: BTreeMap::new(),
             detached: BTreeMap::new(),
@@ -142,8 +166,8 @@ impl<O: Observer> ShareRelay<O> {
             stored: record,
             runtime: RuntimeStatus::Running,
             last_session: restored
-                .checkpoint()
-                .map_or(0, |checkpoint| checkpoint.manifest.last_session),
+                .manifest()
+                .map_or(0, |manifest| manifest.last_session),
             last_work: 0,
             tasks: VecDeque::new(),
             stop_barrier: None,
@@ -154,7 +178,11 @@ impl<O: Observer> ShareRelay<O> {
         relay.restore_connections(restored, now)?;
         let mut turn = Turn::default();
         for &connection in restored.surviving {
-            if !relay.connections.contains_key(&connection) {
+            if relay
+                .connections
+                .get(&connection)
+                .is_none_or(|entry| matches!(entry.role, Role::Closing))
+            {
                 turn.outputs.push(Output::Close(connection));
             }
         }
@@ -187,12 +215,27 @@ impl<O: Observer> ShareRelay<O> {
         };
         for snapshot in &checkpoint.connections {
             let connection = snapshot.connection;
+            let ConnectionResources::Business {
+                ledger: saved_ledger,
+                ..
+            } = &snapshot.resources
+            else {
+                let ConnectionResources::Control { deadline } = snapshot.resources else {
+                    unreachable!()
+                };
+                if restored.surviving.contains(&connection) {
+                    self.controls.insert(connection, deadline);
+                    self.deadlines.set(Key::Control(connection), Some(deadline));
+                    self.restore_socket(connection, &snapshot.role);
+                }
+                continue;
+            };
             let ledger = ConnectionLedger::restore(
                 self.identity.relay,
                 connection,
                 self.limits.delivery,
                 self.limits.retained_flows_per_connection,
-                &snapshot.ledger,
+                saved_ledger,
                 Journal::default(),
             )
             .map_err(|_| Error::InvalidCheckpoint)?;
@@ -245,21 +288,23 @@ impl<O: Observer> ShareRelay<O> {
             if self.ledgers.contains_key(&reservation.connection) {
                 continue;
             }
-            let state = match reservation.state {
+            let ReservationKind::Business { bound, state } = reservation.kind else {
+                // A lost control record grants no authority and never becomes a
+                // full payload reservation. Surviving sockets are closed above.
+                continue;
+            };
+            let state = match state {
                 super::responsibility::GenerationState::Connected => {
                     self.limits.retirement.detached(now)
                 }
                 super::responsibility::GenerationState::Detached(state)
                 | super::responsibility::GenerationState::Unavailable(state) => state,
             };
-            self.unavailable
-                .insert(reservation.connection, reservation.bound);
+            self.unavailable.insert(reservation.connection, bound);
             self.detached.insert(reservation.connection, state);
             self.trace(
                 Some(reservation.connection),
-                RelayDecision::RecoveryIsolated {
-                    reserved: reservation.bound,
-                },
+                RelayDecision::RecoveryIsolated { reserved: bound },
                 now,
             );
         }
@@ -282,6 +327,7 @@ impl<O: Observer> ShareRelay<O> {
                 transcript: transcript.clone(),
             },
             ConnectionRole::Closing => Role::Closing,
+            ConnectionRole::Stopping => Role::Stopping,
             ConnectionRole::Detached(_) => return,
         };
         self.connections.insert(
@@ -383,7 +429,7 @@ fn validate_restore(
     limits: Limits,
     restored: &Restore<'_>,
 ) -> Result<(), Error> {
-    if restored.surviving.len() > limits.connections {
+    if restored.surviving.len() > limits.business_connections + limits.handshakes.concurrent {
         return Err(Error::InvalidCheckpoint);
     }
     for (index, connection) in restored.surviving.iter().enumerate() {
@@ -391,13 +437,16 @@ fn validate_restore(
             return Err(Error::InvalidCheckpoint);
         }
     }
-    if let Some(checkpoint) = restored.checkpoint() {
-        if checkpoint.manifest.identity.relay != identity.relay
-            || checkpoint.manifest.identity.share != identity.share
-            || checkpoint.manifest.identity.incarnation == identity.incarnation
+    if let Some(manifest) = restored.manifest() {
+        if manifest.identity.relay != identity.relay
+            || manifest.identity.share != identity.share
+            || manifest.identity.incarnation == identity.incarnation
         {
             return Err(Error::InvalidCheckpoint);
         }
+        manifest.validate(limits)?;
+    }
+    if let Some(checkpoint) = restored.checkpoint() {
         checkpoint.validate(limits)?;
     } else if matches!(restored.responsibility, Responsibility::Unknown) {
         return Err(Error::MissingResponsibility);

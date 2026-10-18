@@ -18,7 +18,7 @@ pub(super) fn relay(
     retirement: RetirementPolicy,
 ) -> Relay {
     let limits = Limits {
-        connections,
+        business_connections: connections,
         sessions,
         retained_flows_per_connection: sessions + 1,
         retirement,
@@ -27,7 +27,7 @@ pub(super) fn relay(
     Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )
@@ -97,13 +97,14 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
             output, Output::Close(target) if *target == healthy.receiver() || *target == healthy.sender()
         )));
         // Merely observing EOF has not confirmed either direction's application queue.
-        assert_eq!(relay.connection_usage().admitted, 3);
+        assert_eq!(relay.connection_usage().business, 3);
         discard_outputs(&mut relay, lost_turn, fixture.at);
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                controls: 0,
                 uncertain: Counts::ZERO,
-                admitted: 2,
+                business: 2,
                 retired_generations: usize::try_from(attempt).unwrap() + 1,
                 residual: Counts::new(attempt + 1, (attempt + 1) * ONE_FRAME.encoded_bytes),
             }
@@ -160,18 +161,14 @@ fn generation_frame_and_byte_residual_limits_each_block_only_further_admission()
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                controls: 0,
                 uncertain: Counts::ZERO,
-                admitted: 3,
+                business: 3,
                 retired_generations: 1,
                 residual: ONE_FRAME,
             }
         );
-        assert_eq!(
-            relay
-                .handle(Input::Connected(connection(5)), fixture.at)
-                .refusal,
-            Some(Error::Capacity)
-        );
+        assert_business_capacity_refused(&fixture, &mut relay, connection(5), fixture.at);
         assert!(relay.observer().0.iter().any(|event| matches!(
             event, Observation::Relay { connection: Some(target),
                 decision: RelayDecision::RetirementBlocked { .. }, .. }
@@ -195,8 +192,9 @@ fn generation_frame_and_byte_residual_limits_each_block_only_further_admission()
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
+                controls: 0,
                 uncertain: Counts::ZERO,
-                admitted: 2,
+                business: 2,
                 retired_generations: 1,
                 residual: ONE_FRAME,
             }
@@ -238,12 +236,7 @@ fn retirement_waits_for_both_application_queues_and_fences_delayed_submissions()
         relay.ledgers[&key.receiver()].usage().received,
         Counts::ZERO
     );
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(3)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);
     for receipt in [to_sender, to_receiver] {
         assert!(
             relay
@@ -276,12 +269,7 @@ fn physical_release_does_not_hide_queues_on_another_destination() {
         relay.delivery_usage(key.receiver()).unwrap().total(),
         Counts::ZERO
     );
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(3)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);
     assert!(
         relay
             .submit(&queued, fixture.at, |_| panic!("closed source"))
@@ -293,7 +281,7 @@ fn physical_release_does_not_hide_queues_on_another_destination() {
         None
     );
     assert!(relay.delivery_usage(key.receiver()).is_none());
-    assert_eq!(relay.connection_usage().admitted, 1);
+    assert_eq!(relay.connection_usage().business, 1);
     fixture.join(&mut relay, 3);
 }
 
@@ -336,20 +324,16 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
         discard_outputs(&mut restored, turn, now);
         let _ = restored.handle(Input::Disconnected(lost.receiver()), now);
         assert_eq!(restored.deadline(), Some(retirement_at));
-        assert_eq!(
-            restored
-                .handle(Input::Connected(connection(3)), now)
-                .refusal,
-            Some(Error::Capacity)
-        );
+        assert_business_capacity_refused(&fixture, &mut restored, connection(3), now);
         relay = restored;
     }
     let _ = relay.handle(Input::Tick, retirement_at);
     assert_eq!(
         relay.connection_usage(),
         ConnectionUsage {
+            controls: 0,
             uncertain: Counts::ZERO,
-            admitted: 1,
+            business: 1,
             retired_generations: 1,
             residual: ONE_FRAME,
         }
@@ -506,7 +490,10 @@ fn retired_checkpoints_cannot_hide_excess_risk_or_live_authority() {
         .find(|entry| entry.connection == key.receiver())
         .unwrap();
     receiver.role = checkpoint::ConnectionRole::Detached(Detached::Retired);
-    receiver.sessions.clear();
+    let checkpoint::ConnectionResources::Business { sessions, .. } = &mut receiver.resources else {
+        panic!("business checkpoint")
+    };
+    sessions.clear();
     assert!(matches!(
         Relay::restore(
             fixture.identity(2),

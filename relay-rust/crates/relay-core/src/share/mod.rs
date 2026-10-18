@@ -7,6 +7,8 @@
 
 use alloc::boxed::Box;
 
+mod admission;
+pub use admission::{AttemptLimiter, AttemptRate, HandshakeLimits};
 mod checkpoint;
 mod checkpoint_codec;
 mod checkpoint_tracking;
@@ -67,6 +69,7 @@ enum Role {
         transcript: handshake_checkpoint::HandshakeCheckpoint,
     },
     Established(crate::heartbeat::Liveness),
+    Stopping,
     Closing,
 }
 
@@ -90,6 +93,8 @@ pub struct ShareRelay<O> {
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
     connections: BTreeMap<ConnectionRef, Connection>,
+    controls: BTreeMap<ConnectionRef, crate::clock::UnixMillis>,
+    handshake_rate: AttemptLimiter,
     // Delivery remains charged after logical retirement; only exact consumption
     // or release evidence can remove the old generation's residual responsibility.
     ledgers: BTreeMap<ConnectionRef, ConnectionLedger<Journal>>,
@@ -257,7 +262,9 @@ impl<O: Observer> ShareRelay<O> {
                 Key::Lifecycle => {
                     self.lifecycle_event(crate::lifecycle::Event::Tick, None, now, turn);
                 }
-                Key::Handshake(connection) => self.disconnect(connection, now, turn),
+                Key::Handshake(connection) | Key::Control(connection) => {
+                    self.disconnect(connection, now, turn);
+                }
                 Key::Liveness(connection) => self.expire_liveness(connection, now, turn),
                 Key::Session(id) => {
                     self.session_event(id, crate::sessions::Event::Tick, now, turn);

@@ -1,7 +1,10 @@
 use super::{
     Checkpoint, CheckpointManifest, ConnectionCheckpoint, ConnectionRef, Error, Identity, Limits,
 };
-use super::{checkpoint::ConnectionRole, handshake_checkpoint::HandshakeCheckpoint};
+use super::{
+    checkpoint::{ConnectionResources, ConnectionRole},
+    handshake_checkpoint::HandshakeCheckpoint,
+};
 use crate::{
     flow::LedgerCheckpoint,
     heartbeat::Liveness,
@@ -10,14 +13,14 @@ use crate::{
     sessions::SessionSnapshot,
     wire::Reader,
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
-const FORMAT: u8 = 7;
-const CONNECTION_FORMAT: u8 = 5;
+const FORMAT: u8 = 8;
+const CONNECTION_FORMAT: u8 = 6;
 const LENGTH_BYTES: usize = size_of::<u64>();
 const IDENTITY_BYTES: usize = 32 + 12 + 16;
 const CONNECTION_HEADER_BYTES: usize =
-    1 + IDENTITY_BYTES + ConnectionRef::ENCODED_BYTES + 1 + 2 * LENGTH_BYTES;
+    1 + IDENTITY_BYTES + ConnectionRef::ENCODED_BYTES + 2 + 2 * LENGTH_BYTES;
 
 impl ConnectionCheckpoint {
     #[must_use]
@@ -32,6 +35,7 @@ impl ConnectionCheckpoint {
                 out.extend_from_slice(&liveness.encode());
             }
             ConnectionRole::Closing => out.push(1),
+            ConnectionRole::Stopping => out.push(7),
             ConnectionRole::Detached(super::Detached::AwaitingRelease) => out.push(3),
             ConnectionRole::Detached(super::Detached::Released) => out.push(6),
             ConnectionRole::Detached(super::Detached::Quiescing { not_before }) => {
@@ -44,10 +48,19 @@ impl ConnectionCheckpoint {
                 block(&mut out, &handshake.encode());
             }
         }
-        block(&mut out, &self.ledger.encode());
-        out.extend_from_slice(&(self.sessions.len() as u64).to_be_bytes());
-        for session in &self.sessions {
-            block(&mut out, session.encode().as_bytes());
+        match &self.resources {
+            ConnectionResources::Control { deadline } => {
+                out.push(0);
+                out.extend_from_slice(&deadline.0.to_be_bytes());
+            }
+            ConnectionResources::Business { ledger, sessions } => {
+                out.push(1);
+                block(&mut out, &ledger.encode());
+                out.extend_from_slice(&(sessions.len() as u64).to_be_bytes());
+                for session in sessions {
+                    block(&mut out, session.encode().as_bytes());
+                }
+            }
         }
         out
     }
@@ -91,6 +104,7 @@ impl ConnectionCheckpoint {
                     .map_err(|_| Error::InvalidCheckpoint)?,
             ),
             [1] => ConnectionRole::Closing,
+            [7] => ConnectionRole::Stopping,
             [3] => ConnectionRole::Detached(super::Detached::AwaitingRelease),
             [6] => ConnectionRole::Detached(super::Detached::Released),
             [4] => ConnectionRole::Detached(super::Detached::Quiescing {
@@ -103,31 +117,42 @@ impl ConnectionCheckpoint {
             )?)?),
             _ => return Err(Error::InvalidCheckpoint),
         };
-        let maximum = LedgerCheckpoint::maximum_bytes(limits.retained_flows_per_connection)
-            .ok_or(Error::InvalidCheckpoint)?;
-        let ledger = LedgerCheckpoint::decode(
-            read_block(&mut body, maximum)?,
-            limits.retained_flows_per_connection,
-        )
-        .map_err(|_| Error::InvalidCheckpoint)?;
-        let count = bounded_count(&mut body, limits.sessions)?;
-        let mut sessions = Vec::with_capacity(count);
-        for _ in 0..count {
-            sessions.push(
-                SessionSnapshot::decode(read_block(
-                    &mut body,
-                    crate::sessions::MAX_SNAPSHOT_BYTES,
-                )?)
-                .map_err(|_| Error::InvalidCheckpoint)?,
-            );
-        }
+        let resources = match field::<1>(&mut body)? {
+            [0] => ConnectionResources::Control {
+                deadline: crate::clock::UnixMillis(u64::from_be_bytes(field(&mut body)?)),
+            },
+            [1] => {
+                let maximum = LedgerCheckpoint::maximum_bytes(limits.retained_flows_per_connection)
+                    .ok_or(Error::InvalidCheckpoint)?;
+                let ledger = LedgerCheckpoint::decode(
+                    read_block(&mut body, maximum)?,
+                    limits.retained_flows_per_connection,
+                )
+                .map_err(|_| Error::InvalidCheckpoint)?;
+                let count = bounded_count(&mut body, limits.sessions)?;
+                let mut sessions = Vec::with_capacity(count);
+                for _ in 0..count {
+                    sessions.push(
+                        SessionSnapshot::decode(read_block(
+                            &mut body,
+                            crate::sessions::MAX_SNAPSHOT_BYTES,
+                        )?)
+                        .map_err(|_| Error::InvalidCheckpoint)?,
+                    );
+                }
+                ConnectionResources::Business {
+                    ledger: Box::new(ledger),
+                    sessions,
+                }
+            }
+            _ => return Err(Error::InvalidCheckpoint),
+        };
         body.finish().map_err(|_| Error::InvalidCheckpoint)?;
         let checkpoint = Self {
             identity,
             connection,
             role,
-            ledger,
-            sessions,
+            resources,
         };
         checkpoint.validate(limits)?;
         Ok(checkpoint)

@@ -257,7 +257,7 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
     let mut checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
     let limits = Limits {
-        connections: 1,
+        business_connections: 1,
         ..Fixture::limits()
     };
     for incarnation in [2, 3] {
@@ -281,12 +281,7 @@ fn acknowledged_stop_restores_charge_and_deadline_without_sockets() {
             deadline
         );
         assert_eq!(restored.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
-        assert_eq!(
-            restored
-                .handle(Input::Connected(connection(200)), fixture.at)
-                .refusal,
-            Some(Error::Capacity)
-        );
+        assert_business_capacity_refused(&fixture, &mut restored, connection(200), fixture.at);
         assert!(
             complete(&mut restored, &commit, fixture.at)
                 .outputs
@@ -432,3 +427,6 @@ fn stop_from_grace_waits_for_old_generation_queues_without_refunding_submission(
     ));
     assert_eq!(relay.ledgers[&key.sender()].usage().submitted, ONE_FRAME);
 }
+
+#[path = "admission_tests.rs"]
+mod admission_limits;
