@@ -1,16 +1,17 @@
-//! Native lifecycle host with bounded connection I/O. Network JOIN and opaque
-//! ingress await forwarding and coordinated client runtime integration.
+//! Native HTTP/WebSocket lifecycle host with bounded connection I/O.
 
 mod actor;
 mod config;
 mod connection;
 mod environment;
 mod generation;
+mod http;
 mod registry;
 mod socket;
 mod storage;
 
 pub use config::Endpoint;
+pub use http::OriginPolicy;
 pub use registry::Server;
 pub use storage::Database;
 
