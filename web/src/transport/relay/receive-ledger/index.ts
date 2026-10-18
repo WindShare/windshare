@@ -40,7 +40,7 @@ interface ReceiptPrefix {
 
 /**
  * One physical connection generation, independent of sockets, timers and payload storage.
- * Staged for the coordinated Rust host cutover. The adapter serializes calls, retains
+ * The adapter serializes calls, retains
  * receipts with payloads and submits returned controls in order outside content credit.
  * A failed control write must close this generation; a taken control cannot be dropped.
  */
@@ -257,7 +257,7 @@ export class RelayReceiveLedger {
 
   #trace(action: ReceiveAction, flow?: Flow, failure?: ReceiveFailure): void {
     this.#observe?.(Object.freeze({
-      connectionId: this.#connectionId, sessionId: flow?.id, action, failure,
+      connectionId: this.#connectionId, capacity: this.#capacity, sessionId: flow?.id, action, failure,
       progress: flow ? this.#progress(flow) : undefined, usage: this.usage(),
     }))
   }

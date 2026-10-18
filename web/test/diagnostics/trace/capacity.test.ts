@@ -87,6 +87,7 @@ describe('trace frozen contract', () => {
       'operation_recovery',
       'connection_recovery',
       'relay_heartbeat',
+      'relay_delivery',
       'peer_attempt',
       'peer_recovery',
       'lane_transition',

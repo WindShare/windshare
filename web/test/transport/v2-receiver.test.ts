@@ -1,108 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { RELAY_RECEIVE_WINDOW_BYTES } from '../../src/transport/relay/receive-credit-codec'
-import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
+import { DEFAULT_RELAY_RECEIVE_CAPACITY } from '../../src/transport/relay/receiver/capacity'
+import { decodeDeliveryJoin } from '../../src/transport/relay/delivery-handshake-codec'
+import { encodeSettlementNotice } from '../../src/transport/relay/delivery-settlement-codec'
 import {
   dialV2RelayReceiver,
-  V2_RELAY_RECEIVE_QUEUE_FRAMES,
   V2_RELAY_HEARTBEAT_CLOSE_CODE,
   V2_RELAY_PROTOCOL_CLOSE_CODE,
-  type V2WebSocketPort,
 } from '../../src/transport/relay/v2-receiver'
 import {
   decodeV2ConnectionProbe,
-  decodeV2OpaqueRoute,
   encodeV2ConnectionProbeAck,
-  encodeV2DescriptorDelivery,
   encodeV2OpaqueRoute,
   encodeV2SessionCredit,
-  encodeV2SessionRetired,
 } from '../../src/transport/relay/v2-protocol'
 
-const relaySessionId = Uint8Array.of(1, 0, 0, 0, 0, 0, 0, 1)
-const capability: Suite02CapabilityKey = Object.freeze({
-  suite: 2,
-  readSecret: new Uint8Array(16).fill(1),
-  pkHash: new Uint8Array(16).fill(2),
-  shareIdRaw: new Uint8Array(12).fill(3),
-  shareId: 'share',
-})
-
-class FakeSocket implements V2WebSocketPort {
-  binaryType: BinaryType = 'arraybuffer'
-  readyState = 1
-  bufferedAmount = 0
-  closeCode: number | undefined
-  readonly sent: Uint8Array<ArrayBuffer>[] = []
-  sendFailure: Error | undefined
-  initialCredit: { frames: number; bytes: number } | undefined
-  readonly #listeners = new Map<string, Set<(event: unknown) => void>>()
-  readonly #descriptor: boolean
-
-  constructor(descriptor = true) {
-    this.#descriptor = descriptor
-  }
-
-  send(data: ArrayBufferView<ArrayBuffer>): void {
-    if (this.sendFailure !== undefined) throw this.sendFailure
-    const encoded = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-    this.sent.push(encoded.slice())
-    if (String.fromCharCode(...encoded.subarray(0, 4)) !== 'WS2J' || !this.#descriptor) return
-    queueMicrotask(() => {
-      this.message(encodeV2DescriptorDelivery({ relaySessionId, object: Uint8Array.of(1) }))
-      if (this.initialCredit !== undefined) this.grant(this.initialCredit.frames, this.initialCredit.bytes)
-    })
-  }
-
-  close(code?: number): void {
-    if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
-      throw new DOMException('Invalid browser close code', 'InvalidAccessError')
-    }
-    this.closeCode = code
-    this.readyState = 3
-    this.#emit('close', {})
-  }
-
-  addEventListener<K extends keyof WebSocketEventMap>(
-    type: K,
-    listener: (event: WebSocketEventMap[K]) => void,
-  ): void {
-    const listeners = this.#listeners.get(type) ?? new Set()
-    listeners.add(listener as (event: unknown) => void)
-    this.#listeners.set(type, listeners)
-  }
-
-  removeEventListener<K extends keyof WebSocketEventMap>(
-    type: K,
-    listener: (event: WebSocketEventMap[K]) => void,
-  ): void {
-    this.#listeners.get(type)?.delete(listener as (event: unknown) => void)
-  }
-
-  message(bytes: Uint8Array): void {
-    const data = bytes.slice().buffer
-    this.#emit('message', { data })
-  }
-
-  grant(frames: number, bytes: number): void {
-    this.message(encodeV2SessionCredit({ relaySessionId, frames, bytes }))
-  }
-
-  fail(): void {
-    this.#emit('error', {})
-  }
-
-  get opaqueFrames(): Uint8Array[] {
-    return this.sent
-      .filter(encoded => String.fromCharCode(...encoded.subarray(0, 4)) === 'WS2O')
-      .map(encoded => decodeV2OpaqueRoute(encoded).ciphertext)
-  }
-
-  #emit(type: string, event: unknown): void {
-    // DOM dispatch does not invoke listeners added while the event is executing.
-    for (const listener of [...this.#listeners.get(type) ?? []]) listener(event)
-  }
-}
+import { capability, FakeSocket, relaySessionId } from './relay-receiver-fixture'
 
 afterEach(() => vi.useRealTimers())
 
@@ -120,7 +33,7 @@ describe('v2 relay receiver ingress', () => {
       expect(socketFactory).toHaveBeenCalledExactlyOnceWith(
         'wss://relay.invalid/base/v2/ws?token=a%20b&share_id=AwMDAwMDAwMDAwMD',
       )
-      expect(socket.sent[0]?.subarray(8)).toEqual(capability.shareIdRaw)
+      expect(decodeDeliveryJoin(socket.sent[0]!).shareId).toEqual(capability.shareIdRaw)
       expect(connection.endpoint.relayIdentityEndpoint).toBe('wss://relay.invalid/base/v2/ws')
     } finally {
       await connection.close()
@@ -162,8 +75,8 @@ describe('v2 relay receiver ingress', () => {
       ciphertext: new Uint8Array(65_536).fill(7),
     })
 
-    const permitted = Math.floor(RELAY_RECEIVE_WINDOW_BYTES / opaque.byteLength)
-    expect(permitted).toBeLessThanOrEqual(V2_RELAY_RECEIVE_QUEUE_FRAMES)
+    const permitted = Math.floor(Number(DEFAULT_RELAY_RECEIVE_CAPACITY.encodedBytes) / opaque.byteLength)
+    expect(permitted).toBeLessThanOrEqual(Number(DEFAULT_RELAY_RECEIVE_CAPACITY.frames))
     for (let index = 0; index < permitted; index += 1) {
       socket.message(opaque)
     }
@@ -172,7 +85,7 @@ describe('v2 relay receiver ingress', () => {
     expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
 
     const reader = connection.channel.frames.getReader()
-    await expect(reader.read()).rejects.toThrow(/receive credit/)
+    await expect(reader.read()).rejects.toThrow(/capacity/)
   })
 
   it('bounds a relay that opens but withholds descriptor delivery', async () => {
@@ -188,25 +101,20 @@ describe('v2 relay receiver ingress', () => {
     await rejected
   })
 
-  it('retires only the exact receiver channel and treats stale retirement as a no-op', async () => {
+  it('settles an empty retired receiver channel before closing', async () => {
     const socket = new FakeSocket()
     const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
     const reader = connection.channel.frames.getReader()
 
-    socket.message(encodeV2SessionRetired({
-      relaySessionId: Uint8Array.of(2, 0, 0, 0, 0, 0, 0, 1),
-    }))
-    expect(connection.channel.state).toBe('open')
-    expect(socket.closeCode).toBeUndefined()
-
-    socket.message(encodeV2SessionRetired({ relaySessionId }))
+    socket.message(encodeSettlementNotice({ kind: 'settlement-notice', totalFrames: 0n, totalEncodedBytes: 0n, relaySessionId }))
+    await settleSends()
     expect(connection.channel.state).toBe('closed')
     expect(socket.closeCode).toBe(1000)
     await expect(reader.read()).resolves.toEqual({ done: true, value: undefined })
 
-    socket.message(encodeV2SessionRetired({ relaySessionId }))
+    socket.message(encodeSettlementNotice({ kind: 'settlement-notice', totalFrames: 0n, totalEncodedBytes: 0n, relaySessionId }))
     expect(socket.closeCode).toBe(1000)
   })
 
@@ -215,12 +123,12 @@ describe('v2 relay receiver ingress', () => {
     const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
-    const malformed = encodeV2SessionRetired({ relaySessionId })
+    const malformed = encodeSettlementNotice({ kind: 'settlement-notice', totalFrames: 0n, totalEncodedBytes: 0n, relaySessionId })
     malformed[5] = 1
 
     socket.message(malformed)
     expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
-    await expect(connection.channel.frames.getReader().read()).rejects.toThrow(/WS2F/)
+    await expect(connection.channel.frames.getReader().read()).rejects.toMatchObject({ kind: 'malformed' })
   })
 })
 
@@ -340,10 +248,10 @@ describe('v2 relay receiver send credit', () => {
     vi.useFakeTimers()
     const socket = new FakeSocket()
     const connection = await connect(socket)
-    const unrelated = encodeV2SessionRetired({ relaySessionId: new Uint8Array(relaySessionId.byteLength).fill(9) })
+    const inbound = encodeV2OpaqueRoute({ relaySessionId, ciphertext: Uint8Array.of(9) })
     for (let elapsed = 0; elapsed < 180_000; elapsed += 15_000) {
       await vi.advanceTimersByTimeAsync(15_000)
-      socket.message(unrelated)
+      socket.message(inbound)
     }
     expect(connection.channel.state).toBe('open')
     await connection.close()
@@ -375,7 +283,7 @@ describe('v2 relay receiver send credit', () => {
     if (cause === 'local') await connection.close()
     if (cause === 'remote') socket.close()
     if (cause === 'error') socket.fail()
-    if (cause === 'retired') socket.message(encodeV2SessionRetired({ relaySessionId }))
+    if (cause === 'retired') socket.message(encodeSettlementNotice({ kind: 'settlement-notice', totalFrames: 0n, totalEncodedBytes: 0n, relaySessionId }))
     await Promise.all(rejected)
     expect(socket.opaqueFrames).toEqual([])
     expect(connection.channel.state).toBe('closed')
@@ -389,7 +297,7 @@ describe('v2 relay receiver send credit', () => {
       socketFactory: () => socket, heartbeatTrace: trace,
     })
     const frame = Uint8Array.of(7)
-    for (let index = 0; index < V2_RELAY_RECEIVE_QUEUE_FRAMES; index += 1) {
+    for (let index = 0; index < Number(DEFAULT_RELAY_RECEIVE_CAPACITY.frames); index += 1) {
       socket.message(encodeV2OpaqueRoute({ relaySessionId, ciphertext: frame }))
     }
     const pending = connection.channel.send(frame)

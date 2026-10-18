@@ -2,7 +2,7 @@ import { decodeDeliveryTotals, encodeDeliveryTotals, type RelayDeliveryTotals } 
 
 const MAGIC = 'WS2B'
 
-/** Cumulative feedback for the coordinated cutover; not the live receive-credit codec. */
+/** Cumulative consumption of complete envelopes on one relay session. */
 export type RelayDeliveryConsumed = RelayDeliveryTotals
 
 export function encodeDeliveryConsumed(feedback: RelayDeliveryConsumed): Uint8Array<ArrayBuffer> {

@@ -17,7 +17,7 @@ export interface RelayReceiveCapacity {
   readonly encodedBytes: bigint
 }
 
-/** Staged contract: activate with cumulative consumption and final settlement. */
+/** Admission binds immutable receive capacity to the authenticated registration. */
 export interface RelayDeliveryRegisterInit {
   readonly registration: V2RegisterInit
   readonly receiveCapacity: RelayReceiveCapacity

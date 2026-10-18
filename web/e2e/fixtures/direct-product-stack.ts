@@ -14,7 +14,7 @@ const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../
 const WEB_ROOT = join(REPOSITORY_ROOT, 'web')
 const PROCESS_READINESS_TIMEOUT_MILLISECONDS = 20_000
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 5_000
-const RELAY_LISTENING_PATTERN = /wsrelay: listening on ([^\s]+) /u
+const RELAY_LISTENING_PATTERN = /^\{[^\r\n]*"event":"listening"[^\r\n]*\}$/mu
 const BARE_LINK_PATTERN = /^Bare link: (.+)$/mu
 const SEPARATE_KEY_PATTERN = /^Key: (.+)$/mu
 export const DIRECT_TEST_BLOCK_BYTES = 64 * 1024
@@ -264,10 +264,16 @@ export class DirectProductStack {
     await mkdir(stateDirectory, { recursive: true })
     const operationId = `${this.#scenarioId}-relay`
     const relay = this.#track(new DirectProcess(binaries.relay, [
-      '-listen',
+      '--listen',
       '127.0.0.1:0',
-      '-state-dir',
-      stateDirectory,
+      '--database',
+      join(stateDirectory, 'relay.sqlite'),
+      '--origins',
+      this.baseURL,
+      '--stun-udp',
+      '127.0.0.1:0',
+      '--stun-admin',
+      '127.0.0.1:0',
     ], {
       cwd: REPOSITORY_ROOT,
       environment: localGoEnvironment(),
@@ -277,14 +283,19 @@ export class DirectProductStack {
     this.#trace(operationId, 'started')
     let ready: RegExpMatchArray
     try {
-      ready = await relay.waitFor('stderr', RELAY_LISTENING_PATTERN, {
+      ready = await relay.waitFor('stdout', RELAY_LISTENING_PATTERN, {
         timeoutMilliseconds: PROCESS_READINESS_TIMEOUT_MILLISECONDS,
       })
     } catch (error) {
       this.#trace(operationId, 'failed')
       throw error
     }
-    this.#relayUrl = `ws://${requiredCapture(ready, 1, 'relay listener address')}`
+    const readiness = JSON.parse(ready[0]) as { endpoint?: unknown }
+    if (typeof readiness.endpoint !== 'string') throw new Error('Native relay readiness omitted its endpoint')
+    // Clients take a base URL and append /v2/ws; native readiness reports the full endpoint.
+    const endpoint = new URL(readiness.endpoint)
+    if (endpoint.pathname !== '/v2/ws') throw new Error('Unexpected native test relay path')
+    this.#relayUrl = endpoint.origin
     this.#trace(operationId, 'ready')
   }
 

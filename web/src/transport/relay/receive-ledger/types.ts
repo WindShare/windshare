@@ -51,6 +51,7 @@ export class ReceiveLedgerError extends Error {
 
 export interface ReceiveLedgerEvent {
   readonly connectionId: string
+  readonly capacity: ReceiveCounts
   readonly sessionId: string | undefined
   readonly action: ReceiveAction
   readonly failure: ReceiveFailure | undefined

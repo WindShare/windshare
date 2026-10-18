@@ -40,7 +40,7 @@ describe('direct product suite preparation', () => {
       await writeFile(binaries.wind, 'wind')
       started.resolve(binaries)
       await new Promise<void>((resolveBuild) => setTimeout(resolveBuild, 61_000))
-      await writeFile(binaries.relay, 'wsrelay')
+      await writeFile(binaries.relay, 'relay-native')
     })
 
     const preparing = prepareDirectProductBinaries()
@@ -56,7 +56,7 @@ describe('direct product suite preparation', () => {
       // paths; neither lookup is permitted to start another build.
       expect(preparedDirectBinaryPaths()).toEqual(binaries)
       await expect(readFile(binaries.wind, 'utf8')).resolves.toBe('wind')
-      await expect(readFile(binaries.relay, 'utf8')).resolves.toBe('wsrelay')
+      await expect(readFile(binaries.relay, 'utf8')).resolves.toBe('relay-native')
       expect(buildBinaries).toHaveBeenCalledTimes(1)
     } finally {
       await vi.runAllTimersAsync()
@@ -90,7 +90,7 @@ describe('direct product suite preparation', () => {
     vi.stubEnv(DIRECT_PRODUCT_BINARY_DIRECTORY_ENV, inheritedDirectory)
     buildBinaries.mockImplementation(async (binaries) => {
       await writeFile(binaries.wind, 'wind')
-      await writeFile(binaries.relay, 'wsrelay')
+      await writeFile(binaries.relay, 'relay-native')
     })
 
     const directories = new Set<string>()

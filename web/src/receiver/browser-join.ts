@@ -8,7 +8,7 @@ import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
-import { emitRelayHeartbeat } from '../diagnostics/trace/connection-payload'
+import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
 
 export interface BrowserRelayJoin extends V2ProtocolGenerationCore {
   readonly descriptor: V2ShareDescriptor
@@ -42,6 +42,10 @@ export function joinBrowserRelays(
     try {
       let session: V2ReceiverSessionRuntime | undefined
       const relay = await dialV2RelayReceiver(relayBase, ownedCapability, { signal: attemptSignal,
+        receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, () => ({
+          correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+          shareId: capability.shareId,
+        })),
         heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, () => ({
           correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: capability.shareId,
