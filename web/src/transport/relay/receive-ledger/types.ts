@@ -62,7 +62,6 @@ export interface ReceiveLedgerConfig {
   readonly connectionId: string
   readonly capacity: RelayReceiveCapacity
   readonly maxSessions: number
-  readonly batch: RelayReceiveCapacity
   /** Synchronous diagnostics only; the observer must not throw or reenter the ledger. */
   readonly observe?: (event: ReceiveLedgerEvent) => void
 }

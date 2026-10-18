@@ -4,54 +4,50 @@ import (
 	"errors"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2/internal/receiveledger"
 )
 
-func TestBothRolesReportConsumptionAndFlushSparseTail(t *testing.T) {
+func TestBothRolesCoalesceConsumptionUntilWriterIsAvailable(t *testing.T) {
+	const burstFrames = 16
 	for _, fixed := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
-			socket := newScriptedSocket()
-			link := newTestLink(t.Context(), socket, fixed)
+			link := newTestLink(t.Context(), newScriptedSocket(), fixed)
 			defer link.stop(nil)
 			channel := link.installFixed(relaySessionID(81))
-			defer channel.Close()
-			link.start()
 			var frames, wireBytes uint64
+			// Leave the writer unavailable while the consumer drains each burst.
+			// The next writer turn must report one cumulative prefix, not replay
+			// a separate queued control for every handoff.
 			for range 2 {
-				for index := range defaultReceiveFrames / receiveBatchDivisor {
+				for index := range burstFrames {
 					payload := make([]byte, index+1)
 					frames++
 					wireBytes += uint64(len(payload) + v2.OpaqueRouteHeaderBytes)
-					respondOpaque(t, socket, channel.id, payload)
+					if err := channel.deliver(payload); err != nil {
+						t.Fatal(err)
+					}
 				}
-				synctest.Wait()
-				if len(socket.writes) != 0 {
-					t.Fatal("arrival acknowledged application-owned storage")
+				if encoded, _, err := link.receives.take(); err != nil || encoded != nil {
+					t.Fatal("arrival acknowledged application-owned storage", err)
 				}
-				for range defaultReceiveFrames / receiveBatchDivisor {
+				for range burstFrames {
 					<-channel.Recv()
 				}
 				synctest.Wait()
-				feedback, err := v2.ParseDeliveryConsumed(assertWriteMagic(t, socket, v2.DeliveryConsumedMagic))
+				encoded, _, err := link.receives.take()
+				if err != nil {
+					t.Fatal(err)
+				}
+				feedback, err := v2.ParseDeliveryConsumed(encoded)
 				if err != nil || feedback.TotalFrames != frames || feedback.TotalEncodedBytes != wireBytes {
 					t.Fatal("cumulative consumption", feedback, err)
 				}
-			}
-			respondOpaque(t, socket, channel.id, []byte{1})
-			<-channel.Recv()
-			synctest.Wait()
-			if len(socket.writes) != 0 {
-				t.Fatal("sparse traffic bypassed batching deadline")
-			}
-			time.Sleep(receiveFlushInterval)
-			synctest.Wait()
-			tail, err := v2.ParseDeliveryConsumed(assertWriteMagic(t, socket, v2.DeliveryConsumedMagic))
-			if err != nil || tail.TotalFrames != frames+1 || tail.TotalEncodedBytes != wireBytes+v2.OpaqueRouteHeaderBytes+1 {
-				t.Fatal("stranded consumption tail", tail, err)
+				if extra, _, err := link.receives.take(); err != nil || extra != nil {
+					t.Fatal("one handoff generated duplicate controls", err)
+				}
 			}
 		})
 	}
@@ -86,9 +82,9 @@ func TestConnectionReceiveCapacityIsSharedAcrossSessions(t *testing.T) {
 			if err := second.deliver([]byte{3}); !errors.Is(err, receiveledger.ErrCapacity) {
 				t.Fatal("local handoff refunded unreported capacity", err)
 			}
-			feedback, _, err := link.receives.take(time.Now())
+			feedback, _, err := link.receives.take()
 			if err != nil || feedback == nil {
-				t.Fatal("small window did not adapt batching", err)
+				t.Fatal("small window stranded consumption", err)
 			}
 			if err := second.deliver([]byte{3}); err != nil {
 				t.Fatal("reported capacity was not reusable", err)
@@ -130,8 +126,20 @@ func TestSettlementWaitsForQueueReleaseAndPreservesSibling(t *testing.T) {
 				}
 			}
 			synctest.Wait()
+			// Handoffs can wake the writer before the retiring worker finishes.
+			// Their consumed prefixes may precede, but never follow, settlement.
+			var consumed uint64
+			for len(socket.writes) > 1 {
+				feedback, err := v2.ParseDeliveryConsumed(assertWriteMagic(t, socket, v2.DeliveryConsumedMagic))
+				if err != nil || discard || feedback.RelaySessionID != channel.id ||
+					feedback.TotalFrames <= consumed || feedback.TotalFrames > 2 ||
+					feedback.TotalEncodedBytes != feedback.TotalFrames*(v2.OpaqueRouteHeaderBytes+1) {
+					t.Fatal("invalid consumption before settlement", feedback, err)
+				}
+				consumed = feedback.TotalFrames
+			}
 			ack, err := v2.ParseSettlementAck(assertWriteMagic(t, socket, v2.SettlementAckMagic))
-			if err != nil || ack.TotalFrames != 2 || ack.TotalEncodedBytes != 42 {
+			if err != nil || ack.RelaySessionID != channel.id || ack.TotalFrames != 2 || ack.TotalEncodedBytes != 42 {
 				t.Fatal(ack, err)
 			}
 			if err := sibling.Send(t.Context(), []byte("healthy")); err != nil {

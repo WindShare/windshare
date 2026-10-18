@@ -2,20 +2,11 @@ package receiveledger
 
 import v2 "github.com/windshare/windshare/relay/protocol/v2"
 
-// FeedbackReady is connection-wide: small prefixes across many sessions must
-// not collectively exhaust the window while each misses a per-session batch.
+// FeedbackReady never waits for more input: the relay may have granted less
+// than this connection's capacity, including a single remaining envelope.
+// The ordered writer coalesces all consumption accumulated before its next turn.
 func (l *Ledger) FeedbackReady() bool {
-	pending := l.usage.PendingConsumed
-	return !l.closed && pending.Frames != 0 && (l.flushing ||
-		pending.Frames >= l.threshold.Frames || pending.EncodedBytes >= l.threshold.EncodedBytes)
-}
-
-// FlushConsumption makes a partial batch eligible. The adapter calls it at its
-// bounded flush deadline or idle boundary so sparse traffic cannot strand credit.
-func (l *Ledger) FlushConsumption() {
-	if !l.closed && l.usage.PendingConsumed.Frames != 0 {
-		l.flushing = true
-	}
+	return !l.closed && l.usage.PendingConsumed.Frames != 0
 }
 
 // TakeConsumed hands a cumulative control to an ordered, connection-owned writer.
@@ -25,7 +16,6 @@ func (l *Ledger) TakeConsumed() (v2.DeliveryConsumed, bool) {
 	if !l.FeedbackReady() {
 		return v2.DeliveryConsumed{}, false
 	}
-	l.flushing = true
 	for range len(l.order) {
 		f := l.order[l.cursor]
 		l.cursor = (l.cursor + 1) % len(l.order)
@@ -36,7 +26,6 @@ func (l *Ledger) TakeConsumed() (v2.DeliveryConsumed, bool) {
 		l.usage.Outstanding = l.usage.Outstanding.subtract(delta)
 		l.usage.PendingConsumed = l.usage.PendingConsumed.subtract(delta)
 		f.reported = f.ConsumedPrefix
-		l.flushing = l.usage.PendingConsumed.Frames != 0
 		l.trace(ActionFeedback, f, nil)
 		return v2.DeliveryConsumed{
 			RelaySessionID: f.id, TotalFrames: f.reported.Frames, TotalEncodedBytes: f.reported.EncodedBytes,
@@ -62,7 +51,6 @@ func (l *Ledger) TakeSettlement(session Session) (v2.SettlementAck, bool) {
 		f.Phase = Settled
 	}
 	f.ackPending = false
-	l.flushing = l.flushing && l.usage.PendingConsumed.Frames != 0
 	l.trace(ActionSettlement, f, nil)
 	return v2.SettlementAck{
 		RelaySessionID: f.id, TotalFrames: f.Received.Frames, TotalEncodedBytes: f.Received.EncodedBytes,

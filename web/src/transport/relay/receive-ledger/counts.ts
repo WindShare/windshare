@@ -7,7 +7,6 @@ export const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
 export const ZERO_COUNTS: ReceiveCounts = Object.freeze({ frames: 0n, encodedBytes: 0n })
 const MIN_ENVELOPE_BYTES = V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES + 1
 const MAX_ENVELOPE_BYTES = V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES + V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES
-const FEEDBACK_WINDOW_DIVISOR = 4n
 
 export function positiveUint64(value: bigint): boolean {
   return typeof value === 'bigint' && value > 0n && value <= MAX_UINT64
@@ -35,11 +34,4 @@ export function appendEnvelope(prefix: ReceiveCounts, encodedBytes: number): Rec
     throw new ReceiveLedgerError('counter-exhausted')
   }
   return after
-}
-
-/** Either window axis must trigger feedback before a configured batch can strand it. */
-export function feedbackThreshold(capacity: bigint, batch: bigint): bigint {
-  const quarter = capacity / FEEDBACK_WINDOW_DIVISOR
-  const threshold = batch < quarter ? batch : quarter
-  return threshold > 0n ? threshold : 1n
 }

@@ -27,6 +27,29 @@ The workloads cover liveshare ready scaling and real-disk readiness, file-local 
 transfer, extreme-width catalog spill, relay registration wire cost, and Pion chunk transfer. Exact
 benchmark rows, metrics, and behavioral oracles are versioned with the runner.
 
+## Native relay throughput
+
+Build the release relay and run the opt-in real-socket benchmark with both Go
+endpoints at their default receive capacities:
+
+```powershell
+Push-Location relay-rust
+rustup run stable cargo build --release --locked -p windshare-relay-native --bin relay-native
+Pop-Location
+$env:WINDSHARE_RELAY_BENCH_BINARY = (Resolve-Path relay-rust/.target/release/relay-native.exe).Path
+go test ./relay-rust/tests/_goclient -run '^$' -bench '^BenchmarkNativeRelayThroughput$' -benchtime=8192x -count=4
+```
+
+On Linux, use the binary path without `.exe`. Each sample verifies payload bytes
+and FIFO order over 8,192 frames, in both directions at 16 KiB and 64 KiB.
+Treat the first sample of each case as warmup and report all remaining samples
+and their median. Compare identical release relay binaries and benchmark drivers.
+The metrics include feedback controls per data frame and sends exceeding 1 ms;
+send duration includes socket work and credit waits, not just credit waits.
+This isolates transport into memory, without encryption, disk output or WAN
+latency. Use `BenchmarkOpenBlock` in `./core/content/records` to measure the
+production decode/authentication path separately.
+
 ## Progressive discovery
 
 The sender publishes a NodeID hash index with each immutable directory generation. Budgeted

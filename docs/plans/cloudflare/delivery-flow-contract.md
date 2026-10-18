@@ -14,8 +14,10 @@ capacity immediately; grants, accepted queues and submitted-but-unconsumed data
 share capacity, so a grant is not consumption. Feedback reports the complete
 consumed `WS2O` prefix and reclaims only newly consumed resources; it never
 declares capacity or grants permission. Socket submission never refunds capacity.
-Window and batch thresholds are scheduling policy, independent of counter
-encoding limits; control frames bypass content credit, and feedback may batch.
+Host windows are scheduling policy, independent of counter encoding limits.
+Control frames bypass content credit. Consumption is immediately eligible for the
+ordered writer, which coalesces pending prefixes without waiting for more input;
+the destination declaration cannot predict the relay's smaller effective window.
 
 ## Client receive ledgers
 
@@ -31,15 +33,17 @@ are consumed.
 Retirement retains accounting until an ordered `WS2N` matches received totals;
 only consuming or discarding the whole prefix permits `WS2S`, and repeated
 notices cannot refund twice. Metadata stays charged until acknowledgement or
-owner forget; batches adapt to both window axes and drain their below-threshold
-tail. Hosts serialize ledger access, retain payloads with receipts, flush sparse
-consumption before a bounded deadline, and send ordered controls outside content
-credit; delayed callbacks keep their session token.
+owner forget. Hosts serialize ledger access, retain payloads with receipts, wake
+the writer after consumption, and send ordered controls outside content credit;
+delayed callbacks keep their session token. Pending prefixes rotate fairly across
+sessions, including when only one envelope was consumed.
 
 Go takes its immutable declaration and ledger capacity from
 `DialOptions.ReceiveCapacity` (default: 256 frames / 16 MiB per connection).
 Both roles wait for explicit `WS2W`, account full envelopes before retaining
-payloads, and flush partial consumption within 10 ms when the writer is available.
+payloads, and report consumption on the next available writer turn without a
+batch threshold or flush timer. Each turn also offers queued outbound content a
+write so continuous consumption cannot starve the opposite direction.
 Remote retirement drains accepted frames; owner close discards and joins their
 workers. Retired flows retain accounting until the ordered writer issues `WS2S`.
 

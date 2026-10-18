@@ -94,7 +94,7 @@ Independent generation reservations retain conservative loss charges and fixed g
 ownership, permanent STOP and the reservation inventory still require authoritative reads.
 Go and browser clients have socket-free receive ledgers for both endpoint roles.
 Go now activates its ledger with capacity-bearing REGISTER/RESUME/JOIN, explicit
-send grants, cumulative consumption, bounded tail flushing and ordered settlement.
+send grants, cumulative consumption on writer readiness and ordered settlement.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
 the remaining cutover: browser runtime, default server/build entry points and
 product integration suites still target the old Go relay. The new Go runtime
