@@ -14,7 +14,7 @@ export default async function prepareDirectProductBinaries(): Promise<() => Prom
   const previousDirectory = process.env[DIRECT_PRODUCT_BINARY_DIRECTORY_ENV]
   const removeBinaries = () => rm(directory, { recursive: true, force: true })
   const startedAt = Date.now()
-  console.info('Preparing native browser-test binaries: wind and wsrelay')
+  console.info('Preparing browser-test binaries: Go wind and Rust relay-native')
   try {
     await buildDirectProductBinaries(binaries)
   } catch (error) {

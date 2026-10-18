@@ -174,6 +174,14 @@ export type V2RelayHeartbeatTraceEvent = Readonly<{
   timeoutMilliseconds: number
 }>
 
+export type V2RelayDeliveryTraceEvent = import('../transport/relay/receive-ledger').ReceiveLedgerEvent & Readonly<{
+  eventName: 'relay_delivery'
+  correlation: FailureCorrelation
+  relayBase: string
+  shareId?: string
+  shareInstanceId?: string
+}>
+
 export type V2ContentSchedulingTraceEvent = Readonly<{
   admission?: import('../content/scheduling/receive-window').BlockReceiveAdmission
   eventName: 'content_scheduling'
@@ -214,6 +222,7 @@ export type V2ProtocolTraceEvent =
   | V2OperationRecoveryTraceEvent
   | V2ConnectionRecoveryTraceEvent
   | V2RelayHeartbeatTraceEvent
+  | V2RelayDeliveryTraceEvent
 
 export type V2ProtocolTraceObserver = (event: V2ProtocolTraceEvent) => void
 

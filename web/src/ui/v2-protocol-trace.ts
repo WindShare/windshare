@@ -1,5 +1,5 @@
 import { projectCorrelationV1 } from '../diagnostics/export/correlation-v1'
-import { projectConnectionTrace } from '../diagnostics/trace/connection-payload'
+import { projectConnectionTrace, projectRelayDeliveryTrace } from '../diagnostics/trace/connection-payload'
 import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
 import { projectProtocolErrorContentV2 } from '../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
@@ -17,8 +17,12 @@ const FAILURE_DETAIL_FORMAT = Object.freeze({
 export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV2 {
-  if (event.eventName === 'connection_recovery' || event.eventName === 'relay_heartbeat') return projectConnectionTrace(event)
-  if (event.eventName === 'sender_verification') return projectSenderVerification(event)
+  switch (event.eventName) {
+    case 'connection_recovery':
+    case 'relay_heartbeat': return projectConnectionTrace(event)
+    case 'relay_delivery': return projectRelayDeliveryTrace(event)
+    case 'sender_verification': return projectSenderVerification(event)
+  }
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'lease_retirement') return projectLeaseRetirement(event)
   if (event.eventName === 'request_scheduling') {

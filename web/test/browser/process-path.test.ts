@@ -11,7 +11,7 @@ describe('direct product-stack executable paths', () => {
     expect(directBinaryPaths(directory, 'win32')).toEqual({
       directory,
       wind: join(directory, 'wind.exe'),
-      relay: join(directory, 'wsrelay.exe'),
+      relay: join(directory, 'relay-native.exe'),
     })
   })
 
@@ -23,7 +23,7 @@ describe('direct product-stack executable paths', () => {
     expect(first.wind).not.toBe(second.wind)
     expect(first.relay).not.toBe(second.relay)
     expect(first.wind).toBe(join(first.directory, 'wind'))
-    expect(first.relay).toBe(join(first.directory, 'wsrelay'))
+    expect(first.relay).toBe(join(first.directory, 'relay-native'))
   })
 
   it('rejects a relative ownership root', () => {

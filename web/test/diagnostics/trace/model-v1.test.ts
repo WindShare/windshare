@@ -81,6 +81,12 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   },
   connection_recovery: { generation_id: '0', attempt: '1', phase: 'initial', transition: 'attempt_started' },
   relay_heartbeat: { connection_id: '1', generation_id: '1', relay_base: 'https://relay.invalid', round: '1', stage: 'probe', buffered_bytes: '0', elapsed_ms: 0, timeout_ms: 45000 },
+  relay_delivery: {
+    connection_id: 'relay-receiver-1', relay_base: 'https://relay.invalid', action: 'open',
+    capacity: { frames: '256', encoded_bytes: '16777216' },
+    held: { frames: '0', encoded_bytes: '0' }, outstanding: { frames: '0', encoded_bytes: '0' },
+    pending_consumed: { frames: '0', encoded_bytes: '0' }, retained_sessions: '1',
+  },
   peer_attempt: {
     stage: 'started',
     wave_ordinal: '1',

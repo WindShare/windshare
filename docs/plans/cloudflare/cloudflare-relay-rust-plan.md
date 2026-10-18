@@ -67,8 +67,8 @@ Native admission now atomically charges global and per-source business/control b
 retains them through transport-owner teardown, and preserves STOP under business
 saturation. Proxy source identity requires explicitly trusted socket IPs and a single-IP
 header; malformed trusted identity is refused before upgrade.
-The coordinated production client cutover and remaining operational interfaces remain
-pending; Go is still the product entry point.
+The default server/build entry points and remaining operational interfaces remain
+pending; Go is still the default relay entry point.
 The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, executes JOIN with confirmed descriptors,
 and forwards opaque envelopes synchronously through kernel submission. Cumulative
@@ -92,13 +92,13 @@ Dependency-scoped recovery now
 isolates missing/invalid delivery records while preserving healthy sessions.
 Independent generation reservations retain conservative loss charges and fixed grace;
 ownership, permanent STOP and the reservation inventory still require authoritative reads.
-Go and browser clients have socket-free receive ledgers for both endpoint roles.
-Go now activates its ledger with capacity-bearing REGISTER/RESUME/JOIN, explicit
-send grants, cumulative consumption on writer readiness and ordered settlement.
+Go and browser runtimes now activate their socket-free receive ledgers with
+capacity-bearing handshakes, explicit send grants, cumulative consumption on
+writer readiness and ordered settlement. Browser product fixtures build Rust
+`relay-native` and Go `wind`, including the 17 MiB download/hash scenario.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
-the remaining cutover: browser runtime, default server/build entry points and
-product integration suites still target the old Go relay. The new Go runtime
-requires a Rust relay; this step does not claim a completed product switch.
+the remaining cutover: default server/release entry points and Go product
+integration suites still target the incompatible old Go relay.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

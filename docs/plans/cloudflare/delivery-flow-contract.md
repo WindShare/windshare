@@ -1,11 +1,11 @@
 # Relay delivery flow contract
 
-The Go `relayv2` runtime and Rust hosts use capacity-carrying handshakes,
-cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). The native process scenario
-uses real `DialSender`/`DialReceiver`/`Channel` APIs. Browser activation and the
-default server/build cutover remain pending; the legacy Go server and browser
-still use capacity-less handshakes and 24-byte receive-credit deltas and cannot
-interoperate with the new Go runtime. There is no wire-format fallback.
+The Go `relayv2` runtime, browser receiver and Rust hosts use capacity-carrying
+handshakes, cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). Browser product
+fixtures build Go `wind` and Rust `relay-native`; the native process scenario
+uses real `DialSender`/`DialReceiver`/`Channel` APIs. Default server/release entry
+points and Go product integration suites still target the incompatible legacy Go
+server. There is no wire-format fallback.
 
 Capacity is declared per direction at admission and consumed by per-grant
 allowances. Admission reserves both startup allowances before granting either, so
@@ -46,6 +46,15 @@ batch threshold or flush timer. Each turn also offers queued outbound content a
 write so continuous consumption cannot starve the opposite direction.
 Remote retirement drains accepted frames; owner close discards and joins their
 workers. Retired flows retain accounting until the ordered writer issues `WS2S`.
+
+Browser JOIN and its receipt-bearing queue share one immutable `receiveCapacity`
+(default: 256 frames / 16 MiB). Stream handoff wakes cumulative feedback outside
+content credit, including for single-envelope grants. `WS2N` stops application
+sends while accepted frames drain; cancellation discards the remaining prefix.
+Owner close submits any pending final control before the WebSocket close, but
+cannot invent settlement without a notice. Disconnect ends feedback authority.
+The existing 17 MiB browser scenario checks cumulative feedback across the
+declared window and verifies the downloaded SHA-256 through the Rust host.
 
 ## Initial receive capacity
 

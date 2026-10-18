@@ -70,6 +70,33 @@ function validateConnectionIdentity(payload: UnknownRecord): void {
   }
 }
 
+export function validateRelayDelivery(payload: UnknownRecord): void {
+  exactKeys(payload, ['connection_id', 'relay_base', 'action', 'capacity', 'held', 'outstanding', 'pending_consumed', 'retained_sessions'],
+    ['relay_session_id', 'share_id', 'share_instance_id', 'failure', 'progress'], 'relay delivery')
+  validateConnectionIdentity(payload)
+  boundedConnectionText(payload.connection_id, CONNECTION_TRACE_TEXT_MAX_CHARACTERS, 'relay connection')
+  if (payload.relay_session_id !== undefined) boundedConnectionText(payload.relay_session_id, 16, 'relay session')
+  member(payload.action, ['open', 'receive', 'consume', 'discard', 'retire', 'notice', 'feedback', 'settlement', 'forget', 'close'], 'delivery action')
+  if (payload.failure !== undefined) member(payload.failure, [
+    'config', 'closed', 'session', 'session-limit', 'capacity', 'frame-size', 'counter-exhausted', 'receipt',
+    'retirement', 'frozen-prefix', 'settlement', 'settlement-pending',
+  ], 'delivery failure')
+  decimalUint64(payload.retained_sessions, 'retained sessions')
+  for (const name of ['capacity', 'held', 'outstanding', 'pending_consumed']) validateDeliveryCounts(payload[name])
+  if (payload.progress !== undefined) {
+    const progress = recordValue(payload.progress, 'delivery progress')
+    exactKeys(progress, ['phase', 'received', 'consumed', 'discarded', 'consumed_prefix'], [], 'delivery progress')
+    member(progress.phase, ['active', 'retiring', 'draining', 'settled'], 'delivery phase')
+    for (const name of ['received', 'consumed', 'discarded', 'consumed_prefix']) validateDeliveryCounts(progress[name])
+  }
+}
+
+function validateDeliveryCounts(value: unknown): void {
+  const counts = recordValue(value, 'delivery counts')
+  exactKeys(counts, ['frames', 'encoded_bytes'], [], 'delivery counts')
+  decimalFields(counts, ['frames', 'encoded_bytes'], 'delivery counts')
+}
+
 function boundedConnectionText(value: unknown, limit: number, field: string): void {
   if (typeof value !== 'string' || value.length === 0 || value.length > limit) {
     throw new TypeError(`${field} must be bounded text`)

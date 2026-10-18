@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { capabilityUrl, DirectProductStack } from './fixtures/direct-product-stack'
+import { decodeDeliveryJoin, type RelayReceiveCapacity } from '../src/transport/relay/delivery-handshake-codec'
+import { decodeDeliveryConsumed, type RelayDeliveryConsumed } from '../src/transport/relay/delivery-consumed-codec'
 
 const FILE_BYTES = 17 * 1024 * 1024
 const PRODUCTION_BLOCK_BYTES = 1024 * 1024
@@ -11,12 +13,16 @@ test('a production-size relay burst preserves the session and downloaded bytes',
   const stack = new DirectProductStack('relay-burst-backpressure')
   const payload = randomBytes(FILE_BYTES)
   let relayClosures = 0
-  let receiveCreditUpdates = 0
+  const capacities: RelayReceiveCapacity[] = []
+  const consumption: RelayDeliveryConsumed[] = []
   page.on('websocket', socket => {
     if (new URL(socket.url()).pathname !== '/v2/ws') return
     socket.on('close', () => { relayClosures += 1 })
     socket.on('framesent', ({ payload }) => {
-      if (Buffer.isBuffer(payload) && payload.subarray(0, 4).toString('ascii') === 'WS2B') receiveCreditUpdates += 1
+      if (!Buffer.isBuffer(payload)) return
+      const magic = payload.subarray(0, 4).toString('ascii')
+      if (magic === 'WS2J') capacities.push(decodeDeliveryJoin(payload).receiveCapacity)
+      if (magic === 'WS2B') consumption.push(decodeDeliveryConsumed(payload))
     })
   })
   // The relay must sustain native block geometry on its own. A tiny fixture or
@@ -46,7 +52,13 @@ test('a production-size relay burst preserves the session and downloaded bytes',
     expect(createHash('sha256').update(received).digest('hex'))
       .toBe(createHash('sha256').update(payload).digest('hex'))
     expect(relayClosures).toBe(0)
-    expect(receiveCreditUpdates).toBeGreaterThan(1)
+    expect(capacities).toHaveLength(1)
+    expect(consumption.length).toBeGreaterThan(1)
+    expect(consumption.at(-1)!.totalEncodedBytes).toBeGreaterThan(capacities[0]!.encodedBytes)
+    for (let index = 1; index < consumption.length; index += 1) {
+      expect(consumption[index]!.totalFrames).toBeGreaterThan(consumption[index - 1]!.totalFrames)
+      expect(consumption[index]!.totalEncodedBytes).toBeGreaterThan(consumption[index - 1]!.totalEncodedBytes)
+    }
   } finally {
     await stack.dispose()
   }
