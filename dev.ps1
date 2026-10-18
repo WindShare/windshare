@@ -46,7 +46,7 @@ function Start-LocalService {
         -FilePath $FilePath `
         -ArgumentList $ArgumentList `
         -WorkingDirectory $repositoryRoot `
-        -NoNewWindow `
+        -WindowStyle Hidden `
         -PassThru
     return [pscustomobject]@{
         Name = $Name
@@ -125,7 +125,7 @@ function Stop-LocalService {
     try {
         if (-not $Service.Process.HasExited) {
             Write-Host "Stopping $($Service.Name)..."
-            # Kill the complete process tree because both go run and pnpm own a
+            # Kill the complete process tree because both cargo run and pnpm own a
             # child runtime that would otherwise keep the development port open.
             $Service.Process.Kill($true)
             $Service.Process.WaitForExit()
@@ -139,7 +139,7 @@ function Stop-LocalService {
     }
 }
 
-$go = Resolve-RequiredApplication -Name 'go' -InstallHint 'Install Go and ensure it is on PATH.'
+$rustup = Resolve-RequiredApplication -Name 'rustup' -InstallHint 'Install Rust stable and ensure rustup is on PATH.'
 $pnpm = Resolve-RequiredApplication -Name 'pnpm' -InstallHint 'Install pnpm and ensure it is on PATH.'
 $viteCommand = Join-Path $repositoryRoot 'web/node_modules/.bin/vite.cmd'
 if (-not (Test-Path -LiteralPath $viteCommand -PathType Leaf)) {
@@ -149,16 +149,25 @@ if (-not (Test-Path -LiteralPath $viteCommand -PathType Leaf)) {
 $services = @()
 $exitCode = 0
 try {
+    $relayStateDirectory = Join-Path $repositoryRoot '.windshare-dev'
+    [IO.Directory]::CreateDirectory($relayStateDirectory) | Out-Null
+    # Complete compilation before starting the service readiness deadline.
+    & $rustup run stable cargo build --locked --manifest-path relay-rust/Cargo.toml `
+        --package windshare-relay-native --bin relay-native --target-dir .windshare-dev/target
+    if ($LASTEXITCODE -ne 0) { throw 'Native relay build failed.' }
     $services += Start-LocalService `
         -Name 'relay' `
-        -FilePath $go `
+        -FilePath $rustup `
         -ArgumentList @(
-            'run',
-            './relay/cmd/wsrelay',
-            '-listen',
-            $relayAddress,
-            '-relay-base-url',
-            $publicRelayBaseUrl
+            'run', 'stable', 'cargo', 'run', '--locked',
+            '--manifest-path', 'relay-rust/Cargo.toml',
+            '--package', 'windshare-relay-native', '--bin', 'relay-native',
+            '--target-dir', '.windshare-dev/target', '--',
+            '--database', '".windshare-dev/relay.sqlite"',
+            '--listen', $relayAddress,
+            '--public-endpoint', "$publicRelayBaseUrl/v2/ws",
+            '--allow-localhost',
+            '--stun-udp', '""'
         )
     $services += Start-LocalService `
         -Name 'frontend' `

@@ -7,8 +7,8 @@ process scenario uses real `DialSender`/`DialReceiver`/`Channel` APIs.
 `integration/relayv2` shares the native test host with Go process E2E, including
 multi-relay isolation, exact-lane recovery and receive job/output continuity.
 Process E2E checks STOP on each candidate before and after restart. CLI cancellation
-and `connectivity/relayset` short tests are server-free. Default server/release entry
-points and other Go relay fixtures still target the incompatible legacy Go server.
+and `connectivity/relayset` short tests are server-free. Default startup and release
+packaging use the Rust native host; the incompatible Go server is retired.
 There is no wire-format fallback.
 
 Capacity is declared per direction at admission and consumed by per-grant
