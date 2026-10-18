@@ -47,10 +47,11 @@ describe('connection receive ledger', () => {
   })
 
   it.each([
+    { name: 'default capacity', capacity: { frames: 256n, encodedBytes: 16n << 20n }, size: 21 },
     { name: 'one frame', capacity: { frames: 1n, encodedBytes: 1n << 20n }, size: 21 },
     { name: 'few frames', capacity: { frames: 3n, encodedBytes: 1n << 20n }, size: 21 },
     { name: 'one large envelope', capacity: { frames: 256n, encodedBytes: BigInt(MAX_ENVELOPE_BYTES) }, size: MAX_ENVELOPE_BYTES },
-  ])('keeps a small window flowing across cumulative batches: $name', ({ capacity, size }) => {
+  ])('returns consumed credit independently of declared capacity: $name', ({ capacity, size }) => {
     const ledger = createLedger({ capacity })
     const session = ledger.open(sessionId())
     for (let round = 1n; round <= 12n; round += 1n) {
@@ -63,12 +64,12 @@ describe('connection receive ledger', () => {
     }
   })
 
-  it('aggregates small sessions, drains the batch tail and does not starve a sibling', () => {
+  it('coalesces pending consumption without starving a sibling', () => {
     const ledger = createLedger({ capacity: { frames: 8n, encodedBytes: 1n << 20n } })
     const first = ledger.open(sessionId(1))
     const second = ledger.open(sessionId(2))
     ledger.consume(ledger.receive(first, 21))
-    expect(ledger.feedbackReady()).toBe(false)
+    expect(ledger.feedbackReady()).toBe(true)
     ledger.consume(ledger.receive(second, 22))
     expect(ledger.feedbackReady()).toBe(true)
     expect(ledger.takeConsumed()?.relaySessionId).toEqual(sessionId(1))
@@ -81,14 +82,11 @@ describe('connection receive ledger', () => {
     expect(ledger.usage()).toEqual({ held: ZERO, outstanding: ZERO, pendingConsumed: ZERO, retainedSessions: 2 })
   })
 
-  it('allows a bounded adapter deadline to flush sparse consumption without owning a timer', () => {
+  it('returns sparse consumption without waiting for more input or a deadline', () => {
     const ledger = createLedger()
     const session = ledger.open(sessionId())
-    ledger.flushConsumption()
     expect(ledger.feedbackReady()).toBe(false)
     ledger.consume(ledger.receive(session, 23))
-    expect(ledger.takeConsumed()).toBeUndefined()
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()).toEqual({ relaySessionId: sessionId(), totalFrames: 1n, totalEncodedBytes: 23n })
     expect(ledger.takeConsumed()).toBeUndefined()
   })
@@ -109,7 +107,6 @@ describe('connection receive ledger', () => {
     expect(() => ledger.discard(first)).toThrow('receipt')
     expect(ledger.usage()).toEqual(after)
     ledger.consume(second)
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()).toEqual({ relaySessionId: sessionId(), totalFrames: 2n, totalEncodedBytes: 61n })
     expect(ledger.takeConsumed()).toBeUndefined()
   })
@@ -119,8 +116,8 @@ describe('connection receive ledger', () => {
       { connectionId: '' }, { maxSessions: 0 }, { maxSessions: 1.5 },
       { capacity: { frames: 0n, encodedBytes: 1n } },
       { capacity: { frames: MAX_UINT64 + 1n, encodedBytes: 1n } },
-      { batch: { frames: 1n, encodedBytes: -1n } },
-      { batch: { frames: 1n, encodedBytes: MAX_UINT64 + 1n } },
+      { capacity: { frames: 1n, encodedBytes: -1n } },
+      { capacity: { frames: 1n, encodedBytes: MAX_UINT64 + 1n } },
     ]) expect(() => createLedger(config)).toThrow('config')
     const ledger = createLedger()
     for (const id of [new Uint8Array(8), new Uint8Array(7), new Uint8Array(9)]) {

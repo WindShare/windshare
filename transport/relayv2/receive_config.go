@@ -2,7 +2,6 @@ package relayv2
 
 import (
 	"errors"
-	"time"
 
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -11,8 +10,6 @@ const (
 	defaultReceiveFrames = 256
 	defaultReceiveBytes  = 16 << 20
 	maxReceiveSessions   = 256
-	receiveBatchDivisor  = 4
-	receiveFlushInterval = 10 * time.Millisecond
 )
 
 var ErrReceiveCapacity = errors.New("relay v2 transport: invalid receive capacity")

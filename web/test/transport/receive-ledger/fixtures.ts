@@ -14,7 +14,6 @@ export function createLedger(config: Partial<ReceiveLedgerConfig> = {}): RelayRe
     connectionId: 'connection-1',
     capacity: { frames: 256n, encodedBytes: 16n << 20n },
     maxSessions: 8,
-    batch: { frames: 64n, encodedBytes: 1n << 20n },
     ...config,
   })
 }

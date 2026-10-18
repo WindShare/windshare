@@ -18,7 +18,6 @@ func testConfig() Config {
 		ConnectionID: 1,
 		Capacity:     v2.ReceiveCapacity{Frames: 256, EncodedBytes: 16 << 20},
 		MaxSessions:  8,
-		Batch:        v2.ReceiveCapacity{Frames: 64, EncodedBytes: 1 << 20},
 	}
 }
 
@@ -146,7 +145,6 @@ func TestReceiptsRequireFIFOAndCannotRefundTwice(t *testing.T) {
 	requireError(t, ledger.Discard(first), ErrReceipt)
 	requireUsage(t, ledger, after)
 	requireError(t, ledger.Consume(second), nil)
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.TotalFrames != 2 || feedback.TotalEncodedBytes != 61 {
 		t.Fatal(feedback, ok)
@@ -167,7 +165,6 @@ func TestOnlyCompleteEnvelopeSizesAreAccepted(t *testing.T) {
 	}
 	receipt := receiveFrame(t, ledger, session, maximumEnvelopeBytes)
 	requireError(t, ledger.Consume(receipt), nil)
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.TotalEncodedBytes != maximumEnvelopeBytes {
 		t.Fatal("maximum envelope lost its header", feedback, ok)
@@ -181,8 +178,6 @@ func TestConfigurationBoundsMetadataWithoutPreallocatingQueues(t *testing.T) {
 		func(c *Config) { c.MaxSessions = -1 },
 		func(c *Config) { c.Capacity.Frames = 0 },
 		func(c *Config) { c.Capacity.EncodedBytes = 0 },
-		func(c *Config) { c.Batch.Frames = 0 },
-		func(c *Config) { c.Batch.EncodedBytes = 0 },
 	} {
 		config := testConfig()
 		mutate(&config)

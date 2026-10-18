@@ -38,13 +38,12 @@ func (a Counts) subtract(b Counts) Counts {
 	return Counts{a.Frames - b.Frames, a.EncodedBytes - b.EncodedBytes}
 }
 
-// Config separates immutable connection capacity, metadata bounds and batching
-// policy. ConnectionID identifies this physical generation in observations.
+// Config owns immutable connection capacity and metadata bounds. ConnectionID
+// identifies this physical generation in observations.
 type Config struct {
 	ConnectionID uint64
 	Capacity     v2.ReceiveCapacity
 	MaxSessions  int
-	Batch        v2.ReceiveCapacity
 	Observer     Observer
 }
 
@@ -89,31 +88,21 @@ type Usage struct {
 }
 
 type Ledger struct {
-	config    Config
-	threshold Counts
-	sessions  map[v2.RelaySessionID]*flow
-	order     []*flow
-	cursor    int
-	usage     Usage
-	flushing  bool
-	closed    bool
+	config   Config
+	sessions map[v2.RelaySessionID]*flow
+	order    []*flow
+	cursor   int
+	usage    Usage
+	closed   bool
 }
-
-// Feedback starts at a fraction of either window axis, even when the configured
-// batch is larger than the entire window.
-const feedbackWindowDivisor = 4
 
 func New(config Config) (*Ledger, error) {
 	if config.ConnectionID == 0 || config.MaxSessions <= 0 ||
-		config.Capacity.Validate() != nil || config.Batch.Validate() != nil {
+		config.Capacity.Validate() != nil {
 		return nil, ErrConfig
 	}
 	return &Ledger{
-		config: config,
-		threshold: Counts{
-			Frames:       max(1, min(config.Batch.Frames, config.Capacity.Frames/feedbackWindowDivisor)),
-			EncodedBytes: max(1, min(config.Batch.EncodedBytes, config.Capacity.EncodedBytes/feedbackWindowDivisor)),
-		},
+		config:   config,
 		sessions: make(map[v2.RelaySessionID]*flow),
 	}, nil
 }

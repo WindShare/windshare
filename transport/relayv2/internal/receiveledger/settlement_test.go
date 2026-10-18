@@ -13,7 +13,6 @@ func TestNoticeWaitsForActualConsumptionOrDiscard(t *testing.T) {
 	second := receiveFrame(t, ledger, session, 22)
 	third := receiveFrame(t, ledger, session, 23)
 	requireError(t, ledger.Consume(first), nil)
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.TotalEncodedBytes != 21 {
 		t.Fatal(feedback, ok)
@@ -38,7 +37,6 @@ func TestNoticeWaitsForActualConsumptionOrDiscard(t *testing.T) {
 	}) {
 		t.Fatal("consumption crossed a discarded hole", progress)
 	}
-	ledger.FlushConsumption()
 	if _, ok := ledger.TakeConsumed(); ok {
 		t.Fatal("WS2B claimed discarded data")
 	}
@@ -117,7 +115,6 @@ func TestConsumedPrefixDoesNotAcknowledgeRetirement(t *testing.T) {
 		session := openSession(t, ledger, 1)
 		requireError(t, ledger.Consume(receiveFrame(t, ledger, session, 21)), nil)
 		if flush {
-			ledger.FlushConsumption()
 			ledger.TakeConsumed()
 		}
 		requireError(t, ledger.Retire(session), nil)
@@ -131,7 +128,6 @@ func TestConsumedPrefixDoesNotAcknowledgeRetirement(t *testing.T) {
 		if _, ok := ledger.TakeSettlement(session); !ok {
 			t.Fatal("fully consumed flow did not settle")
 		}
-		ledger.FlushConsumption()
 		if _, ok := ledger.TakeConsumed(); ok {
 			t.Fatal("settlement left duplicate consumption pending")
 		}
@@ -179,7 +175,6 @@ func TestSettlementReplayAndStaleCallbacksCannotTouchSiblings(t *testing.T) {
 	}
 	requireUsage(t, ledger, before)
 	requireError(t, ledger.Consume(siblingFrame), nil)
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.RelaySessionID != testID(2) || feedback.TotalEncodedBytes != 25 {
 		t.Fatal("stale callbacks affected sibling progress", feedback, ok)
@@ -217,7 +212,6 @@ func TestClosedConnectionCannotProduceFeedbackOrReopen(t *testing.T) {
 	before := ledger.Usage()
 	ledger.Close()
 	ledger.Close()
-	ledger.FlushConsumption()
 	if _, ok := ledger.TakeConsumed(); ok {
 		t.Fatal("closed connection produced consumption")
 	}
