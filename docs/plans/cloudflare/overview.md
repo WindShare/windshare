@@ -74,8 +74,9 @@ discard. Cleanup deadlines never renew, and settling one receiver does not close
 its sender or siblings. Lifecycle, handshake, liveness, session and settlement
 deadlines share one indexed schedule. Hosts inject `RetirementPolicy`:
 `PhysicalRelease` waits for `Closed` and discard of queues targeting other
-connections; `Bounded` permits logical retirement after revocation, both queue
-discards and a fixed grace (possibly zero).
+connections. `Bounded` fixes admission grace and risk expiry at first loss.
+Revocation and both queue discards precede either exit; risk expiry removes only
+the lost destination's reservation, without claiming consumption or buffer release.
 
 Clients send increasing `WS2H` nonces; the relay answers with only
 `Control::ProbeAck` (`WS2A`), outside content credit and coalescible to the newest
@@ -90,21 +91,20 @@ affected connections and sessions; healthy ledgers keep grants, debt and absolut
 deadlines, and neither restart nor an empty socket list proves release.
 `Limits::business_connections` bounds business admissions through unfinished
 retirement; new sockets enter a rate-limited control budget first, and STOP keeps
-its control slot and proof until acknowledgement. Exhausted retired generations
-stay admitted until exact settlement or physical release retries them; retained
-flows occupy bounded slots so a healthy sender keeps its reverse-flow debt, and
-risk exhaustion blocks retirement/admission without revoking healthy sessions.
+its control slot and proof until acknowledgement. A full risk pool temporarily
+blocks retirement/admission; original expiries automatically free capacity and retry
+blocked generations before new admission. Healthy senders retain reverse-flow debt.
 Recovery preserves deadlines, totals, wire-ID high-water marks, fixed grace and
 pending ownership; fresh incarnations fence old callbacks.
 
 Control records hold the handshake and control deadline; business records hold
 the ledger and admissions; established connections retain the probe nonce, last
 inbound time and silence deadline. The independent `CheckpointManifest` holds
-generation identity, retirement state, risk reservation, attempt-rate history and
+generation identity, retirement state, absolute risk expiry, reservation, attempt-rate history and
 the session-ID high-water mark. Missing control records close only their sockets;
 missing business or retired records become explicit uncertain reservations (full
 budget or the submission bound), never fabricated counters; old feedback cannot
-release them, but physical release can.
+release them. Physical release or quiescent policy expiry can end these reservations.
 
 Hibernating hosts enable tracking after restore and flush after outputs, writing
 the manifest last and retaining partial batches for retry. They omit unavailable
@@ -137,8 +137,9 @@ the same lifecycle on a Worker and SQLite Durable Object. The Worker routes by
 STOP authenticate independently. `authority::apply` shares atomic row transitions
 between SQL hosts. Typed attachments preserve pending handshakes and liveness;
 the manifest and persisted allocator fence lost generations, and alarms coalesce
-without extending deadlines. The lifecycle-only schema never acquired payload
-debt, so enabling delivery requires replacing that recovery assumption. The
+without extending deadlines. Empty-socket recovery still honors an existing manifest.
+The host selects immediate risk expiry after quiescence; a reconnect-rate budget
+remains enforced. This is an admission policy, not a physical buffer TTL. The
 [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
 passed signatures, hibernation, fault RESUME, permanent STOP and Alarm expiry.
 JOIN/forwarding and the runtime cutover remain pending.

@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 
 impl Limits {
     pub(super) fn generation_limit(self) -> Result<usize, Error> {
+        self.retirement.validate()?;
         self.business_connections
             .checked_add(self.handshakes.concurrent)
             .and_then(|value| value.checked_add(self.retirement.generations()))
@@ -27,6 +28,13 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn generation_quiescent(&self, connection: ConnectionRef) -> bool {
+        if self.sessions.values().any(|entry| {
+            let key = entry.session.key();
+            (key.sender() == connection || key.receiver() == connection)
+                && (entry.deferred || entry.session.phase() != crate::sessions::Phase::Retired)
+        }) {
+            return false;
+        }
         // The lost peer can also source payloads queued on healthy destinations.
         self.routes.values().all(|flow| {
             (flow.destination() != connection && flow.permit().source() != connection)
@@ -48,16 +56,19 @@ impl<O: Observer> ShareRelay<O> {
             if !self.generation_quiescent(connection) {
                 continue;
             }
-            match self
-                .generations
-                .retire(connection, now, &mut self.checkpointing)
-            {
+            match self.generations.progress_retirement(
+                connection,
+                now,
+                &mut self.checkpointing,
+                &mut self.deadlines,
+            ) {
                 RetirementProgress::Waiting => {}
                 RetirementProgress::Blocked {
                     usage,
                     residual,
                     generation_limit,
                     residual_limit,
+                    expires_at,
                 } => {
                     self.trace(
                         Some(connection),
@@ -66,13 +77,39 @@ impl<O: Observer> ShareRelay<O> {
                             residual,
                             generation_limit,
                             residual_limit,
+                            expires_at,
                         },
                         now,
                     );
                 }
-                RetirementProgress::Retired { residual } => {
-                    self.trace(Some(connection), RelayDecision::Retired { residual }, now);
+                RetirementProgress::Retired {
+                    residual,
+                    expires_at,
+                } => {
+                    self.trace(
+                        Some(connection),
+                        RelayDecision::Retired {
+                            residual,
+                            expires_at,
+                        },
+                        now,
+                    );
                     self.collect_ledger(connection, now);
+                }
+                RetirementProgress::RiskExpired {
+                    residual,
+                    expires_at,
+                } => {
+                    self.routes
+                        .retain(|(destination, _), _| *destination != connection);
+                    self.trace(
+                        Some(connection),
+                        RelayDecision::RetirementRiskExpired {
+                            residual,
+                            expires_at,
+                        },
+                        now,
+                    );
                 }
             }
         }

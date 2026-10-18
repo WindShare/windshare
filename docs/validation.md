@@ -87,8 +87,9 @@ acknowledgement with unsettled occupancy, duplicate STOP, uncertain writes, regi
 and late callbacks. Admission regressions fill business capacity before authenticating STOP,
 retain delivery debt, reject invalid proofs, bound control lifetimes and preserve attempt-rate
 history across hibernation and empty-socket reconstruction. Native permit ownership spans
-supervisor/reader/writer teardown. Stopped recovery retains charges and deadlines without sockets; only consumption,
-settlement or proven release refunds them. Restoration covers every durable record,
+supervisor/reader/writer teardown. Stopped recovery retains charges and deadlines without sockets;
+host-policy expiry ends quiescent risk reservations without fabricating consumption or release.
+Restoration covers every durable record,
 surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
 pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued
 permits and callbacks, and sibling isolation. Delivery-ledger tests cover startup reservations,
@@ -112,6 +113,8 @@ budgets/deadlines. They cover repeated recovery, risk exhaustion, new generation
 isolation, sender-loss fanout and permanent STOP despite delivery-record loss.
 Retirement scenarios cover repeated reconnects beside a healthy download, bidirectional queue
 discard, independent metadata/frame/byte limits, retained reverse-flow debt and host-injected grace.
+Risk-expiry tests saturate admission through lost feedback, restore it on the original deadline,
+fence stale callbacks, and preserve manifest deadlines across hibernation, missing records and full restart.
 Connection-liveness tests consume shared WS2H/WS2A vectors and cover monotonic nonces, content-credit
 bypass, accepted inbound activity, silence isolation and expiry before handoff. Repeated hibernation
 preserves nonces and absolute deadlines; heartbeats cannot extend handshake, admission or settlement.

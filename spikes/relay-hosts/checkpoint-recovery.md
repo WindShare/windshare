@@ -17,7 +17,9 @@ The probe uses three admitted connections and two retired generations. Its exper
 zero-grace policy allows retirement only after revocation and queue discard. Retired
 risk is bounded by two connection budgets. Missing live records reserve the full
 connection capacity; records lost after retirement reserve the submitted bound
-persisted at retirement. Neither reservation expires or proves physical release.
+persisted at retirement. The recorded build did not expire either reservation.
+The current probe uses a 60-second risk policy in injected fixture time; expiry
+is an admission decision, never proof of physical release.
 This profile demonstrates isolation, not a production retention policy.
 
 | Mode | Live records | After a socket disappears |

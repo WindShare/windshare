@@ -20,9 +20,9 @@ production WindShare download.
 
 The kernel reproduction verifies every byte **before** withholding feedback.
 It demonstrates admission exhaustion without requiring retained payload inside
-Cloudflare. The real kernel's current `Bounded` grace only frees business slots;
-its residual-risk pool has no expiry. Once that pool fills, later lost generations
-keep their business slots. Exact persistence cannot repair feedback that will
+Cloudflare. The tested kernel's `Bounded` grace only freed business slots;
+its residual-risk pool had no expiry. Once that pool filled, later lost generations
+kept their business slots. Exact persistence cannot repair feedback that will
 never arrive.
 Its deliberately small limits expose the mechanism; three losses are not a
 production failure threshold.
@@ -50,8 +50,10 @@ have an automatic recovery path without resetting healthy connections. The measu
 24–26-second refusals are a user-experience cost, not a recommended reconnect delay.
 
 Continue Cloudflare integration rather than requiring a universal physical
-release proof. The production kernel still needs an explicit policy-based end
+release proof. The production kernel now implements a finite policy-based end
 to retired risk accounting, distinct from consumption and physical release.
+The current checkpoint probe retains risk for 60 seconds of injected fixture time;
+the recorded no-expiry build remains identified by the evidence hashes.
 Real CLI/browser download, forced relay use and end-to-end resume remain
 integration work; these probes do not certify them.
 

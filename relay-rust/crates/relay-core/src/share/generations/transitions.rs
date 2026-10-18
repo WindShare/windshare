@@ -195,7 +195,7 @@ impl Generations {
     ) -> bool {
         let Some(Generation::Detached {
             delivery,
-            state: Detached::Released | Detached::Retired,
+            state: Detached::Released | Detached::RiskRetained { .. },
         }) = self.entries.get(&connection)
         else {
             return false;
@@ -207,11 +207,20 @@ impl Generations {
         if !empty {
             return false;
         }
+        self.remove_detached(connection, checkpointing, deadlines);
+        true
+    }
+
+    pub(super) fn remove_detached(
+        &mut self,
+        connection: ConnectionRef,
+        checkpointing: &mut Checkpointing,
+        deadlines: &mut Deadlines,
+    ) {
         self.entries.remove(&connection);
         deadlines.set(Key::Retirement(connection), None);
         deadlines.set(Key::Ledger(connection), None);
         checkpointing.removed(connection);
-        true
     }
 }
 

@@ -33,7 +33,7 @@ impl Generations {
                         let (bound, state) = match delivery {
                             Delivery::Exact(ledger) => {
                                 let bound = match state {
-                                    Detached::Retired => ledger.usage().submitted,
+                                    Detached::RiskRetained { .. } => ledger.usage().submitted,
                                     Detached::Released => Counts::ZERO,
                                     _ => self.limits.delivery.total(),
                                 };
@@ -139,8 +139,10 @@ impl Generations {
                 .map_err(|_| Error::InvalidCheckpoint)?;
                 if matches!(snapshot.role, ConnectionRole::Established(_))
                     && ledger.receive_capacity().is_none()
-                    || matches!(snapshot.role, ConnectionRole::Detached(Detached::Retired))
-                        && !ledger.queues_discarded()
+                    || matches!(
+                        snapshot.role,
+                        ConnectionRole::Detached(Detached::RiskRetained { .. })
+                    ) && !ledger.queues_discarded()
                 {
                     return Err(Error::InvalidCheckpoint);
                 }
