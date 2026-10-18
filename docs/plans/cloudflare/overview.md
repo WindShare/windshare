@@ -66,7 +66,8 @@ survives cancellation until consumption, settlement or confirmed physical
 closure, and failed sends do not refund. The
 [delivery contract](delivery-flow-contract.md) is active in the Go `relayv2`
 runtime: declaration and local buffers share one capacity, both roles await
-explicit grants, sparse feedback is flushed, and settlement follows queue release.
+explicit grants, sparse consumption wakes the ordered writer immediately, and
+settlement follows queue release.
 The browser ledger remains staged. Smaller declarations now preserve startup
 capacity within their effective host/client bound, including after restore.
 

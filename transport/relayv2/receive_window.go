@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -36,7 +35,6 @@ type receiveBuffer struct {
 	mu         sync.Mutex
 	ledger     *receiveledger.Ledger
 	flows      map[v2.RelaySessionID]*receiveFlow
-	flushAt    time.Time
 	closed     bool
 	wakeWriter func()
 	fail       func(error)
@@ -45,9 +43,7 @@ type receiveBuffer struct {
 func newReceiveBuffer(id uint64, capacity v2.ReceiveCapacity, wake func(), fail func(error)) (*receiveBuffer, error) {
 	r := &receiveBuffer{flows: make(map[v2.RelaySessionID]*receiveFlow), wakeWriter: wake, fail: fail}
 	ledger, err := receiveledger.New(receiveledger.Config{
-		ConnectionID: id, Capacity: capacity, MaxSessions: maxReceiveSessions,
-		Batch: v2.ReceiveCapacity{Frames: defaultReceiveFrames / receiveBatchDivisor,
-			EncodedBytes: defaultReceiveBytes / receiveBatchDivisor}, Observer: r,
+		ConnectionID: id, Capacity: capacity, MaxSessions: maxReceiveSessions, Observer: r,
 	})
 	if err != nil {
 		return nil, err
@@ -174,9 +170,6 @@ func (r *receiveBuffer) run(f *receiveFlow) {
 			} else {
 				err = r.ledger.Consume(frame.receipt)
 			}
-			if r.flushAt.IsZero() && r.ledger.Usage().PendingConsumed.Frames != 0 {
-				r.flushAt = time.Now().Add(receiveFlushInterval)
-			}
 		}
 		r.mu.Unlock()
 		r.wakeWriter()
@@ -193,7 +186,6 @@ func (r *receiveBuffer) close(discard bool) {
 	r.mu.Lock()
 	r.closed = true
 	r.ledger.Close()
-	r.flushAt = time.Time{}
 	var waiters []<-chan struct{}
 	for _, f := range r.flows {
 		f.sealed = true
@@ -212,25 +204,14 @@ func (r *receiveBuffer) close(discard bool) {
 	}
 }
 
-func (r *receiveBuffer) deadline() time.Time {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.flushAt
-}
-
 // take is called exclusively by the physical connection's ordered writer. A
 // failed write closes that generation; issued feedback is never retried elsewhere.
-func (r *receiveBuffer) take(now time.Time) ([]byte, v2.RelaySessionID, error) {
+func (r *receiveBuffer) take() ([]byte, v2.RelaySessionID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return nil, v2.RelaySessionID{}, nil
 	}
-	defer func() {
-		if r.ledger.Usage().PendingConsumed.Frames == 0 {
-			r.flushAt = time.Time{}
-		}
-	}()
 	for id, f := range r.flows {
 		if !f.disposed {
 			continue
@@ -251,9 +232,6 @@ func (r *receiveBuffer) take(now time.Time) ([]byte, v2.RelaySessionID, error) {
 			delete(r.flows, id)
 			return encoded, id, nil
 		}
-	}
-	if !r.flushAt.IsZero() && !now.Before(r.flushAt) {
-		r.ledger.FlushConsumption()
 	}
 	if consumed, ok := r.ledger.TakeConsumed(); ok {
 		encoded, err := consumed.MarshalBinary()

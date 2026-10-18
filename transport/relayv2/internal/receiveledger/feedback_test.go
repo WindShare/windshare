@@ -7,12 +7,13 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-func TestBatchThresholdAdaptsToEitherWindowAxis(t *testing.T) {
+func TestConsumptionReadinessIsIndependentOfDeclaredCapacity(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string
 		capacity v2.ReceiveCapacity
 		size     uint64
 	}{
+		{"default capacity", testConfig().Capacity, 21},
 		{"one frame", v2.ReceiveCapacity{Frames: 1, EncodedBytes: 1 << 20}, 21},
 		{"few frames", v2.ReceiveCapacity{Frames: 3, EncodedBytes: 1 << 20}, 21},
 		{"byte bound", v2.ReceiveCapacity{Frames: 256, EncodedBytes: maximumEnvelopeBytes}, maximumEnvelopeBytes},
@@ -25,7 +26,7 @@ func TestBatchThresholdAdaptsToEitherWindowAxis(t *testing.T) {
 			for round := uint64(1); round <= 3; round++ {
 				requireError(t, ledger.Consume(receiveFrame(t, ledger, session, scenario.size)), nil)
 				if !ledger.FeedbackReady() {
-					t.Fatal("small window stranded a consumed frame")
+					t.Fatal("declared capacity delayed a consumed frame")
 				}
 				feedback, ok := ledger.TakeConsumed()
 				if !ok || feedback.TotalFrames != round || feedback.TotalEncodedBytes != scenario.size*round {
@@ -36,24 +37,25 @@ func TestBatchThresholdAdaptsToEitherWindowAxis(t *testing.T) {
 	}
 }
 
-func TestBatchAggregatesSessionsAndDrainsItsTail(t *testing.T) {
+func TestWriterCoalescesConsumptionAcrossSessions(t *testing.T) {
 	config := testConfig()
 	config.Capacity = v2.ReceiveCapacity{Frames: 8, EncodedBytes: 1 << 20}
 	ledger := testLedger(t, config)
 	first := openSession(t, ledger, 1)
 	second := openSession(t, ledger, 2)
 	requireError(t, ledger.Consume(receiveFrame(t, ledger, first, 21)), nil)
-	if ledger.FeedbackReady() {
-		t.Fatal("partial batch flushed too early")
-	}
+	requireError(t, ledger.Consume(receiveFrame(t, ledger, first, 23)), nil)
 	requireError(t, ledger.Consume(receiveFrame(t, ledger, second, 22)), nil)
 	if !ledger.FeedbackReady() {
-		t.Fatal("per-session thresholds stranded aggregate consumption")
+		t.Fatal("pending consumption was not eligible")
 	}
 	for _, id := range []uint64{1, 2} {
 		feedback, ok := ledger.TakeConsumed()
 		if !ok || feedback.RelaySessionID != testID(id) {
-			t.Fatal("batch tail was stranded below threshold", feedback, ok)
+			t.Fatal("pending session lost its feedback", feedback, ok)
+		}
+		if id == 1 && (feedback.TotalFrames != 2 || feedback.TotalEncodedBytes != 44) {
+			t.Fatal("writer did not coalesce the consumed prefix", feedback)
 		}
 	}
 	if ledger.FeedbackReady() {
@@ -64,7 +66,6 @@ func TestBatchAggregatesSessionsAndDrainsItsTail(t *testing.T) {
 
 func TestBusySessionDoesNotStarveSiblingFeedback(t *testing.T) {
 	config := testConfig()
-	config.Batch.Frames = 1
 	ledger := testLedger(t, config)
 	first := openSession(t, ledger, 1)
 	second := openSession(t, ledger, 2)
@@ -82,21 +83,16 @@ func TestBusySessionDoesNotStarveSiblingFeedback(t *testing.T) {
 	}
 }
 
-func TestSparseConsumptionHasExplicitFlushWithoutTimers(t *testing.T) {
+func TestSparseConsumptionNeedsNoAdditionalInput(t *testing.T) {
 	ledger := testLedger(t, testConfig())
 	session := openSession(t, ledger, 1)
-	ledger.FlushConsumption()
 	if ledger.FeedbackReady() {
-		t.Fatal("empty flush generated feedback")
+		t.Fatal("empty ledger generated feedback")
 	}
 	requireError(t, ledger.Consume(receiveFrame(t, ledger, session, 23)), nil)
-	if _, ok := ledger.TakeConsumed(); ok {
-		t.Fatal("partial batch ignored its threshold")
-	}
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.TotalFrames != 1 || feedback.TotalEncodedBytes != 23 {
-		t.Fatal("flush did not release sparse consumption", feedback, ok)
+		t.Fatal("writer could not release sparse consumption", feedback, ok)
 	}
 }
 
@@ -111,7 +107,6 @@ func TestCumulativeCountersReachUint64BoundaryWithoutWrapping(t *testing.T) {
 	for range 2 {
 		requireError(t, ledger.Consume(receiveFrame(t, ledger, session, 21)), nil)
 	}
-	ledger.FlushConsumption()
 	feedback, ok := ledger.TakeConsumed()
 	if !ok || feedback.TotalFrames != history.Frames+2 || feedback.TotalEncodedBytes != math.MaxUint64 {
 		t.Fatal("cumulative count truncated", feedback, ok)

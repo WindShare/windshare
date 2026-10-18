@@ -63,6 +63,11 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		if channel.RelaySessionID() != sessionID || string(<-channel.Recv()) != "incoming" {
 			t.Fatal("sender channel did not preserve route identity and ciphertext")
 		}
+		feedback, err := v2.ParseDeliveryConsumed(assertWriteMagic(t, socket, v2.DeliveryConsumedMagic))
+		if err != nil || feedback.RelaySessionID != sessionID || feedback.TotalFrames != 1 ||
+			feedback.TotalEncodedBytes != uint64(len(route)) {
+			t.Fatal("application handoff did not return exact credit", feedback, err)
+		}
 		if err := channel.SendTerminal(context.Background(), framechannel.Frame("outgoing")); err != nil {
 			t.Fatal(err)
 		}

@@ -3,7 +3,7 @@ import type { RelayDeliveryConsumed } from '../delivery-consumed-codec'
 import type { RelaySettlementAck, RelaySettlementNotice } from '../delivery-settlement-codec'
 import { V2_RELAY_SESSION_ID_BYTES } from '../v2-protocol'
 import {
-  addCounts, appendEnvelope, feedbackThreshold, positiveUint64, sameCounts, subtractCounts, ZERO_COUNTS,
+  addCounts, appendEnvelope, positiveUint64, sameCounts, subtractCounts, ZERO_COUNTS,
 } from './counts'
 import {
   ReceiveLedgerError, type ReceiveAction, type ReceiveCounts, type ReceiveFailure,
@@ -47,7 +47,6 @@ interface ReceiptPrefix {
 export class RelayReceiveLedger {
   readonly #connectionId: string
   readonly #capacity: ReceiveCounts
-  readonly #threshold: ReceiveCounts
   readonly #maxSessions: number
   readonly #observe: ReceiveLedgerConfig['observe']
   readonly #sessions = new Map<ReceiveSession, Flow>()
@@ -59,20 +58,15 @@ export class RelayReceiveLedger {
   #outstanding = ZERO_COUNTS
   #pendingConsumed = ZERO_COUNTS
   #cursor = 0
-  #flushing = false
   #closed = false
 
   constructor(config: ReceiveLedgerConfig) {
     if (!config.connectionId.trim() || !Number.isSafeInteger(config.maxSessions) || config.maxSessions <= 0 ||
-        ![config.capacity.frames, config.capacity.encodedBytes, config.batch.frames, config.batch.encodedBytes].every(positiveUint64)) {
+        ![config.capacity.frames, config.capacity.encodedBytes].every(positiveUint64)) {
       throw new ReceiveLedgerError('config')
     }
     this.#connectionId = config.connectionId
     this.#capacity = Object.freeze({ ...config.capacity })
-    this.#threshold = Object.freeze({
-      frames: feedbackThreshold(config.capacity.frames, config.batch.frames),
-      encodedBytes: feedbackThreshold(config.capacity.encodedBytes, config.batch.encodedBytes),
-    })
     this.#maxSessions = config.maxSessions
     this.#observe = config.observe
   }
@@ -183,15 +177,12 @@ export class RelayReceiveLedger {
     this.#trace('notice', flow)
   }
 
-  /** Connection-wide readiness prevents many small sessions from collectively stranding the window. */
+  /**
+   * The relay may grant less than the declared capacity, even a single envelope.
+   * Feedback never waits for more input; the ordered writer coalesces pending consumption.
+   */
   feedbackReady(): boolean {
-    return !this.#closed && this.#pendingConsumed.frames !== 0n && (this.#flushing ||
-      this.#pendingConsumed.frames >= this.#threshold.frames || this.#pendingConsumed.encodedBytes >= this.#threshold.encodedBytes)
-  }
-
-  /** The adapter invokes this at a bounded flush deadline for sparse consumption. */
-  flushConsumption(): void {
-    if (!this.#closed && this.#pendingConsumed.frames !== 0n) this.#flushing = true
+    return !this.#closed && this.#pendingConsumed.frames !== 0n
   }
 
   takeConsumed(): RelayDeliveryConsumed | undefined {
@@ -204,8 +195,6 @@ export class RelayReceiveLedger {
       this.#outstanding = subtractCounts(this.#outstanding, delta)
       this.#pendingConsumed = subtractCounts(this.#pendingConsumed, delta)
       flow.reported = flow.consumedPrefix
-      // Once a batch starts, its below-threshold tail remains eligible, fairly across sessions.
-      this.#flushing = this.#pendingConsumed.frames !== 0n
       this.#trace('feedback', flow)
       return Object.freeze({
         relaySessionId: flow.wireId.slice(), totalFrames: flow.reported.frames, totalEncodedBytes: flow.reported.encodedBytes,
@@ -225,7 +214,6 @@ export class RelayReceiveLedger {
       this.#pendingConsumed = subtractCounts(this.#pendingConsumed, subtractCounts(flow.consumedPrefix, flow.reported))
     }
     flow.state = { phase: 'settled', ackPending: false }
-    this.#flushing = this.#flushing && this.#pendingConsumed.frames !== 0n
     this.#trace('settlement', flow)
     return Object.freeze({
       kind: 'settlement-ack', relaySessionId: flow.wireId.slice(),

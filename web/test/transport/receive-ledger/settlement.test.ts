@@ -25,7 +25,6 @@ describe('receive ledger retirement settlement', () => {
       phase: 'draining', received: { frames: 3n, encodedBytes: 66n }, consumed: { frames: 2n, encodedBytes: 44n },
       discarded: { frames: 1n, encodedBytes: 22n }, consumedPrefix: { frames: 1n, encodedBytes: 21n },
     })
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()).toEqual({ relaySessionId: sessionId(), totalFrames: 1n, totalEncodedBytes: 21n })
     expect(ledger.takeConsumed()).toBeUndefined()
     expect(ledger.usage().outstanding).toEqual({ frames: 2n, encodedBytes: 45n })
@@ -80,7 +79,6 @@ describe('receive ledger retirement settlement', () => {
     const session = ledger.open(sessionId())
     ledger.consume(ledger.receive(session, 21))
     if (reported) {
-      ledger.flushConsumption()
       expect(ledger.takeConsumed()).toBeDefined()
     }
     ledger.retire(session)
@@ -88,7 +86,6 @@ describe('receive ledger retirement settlement', () => {
     expect(() => ledger.forget(session)).toThrow('settlement-pending')
     ledger.notice(session, notice(1n, 21n))
     expect(ledger.takeSettlement(session)).toEqual({ ...notice(1n, 21n), kind: 'settlement-ack' })
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()).toBeUndefined()
     expect(ledger.takeSettlement(session)).toBeUndefined()
     expect(ledger.usage()).toEqual({ held: ZERO, outstanding: ZERO, pendingConsumed: ZERO, retainedSessions: 1 })
@@ -121,7 +118,6 @@ describe('receive ledger retirement settlement', () => {
     expect(ledger.takeSettlement(old)).toBeUndefined()
     expect(ledger.usage()).toEqual(beforeStale)
     ledger.consume(siblingFrame)
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()).toEqual({ relaySessionId: sessionId(2), totalFrames: 1n, totalEncodedBytes: 25n })
   })
 
@@ -148,7 +144,6 @@ describe('receive ledger retirement settlement', () => {
       () => oldLedger.discard(receipt), () => oldLedger.retire(old), () => oldLedger.notice(old, notice(1n, 21n)),
       () => oldLedger.forget(old),
     ]) expect(stale).toThrow('closed')
-    oldLedger.flushConsumption()
     expect(oldLedger.feedbackReady()).toBe(false)
     expect(oldLedger.takeConsumed()).toBeUndefined()
     expect(oldLedger.takeSettlement(old)).toBeUndefined()
@@ -167,7 +162,6 @@ describe('receive ledger retirement settlement', () => {
     ledger.forget(session)
     const next = ledger.open(sessionId(2))
     ledger.consume(ledger.receive(next, 21))
-    ledger.flushConsumption()
     expect(ledger.takeConsumed()?.relaySessionId).toEqual(sessionId(2))
   })
 
@@ -180,7 +174,6 @@ describe('receive ledger retirement settlement', () => {
     const receipt = ledger.receive(session, 21)
     expect(() => ledger.discard(receipt)).toThrow('retirement')
     ledger.consume(receipt)
-    ledger.flushConsumption()
     const feedback = ledger.takeConsumed()!
     feedback.relaySessionId.fill(0)
     ledger.notice(session, notice(1n, 21n))

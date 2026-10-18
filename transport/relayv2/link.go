@@ -223,9 +223,6 @@ func (l *link) receive(messageType websocket.MessageType, encoded []byte) error 
 }
 
 func (l *link) writeLoop() {
-	flush := time.NewTimer(receiveFlushInterval)
-	flush.Stop()
-	defer flush.Stop()
 	for {
 		// Probes bypass credit waits: a blocked content window must not keep
 		// the relay from seeing this client alive.
@@ -236,7 +233,7 @@ func (l *link) writeLoop() {
 			}
 			continue
 		}
-		encoded, settled, err := l.receives.take(time.Now())
+		encoded, settled, err := l.receives.take()
 		if err != nil {
 			l.stop(err)
 			return
@@ -251,8 +248,9 @@ func (l *link) writeLoop() {
 				delete(l.channels, settled)
 				l.channelMu.Unlock()
 			}
-			continue
 		}
+		// One content turn between cumulative controls prevents a continuously
+		// consuming peer from starving this connection's opposite direction.
 		request, ok := l.takeRequest()
 		if ok {
 			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
@@ -263,16 +261,13 @@ func (l *link) writeLoop() {
 			}
 			continue
 		}
-		var flushDue <-chan time.Time
-		if deadline := l.receives.deadline(); !deadline.IsZero() {
-			flush.Reset(time.Until(deadline))
-			flushDue = flush.C
+		if encoded != nil {
+			continue
 		}
 		select {
 		case <-l.ctx.Done():
 			return
 		case <-l.writeWake:
-		case <-flushDue:
 		}
 	}
 }
