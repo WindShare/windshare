@@ -129,8 +129,11 @@ The Go-codec process scenario covers asymmetric windows, feedback replay, STOP w
 outstanding delivery and restart/RESUME. Native HTTP ingress now serves root
 `GET/HEAD /healthz` and validates configurable WebSocket origins before relay admission.
 Bounded HTTP reads/writes use separate capacity; upgrades preserve pre-read bytes and
-existing connection teardown. STUN, remaining operational interfaces and the production
-client cutover remain pending; Go is still the product entry point.
+existing connection teardown. Independent UDP STUN now supplies IPv4/IPv6 Binding,
+bounded per-listener/source rates, fault-isolated health/metrics and joined teardown.
+The native process scenario verifies responses with Pion across restarts.
+Remaining operational interfaces and the production client cutover remain pending;
+Go is still the product entry point.
 
 ## Cloudflare host
 
