@@ -78,7 +78,7 @@ impl Outbox {
         not(test),
         expect(
             dead_code,
-            reason = "JOIN ingress awaits delivery recovery and client runtime integration"
+            reason = "JOIN ingress awaits forwarding and client runtime integration"
         )
     )]
     pub fn queue(&mut self, receipt: ReceivedFrame, bytes: Vec<u8>) -> Result<()> {

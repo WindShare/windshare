@@ -1,10 +1,11 @@
 //! Native lifecycle host with bounded connection I/O. Network JOIN and opaque
-//! ingress await delivery recovery and coordinated client runtime integration.
+//! ingress await forwarding and coordinated client runtime integration.
 
 mod actor;
 mod config;
 mod connection;
 mod environment;
+mod generation;
 mod registry;
 mod socket;
 mod storage;

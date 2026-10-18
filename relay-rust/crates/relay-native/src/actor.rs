@@ -2,6 +2,7 @@ use crate::{
     config::{STORAGE_RETRY, limits},
     connection::Outbox,
     environment::{Environment, Trace},
+    generation::{Generation, Recovery},
     storage::Persistence,
 };
 use anyhow::{Result, anyhow, bail, ensure};
@@ -21,10 +22,7 @@ use tokio::{
 };
 use windshare_relay_core::{
     lifecycle::ConnectionRef,
-    share::{
-        Control, Identity, Input, Output, Responsibility, Restore, ShareRelay, Turn, WorkId,
-        WorkResult,
-    },
+    share::{Control, Identity, Input, Output, ShareRelay, Turn, WorkId, WorkResult},
 };
 
 pub enum Event {
@@ -48,21 +46,24 @@ pub struct Actor<S, E> {
     commit: Option<Commit>,
     retry: Option<(Instant, WorkId)>,
     idle: Arc<AtomicBool>,
+    generation: Generation,
 }
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
     pub async fn start(
-        identity: Identity,
         store: S,
         environment: E,
         inbox: mpsc::Receiver<Event>,
         idle: Arc<AtomicBool>,
+        generation: Generation,
+        recovery: Recovery,
     ) -> Result<()> {
+        let identity = generation.identity();
         let reader = store.clone();
-        let record = tokio::task::spawn_blocking(move || reader.load(identity.share)).await??;
-        // This schema and ingress never admit JOIN or opaque payloads. Therefore
-        // no generation has ever acquired delivery debt; restart alone is not proof.
-        let restored = Restore::restarted(record, Responsibility::Released);
+        let record = generation
+            .spawn_blocking(move || reader.load(identity.share))
+            .await??;
+        let restored = recovery.restore(identity, record)?;
         let (relay, initial) =
             ShareRelay::restore(identity, limits(), &restored, Trace, environment.now())
                 .map_err(|error| anyhow!("restore refused: {error:?}"))?;
@@ -76,26 +77,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             commit: None,
             retry: None,
             idle,
+            generation,
         };
         actor.outputs(initial)?;
-        let result = actor.run().await;
-        actor.ports.clear();
-        // A failed actor cannot be replaced while a write might still commit.
-        // Drain its mailbox while that obligation quiesces: socket cleanup must
-        // not deadlock behind a full inbox, and newly attached ports must abort.
-        if let Some(mut commit) = actor.commit.take() {
-            let (_, completion) = loop {
-                tokio::select! {
-                    completion = &mut commit => break completion?,
-                    Some(event) = actor.inbox.recv() => drop(event),
-                }
-            };
-            if let Err(error) = completion {
-                tracing::error!(event = "shutdown_storage_uncertain", %error);
-            }
-        }
-        drop(actor);
-        result
+        actor.run().await
     }
 
     async fn run(&mut self) -> Result<()> {
@@ -250,8 +235,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     let share = self.identity.share;
                     tracing::debug!(event = "storage_started", ?share, work = work.id.sequence(),
                         incarnation = ?work.id.incarnation());
-                    self.commit = Some(tokio::task::spawn_blocking(move || {
+                    self.commit = Some(self.generation.spawn_blocking(move || {
                         let result = store.execute(share, &work.operation);
+                        tracing::debug!(event = "storage_finished", ?share, work = work.id.sequence(),
+                            incarnation = ?work.id.incarnation(), ?result);
                         (work.id, result)
                     }));
                     None

@@ -68,7 +68,8 @@ struct Harness {
     sender: crate::connection::Writer,
     stopper: crate::connection::Writer,
     attempts: mpsc::UnboundedReceiver<Attempt>,
-    task: JoinHandle<Result<()>>,
+    task: tokio::task::AbortHandle,
+    generation: Generation,
     store: Database,
     fixture: Fixture,
     _directory: tempfile::TempDir,
@@ -99,13 +100,16 @@ impl Harness {
             ]))),
         };
         let (tx, inbox) = mpsc::channel(32);
-        let task = tokio::spawn(Actor::start(
-            identity,
+        let generation = Generation::new(identity, store.clone());
+        let task = tokio::spawn(generation.track(Actor::start(
             controlled,
             environment.clone(),
             inbox,
             Arc::new(AtomicBool::new(false)),
-        ));
+            generation.clone(),
+            Recovery::vacant(&store),
+        )));
+        let task = generation.supervise(task);
         let (stop_tx, mut stopper, _stop_closure) = crate::connection::channel(connection(2));
         tx.send(Event::Connected(connection(2), stop_tx))
             .await
@@ -146,6 +150,7 @@ impl Harness {
             stopper,
             attempts,
             task,
+            generation,
             store,
             fixture,
             _directory: directory,
@@ -243,13 +248,15 @@ async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
             now: Arc::new(AtomicU64::new(fixture.now(false).0)),
             seeds: Arc::new(Mutex::new(VecDeque::new())),
         };
-        let task = tokio::spawn(Actor::start(
-            identity,
+        let generation = Generation::new(identity, store.clone());
+        let task = tokio::spawn(generation.track(Actor::start(
             store.clone(),
             environment,
             inbox,
             Arc::clone(&idle),
-        ));
+            generation.clone(),
+            Recovery::vacant(&store),
+        )));
         timeout(Duration::from_secs(3), async {
             while !idle.load(Ordering::Acquire) && !task.is_finished() {
                 tokio::task::yield_now().await;
@@ -275,7 +282,7 @@ async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
 }
 
 #[tokio::test]
-async fn failed_actor_drains_socket_cleanup_while_storage_remains_in_flight() {
+async fn failed_actor_closes_mailbox_but_storage_still_fences_recovery() {
     let mut host = Harness::new().await;
     let publication = host.attempt().await;
     let (port, mut incoming, _) = crate::connection::channel(connection(3));
@@ -302,27 +309,61 @@ async fn failed_actor_drains_socket_cleanup_while_storage_remains_in_flight() {
             .unwrap()
             .is_none()
     );
+    host.tx.closed().await;
+    assert!(host.generation.recovery().is_err());
+    publication.release.send(Receipt::Commit).unwrap();
+    timeout(Duration::from_secs(3), host.generation.wait_released())
+        .await
+        .unwrap();
+    assert!(host.generation.recovery().is_ok());
+    assert!(matches!(
+        host.store.load(host.fixture.identity().share).unwrap(),
+        Some(Record::Unresolved(_))
+    ));
+    drop(host);
+}
+
+#[tokio::test]
+async fn cancelled_actor_cannot_lose_a_blocking_commit() {
+    let mut host = Harness::new().await;
+    let publication = host.attempt().await;
+    host.task.abort();
+    host.tx.closed().await;
+    assert!(host.generation.recovery().is_err());
+    publication.release.send(Receipt::LostAfterCommit).unwrap();
+    timeout(Duration::from_secs(3), host.generation.wait_released())
+        .await
+        .unwrap();
+    let identity = Identity {
+        incarnation: crate::environment::incarnation().unwrap(),
+        ..host.fixture.identity()
+    };
+    let generation = Generation::new(identity, host.store.clone());
+    let (_tx, inbox) = mpsc::channel(8);
+    let idle = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(generation.track(Actor::start(
+        host.store.clone(),
+        Frozen {
+            now: Arc::new(AtomicU64::new(host.fixture.now(false).0)),
+            seeds: Arc::new(Mutex::new(VecDeque::new())),
+        },
+        inbox,
+        Arc::clone(&idle),
+        generation.clone(),
+        host.generation.recovery().unwrap(),
+    )));
+    let abort = generation.supervise(task);
     timeout(Duration::from_secs(3), async {
-        for _ in 0..crate::config::MAILBOX_CAPACITY * 2 {
-            let (applied, completed) = oneshot::channel();
-            host.tx
-                .send(Event::Closed(connection(1), applied))
-                .await
-                .unwrap();
-            assert!(
-                completed.await.is_err(),
-                "failed kernel cannot accept a release receipt"
-            );
+        while !idle.load(Ordering::Acquire) {
+            assert!(!abort.is_finished());
+            tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    assert!(
-        !host.task.is_finished(),
-        "storage write must fence actor replacement"
-    );
-    publication.release.send(Receipt::Commit).unwrap();
-    assert!((&mut host.task).await.unwrap().is_err());
+    assert!(host.store.load(identity.share).unwrap().is_none());
+    abort.abort();
+    generation.wait_released().await;
     drop(host);
 }
 

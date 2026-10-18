@@ -2,6 +2,7 @@ use crate::{
     actor::{Actor, Event},
     config::{Endpoint, MAILBOX_CAPACITY, MAX_CONNECTIONS, MAX_RESIDENT_SHARES},
     environment::{NativeEnvironment, incarnation},
+    generation::{Generation, Recovery},
     socket,
     storage::Database,
 };
@@ -29,12 +30,20 @@ use windshare_relay_core::{
 
 pub struct Handle {
     pub tx: mpsc::Sender<Event>,
+    pub generation: Generation,
     idle: Arc<AtomicBool>,
     task: AbortHandle,
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        self.retire();
+    }
+}
+
+impl Handle {
+    fn retire(&self) {
+        self.generation.retire();
         self.task.abort();
     }
 }
@@ -52,16 +61,28 @@ impl Registry {
             .actors
             .lock()
             .map_err(|_| anyhow!("registry poisoned"))?;
-        if let Some(handle) = actors.get(&share)
-            && !handle.tx.is_closed()
-        {
-            return Ok(Arc::clone(handle));
-        }
+        let recovery = if let Some(handle) = actors.get(&share) {
+            if !handle.tx.is_closed() {
+                return Ok(Arc::clone(handle));
+            }
+            handle.generation.recovery().inspect_err(|error| {
+                tracing::debug!(event = "share_rebuild_deferred", ?share,
+                    incarnation = ?handle.generation.identity().incarnation, %error);
+            })?
+        } else {
+            Recovery::vacant(&self.store)
+        };
         // A socket holds a strong lease even before its Connected event arrives.
-        // Only deadline-free actors with no socket leases can be evicted.
+        // Eviction must cross the same cleanup barrier as failure. Retaining its
+        // slot prevents a vacant lookup from bypassing an unfinished generation.
         actors.retain(|_, handle| {
-            !(handle.tx.is_closed()
-                || Arc::strong_count(handle) == 1 && handle.idle.load(Ordering::Acquire))
+            if handle.generation.released() {
+                return false;
+            }
+            if Arc::strong_count(handle) == 1 && handle.idle.load(Ordering::Acquire) {
+                handle.retire();
+            }
+            true
         });
         ensure!(
             actors.len() < MAX_RESIDENT_SHARES,
@@ -77,19 +98,41 @@ impl Registry {
         let store = self.store.clone();
         let environment = self.environment.clone();
         let activity = Arc::clone(&idle);
-        let task = tokio::spawn(async move {
-            if let Err(error) = Actor::start(identity, store, environment, inbox, activity).await {
-                tracing::error!(event = "share_host_failed", ?share, incarnation = ?identity.incarnation, %error);
-            }
-        });
+        let generation = Generation::new(identity, self.store.clone());
+        let task = tokio::spawn(generation.track(Actor::start(
+            store,
+            environment,
+            inbox,
+            activity,
+            generation.clone(),
+            recovery,
+        )));
+        let task = generation.supervise(task);
         let handle = Arc::new(Handle {
             tx,
+            generation,
             idle,
-            task: task.abort_handle(),
+            task,
         });
         actors.insert(share, Arc::clone(&handle));
         drop(actors);
         Ok(handle)
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        let actors = std::mem::take(
+            &mut *self
+                .actors
+                .lock()
+                .map_err(|_| anyhow!("registry poisoned"))?,
+        );
+        for handle in actors.values() {
+            handle.retire();
+        }
+        for handle in actors.values() {
+            handle.generation.wait_released().await;
+        }
+        Ok(())
     }
 }
 
@@ -173,11 +216,11 @@ impl Server {
         // receipts before actors disappear. Aborting supervisors would skip that work.
         stop_connections.send_replace(true);
         while tasks.join_next().await.is_some() {}
-        self.registry
-            .actors
-            .lock()
-            .map_err(|_| anyhow!("registry poisoned"))?
-            .clear();
+        self.registry.shutdown().await?;
         result
     }
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;
