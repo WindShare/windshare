@@ -1,9 +1,10 @@
-package receive_test
+package relayv2_test
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/testoutputroot"
+	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -62,9 +64,13 @@ func (r countedReservation) Create(ctx context.Context, s receivecontract.Artifa
 }
 
 func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) {
-	server := newReceiveRelayServer(t, &memoryStopStore{})
-	stopped := newReceiveRelayServer(t, &memoryStopStore{})
+	if testing.Short() {
+		t.Skip("native receive recovery belongs to the long integration gate")
+	}
 	filename := filepath.Join(t.TempDir(), "file.bin")
+	root := testoutputroot.New(t)
+	trace, relayURLs := startNativeRelays(t, 2)
+	stoppedRelayURL := relayURLs[1]
 	payload := bytes.Repeat([]byte("preserved output"), 4096)
 	if err := os.WriteFile(filename, payload, 0600); err != nil {
 		t.Fatal(err)
@@ -75,7 +81,7 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	application, err := engine.New(engine.Config{Receive: engine.ReceiveDependencies{
 		Recovery: relayset.ReceiverRecoveryOptions{Clock: clock, Jitter: func(d time.Duration) time.Duration { return d }},
 		ReceiverDial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
-			if config.RelayBaseURL == stopped.URL {
+			if config.RelayBaseURL == stoppedRelayURL {
 				stoppedAttempts.Add(1)
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
 			}
@@ -93,18 +99,14 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := application.Close(context.Background()); err != nil {
-			t.Error(err)
-		}
-	}()
+	trace.RequireCleanup(t, "receive engine", application.Close)
 	// Retry timing is virtual, but authenticated sessions and native disk writes
 	// share CI resources. This watchdog bounds hangs, not recovery latency.
 	ctx, cancel := context.WithTimeout(t.Context(), recoveryIntegrationTimeout)
 	defer cancel()
 	sender, err := application.StartShare(ctx, engine.ShareRequest{Source: liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{Paths: []string{filename}, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity)})
-	}), RelayURLs: []string{server.URL, stopped.URL}, ChunkSize: catalog.MinChunkSize})
+	}), RelayURLs: relayURLs, ChunkSize: catalog.MinChunkSize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,14 +115,14 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 		t.Fatal(err)
 	}
 	sender.Activate(nil)
-	defer func() {
+	trace.RequireCleanup(t, "sender share", func(cleanup context.Context) error {
 		sender.StopShare()
-		result, err := sender.Wait(context.Background())
+		result, err := sender.Wait(cleanup)
 		if err != nil || result.FailureClass != engine.FailureNone {
-			t.Errorf("sender settlement=%+v wait=%v", result, err)
+			return fmt.Errorf("sender settlement=%+v wait=%v", result, err)
 		}
-	}()
-	root := testoutputroot.New(t)
+		return nil
+	})
 	var cut sync.Once
 	factory := engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
 		authorities.Add(1)
@@ -147,6 +149,12 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	var events []engine.Event
 	for value := range receiver.Observations() {
 		events = append(events, value.Event)
+		switch event := value.Event.(type) {
+		case engine.ReceiveRecoveryObserved:
+			trace.RequireRecord(t, "receiver_recovery_observed", testrun.OutcomeSucceeded, event)
+		case engine.ReceiveGenerationChanged:
+			trace.RequireRecord(t, "receiver_generation_changed", testrun.OutcomeSucceeded, event)
+		}
 	}
 	result, err := receiver.Wait(context.Background())
 	if err != nil || result.Outcome != engine.OutcomeSuccess {
@@ -194,4 +202,5 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if result.Value.Transfer.Progress.VerifiedBytes != uint64(len(payload)) {
 		t.Fatalf("verified progress=%+v", result.Value.Transfer.Progress)
 	}
+	trace.RequireSuccess(t)
 }
