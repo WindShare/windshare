@@ -80,7 +80,8 @@ Go/browser Ed25519 acceptance vectors; REGISTER/RESUME/STOP frames, preimages, p
 consume `v2-session.json`. The per-connection handshake and single-share lifecycle cover
 reservation, authenticated publication, stale-operation fencing, uncertain host results, owner-loss
 grace and ownership-bound RESUME. The lifecycle's activation barrier keeps JOIN, forwarding and
-REGISTERED behind final persistence, including delayed confirmation, disconnect and STOP races.
+REGISTERED behind the single atomic ownership/descriptor write, including unknown-result
+retries, delayed confirmation, disconnect, grace expiry and STOP races.
 Aggregate JOIN tests preserve absent/stopped refusals. STOP tests cover ordered persistence/queue discard/final commit,
 acknowledgement with unsettled occupancy, duplicate STOP, uncertain writes, registration/RESUME races
 and late callbacks. Admission regressions fill business capacity before authenticating STOP,
@@ -128,7 +129,9 @@ Real kernel receipts cover queue bounds and STOP fencing at synchronous writer h
 Held transport destruction fences actor reconstruction; cancelled supervisors retain
 the host lease until their children exit, and old receipts cannot reach a new actor.
 Fault-injected host tests hold commits across actor failure/cancellation,
-lose receipts and race STOP with ownership publication. JOIN/forwarding, client
+fail before commit, lose receipts and race STOP with ownership publication. A real
+SQLite trigger abort verifies rollback of the whole registration; restart retains
+committed ownership whose receipt was lost. JOIN/forwarding, client
 runtime cutover remain unimplemented. The Cloudflare lifecycle adapter now uses the
 same authority-row transitions, real Worker entropy/time and SQLite. Injected host
 tests cover incomplete commits, permanent STOP, hibernation, partial attachment

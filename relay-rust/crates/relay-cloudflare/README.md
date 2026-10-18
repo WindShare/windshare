@@ -17,8 +17,12 @@ SQLite stores endpoint identity, a never-reused connection allocator, authority
 and the checkpoint manifest. Binary WebSocket attachments retain handshake state,
 capacity, heartbeat nonce and original deadlines. Heartbeats update attachments,
 not SQL delivery counters. Alarms only move earlier; each event expires overdue
-state before processing new controls. Shared `authority` transitions and the
-Cloudflare output gate keep acknowledgements behind publication and permanent STOP.
+state before processing new controls. REGISTER atomically writes ownership and
+descriptor in one SQL operation; exact completion and the Cloudflare output gate
+keep acknowledgements behind that commit and permanent STOP. Uncertain events require
+authoritative recovery before more controls. Recovery retains committed ownership even
+when its receipt was lost, entering grace if the owner is gone. Lifecycle schema version 2
+rejects older storage.
 
 A close callback reports communication loss, never physical buffer release.
 This versioned lifecycle schema has never admitted payloads: after losing every

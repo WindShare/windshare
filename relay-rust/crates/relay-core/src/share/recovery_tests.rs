@@ -157,8 +157,7 @@ fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
 fn publication_deadline_includes_final_durable_confirmation() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
-    let publication = fixture.begin_registration(&mut relay);
-    let durable = work(&complete(&mut relay, &publication, fixture.at));
+    let durable = fixture.begin_registration(&mut relay);
     let expired = UnixMillis(fixture.at.0 + REGISTRATION_BUDGET);
     let turn = complete(&mut relay, &durable, expired);
     assert!(

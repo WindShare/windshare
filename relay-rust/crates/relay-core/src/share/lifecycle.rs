@@ -1,6 +1,5 @@
 use super::{
-    Admission, ConnectionRef, Control, Observer, OperationId, RelayDecision, ShareRelay,
-    StopBarrier, Turn,
+    Admission, ConnectionRef, Control, Observer, RelayDecision, ShareRelay, Turn,
     storage::{AfterWrite, TaskKind},
 };
 use crate::{
@@ -8,7 +7,7 @@ use crate::{
     lifecycle::{Action, Event, Expiration, Phase, StopCleanup, StopWork},
     sessions::Event as SessionEvent,
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 impl<O: Observer> ShareRelay<O> {
     pub(super) fn lifecycle_event(
@@ -33,7 +32,6 @@ impl<O: Observer> ShareRelay<O> {
                     self.action(Action::Detached(route), None, now, turn);
                 }
                 Expiration::Released(id) => self.close(id.connection(), turn),
-                Expiration::Reconcile(id) => self.reconcile(id, turn),
                 Expiration::Lapsed(_) => self.enqueue(
                     TaskKind::Write {
                         next: None,
@@ -64,11 +62,10 @@ impl<O: Observer> ShareRelay<O> {
             Action::ResumeAdmitted(attempt) => {
                 self.offer_admission(attempt.id().connection(), Admission::Resume(attempt), turn);
             }
-            Action::Publish(request) => {
+            Action::Register(request) => {
                 self.enqueue(
-                    TaskKind::Publish {
-                        id: request.id,
-                        record: request.record(),
+                    TaskKind::Register {
+                        ownership: request.ownership,
                         descriptor: request.descriptor.to_vec(),
                     },
                     turn,
@@ -139,7 +136,6 @@ impl<O: Observer> ShareRelay<O> {
             }
             Action::Joined(joined) => self.install_session(joined, now, turn),
             Action::Released(id) => self.close(id.connection(), turn),
-            Action::Reconcile(id) => self.reconcile(id, turn),
             Action::Refused(reason) => {
                 if let Some(connection) = requester {
                     if let Some(frame) = reason.frame() {
@@ -152,31 +148,26 @@ impl<O: Observer> ShareRelay<O> {
         }
     }
 
-    fn reconcile(&mut self, id: OperationId, turn: &mut Turn) {
-        self.close(id.connection(), turn);
-        self.enqueue(TaskKind::Reconcile(id), turn);
-    }
-
     fn stop_work(&mut self, work: StopWork, now: UnixMillis, turn: &mut Turn) {
         match work {
             StopWork::Persist(pending) => self.enqueue(
                 TaskKind::Write {
                     next: Some(pending.record()),
-                    after: AfterWrite::Stop(work),
+                    after: AfterWrite::Stop(Box::new(work)),
                 },
                 turn,
             ),
             StopWork::Commit(pending) => self.enqueue(
                 TaskKind::Write {
                     next: Some(pending.stopped().record()),
-                    after: AfterWrite::Stop(work),
+                    after: AfterWrite::Stop(Box::new(work)),
                 },
                 turn,
             ),
             StopWork::Retire(pending) => {
                 let mut connections = Vec::new();
-                let operation = match pending.cleanup() {
-                    StopCleanup::None => None,
+                match pending.cleanup() {
+                    StopCleanup::None => {}
                     StopCleanup::Owner(connection) => {
                         connections.push(connection);
                         for ledger in self.ledgers.values() {
@@ -187,17 +178,11 @@ impl<O: Observer> ShareRelay<O> {
                                 },
                             ));
                         }
-                        None
                     }
                     StopCleanup::Reservation(id) => {
                         connections.push(id.connection());
-                        None
                     }
-                    StopCleanup::Publication(id) => {
-                        connections.push(id.connection());
-                        Some(id)
-                    }
-                };
+                }
                 let deferred: Vec<_> = self
                     .sessions
                     .values()
@@ -215,13 +200,9 @@ impl<O: Observer> ShareRelay<O> {
                 for &connection in &connections {
                     self.close(connection, turn);
                 }
-                self.stop_barrier = Some(StopBarrier {
-                    work,
-                    publication: operation,
-                });
-                if let Some(id) = operation {
-                    self.enqueue(TaskKind::Quiesce(id), turn);
-                }
+                // The serialized storage queue confirmed every earlier ownership
+                // write before persisting STOP. Only queue discard remains here.
+                self.stop_barrier = Some(work);
             }
         }
     }

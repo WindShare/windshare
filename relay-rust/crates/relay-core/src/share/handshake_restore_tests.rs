@@ -83,7 +83,7 @@ fn unissued_challenge_restarts_random_request_without_extending_handshake() {
         "descriptorUploadB64",
         fixture.at,
     );
-    assert!(matches!(work(&upload).operation, Storage::Publish { .. }));
+    assert!(matches!(work(&upload).operation, Storage::Register { .. }));
 }
 
 #[test]
@@ -112,9 +112,8 @@ fn awaiting_descriptor_reauthenticates_proof_after_hibernation() {
         "descriptorUploadB64",
         fixture.at,
     ));
-    let durable = work(&complete(&mut restored, &publish, fixture.at));
     assert!(
-        complete(&mut restored, &durable, fixture.at)
+        complete(&mut restored, &publish, fixture.at)
             .outputs
             .iter()
             .any(|output| matches!(

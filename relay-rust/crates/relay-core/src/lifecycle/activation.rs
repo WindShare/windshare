@@ -28,6 +28,12 @@ impl OwnershipCommit {
         Record::Published(self.route)
     }
 
+    /// The complete owner stored atomically with a fresh descriptor.
+    #[must_use]
+    pub const fn ownership(self) -> OwnedRoute {
+        self.route
+    }
+
     /// The original handshake budget also bounds the final durable confirmation.
     #[must_use]
     pub const fn deadline(self) -> UnixMillis {
@@ -50,13 +56,13 @@ impl OwnershipCommit {
 }
 
 impl<O: Observer> ShareLifecycle<O> {
-    pub(super) const fn commit_ownership(
+    pub(super) const fn activate(
         &mut self,
         id: OperationId,
         registration: PublishedRegistration,
         deadline: UnixMillis,
         replaced: Option<ConnectionRef>,
-    ) -> Action<'static> {
+    ) -> OwnershipCommit {
         let commit = OwnershipCommit {
             id,
             route: OwnedRoute {
@@ -68,7 +74,7 @@ impl<O: Observer> ShareLifecycle<O> {
             replaced,
         };
         self.state = State::Activating(commit);
-        Action::CommitOwnership(commit)
+        commit
     }
 
     pub(super) fn ownership_committed(&mut self, id: OperationId) -> Action<'static> {

@@ -223,13 +223,13 @@ impl Fixture {
         }
     }
 
-    fn publish<'a>(&'a self, engine: &mut ShareLifecycle<Recorder>) -> PublishRequest<'a> {
+    fn publish(&self, engine: &mut ShareLifecycle<Recorder>) -> OwnershipCommit {
         let reservation = self.reserve(engine, connection(1, 1), self.at);
         let publication = self.authenticate(reservation);
         let effects = engine.handle(Event::Publish(publication), self.at);
         assert_eq!(effects.expiration, None);
         match effects.action {
-            Action::Publish(request) => request,
+            Action::Register(request) => request.ownership,
             action => panic!("expected host transaction: {action:?}"),
         }
     }
@@ -237,12 +237,7 @@ impl Fixture {
     /// Publishes the shared registration, owned by `connection(1, 1)`.
     fn register(&self, engine: &mut ShareLifecycle<Recorder>) -> PublishedRegistration {
         let request = self.publish(engine);
-        let finished = Event::PublicationFinished {
-            id: request.id,
-            result: PublicationResult::Committed,
-        };
-        let commit = ownership_commit(engine.handle(finished, self.at));
-        committed_registration(engine, commit.id(), self.at)
+        committed_registration(engine, request.id(), self.at)
     }
 
     fn join(&self, engine: &mut ShareLifecycle<Recorder>, at: UnixMillis) -> Effects<'static> {
@@ -357,43 +352,34 @@ fn publication_requires_host_commit_and_preparation_before_join_or_registered() 
         Action::Refused(Refusal::Starting)
     );
     let publication = fixture.authenticate(reservation);
-    let Action::Publish(request) = engine
+    let Action::Register(request) = engine
         .handle(Event::Publish(publication), fixture.at)
         .action
     else {
         panic!("authenticated upload must request a host transaction");
     };
-    assert_eq!(request.id, id);
-    assert_eq!(request.init, fixture.init());
-    assert_eq!(request.deadline, deadline);
+    assert_eq!(request.ownership.id(), id);
+    assert_eq!(
+        request.ownership.ownership().route().registration(),
+        fixture.init().registration()
+    );
+    assert_eq!(request.ownership.deadline(), deadline);
     assert_eq!(
         request.descriptor,
         DescriptorUpload::decode(&fixture.upload).unwrap().object()
     );
-    assert_eq!(engine.phase(), Phase::Publishing);
+    assert_eq!(engine.phase(), Phase::Activating);
     assert_eq!(engine.deadline(), Some(deadline));
     assert_eq!(
         fixture.join(&mut engine, fixture.at).action,
         Action::Refused(Refusal::Starting)
     );
 
-    // The fake host retains both resources before returning committed evidence.
+    // The exact owner and descriptor form one transaction; no intermediate
+    // durable record is needed before requesting ownership.
     let stored_descriptor = request.descriptor.to_vec();
-    let prepared_connection = request.id.connection();
-    let Action::CommitOwnership(commit) = engine
-        .handle(
-            Event::PublicationFinished {
-                id,
-                result: PublicationResult::Committed,
-            },
-            UnixMillis(deadline.0 - 1),
-        )
-        .action
-    else {
-        panic!("confirmed publication must request the ownership commit");
-    };
-    assert_eq!(engine.phase(), Phase::Activating);
-    assert_eq!(engine.deadline(), Some(deadline));
+    let commit = request.ownership;
+    let prepared_connection = commit.id().connection();
     assert_eq!(commit.record(), commit.registration().record());
     assert_eq!(
         fixture.join(&mut engine, UnixMillis(deadline.0 - 1)).action,
@@ -438,7 +424,7 @@ fn competing_registration_never_changes_the_incumbent() {
         Event::Publish(fixture.authenticate(reservation)),
         fixture.at,
     );
-    let Action::Publish(request) = request.action else {
+    let Action::Register(request) = request.action else {
         panic!("incumbent remains admitted");
     };
     assert_eq!(
@@ -447,18 +433,7 @@ fn competing_registration_never_changes_the_incumbent() {
             .action,
         Action::Refused(Refusal::Occupied)
     );
-    assert!(matches!(
-        engine
-            .handle(
-                Event::PublicationFinished {
-                    id: request.id,
-                    result: PublicationResult::Committed
-                },
-                fixture.at
-            )
-            .action,
-        Action::CommitOwnership(_)
-    ));
+    committed_registration(&mut engine, request.ownership.id(), fixture.at);
     assert_eq!(
         engine
             .handle(fixture.reserve_event(fixture.at), fixture.at)
@@ -583,7 +558,7 @@ fn delayed_authenticated_upload_cannot_use_a_new_attempt_on_the_same_connection(
                 fixture.at
             )
             .action,
-        Action::Publish(_)
+        Action::Register(_)
     ));
 }
 

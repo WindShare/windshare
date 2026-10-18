@@ -7,17 +7,18 @@
 //! exact ownership write makes the route serve and permits REGISTERED. The
 //! original handshake deadline also bounds this final confirmation.
 //!
-//! A publication that expires, loses its owner or has an uncertain result stays
-//! fenced until authoritative rollback. A late success cannot publish it.
+//! REGISTER atomically stores ownership with its descriptor. Uncertain writes
+//! retain the exact obligation; expiry or owner loss queues grace behind it.
+//! A late confirmation cannot reactivate an expired, disconnected or stopped owner.
 //! Owner loss starts a fixed grace; RESUME replaces only the ownership observed
 //! before its challenge, never an owner it did not authenticate against.
 //!
 //! [`ShareLifecycle::restore`] takes the authoritative [`Record`], preventing an
-//! empty actor from replacing a registration, unresolved publication or STOP.
+//! empty actor from replacing committed ownership, grace or STOP.
 //! Surviving sockets retain their ownership and validated session identities.
 //!
-//! STOP revokes authority immediately, persists its cleanup obligation, retires
-//! exact participants and publication work, then commits before acknowledging.
+//! STOP revokes authority immediately, persists its cleanup obligation after
+//! earlier writes, retires exact participants, then commits before acknowledging.
 //! The aggregate retains those obligations and applies revocation to sessions.
 
 mod activation;
@@ -30,15 +31,15 @@ mod session;
 mod stopping;
 
 pub use activation::OwnershipCommit;
-pub use effect::{Action, Cancellation, Effects, Event, Expiration, PublicationResult, Refusal};
+pub use effect::{Action, Cancellation, Effects, Event, Expiration, Refusal};
 pub use observation::{Decision, Observation, ObservedEvent, Observer, Phase};
 pub use operation::{
     ConnectionRef, Incarnation, OperationId, OwnershipEpoch, OwnershipId, Publication,
-    PublishRequest, PublishedRegistration, Reservation, ResumeAttempt, Resumption,
+    PublishedRegistration, RegistrationCommit, Reservation, ResumeAttempt, Resumption,
 };
 pub use record::{
     EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
-    RestoreError, StoppedShare, UnresolvedPublication,
+    RestoreError, StoppedShare,
 };
 pub use restoration::{Restoration, SessionRestore};
 pub use session::Joined;
@@ -64,8 +65,6 @@ const SENDER_GRACE: Duration = Duration::from_secs(60);
 enum State {
     Vacant,
     Reserved(Pending),
-    Publishing(Pending),
-    Fenced(UnresolvedPublication),
     Activating(OwnershipCommit),
     Published(PublishedRegistration),
     // Keeps the lost ownership, so a resume admitted while that owner was
@@ -105,9 +104,8 @@ impl<O: Observer> ShareLifecycle<O> {
     /// restore, including a replacement inside one process, needs a fresh
     /// `incarnation`; it fences old host callbacks, never live authority.
     ///
-    /// An unresolved publication restores fenced under its stored operation,
-    /// and the returned `Action::Reconcile` must be executed like any other
-    /// action. A published route re-adopts its stored ownership when the owner
+    /// A committed registration survives even when its completion or REGISTERED
+    /// was lost. A published route re-adopts its stored ownership when the owner
     /// survived, without a write; otherwise it returns `Action::Detached`, the
     /// only deadline a restore derives, which the host persists so no later
     /// restore extends it. A stored grace keeps its deadline, even a past one
@@ -140,9 +138,6 @@ impl<O: Observer> ShareLifecycle<O> {
         match restoration.record {
             Some(record) if record.relay() != relay => return Err(RestoreError::ForeignRelay),
             Some(record) if record.share() != share => return Err(RestoreError::ForeignShare),
-            Some(Record::Unresolved(unresolved)) if unresolved.id.incarnation == incarnation => {
-                return Err(RestoreError::ReusedIncarnation);
-            }
             Some(Record::Stopping(pending))
                 if pending.id().incarnation() == incarnation
                     || pending
@@ -183,8 +178,6 @@ impl<O: Observer> ShareLifecycle<O> {
         match self.state {
             State::Vacant => Phase::Vacant,
             State::Reserved(_) => Phase::Reserved,
-            State::Publishing(_) => Phase::Publishing,
-            State::Fenced(_) => Phase::Fenced,
             State::Activating(_) => Phase::Activating,
             State::Published(_) => Phase::Published,
             State::Grace(_) => Phase::Grace,
@@ -193,24 +186,20 @@ impl<O: Observer> ShareLifecycle<O> {
         }
     }
 
-    /// Returns the next absolute deadline. Fenced work needs host reconciliation,
-    /// not a timeout that could forget a possibly committed record.
+    /// Returns the next absolute deadline. Expiry never cancels an outstanding
+    /// durable write; ordered grace/STOP work follows its exact confirmation.
     #[must_use]
     pub const fn deadline(&self) -> Option<UnixMillis> {
         match self.state {
-            State::Reserved(pending) | State::Publishing(pending) => Some(pending.deadline),
+            State::Reserved(pending) => Some(pending.deadline),
             State::Activating(commit) => Some(commit.deadline),
             State::Grace(route) => Some(route.deadline),
-            State::Vacant
-            | State::Fenced(_)
-            | State::Published(_)
-            | State::Stopping(_)
-            | State::Stopped(_) => None,
+            State::Vacant | State::Published(_) | State::Stopping(_) | State::Stopped(_) => None,
         }
     }
 
     /// Applies one event. Authentication happens in `ControlHandshake`; host
-    /// publication results cannot substitute for an authenticated upload.
+    /// ownership completions cannot substitute for an authenticated upload.
     pub fn handle<'f>(&mut self, event: Event<'f>, now: UnixMillis) -> Effects<'f> {
         // STOP must retain the exact cleanup obligation even at an expired
         // reservation/grace boundary. A refused STOP still runs normal expiry.
@@ -226,7 +215,6 @@ impl<O: Observer> ShareLifecycle<O> {
                 deadline,
             } => self.reserve(connection, init, deadline, now),
             Event::Publish(publication) => self.publish(publication),
-            Event::PublicationFinished { id, result } => self.finish(id, result),
             Event::OwnershipCommitted(id) => self.ownership_committed(id),
             Event::Cancel { id, .. } => self.cancel(id, now),
             Event::BeginResume {
@@ -261,16 +249,6 @@ impl<O: Observer> ShareLifecycle<O> {
             before,
             decision(&action),
         );
-        // A completion discovered after expiry either confirms rollback or
-        // already requests reconciliation. Retain only unrelated expiry work.
-        if let (
-            Some(Expiration::Reconcile(expired)),
-            Action::Reconcile(current) | Action::Released(current),
-        ) = (expiration, &action)
-            && expired == *current
-        {
-            expiration = None;
-        }
         if is_stop && matches!(action, Action::Refused(_)) {
             expiration = self.expire(now);
         }
@@ -300,7 +278,6 @@ impl<O: Observer> ShareLifecycle<O> {
         }
         match self.state {
             State::Vacant => {}
-            State::Fenced(_) => return Action::Refused(Refusal::PublicationUncertain),
             State::Stopping(_) => return Action::Refused(Refusal::StopPending),
             State::Stopped(stopped)
                 if stopped.share_instance == init.registration().share_instance() =>
@@ -337,44 +314,19 @@ impl<O: Observer> ShareLifecycle<O> {
         {
             return Action::Refused(Refusal::StaleOperation);
         }
-        self.state = State::Publishing(pending);
-        Action::Publish(PublishRequest {
-            id: pending.id,
-            init: pending.init,
-            descriptor: publication.descriptor.object(),
-            deadline: pending.deadline,
-        })
-    }
-
-    fn finish(&mut self, id: OperationId, result: PublicationResult) -> Action<'static> {
-        let (unresolved, deadline) = match self.state {
-            State::Publishing(pending) if pending.id == id => {
-                (pending.unresolved(), Some(pending.deadline))
-            }
-            State::Fenced(unresolved) if unresolved.id == id => (unresolved, None),
-            _ => return Action::Refused(Refusal::StaleOperation),
+        let route = PublishedRoute {
+            relay: self.relay,
+            registration: *pending.init.registration(),
         };
-        match (result, deadline) {
-            (PublicationResult::Aborted, _) => {
-                self.state = State::Vacant;
-                Action::Released(id)
-            }
-            (PublicationResult::Committed, Some(deadline)) => {
-                let route = PublishedRoute {
-                    relay: self.relay,
-                    registration: unresolved.registration,
-                };
-                let published = PublishedRegistration {
-                    owner: route.ownership(OwnershipEpoch::FIRST, id.connection),
-                    route,
-                };
-                self.commit_ownership(id, published, deadline, None)
-            }
-            (PublicationResult::Committed | PublicationResult::Uncertain, _) => {
-                self.state = State::Fenced(unresolved);
-                Action::Reconcile(id)
-            }
-        }
+        let registration = PublishedRegistration {
+            owner: route.ownership(OwnershipEpoch::FIRST, pending.id.connection),
+            route,
+        };
+        let ownership = self.activate(pending.id, registration, pending.deadline, None);
+        Action::Register(RegistrationCommit {
+            ownership,
+            descriptor: publication.descriptor.object(),
+        })
     }
 
     fn cancel(&mut self, id: OperationId, now: UnixMillis) -> Action<'static> {
@@ -383,11 +335,6 @@ impl<O: Observer> ShareLifecycle<O> {
                 self.state = State::Vacant;
                 Action::Released(id)
             }
-            State::Publishing(pending) if pending.id == id => {
-                self.state = State::Fenced(pending.unresolved());
-                Action::Reconcile(id)
-            }
-            State::Fenced(unresolved) if unresolved.id == id => Action::Reconcile(id),
             State::Activating(commit) if commit.id == id => self.detach(id.connection(), now),
             _ => Action::Refused(Refusal::StaleOperation),
         }
@@ -454,12 +401,12 @@ impl<O: Observer> ShareLifecycle<O> {
             owner: current.route.ownership(epoch, attempt.id.connection),
             route: current.route,
         };
-        self.commit_ownership(
+        Action::CommitOwnership(self.activate(
             attempt.id,
             registration,
             attempt.deadline,
             current.live.then_some(current.ownership.connection),
-        )
+        ))
     }
 
     /// Returns the ownership a resume of `registration` would replace now,
@@ -467,12 +414,7 @@ impl<O: Observer> ShareLifecycle<O> {
     fn incumbent(&self, registration: &Registration) -> Result<Option<Incumbent>, Refusal> {
         let (held, incumbent) = match self.state {
             State::Vacant => return Ok(None),
-            State::Reserved(pending) | State::Publishing(pending) => {
-                (*pending.init.registration(), Err(Refusal::Starting))
-            }
-            State::Fenced(unresolved) => {
-                (unresolved.registration, Err(Refusal::PublicationUncertain))
-            }
+            State::Reserved(pending) => (*pending.init.registration(), Err(Refusal::Starting)),
             State::Activating(commit) => (
                 commit.route.route.registration,
                 Ok(Incumbent {
@@ -538,10 +480,7 @@ impl<O: Observer> ShareLifecycle<O> {
         }
         match self.state {
             State::Vacant => Action::Refused(Refusal::NotFound),
-            State::Reserved(_) | State::Publishing(_) | State::Activating(_) => {
-                Action::Refused(Refusal::Starting)
-            }
-            State::Fenced(_) => Action::Refused(Refusal::PublicationUncertain),
+            State::Reserved(_) | State::Activating(_) => Action::Refused(Refusal::Starting),
             State::Published(published) => Action::JoinReady(published),
             State::Grace(_) => Action::Refused(Refusal::SenderDetached),
             State::Stopping(_) => Action::Refused(Refusal::StopPending),
@@ -558,14 +497,6 @@ impl<O: Observer> ShareLifecycle<O> {
                     Some(pending.id),
                     Expiration::Released(pending.id),
                     Decision::Released,
-                )
-            }
-            State::Publishing(pending) if now >= pending.deadline => {
-                self.state = State::Fenced(pending.unresolved());
-                (
-                    Some(pending.id),
-                    Expiration::Reconcile(pending.id),
-                    Decision::Reconcile,
                 )
             }
             State::Activating(commit) if now >= commit.deadline => {

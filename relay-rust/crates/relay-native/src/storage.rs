@@ -16,7 +16,7 @@ use windshare_relay_core::{
 mod transactions;
 use transactions::read;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub trait Persistence: Clone + Send + Sync + 'static {
@@ -151,9 +151,7 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
          CREATE TABLE IF NOT EXISTS shares (
             share BLOB PRIMARY KEY CHECK(length(share) = 12),
             record BLOB NOT NULL,
-            descriptor BLOB,
-            publication BLOB,
-            CHECK((descriptor IS NULL) = (publication IS NULL))
+            descriptor BLOB
          ) STRICT;",
     )?;
     let existing: Option<(i64, Vec<u8>, i64)> = transaction

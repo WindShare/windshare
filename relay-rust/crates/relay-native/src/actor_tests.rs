@@ -29,6 +29,7 @@ impl Environment for Frozen {
 
 enum Receipt {
     Commit,
+    FailedBeforeCommit,
     LostAfterCommit,
 }
 struct Attempt {
@@ -54,11 +55,13 @@ impl Persistence for Controlled {
             operation: operation.clone(),
             release,
         })?;
-        let receipt = wait.recv()?;
-        self.database.execute(share, operation)?;
-        match receipt {
-            Receipt::Commit => Ok(()),
-            Receipt::LostAfterCommit => bail!("lost commit receipt"),
+        match wait.recv()? {
+            Receipt::Commit => self.database.execute(share, operation),
+            Receipt::FailedBeforeCommit => bail!("write failed before commit"),
+            Receipt::LostAfterCommit => {
+                self.database.execute(share, operation)?;
+                bail!("lost commit receipt");
+            }
         }
     }
 }
@@ -181,59 +184,69 @@ async fn read(rx: &mut crate::connection::Writer) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn acknowledgements_wait_for_durable_receipts_and_uncertain_cas_retries() {
-    let mut host = Harness::new().await;
-    let publication = host.attempt().await;
-    assert!(matches!(publication.operation, Storage::Publish { .. }));
-    assert!(host.sender.try_recv().is_err());
-    publication.release.send(Receipt::Commit).unwrap();
+async fn acknowledgements_wait_for_atomic_registration_receipts_and_exact_retries() {
+    for committed in [false, true] {
+        let mut host = Harness::new().await;
+        let ownership = host.attempt().await;
+        assert!(matches!(ownership.operation, Storage::Register { .. }));
+        assert!(
+            host.store
+                .load(host.fixture.identity().share)
+                .unwrap()
+                .is_none()
+        );
+        assert!(host.sender.try_recv().is_err());
+        let expected_retry = ownership.operation.clone();
+        ownership
+            .release
+            .send(if committed {
+                Receipt::LostAfterCommit
+            } else {
+                Receipt::FailedBeforeCommit
+            })
+            .unwrap();
 
-    let ownership = host.attempt().await;
-    assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
-        Some(Record::Unresolved(_))
-    ));
-    assert!(host.sender.try_recv().is_err());
-    let expected_retry = ownership.operation.clone();
-    ownership.release.send(Receipt::LostAfterCommit).unwrap();
+        let retry = host.attempt().await;
+        assert_eq!(retry.operation, expected_retry);
+        assert_eq!(
+            matches!(
+                host.store.load(host.fixture.identity().share).unwrap(),
+                Some(Record::Published(_))
+            ),
+            committed
+        );
+        assert!(host.sender.try_recv().is_err());
+        retry.release.send(Receipt::Commit).unwrap();
+        assert_eq!(&read(&mut host.sender).await[..4], b"WS2K");
 
-    let retry = host.attempt().await;
-    assert_eq!(retry.operation, expected_retry);
-    assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
-        Some(Record::Published(_))
-    ));
-    assert!(host.sender.try_recv().is_err());
-    retry.release.send(Receipt::Commit).unwrap();
-    assert_eq!(&read(&mut host.sender).await[..4], b"WS2K");
-
-    host.stop().await;
-    let stopping = host.attempt().await;
-    assert!(host.stopper.try_recv().is_err());
-    stopping.release.send(Receipt::Commit).unwrap();
-    let stopped = host.attempt().await;
-    assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
-        Some(Record::Stopping(_))
-    ));
-    assert!(host.stopper.try_recv().is_err());
-    stopped.release.send(Receipt::Commit).unwrap();
-    assert_eq!(&read(&mut host.stopper).await[..4], b"WS2Y");
-    assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
-        Some(Record::Stopped(_))
-    ));
-    drop(host);
+        host.stop().await;
+        let stopping = host.attempt().await;
+        assert!(host.stopper.try_recv().is_err());
+        stopping.release.send(Receipt::Commit).unwrap();
+        let stopped = host.attempt().await;
+        assert!(matches!(
+            host.store.load(host.fixture.identity().share).unwrap(),
+            Some(Record::Stopping(_))
+        ));
+        assert!(host.stopper.try_recv().is_err());
+        stopped.release.send(Receipt::Commit).unwrap();
+        assert_eq!(&read(&mut host.stopper).await[..4], b"WS2Y");
+        assert!(matches!(
+            host.store.load(host.fixture.identity().share).unwrap(),
+            Some(Record::Stopped(_))
+        ));
+        drop(host);
+    }
 }
 
 #[tokio::test]
-async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
+async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlite() {
     let fixture = Fixture::new();
     let identity = Identity {
         incarnation: crate::environment::incarnation().unwrap(),
         ..fixture.identity()
     };
-    for committed in [1, 3] {
+    for committed in [1, 2] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("authority.sqlite");
         let store = Database::open(&path, identity.relay).unwrap();
@@ -258,7 +271,11 @@ async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
             Recovery::vacant(&store),
         )));
         timeout(Duration::from_secs(3), async {
-            while !idle.load(Ordering::Acquire) && !task.is_finished() {
+            while !matches!(
+                store.load(identity.share).unwrap(),
+                Some(Record::Grace(_) | Record::Stopped(_))
+            ) && !task.is_finished()
+            {
                 tokio::task::yield_now().await;
             }
         })
@@ -269,10 +286,9 @@ async fn startup_reconciles_interrupted_publication_and_stop_from_sqlite() {
             "recovery task exited before reconciliation: {:?}",
             task.await
         );
-        assert!(idle.load(Ordering::Acquire));
         let record = store.load(identity.share).unwrap();
         if committed == 1 {
-            assert!(record.is_none());
+            assert!(matches!(record, Some(Record::Grace(_))));
         } else {
             assert!(matches!(record, Some(Record::Stopped(_))));
         }
@@ -318,7 +334,7 @@ async fn failed_actor_closes_mailbox_but_storage_still_fences_recovery() {
     assert!(host.generation.recovery().is_ok());
     assert!(matches!(
         host.store.load(host.fixture.identity().share).unwrap(),
-        Some(Record::Unresolved(_))
+        Some(Record::Published(_))
     ));
     drop(host);
 }
@@ -354,14 +370,20 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
     )));
     let abort = generation.supervise(task);
     timeout(Duration::from_secs(3), async {
-        while !idle.load(Ordering::Acquire) {
+        while !matches!(
+            host.store.load(identity.share).unwrap(),
+            Some(Record::Grace(_))
+        ) {
             assert!(!abort.is_finished());
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    assert!(host.store.load(identity.share).unwrap().is_none());
+    assert!(matches!(
+        host.store.load(identity.share).unwrap(),
+        Some(Record::Grace(_))
+    ));
     abort.abort();
     generation.wait_released().await;
     drop(host);
@@ -370,7 +392,6 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
 #[tokio::test]
 async fn stop_supersedes_an_ownership_write_already_in_flight() {
     let mut host = Harness::new().await;
-    host.attempt().await.release.send(Receipt::Commit).unwrap();
     let ownership = host.attempt().await;
     host.stop().await;
     // A same-mailbox marker proves STOP was processed while the write remains

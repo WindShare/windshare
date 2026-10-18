@@ -11,7 +11,7 @@ use windshare_relay_core::{
 
 // This version has never admitted JOIN or opaque frames. Recovery may prove zero
 // delivery responsibility from that fact, never merely from disappearing sockets.
-const LIFECYCLE_SCHEMA: u32 = 1;
+const LIFECYCLE_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Image {
@@ -95,7 +95,6 @@ impl Image {
 pub struct AuthorityRow {
     record: Vec<u8>,
     descriptor: Option<Vec<u8>>,
-    publication: Option<Vec<u8>>,
 }
 
 impl AuthorityRow {
@@ -103,19 +102,12 @@ impl AuthorityRow {
         Self {
             record: stored.record().encode().as_bytes().to_vec(),
             descriptor: stored.descriptor().map(<[u8]>::to_vec),
-            publication: stored.publication_key().map(<[u8]>::to_vec),
         }
     }
 
     pub fn decode(self, relay: RelayIdentity, share: ShareId) -> Result<StoredAuthority> {
-        StoredAuthority::decode(
-            relay,
-            share,
-            &self.record,
-            self.descriptor,
-            self.publication,
-        )
-        .map_err(|error| anyhow!("invalid authority row: {error:?}"))
+        StoredAuthority::decode(relay, share, &self.record, self.descriptor)
+            .map_err(|error| anyhow!("invalid authority row: {error:?}"))
     }
 }
 

@@ -63,9 +63,10 @@ impl Runtime {
                     Output::Work(work) => {
                         let current = self.image.record()?;
                         match work.operation {
-                            Storage::Publish { record, .. } => {
-                                if current.is_some() && current != Some(*record) {
-                                    return Err(failure("publication conflict"));
+                            Storage::Register { ownership, .. } => {
+                                let record = Record::Published(*ownership);
+                                if current.is_some() && current != Some(record) {
+                                    return Err(failure("registration conflict"));
                                 }
                                 self.image.lifecycle = Some(record.encode().as_bytes().to_vec());
                             }
@@ -77,12 +78,6 @@ impl Runtime {
                                 }
                                 self.image.lifecycle =
                                     next.map(|record| record.encode().as_bytes().to_vec());
-                            }
-                            Storage::RemovePublication(id) => {
-                                if matches!(current, Some(Record::Unresolved(record)) if record.id() == id)
-                                {
-                                    self.image.lifecycle = None;
-                                }
                             }
                         }
                         persistence::save(state, &mut self.image)?;
