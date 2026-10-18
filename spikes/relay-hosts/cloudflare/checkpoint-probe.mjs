@@ -7,7 +7,7 @@ import { sourceState } from './checkpoint-evidence.mjs';
 
 const base = process.argv[2]?.replace(/\/$/, '');
 const selected = process.argv[3] ?? 'all';
-if (!base) throw new Error('Usage: node checkpoint-probe.mjs <URL> [all|hibernate|attachment-loss|disconnect|reset]');
+if (!base) throw new Error('Usage: node checkpoint-probe.mjs <URL> [all|hibernate|attachment-loss|disconnect|ack-loss-exhaustion|reset]');
 const token = process.env.PROBE_TOKEN
   ?? (await readFile(new URL('./.evidence/token', import.meta.url), 'utf8')).trim();
 const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
@@ -215,6 +215,69 @@ async function scenario(mode, kind) {
       assert.equal(sibling.closed, false);
       result.healthy_receiver_progressed = true;
       result.healthy_sender_progressed = true;
+    } else if (kind === 'ack-loss-exhaustion') {
+      // All payloads are read and verified before losing feedback. This separates
+      // unreachable accounting from an actual slow-reader platform buffer.
+      const sibling = await connect('receiver2');
+      await until(() => sibling.messages.some(value => value.event === 'joined'), 'healthy sibling joined');
+      const siblingSession = sibling.messages.find(value => value.event === 'joined').session;
+      sibling.socket.send(opaque(0, siblingSession));
+      await until(() => sender.binary.some(frame => frame.toString('ascii', 0, 4) === 'WS2O'
+        && Number(frame.readBigUInt64BE(8)) === siblingSession), 'healthy sibling bootstrap');
+      sender.socket.send(admitted(siblingSession));
+      sender.socket.send(control('WS2B', 1, FRAME_BYTES, siblingSession));
+      await ping(sender);
+      let lost = receiver;
+      result.loss_cycles = [];
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const oldSession = lost.messages.find(value => value.event === 'joined').session;
+        const frames = lost.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O');
+        assert.deepEqual(frames, [opaque(0, oldSession), opaque(1, oldSession)]);
+        const loss = { cycle, old_session: oldSession, verified_frames_without_feedback: frames.length };
+        result.loss_cycles.push(loss);
+        lost.socket.terminate();
+        await until(() => lost.closed, 'lost transport terminated');
+        await delay(300);
+        await ping(sender);
+        settle(sender);
+        await ping(sender);
+        loss.after_loss = await request('status');
+        loss.after_reconstruction = await request('reconstruct', {});
+        assert.equal(loss.after_reconstruction.ready, true);
+        sender.socket.send(opaque(cycle, siblingSession));
+        await until(() => sibling.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O').length === cycle + 1,
+          'healthy sibling continues through feedback loss');
+        sibling.socket.send(control('WS2B', cycle + 1, (cycle + 1) * FRAME_BYTES, siblingSession));
+        await ping(sibling);
+        if (cycle < 2) {
+          lost = await connect('receiver');
+          await until(() => lost.messages.some(value => value.event === 'joined'), 'replacement after feedback loss');
+          const session = lost.messages.find(value => value.event === 'joined').session;
+          lost.socket.send(opaque(0, session));
+          await until(() => sender.binary.some(frame => frame.toString('ascii', 0, 4) === 'WS2O'
+            && Number(frame.readBigUInt64BE(8)) === session), 'replacement bootstrap');
+          sender.socket.send(admitted(session));
+          sender.socket.send(control('WS2B', 1, FRAME_BYTES, session));
+          sender.socket.send(opaque(0, session));
+          sender.socket.send(opaque(1, session));
+          await until(() => lost.binary.filter(frame => frame.toString('ascii', 0, 4) === 'WS2O').length === 2,
+            'replacement payload delivered');
+        }
+      }
+      assert.equal(result.loss_cycles.at(-1).after_reconstruction.admitted, 3);
+      assert.equal(result.loss_cycles.at(-1).after_reconstruction.retired_generations, 2);
+      try { await connect('receiver'); assert.fail('exhausted risk should reject replacement'); }
+      catch (error) {
+        result.replacement_refusal = String(error);
+        assert.match(result.replacement_refusal, /409/);
+      }
+      await ping(sender);
+      await ping(sibling);
+      result.after_refusal = await request('status');
+      assert.equal(sender.closed, false);
+      assert.equal(sibling.closed, false);
+      result.payload_delivered_before_feedback_loss = true;
+      result.healthy_receiver_progressed = true;
     } else if (kind === 'disconnect') {
       receiver.socket.close();
       await until(() => receiver.closed, 'receiver closed');

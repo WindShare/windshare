@@ -6,6 +6,7 @@ use worker::*;
 
 #[path = "../../payload.rs"]
 mod payload;
+mod risk;
 
 const MAX_CONNECTIONS: u64 = 96;
 const MAX_SLOW_FRAMES: u64 = 8192; // 512 MiB over the entire object, including resets.
@@ -61,12 +62,14 @@ impl PressureSockets {
             .one()
     }
 
-    fn record(&self, event: &str, detail: Value) {
+    fn record(&self, event: &str, detail: Value) -> Result<()> {
+        risk::record(&self.state, event, &detail)?;
         console_log!(
             "{}",
             json!({"probe":"pressure", "event":event, "at_ms":Date::now(),
             "object":self.state.id().to_string(), "rust_boot":self.boot, "detail":detail})
         );
+        Ok(())
     }
 
     fn sockets(&self) -> Value {
@@ -88,6 +91,7 @@ impl PressureSockets {
         if !command.role.starts_with("slow-")
             || command.frames == 0
             || command.frames > MAX_BURST_FRAMES
+            || !risk::permits_burst(&self.state, &command.role, command.frames)?
             || budget.frames + command.frames > MAX_SLOW_FRAMES
         {
             return Response::error("burst bound exceeded", 400);
@@ -120,7 +124,7 @@ impl PressureSockets {
             json!({"role":command.role, "frames":command.frames,
             "cumulative_reserved_frames":budget.frames+command.frames, "close":command.close,
             "socket_state":sockets[0].as_ref().ready_state()}),
-        );
+        )?;
         Response::from_json(
             &json!({"frames":command.frames, "frame_bytes":payload::FRAME_BYTES,
             "payload":payload::PAYLOAD_FORMAT, "rust_boot":self.boot}),
@@ -136,7 +140,8 @@ impl DurableObject for PressureSockets {
         }
     }
 
-    async fn fetch(&self, req: Request) -> Result<Response> {
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        risk::prepare(&self.state)?;
         let budget = self.budget()?;
         let url = req.url()?;
         match (req.method(), url.path().rsplit('/').next().unwrap_or("")) {
@@ -158,6 +163,13 @@ impl DurableObject for PressureSockets {
                 {
                     return Response::error("connection bound exceeded", 409);
                 }
+                if !risk::admit(&self.state, &role)? {
+                    self.record(
+                        "risk_admission_refused",
+                        json!({"role":role,"risk":risk::status(&self.state)?}),
+                    )?;
+                    return Response::error("risk reservation limit", 429);
+                }
                 self.state.storage().sql().exec(
                     "UPDATE budget SET connections=connections+1 WHERE id=1",
                     None,
@@ -169,10 +181,38 @@ impl DurableObject for PressureSockets {
                     role: role.clone(),
                     echoes: 0,
                 })?;
-                self.record("connected", json!({"role":role}));
+                self.record("connected", json!({"role":role}))?;
                 Response::from_websocket(pair.client)
             }
             (Method::Post, "burst") => self.burst(req).await,
+            (Method::Post, "risk-configure") => {
+                #[derive(Deserialize)]
+                struct Configure {
+                    policy: risk::Policy,
+                }
+                let command: Configure = req.json().await?;
+                if !risk::configure(&self.state, command.policy, budget.connections)? {
+                    return Response::error("configure before any connections", 409);
+                }
+                Response::from_json(&risk::status(&self.state)?)
+            }
+            (Method::Post, "risk-retire") => {
+                #[derive(Deserialize)]
+                struct Retire {
+                    role: String,
+                }
+                let command: Retire = req.json().await?;
+                risk::retire(&self.state, &command.role)?;
+                for ws in self.state.get_websockets_with_tag(&command.role) {
+                    ws.close(Some(1000), Some("risk probe retirement"))?;
+                }
+                self.record(
+                    "risk_retired",
+                    json!({"role":command.role,"risk":risk::status(&self.state)?}),
+                )?;
+                Response::from_json(&risk::status(&self.state)?)
+            }
+            (Method::Get, "events") => Response::from_json(&risk::events(&self.state)?),
             (Method::Post, "prepare-reset") => {
                 if budget.resets >= MAX_RESETS {
                     return Response::error("reset bound exceeded", 409);
@@ -181,14 +221,14 @@ impl DurableObject for PressureSockets {
                     .storage()
                     .sql()
                     .exec("UPDATE budget SET resets=resets+1 WHERE id=1", None)?;
-                self.record("reset_prepared", json!({"resets":budget.resets+1}));
+                self.record("reset_prepared", json!({"resets":budget.resets+1}))?;
                 self.state.storage().sync().await?;
                 Response::ok("prepared")
             }
             (Method::Get, "status") => Response::from_json(&json!({
                 "rust_boot":self.boot, "object":self.state.id().to_string(),
                 "connections_ever":budget.connections, "reserved_frames":budget.frames,
-                "resets":budget.resets, "sockets":self.sockets(),
+                "resets":budget.resets, "sockets":self.sockets(), "risk":risk::status(&self.state)?,
                 "physical_release_proven":false
             })),
             _ => Response::error("not found", 404),
@@ -233,7 +273,7 @@ impl DurableObject for PressureSockets {
             "close_callback",
             json!({"attachment":ws.deserialize_attachment::<Attachment>()?,
             "code":code, "reason":reason, "clean":clean}),
-        );
+        )?;
         ws.close(Some(1000), Some("acknowledged"))
     }
 
@@ -242,7 +282,7 @@ impl DurableObject for PressureSockets {
             "error_callback",
             json!({"attachment":ws.deserialize_attachment::<Attachment>()?,
             "error":error.to_string()}),
-        );
+        )?;
         Ok(())
     }
 }

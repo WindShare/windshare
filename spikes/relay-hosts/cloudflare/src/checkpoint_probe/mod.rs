@@ -91,9 +91,10 @@ impl CheckpointProbe {
         let restored = Restore {
             authority: Authority::Known(image.record()?),
             surviving: &surviving,
-            responsibility: checkpoint
-                .as_ref()
-                .map_or(Responsibility::Released, Responsibility::Checkpoint),
+            responsibility: checkpoint.as_ref().map_or(
+                Responsibility::Released { previous: None },
+                Responsibility::Checkpoint,
+            ),
         };
         let (mut relay, turn) = ShareRelay::restore(
             fixture.identity(self.incarnation),

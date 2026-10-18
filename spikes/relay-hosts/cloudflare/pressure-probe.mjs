@@ -12,13 +12,15 @@ const frames = Number(process.argv[5] ?? 256);
 const holdMs = Number(process.argv[6] ?? 30_000);
 const calibrationKind = process.argv[7] ?? 'heap';
 const FRAME_BYTES = 65_536;
-const MAX_RUN_MS = 12 * 60_000;
+const MAX_RUN_MS = 20 * 60_000;
+const MAX_HOLD_MS = 10 * 60_000;
+const HOLD_SAMPLE_MS = 30_000;
 const DRAIN_CONCURRENCY = 4;
 assert.ok(base?.startsWith('https://'));
 assert.ok(['live', 'close', 'reset', 'calibration'].includes(mode));
 assert.ok(Number.isInteger(steps) && steps >= 1 && steps <= 32);
 assert.ok(Number.isInteger(frames) && frames >= 1 && frames <= 256);
-assert.ok(Number.isInteger(holdMs) && holdMs >= 0 && holdMs <= 60_000);
+assert.ok(Number.isInteger(holdMs) && holdMs >= 0 && holdMs <= MAX_HOLD_MS);
 const token = process.env.PROBE_TOKEN ??
   (await readFile(new URL('./.evidence/token', import.meta.url), 'utf8')).trim();
 const run = mode + '-' + randomUUID();
@@ -113,7 +115,17 @@ try {
       await save();
     }
     evidence.before_hold = await status();
-    await delay(holdMs);
+    evidence.hold_samples = [];
+    const holdStarted = performance.now();
+    while (performance.now() - holdStarted < holdMs) {
+      await delay(Math.min(HOLD_SAMPLE_MS, holdMs - (performance.now() - holdStarted)));
+      const sample = { held_ms: performance.now() - holdStarted, status: await status(),
+        healthy: await sentinel.sample() };
+      evidence.hold_samples.push(sample);
+      console.log(JSON.stringify({ run, held_ms: sample.held_ms,
+        sockets: sample.status.value.sockets.length, rust_boot: sample.status.value.rust_boot }));
+      await save();
+    }
     evidence.after_hold = await status();
     evidence.final_healthy = await sentinel.sample();
     evidence.sibling_after_load = await sibling.sample();
