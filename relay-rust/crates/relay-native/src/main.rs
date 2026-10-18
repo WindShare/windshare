@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         "{}",
         serde_json::json!({
             "event": "listening", "address": address.to_string(), "endpoint": endpoint.as_str(),
-            "capabilities": ["registration", "resume", "stop", "heartbeat"],
+            "capabilities": ["registration", "resume", "join", "delivery", "stop", "heartbeat"],
         })
     );
     server

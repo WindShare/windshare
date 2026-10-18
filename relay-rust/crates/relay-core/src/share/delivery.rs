@@ -19,6 +19,17 @@ impl<O: Observer> ShareRelay<O> {
             .map(crate::flow::ConnectionLedger::usage)
     }
 
+    /// Read-only replenishment offer for a host-selected outstanding window.
+    /// Grants, queued payloads and unconsumed submissions all occupy the window;
+    /// duplicate feedback therefore cannot create additional credit. Hosts must
+    /// still reserve this offer through `Input::Grant`, which rechecks authority.
+    #[must_use]
+    pub fn delivery_window(&self, flow: FlowKey, target: Counts) -> Option<Counts> {
+        self.generations
+            .ledger(&flow.destination())?
+            .window_credit(flow, target)
+    }
+
     pub(super) fn receive(
         &mut self,
         source: ConnectionRef,

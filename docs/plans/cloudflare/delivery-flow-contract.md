@@ -1,8 +1,8 @@
 # Relay delivery flow contract
 
-Capacity-carrying handshakes, cumulative `WS2B` and final settlement
-(`WS2N`/`WS2S`) are staged behind shared Rust/Go/TypeScript vectors and
-socket-free ledgers; current Go/browser connections still use capacity-less
+The Rust native host and its Go-codec process scenario exercise capacity-carrying
+handshakes, cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). The production
+Go/browser runtime cutover remains pending: those connections still use capacity-less
 handshakes and 24-byte receive-credit deltas. Mode is never inferred from frame
 length or shifted between meanings. Staged entry points: Go
 `DeliveryRegisterInit`/`DeliveryJoin`, browser `delivery-handshake-codec.ts`.

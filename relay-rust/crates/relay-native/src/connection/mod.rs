@@ -76,13 +76,6 @@ impl Outbox {
     ///
     /// # Errors
     /// Refuses a different destination, mismatched size or exhausted frame/byte budget.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "JOIN ingress awaits forwarding and client runtime integration"
-        )
-    )]
     pub fn queue(&mut self, receipt: ReceivedFrame, bytes: Vec<u8>) -> Result<()> {
         ensure!(
             receipt.flow().destination() == self.connection,
@@ -148,6 +141,10 @@ impl Outbox {
                 true
             }
         });
+    }
+
+    pub fn control_available(&self) -> bool {
+        self.control_slots.available_permits() != 0 && !self.ordered.is_closed()
     }
 
     pub fn control(&self, bytes: Vec<u8>) -> Result<()> {

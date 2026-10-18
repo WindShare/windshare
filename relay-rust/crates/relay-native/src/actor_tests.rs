@@ -3,11 +3,18 @@ use crate::{
     storage::Database,
     test_support::{Fixture, connection},
 };
-use std::sync::{Mutex, atomic::AtomicU64};
+use anyhow::bail;
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, atomic::AtomicU64},
+};
 use tokio::time::timeout;
 use windshare_relay_core::{
     challenge::ChallengeSeed, clock::UnixMillis, lifecycle::Record, share::Storage,
 };
+
+#[path = "actor_delivery_tests.rs"]
+mod delivery;
 
 #[derive(Clone)]
 struct Frozen {
@@ -42,14 +49,17 @@ struct Controlled {
     attempts: mpsc::UnboundedSender<Attempt>,
 }
 impl Persistence for Controlled {
-    fn load(&self, share: windshare_relay_core::identifiers::ShareId) -> Result<Option<Record>> {
+    fn load(
+        &self,
+        share: windshare_relay_core::identifiers::ShareId,
+    ) -> Result<Option<StoredAuthority>> {
         self.database.load(share)
     }
     fn execute(
         &self,
         share: windshare_relay_core::identifiers::ShareId,
         operation: &Storage,
-    ) -> Result<()> {
+    ) -> Result<Option<StoredAuthority>> {
         let (release, wait) = std::sync::mpsc::channel();
         self.attempts.send(Attempt {
             operation: operation.clone(),
@@ -210,7 +220,10 @@ async fn acknowledgements_wait_for_atomic_registration_receipts_and_exact_retrie
         assert_eq!(retry.operation, expected_retry);
         assert_eq!(
             matches!(
-                host.store.load(host.fixture.identity().share).unwrap(),
+                host.store
+                    .load(host.fixture.identity().share)
+                    .unwrap()
+                    .map(|stored| stored.record()),
                 Some(Record::Published(_))
             ),
             committed
@@ -225,14 +238,20 @@ async fn acknowledgements_wait_for_atomic_registration_receipts_and_exact_retrie
         stopping.release.send(Receipt::Commit).unwrap();
         let stopped = host.attempt().await;
         assert!(matches!(
-            host.store.load(host.fixture.identity().share).unwrap(),
+            host.store
+                .load(host.fixture.identity().share)
+                .unwrap()
+                .map(|stored| stored.record()),
             Some(Record::Stopping(_))
         ));
         assert!(host.stopper.try_recv().is_err());
         stopped.release.send(Receipt::Commit).unwrap();
         assert_eq!(&read(&mut host.stopper).await[..4], b"WS2Y");
         assert!(matches!(
-            host.store.load(host.fixture.identity().share).unwrap(),
+            host.store
+                .load(host.fixture.identity().share)
+                .unwrap()
+                .map(|stored| stored.record()),
             Some(Record::Stopped(_))
         ));
         drop(host);
@@ -272,7 +291,10 @@ async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlit
         )));
         timeout(Duration::from_secs(3), async {
             while !matches!(
-                store.load(identity.share).unwrap(),
+                store
+                    .load(identity.share)
+                    .unwrap()
+                    .map(|stored| stored.record()),
                 Some(Record::Grace(_) | Record::Stopped(_))
             ) && !task.is_finished()
             {
@@ -286,7 +308,10 @@ async fn startup_recovers_committed_registration_and_interrupted_stop_from_sqlit
             "recovery task exited before reconciliation: {:?}",
             task.await
         );
-        let record = store.load(identity.share).unwrap();
+        let record = store
+            .load(identity.share)
+            .unwrap()
+            .map(|stored| stored.record());
         if committed == 1 {
             assert!(matches!(record, Some(Record::Grace(_))));
         } else {
@@ -333,7 +358,10 @@ async fn failed_actor_closes_mailbox_but_storage_still_fences_recovery() {
         .unwrap();
     assert!(host.generation.recovery().is_ok());
     assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
+        host.store
+            .load(host.fixture.identity().share)
+            .unwrap()
+            .map(|stored| stored.record()),
         Some(Record::Published(_))
     ));
     drop(host);
@@ -371,7 +399,10 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
     let abort = generation.supervise(task);
     timeout(Duration::from_secs(3), async {
         while !matches!(
-            host.store.load(identity.share).unwrap(),
+            host.store
+                .load(identity.share)
+                .unwrap()
+                .map(|stored| stored.record()),
             Some(Record::Grace(_))
         ) {
             assert!(!abort.is_finished());
@@ -381,7 +412,10 @@ async fn cancelled_actor_cannot_lose_a_blocking_commit() {
     .await
     .unwrap();
     assert!(matches!(
-        host.store.load(identity.share).unwrap(),
+        host.store
+            .load(identity.share)
+            .unwrap()
+            .map(|stored| stored.record()),
         Some(Record::Grace(_))
     ));
     abort.abort();
@@ -411,7 +445,10 @@ async fn stop_supersedes_an_ownership_write_already_in_flight() {
     host.attempt().await.release.send(Receipt::Commit).unwrap();
     assert_eq!(&read(&mut host.stopper).await[..4], b"WS2Y");
     assert!(matches!(
-        host.store.load(host.fixture.identity().share).unwrap(),
+        host.store
+            .load(host.fixture.identity().share)
+            .unwrap()
+            .map(|stored| stored.record()),
         Some(Record::Stopped(_))
     ));
     drop(host);

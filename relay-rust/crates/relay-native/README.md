@@ -1,9 +1,10 @@
-# Native relay lifecycle host
+# Native relay host
 
-This first native host runs real WebSocket REGISTER, RESUME, independent STOP and
-heartbeat control through `ShareRelay`. It requires the capacity-bearing handshake.
-JOIN and opaque forwarding are explicitly unavailable; the Go relay remains the
-product server until the delivery runtime, STUN and operational endpoints are ready.
+This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulative
+consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
+real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
+production Go/browser clients still await the coordinated cutover. The Go relay remains
+the product server until client integration, STUN and operational endpoints are ready.
 
 From `relay-rust/`:
 
@@ -25,6 +26,8 @@ cleanup and commits the final fact before acknowledgement. Startup recovers comm
 ownership even if its receipt was lost, enters grace when the owner is gone and
 preserves already-persisted grace deadlines. Schema version 2 rejects older databases.
 Generation allocation is durable; challenge entropy comes from the OS.
+JOIN reads its sealed descriptor from the confirmed authority cached by the actor,
+including after RESUME. Opaque forwarding and consumption never perform SQL.
 
 Ingress separates 256 process-wide business slots from 32 control slots; each share
 keeps 32 business and 8 control slots. New connections are rate-limited, and valid
@@ -38,8 +41,13 @@ frame/byte bounds, reserved control capacity and coalesced priority heartbeat re
 Unsubmitted payloads stay with the actor. The connection foundation rechecks a receipt
 through `ShareRelay::submit` and hands it to the bounded writer synchronously; those
 bytes are then submitted responsibility and may still arrive after STOP.
+Native scheduling maintains a 16-frame window, bounded by the destination declaration
+and available ordinary capacity. It reads kernel occupancy instead of duplicating
+cumulative counters, rotates flows sharing a destination, and defers grants until
+their control writer has space. Consumption replay cannot replenish twice.
 
-Queue discard precedes its kernel receipt. Closure aborts both tasks, or gives ordered
+Queue discard precedes its kernel receipt; the resulting settlement enters the ordered
+writer before closure. Closure aborts both tasks, or gives ordered
 terminal replies and the WebSocket close handshake one bounded interval; shutdown
 interrupts that drain.
 Only joined tasks, dropped queues and abortive TCP teardown justify `Closed`;
@@ -61,10 +69,11 @@ Recovery evidence depends on the boundary:
 
 Previously submitted network bytes may still arrive; release does not mean delivery
 or recall. These native ownership guarantees do not apply to Cloudflare buffers.
-JOIN/data ingress remains disabled pending forwarding and coordinated client integration.
 
 `make rust` covers blocked-write ingress, bounded queues, STOP submission fencing,
 joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
-cancelled-supervisor lease retention, fault-injected commit ordering and a Go-codec WebSocket scenario
-that kills/restarts the actual binary, resumes ownership, stops the share,
-then verifies that another restart cannot republish or resume it.
+cancelled-supervisor lease retention and fault-injected commit ordering. The existing
+Go-codec process scenario transfers 80 mixed-size frames per direction beyond asymmetric
+receive windows, replays consumption, leaves submitted debt outstanding for STOP, and
+verifies ordered settlement. It also kills/restarts the binary, resumes and transfers
+again, then verifies that another restart cannot republish or resume a stopped share.

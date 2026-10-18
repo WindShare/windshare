@@ -27,14 +27,14 @@ pub(super) fn apply(
     relay: RelayIdentity,
     share: ShareId,
     operation: &Storage,
-) -> Result<()> {
+) -> Result<Option<StoredAuthority>> {
     let current = read(connection, relay, share)?;
     let next = authority::apply(relay, share, current.as_ref(), operation)
         .map_err(|error| anyhow!("authority transition: {error:?}"))?;
     if next == current {
-        return Ok(());
+        return Ok(next);
     }
-    if let Some(stored) = next {
+    if let Some(stored) = &next {
         connection.execute(
             "INSERT INTO shares (share, record, descriptor) VALUES (?1, ?2, ?3)
              ON CONFLICT(share) DO UPDATE SET record=excluded.record,
@@ -48,5 +48,5 @@ pub(super) fn apply(
     } else {
         connection.execute("DELETE FROM shares WHERE share=?1", [share.as_bytes()])?;
     }
-    Ok(())
+    Ok(next)
 }

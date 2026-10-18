@@ -78,7 +78,8 @@ func dialWithCredential(endpoint string, share v2.ShareID, credential bool) (*we
 	}
 	connection, _, err := websocket.Dial(ctx, route.DialURL, &websocket.DialOptions{HTTPHeader: headers})
 	check(err)
-	connection.SetReadLimit(v2.MaxDescriptorBytes + v2.DescriptorUploadHeaderBytes)
+	connection.SetReadLimit(max(v2.MaxDescriptorBytes+v2.DescriptorDeliveryHeaderBytes,
+		v2.MaxOpaqueCiphertextBytes+v2.OpaqueRouteHeaderBytes))
 	return connection, route
 }
 
