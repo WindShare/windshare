@@ -1,6 +1,9 @@
 package v2
 
-import "encoding/binary"
+import (
+	"crypto/ed25519"
+	"encoding/binary"
+)
 
 // Explicit staged codecs: runtime activation requires cumulative consumption and
 // settlement together. Neither parser accepts the live capacity-less handshake.
@@ -80,6 +83,16 @@ func DeliveryRegistrationPreimage(init DeliveryRegisterInit, challenge Challenge
 type DeliveryJoin struct {
 	ShareID         ShareID
 	ReceiveCapacity ReceiveCapacity
+}
+
+// NewDeliveryRegisterProof binds the capacity used by the connection ledger to
+// the same fresh challenge and authority as REGISTER or RESUME.
+func NewDeliveryRegisterProof(init DeliveryRegisterInit, challenge Challenge, relay RelayIdentity, key ed25519.PrivateKey) (RegisterProof, error) {
+	preimage, err := DeliveryRegistrationPreimage(init, challenge, relay)
+	if err != nil {
+		return RegisterProof{}, err
+	}
+	return signRegisterProof(init.Registration, preimage, key)
 }
 
 func (f DeliveryJoin) MarshalBinary() ([]byte, error) {

@@ -3,8 +3,9 @@
 This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulative
 consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
 real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
-production Go/browser clients still await the coordinated cutover. The Go relay remains
-the product server until client integration and remaining operational interfaces are ready.
+the Go `relayv2` runtime now implements both. Browser activation and default server/build
+entry points remain pending. The new Go client is incompatible with the legacy Go relay;
+use this host for its delivery protocol.
 
 From `relay-rust/`:
 
@@ -138,7 +139,8 @@ STOP under full business budgets and upgrade handoff, plus blocked-write ingress
 bounded queues, STOP submission fencing,
 joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
 cancelled-supervisor lease retention and fault-injected commit ordering. The existing
-Go-codec process scenario transfers 80 mixed-size frames per direction beyond asymmetric
-receive windows, replays consumption, leaves submitted debt outstanding for STOP, and
-verifies ordered settlement. It also kills/restarts the binary, resumes and transfers
-again, then verifies that another restart cannot republish or resume a stopped share.
+Go-client process scenario calls `DialSender`, `DialReceiver` and `Channel` directly.
+It transfers mixed-size frames beyond asymmetric receive windows, verifies sparse
+feedback, isolates a slow receiver, releases cancelled queues through `WS2S`, and
+leaves submitted debt outstanding for STOP. It also kills/restarts the binary,
+resumes and transfers again, then verifies permanent STOP across another restart.

@@ -14,7 +14,7 @@ var testHeartbeat = HeartbeatConfig{Interval: time.Second, Timeout: 3 * time.Sec
 
 func startHeartbeatLink(t *testing.T, socket *scriptedSocket) *link {
 	t.Helper()
-	link := newLinkWithLifecycleStream(context.Background(), socket, false, 64)
+	link := newTestLinkWithLifecycleStream(context.Background(), socket, false, 64)
 	link.heartbeat = testHeartbeat
 	link.start()
 	return link
@@ -67,7 +67,7 @@ func TestHeartbeatKeepsProbingWhileContentOutlivesAcknowledgements(t *testing.T)
 	synctest.Test(t, func(t *testing.T) {
 		socket := newScriptedSocket()
 		link := startHeartbeatLink(t, socket)
-		retired, _ := v2.SessionRetired{RelaySessionID: relaySessionID(9)}.MarshalBinary()
+		retired, _ := v2.SettlementNotice{RelaySessionID: relaySessionID(9)}.MarshalBinary()
 		const rounds = 10
 		for round := uint64(1); round <= rounds; round++ {
 			time.Sleep(testHeartbeat.Interval)

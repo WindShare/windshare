@@ -279,8 +279,8 @@ impl<O: Observer> ConnectionLedger<O> {
                 })
                 .min_by_key(|request| request.deadline);
         }
-        debug_assert!(self.limits.startup_reserve.covers(self.startup_used));
-        debug_assert!(self.limits.regular().covers(self.regular_used()));
+        debug_assert!(self.capacity_pools().startup.covers(self.startup_used));
+        debug_assert!(self.capacity_pools().regular.covers(self.regular_used()));
         debug_assert!(
             self.receive_capacity
                 .is_some_and(|capacity| capacity.counts().covers(self.usage.total()))

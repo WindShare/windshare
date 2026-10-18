@@ -61,7 +61,7 @@ fn stopped(database: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn go_capacity_client_drives_native_io_and_process_restart() {
+async fn go_runtime_client_drives_native_io_and_process_restart() {
     let (directory, client) = tokio::task::spawn_blocking(client).await.unwrap();
     let database = directory.path().join("in-process.sqlite");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

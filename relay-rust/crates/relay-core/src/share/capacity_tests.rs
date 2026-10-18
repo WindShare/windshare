@@ -206,17 +206,11 @@ fn window_offers_follow_all_occupancy_stages_and_never_refill_from_replays() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.register(&mut relay);
-    let joined = join_capacity(&fixture, &mut relay, 2, Counts::new(2, 2 * MAX_FRAME));
+    // A minimum-size destination must retain ordinary capacity after its
+    // startup allowance; protecting the whole declaration would strand it.
+    let joined = join_capacity(&fixture, &mut relay, 2, Counts::new(1, MAX_FRAME));
     let flow = grants(&joined)[1].flow;
     let target = Counts::new(4, 4 * MAX_FRAME);
-    let credit = relay.delivery_window(flow, target).unwrap();
-    assert_eq!(credit, Counts::new(1, MAX_FRAME));
-    assert_eq!(
-        relay
-            .handle(Input::Grant { flow, credit }, fixture.at)
-            .refusal,
-        None
-    );
     assert_eq!(relay.delivery_window(flow, target), Some(Counts::ZERO));
     let receipt = receive_from(
         &mut relay,

@@ -1,7 +1,6 @@
 // Package receiveledger accounts for inbound delivery on one physical connection.
 // Both endpoint roles use the same socket-free state machine. The caller serializes
 // access, owns payload storage, and admits each non-reused wire session explicitly.
-// This is staged for the coordinated delivery-protocol cutover.
 package receiveledger
 
 import (

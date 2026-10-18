@@ -2,12 +2,14 @@ package relayv2
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/internal/connectionliveness"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -23,14 +25,14 @@ type link struct {
 	liveness  *connectionliveness.Monitor
 	probes    probeLedger
 
-	writeWake      chan struct{}
-	writeMu        sync.Mutex
-	queues         map[v2.RelaySessionID]*sendQueue
-	order          []v2.RelaySessionID
-	cursor         int
-	queued         int
-	windows        map[v2.RelaySessionID]*sendWindow
-	receiveCredits map[v2.RelaySessionID]*v2.ReceiveCredit
+	writeWake chan struct{}
+	writeMu   sync.Mutex
+	queues    map[v2.RelaySessionID]*sendQueue
+	order     []v2.RelaySessionID
+	cursor    int
+	queued    int
+	windows   map[v2.RelaySessionID]*sendWindow
+	receives  *receiveBuffer
 	// Observation completion joins only accepted sends that can still publish a
 	// result fact; disabled tracing pays no registration or synchronization cost.
 	sendResultMu         sync.Mutex
@@ -52,21 +54,34 @@ type link struct {
 	nextOperation atomic.Uint64
 }
 
-func newLink(parent context.Context, socket BinarySocket, fixed bool) *link {
-	return newLinkWithLifecycleStream(parent, socket, fixed, 0)
-}
-
-func newLinkWithLifecycleStream(parent context.Context, socket BinarySocket, fixed bool, capacity int) *link {
+func newLink(parent context.Context, socket BinarySocket, fixed bool, options DialOptions) (*link, error) {
+	capacity, err := normalizeReceiveCapacity(options.ReceiveCapacity)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(parent)
 	linkID := nextLinkID.Add(1)
-	return &link{
+	l := &link{
 		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
+		heartbeat: options.Heartbeat,
 		liveness:  connectionliveness.NewMonitor(time.Now()),
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
-		windows:        make(map[v2.RelaySessionID]*sendWindow),
-		receiveCredits: make(map[v2.RelaySessionID]*v2.ReceiveCredit),
-		channels:       make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
-		done: make(chan struct{}), traces: newLifecycleSource(linkID, capacity),
+		windows:  make(map[v2.RelaySessionID]*sendWindow),
+		channels: make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
+		done: make(chan struct{}), traces: newLifecycleSource(linkID, options.LifecycleObservationCapacity),
+	}
+	l.receives, err = newReceiveBuffer(linkID, capacity, l.wakeWriter, l.stop)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return l, nil
+}
+
+func (l *link) wakeWriter() {
+	select {
+	case l.writeWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -163,12 +178,15 @@ func (l *link) receive(messageType websocket.MessageType, encoded []byte) error 
 		return ErrProtocol
 	}
 	switch string(encoded[:4]) {
-	case v2.SessionRetiredMagic:
-		retired, err := v2.ParseSessionRetired(encoded)
+	case v2.SettlementNoticeMagic:
+		notice, err := v2.ParseSettlementNotice(encoded)
 		if err != nil {
 			return ErrProtocol
 		}
-		l.retire(retired.RelaySessionID)
+		l.retire(notice.RelaySessionID)
+		if err := l.receives.notice(notice.RelaySessionID, notice); err != nil {
+			return errors.Join(ErrProtocol, err)
+		}
 		return nil
 	case v2.SessionCreditMagic:
 		credit, err := v2.ParseSessionCredit(encoded)
@@ -183,11 +201,17 @@ func (l *link) receive(messageType websocket.MessageType, encoded []byte) error 
 	if err != nil {
 		return ErrProtocol
 	}
-	channel, created := l.channel(route.RelaySessionID)
+	l.channelMu.Lock()
+	channel := l.channels[route.RelaySessionID]
+	l.channelMu.Unlock()
 	if channel == nil {
 		return ErrProtocol
 	}
-	if created {
+	if err := channel.deliver(route.Ciphertext); err != nil {
+		return errors.Join(ErrProtocol, err)
+	}
+	if !l.fixed && !channel.announced && channel.State() == framechannel.Open {
+		channel.announced = true
 		select {
 		case l.accept <- channel:
 		default:
@@ -195,13 +219,13 @@ func (l *link) receive(messageType websocket.MessageType, encoded []byte) error 
 			return nil
 		}
 	}
-	if !channel.deliver(route.Ciphertext) {
-		l.failChannel(channel, LifecycleRetirementIngressFailure, ErrIngressOverflow)
-	}
 	return nil
 }
 
 func (l *link) writeLoop() {
+	flush := time.NewTimer(receiveFlushInterval)
+	flush.Stop()
+	defer flush.Stop()
 	for {
 		// Probes bypass credit waits: a blocked content window must not keep
 		// the relay from seeing this client alive.
@@ -212,7 +236,7 @@ func (l *link) writeLoop() {
 			}
 			continue
 		}
-		encoded, err := l.takeReceiveCredit()
+		encoded, settled, err := l.receives.take(time.Now())
 		if err != nil {
 			l.stop(err)
 			return
@@ -221,6 +245,11 @@ func (l *link) writeLoop() {
 			if err := l.socket.Write(l.ctx, websocket.MessageBinary, encoded); err != nil {
 				l.stop(err)
 				return
+			}
+			if settled != (v2.RelaySessionID{}) {
+				l.channelMu.Lock()
+				delete(l.channels, settled)
+				l.channelMu.Unlock()
 			}
 			continue
 		}
@@ -234,10 +263,16 @@ func (l *link) writeLoop() {
 			}
 			continue
 		}
+		var flushDue <-chan time.Time
+		if deadline := l.receives.deadline(); !deadline.IsZero() {
+			flush.Reset(time.Until(deadline))
+			flushDue = flush.C
+		}
 		select {
 		case <-l.ctx.Done():
 			return
 		case <-l.writeWake:
+		case <-flushDue:
 		}
 	}
 }
@@ -257,6 +292,9 @@ func (l *link) channel(id v2.RelaySessionID) (*Channel, bool) {
 		return nil, false
 	}
 	channel := newChannel(id, l)
+	if channel == nil {
+		return nil, false
+	}
 	l.channels[id] = channel
 	return channel, true
 }
@@ -266,17 +304,12 @@ func (l *link) installFixed(id v2.RelaySessionID) *Channel {
 	defer l.lifecycleMu.Unlock()
 	l.channelMu.Lock()
 	defer l.channelMu.Unlock()
+	if l.lifecycle != linkOpen {
+		return nil
+	}
 	channel := newChannel(id, l)
-	if l.lifecycle == linkOpen {
+	if channel != nil {
 		l.channels[id] = channel
-		if l.fixed {
-			l.writeMu.Lock()
-			l.receiveCredits[id] = &v2.ReceiveCredit{RelaySessionID: id,
-				Frames: v2.ReceiveWindowFrames, Bytes: v2.ReceiveWindowBytes}
-			l.writeMu.Unlock()
-		}
-	} else if channel.incoming != nil {
-		channel.stopReceiving()
 	}
 	return channel
 }
@@ -314,6 +347,11 @@ func (l *link) stop(cause error) {
 	l.lifecycleMu.Lock()
 	if l.lifecycle == linkClosed {
 		l.lifecycleMu.Unlock()
+		// Accepted terminal frames can outlive a network failure. A later owner
+		// close must still join their workers and release the remaining storage.
+		if cause == nil {
+			l.receives.close(true)
+		}
 		return
 	}
 	first := l.lifecycle == linkOpen
@@ -350,6 +388,7 @@ func (l *link) stop(cause error) {
 	}
 	// Failure retirement can cancel an in-flight write that was already removed
 	// from the queue. Keep the stream open until that accepted result publishes.
+	l.receives.close(cause == nil)
 	l.cancel()
 	if l.traces != nil {
 		if authoritative.cause != nil {

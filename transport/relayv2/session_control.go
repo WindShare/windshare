@@ -13,20 +13,25 @@ func (l *link) sendWindowLocked(id v2.RelaySessionID) *sendWindow {
 	window := l.windows[id]
 	if window == nil {
 		window = &sendWindow{}
-		if !l.fixed {
-			window.frames, window.bytes = v2.SenderWindowFrames, v2.SenderWindowBytes
-		}
 		l.windows[id] = window
 	}
 	return window
 }
 
 func (l *link) replenishCredit(credit v2.SessionCredit) bool {
+	// The initial grant admits sender-side metadata before the first opaque
+	// frame; neither endpoint may invent startup allowance locally.
+	channel, _ := l.channel(credit.RelaySessionID)
+	if channel == nil {
+		return false
+	}
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
 	l.channelMu.Lock()
 	defer l.channelMu.Unlock()
 	// Credit can cross local retirement. It must never recreate a channel or
 	// its budget after the authoritative owner has released it.
-	if l.channels[credit.RelaySessionID] == nil {
+	if l.channels[credit.RelaySessionID] != channel || channel.state != framechannel.Open {
 		return true
 	}
 	l.writeMu.Lock()

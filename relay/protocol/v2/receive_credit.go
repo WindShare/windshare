@@ -12,7 +12,8 @@ const (
 	ReceiveCreditBatchFrames = ReceiveWindowFrames / 4
 )
 
-// ReceiveCredit reserves receiver-owned ingress storage for relay delivery.
+// ReceiveCredit is the legacy Go relay/browser credit dialect. The Go delivery
+// runtime instead declares ReceiveCapacity and reports DeliveryConsumed.
 // The first grant opens an initially empty window; subsequent grants return
 // capacity only after the application takes frames out of that storage.
 type ReceiveCredit struct {

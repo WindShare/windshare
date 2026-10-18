@@ -126,14 +126,19 @@ func newRegistrationContractFixture(tb testing.TB) (registrationContractFixture,
 	for index := range challenge.Nonce {
 		challenge.Nonce[index] = byte(index + 97)
 	}
-	proof, err := v2.NewRegisterProof(init, challenge, endpoint.Identity, privateKey)
+	capacity, err := normalizeReceiveCapacity(v2.ReceiveCapacity{})
+	if err != nil {
+		return registrationContractFixture{}, err
+	}
+	deliveryInit := v2.DeliveryRegisterInit{Registration: init, ReceiveCapacity: capacity}
+	proof, err := v2.NewDeliveryRegisterProof(deliveryInit, challenge, endpoint.Identity, privateKey)
 	if err != nil {
 		return registrationContractFixture{}, err
 	}
 	registered := v2.Registered{
 		ShareID: init.ShareID, ShareInstance: init.ShareInstance, DescriptorDigest: init.DescriptorDigest,
 	}
-	initBytes, err := init.MarshalBinary()
+	initBytes, err := deliveryInit.MarshalBinary()
 	if err != nil {
 		return registrationContractFixture{}, err
 	}

@@ -44,12 +44,12 @@ impl<O: Observer> ConnectionLedger<O> {
             if !ledger.receive_available()?.covers(credit) {
                 return Err(Refusal::StartupCapacity);
             }
-            let startup = credit.min(ledger.limits.startup_reserve.sub(ledger.startup_used));
+            let pools = ledger.capacity_pools();
+            let startup = credit.min(pools.startup.sub(ledger.startup_used));
             // A prior handshake may retain unused byte credit after consuming its
             // frame allowance. Free ordinary capacity must still admit newcomers.
-            if !ledger
-                .limits
-                .regular()
+            if !pools
+                .regular
                 .sub(ledger.regular_used())
                 .covers(credit.sub(startup))
             {
@@ -93,8 +93,8 @@ impl<O: Observer> ConnectionLedger<O> {
                 return Err(Refusal::DeliveryCapacity);
             }
             if !ledger
-                .limits
-                .regular()
+                .capacity_pools()
+                .regular
                 .sub(ledger.regular_used())
                 .covers(credit)
             {
