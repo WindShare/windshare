@@ -64,7 +64,7 @@ func nativeRelayArtifact(output io.Reader) (string, error) {
 		}
 		if err := decoder.Decode(&message); err != nil {
 			if errors.Is(err, io.EOF) {
-				return "", errors.New("Cargo did not report the native relay executable")
+				return "", errors.New("cargo did not report the native relay executable")
 			}
 			return "", fmt.Errorf("decode Cargo artifact: %w", err)
 		}
@@ -72,7 +72,7 @@ func nativeRelayArtifact(output io.Reader) (string, error) {
 			continue
 		}
 		if !filepath.IsAbs(message.Executable) {
-			return "", fmt.Errorf("Cargo executable path is not absolute: %q", message.Executable)
+			return "", fmt.Errorf("cargo executable path is not absolute: %q", message.Executable)
 		}
 		return message.Executable, nil
 	}
