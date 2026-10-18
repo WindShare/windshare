@@ -1,6 +1,6 @@
 use super::{
     config,
-    runtime::{Host, Runtime},
+    runtime::{Host, Recovery, Runtime},
 };
 use anyhow::{Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -23,6 +23,9 @@ use windshare_relay_core::{
 
 #[path = "recovery_tests.rs"]
 mod recovery;
+
+#[path = "delivery_tests.rs"]
+mod delivery;
 
 struct Fixture(serde_json::Value);
 impl Fixture {
@@ -91,6 +94,7 @@ fn connection(id: u64) -> ConnectionRef {
 }
 
 struct Memory {
+    initialized: bool,
     identity: Identity,
     time: UnixMillis,
     seed: Option<ChallengeSeed>,
@@ -103,10 +107,12 @@ struct Memory {
     fail_write: Option<(usize, bool)>,
     failed_attachments: usize,
     manifest_writes: usize,
+    fail_send: Option<ConnectionRef>,
 }
 impl Memory {
     fn new(f: &Fixture) -> Self {
         Self {
+            initialized: false,
             identity: f.identity(1),
             time: f.time(""),
             seed: Some(f.seed("")),
@@ -119,6 +125,7 @@ impl Memory {
             fail_write: None,
             failed_attachments: 0,
             manifest_writes: 0,
+            fail_send: None,
         }
     }
     fn restore(&mut self, boot: u8) -> Result<Runtime<()>> {
@@ -136,14 +143,19 @@ impl Memory {
             .unwrap()
         });
         let surviving: Vec<_> = self.live.iter().copied().collect();
-        Runtime::restore(
-            self,
-            self.identity,
-            self.stored.as_ref().map(StoredAuthority::record),
-            checkpoint.as_ref(),
-            &surviving,
-            (),
-        )
+        let authority = self.stored.clone();
+        let recovery = if self.initialized {
+            Recovery::Existing {
+                authority: authority.as_ref(),
+                checkpoint: checkpoint.as_ref(),
+                surviving: &surviving,
+            }
+        } else {
+            Recovery::New
+        };
+        let runtime = Runtime::restore(self, self.identity, recovery, ())?;
+        self.initialized = true;
+        Ok(runtime)
     }
     fn open(&mut self, runtime: &mut Runtime<()>, id: u64) {
         self.live.insert(connection(id));
@@ -181,7 +193,7 @@ impl Host for Memory {
     fn challenge(&mut self) -> Result<ChallengeSeed> {
         Ok(self.seed.take().expect("one challenge"))
     }
-    fn execute(&mut self, operation: &Storage) -> Result<()> {
+    fn execute(&mut self, operation: &Storage) -> Result<Option<StoredAuthority>> {
         self.writes += 1;
         let failure = self.fail_write.filter(|(index, _)| *index == self.writes);
         if failure == Some((self.writes, false)) {
@@ -203,9 +215,13 @@ impl Host for Memory {
         if failure.is_some() {
             bail!("injected lost receipt");
         }
-        Ok(())
+        Ok(self.stored.clone())
     }
     fn send(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()> {
+        if self.fail_send == Some(connection) {
+            self.fail_send = None;
+            bail!("uncertain handoff");
+        }
         if !self.live.contains(&connection) {
             bail!("disconnected");
         }

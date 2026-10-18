@@ -14,8 +14,8 @@ use anyhow::{Result as HostResult, anyhow};
 use io::CloudflareHost;
 use recovery::Ready;
 use serde_json::json;
-use std::cell::RefCell;
-use storage::{Database, IMAGE, api};
+use std::cell::{Cell, RefCell};
+use storage::{IMAGE, api};
 use windshare_relay_core::share::Input;
 use worker::{
     DurableObject, Env, Method, Request, Response, Result, State, WebSocket,
@@ -29,11 +29,18 @@ enum Loaded {
     Ready(Box<Ready>),
 }
 
+#[derive(Clone, Copy)]
+enum AlarmState {
+    Unknown,
+    Known(Option<u64>),
+}
+
 #[durable_object]
 pub struct ShareRelayObject {
     state: State,
     env: Env,
     loaded: RefCell<Loaded>,
+    alarm: Cell<AlarmState>,
 }
 
 fn failure(error: impl std::fmt::Display) -> worker::Error {
@@ -59,7 +66,7 @@ impl ShareRelayObject {
         };
         let mut host = CloudflareHost {
             state: &self.state,
-            database: Database::open(&self.state)?,
+            database: ready.database.clone(),
             identity: ready.identity,
         };
         action(ready, &mut host)
@@ -76,6 +83,7 @@ impl ShareRelayObject {
         // An uncertain authority/inventory cannot authorize any socket. A new
         // event reads SQLite afresh and completes unresolved kernel obligations.
         *self.loaded.borrow_mut() = Loaded::Cold;
+        self.alarm.set(AlarmState::Unknown);
         for ws in self.state.get_websockets() {
             let _ = ws.close(Some(1011), Some("authority recovery required"));
         }
@@ -93,20 +101,31 @@ impl ShareRelayObject {
     }
 
     async fn schedule(&self) -> Result<()> {
-        // Storage reads retain the default input gate. Re-read the in-memory
-        // deadline after awaiting; never install a stale event's later deadline.
-        let scheduled = self.state.storage().get_alarm().await?;
+        // Read once after construction, not for every payload. Storage retains
+        // its input gate; use the current kernel deadline after any await.
+        let scheduled = match self.alarm.get() {
+            AlarmState::Known(at) => at,
+            AlarmState::Unknown => {
+                let at = self
+                    .state
+                    .storage()
+                    .get_alarm()
+                    .await?
+                    .and_then(|at| u64::try_from(at).ok());
+                self.alarm.set(AlarmState::Known(at));
+                at
+            }
+        };
         let deadline = match &*self.loaded.borrow() {
             Loaded::Ready(ready) => ready.runtime.deadline().map(|at| at.0),
             Loaded::Cold => Some(io::now().0.saturating_add(RECOVERY_RETRY_MS)),
         };
-        if let Some(at) =
-            config::earlier_alarm(scheduled.and_then(|at| u64::try_from(at).ok()), deadline)
-        {
+        if let Some(at) = config::earlier_alarm(scheduled, deadline) {
             self.state
                 .storage()
                 .set_alarm(io::alarm_time(at).map_err(failure)?)
                 .await?;
+            self.alarm.set(AlarmState::Known(Some(at)));
         }
         Ok(())
     }
@@ -151,6 +170,7 @@ impl DurableObject for ShareRelayObject {
             state,
             env,
             loaded: RefCell::new(Loaded::Cold),
+            alarm: Cell::new(AlarmState::Unknown),
         }
     }
 
@@ -187,9 +207,7 @@ impl DurableObject for ShareRelayObject {
                 .any(|tag| tag == edge::REGISTER_TAG);
             self.with_runtime(|ready, host| match message {
                 WebSocketIncomingMessage::Binary(bytes) => {
-                    ready
-                        .runtime
-                        .control(host, connection, &bytes, may_register)
+                    ready.runtime.message(host, connection, bytes, may_register)
                 }
                 WebSocketIncomingMessage::String(_) => {
                     host.close(connection)?;
@@ -222,6 +240,7 @@ impl DurableObject for ShareRelayObject {
     }
 
     async fn alarm(&self) -> Result<Response> {
+        self.alarm.set(AlarmState::Known(None));
         let result = (|| {
             self.initialize(None)?;
             self.with_runtime(|ready, host| ready.runtime.event(host, Input::Tick))?;

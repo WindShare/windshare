@@ -136,10 +136,11 @@ Fault-injected host tests hold commits across actor failure/cancellation,
 fail before commit, lose receipts and race STOP with ownership publication. A real
 SQLite trigger abort verifies rollback of the whole registration; restart retains
 committed ownership whose receipt was lost. Production client runtime cutover remains
-pending. The Cloudflare lifecycle adapter now uses the
-same authority-row transitions, real Worker entropy/time and SQLite. Injected host
-tests cover incomplete commits, permanent STOP, hibernation, partial attachment
-writes, lost-attachment isolation and absolute deadline/nonce preservation. Its
+pending. The Cloudflare adapter uses the same authority-row transitions, real Worker
+entropy/time and SQLite. Injected host tests cover JOIN descriptors, bidirectional
+window replenishment, replayed consumption, ordered settlement before STOP closure,
+uncertain sends, incomplete commits, hibernation with delivery debt, missing manifests,
+partial attachment writes and absolute deadline/nonce preservation. Its
 [opt-in Preview scenario](../relay-rust/crates/relay-cloudflare/README.md#validation)
 uses the shared Go client and a separate fault-injection entry.
 Opt-in [host probes](../spikes/relay-hosts/README.md) exercise real native writers and

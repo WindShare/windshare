@@ -129,20 +129,26 @@ The Go-codec process scenario covers asymmetric windows, feedback replay, STOP w
 outstanding delivery and restart/RESUME. STUN, operational endpoints and the production
 client cutover remain pending; Go is still the product entry point.
 
-## Cloudflare lifecycle host
+## Cloudflare host
 
 [`relay-cloudflare`](../../../relay-rust/crates/relay-cloudflare/README.md) runs
-the same lifecycle on a Worker and SQLite Durable Object. The Worker routes by
+the same lifecycle and bidirectional delivery on a Worker and SQLite Durable Object.
+JOIN reads the descriptor from confirmed authority; event-owned payloads use synchronous
+kernel submission, and consumption replenishes windows from restored kernel occupancy.
+The Worker routes by
 `share_id` and gates fresh registration with a deployment credential; RESUME and
 STOP authenticate independently. `authority::apply` shares atomic row transitions
-between SQL hosts. Typed attachments preserve pending handshakes and liveness;
+between SQL hosts. Typed attachments preserve pending handshakes, delivery and liveness;
 the manifest and persisted allocator fence lost generations, and alarms coalesce
-without extending deadlines. Empty-socket recovery still honors an existing manifest.
+without per-frame reads or extending deadlines. Existing identities require the manifest
+even without authority or sockets; only first creation establishes empty responsibility.
+Ordered cleanup completes settlement sends before subsequent closure.
 The host selects immediate risk expiry after quiescence; a reconnect-rate budget
 remains enforced. This is an admission policy, not a physical buffer TTL. The
 [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
-passed signatures, hibernation, fault RESUME, permanent STOP and Alarm expiry.
-JOIN/forwarding and the runtime cutover remain pending.
+passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hibernation
+with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
+The production client runtime cutover remains pending.
 
 ## Host evidence
 

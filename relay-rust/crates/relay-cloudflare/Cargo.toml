@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Cloudflare Worker and Durable Object lifecycle host for WindShare"
+description = "Cloudflare Worker and Durable Object relay host for WindShare"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
