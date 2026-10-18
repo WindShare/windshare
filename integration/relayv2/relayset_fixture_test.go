@@ -35,8 +35,16 @@ const (
 // authority and listening sockets belong to each individual native relay.
 func startRelaysetScenario(t *testing.T, count int) (context.Context, *testscenario.Trace, []string) {
 	t.Helper()
+	trace, urls := startNativeRelays(t, count)
+	ctx, cancel := context.WithTimeout(t.Context(), relayScenarioTimeout)
+	t.Cleanup(cancel)
+	return ctx, trace, urls
+}
+
+func startNativeRelays(t *testing.T, count int) (*testscenario.Trace, []string) {
+	t.Helper()
 	if testing.Short() {
-		t.Skip("native relay-set scenarios belong to the long integration gate")
+		t.Skip("native relay scenarios belong to the long integration gate")
 	}
 	prepareRelaySuite(t)
 	directories := make([]string, count)
@@ -63,9 +71,7 @@ func startRelaysetScenario(t *testing.T, count int) (context.Context, *testscena
 		trace.RequireRecord(t, testrun.ListenerReadyMilestone, testrun.OutcomeSucceeded, host.Ready)
 		urls[index] = host.Ready.BaseURL
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), relayScenarioTimeout)
-	t.Cleanup(cancel)
-	return ctx, trace, urls
+	return trace, urls
 }
 
 type relaysetTerminal struct{}
