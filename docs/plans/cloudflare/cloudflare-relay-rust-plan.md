@@ -166,7 +166,7 @@ Go CLI / 浏览器 / 未来客户端
 ```
 
 Go REGISTER/RESUME/JOIN/STOP and browser JOIN now append the public `share_id` upgrade hint using
-the [relay routing contract](../../协议规范.md#4-分享与接收流程). Existing query bytes and `relay_identity`
+the relay routing contract. Existing query bytes and `relay_identity`
 remain unchanged; preconfigured routing parameters are rejected. The Worker must select the
 ShareRelay DO from this hint, and the DO must reject a handshake whose share identity differs.
 The hint grants no authority.
