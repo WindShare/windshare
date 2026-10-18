@@ -64,9 +64,11 @@ either. Provisional sessions carry the E2E handshake under an absolute admission
 deadline; active sessions have no relay-idle timeout. Submitted occupancy
 survives cancellation until consumption, settlement or confirmed physical
 closure, and failed sends do not refund. The
-[delivery contract](delivery-flow-contract.md) stages its codecs separately;
-socket-free ledgers exist on both clients, and runtime integration awaits the
-cutover.
+[delivery contract](delivery-flow-contract.md) is active in the Go `relayv2`
+runtime: declaration and local buffers share one capacity, both roles await
+explicit grants, sparse feedback is flushed, and settlement follows queue release.
+The browser ledger remains staged. Smaller declarations now preserve startup
+capacity within their effective host/client bound, including after restore.
 
 Retirement revokes unused credit and requests queue discard before ordered
 settlement: `WS2N` freezes submitted totals and `WS2S` confirms consumption or
@@ -125,8 +127,9 @@ persisted generation prevent overlapping hosts and reused lifetimes; startup
 recovers committed ownership and interrupted STOP. Confirmed authority supplies
 the sealed JOIN descriptor without another SQL read. Native scheduling replenishes
 windows from kernel occupancy and defers grants until control-writer space is available.
-The Go-codec process scenario covers asymmetric windows, feedback replay, STOP with
-outstanding delivery and restart/RESUME. Native HTTP ingress now serves root
+The real Go-client process scenario covers asymmetric windows, sparse feedback,
+slow-receiver isolation, cancelled-queue settlement, STOP with outstanding delivery
+and restart/RESUME. Native HTTP ingress now serves root
 `GET/HEAD /healthz` and validates configurable WebSocket origins before relay admission.
 Bounded HTTP reads/writes use separate capacity; upgrades preserve pre-read bytes and
 existing connection teardown. Independent UDP STUN now supplies IPv4/IPv6 Binding,
@@ -135,8 +138,9 @@ The native process scenario verifies responses with Pion across restarts.
 Global and per-source connection budgets now share atomic admission and teardown;
 separate control budgets preserve STOP under business saturation. Explicit proxy trust
 resolves source IPs without accepting arbitrary forwarding headers.
-Remaining operational interfaces and the production client cutover remain pending;
-Go is still the product entry point.
+Browser activation, remaining operational interfaces and default server/build
+entry points remain pending. The new Go client requires a Rust host; the old Go
+server and its product integration suites have not been switched.
 
 ## Cloudflare host
 
@@ -157,7 +161,7 @@ remains enforced. This is an admission policy, not a physical buffer TTL. The
 [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
 passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hibernation
 with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
-The production client runtime cutover remains pending.
+Browser activation and real Go-client validation against Cloudflare remain pending.
 
 ## Host evidence
 

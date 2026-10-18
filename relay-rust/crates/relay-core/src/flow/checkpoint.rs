@@ -83,6 +83,7 @@ impl<O: Observer> ConnectionLedger<O> {
         let mut ledger = Self::new(relay, destination, limits, max_flows, observer)
             .map_err(|_| CheckpointError::Capacity)?;
         ledger.receive_capacity = checkpoint.receive_capacity;
+        let pools = ledger.capacity_pools();
         for (index, entry) in checkpoint.entries.iter().enumerate() {
             let slot = entry.key.slot;
             if slot >= max_flows {
@@ -109,8 +110,8 @@ impl<O: Observer> ConnectionLedger<O> {
                 .receive_capacity
                 .is_some_and(|capacity| capacity.counts().covers(total))
                 || !limits.total.covers(total)
-                || !limits.startup_reserve.covers(startup)
-                || !limits.regular().covers(total.sub(startup))
+                || !pools.startup.covers(startup)
+                || !pools.regular.covers(total.sub(startup))
             {
                 return Err(CheckpointError::Capacity);
             }

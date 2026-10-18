@@ -9,8 +9,8 @@ const (
 	SessionAdmittedBytes = 8 + RelaySessionIDBytes
 
 	// Every source reserves both budgets, including the route header, before
-	// writing a routed frame. Senders start with this window; receivers start
-	// at zero and receive explicit grants from the destination reservation pool.
+	// writing a routed frame. Delivery clients start at zero in both roles;
+	// these bounds constrain WS2W grants, not an implicit startup allowance.
 	SenderWindowFrames = 64
 	SenderWindowBytes  = 4 << 20
 )

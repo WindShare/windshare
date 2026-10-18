@@ -38,10 +38,10 @@ func TestRelayLifecycleConstructorsProduceStageShapes(t *testing.T) {
 }
 
 func TestRelayLifecycleOrdinarySuccessIsSuppressed(t *testing.T) {
-	link := newLinkWithLifecycleStream(
+	link := newTestLinkWithLifecycleStream(
 		context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 	)
-	channel := link.installFixed(relaySessionID(92))
+	channel := installGrantedChannel(link, relaySessionID(92))
 
 	result := make(chan error, 1)
 	go func() {
@@ -66,10 +66,10 @@ func TestRelayLifecycleOrdinarySuccessIsSuppressed(t *testing.T) {
 
 func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
 	t.Run("accepted provider failure", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
-		channel := link.installFixed(relaySessionID(96))
+		channel := installGrantedChannel(link, relaySessionID(96))
 		result := make(chan error, 1)
 		providerFailure := errors.New("provider failed after acceptance")
 		go func() {
@@ -95,10 +95,10 @@ func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
 	})
 
 	t.Run("rejection", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
-		channel := link.installFixed(relaySessionID(97))
+		channel := installGrantedChannel(link, relaySessionID(97))
 		err := channel.Send(context.Background(), nil)
 		if !errors.Is(err, ErrFrameBounds) || framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 			t.Fatalf("invalid send = %v disposition=%d", err, framechannel.SendDispositionOf(err))
@@ -112,10 +112,10 @@ func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
 	})
 
 	t.Run("rollback", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
-		channel := link.installFixed(relaySessionID(98))
+		channel := installGrantedChannel(link, relaySessionID(98))
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() { result <- channel.Send(ctx, framechannel.Frame("queued")) }()
@@ -134,10 +134,10 @@ func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
 	})
 
 	t.Run("terminal provider failure", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
-		channel := link.installFixed(relaySessionID(99))
+		channel := installGrantedChannel(link, relaySessionID(99))
 		result := make(chan error, 1)
 		providerFailure := errors.New("terminal provider failure")
 		go func() {
@@ -164,7 +164,7 @@ func TestRelayLifecycleFailureAndRefusalRemainObservable(t *testing.T) {
 }
 
 func TestRelayLifecycleDisabledHasNoProducerWork(t *testing.T) {
-	link := newLink(context.Background(), newScriptedSocket(), false)
+	link := newTestLink(context.Background(), newScriptedSocket(), false)
 	if link.traces != nil || link.lifecycleTrace() != nil {
 		t.Fatal("disabled lifecycle observations allocated a producer")
 	}
@@ -175,8 +175,8 @@ func TestRelayLifecycleDisabledHasNoProducerWork(t *testing.T) {
 }
 
 func TestRelayLifecycleNoReaderSaturationCannotDelayShutdown(t *testing.T) {
-	link := newLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 1)
-	channel := link.installFixed(relaySessionID(93))
+	link := newTestLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 1)
+	channel := installGrantedChannel(link, relaySessionID(93))
 	if err := channel.Send(context.Background(), nil); !errors.Is(err, ErrFrameBounds) {
 		t.Fatalf("invalid send = %v", err)
 	}
@@ -300,10 +300,10 @@ func TestRelayLifecycleFailurePublishesAdmittedSendResultsBeforeCompletion(t *te
 		{name: "terminal settlement", terminal: true, stage: LifecycleTerminalSettled},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			link := newLinkWithLifecycleStream(
+			link := newTestLinkWithLifecycleStream(
 				context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 			)
-			channel := link.installFixed(relaySessionID(104))
+			channel := installGrantedChannel(link, relaySessionID(104))
 			result := make(chan error, 1)
 			go func() {
 				if test.terminal {
@@ -361,8 +361,8 @@ func TestRelayLifecycleFailurePublishesAdmittedSendResultsBeforeCompletion(t *te
 
 func TestRelayLifecycleShutdownOrdersTerminalFactBeforeStreamCloseAndDone(t *testing.T) {
 	const concurrentEmits = 32
-	link := newLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 128)
-	channel := link.installFixed(relaySessionID(102))
+	link := newTestLinkWithLifecycleStream(context.Background(), newScriptedSocket(), false, 128)
+	channel := installGrantedChannel(link, relaySessionID(102))
 
 	var publishers sync.WaitGroup
 	publishers.Add(concurrentEmits)

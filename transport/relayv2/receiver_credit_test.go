@@ -14,11 +14,10 @@ import (
 func TestReceiverWaitsForBothCreditDimensionsAndPreservesCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		socket := newScriptedSocket()
-		link := newLink(t.Context(), socket, true)
+		link := newTestLink(t.Context(), socket, true)
 		defer link.stop(nil)
 		channel := link.installFixed(relaySessionID(71))
 		link.start()
-		assertWriteMagic(t, socket, v2.ReceiveCreditMagic)
 		payload := framechannel.Frame("client hello")
 		result := make(chan error, 1)
 		go func() { result <- channel.Send(t.Context(), payload) }()
@@ -63,11 +62,10 @@ func TestReceiverWaitsForBothCreditDimensionsAndPreservesCancellation(t *testing
 func TestReceiverHeartbeatRunsWhileApplicationCreditIsUnavailable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		socket := newScriptedSocket()
-		link := newLink(t.Context(), socket, true)
+		link := newTestLink(t.Context(), socket, true)
 		channel := link.installFixed(relaySessionID(72))
 		link.heartbeat = HeartbeatConfig{Interval: time.Second, Timeout: 3 * time.Second}
 		link.start()
-		assertWriteMagic(t, socket, v2.ReceiveCreditMagic)
 		result := make(chan error, 1)
 		go func() { result <- channel.Send(t.Context(), []byte("waiting for capacity")) }()
 		synctest.Wait()

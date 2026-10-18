@@ -1,4 +1,4 @@
-// This helper imports the real Go capacity codecs and signs fresh host challenges.
+// This helper drives the production Go relayv2 API against the native Rust host.
 // It is invoked by the Rust gate, so ordinary Go tests do not rebuild a Rust server.
 package main
 
@@ -29,30 +29,33 @@ func main() {
 		endpoint = process.endpoint
 	}
 	f := newDeliveryFixture()
+	// Two simultaneous sessions need room for both native per-flow windows;
+	// the receiver still declares an asymmetric two-envelope byte budget.
+	f.init.ReceiveCapacity = v2.ReceiveCapacity{Frames: 32, EncodedBytes: 32 * maximumEnvelopeBytes}
 	rejectInvalidProofs(endpoint, f)
 	rejectJoin(endpoint, f, v2.ErrorNotFound)
-	sender := register(endpoint, f, false)
-	defer sender.CloseNow()
+	sender := registerRuntime(endpoint, f, false)
+	defer sender.Close()
 	duplicate, _ := dial(endpoint, f.init.Registration.ShareID)
 	send(duplicate, f.init)
 	refusal(duplicate, v2.ErrorAlreadyRegistered)
 	_ = duplicate.CloseNow()
-	delivery := transfer(endpoint, f, sender)
+	delivery := transferRuntime(endpoint, f, sender)
 	defer func() { delivery.close() }()
 
 	if process != nil {
 		address := process.address
 		process.kill()
 		delivery.close()
-		_ = sender.CloseNow()
+		_ = sender.Close()
 		process = start(*binary, *database, address)
 		require(endpoint == process.endpoint, "public identity changed during restart")
-		sender = register(endpoint, f, true)
-		defer sender.CloseNow()
-		delivery = transfer(endpoint, f, sender)
+		sender = registerRuntime(endpoint, f, true)
+		defer sender.Close()
+		delivery = transferRuntime(endpoint, f, sender)
 	}
-	stop(endpoint, f)
-	delivery.stopped()
+	stopRuntime(endpoint, f)
+	delivery.stopped(sender)
 	if process != nil {
 		address := process.address
 		process.kill()
@@ -70,8 +73,8 @@ func main() {
 		refusal(stopped, v2.ErrorStopped)
 		_ = stopped.CloseNow()
 	}
-	stop(endpoint, f)
-	fmt.Println("PASS: live challenges, JOIN, bidirectional delivery beyond capacity, cumulative feedback replay, ordered STOP, restart/resume fencing")
+	stopRuntime(endpoint, f)
+	fmt.Println("PASS: real relayv2 clients, bidirectional delivery beyond asymmetric windows, sparse feedback, slow-receiver isolation, queue settlement, STOP and restart/resume")
 }
 
 func rejectInvalidProofs(endpoint string, f fixture) {

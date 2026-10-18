@@ -11,6 +11,11 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReceiveCapacity(Counts);
 
+pub(super) struct CapacityPools {
+    pub(super) startup: Counts,
+    pub(super) regular: Counts,
+}
+
 impl ReceiveCapacity {
     pub const ENCODED_BYTES: usize = 16;
 
@@ -98,7 +103,7 @@ impl<O: Observer> ConnectionLedger<O> {
         Some(
             missing
                 .min(self.receive_available().ok()?)
-                .min(self.limits.regular().sub(self.regular_used())),
+                .min(self.capacity_pools().regular.sub(self.regular_used())),
         )
     }
 
@@ -108,5 +113,27 @@ impl<O: Observer> ConnectionLedger<O> {
             .counts()
             .min(self.limits.total)
             .sub(self.usage.total()))
+    }
+
+    pub(super) const fn capacity_pools(&self) -> CapacityPools {
+        let total = match self.receive_capacity {
+            Some(capacity) => self.limits.total.min(capacity.counts()),
+            None => self.limits.total,
+        };
+        // Protect admission inside the declared window too. A small peer
+        // must still retain room for ordinary replenishment after startup;
+        // reserving its entire window would deadlock its very first flow.
+        let startup = self.limits.startup_reserve.min(Counts::new(
+            total
+                .frames
+                .saturating_sub(self.limits.startup_grant.frames),
+            total
+                .encoded_bytes
+                .saturating_sub(self.limits.startup_grant.encoded_bytes),
+        ));
+        CapacityPools {
+            startup,
+            regular: total.sub(startup),
+        }
     }
 }

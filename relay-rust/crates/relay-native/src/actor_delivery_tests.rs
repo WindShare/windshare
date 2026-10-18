@@ -14,6 +14,9 @@ async fn published() -> Harness {
 }
 
 async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
+    // The vector declares 16 frames: 14 ordinary plus this flow's startup
+    // allowance, leaving one protected startup slot for a later receiver.
+    const INITIAL_GRANTED_FRAMES: u64 = 15;
     let (port, mut receiver, _) = crate::connection::channel(connection(id));
     host.tx
         .send(Event::Connected(connection(id), port))
@@ -41,7 +44,7 @@ async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
             assert_eq!(&grant[..4], b"WS2W");
             frames += u32::from_be_bytes(grant[16..20].try_into().unwrap());
         }
-        assert_eq!(u64::from(frames), crate::config::DELIVERY_WINDOW.frames);
+        assert_eq!(u64::from(frames), INITIAL_GRANTED_FRAMES);
     }
     (receiver, session)
 }
@@ -147,7 +150,8 @@ async fn full_control_writer_defers_credit_and_readiness_resumes_without_double_
     let (mut receiver, session) = joined(&mut host, 3).await;
     let frame = opaque(session);
     let controls = crate::config::CONTROL_QUEUE_FRAMES;
-    for index in 1..=controls + 1 {
+    // Consuming the first envelope releases startup, not ordinary credit.
+    for index in 1..=controls + 2 {
         host.tx
             .send(Event::Frame(connection(1), frame.clone()))
             .await
@@ -178,7 +182,8 @@ async fn full_control_writer_defers_credit_and_readiness_resumes_without_double_
     let grant = read(&mut host.sender).await;
     assert_eq!(&grant[..4], b"WS2W");
     assert_eq!(u32::from_be_bytes(grant[16..20].try_into().unwrap()), 1);
-    assert_eq!(u32::from_be_bytes(grant[20..24].try_into().unwrap()), 21);
+    // These tiny envelopes have not exhausted their startup byte allowance.
+    assert_eq!(u32::from_be_bytes(grant[20..24].try_into().unwrap()), 0);
     assert!(host.sender.try_recv().is_err());
     drop(host);
 }

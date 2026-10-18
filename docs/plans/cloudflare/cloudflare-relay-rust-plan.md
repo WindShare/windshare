@@ -44,9 +44,10 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 Implementation progress is tracked in [Rust relay implementation](overview.md).
 The [native host](../../../relay-rust/crates/relay-native/README.md) now
 executes REGISTER/RESUME, JOIN, bidirectional opaque delivery, cumulative consumption,
-settlement and STOP with SQLite authority, OS entropy and host timers. Its Go-codec
-process scenario transfers beyond asymmetric receive windows, replays feedback and
-verifies STOP with outstanding delivery plus ownership recovery across restarts.
+settlement and STOP with SQLite authority, OS entropy and host timers. Its real
+Go `relayv2` client scenario transfers beyond asymmetric receive windows, isolates
+slow receivers, settles cancelled queues, and verifies STOP with outstanding
+delivery plus REGISTER/RESUME across process restarts.
 Native connections supervise separate reader/writer
 tasks, bound output by frames and bytes, and synchronize permit rechecks with the
 kernel-to-writer handoff. Discard and physical-release receipts follow actual queue
@@ -91,11 +92,13 @@ Dependency-scoped recovery now
 isolates missing/invalid delivery records while preserving healthy sessions.
 Independent generation reservations retain conservative loss charges and fixed grace;
 ownership, permanent STOP and the reservation inventory still require authoritative reads.
-Go and browser clients now have socket-free receive ledgers for both endpoint roles,
-shared connection capacity, cumulative feedback and ordered settlement. Their
-[delivery contract](delivery-flow-contract.md#client-receive-ledgers) keeps runtime
-activation coupled to the coordinated cutover; production Go/browser connections
-still use the legacy handshake and incremental feedback.
+Go and browser clients have socket-free receive ledgers for both endpoint roles.
+Go now activates its ledger with capacity-bearing REGISTER/RESUME/JOIN, explicit
+send grants, cumulative consumption, bounded tail flushing and ordered settlement.
+The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
+the remaining cutover: browser runtime, default server/build entry points and
+product integration suites still target the old Go relay. The new Go runtime
+requires a Rust relay; this step does not claim a completed product switch.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

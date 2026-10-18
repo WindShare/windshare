@@ -13,10 +13,10 @@ import (
 func TestSenderCreditCancellationAndControlScheduling(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		socket := newScriptedSocket()
-		link := newLink(context.Background(), socket, false)
+		link := newTestLink(context.Background(), socket, false)
 		defer link.stop(nil)
-		slow, _ := link.channel(relaySessionID(41))
-		fast, _ := link.channel(relaySessionID(42))
+		slow := installGrantedChannel(link, relaySessionID(41))
+		fast := installGrantedChannel(link, relaySessionID(42))
 		link.start()
 		payload := framechannel.Frame("payload")
 		for range v2.SenderWindowFrames {
@@ -83,8 +83,8 @@ func TestRelayCreditRejectsWindowOverflow(t *testing.T) {
 	for _, fixed := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			socket := newScriptedSocket()
-			link := newLink(context.Background(), socket, fixed)
-			channel := link.installFixed(relaySessionID(44))
+			link := newTestLink(context.Background(), socket, fixed)
+			channel := installGrantedChannel(link, relaySessionID(44))
 			link.start()
 			if fixed {
 				if err := channel.ConfirmAdmission(t.Context()); !errors.Is(err, ErrProtocol) {
