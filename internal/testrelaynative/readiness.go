@@ -58,8 +58,11 @@ func relayBaseURL(endpoint string) (string, error) {
 	base.RawPath = strings.TrimSuffix(base.RawPath, v2.WebSocketPath)
 	baseURL := base.String()
 	normalized, err := v2.NormalizeRelayEndpoint(baseURL)
-	if err != nil || normalized.DialURL != endpoint {
-		return "", fmt.Errorf("relay endpoint is not canonical: %q (%v)", endpoint, err)
+	if err != nil {
+		return "", fmt.Errorf("normalize relay endpoint %q: %w", endpoint, err)
+	}
+	if normalized.DialURL != endpoint {
+		return "", fmt.Errorf("relay endpoint is not canonical: %q (normalized to %q)", endpoint, normalized.DialURL)
 	}
 	return baseURL, nil
 }
