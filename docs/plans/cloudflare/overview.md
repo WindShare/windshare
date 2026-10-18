@@ -172,8 +172,14 @@ queues and a synchronous kernel-to-writer handoff. Unsubmitted queues are discar
 before receipts; transport release follows joined task cancellation and abortive TCP
 teardown. Ordered terminal replies have one bounded drain interval. These primitives
 are tested with real kernel receipts; network JOIN/data ingress remains disabled.
-The control-only schema still proves no payload responsibility was acquired on restart;
-delivery recovery remains part of the next integration step.
+Native recovery now uses explicit host ownership and generation-cleanup evidence.
+An independent supervisor tracks actor, connection and storage descendants through
+failure or cancellation. Closed mailboxes and idle eviction retain their registry slots
+until all resources are destroyed; old receipts stay bound to the old mailbox. Every
+tracked resource owner retains the exclusive database lease, so reopening a host cannot
+overlap orphaned native buffers or writes. Process recovery additionally relies on the
+native abortive-close contract and a new durable connection generation, never just a
+restart event. JOIN/data ingress and client integration remain the next step.
 
 ## Cloudflare lifecycle host
 

@@ -48,8 +48,11 @@ and host timers. Its Go-codec process scenario verifies ownership recovery and
 permanent STOP across restarts. Native connections now supervise separate reader/writer
 tasks, bound output by frames and bytes, and synchronize permit rechecks with the
 kernel-to-writer handoff. Discard and physical-release receipts follow actual queue
-cleanup and joined transport teardown. JOIN/data ingress, delivery recovery and the
-coordinated client runtime cutover remain pending; Go is still the product entry point.
+cleanup and joined transport teardown. An independent generation supervisor now fences
+actor reconstruction on connection descendants and storage work, retains the exclusive
+host lease through cleanup, and isolates old mailboxes. Native recovery no longer relies
+on control-only ingress. JOIN/data ingress and the coordinated client runtime cutover
+remain pending; Go is still the product entry point.
 The [Cloudflare lifecycle host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, uses Worker entropy and time, executes the
 same authority-row transitions as native SQLite, and restores binary socket
