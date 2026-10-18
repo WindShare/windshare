@@ -3,8 +3,12 @@ use super::{
     storage::{Database, IMAGE, MANIFEST, api},
     trace::Trace,
 };
-use crate::{config, persistence::Image, runtime::Runtime};
-use anyhow::Result;
+use crate::{
+    config,
+    persistence::Image,
+    runtime::{Recovery, Runtime},
+};
+use anyhow::{Result, ensure};
 use serde_json::json;
 use windshare_relay_core::share::{Checkpoint, CheckpointManifest, ConnectionCheckpoint, Identity};
 use worker::State;
@@ -13,13 +17,23 @@ pub struct Ready {
     pub runtime: Runtime<Trace>,
     pub image: Image,
     pub identity: Identity,
+    pub database: Database,
 }
 
 pub fn restore(state: &State, route: Option<&config::Route>) -> Result<Ready> {
     let database = Database::open(state)?;
-    let image = database.image(route)?;
+    let existing = database.get::<Image>(IMAGE)?;
+    let image = if let Some(image) = &existing {
+        image.clone()
+    } else {
+        ensure!(
+            state.get_websockets().is_empty(),
+            "identity missing with surviving sockets"
+        );
+        database.new_image(route)?
+    };
     let identity = image.identity(io::incarnation()?)?;
-    let record = database.authority(identity)?.map(|stored| stored.record());
+    let authority = database.authority(identity)?;
     let manifest = database
         .bytes(MANIFEST)?
         .map(|bytes| CheckpointManifest::decode(&bytes, config::limits()))
@@ -55,15 +69,21 @@ pub fn restore(state: &State, route: Option<&config::Route>) -> Result<Ready> {
     );
     let mut host = CloudflareHost {
         state,
-        database,
+        database: database.clone(),
         identity,
     };
     let runtime = Runtime::restore(
         &mut host,
         identity,
-        record,
-        checkpoint.as_ref(),
-        &surviving,
+        if existing.is_some() {
+            Recovery::Existing {
+                authority: authority.as_ref(),
+                checkpoint: checkpoint.as_ref(),
+                surviving: &surviving,
+            }
+        } else {
+            Recovery::New
+        },
         observer,
     )?;
     // The allocator is independent of attachment survival and never rolls back
@@ -73,5 +93,6 @@ pub fn restore(state: &State, route: Option<&config::Route>) -> Result<Ready> {
         runtime,
         image,
         identity,
+        database,
     })
 }

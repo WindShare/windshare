@@ -32,13 +32,13 @@ func cloudflare(endpoint string, idle time.Duration) {
 	require(os.Getenv("WINDSHARE_RELAY_REGISTRATION_SECRET") != "", "registration secret required")
 	require(os.Getenv("WINDSHARE_RELAY_PREVIEW_SECRET") != "", "Preview test secret required")
 	expireIdleHandshake(endpoint)
-	f := newFixture()
+	f := newDeliveryFixture()
 	unauthorized, _ := dialWithCredential(endpoint, f.init.Registration.ShareID, false)
 	send(unauthorized, f.init)
 	refusal(unauthorized, v2.ErrorInvalidProof)
 	_ = unauthorized.CloseNow()
 	rejectInvalidProofs(endpoint, f)
-	rejectJoin(endpoint, f, v2.ErrorUnsupportedMode)
+	rejectJoin(endpoint, f, v2.ErrorNotFound)
 
 	sender := register(endpoint, f, false)
 	defer sender.CloseNow()
@@ -58,15 +58,20 @@ func cloudflare(endpoint string, idle time.Duration) {
 	}
 	fmt.Printf("PASS hibernation: share=%s before=%s after=%s attachment_bytes=%d\n",
 		base64.RawURLEncoding.EncodeToString(f.init.Registration.ShareID[:]), before.Boot, after.Boot, after.Sockets[0].AttachmentBytes)
+	delivery := hibernatingDelivery(endpoint, f, sender, idle)
 
 	reset(endpoint, f)
-	closed(sender)
+	delivery.close()
 	_ = sender.CloseNow()
 	sender = register(endpoint, f, true)
 	defer sender.CloseNow()
-	fmt.Println("PASS fault restart: fresh signed RESUME without deployment credential")
+	delivery = transfer(endpoint, f, sender)
+	defer delivery.close()
+	fmt.Println("PASS fault restart: signed RESUME without deployment credential and bidirectional delivery")
 
 	stop(endpoint, f)
+	delivery.stopped()
+	fmt.Println("PASS STOP: ordered settlement with unconsumed submitted data in both directions")
 	reset(endpoint, f)
 	for _, mode := range []v2.RegistrationMode{v2.RegistrationFresh, v2.RegistrationResume} {
 		conn, _ := dialWithCredential(endpoint, f.init.Registration.ShareID, mode == v2.RegistrationFresh)
@@ -81,6 +86,36 @@ func cloudflare(endpoint string, idle time.Duration) {
 	}
 	stop(endpoint, f)
 	fmt.Println("PASS permanent STOP: fresh REGISTER and RESUME refused after object reset; duplicate STOP acknowledged")
+}
+
+func hibernatingDelivery(endpoint string, f fixture, sender *websocket.Conn, idle time.Duration) *deliverySession {
+	const pauseAt = transferFrames / 2
+	const heldFrames = 2
+	delivery := beginDelivery(endpoint, f, sender)
+	delivery.consumeThrough = pauseAt
+	delivery.through(pauseAt + heldFrames)
+	// The probe barrier drains earlier grants and feedback before freezing the
+	// comparison. Both Cloudflare frame windows remain full of unconsumed data.
+	delivery.barrier(4)
+	before := status(endpoint, f)
+	require(len(before.Sockets) == 2, "delivery must retain both sockets")
+	grants := [2]v2.DeliveryConsumed{delivery.peers[0].granted, delivery.peers[1].granted}
+	time.Sleep(idle)
+	after := status(endpoint, f)
+	require(before.Boot != after.Boot, "delivery hibernation was not observed")
+	require(reflect.DeepEqual(before.Sockets, after.Sockets), "delivery hibernation lost attachments")
+	delivery.barrier(5)
+	for index, peer := range delivery.peers {
+		require(peer.granted == grants[index], "hibernation refunded unconsumed delivery credit")
+		peer.consume()
+	}
+	delivery.consumeThrough = transferFrames
+	delivery.through(transferFrames + 1)
+	fmt.Printf("PASS delivery hibernation: share=%s session=%x before=%s after=%s frames_each=%d bytes_each=%d held_each=%d\n",
+		base64.RawURLEncoding.EncodeToString(f.init.Registration.ShareID[:]), delivery.peers[0].session,
+		before.Boot, after.Boot, delivery.peers[0].received.TotalFrames,
+		delivery.peers[0].received.TotalEncodedBytes, heldFrames)
+	return delivery
 }
 
 func expireIdleHandshake(endpoint string) {

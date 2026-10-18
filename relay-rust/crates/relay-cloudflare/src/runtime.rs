@@ -1,16 +1,19 @@
+mod delivery;
+mod outputs;
+
 use crate::config;
-use anyhow::{Result, anyhow, bail};
-use std::collections::VecDeque;
+use anyhow::{Result, anyhow};
 use windshare_relay_core::{
+    authority::StoredAuthority,
     challenge::ChallengeSeed,
     clock::UnixMillis,
     error_frame::ErrorFrame,
-    lifecycle::{ConnectionRef, Record},
+    lifecycle::ConnectionRef,
     observation::Observer,
     registration::{RegisterInit, RegistrationMode},
     share::{
-        Authority, Checkpoint, CheckpointTarget, Control, Identity, Input, Output, Responsibility,
-        Restore, ShareRelay, Storage, Turn, WorkResult,
+        Authority, Checkpoint, CheckpointTarget, Identity, Input, Responsibility, Restore,
+        ShareRelay, Storage,
     },
 };
 
@@ -19,14 +22,28 @@ use windshare_relay_core::{
 pub trait Host {
     fn now(&self) -> UnixMillis;
     fn challenge(&mut self) -> Result<ChallengeSeed>;
-    fn execute(&mut self, operation: &Storage) -> Result<()>;
+    fn execute(&mut self, operation: &Storage) -> Result<Option<StoredAuthority>>;
     fn send(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()>;
     fn close(&mut self, connection: ConnectionRef) -> Result<()>;
     fn checkpoint(&mut self, target: CheckpointTarget, bytes: &[u8]) -> Result<()>;
 }
 
+/// Only a completely absent durable identity can establish first creation.
+/// An existing identity with missing inventory is a recovery failure, even if
+/// authority and all sockets have disappeared.
+#[derive(Clone, Copy)]
+pub enum Recovery<'a> {
+    New,
+    Existing {
+        authority: Option<&'a StoredAuthority>,
+        checkpoint: Option<&'a Checkpoint>,
+        surviving: &'a [ConnectionRef],
+    },
+}
+
 pub struct Runtime<O> {
     relay: ShareRelay<O>,
+    authority: Option<StoredAuthority>,
 }
 
 impl<O: Observer> Runtime<O> {
@@ -35,22 +52,25 @@ impl<O: Observer> Runtime<O> {
     pub fn restore(
         host: &mut impl Host,
         identity: Identity,
-        record: Option<Record>,
-        checkpoint: Option<&Checkpoint>,
-        surviving: &[ConnectionRef],
+        recovery: Recovery<'_>,
         observer: O,
     ) -> Result<Self> {
+        let (authority, surviving, responsibility) = match recovery {
+            Recovery::New => (None, &[][..], Responsibility::Released { previous: None }),
+            Recovery::Existing {
+                authority,
+                checkpoint,
+                surviving,
+            } => (
+                authority.cloned(),
+                surviving,
+                checkpoint.map_or(Responsibility::Unknown, Responsibility::Checkpoint),
+            ),
+        };
         let restored = Restore {
-            authority: Authority::Known(record),
+            authority: Authority::Known(authority.as_ref().map(StoredAuthority::record)),
             surviving,
-            // The manifest owns loss deadlines even when every socket/attachment
-            // disappears. Only an absent inventory in this lifecycle-only schema
-            // can establish that no prior delivery responsibility exists.
-            responsibility: match checkpoint {
-                Some(checkpoint) => Responsibility::Checkpoint(checkpoint),
-                None if surviving.is_empty() => Responsibility::Released { previous: None },
-                None => Responsibility::Unknown,
-            },
+            responsibility,
         };
         let (mut relay, turn) =
             ShareRelay::restore(identity, config::limits(), &restored, observer, host.now())
@@ -58,7 +78,7 @@ impl<O: Observer> Runtime<O> {
         relay
             .enable_checkpoints(config::budget(), host.now())
             .map_err(|error| anyhow!("checkpoint profile: {error:?}"))?;
-        let mut runtime = Self { relay };
+        let mut runtime = Self { relay, authority };
         runtime.outputs(host, turn)?;
         runtime.flush(host)?;
         Ok(runtime)
@@ -75,13 +95,24 @@ impl<O: Observer> Runtime<O> {
         let refused = turn.refusal.is_some();
         self.outputs(host, turn)?;
         if refused && let Some(connection) = connection {
-            host.close(connection)?;
-            let turn = self
-                .relay
-                .handle(Input::Disconnected(connection), host.now());
-            self.outputs(host, turn)?;
+            self.disconnect(host, connection)?;
         }
         self.flush(host)
+    }
+
+    /// # Errors
+    /// Malformed frames close their source; uncertain host state requires recovery.
+    pub fn message(
+        &mut self,
+        host: &mut impl Host,
+        connection: ConnectionRef,
+        bytes: Vec<u8>,
+        may_register: bool,
+    ) -> Result<()> {
+        if bytes.get(..4) == Some(b"WS2O") {
+            return self.forward(host, connection, bytes);
+        }
+        self.control(host, connection, &bytes, may_register)
     }
 
     /// # Errors
@@ -96,7 +127,19 @@ impl<O: Observer> Runtime<O> {
         let supported = bytes.len() <= config::MAX_CONTROL_BYTES
             && matches!(
                 bytes.get(..4),
-                Some(b"WS2R" | b"WS2P" | b"WS2U" | b"WS2T" | b"WS2X" | b"WS2V" | b"WS2H")
+                Some(
+                    b"WS2R"
+                        | b"WS2P"
+                        | b"WS2U"
+                        | b"WS2T"
+                        | b"WS2X"
+                        | b"WS2V"
+                        | b"WS2H"
+                        | b"WS2J"
+                        | b"WS2M"
+                        | b"WS2B"
+                        | b"WS2S"
+                )
             );
         let unauthorized = !may_register
             && RegisterInit::decode(bytes).is_ok_and(|init| init.mode() == RegistrationMode::Fresh);
@@ -109,8 +152,8 @@ impl<O: Observer> Runtime<O> {
                 ErrorFrame::UnsupportedMode
             };
             let _ = host.send(connection, &refusal.encode());
-            host.close(connection)?;
-            return self.event(host, Input::Disconnected(connection));
+            self.disconnect(host, connection)?;
+            return self.flush(host);
         }
         self.event(
             host,
@@ -126,62 +169,12 @@ impl<O: Observer> Runtime<O> {
         self.relay.deadline()
     }
 
-    fn outputs(&mut self, host: &mut impl Host, turn: Turn) -> Result<()> {
-        let mut outputs: VecDeque<_> = turn.outputs.into();
-        while let Some(output) = outputs.pop_front() {
-            let follow = match output {
-                Output::ChallengeNeeded(request) => Some(self.relay.handle(
-                    Input::Challenge {
-                        request,
-                        seed: host.challenge()?,
-                    },
-                    host.now(),
-                )),
-                Output::Work(work) => {
-                    // SQLite's synchronous write is coupled to the output gate;
-                    // a failed durability commit cannot leak REGISTERED or STOPPED.
-                    host.execute(&work.operation)?;
-                    Some(self.relay.handle(
-                        Input::Completed {
-                            id: work.id,
-                            result: WorkResult::Complete,
-                        },
-                        host.now(),
-                    ))
-                }
-                Output::Send {
-                    connection,
-                    control,
-                } => {
-                    if host.send(connection, &encode(control)?).is_err() {
-                        host.close(connection)?;
-                        Some(
-                            self.relay
-                                .handle(Input::Disconnected(connection), host.now()),
-                        )
-                    } else {
-                        None
-                    }
-                }
-                Output::Close(connection) => {
-                    host.close(connection)?;
-                    // This is communication loss, never a physical release receipt.
-                    Some(
-                        self.relay
-                            .handle(Input::Disconnected(connection), host.now()),
-                    )
-                }
-                Output::Discard(flow) => {
-                    Some(self.relay.handle(Input::Discarded(flow), host.now()))
-                }
-                Output::Retry(_) | Output::Reload => bail!("authoritative recovery required"),
-                Output::Received(_) => bail!("payload reached lifecycle-only host"),
-            };
-            if let Some(turn) = follow {
-                outputs.extend(turn.outputs);
-            }
-        }
-        Ok(())
+    fn disconnect(&mut self, host: &mut impl Host, connection: ConnectionRef) -> Result<()> {
+        host.close(connection)?;
+        let turn = self
+            .relay
+            .handle(Input::Disconnected(connection), host.now());
+        self.outputs(host, turn)
     }
 
     fn flush<H: Host>(&mut self, host: &mut H) -> Result<()> {
@@ -196,17 +189,4 @@ impl<O: Observer> Runtime<O> {
         }
         Ok(())
     }
-}
-
-fn encode(control: Control) -> Result<Vec<u8>> {
-    Ok(match control {
-        Control::Challenge(bytes) => bytes,
-        Control::Error(frame) => frame.encode().to_vec(),
-        Control::Registered(frame) => frame.encode().to_vec(),
-        Control::Stopped(frame) => frame.encode().to_vec(),
-        Control::ProbeAck(frame) => frame.encode().to_vec(),
-        Control::Descriptor { .. } | Control::Grant(_) | Control::Settlement(_) => {
-            bail!("delivery control reached lifecycle-only host")
-        }
-    })
 }

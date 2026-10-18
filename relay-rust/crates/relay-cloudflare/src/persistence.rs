@@ -9,9 +9,8 @@ use windshare_relay_core::{
     share::Identity,
 };
 
-// This version has never admitted JOIN or opaque frames. Recovery may prove zero
-// delivery responsibility from that fact, never merely from disappearing sockets.
-const LIFECYCLE_SCHEMA: u32 = 2;
+// Delivery responsibility requires its independent manifest, even with no sockets.
+const LIFECYCLE_SCHEMA: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Image {

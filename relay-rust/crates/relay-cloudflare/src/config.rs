@@ -23,6 +23,9 @@ const RETAINED_FLOWS: usize = 32;
 const ATTACHMENT_BYTES: usize = 16_384;
 const ATTACHMENT_ENVELOPE_BYTES: usize = 512;
 const CONNECTION_FRAMES: u64 = 16;
+// Two envelopes permit batched feedback while seven receivers share the sender's
+// ordinary fourteen-frame pool. Startup capacity remains independently reserved.
+const SESSION_WINDOW_FRAMES: u64 = 2;
 const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 // The probes establish no safer physical-buffer TTL. Prefer immediate replacement
 // after quiescence; the attempt-rate budget still bounds reconnect admission.
@@ -123,6 +126,13 @@ pub fn limits() -> Limits {
 pub const fn budget() -> CheckpointBudget {
     CheckpointBudget::new(ATTACHMENT_BYTES, ATTACHMENT_ENVELOPE_BYTES)
         .expect("bounded binary attachment")
+}
+
+pub const fn delivery_window() -> Counts {
+    Counts::new(
+        SESSION_WINDOW_FRAMES,
+        SESSION_WINDOW_FRAMES * OpaqueHeader::MAX_ENCODED_BYTES as u64,
+    )
 }
 
 /// Keep an earlier alarm: moving a deadline later must not cause a storage write.
