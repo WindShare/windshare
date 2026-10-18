@@ -15,6 +15,7 @@ mod checkpoint_tracking;
 mod connections;
 mod deadlines;
 mod delivery;
+mod generations;
 mod handshake_checkpoint;
 mod handshake_restore;
 mod lifecycle;
@@ -22,8 +23,8 @@ mod liveness;
 mod responsibility;
 mod restoration;
 mod retirement;
-use retirement::Detached;
-pub use retirement::{ConnectionUsage, RetirementPolicy};
+pub use generations::{ConnectionUsage, RetirementPolicy};
+use generations::{Detached, Generations};
 mod sessions;
 mod storage;
 mod types;
@@ -39,7 +40,6 @@ pub use restoration::{Authority, Responsibility, Restore};
 pub use types::*;
 
 use crate::{
-    flow::ConnectionLedger,
     handshake::{Admission, ControlHandshake},
     identifiers::RelaySessionId,
     lifecycle::{ConnectionRef, OperationId, Record, ShareLifecycle},
@@ -92,15 +92,8 @@ pub struct ShareRelay<O> {
     identity: Identity,
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
-    connections: BTreeMap<ConnectionRef, Connection>,
-    controls: BTreeMap<ConnectionRef, crate::clock::UnixMillis>,
+    generations: Generations,
     handshake_rate: AttemptLimiter,
-    // Delivery remains charged after logical retirement; only exact consumption
-    // or release evidence can remove the old generation's residual responsibility.
-    ledgers: BTreeMap<ConnectionRef, ConnectionLedger<Journal>>,
-    // Missing delivery records retain an upper bound, never invented exact counters.
-    unavailable: BTreeMap<ConnectionRef, crate::flow::Counts>,
-    detached: BTreeMap<ConnectionRef, Detached>,
     sessions: BTreeMap<RelaySessionId, AdmissionState>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
     deadlines: Deadlines,
@@ -144,7 +137,7 @@ impl<O: Observer> ShareRelay<O> {
         match input {
             Input::Connected(connection) => {
                 let result = self.connect(connection, now);
-                if result.is_err() && !self.connections.contains_key(&connection) {
+                if result.is_err() && self.generations.connection(&connection).is_none() {
                     turn.outputs.push(Output::Close(connection));
                 }
                 result
@@ -212,24 +205,19 @@ impl<O: Observer> ShareRelay<O> {
             .set(Key::Lifecycle, self.lifecycle.deadline());
     }
 
-    fn flush_ledger(
+    fn apply_delivery_close(
         &mut self,
         connection: ConnectionRef,
         now: crate::clock::UnixMillis,
         turn: &mut Turn,
     ) {
-        if let Some(ledger) = self.ledgers.get_mut(&connection) {
-            if self.checkpointing.enabled() && ledger.take_checkpoint_change() {
-                self.checkpointing.changed(connection);
-            }
-            for item in ledger.observer_mut().0.drain(..) {
-                self.observer.observe(item);
-            }
-            self.deadlines
-                .set(Key::Ledger(connection), ledger.deadline());
-            if ledger.close_request().is_some() && !self.cleanup_deferred() {
-                self.disconnect(connection, now, turn);
-            }
+        if self
+            .generations
+            .ledger(&connection)
+            .is_some_and(|ledger| ledger.close_request().is_some())
+            && !self.cleanup_deferred()
+        {
+            self.disconnect(connection, now, turn);
         }
     }
 
@@ -271,10 +259,14 @@ impl<O: Observer> ShareRelay<O> {
                 }
                 Key::Retirement(_) => self.progress_retirements(now),
                 Key::Ledger(connection) => {
-                    if let Some(ledger) = self.ledgers.get_mut(&connection) {
-                        let _ = ledger.tick(now);
-                    }
-                    self.flush_ledger(connection, now, turn);
+                    let _ = self.generations.update_ledger(
+                        connection,
+                        |ledger| ledger.tick(now),
+                        &mut self.checkpointing,
+                        &mut self.deadlines,
+                        &mut self.observer,
+                    );
+                    self.apply_delivery_close(connection, now, turn);
                 }
             }
         }

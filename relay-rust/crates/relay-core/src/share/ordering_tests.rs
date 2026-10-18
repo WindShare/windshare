@@ -73,7 +73,7 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
         assert!(matches!(next_record(&commit), Record::Stopped(_)));
         let _ = complete(&mut restored, &commit, fixture.at);
         assert_eq!(
-            restored.ledgers[&key.sender()].usage().submitted,
+            ledger_of(&restored, key.sender()).usage().submitted,
             Counts::new(1, 21)
         );
         assert!(restored.checkpoint().is_ok());

@@ -91,7 +91,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
     for attempt in 0..RECONNECTS {
         let (lost, _) = fixture.join(&mut relay, attempt + 3);
         deliver(&fixture, &mut relay, lost);
-        let healthy_ledger = relay.ledgers[&healthy.receiver()].checkpoint().unwrap();
+        let healthy_ledger = ledger_of(&relay, healthy.receiver()).checkpoint().unwrap();
         let lost_turn = relay.handle(Input::Disconnected(lost.receiver()), fixture.at);
         assert!(!lost_turn.outputs.iter().any(|output| matches!(
             output, Output::Close(target) if *target == healthy.receiver() || *target == healthy.sender()
@@ -110,7 +110,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
             }
         );
         assert_eq!(
-            relay.ledgers[&healthy.receiver()].checkpoint().unwrap(),
+            ledger_of(&relay, healthy.receiver()).checkpoint().unwrap(),
             healthy_ledger
         );
         assert_eq!(relay.sessions.len(), 1);
@@ -131,7 +131,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
         usize::try_from(RECONNECTS).unwrap()
     );
     assert_eq!(
-        relay.ledgers[&healthy.sender()]
+        ledger_of(&relay, healthy.sender())
             .metadata_usage()
             .retained_flows,
         2
@@ -233,7 +233,7 @@ fn retirement_waits_for_both_application_queues_and_fences_delayed_submissions()
         None
     );
     assert_eq!(
-        relay.ledgers[&key.receiver()].usage().received,
+        ledger_of(&relay, key.receiver()).usage().received,
         Counts::ZERO
     );
     assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);
@@ -377,7 +377,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
                 .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
         )
     );
-    assert!(relay.ledgers[&lost.receiver()].deadline().is_none());
+    assert!(ledger_of(&relay, lost.receiver()).deadline().is_none());
 }
 
 #[test]
@@ -403,13 +403,13 @@ fn retired_session_releases_admission_but_healthy_sender_keeps_its_flow_debt() {
     }
     assert_eq!(relay.sessions.len(), 1);
     assert_eq!(
-        relay.ledgers[&healthy.sender()]
+        ledger_of(&relay, healthy.sender())
             .metadata_usage()
             .retained_flows,
         3
     );
     assert_eq!(
-        relay.ledgers[&healthy.sender()].usage().submitted,
+        ledger_of(&relay, healthy.sender()).usage().submitted,
         Counts::new(2, 42)
     );
     assert_eq!(
@@ -443,7 +443,7 @@ fn retired_session_releases_admission_but_healthy_sender_keeps_its_flow_debt() {
     );
     fixture.join(&mut relay, 6);
     assert_eq!(
-        relay.ledgers[&healthy.sender()].usage().submitted,
+        ledger_of(&relay, healthy.sender()).usage().submitted,
         ONE_FRAME
     );
 }
