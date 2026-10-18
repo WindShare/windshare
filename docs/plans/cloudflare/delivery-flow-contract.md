@@ -3,9 +3,10 @@
 The Go `relayv2` runtime, browser receiver and Rust hosts use capacity-carrying
 handshakes, cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). Go process E2E
 and browser product fixtures build Go `wind` and Rust `relay-native`; the native
-process scenario uses real `DialSender`/`DialReceiver`/`Channel` APIs. Default
-server/release entry points and `integration/` suites still target the incompatible
-legacy Go server. There is no wire-format fallback.
+process scenario uses real `DialSender`/`DialReceiver`/`Channel` APIs.
+`integration/relayv2` shares the native test host with Go process E2E. Default
+server/release entry points and other Go relay fixtures still target the
+incompatible legacy Go server. There is no wire-format fallback.
 
 Capacity is declared per direction at admission and consumed by per-grant
 allowances. Admission reserves both startup allowances before granting either, so

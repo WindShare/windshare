@@ -22,7 +22,7 @@ var relayTraceOutput struct {
 	err  error
 }
 
-func startRelayScenario(t *testing.T) *testscenario.Trace {
+func startRelayScenario(t *testing.T) (*testscenario.Trace, testrun.Identity) {
 	t.Helper()
 	run, err := testrun.PackageRun()
 	if err != nil {
@@ -36,7 +36,9 @@ func startRelayScenario(t *testing.T) *testscenario.Trace {
 	if err != nil {
 		t.Fatalf("create relay integration event sink: %v", err)
 	}
-	return testscenario.Start(t, operation, relayIntegrationComponent, sink)
+	return testscenario.Start(t, operation, relayIntegrationComponent, sink), testrun.Identity{
+		RunID: operation.RunID(), OperationID: operation.ID(), Scenario: operation.Scenario(),
+	}
 }
 
 func relayIntegrationSink() (*testrun.JSONLineSink, error) {
