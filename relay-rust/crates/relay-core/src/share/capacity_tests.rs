@@ -51,7 +51,7 @@ fn insufficient_receiver_capacity_rolls_back_both_startup_directions() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )
@@ -183,7 +183,7 @@ fn stop_and_unclassified_connections_never_acquire_delivery_capacity() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
-    assert_eq!(relay.ledgers[&connection(1)].receive_capacity(), None);
+    assert!(!relay.ledgers.contains_key(&connection(1)));
     fixture.prepare_stop(&mut relay);
-    assert_eq!(relay.ledgers[&connection(99)].receive_capacity(), None);
+    assert!(!relay.ledgers.contains_key(&connection(99)));
 }

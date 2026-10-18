@@ -62,7 +62,7 @@ impl Fixture {
         let (mut relay, _) = ShareRelay::restore(
             self.identity(),
             limits(),
-            &Restore::restarted(None, Responsibility::Released),
+            &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace,
             self.now(true),
         )
@@ -168,4 +168,16 @@ pub fn connection(id: u64) -> ConnectionRef {
         id: NonZeroU64::new(id).unwrap(),
         generation: NonZeroU64::MIN,
     }
+}
+
+pub fn socket_admission() -> std::sync::Arc<crate::connection::Admission> {
+    crate::connection::Capacity::new(
+        crate::config::MAX_BUSINESS_CONNECTIONS,
+        crate::config::MAX_CONTROL_CONNECTIONS,
+        crate::config::CONNECTION_ATTEMPTS,
+        windshare_relay_core::clock::UnixMillis(0),
+    )
+    .unwrap()
+    .accept(windshare_relay_core::clock::UnixMillis(0))
+    .unwrap()
 }

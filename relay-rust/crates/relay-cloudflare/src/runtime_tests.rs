@@ -413,3 +413,72 @@ fn deployment_permission_and_delivery_boundary_precede_admission() {
     assert!(!host.live.contains(&connection(2)));
     assert!(host.stored.is_none());
 }
+
+#[test]
+fn business_saturation_keeps_signed_stop_available_through_hibernation() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    host.time = f.time("stop");
+    let mut runtime = host.restore(1).unwrap();
+    let business_limit = config::limits().business_connections as u64;
+    for id in 1..=business_limit {
+        host.open(&mut runtime, id);
+        // A RESUME reserves business capacity while awaiting its credential.
+        host.frame(&mut runtime, &f, id, "resumeInitB64");
+    }
+    let refused = business_limit + 1;
+    host.open(&mut runtime, refused);
+    host.frame(&mut runtime, &f, refused, "resumeInitB64");
+    assert!(!host.live.contains(&connection(refused)));
+    let stop = business_limit + 2;
+    host.time = f.time("stop");
+    host.seed = Some(f.seed("stop"));
+    host.open(&mut runtime, stop);
+    runtime
+        .control(&mut host, connection(stop), &f.frame("stopInitB64"), false)
+        .unwrap();
+    assert!(host.live.contains(&connection(stop)));
+    let deadline = runtime.deadline();
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    assert_eq!(runtime.deadline(), deadline);
+    runtime
+        .control(&mut host, connection(stop), &f.frame("stopProofB64"), false)
+        .unwrap();
+    assert!(matches!(
+        host.stored.as_ref().unwrap().record(),
+        Record::Stopped(_)
+    ));
+    assert!(
+        host.sent
+            .iter()
+            .any(|(target, bytes)| *target == connection(stop) && bytes == &f.frame("stoppedB64"))
+    );
+    assert!(!host.live.contains(&connection(stop)));
+}
+
+#[test]
+fn empty_socket_reconstruction_preserves_attempt_rate_history() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    let burst = u64::from(config::limits().handshakes.attempts.burst);
+    for id in 1..=burst {
+        host.open(&mut runtime, id);
+        assert!(host.live.contains(&connection(id)));
+        runtime
+            .control(&mut host, connection(id), b"invalid", false)
+            .unwrap();
+    }
+    assert!(host.live.is_empty());
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    host.open(&mut runtime, burst + 1);
+    assert!(
+        host.live.is_empty(),
+        "reconstruction must not refund admission attempts"
+    );
+    host.time.0 += u64::try_from(config::limits().handshakes.attempts.refill.as_millis()).unwrap();
+    host.open(&mut runtime, burst + 2);
+    assert!(host.live.contains(&connection(burst + 2)));
+}

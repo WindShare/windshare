@@ -27,6 +27,7 @@ pub async fn serve(
     registry: Arc<Registry>,
     connection: ConnectionRef,
     mut shutdown: watch::Receiver<bool>,
+    admission: Arc<connection::Admission>,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
     // Default TCP close may retain and transmit queued bytes after the application
@@ -72,6 +73,7 @@ pub async fn serve(
                 connection,
                 shutdown,
                 handle.generation.clone(),
+                admission,
             ),
         )?
         .await

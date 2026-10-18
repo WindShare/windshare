@@ -107,7 +107,12 @@ impl<O: Observer> ShareRelay<O> {
         }
         self.checkpointing = Checkpointing::Enabled {
             budget,
-            dirty: self.ledgers.keys().copied().collect(),
+            dirty: self
+                .ledgers
+                .keys()
+                .chain(self.controls.keys())
+                .copied()
+                .collect(),
             manifest_dirty: true,
         };
         self.trace(
@@ -198,6 +203,9 @@ impl<O: Observer> ShareRelay<O> {
         // Clean ledgers have not changed since a successful flush, so only dirty
         // connections can contain payloads that would make this event unsafe to end.
         for connection in dirty {
+            if self.controls.contains_key(connection) {
+                continue;
+            }
             let ledger = self
                 .ledgers
                 .get(connection)

@@ -57,7 +57,14 @@ pub enum RelayDecision {
         stop_id: crate::identifiers::StopId,
         unsettled_generations: usize,
     },
-    Capacity,
+    ControlCapacity {
+        usage: crate::share::ConnectionUsage,
+    },
+    HandshakeRateLimited,
+    BusinessCapacity {
+        usage: crate::share::ConnectionUsage,
+    },
+    BusinessAdmitted,
     StaleCompletion(crate::share::WorkId),
     StorageUncertain(crate::share::WorkId),
     WorkIssued(crate::share::WorkId),

@@ -106,7 +106,12 @@ Recovery separates ownership/STOP authority, communicating sockets and delivery 
 unknown inventory also refuses recovery. Missing delivery records isolate their connections and
 dependent sessions, while healthy ledgers keep their grants, submitted debt and absolute deadlines.
 Restart and empty socket lists never prove release.
-`Limits::connections` bounds admission through unfinished retirement.
+`Limits::business_connections` bounds REGISTER/RESUME/JOIN reservations through unfinished
+retirement. New sockets first enter a separate bounded, rate-limited control budget;
+only a valid business initiation allocates a delivery ledger. STOP keeps its control
+slot, requires the existing sender proof, and closes after acknowledgement. Its total
+control lifetime is bounded independently of storage completion. Business saturation
+does not block STOP, but control saturation or exhausted attempt rate can still refuse it.
 `RetirementPolicy::PhysicalRelease` waits for `Closed` and discard of queues targeting
 other connections; `Bounded` permits logical retirement
 after revocation, both directions' queue discard and an injected fixed grace (possibly zero).
@@ -122,12 +127,14 @@ wire-ID high-water marks survive repeated recovery; old feedback cannot affect r
 Pending handshakes retain their original ownership; fresh incarnations fence old storage
 and entropy callbacks.
 
-Each connection record contains its ledger, handshake and receiver-side admissions. Established
+Control records contain the handshake and original absolute control deadline; business
+records contain the ledger and receiver-side admissions. Established
 connections also retain their last probe nonce, last accepted inbound time and absolute silence
 deadline; restoration checks the original expiry before accepting traffic.
 The independent `CheckpointManifest` retains generation identity, retirement state, a risk
-reservation and the session-ID high-water mark. Admission no longer rewrites unrelated
-receiver attachments. Missing live records reserve the entire configured connection budget;
+reservation, attempt-rate history and the session-ID high-water mark. Admission no longer
+rewrites unrelated receiver attachments. Missing control records close only their sockets;
+missing business records reserve the entire configured delivery budget;
 missing retired records retain the submitted bound established at retirement. These are
 explicit uncertain reservations, not fabricated delivery counters. Old feedback cannot
 release them; physical release can. Risk exhaustion blocks further retirement/admission,
@@ -136,8 +143,8 @@ without revoking healthy sessions. Repeated recovery preserves fixed grace and l
 Hibernating hosts enable tracking after restore and flush after outputs. Flush preflights
 changed records and writes a changed manifest last; partial failures retain the batch for
 retry. Hosts must omit unavailable records instead of replaying stale credits, and preserve
-authoritative lifecycle/reservation facts. Manifest changes cover admission, retirement and
-retired-risk release, never ordinary forwarding counters or liveness refreshes. Inbound data can
+authoritative lifecycle/reservation facts. Manifest changes cover admission and attempt-rate
+state, retirement and retired-risk release, never ordinary forwarding counters or liveness refreshes. Inbound data can
 change both source liveness and destination accounting; unrelated attachments remain untouched.
 Generation allocation must be
 persisted before accepting a new socket; removed IDs cannot be reused. `CheckpointBudget`

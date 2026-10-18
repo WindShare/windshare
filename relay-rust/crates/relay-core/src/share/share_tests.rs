@@ -57,7 +57,14 @@ impl Fixture {
         let capacity =
             |frames| Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES));
         Limits {
-            connections: 16,
+            business_connections: 16,
+            handshakes: crate::share::HandshakeLimits {
+                concurrent: 16,
+                attempts: crate::share::AttemptRate {
+                    burst: 64,
+                    refill: Duration::from_millis(100),
+                },
+            },
             sessions: SESSION_LIMIT,
             retained_flows_per_connection: SESSION_LIMIT,
             retirement: RetirementPolicy::PhysicalRelease,
@@ -74,7 +81,7 @@ impl Fixture {
         let (relay, turn) = Relay::restore(
             self.identity(1),
             Self::limits(),
-            &Restore::restarted(None, Responsibility::Released),
+            &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace::default(),
             self.at,
         )
@@ -628,3 +635,18 @@ mod responsibility;
 
 #[path = "stopping_tests.rs"]
 mod stopping;
+
+fn assert_business_capacity_refused(
+    fixture: &Fixture,
+    relay: &mut Relay,
+    candidate: ConnectionRef,
+    now: UnixMillis,
+) {
+    assert_eq!(relay.handle(Input::Connected(candidate), now).refusal, None);
+    let turn = fixture.control(relay, candidate, "joinB64", now);
+    assert_eq!(turn.refusal, Some(Error::Capacity));
+    assert!(turn.outputs.iter().any(|output| matches!(output,
+        Output::Send { connection, control: Control::Error(crate::error_frame::ErrorFrame::Admission(_)) }
+            if *connection == candidate)));
+    let _ = relay.handle(Input::Closed(candidate), now);
+}

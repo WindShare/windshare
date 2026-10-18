@@ -4,7 +4,7 @@ use super::{
     handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{flow::LedgerCheckpoint, sessions::SessionSnapshot};
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 /// Complete metadata for recovery/testing; hot-path hosts use connection checkpoints.
 #[derive(Clone, Debug)]
@@ -22,14 +22,25 @@ pub struct ConnectionCheckpoint {
     pub(super) identity: Identity,
     pub(super) connection: ConnectionRef,
     pub(super) role: ConnectionRole,
-    pub(super) ledger: LedgerCheckpoint,
-    pub(super) sessions: Vec<SessionSnapshot>,
+    pub(super) resources: ConnectionResources,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ConnectionResources {
+    Control {
+        deadline: crate::clock::UnixMillis,
+    },
+    Business {
+        ledger: Box<LedgerCheckpoint>,
+        sessions: Vec<SessionSnapshot>,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum ConnectionRole {
     Established(crate::heartbeat::Liveness),
     Closing,
+    Stopping,
     Detached(super::Detached),
     Handshake(HandshakeCheckpoint),
 }
@@ -76,18 +87,56 @@ impl ConnectionCheckpoint {
         self.connection
     }
 
+    #[cfg(test)]
+    pub(super) fn ledger(&self) -> Option<&LedgerCheckpoint> {
+        match &self.resources {
+            ConnectionResources::Business { ledger, .. } => Some(ledger),
+            ConnectionResources::Control { .. } => None,
+        }
+    }
+
+    pub(super) fn sessions(&self) -> &[SessionSnapshot] {
+        match &self.resources {
+            ConnectionResources::Business { sessions, .. } => sessions,
+            ConnectionResources::Control { .. } => &[],
+        }
+    }
+
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
-        if self.connection != self.ledger.destination()
-            || self.sessions.len() > limits.sessions
-            || self
-                .sessions
-                .iter()
-                .any(|session| session.key().receiver() != self.connection)
-            || matches!(self.role, ConnectionRole::Detached(_)) && !self.sessions.is_empty()
-            || matches!(self.role, ConnectionRole::Handshake(_))
-                && (!self.sessions.is_empty() || self.ledger.flows().next().is_some())
-        {
-            return Err(Error::InvalidCheckpoint);
+        if let ConnectionRole::Handshake(transcript) = &self.role {
+            let business = transcript.steps.first().is_some_and(|step| {
+                matches!(step, super::handshake_checkpoint::Step::Frame { bytes, .. }
+                    if crate::handshake::Initiation::decode(bytes)
+                        .is_ok_and(|init| init.uses_business_capacity()))
+            });
+            if business != matches!(self.resources, ConnectionResources::Business { .. }) {
+                return Err(Error::InvalidCheckpoint);
+            }
+        }
+        match &self.resources {
+            ConnectionResources::Control { deadline } => match &self.role {
+                ConnectionRole::Handshake(transcript)
+                    if *deadline
+                        == transcript
+                            .opened
+                            .saturating_add(super::admission::CONTROL_LIFETIME) => {}
+                ConnectionRole::Closing | ConnectionRole::Stopping => {}
+                _ => return Err(Error::InvalidCheckpoint),
+            },
+            ConnectionResources::Business { ledger, sessions } => {
+                if self.connection != ledger.destination()
+                    || sessions.len() > limits.sessions
+                    || sessions
+                        .iter()
+                        .any(|session| session.key().receiver() != self.connection)
+                    || matches!(self.role, ConnectionRole::Detached(_)) && !sessions.is_empty()
+                    || matches!(self.role, ConnectionRole::Stopping)
+                    || matches!(self.role, ConnectionRole::Handshake(_))
+                        && (!sessions.is_empty() || ledger.flows().next().is_some())
+                {
+                    return Err(Error::InvalidCheckpoint);
+                }
+            }
         }
         Ok(())
     }
@@ -133,7 +182,9 @@ impl Checkpoint {
     }
 
     pub(super) fn sessions(&self) -> impl Iterator<Item = &SessionSnapshot> {
-        self.connections.iter().flat_map(|entry| &entry.sessions)
+        self.connections
+            .iter()
+            .flat_map(ConnectionCheckpoint::sessions)
     }
 
     pub(super) fn validate(&self, limits: super::Limits) -> Result<(), Error> {
@@ -175,19 +226,27 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
     ) -> Result<ConnectionCheckpoint, Error> {
         self.checkpoint_ready()?;
-        let ledger = self
-            .ledgers
-            .get(&connection)
-            .ok_or(Error::UnknownConnection)?;
-        let sessions = ledger
-            .checkpoint_flows()
-            .filter_map(|(flow, _)| {
-                let key = flow.session();
-                (key.receiver() == connection)
-                    .then(|| self.sessions.get(&key.wire_id())?.session.snapshot())
-                    .flatten()
-            })
-            .collect();
+        let resources = if let Some(&deadline) = self.controls.get(&connection) {
+            ConnectionResources::Control { deadline }
+        } else {
+            let ledger = self
+                .ledgers
+                .get(&connection)
+                .ok_or(Error::UnknownConnection)?;
+            let sessions = ledger
+                .checkpoint_flows()
+                .filter_map(|(flow, _)| {
+                    let key = flow.session();
+                    (key.receiver() == connection)
+                        .then(|| self.sessions.get(&key.wire_id())?.session.snapshot())
+                        .flatten()
+                })
+                .collect();
+            ConnectionResources::Business {
+                ledger: Box::new(ledger.checkpoint().map_err(|_| Error::CheckpointBusy)?),
+                sessions,
+            }
+        };
         Ok(ConnectionCheckpoint {
             identity: self.identity,
             connection,
@@ -199,13 +258,13 @@ impl<O: Observer> ShareRelay<O> {
                         .ok_or(Error::InvalidCheckpoint)?,
                 ),
                 Some(Role::Closing) => ConnectionRole::Closing,
+                Some(Role::Stopping) => ConnectionRole::Stopping,
                 Some(Role::Established(liveness)) => ConnectionRole::Established(*liveness),
                 Some(Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. }) => {
                     ConnectionRole::Handshake(transcript.clone())
                 }
             },
-            ledger: ledger.checkpoint().map_err(|_| Error::CheckpointBusy)?,
-            sessions,
+            resources,
         })
     }
 
@@ -220,6 +279,7 @@ impl<O: Observer> ShareRelay<O> {
             connections: self
                 .ledgers
                 .keys()
+                .chain(self.controls.keys())
                 .map(|&connection| self.checkpoint_connection(connection))
                 .collect::<Result<_, _>>()?,
         })

@@ -40,13 +40,17 @@ impl<O: Observer> Runtime<O> {
         surviving: &[ConnectionRef],
         observer: O,
     ) -> Result<Self> {
+        let previous = checkpoint.map(Checkpoint::manifest);
         let restored = Restore {
             authority: Authority::Known(record),
             surviving,
             // This storage profile cannot have delivery debt. With no surviving
             // sockets there is no liveness/transcript to preserve either.
             responsibility: if surviving.is_empty() {
-                Responsibility::Released
+                // Zero delivery debt does not reset admission-rate history.
+                Responsibility::Released {
+                    previous: previous.as_ref(),
+                }
             } else {
                 checkpoint.map_or(Responsibility::Unknown, Responsibility::Checkpoint)
             },

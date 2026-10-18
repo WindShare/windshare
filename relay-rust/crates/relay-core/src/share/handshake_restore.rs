@@ -36,14 +36,10 @@ impl<O: Observer> ShareRelay<O> {
                 continue;
             }
             let connection = snapshot.connection;
-            let ledger = self
+            let declared_capacity = self
                 .ledgers
                 .get(&connection)
-                .ok_or(Error::InvalidCheckpoint)?;
-            if ledger.checkpoint_flows().next().is_some() {
-                return Err(Error::InvalidCheckpoint);
-            }
-            let declared_capacity = ledger.receive_capacity();
+                .and_then(crate::flow::ConnectionLedger::receive_capacity);
             let entry = self
                 .connections
                 .get_mut(&connection)

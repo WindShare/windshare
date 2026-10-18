@@ -9,7 +9,9 @@ forwarding return `UnsupportedMode`; this is not yet a download relay.
 Fresh REGISTER requires `Authorization: Bearer <REGISTRATION_SECRET>` on the
 upgrade. The edge overwrites its internal permission header and stores permission
 as a socket tag. Missing credentials never grant registration. Signed STOP and
-token-bound RESUME do not require this deployment credential.
+token-bound RESUME do not require this deployment credential. Each share has 8 business
+slots and a separate 8-socket control reserve. STOP needs no business slot; authentication,
+control concurrency, attempt-rate and absolute deadlines still apply.
 
 SQLite stores endpoint identity, a never-reused connection allocator, authority
 and the checkpoint manifest. Binary WebSocket attachments retain handshake state,
@@ -20,7 +22,8 @@ Cloudflare output gate keep acknowledgements behind publication and permanent ST
 
 A close callback reports communication loss, never physical buffer release.
 This versioned lifecycle schema has never admitted payloads: after losing every
-socket it can establish zero delivery debt from that restriction. A future data
+socket it can establish zero delivery debt from that restriction, while retaining the
+manifest's attempt-rate history. A future data
 host must replace that recovery assumption explicitly. Unreadable authority or
 inventory closes connections and retries authoritative recovery; a lost individual
 attachment is isolated by the kernel. No descriptor or payload appears in traces.

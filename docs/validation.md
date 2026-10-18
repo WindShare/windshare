@@ -83,7 +83,10 @@ grace and ownership-bound RESUME. The lifecycle's activation barrier keeps JOIN,
 REGISTERED behind final persistence, including delayed confirmation, disconnect and STOP races.
 Aggregate JOIN tests preserve absent/stopped refusals. STOP tests cover ordered persistence/queue discard/final commit,
 acknowledgement with unsettled occupancy, duplicate STOP, uncertain writes, registration/RESUME races
-and late callbacks. Stopped recovery retains charges and deadlines without sockets; only consumption,
+and late callbacks. Admission regressions fill business capacity before authenticating STOP,
+retain delivery debt, reject invalid proofs, bound control lifetimes and preserve attempt-rate
+history across hibernation and empty-socket reconstruction. Native permit ownership spans
+supervisor/reader/writer teardown. Stopped recovery retains charges and deadlines without sockets; only consumption,
 settlement or proven release refunds them. Restoration covers every durable record,
 surviving owners and interrupted STOP cleanup. Receiver-session tests cover fixed admission deadlines,
 pre-admission E2E forwarding, quiet active sessions, STOP/RESUME/disconnect revocation, stale queued

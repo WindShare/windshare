@@ -1,4 +1,4 @@
-use super::{Closure, channel};
+use super::{Admission, Closure, channel};
 use crate::{actor::Event, config::SOCKET_TIMEOUT, generation::Generation};
 use anyhow::{Result, anyhow, bail};
 use futures_util::{Stream, StreamExt};
@@ -19,6 +19,7 @@ pub async fn run<I>(
     connection: ConnectionRef,
     mut shutdown: watch::Receiver<bool>,
     generation: Generation,
+    admission: Arc<Admission>,
 ) -> Result<()>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -38,11 +39,14 @@ where
     let mut tasks = JoinSet::new();
     let read_events = events.clone();
     let read_flush = Arc::clone(&flush);
-    let reader = tasks.spawn(
-        generation.track(async move { read(source, read_events, connection, read_flush).await }),
-    );
+    let read_admission = Arc::clone(&admission);
+    let reader = tasks.spawn(generation.track(async move {
+        read(source, read_events, connection, read_flush, read_admission).await
+    }));
     let write_events = events.clone();
+    let write_admission = Arc::clone(&admission);
     let writer = tasks.spawn(generation.track(async move {
+        let _admission = write_admission;
         writer.run(sink, flush, write_events, connection).await?;
         Ok(Closure::Drain)
     }));
@@ -77,6 +81,7 @@ where
         // not merely until the receipt has entered a mailbox.
         let _ = applied.await;
     }
+    drop(admission);
     result.and(cleanup)
 }
 
@@ -144,6 +149,7 @@ async fn read<S>(
     events: mpsc::Sender<Event>,
     connection: ConnectionRef,
     flush: Arc<Notify>,
+    admission: Arc<Admission>,
 ) -> Result<Closure>
 where
     S: Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -153,6 +159,7 @@ where
         match message? {
             Message::Binary(bytes) if accepting => {
                 if supported_control(&bytes) {
+                    admission.inspect(&bytes, connection)?;
                     events
                         .send(Event::Control(connection, bytes.to_vec()))
                         .await

@@ -8,11 +8,11 @@ mod retirement;
 
 fn bounded_relay(fixture: &Fixture, generations: usize) -> Relay {
     let mut limits = Fixture::limits();
-    limits.connections = generations;
+    limits.business_connections = generations;
     Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )
@@ -108,12 +108,7 @@ fn disconnect_revokes_grants_but_requires_separate_queue_and_transport_evidence(
             ..Usage::default()
         }
     );
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(3)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);
     assert!(relay.checkpoint().is_ok());
     let _ = relay.handle(Input::Closed(key.receiver()), fixture.at);
     assert_eq!(relay.delivery_usage(key.receiver()), None);
@@ -167,23 +162,13 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
         } else {
             deadline = restored.deadline();
         }
-        assert_eq!(
-            restored
-                .handle(Input::Connected(connection(3)), now)
-                .refusal,
-            Some(Error::Capacity)
-        );
+        assert_business_capacity_refused(&fixture, &mut restored, connection(3), now);
         relay = restored;
     }
     let deadline = deadline.unwrap();
     let _ = relay.handle(Input::Tick, deadline);
     assert_eq!(relay.ledgers[&key.receiver()].usage().submitted, ONE_FRAME);
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(3)), deadline)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_business_capacity_refused(&fixture, &mut relay, connection(3), deadline);
     assert_eq!(
         relay.deadline(),
         Some(
@@ -234,12 +219,9 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
             .refusal,
         None
     );
-    assert_eq!(
-        restored
-            .handle(Input::Connected(connection(4)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    let pending = fixture.control(&mut restored, connection(3), "resumeInitB64", fixture.at);
+    assert_eq!(pending.refusal, None);
+    assert_business_capacity_refused(&fixture, &mut restored, connection(4), fixture.at);
 }
 
 #[test]
@@ -308,12 +290,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
     assert!(!relay.ledgers.contains_key(&old.receiver()));
     assert_eq!(relay.connection_usage().retired_generations, 0);
     // Releasing an old generation cannot also release the replacement's admission slot.
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(3)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_business_capacity_refused(&fixture, &mut relay, connection(3), fixture.at);
 }
 
 #[test]
@@ -340,7 +317,7 @@ fn absent_responsibility_never_means_a_fresh_budget() {
             &Restore {
                 authority: Authority::Known(Some(stored)),
                 surviving: &[connection(1)],
-                responsibility: Responsibility::Released
+                responsibility: Responsibility::Released { previous: None }
             },
             Trace::default(),
             fixture.at,

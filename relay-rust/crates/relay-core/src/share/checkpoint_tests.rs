@@ -519,10 +519,10 @@ fn host_budget_checks_worst_case_metadata_before_tracking_is_enabled() {
     }
     let sender = relay.checkpoint_connection(connection(1)).unwrap();
     let receiver = relay.checkpoint_connection(connection(2)).unwrap();
-    assert_eq!(sender.ledger.flows().count(), 4);
-    assert_eq!(receiver.ledger.flows().count(), 1);
-    assert_eq!(sender.sessions.len(), 0);
-    assert_eq!(receiver.sessions.len(), 1);
+    assert_eq!(sender.ledger().unwrap().flows().count(), 4);
+    assert_eq!(receiver.ledger().unwrap().flows().count(), 1);
+    assert_eq!(sender.sessions().len(), 0);
+    assert_eq!(receiver.sessions().len(), 1);
     for snapshot in relay.checkpoint().unwrap().connections {
         assert!(snapshot.encode().len() <= maximum);
     }
@@ -569,7 +569,11 @@ fn independent_checkpoint_codecs_reject_mixed_or_misassigned_state() {
     wrong_connection.connection = connection(5);
     assert!(ConnectionCheckpoint::decode(&wrong_connection.encode(), Fixture::limits()).is_err());
     let mut wrong_admission = sender.clone();
-    wrong_admission.sessions = receiver.sessions.clone();
+    let checkpoint::ConnectionResources::Business { sessions, .. } = &mut wrong_admission.resources
+    else {
+        panic!("business checkpoint")
+    };
+    *sessions = receiver.sessions().to_vec();
     assert!(ConnectionCheckpoint::decode(&wrong_admission.encode(), Fixture::limits()).is_err());
     let mut wrong_identity = receiver;
     wrong_identity.identity = fixture.identity(9);
@@ -600,7 +604,7 @@ fn manifest_detects_a_missing_generation_even_when_its_socket_is_gone() {
         assert!(CheckpointManifest::decode(bytes, Fixture::limits()).is_err());
     }
     let mut reduced = Fixture::limits();
-    reduced.connections = 1;
+    reduced.business_connections = 1;
     assert!(CheckpointManifest::decode(&bytes, reduced).is_err());
     let mut duplicate = manifest;
     duplicate.reservations[1] = duplicate.reservations[0];
@@ -615,6 +619,8 @@ fn manifest_failure_retries_generation_records_and_only_commits_removal_after_re
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
+    // A business reservation survives communication loss until physical release.
+    let _ = fixture.control(&mut relay, connection(1), "resumeInitB64", fixture.at);
     relay.enable_checkpoints(budget(), fixture.at).unwrap();
     let mut host = Attachments::default();
     let result = relay.flush_checkpoints(fixture.at, |target, bytes| {

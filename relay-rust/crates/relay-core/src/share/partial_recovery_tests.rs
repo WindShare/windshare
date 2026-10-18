@@ -25,7 +25,12 @@ fn unknown_authority_or_invalid_reservations_refuse_even_with_healthy_records() 
         Err(Error::MissingAuthority)
     ));
     let mut manifest = original.checkpoint_manifest().unwrap();
-    manifest.reservations[0].bound = Counts::ZERO;
+    let crate::share::responsibility::ReservationKind::Business { bound, .. } =
+        &mut manifest.reservations[0].kind
+    else {
+        panic!("business reservation")
+    };
+    *bound = Counts::ZERO;
     assert!(matches!(
         Checkpoint::from_connections(&manifest, Vec::new(), original.limits),
         Err(Error::InvalidCheckpoint)
@@ -34,7 +39,7 @@ fn unknown_authority_or_invalid_reservations_refuse_even_with_healthy_records() 
 
 fn relay(fixture: &Fixture, grace: u64, residual: Counts) -> Relay {
     let limits = Limits {
-        connections: 3,
+        business_connections: 3,
         retirement: RetirementPolicy::Bounded {
             grace: Duration::from_millis(grace),
             generations: 2,
@@ -45,7 +50,7 @@ fn relay(fixture: &Fixture, grace: u64, residual: Counts) -> Relay {
     Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )
@@ -286,13 +291,8 @@ fn missing_record_risk_exhaustion_blocks_replacement_without_stopping_healthy_fl
     )
     .unwrap();
     discard(&mut recovered, turn, fixture.at);
-    assert_eq!(recovered.connection_usage().admitted, 3);
-    assert_eq!(
-        recovered
-            .handle(Input::Connected(connection(4)), fixture.at)
-            .refusal,
-        Some(Error::Capacity)
-    );
+    assert_eq!(recovered.connection_usage().business, 3);
+    assert_business_capacity_refused(&fixture, &mut recovered, connection(4), fixture.at);
     assert_eq!(
         recovered
             .handle(

@@ -152,7 +152,7 @@ fn startup_exhaustion_does_not_leak_credit_and_reclaimed_capacity_admits_again()
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )

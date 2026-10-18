@@ -12,7 +12,13 @@ use windshare_relay_core::{
 pub const WEBSOCKET_PATH: &str = "/v2/ws";
 pub const MAX_CONTROL_BYTES: usize =
     windshare_relay_core::descriptor_upload::MAX_DESCRIPTOR_BYTES + 12;
-pub const MAX_CONNECTIONS: usize = 8;
+pub const MAX_BUSINESS_CONNECTIONS: usize = 8;
+const CONTROL_CONNECTIONS: usize = 8;
+const CONNECTION_ATTEMPTS: windshare_relay_core::share::AttemptRate =
+    windshare_relay_core::share::AttemptRate {
+        burst: 64,
+        refill: Duration::from_millis(100),
+    };
 const RETAINED_FLOWS: usize = 32;
 const ATTACHMENT_BYTES: usize = 16_384;
 const ATTACHMENT_ENVELOPE_BYTES: usize = 512;
@@ -87,15 +93,19 @@ pub fn limits() -> Limits {
     let capacity =
         |frames| Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES));
     Limits {
-        connections: MAX_CONNECTIONS,
+        business_connections: MAX_BUSINESS_CONNECTIONS,
+        handshakes: windshare_relay_core::share::HandshakeLimits {
+            concurrent: CONTROL_CONNECTIONS,
+            attempts: CONNECTION_ATTEMPTS,
+        },
         sessions: RETAINED_FLOWS,
         retained_flows_per_connection: RETAINED_FLOWS,
         // No payloads are admitted in this schema. Logical retirement of empty
         // ledgers makes no claim about Cloudflare's physical control-frame buffers.
         retirement: RetirementPolicy::Bounded {
             grace: Duration::ZERO,
-            generations: MAX_CONNECTIONS,
-            residual: capacity(CONNECTION_FRAMES * MAX_CONNECTIONS as u64),
+            generations: MAX_BUSINESS_CONNECTIONS,
+            residual: capacity(CONNECTION_FRAMES * MAX_BUSINESS_CONNECTIONS as u64),
         },
         delivery: flow::Limits::new(
             capacity(CONNECTION_FRAMES),

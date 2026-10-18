@@ -18,6 +18,8 @@ use windshare_relay_core::{
     share::{ShareRelay, Submission, Turn},
 };
 
+mod admission;
+pub use admission::{Admission, Capacity};
 mod runtime;
 mod writer;
 pub use runtime::{run, stopped};
