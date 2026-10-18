@@ -95,7 +95,8 @@ Checked 2026-10-17; none is a confirmed fix for this probe.
   Their triggers differ from this probe; neither explains the retained burst yet.
 
 Next: check the 0.8.7 reinitialization path against our reset reproduction.
-Production host risk policy and a real client download remain the integration work.
+The kernel now supports finite risk expiry; the production Cloudflare host selects
+immediate expiry after quiescence. A real client download remains integration work.
 
 ## Run locally
 

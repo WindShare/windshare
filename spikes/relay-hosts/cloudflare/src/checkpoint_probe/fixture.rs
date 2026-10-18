@@ -24,6 +24,8 @@ const HANDSHAKE_LIMIT: usize = 3;
 const ATTEMPT_BURST: u32 = 64;
 const ATTEMPT_REFILL: Duration = Duration::from_millis(100);
 const RETIRED_GENERATIONS: usize = 2;
+// Keep the exhaustion probe's frozen-time window; this is not a platform TTL.
+const RISK_RETENTION: Duration = Duration::from_secs(60);
 const SESSION_LIMIT: usize = 2;
 const CONNECTION_FRAMES: u64 = 16;
 const REGISTRATION_BUDGET_MS: u64 = 5_000;
@@ -106,7 +108,8 @@ pub fn limits() -> Limits {
         retained_flows_per_connection: SESSION_LIMIT,
         // Experimental risk allowance, not evidence of physical release or a production default.
         retirement: windshare_relay_core::share::RetirementPolicy::Bounded {
-            grace: Duration::ZERO,
+            admission_grace: Duration::ZERO,
+            risk_retention: RISK_RETENTION,
             generations: RETIRED_GENERATIONS,
             residual: capacity(CONNECTION_FRAMES * RETIRED_GENERATIONS as u64),
         },

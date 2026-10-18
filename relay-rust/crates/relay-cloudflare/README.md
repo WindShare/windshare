@@ -25,12 +25,15 @@ when its receipt was lost, entering grace if the owner is gone. Lifecycle schema
 rejects older storage.
 
 A close callback reports communication loss, never physical buffer release.
-This versioned lifecycle schema has never admitted payloads: after losing every
-socket it can establish zero delivery debt from that restriction, while retaining the
-manifest's attempt-rate history. A future data
-host must replace that recovery assumption explicitly. Unreadable authority or
-inventory closes connections and retries authoritative recovery; a lost individual
-attachment is isolated by the kernel. No descriptor or payload appears in traces.
+Risk reservations and their absolute expiry survive in the manifest even when all
+sockets/attachments disappear. The host selects immediate expiry after revocation
+and both application queues are discarded, preserving the reconnect-rate budget.
+The experiments establish no safer physical-buffer TTL; their 30-second interval
+is not a release guarantee. A positive host retention interval also expires through
+the shared Alarm schedule, without renewing on recovery or retry. Unreadable
+authority or inventory refuses recovery; individual attachment loss is isolated.
+Only absent inventory in this lifecycle-only schema proves no prior payload debt.
+No descriptor or payload appears in traces.
 
 From this directory, with the Rust Wasm target and `worker-build` installed:
 

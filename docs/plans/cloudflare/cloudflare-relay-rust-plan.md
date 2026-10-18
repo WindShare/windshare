@@ -68,8 +68,12 @@ Connection liveness is implemented in the kernel: client `WS2H` probes receive
 and connection checkpoints preserve the nonce, last inbound time and original expiry.
 The kernel now separates admitted connections, retired-generation metadata and
 submitted residual risk. Host-injected retirement waits for revocation and both
-directions' queue discard; fixed grace and residual charges survive recovery.
-Physical release remains a separate host receipt. Dependency-scoped recovery now
+directions' queue discard. Admission grace and risk expiry are fixed at first loss
+and persist in the manifest, including missing attachments and empty-socket restarts.
+Expiry ends risk accounting and retries blocked retirement; it does not acknowledge
+consumption or physical release. Cloudflare selects immediate expiry after cleanup,
+with bounded reconnect attempts; native still requires physical-release receipts.
+Dependency-scoped recovery now
 isolates missing/invalid delivery records while preserving healthy sessions.
 Independent generation reservations retain conservative loss charges and fixed grace;
 ownership, permanent STOP and the reservation inventory still require authoritative reads.
@@ -92,10 +96,11 @@ an exact SQLite mirror. Separate platform probes sustain replacement admissions
 with immediate or 30-second risk expiry; neither is a physical-release receipt.
 Some close-requested old peers still deliver complete bursts after more than ten
 minutes; the experiment cannot locate those bytes within the forwarding path.
-Production integration must give retired risk an explicit policy-based end,
-without restoring old authority or making ordinary reconnects wait for a global reset.
+The kernel now gives retired risk an explicit policy-based end without restoring
+old authority or resetting healthy peers. Deterministic tests cover saturation,
+automatic recovery and stale feedback; production data forwarding remains pending.
 
-结论：**保留共享 Rust 语义内核；退役与局部恢复已实现。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。注册已合并为单次原子保存，保留提交确认屏障；消费反馈简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+结论：**保留共享 Rust 语义内核；有限风险退出、退役与局部恢复已实现。** Cloudflare 选择清理完成后立即结束风险预留，实验不支持将等待时间解释为物理释放保证。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。注册已合并为单次原子保存，保留提交确认屏障；消费反馈简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 

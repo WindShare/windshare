@@ -3,6 +3,7 @@ use std::vec;
 
 const ONE: Counts = Counts::new(1, 21);
 const LOSS_GRACE_MS: u64 = 100;
+const LOSS_RISK_RETENTION: Duration = Duration::from_secs(10);
 
 #[test]
 fn unknown_authority_or_invalid_reservations_refuse_even_with_healthy_records() {
@@ -41,7 +42,8 @@ fn relay(fixture: &Fixture, grace: u64, residual: Counts) -> Relay {
     let limits = Limits {
         business_connections: 3,
         retirement: RetirementPolicy::Bounded {
-            grace: Duration::from_millis(grace),
+            admission_grace: Duration::from_millis(grace),
+            risk_retention: LOSS_RISK_RETENTION,
             generations: 2,
             residual,
         },
@@ -234,7 +236,8 @@ fn reconnect_after_recovery(
                 .retirement_state(&lost.receiver())
                 .unwrap(),
             Detached::Quiescing {
-                not_before: grace_end
+                retire_at: grace_end,
+                risk_expires_at: fixture.at.saturating_add(LOSS_RISK_RETENTION),
             }
         );
         assert_eq!(

@@ -1,6 +1,6 @@
 use serde_json::json;
 use windshare_relay_core::{
-    observation::{Observation, Observer},
+    observation::{Observation, Observer, RelayDecision},
     share::Identity,
 };
 
@@ -40,12 +40,44 @@ impl Observer for Trace {
                 connection,
                 decision,
                 ..
-            } => self.event(
-                "relay_decision",
-                &json!({
-                    "connection": format!("{connection:?}"), "decision": format!("{decision:?}"),
-                }),
-            ),
+            } => {
+                let mut detail = match decision {
+                    RelayDecision::Retired {
+                        residual,
+                        expires_at,
+                    }
+                    | RelayDecision::RetirementRiskExpired {
+                        residual,
+                        expires_at,
+                    } => json!({
+                        "decision": if matches!(decision, RelayDecision::Retired { .. }) {
+                            "risk_retained"
+                        } else {
+                            "risk_policy_expired"
+                        },
+                        "risk_expires_at_ms": expires_at.0,
+                        "residual_frames": residual.frames,
+                        "residual_bytes": residual.encoded_bytes,
+                    }),
+                    RelayDecision::RetirementBlocked {
+                        usage,
+                        residual,
+                        generation_limit,
+                        residual_limit,
+                        expires_at,
+                    } => json!({
+                        "decision": "retirement_capacity_blocked",
+                        "risk_expires_at_ms": expires_at.0,
+                        "residual_frames": residual.frames, "residual_bytes": residual.encoded_bytes,
+                        "retained_generations": usage.retired_generations, "generation_limit": generation_limit,
+                        "retained_frames": usage.residual.frames, "frame_limit": residual_limit.frames,
+                        "retained_bytes": usage.residual.encoded_bytes, "byte_limit": residual_limit.encoded_bytes,
+                    }),
+                    _ => json!({"decision": format!("{decision:?}")}),
+                };
+                detail["connection"] = json!(format!("{connection:?}"));
+                self.event("relay_decision", &detail);
+            }
             value => self.event(
                 "delivery_decision",
                 &json!({"decision": format!("{value:?}")}),

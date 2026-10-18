@@ -24,6 +24,9 @@ const ATTACHMENT_BYTES: usize = 16_384;
 const ATTACHMENT_ENVELOPE_BYTES: usize = 512;
 const CONNECTION_FRAMES: u64 = 16;
 const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
+// The probes establish no safer physical-buffer TTL. Prefer immediate replacement
+// after quiescence; the attempt-rate budget still bounds reconnect admission.
+const LOST_GENERATION_RISK_RETENTION: Duration = Duration::ZERO;
 const RELAY_IDENTITY_DOMAIN: &[u8] = b"windshare/v2 relay-identity\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,10 +103,10 @@ pub fn limits() -> Limits {
         },
         sessions: RETAINED_FLOWS,
         retained_flows_per_connection: RETAINED_FLOWS,
-        // No payloads are admitted in this schema. Logical retirement of empty
-        // ledgers makes no claim about Cloudflare's physical control-frame buffers.
+        // This is an admission-risk policy, never a receipt for hidden buffers.
         retirement: RetirementPolicy::Bounded {
-            grace: Duration::ZERO,
+            admission_grace: Duration::ZERO,
+            risk_retention: LOST_GENERATION_RISK_RETENTION,
             generations: MAX_BUSINESS_CONNECTIONS,
             residual: capacity(CONNECTION_FRAMES * MAX_BUSINESS_CONNECTIONS as u64),
         },

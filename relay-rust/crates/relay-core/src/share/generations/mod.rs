@@ -204,7 +204,7 @@ impl Generations {
         let retired = matches!(
             entry,
             Generation::Detached {
-                state: Detached::Retired,
+                state: Detached::RiskRetained { .. },
                 ..
             }
         );

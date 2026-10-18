@@ -1,11 +1,16 @@
 use super::*;
 
+#[path = "risk_expiry_tests.rs"]
+mod risk_expiry;
+
 const RECONNECTS: u64 = 6;
 const GRACE_MS: u64 = 100;
+const RISK_RETENTION_MS: u64 = 10_000;
 
 pub(super) fn policy(generations: usize, residual: Counts) -> RetirementPolicy {
     RetirementPolicy::Bounded {
-        grace: Duration::ZERO,
+        admission_grace: Duration::ZERO,
+        risk_retention: Duration::from_millis(RISK_RETENTION_MS),
         generations,
         residual,
     }
@@ -293,7 +298,8 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
         2,
         1,
         RetirementPolicy::Bounded {
-            grace: Duration::from_millis(GRACE_MS),
+            admission_grace: Duration::from_millis(GRACE_MS),
+            risk_retention: Duration::from_millis(RISK_RETENTION_MS),
             generations: 2,
             residual: Counts::new(2, 42),
         },
@@ -371,11 +377,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
     assert_eq!(relay.connection_usage().retired_generations, 1);
     assert_eq!(
         relay.deadline(),
-        Some(
-            fixture
-                .at
-                .saturating_add(crate::heartbeat::CONNECTION_SILENCE_TIMEOUT)
-        )
+        Some(UnixMillis(retirement_at.0 - GRACE_MS + RISK_RETENTION_MS))
     );
     assert!(ledger_of(&relay, lost.receiver()).deadline().is_none());
 }
@@ -489,7 +491,9 @@ fn retired_checkpoints_cannot_hide_excess_risk_or_live_authority() {
         .iter_mut()
         .find(|entry| entry.connection == key.receiver())
         .unwrap();
-    receiver.role = checkpoint::ConnectionRole::Detached(Detached::Retired);
+    receiver.role = checkpoint::ConnectionRole::Detached(Detached::RiskRetained {
+        expires_at: UnixMillis(fixture.at.0 + RISK_RETENTION_MS),
+    });
     let checkpoint::ConnectionResources::Business { sessions, .. } = &mut receiver.resources else {
         panic!("business checkpoint")
     };
