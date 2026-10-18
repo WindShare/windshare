@@ -26,6 +26,9 @@ use tokio_tungstenite::{
 const TEST_BUDGET: Duration = Duration::from_secs(3);
 const PIPE_BYTES: usize = 16;
 
+#[path = "registry_http_tests.rs"]
+mod http;
+
 struct HeldTransport {
     stream: DuplexStream,
     blocked: Arc<Notify>,

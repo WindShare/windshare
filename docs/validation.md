@@ -124,6 +124,10 @@ receipts, frame/byte-aware batching across sessions, sparse flush, counter exhau
 retirement settlement, replay and stale-generation isolation without timers or sockets.
 The native host runs REGISTER/RESUME, JOIN, bidirectional forwarding, cumulative
 feedback, settlement, STOP and heartbeats on real WebSockets with SQLite persistence.
+HTTP tests cover root health routing, Origin policy and startup validation, independent
+HTTP/relay capacity, bounded headers, pre-read frame handoff and joined shutdown.
+Incomplete reads and blocked responses use virtual time to verify absolute deadlines
+and admission release without increasing wall-clock timeout waits.
 Its Go-codec scenario transfers beyond asymmetric windows, replays feedback, verifies
 maximum frames and descriptors, restarts and resumes delivery, then stops with submitted
 debt and verifies permanent refusal across another restart. Connection tests block actual WebSocket

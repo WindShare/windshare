@@ -4,7 +4,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::oneshot};
 use windshare_relay_core::lifecycle::Record;
-use windshare_relay_native::{Endpoint, Server};
+use windshare_relay_native::{Endpoint, OriginPolicy, Server};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -66,7 +66,12 @@ async fn go_capacity_client_drives_native_io_and_process_restart() {
     let database = directory.path().join("in-process.sqlite");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("ws://{}/v2/ws", listener.local_addr().unwrap());
-    let server = Server::open(Endpoint::parse(&endpoint).unwrap(), &database).unwrap();
+    let server = Server::open(
+        Endpoint::parse(&endpoint).unwrap(),
+        OriginPolicy::default(),
+        &database,
+    )
+    .unwrap();
     let (shutdown, ended) = oneshot::channel();
     let task = tokio::spawn(async move {
         server
@@ -119,6 +124,7 @@ async fn shutdown_joins_connected_sockets_and_incomplete_upgrades() {
     let endpoint = format!("ws://{address}/v2/ws");
     let server = Server::open(
         Endpoint::parse(&endpoint).unwrap(),
+        OriginPolicy::default(),
         &directory.path().join("shutdown.sqlite"),
     )
     .unwrap();

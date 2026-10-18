@@ -16,6 +16,9 @@ anyhow = "1"
 base64 = "0.23.1"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.4"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.11.1"
 socket2 = "0.6"
