@@ -59,6 +59,7 @@ struct Harness {
     task: tokio::task::JoinHandle<Result<()>>,
     blocked: Arc<Notify>,
     dropped: Arc<AtomicBool>,
+    _directory: tempfile::TempDir,
 }
 
 impl Harness {
@@ -79,7 +80,21 @@ impl Harness {
         let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
         let (tx, mut events) = mpsc::channel(16);
         let (shutdown, stopping) = watch::channel(false);
-        let task = tokio::spawn(run(server, tx, connection(1), stopping));
+        let fixture = crate::test_support::Fixture::new();
+        let directory = tempfile::tempdir().unwrap();
+        let database = crate::storage::Database::open(
+            &directory.path().join("authority.sqlite"),
+            fixture.identity().relay,
+        )
+        .unwrap();
+        let generation = Generation::new(fixture.identity(), database);
+        let task = tokio::spawn(generation.track(run(
+            server,
+            tx,
+            connection(1),
+            stopping,
+            generation.clone(),
+        )));
         let Event::Connected(_, port) = events.recv().await.unwrap() else {
             panic!("connection admission")
         };
@@ -91,6 +106,7 @@ impl Harness {
                 task,
                 blocked,
                 dropped,
+                _directory: directory,
             },
             port,
         )

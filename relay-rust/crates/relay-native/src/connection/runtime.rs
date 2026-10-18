@@ -1,6 +1,6 @@
 use super::{Closure, channel};
-use crate::{actor::Event, config::SOCKET_TIMEOUT};
-use anyhow::{Result, bail};
+use crate::{actor::Event, config::SOCKET_TIMEOUT, generation::Generation};
+use anyhow::{Result, anyhow, bail};
 use futures_util::{Stream, StreamExt};
 use std::sync::Arc;
 use tokio::{
@@ -18,31 +18,39 @@ pub async fn run<I>(
     events: mpsc::Sender<Event>,
     connection: ConnectionRef,
     mut shutdown: watch::Receiver<bool>,
+    generation: Generation,
 ) -> Result<()>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (outbox, writer, mut closure) = channel(connection);
     tokio::select! {
-        result = events.send(Event::Connected(connection, outbox)) => result?,
+        result = events.send(Event::Connected(connection, outbox)) => {
+            // SendError owns the rejected event. Do not let an Outbox escape
+            // tracked cleanup inside a task's returned error value.
+            result.map_err(|_| anyhow!("share actor unavailable"))?;
+        }
         () = stopped(&mut shutdown) => return Ok(()),
+        () = generation.cancelled() => return Ok(()),
     }
     let (sink, source) = socket.split();
     let flush = Arc::new(Notify::new());
     let mut tasks = JoinSet::new();
     let read_events = events.clone();
     let read_flush = Arc::clone(&flush);
-    let reader =
-        tasks.spawn(async move { read(source, read_events, connection, read_flush).await });
+    let reader = tasks.spawn(
+        generation.track(async move { read(source, read_events, connection, read_flush).await }),
+    );
     let write_events = events.clone();
-    let writer = tasks.spawn(async move {
+    let writer = tasks.spawn(generation.track(async move {
         writer.run(sink, flush, write_events, connection).await?;
         Ok(Closure::Drain)
-    });
+    }));
     tracing::debug!(event = "connection_tasks_started", ?connection);
     let (mode, result) = tokio::select! {
         biased;
         () = stopped(&mut shutdown) => (Closure::Abort, Ok(())),
+        () = generation.cancelled() => (Closure::Abort, Ok(())),
         changed = closure.changed() => {
             let mode = if changed.is_ok() { *closure.borrow_and_update() } else { Closure::Abort };
             (mode, Ok(()))
@@ -55,7 +63,7 @@ where
         writer.abort();
     }
     let _ = events.send(Event::Disconnected(connection)).await;
-    let cleanup = drain(&mut tasks, &mut shutdown, connection).await;
+    let cleanup = drain(&mut tasks, &mut shutdown, &generation, connection).await;
     // Joining, rather than dropping JoinHandles, proves the split transport,
     // in-flight frame and writer mailboxes have actually been destroyed.
     tracing::debug!(event = "connection_transport_released", ?connection);
@@ -75,6 +83,7 @@ where
 async fn drain(
     tasks: &mut JoinSet<Result<Closure>>,
     shutdown: &mut watch::Receiver<bool>,
+    generation: &Generation,
     connection: ConnectionRef,
 ) -> Result<()> {
     // One total deadline prevents terminal draining from being prolonged by
@@ -90,6 +99,10 @@ async fn drain(
             }
         }
         () = stopped(shutdown) => {
+            tasks.abort_all();
+            join(tasks).await
+        }
+        () = generation.cancelled() => {
             tasks.abort_all();
             join(tasks).await
         }
@@ -142,9 +155,13 @@ where
                 if supported_control(&bytes) {
                     events
                         .send(Event::Control(connection, bytes.to_vec()))
-                        .await?;
+                        .await
+                        .map_err(|_| anyhow!("share actor unavailable"))?;
                 } else {
-                    events.send(Event::Unsupported(connection)).await?;
+                    events
+                        .send(Event::Unsupported(connection))
+                        .await
+                        .map_err(|_| anyhow!("share actor unavailable"))?;
                     // Continue driving the close handshake without accepting more
                     // commands after this connection's capability refusal.
                     accepting = false;
@@ -164,7 +181,7 @@ where
 
 fn supported_control(bytes: &[u8]) -> bool {
     // The kernel validates layouts and authentication. JOIN and opaque ingress
-    // stay closed until delivery recovery and the client runtime are integrated.
+    // stay closed until forwarding and the client runtime are integrated.
     matches!(
         bytes.get(..4),
         Some(b"WS2R" | b"WS2P" | b"WS2U" | b"WS2T" | b"WS2X" | b"WS2V" | b"WS2H")

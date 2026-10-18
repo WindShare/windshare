@@ -26,7 +26,8 @@ pub trait Persistence: Clone + Send + Sync + 'static {
 
 struct State {
     connection: Mutex<Connection>,
-    // The lock is held until every outstanding blocking transaction has finished.
+    // Generation-owned clones retain this lock through transport teardown and
+    // blocking transactions, even when their actor or server has disappeared.
     _lease: File,
     relay: RelayIdentity,
     generation: NonZeroU64,

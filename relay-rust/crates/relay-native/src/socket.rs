@@ -62,7 +62,19 @@ pub async fn serve(
     let share = routed.ok_or_else(|| anyhow!("missing upgrade route"))?;
     let handle = registry.attach(share)?;
     tracing::debug!(event = "socket_connected", ?share, ?connection);
-    connection::run(socket, handle.tx.clone(), connection, shutdown).await
+    handle
+        .generation
+        .admit(
+            &handle.tx,
+            connection::run(
+                socket,
+                handle.tx.clone(),
+                connection,
+                shutdown,
+                handle.generation.clone(),
+            ),
+        )?
+        .await
 }
 
 fn route(request: &Request, endpoint: &Endpoint) -> Result<ShareId> {

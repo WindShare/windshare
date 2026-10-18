@@ -37,11 +37,27 @@ terminal replies and the WebSocket close handshake one bounded interval; shutdow
 interrupts that drain.
 Only joined tasks, dropped queues and abortive TCP teardown justify `Closed`;
 shutdown waits until the share actor has processed that receipt.
-This lifecycle-only storage schema has never admitted payloads; its recovery uses that
-evidence to establish zero delivery responsibility. JOIN/data ingress still requires
-delivery recovery and coordinated client runtime integration.
+An independent generation supervisor tracks the actor, connection supervisors,
+reader/writer descendants and blocking storage work. Failure, cancellation and idle
+eviction retain the registry slot until every tracked task has destroyed its resources;
+a closed mailbox alone never permits reconstruction. Each generation has its own mailbox,
+so delayed old receipts cannot enter the replacement.
+
+Recovery evidence depends on the boundary:
+
+- A first share requires an authoritative absent record and an empty host inventory.
+- Same-host reconstruction requires the old generation's completed cleanup barrier,
+  including storage work, before reading authority again.
+- Host/process restart requires the exclusive database lease, held by every tracked
+  resource owner until teardown, and a new durable connection generation. Native
+  transports use abortive TCP close and retain no buffers in an external host.
+
+Previously submitted network bytes may still arrive; release does not mean delivery
+or recall. These native ownership guarantees do not apply to Cloudflare buffers.
+JOIN/data ingress remains disabled pending forwarding and coordinated client integration.
 
 `make rust` covers blocked-write ingress, bounded queues, STOP submission fencing,
-joined teardown, fault-injected commit ordering and a Go-codec WebSocket scenario
+joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
+cancelled-supervisor lease retention, fault-injected commit ordering and a Go-codec WebSocket scenario
 that kills/restarts the actual binary, resumes ownership, stops the share,
 then verifies that another restart cannot republish or resume it.

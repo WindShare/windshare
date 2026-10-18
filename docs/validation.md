@@ -122,7 +122,9 @@ restarts again to verify permanent refusal. Connection tests block actual WebSoc
 writes over bounded in-memory I/O while reading inbound controls, verify joined
 task/queue release, terminal reply draining, heartbeat priority and shutdown.
 Real kernel receipts cover queue bounds and STOP fencing at synchronous writer handoff.
-Fault-injected host tests hold commits,
+Held transport destruction fences actor reconstruction; cancelled supervisors retain
+the host lease until their children exit, and old receipts cannot reach a new actor.
+Fault-injected host tests hold commits across actor failure/cancellation,
 lose receipts and race STOP with ownership publication. JOIN/forwarding, client
 runtime cutover remain unimplemented. The Cloudflare lifecycle adapter now uses the
 same authority-row transitions, real Worker entropy/time and SQLite. Injected host
