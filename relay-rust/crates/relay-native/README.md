@@ -18,12 +18,13 @@ Keep the SQLite database and its WAL together; deleting storage deletes STOP his
 The parent directory must exist. JSON readiness goes to stdout; structured traces
 go to stderr, with kernel decisions enabled by `RUST_LOG=debug`.
 
-SQLite transactions atomically publish the descriptor and unresolved record, then
-conditionally commit ownership. STOP retains its permanent intent through cleanup
-and commits the final fact before acknowledgement. Ambiguous results remain fenced
-and retry the same obligation; operation-scoped cleanup cannot erase another owner.
-Startup restores pending work and original persisted grace deadlines. Generation
-allocation is durable; challenge entropy comes from the OS.
+REGISTER creates ownership and descriptor in one SQLite transaction. The kernel
+permits REGISTERED only after that exact write is confirmed; ambiguous results retry
+the same write. STOP follows earlier writes, retains its permanent intent through
+cleanup and commits the final fact before acknowledgement. Startup recovers committed
+ownership even if its receipt was lost, enters grace when the owner is gone and
+preserves already-persisted grace deadlines. Schema version 2 rejects older databases.
+Generation allocation is durable; challenge entropy comes from the OS.
 
 Ingress separates 256 process-wide business slots from 32 control slots; each share
 keeps 32 business and 8 control slots. New connections are rate-limited, and valid

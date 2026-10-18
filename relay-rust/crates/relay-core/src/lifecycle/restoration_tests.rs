@@ -4,87 +4,39 @@ fn restarted() -> Incarnation {
     Incarnation::new([2; 16]).unwrap()
 }
 
-fn finish(
-    engine: &mut ShareLifecycle<Recorder>,
-    id: OperationId,
-    result: PublicationResult,
-    at: UnixMillis,
-) -> Action<'static> {
-    engine
-        .handle(Event::PublicationFinished { id, result }, at)
-        .action
-}
-
 #[test]
-fn a_stored_publication_restores_fenced_and_only_its_exact_abort_reopens_the_share() {
+fn a_committed_registration_with_lost_completion_restores_into_resumable_grace() {
     let fixture = Fixture::new();
     let mut original = fixture.engine();
-    let request = fixture.publish(&mut original);
-    let stored = request.record();
-    assert_eq!(stored.relay(), fixture.relay());
-    assert_eq!(stored.share(), fixture.share());
-
-    // Restart before the transaction reports, long after the handshake deadline.
-    let much_later = request.deadline.saturating_add(Duration::from_secs(600));
-    let (mut engine, action) = fixture.restore(Some(stored), restarted()).unwrap();
-    assert_eq!(action, Action::Reconcile(request.id));
-    assert_eq!(engine.phase(), Phase::Fenced);
-    assert_eq!(engine.deadline(), None);
-    let restored = engine.observer.0[0];
-    assert_eq!(restored.event, ObservedEvent::Restore);
-    assert_eq!(restored.operation, Some(request.id));
-    assert_eq!(restored.incarnation, restarted());
-    assert_eq!(restored.decision, Decision::Reconcile);
-
-    assert_eq!(engine.handle(Event::Tick, much_later).expiration, None);
-    for result in [PublicationResult::Committed, PublicationResult::Uncertain] {
-        assert_eq!(
-            finish(&mut engine, request.id, result, much_later),
-            Action::Reconcile(request.id)
-        );
-    }
+    let commit = fixture.publish(&mut original);
+    assert_eq!(original.phase(), Phase::Activating);
+    let (mut engine, action) = fixture.restore(Some(commit.record()), restarted()).unwrap();
+    let Action::Detached(grace) = action else {
+        panic!("lost owner must enter grace");
+    };
+    assert_eq!(grace.lost(), commit.registration().owner);
+    assert_eq!(engine.phase(), Phase::Grace);
     assert_eq!(
-        fixture.join(&mut engine, much_later).action,
-        Action::Refused(Refusal::PublicationUncertain)
+        fixture.join(&mut engine, fixture.at).action,
+        Action::Refused(Refusal::SenderDetached)
     );
     assert_eq!(
         engine
-            .handle(fixture.reserve_event(much_later), much_later)
+            .handle(Event::OwnershipCommitted(commit.id()), fixture.at)
             .action,
-        Action::Refused(Refusal::PublicationUncertain)
+        Action::Refused(Refusal::StaleOperation)
     );
-    assert_eq!(
-        finish(
-            &mut engine,
-            request.id,
-            PublicationResult::Aborted,
-            much_later
-        ),
-        Action::Released(request.id)
-    );
-    let Action::Reserved(replacement) = engine
-        .handle(fixture.reserve_event(much_later), much_later)
-        .action
-    else {
-        panic!("a confirmed abort reopens the share");
-    };
-    assert_eq!(replacement.id().incarnation(), restarted());
-    assert_ne!(replacement.id(), request.id);
+    let resume = ownership_commit(fixture.resume(&mut engine, connection(2, 1)));
+    let owner = committed_registration(&mut engine, resume.id(), fixture.resume_at);
+    assert_eq!(owner.route, commit.registration().route);
+    assert_eq!(owner.owner.epoch().get().get(), 2);
 }
 
 #[test]
 fn a_published_route_re_adopts_its_surviving_ownership_without_a_write() {
     let fixture = Fixture::new();
     let mut original = fixture.engine();
-    let publication = fixture.publish(&mut original).id;
-    let Action::CommitOwnership(commit) = finish(
-        &mut original,
-        publication,
-        PublicationResult::Committed,
-        fixture.at,
-    ) else {
-        panic!("publication must request the ownership commit");
-    };
+    let commit = fixture.publish(&mut original);
     let published = committed_registration(&mut original, commit.id(), fixture.at);
     let owner = published.owner.connection();
     let (mut engine, action) = fixture
@@ -115,12 +67,9 @@ fn a_published_route_re_adopts_its_surviving_ownership_without_a_write() {
     // Callbacks for the operation that published it name no current work,
     // while the re-adopted owner can still be lost.
     assert_eq!(
-        finish(
-            &mut engine,
-            publication,
-            PublicationResult::Aborted,
-            fixture.at
-        ),
+        engine
+            .handle(Event::OwnershipCommitted(commit.id()), fixture.at)
+            .action,
         Action::Refused(Refusal::StaleOperation)
     );
     assert!(matches!(
@@ -250,7 +199,7 @@ fn a_stop_record_retires_its_instance_and_keeps_the_share_occupied() {
 }
 
 #[test]
-fn restoration_refuses_records_of_another_relay_or_share_and_a_reused_incarnation() {
+fn restoration_refuses_records_of_another_relay_or_share() {
     let fixture = Fixture::new();
     let mut original = fixture.engine();
     let request = fixture.publish(&mut original);
@@ -268,12 +217,6 @@ fn restoration_refuses_records_of_another_relay_or_share_and_a_reused_incarnatio
             other_share,
             restarted(),
             RestoreError::ForeignShare,
-        ),
-        (
-            fixture.relay(),
-            fixture.share(),
-            request.id.incarnation(),
-            RestoreError::ReusedIncarnation,
         ),
     ] {
         let restored = ShareLifecycle::restore(

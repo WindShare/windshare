@@ -65,13 +65,6 @@ impl Fixture {
         }
     }
 
-    fn unresolved(&self) -> Record {
-        Record::Unresolved(UnresolvedPublication {
-            id: self.operation(),
-            registration: self.registration(),
-        })
-    }
-
     fn route(&self) -> PublishedRoute {
         PublishedRoute {
             relay: self.relay,
@@ -134,18 +127,9 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
         - FRAME_HEADER_BYTES
         - crate::flow::ReceiveCapacity::ENCODED_BYTES;
     let connection = [&0x0102_u64.to_be_bytes()[..], &3_u64.to_be_bytes()].concat();
-    let operation = [&[7; 16][..], &connection, &u64::MAX.to_be_bytes()].concat();
     let ownership = [&OWNER_EPOCH.to_be_bytes()[..], &connection].concat();
     let stop = StopInit::decode(&fixture.stop_init).unwrap();
     let cases = [
-        (
-            fixture.unresolved(),
-            [
-                fixture.prefix(UNRESOLVED, &fixture.register_init, registration_body),
-                operation,
-            ]
-            .concat(),
-        ),
         (
             fixture.published(),
             [
@@ -180,7 +164,12 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
         assert_eq!(Record::decode(&expected), Ok(record));
     }
     assert_eq!(
-        fixture.unresolved().encode().as_bytes().len(),
+        fixture
+            .pending(StopCleanup::Reservation(fixture.operation()))
+            .record()
+            .encode()
+            .as_bytes()
+            .len(),
         MAX_RECORD_BYTES
     );
 }
@@ -197,11 +186,6 @@ fn stopping_records_preserve_the_exact_cleanup_obligation_in_bounded_bytes() {
         (
             StopCleanup::Reservation(old),
             CLEANUP_RESERVATION,
-            OPERATION_BYTES,
-        ),
-        (
-            StopCleanup::Publication(old),
-            CLEANUP_PUBLICATION,
             OPERATION_BYTES,
         ),
         (
@@ -248,7 +232,6 @@ fn stopping_records_reject_unknown_cleanup_and_zero_operation_or_connection_fiel
     let pending_start = HEADER_BYTES + STOP_FACT_BYTES;
     for cleanup in [
         StopCleanup::Reservation(operation),
-        StopCleanup::Publication(operation),
         StopCleanup::Owner(operation.connection()),
     ] {
         let stored = fixture.pending(cleanup).record().encode();
@@ -278,7 +261,6 @@ fn stopping_records_reject_unknown_cleanup_and_zero_operation_or_connection_fiel
 #[test]
 fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
     let fixture = Fixture::new();
-    let unresolved = fixture.unresolved().encode().as_bytes().to_vec();
     let published = fixture.published().encode().as_bytes().to_vec();
     let grace = fixture.grace().encode().as_bytes().to_vec();
     let stopped = fixture.stopped().encode().as_bytes().to_vec();
@@ -290,7 +272,7 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
     let cases = [
         (Vec::new(), RecordError::Length),
         (
-            unresolved[..unresolved.len() - 1].to_vec(),
+            published[..published.len() - 1].to_vec(),
             RecordError::Length,
         ),
         ([&published[..], &[0]].concat(), RecordError::Length),
@@ -303,13 +285,8 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&published, 2..34, 0), RecordError::Field),
         (edit(&published, 34..35, 0xff), RecordError::Field),
         (edit(&stopped, 34..35, 0xff), RecordError::Field),
-        // Instance, then the unresolved operation's incarnation, connection
-        // slot, generation and sequence.
-        (edit(&unresolved, 46..62, 0), RecordError::Field),
-        (edit(&unresolved, 142..158, 0), RecordError::Field),
-        (edit(&unresolved, 158..166, 0), RecordError::Field),
-        (edit(&unresolved, 166..174, 0), RecordError::Field),
-        (edit(&unresolved, 174..182, 0), RecordError::Field),
+        // Instance remains authenticated by the registration.
+        (edit(&published, 46..62, 0), RecordError::Field),
         // The owner's epoch, connection slot and generation, also after a
         // grace deadline, and the stop ID.
         (edit(&published, 142..150, 0), RecordError::Field),

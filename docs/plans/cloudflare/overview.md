@@ -53,20 +53,21 @@ confirmed. The lifecycle alone then permits REGISTERED, JOIN and forwarding;
 the aggregate executes writes and retries without a second readiness state.
 Owner loss enters a fixed grace; RESUME binds to the ownership observed before
 its challenge and replaces only that ownership. STOP immediately revokes
-forwarding, persists its intent, waits for unsubmitted-queue discard across all
-generations and publication quiescence, then commits before acknowledging.
+forwarding, persists its intent after earlier writes, waits for unsubmitted-queue
+discard across all generations, then commits before acknowledging.
 Submitted occupancy settles independently; old network bytes can still arrive.
 `STOPPED` never releases capacity, and stopped checkpoints retain unsettled ledgers.
 The aggregate owns
 revocation fanout and ordered I/O; the lifecycle enforces the original activation
 deadline and rejects completions superseded by disconnect, expiry or STOP.
 
-Storage commands serialize publication, conditional record replacement and
-operation-scoped cleanup. Uncertain work stays fenced and retries the exact
-obligation; stale completion generations cannot advance it. Conditional writes
-must treat an already-applied target as success and never overwrite another
-record. Durable records retain unresolved publication, published ownership,
-grace, stopping or permanent stopped facts.
+REGISTER atomically creates ownership and descriptor in one SQL write. Storage
+commands serialize it with subsequent conditional record replacements. Uncertain
+work retains the exact obligation; stale completion generations cannot advance it.
+An exact already-applied write succeeds without overwriting another owner.
+Committed ownership survives a lost receipt; recovery re-adopts a surviving owner
+or enters grace. Durable records contain ownership, grace, stopping or permanent
+stopped facts; pending activation remains runtime state.
 
 ## Delivery and recovery
 
@@ -165,10 +166,10 @@ slots and the bound, separately from payload occupancy.
 REGISTER, RESUME, STOP and heartbeat controls on real WebSockets. Per-share actors
 consume `ShareRelay` commands; OS entropy, monotonic Unix-based time, bounded socket
 writers and SQLite transactions supply host evidence. Ownership and permanent STOP
-acknowledgements remain behind kernel commit barriers. Conditional writes and
-operation-scoped descriptor cleanup are idempotent; uncertain receipts remain fenced.
+acknowledgements remain behind kernel commit barriers. Atomic registration and
+conditional replacements are idempotent; uncertain receipts retry exact writes.
 An exclusive database lease and persisted connection generation prevent overlapping
-hosts and reused lifetimes. Startup reconciles unresolved publication and STOP work.
+hosts and reused lifetimes. Startup recovers committed ownership and interrupted STOP.
 
 The Go capacity-codec scenario signs live challenges, restarts the binary after
 registration, resumes ownership, stops independently and verifies stopped refusal

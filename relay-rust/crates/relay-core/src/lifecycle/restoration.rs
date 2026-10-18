@@ -68,11 +68,6 @@ impl<O: Observer> ShareLifecycle<O> {
     ) -> (Action<'static>, Option<OperationId>, Option<ConnectionRef>) {
         match stored {
             None => (Action::None, None, None),
-            Some(Record::Unresolved(unresolved)) => {
-                self.state = State::Fenced(unresolved);
-                let id = unresolved.id;
-                (Action::Reconcile(id), Some(id), Some(id.connection))
-            }
             Some(Record::Published(owned)) => {
                 // A surviving owner keeps the stored ownership: rebuilding the
                 // actor replaces no connection and retires no session.

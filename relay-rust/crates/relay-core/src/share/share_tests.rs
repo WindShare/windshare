@@ -135,9 +135,8 @@ impl Fixture {
         work(&self.control(relay, sender, "descriptorUploadB64", self.at))
     }
     fn register(&self, relay: &mut Relay) -> Record {
-        let publish = self.begin_registration(relay);
-        let durable = work(&complete(relay, &publish, self.at));
-        assert!(matches!(durable.operation, Storage::CompareExchange { .. }));
+        let durable = self.begin_registration(relay);
+        assert!(matches!(durable.operation, Storage::Register { .. }));
         let turn = complete(relay, &durable, self.at);
         assert!(turn.outputs.iter().any(|output| matches!(
             output,
@@ -281,9 +280,9 @@ fn next_record(work: &Work) -> Record {
     match &work.operation {
         Storage::CompareExchange {
             next: Some(record), ..
-        }
-        | Storage::Publish { record, .. } => **record,
-        _ => panic!("expected stored record"),
+        } => **record,
+        Storage::Register { ownership, .. } => Record::Published(**ownership),
+        Storage::CompareExchange { next: None, .. } => panic!("expected stored record"),
     }
 }
 fn receive(relay: &mut Relay, key: SessionKey, at: UnixMillis) -> ReceivedFrame {
@@ -333,8 +332,7 @@ fn activate(relay: &mut Relay, key: SessionKey, at: UnixMillis) {
 fn publication_waits_for_final_durability_and_retries_exact_work() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
-    let publication = fixture.begin_registration(&mut relay);
-    let durable = work(&complete(&mut relay, &publication, fixture.at));
+    let durable = fixture.begin_registration(&mut relay);
     assert_eq!(
         relay
             .handle(Input::Connected(connection(2)), fixture.at)

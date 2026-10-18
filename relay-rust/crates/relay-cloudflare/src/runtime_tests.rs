@@ -157,10 +157,12 @@ impl Memory {
             .unwrap();
     }
     fn registered(&mut self, runtime: &mut Runtime<()>, f: &Fixture) {
+        let writes = self.writes;
         self.open(runtime, 1);
         for key in ["registerInitB64", "registerProofB64", "descriptorUploadB64"] {
             self.frame(runtime, f, 1, key);
         }
+        assert_eq!(self.writes, writes + 1);
         assert!(matches!(
             self.stored.as_ref().unwrap().record(),
             Record::Published(_)
@@ -325,13 +327,13 @@ fn expiry_is_processed_before_a_late_heartbeat_and_grace_survives_reconstruction
 #[test]
 fn uncertain_publication_never_acknowledges_and_recovers_from_authoritative_sql() {
     let f = Fixture::new();
-    for (write, committed) in [(1, false), (1, true), (2, false), (2, true)] {
+    for committed in [false, true] {
         let mut host = Memory::new(&f);
         let mut runtime = host.restore(1).unwrap();
         host.open(&mut runtime, 1);
         host.frame(&mut runtime, &f, 1, "registerInitB64");
         host.frame(&mut runtime, &f, 1, "registerProofB64");
-        host.fail_write = Some((write, committed));
+        host.fail_write = Some((1, committed));
         assert!(
             runtime
                 .control(
@@ -353,11 +355,11 @@ fn uncertain_publication_never_acknowledges_and_recovers_from_authoritative_sql(
         host.attachments.clear();
         host.fail_write = None;
         let _runtime = host.restore(2).unwrap();
-        assert!(
-            host.stored
-                .as_ref()
-                .is_none_or(|row| matches!(row.record(), Record::Grace(_)))
-        );
+        assert_eq!(host.stored.is_some(), committed);
+        if let Some(row) = &host.stored {
+            assert!(matches!(row.record(), Record::Grace(_)));
+            assert!(row.descriptor().is_some());
+        }
     }
 }
 

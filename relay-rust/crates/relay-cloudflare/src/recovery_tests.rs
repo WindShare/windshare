@@ -24,7 +24,7 @@ fn a_lost_attachment_does_not_replace_the_healthy_owner_or_renew_its_deadline() 
 #[test]
 fn uncertain_stop_receipts_cannot_erase_the_persisted_stop_intent() {
     let f = Fixture::new();
-    for (write, committed) in [(3, true), (4, false), (4, true)] {
+    for (write, committed) in [(2, true), (3, false), (3, true)] {
         let mut host = Memory::new(&f);
         host.time = f.time("stop");
         host.seed = Some(f.seed("stop"));

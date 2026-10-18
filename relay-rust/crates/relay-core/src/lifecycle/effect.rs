@@ -11,24 +11,10 @@ use crate::{
 };
 
 use super::{
-    ConnectionRef, GraceRoute, Joined, OperationId, OwnershipCommit, Publication, PublishRequest,
-    PublishedRegistration, PublishedRoute, Reservation, ResumeAttempt, Resumption,
-    StopAcknowledgement, StopResult, StopWork,
+    ConnectionRef, GraceRoute, Joined, OperationId, OwnershipCommit, Publication,
+    PublishedRegistration, PublishedRoute, RegistrationCommit, Reservation, ResumeAttempt,
+    Resumption, StopAcknowledgement, StopResult, StopWork,
 };
-
-/// Host evidence about one publication transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PublicationResult {
-    /// The unresolved record, descriptor bytes and connection preparation all
-    /// completed. The lifecycle next requests the final ownership commit;
-    /// the route remains unavailable until that commit is confirmed.
-    Committed,
-    /// No stored record, prepared resource, or outstanding write for this
-    /// attempt remains. A failed write alone is insufficient evidence of an abort.
-    Aborted,
-    /// The host cannot establish whether persistence or preparation completed.
-    Uncertain,
-}
 
 /// Why an unpublished registration must no longer become visible.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,18 +42,10 @@ pub enum Event<'f> {
     },
     /// Consumes `Outcome::Publish` from the admitted handshake.
     Publish(Publication<'f>),
-    /// Reports the result of the host transaction, including reconciliation.
-    PublicationFinished {
-        /// Identity copied from `PublishRequest`.
-        id: OperationId,
-        /// Terminal evidence, or an explicit uncertain result.
-        result: PublicationResult,
-    },
     /// Confirms the exact ownership record is durable. Failed or uncertain
     /// writes keep the activation pending and retry the same host work.
     OwnershipCommitted(OperationId),
-    /// Releases a pre-publication attempt, fences its in-flight transaction,
-    /// or detaches a pending activation. A resume handshake that has not yet
+    /// Releases a reservation or detaches a pending activation. A resume handshake that has not yet
     /// requested an ownership commit reserves nothing and needs no cancellation.
     Cancel {
         /// Never look this up again by connection ID after asynchronous work.
@@ -139,8 +117,6 @@ pub enum Refusal {
     JoinExpired,
     /// Another attempt or published sender owns the share.
     Occupied,
-    /// A transaction needs authoritative reconciliation before another attempt.
-    PublicationUncertain,
     /// The incarnation exhausted its non-reusable attempt identities, or the
     /// route its ownership epochs.
     SequenceExhausted,
@@ -173,9 +149,7 @@ impl Refusal {
             Self::InvalidReceiver => Some(ErrorFrame::Malformed),
             Self::Expired => Some(ErrorFrame::ChallengeExpired),
             Self::Occupied => Some(ErrorFrame::AlreadyRegistered),
-            Self::PublicationUncertain | Self::SequenceExhausted | Self::StopPending => {
-                Some(ErrorFrame::Admission(RETRY))
-            }
+            Self::SequenceExhausted | Self::StopPending => Some(ErrorFrame::Admission(RETRY)),
             Self::Starting | Self::SenderDetached => Some(ErrorFrame::Starting(RETRY)),
             Self::Stopped => Some(ErrorFrame::Stopped),
             Self::ResumeMismatch | Self::StopMismatch | Self::WrongRelay => {
@@ -200,8 +174,9 @@ const RETRY: RetryAfter = match RetryAfter::from_millis(250) {
 pub enum Action<'f> {
     /// Pass this move-only reservation into the requesting handshake.
     Reserved(Reservation),
-    /// Execute the bounded host transaction before confirming publication.
-    Publish(PublishRequest<'f>),
+    /// Atomically create ownership and descriptor, then confirm the exact
+    /// ownership commit. No reply or admission is authorized before confirmation.
+    Register(RegistrationCommit<'f>),
     /// Persist this exact ownership change, close its replaced owner, then
     /// report `Event::OwnershipCommitted`. No reply or admission is authorized.
     CommitOwnership(OwnershipCommit),
@@ -227,14 +202,8 @@ pub enum Action<'f> {
     Joined(Joined),
     /// The attempt never reached publication; close its connection only if
     /// this exact attempt still owns the host's connection resources. Storage
-    /// needs no write: a reservation stores nothing, and an abort already
-    /// proved its unresolved record gone.
+    /// needs no write because a reservation stores nothing.
     Released(OperationId),
-    /// Keep the route hidden, close this attempt's connection and reconcile
-    /// only its resources and unresolved record. A stopping or stopped record
-    /// must never be removed by this cleanup. Report Aborted only after all
-    /// work is quiescent and neither remains. Never retry publication.
-    Reconcile(OperationId),
     /// Refuse a peer input, or ignore a stale host callback.
     Refused(Refusal),
     /// No work is needed.
@@ -250,8 +219,6 @@ pub enum Expiration {
     /// Only a reservation existed; close its connection resources only if
     /// they still belong to this exact attempt.
     Released(OperationId),
-    /// Host work may already have committed; close and reconcile this attempt.
-    Reconcile(OperationId),
     /// The grace route lapsed without a resume: delete only its exact grace
     /// record, never a newer publication or a stopping/stopped record.
     /// If the delete fails, restore the share from storage, which lapses the

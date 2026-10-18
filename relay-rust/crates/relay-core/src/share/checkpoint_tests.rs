@@ -748,8 +748,7 @@ fn handshake_expiration_and_storage_barriers_are_included_in_incremental_capture
         }),
         Err(CheckpointWriteError::State(Error::CheckpointBusy))
     );
-    let durable = work(&complete(&mut relay, &publish, fixture.at));
-    let _ = complete(&mut relay, &durable, fixture.at);
+    let _ = complete(&mut relay, &publish, fixture.at);
     let mut host = Attachments::default();
     host.flush(&mut relay, fixture.at);
     let _ = relay.handle(Input::Connected(connection(2)), fixture.at);

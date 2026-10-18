@@ -257,67 +257,39 @@ fn a_reservation_cannot_claim_another_instance_to_block_authenticated_stop() {
 }
 
 #[test]
-fn stop_subsumes_publication_cleanup_and_late_results_never_release_its_fence() {
+fn stop_supersedes_pending_registration_even_at_its_deadline() {
     let fixture = Fixture::new();
-    for fenced in [false, true] {
-        for at_deadline in [false, true] {
-            let mut engine = fixture.engine();
-            let request = fixture.publish(&mut engine);
-            if fenced {
-                assert_eq!(
-                    engine
-                        .handle(
-                            Event::PublicationFinished {
-                                id: request.id,
-                                result: PublicationResult::Uncertain,
-                            },
-                            fixture.at
-                        )
-                        .action,
-                    Action::Reconcile(request.id)
-                );
+    for at_deadline in [false, true] {
+        let mut engine = fixture.engine();
+        let commit = fixture.publish(&mut engine);
+        let at = if at_deadline {
+            commit.deadline()
+        } else {
+            fixture.at
+        };
+        let work = stop(&fixture, &mut engine, at);
+        assert_eq!(
+            work.pending().cleanup(),
+            StopCleanup::Owner(commit.id().connection())
+        );
+        for completed in [false, true] {
+            if completed {
+                complete(&mut engine, work, at);
             }
-            let at = if at_deadline {
-                request.deadline
-            } else {
-                fixture.at
-            };
-            let work = stop(&fixture, &mut engine, at);
             assert_eq!(
-                work.pending().cleanup(),
-                StopCleanup::Publication(request.id)
+                engine
+                    .handle(Event::OwnershipCommitted(commit.id()), at)
+                    .action,
+                Action::Refused(Refusal::StaleOperation)
             );
-            for completed in [false, true] {
+            assert_eq!(
+                engine.phase(),
                 if completed {
-                    complete(&mut engine, work, at);
+                    Phase::Stopped
+                } else {
+                    Phase::Stopping
                 }
-                for result in [
-                    PublicationResult::Committed,
-                    PublicationResult::Uncertain,
-                    PublicationResult::Aborted,
-                ] {
-                    assert_eq!(
-                        engine
-                            .handle(
-                                Event::PublicationFinished {
-                                    id: request.id,
-                                    result
-                                },
-                                at
-                            )
-                            .action,
-                        Action::Refused(Refusal::StaleOperation)
-                    );
-                }
-                assert_eq!(
-                    engine.phase(),
-                    if completed {
-                        Phase::Stopped
-                    } else {
-                        Phase::Stopping
-                    }
-                );
-            }
+            );
         }
     }
 }

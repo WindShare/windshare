@@ -9,7 +9,7 @@ use crate::{
     registration::{RegisterInit, Registered, ResumeRegistration},
 };
 
-use super::{OwnedRoute, PublishedRoute, Record, UnresolvedPublication};
+use super::{OwnedRoute, OwnershipCommit, PublishedRoute, Record};
 
 /// One lifetime of a host connection slot. Reusing a slot requires a new generation.
 ///
@@ -219,17 +219,6 @@ pub(super) struct Pending {
     pub deadline: UnixMillis,
 }
 
-impl Pending {
-    /// Drops the handshake deadline: once fenced, only reconciliation ends
-    /// the attempt, never a timeout.
-    pub const fn unresolved(self) -> UnresolvedPublication {
-        UnresolvedPublication {
-            id: self.id,
-            registration: *self.init.registration(),
-        }
-    }
-}
-
 /// Admission of one fresh handshake. Moving it into the handshake binds the
 /// eventual upload to this exact reservation, even if a newer one replaces it.
 #[derive(Debug, Eq, PartialEq)]
@@ -289,36 +278,14 @@ impl<'f> Publication<'f> {
     }
 }
 
-/// Host transaction requested after authentication, before receiver visibility.
-///
-/// Prepare connection resources and durably store [`Self::record`] with these
-/// exact opaque descriptor bytes, conditional on the share having no record.
-/// Do not expose the route or send REGISTERED. Report the outcome through
-/// `Event::PublicationFinished`. If work crosses an await, copy only the
-/// bounded descriptor into host storage.
+/// One authenticated registration transaction: ownership and descriptor together.
+/// Confirmation uses the same `OwnershipCommitted` barrier as RESUME.
 #[derive(Debug, Eq, PartialEq)]
-pub struct PublishRequest<'f> {
-    /// All resource and storage changes must be conditional on this identity.
-    pub id: OperationId,
-    /// Metadata authenticated by the sender.
-    pub init: RegisterInit,
-    /// Opaque, authenticated upload; never a parsed end-to-end object.
+pub struct RegistrationCommit<'f> {
+    /// Identity, owner and original deadline whose exact write must be confirmed.
+    pub ownership: OwnershipCommit,
+    /// Opaque authenticated bytes, copied only across asynchronous host work.
     pub descriptor: &'f [u8],
-    /// Host work cannot extend the handshake budget.
-    pub deadline: UnixMillis,
-}
-
-impl PublishRequest<'_> {
-    /// The record the transaction stores. Until the ownership commit replaces it, a
-    /// restart restores this attempt fenced, so a commit the lifecycle never
-    /// acknowledged cannot become visible.
-    #[must_use]
-    pub const fn record(&self) -> Record {
-        Record::Unresolved(UnresolvedPublication {
-            id: self.id,
-            registration: *self.init.registration(),
-        })
-    }
 }
 
 /// Admission of one resume handshake, bound to the route ownership observed
