@@ -1,6 +1,6 @@
 //! Inert generation recovery records. Storage layout does not confer authority.
 use super::{
-    CheckpointManifest, ConnectionRef, Error, Identity, Observer, Role, RuntimeStatus, ShareRelay,
+    CheckpointManifest, ConnectionRef, Error, Identity, Observer, RuntimeStatus, ShareRelay,
     handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{flow::LedgerCheckpoint, sessions::SessionSnapshot};
@@ -226,45 +226,10 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
     ) -> Result<ConnectionCheckpoint, Error> {
         self.checkpoint_ready()?;
-        let resources = if let Some(&deadline) = self.controls.get(&connection) {
-            ConnectionResources::Control { deadline }
-        } else {
-            let ledger = self
-                .ledgers
-                .get(&connection)
-                .ok_or(Error::UnknownConnection)?;
-            let sessions = ledger
-                .checkpoint_flows()
-                .filter_map(|(flow, _)| {
-                    let key = flow.session();
-                    (key.receiver() == connection)
-                        .then(|| self.sessions.get(&key.wire_id())?.session.snapshot())
-                        .flatten()
-                })
-                .collect();
-            ConnectionResources::Business {
-                ledger: Box::new(ledger.checkpoint().map_err(|_| Error::CheckpointBusy)?),
-                sessions,
-            }
-        };
-        Ok(ConnectionCheckpoint {
-            identity: self.identity,
-            connection,
-            role: match self.connections.get(&connection).map(|entry| &entry.role) {
-                None => ConnectionRole::Detached(
-                    *self
-                        .detached
-                        .get(&connection)
-                        .ok_or(Error::InvalidCheckpoint)?,
-                ),
-                Some(Role::Closing) => ConnectionRole::Closing,
-                Some(Role::Stopping) => ConnectionRole::Stopping,
-                Some(Role::Established(liveness)) => ConnectionRole::Established(*liveness),
-                Some(Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. }) => {
-                    ConnectionRole::Handshake(transcript.clone())
-                }
-            },
-            resources,
+        self.generations.checkpoint_connection(connection, |key| {
+            self.sessions
+                .get(&key.wire_id())
+                .and_then(|entry| entry.session.snapshot())
         })
     }
 
@@ -277,10 +242,9 @@ impl<O: Observer> ShareRelay<O> {
         Ok(Checkpoint {
             manifest: self.checkpoint_manifest()?,
             connections: self
-                .ledgers
-                .keys()
-                .chain(self.controls.keys())
-                .map(|&connection| self.checkpoint_connection(connection))
+                .generations
+                .record_ids()
+                .map(|connection| self.checkpoint_connection(connection))
                 .collect::<Result<_, _>>()?,
         })
     }

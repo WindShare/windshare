@@ -1,6 +1,6 @@
 //! Short control lifetimes never reserve payload capacity or business admission.
-use super::{ConnectionRef, Error, Key, Observer, RelayDecision, ShareRelay};
-use crate::{clock::UnixMillis, flow::ConnectionLedger, observation::Journal};
+use super::{ConnectionRef, Error, Observer, RelayDecision, ShareRelay};
+use crate::clock::UnixMillis;
 use core::{num::NonZeroU64, time::Duration};
 
 pub const CONTROL_LIFETIME: Duration = Duration::from_secs(30);
@@ -93,42 +93,26 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
     ) -> Result<(), Error> {
         // Replay of an admitted handshake must preserve its original reservation.
-        if self.ledgers.contains_key(&connection) {
+        if self.generations.ledger(&connection).is_some() {
             return Ok(());
         }
-        if !self.controls.contains_key(&connection) {
-            return Err(Error::UnknownConnection);
-        }
-        let usage = self.connection_usage();
-        if usage.business >= self.limits.business_connections {
-            self.trace(
-                Some(connection),
-                RelayDecision::BusinessCapacity { usage },
-                now,
-            );
-            return Err(Error::Capacity);
-        }
-        let ledger = ConnectionLedger::new(
-            self.identity.relay,
+        if let Err(error) = self.generations.admit_business(
             connection,
-            self.limits.delivery,
-            self.limits.retained_flows_per_connection,
-            Journal::default(),
-        )
-        .map_err(|_| Error::Configuration)?;
-        self.ledgers.insert(connection, ledger);
-        self.controls.remove(&connection);
-        self.deadlines.set(Key::Control(connection), None);
-        self.checkpointing.changed(connection);
-        self.checkpointing.retention_changed();
+            &mut self.checkpointing,
+            &mut self.deadlines,
+        ) {
+            if error == Error::Capacity {
+                self.trace(
+                    Some(connection),
+                    RelayDecision::BusinessCapacity {
+                        usage: self.connection_usage(),
+                    },
+                    now,
+                );
+            }
+            return Err(error);
+        }
         self.trace(Some(connection), RelayDecision::BusinessAdmitted, now);
         Ok(())
-    }
-
-    pub(super) fn release_control(&mut self, connection: ConnectionRef) {
-        if self.controls.remove(&connection).is_some() {
-            self.deadlines.set(Key::Control(connection), None);
-            self.checkpointing.removed(connection);
-        }
     }
 }

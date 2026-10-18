@@ -92,9 +92,8 @@ fn discard(relay: &mut Relay, turn: Turn, at: UnixMillis) {
 
 fn without(relay: &Relay, connection: ConnectionRef) -> Checkpoint {
     let records = relay
-        .ledgers
-        .keys()
-        .copied()
+        .generations
+        .ledger_ids()
         .filter(|value| *value != connection)
         .map(|value| relay.checkpoint_connection(value).unwrap())
         .collect();
@@ -110,8 +109,10 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
     let stored = fixture.register(&mut original);
     let (lost, lost_flows, receipt) = active(&fixture, &mut original, 2);
     let (healthy, healthy_flows) = fixture.join(&mut original, 3);
-    let healthy_before = original.ledgers[&healthy.receiver()].checkpoint().unwrap();
-    let sender_before = original.ledgers[&healthy.sender()]
+    let healthy_before = ledger_of(&original, healthy.receiver())
+        .checkpoint()
+        .unwrap();
+    let sender_before = ledger_of(&original, healthy.sender())
         .snapshot(healthy_flows[0])
         .unwrap();
     let deadline = original.sessions[&healthy.wire_id()].session.deadline();
@@ -144,17 +145,19 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
         deadline
     );
     assert_eq!(
-        recovered.ledgers[&healthy.receiver()].checkpoint().unwrap(),
+        ledger_of(&recovered, healthy.receiver())
+            .checkpoint()
+            .unwrap(),
         healthy_before
     );
     assert_eq!(
-        recovered.ledgers[&healthy.sender()]
+        ledger_of(&recovered, healthy.sender())
             .snapshot(healthy_flows[0])
             .unwrap(),
         sender_before
     );
     assert_eq!(
-        recovered.ledgers[&lost.sender()]
+        ledger_of(&recovered, lost.sender())
             .snapshot(lost_flows[0])
             .unwrap()
             .submitted,
@@ -226,7 +229,10 @@ fn reconnect_after_recovery(
         recovered = next;
         discard(&mut recovered, turn, fixture.at);
         assert_eq!(
-            recovered.detached[&lost.receiver()],
+            recovered
+                .generations
+                .retirement_state(&lost.receiver())
+                .unwrap(),
             Detached::Quiescing {
                 not_before: grace_end
             }
@@ -246,7 +252,7 @@ fn reconnect_after_recovery(
     let (next, _) = fixture.join_connection(&mut recovered, replacement);
     assert_ne!(next.wire_id(), lost.wire_id());
     assert_ne!(next.wire_id(), healthy.wire_id());
-    let before = recovered.ledgers[&replacement].checkpoint().unwrap();
+    let before = ledger_of(&recovered, replacement).checkpoint().unwrap();
     for connection in [lost.receiver(), replacement] {
         let _ = recovered.handle(
             Input::Settled {
@@ -258,7 +264,7 @@ fn reconnect_after_recovery(
         );
     }
     assert_eq!(
-        recovered.ledgers[&replacement].checkpoint().unwrap(),
+        ledger_of(&recovered, replacement).checkpoint().unwrap(),
         before
     );
     assert_eq!(
@@ -444,4 +450,58 @@ fn losing_a_retired_record_uses_its_persisted_reservation_and_cannot_resurrect_i
     .unwrap();
     assert_eq!(checkpoint.connections.len(), 1);
     assert_eq!(manifest, checkpoint.manifest());
+}
+
+#[test]
+fn duplicate_connection_events_preserve_exact_and_unavailable_responsibility() {
+    let fixture = Fixture::new();
+    for missing_record in [false, true] {
+        let mut original = relay(&fixture, LOSS_GRACE_MS, Fixture::limits().delivery.total());
+        let stored = fixture.register(&mut original);
+        let (lost, _, _) = active(&fixture, &mut original, 2);
+        let checkpoint = if missing_record {
+            without(&original, lost.receiver())
+        } else {
+            original.checkpoint().unwrap()
+        };
+        let (mut recovered, turn) = Relay::restore(
+            fixture.identity(2),
+            original.limits,
+            &Restore {
+                authority: Authority::Known(Some(stored)),
+                surviving: &[lost.sender()],
+                responsibility: Responsibility::Checkpoint(&checkpoint),
+            },
+            Trace::default(),
+            fixture.at,
+        )
+        .unwrap();
+        discard(&mut recovered, turn, fixture.at);
+        let before = recovered.checkpoint().unwrap().encode();
+        let usage = recovered.connection_usage();
+        assert_eq!(
+            recovered.delivery_usage(lost.receiver()).is_none(),
+            missing_record
+        );
+        assert_eq!(
+            recovered.unavailable_reservation(lost.receiver()).is_some(),
+            missing_record
+        );
+
+        let refused = recovered.handle(Input::Connected(lost.receiver()), fixture.at);
+        assert_eq!(refused.refusal, Some(Error::UnknownConnection));
+        assert!(refused.outputs.iter().any(|output| matches!(
+            output, Output::Close(connection) if *connection == lost.receiver()
+        )));
+        let _ = recovered.handle(Input::Disconnected(lost.receiver()), fixture.at);
+        assert_eq!(recovered.connection_usage(), usage);
+        assert_eq!(recovered.checkpoint().unwrap().encode(), before);
+
+        let _ = recovered.handle(Input::Closed(lost.receiver()), fixture.at);
+        assert_eq!(recovered.delivery_usage(lost.receiver()), None);
+        assert_eq!(recovered.unavailable_reservation(lost.receiver()), None);
+        let released = recovered.checkpoint().unwrap().encode();
+        let _ = recovered.handle(Input::Closed(lost.receiver()), fixture.at);
+        assert_eq!(recovered.checkpoint().unwrap().encode(), released);
+    }
 }

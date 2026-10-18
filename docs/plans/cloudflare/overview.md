@@ -7,9 +7,13 @@ session and delivery rules themselves.
 
 ## Shared boundary
 
-One `ShareRelay` owns a share's handshakes, lifecycle, connections, sessions,
-wire-session IDs, delivery ledgers and deadline index. Platform capacity is
-injected; payloads, sockets, entropy, storage and scheduling remain outside.
+One `ShareRelay` coordinates share authority, sessions and cross-connection queue
+cleanup. Its `generations` module owns each connection generation's admission,
+exact ledger or conservative reservation, retirement and collection. Transitions
+update recovery tracking and deadlines together; ledger edits also track retired
+risk changes. Exact records and manifest reservations remain separate persistence
+projections. Platform capacity is injected; payloads, sockets, entropy, storage
+and scheduling remain outside.
 
 | Entry point | Responsibility |
 | --- | --- |

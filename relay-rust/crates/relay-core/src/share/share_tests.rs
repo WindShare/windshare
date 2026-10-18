@@ -648,3 +648,8 @@ fn assert_business_capacity_refused(
             if *connection == candidate)));
     let _ = relay.handle(Input::Closed(candidate), now);
 }
+
+// Keep scenario assertions independent of the registry's storage representation.
+fn ledger_of(relay: &Relay, connection: ConnectionRef) -> &crate::flow::ConnectionLedger<Journal> {
+    relay.generations.ledger(&connection).unwrap()
+}

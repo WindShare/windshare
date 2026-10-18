@@ -246,7 +246,8 @@ fn later_inbound_data_and_probes_persist_source_liveness_without_rewriting_sibli
         at,
     )
     .unwrap();
-    let Role::Established(live) = restored.connections[&key.sender()].role else {
+    let Role::Established(live) = restored.generations.connection(&key.sender()).unwrap().role
+    else {
         panic!("lost sender");
     };
     assert_eq!(live.last_probe_nonce(), 1);
@@ -379,7 +380,7 @@ fn partial_host_failure_retries_the_entire_batch_without_losing_updates() {
     assert_eq!(host.written, [key.sender(), key.receiver()]);
     let restored = host.restore(&fixture, stored);
     assert_eq!(
-        restored.ledgers[&key.sender()].usage().submitted,
+        ledger_of(&restored, key.sender()).usage().submitted,
         Counts::new(1, 21)
     );
 }
@@ -456,7 +457,7 @@ fn retirement_attachments_restore_unsettled_occupancy_and_original_deadlines() {
     let mut restored = host.restore(&fixture, stored);
     assert_eq!(restored.deadline(), deadline);
     assert_eq!(
-        restored.ledgers[&key.sender()]
+        ledger_of(&restored, key.sender())
             .snapshot(flows[0])
             .unwrap()
             .submitted,
@@ -479,7 +480,11 @@ fn retirement_attachments_restore_unsettled_occupancy_and_original_deadlines() {
     );
     host.flush(&mut restored, fixture.at);
     assert_eq!(host.written, [key.sender(), key.receiver()]);
-    assert!(restored.ledgers[&key.sender()].snapshot(flows[0]).is_none());
+    assert!(
+        ledger_of(&restored, key.sender())
+            .snapshot(flows[0])
+            .is_none()
+    );
 }
 
 #[test]
@@ -687,7 +692,7 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
         fixture.at,
     )
     .unwrap();
-    assert!(!detached.connections.contains_key(&key.sender()));
+    assert!(detached.generations.connection(&key.sender()).is_none());
     assert!(
         turn.outputs
             .iter()
@@ -767,4 +772,98 @@ fn handshake_expiration_and_storage_barriers_are_included_in_incremental_capture
     let flushed = host.flush(&mut relay, deadline);
     assert_eq!(flushed.connections, 0);
     assert!(flushed.manifest);
+}
+
+#[test]
+fn retired_feedback_updates_its_record_and_manifest_as_one_accounting_change() {
+    const ONE: Counts = Counts::new(1, 21);
+    const TWO: Counts = Counts::new(2, 42);
+    let fixture = Fixture::new();
+    let limits = Limits {
+        retirement: RetirementPolicy::Bounded {
+            grace: Duration::ZERO,
+            generations: 1,
+            residual: TWO,
+        },
+        ..Fixture::limits()
+    };
+    let (mut relay, _) = Relay::restore(
+        fixture.identity(1),
+        limits,
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        Trace::default(),
+        fixture.at,
+    )
+    .unwrap();
+    fixture.register(&mut relay);
+    let (key, flows) = active(&mut relay, &fixture, 2);
+    assert_eq!(
+        relay
+            .handle(
+                Input::Grant {
+                    flow: flows[1],
+                    credit: ONE
+                },
+                fixture.at
+            )
+            .refusal,
+        None
+    );
+    for _ in 0..TWO.frames {
+        let receipt = receive_from(&mut relay, key, key.sender(), fixture.at);
+        assert_eq!(
+            relay
+                .submit(&receipt, fixture.at, |_| Submission::Complete)
+                .refusal,
+            None
+        );
+    }
+    let _ = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
+    for flow in flows {
+        assert_eq!(
+            relay.handle(Input::Discarded(flow), fixture.at).refusal,
+            None
+        );
+    }
+    assert_eq!(relay.connection_usage().residual, TWO);
+    let feedback = || Input::Consumed {
+        connection: key.receiver(),
+        session: key.wire_id(),
+        total: ONE,
+    };
+    relay.enable_checkpoints(budget(), fixture.at).unwrap();
+    relay
+        .flush_checkpoints(fixture.at, |_, _| Ok::<_, ()>(()))
+        .unwrap();
+
+    assert_eq!(relay.handle(feedback(), fixture.at).refusal, None);
+    assert_eq!(relay.connection_usage().residual, ONE);
+    let expected = relay.checkpoint_manifest().unwrap();
+    let mut written = Vec::new();
+    relay
+        .flush_checkpoints(fixture.at, |target, bytes| {
+            written.push(target);
+            if target == CheckpointTarget::Manifest {
+                assert_eq!(CheckpointManifest::decode(bytes, limits).unwrap(), expected);
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert_eq!(
+        written,
+        [
+            CheckpointTarget::Generation(key.receiver()),
+            CheckpointTarget::Manifest
+        ]
+    );
+
+    // Replayed feedback changes neither exact occupancy nor the durable risk bound.
+    assert_eq!(relay.handle(feedback(), fixture.at).refusal, None);
+    let flushed = relay
+        .flush_checkpoints(fixture.at, |_, _| -> Result<(), ()> {
+            panic!("unchanged generation must not be persisted");
+        })
+        .unwrap();
+    assert_eq!(flushed.connections, 0);
+    assert!(!flushed.manifest);
 }

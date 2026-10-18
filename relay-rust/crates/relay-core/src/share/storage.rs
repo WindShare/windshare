@@ -182,8 +182,8 @@ impl<O: Observer> ShareRelay<O> {
         // on hosts that cannot prove transport-buffer release.
         let ready = self.stop_barrier.is_some()
             && self
-                .ledgers
-                .values()
+                .generations
+                .ledgers()
                 .all(crate::flow::ConnectionLedger::queues_discarded);
         if ready {
             let work = self.stop_barrier.take().expect("ready stop barrier");

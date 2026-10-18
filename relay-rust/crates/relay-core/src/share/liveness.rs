@@ -55,8 +55,8 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) -> Result<(), Error> {
         let Some(Role::Established(liveness)) = self
-            .connections
-            .get_mut(&connection)
+            .generations
+            .connection_mut(&connection)
             .map(|entry| &mut entry.role)
         else {
             return Err(Error::Unavailable);
@@ -88,8 +88,8 @@ impl<O: Observer> ShareRelay<O> {
 
     pub(super) fn accepted_inbound(&mut self, connection: ConnectionRef, now: UnixMillis) {
         if let Some(Role::Established(liveness)) = self
-            .connections
-            .get_mut(&connection)
+            .generations
+            .connection_mut(&connection)
             .map(|entry| &mut entry.role)
             && liveness.accepted_inbound(now)
         {
@@ -105,8 +105,10 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) {
-        if let Some(Role::Established(liveness)) =
-            self.connections.get(&connection).map(|entry| &entry.role)
+        if let Some(Role::Established(liveness)) = self
+            .generations
+            .connection(&connection)
+            .map(|entry| &entry.role)
         {
             self.trace(
                 Some(connection),
