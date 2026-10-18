@@ -141,8 +141,9 @@ separate control budgets preserve STOP under business saturation. Explicit proxy
 resolves source IPs without accepting arbitrary forwarding headers.
 Go process E2E and browser product fixtures now use Go `wind` and Rust
 `relay-native`, covering reconnect, permanent STOP, receiver-crash recovery and
-the 17 MiB browser download/hash scenario. Remaining operational interfaces,
-default server/release entry points and `integration/` suites have not been switched.
+the 17 MiB browser download/hash scenario. `integration/relayv2` shares the native
+test host with Go process E2E. Remaining operational interfaces, default
+server/release entry points and other Go relay fixtures have not been switched.
 
 ## Cloudflare host
 

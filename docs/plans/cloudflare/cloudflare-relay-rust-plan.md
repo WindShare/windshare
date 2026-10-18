@@ -98,9 +98,11 @@ writer readiness and ordered settlement. Browser product fixtures build Rust
 `relay-native` and Go `wind`, including the 17 MiB download/hash scenario. Go process
 E2E uses the same binaries with isolated SQLite and stable endpoint identity across
 restarts, covering reconnect, permanent STOP and receiver-crash recovery.
+`integration/relayv2` now shares the native test host with Go process E2E,
+preserving registration, descriptor and bidirectional frame checks.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
-the remaining cutover: default server/release entry points and `integration/`
-suites still target the incompatible old Go relay.
+the remaining cutover: default server/release entry points and other Go relay
+fixtures still target the incompatible old Go relay.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

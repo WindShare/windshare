@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	capabilitylink "github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/senderobject"
-	"github.com/windshare/windshare/internal/testloopback"
+	"github.com/windshare/windshare/internal/testrelaynative"
 	"github.com/windshare/windshare/internal/testrun"
 	"github.com/windshare/windshare/internal/testscenario"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -24,6 +24,7 @@ import (
 
 const (
 	relayScenarioTimeout = 10 * time.Second
+	relayCleanupTimeout  = 5 * time.Second
 
 	relaySenderSeedByte       = byte(0x35)
 	relayDescriptorKeyByte    = byte(0x46)
@@ -92,34 +93,37 @@ func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real relay WebSocket integration is owned by the long integration gate")
 	}
-	trace := startRelayScenario(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), relayScenarioTimeout)
-	trace.RequireCleanup(t, "scenario deadline", func(context.Context) error {
-		cancel()
-		return nil
+	prepareRelaySuite(t)
+	// Register directory cleanup first: the trace must retire the process before
+	// Windows can remove its SQLite files, including on a failed assertion.
+	fixture := testrelaynative.NewFixture(t.TempDir(), "")
+	trace, identity := startRelayScenario(t)
+	runtime, err := fixture.Start(t.Context(), relaySuite.owner, testrelaynative.Launch{
+		Executable: relaySuite.binary, WorkingDirectory: relaySuite.root, Identity: identity,
 	})
-	loopback := testloopback.New(t)
-	trace.RequireCleanup(t, "loopback network fixture", func(context.Context) error {
-		return loopback.Close()
-	})
-	listener := loopback.ListenTCP()
-	runtime, err := startRelayRuntime(ctx, listener, t.TempDir())
 	if err != nil {
 		t.Fatalf("start relay integration runtime: %v", err)
 	}
-	trace.RequireCleanup(t, "relay runtime", func(context.Context) error {
-		return runtime.Close()
+	trace.RequireCleanup(t, "relay runtime", runtime.Close)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("native relay: %s", runtime.Diagnostic())
+		}
 	})
 	trace.RequireRecord(
 		t,
 		testrun.Milestone(testrun.ListenerReadyMilestone),
 		testrun.OutcomeSucceeded,
-		testrun.ListenerReadyContext{Address: listener.Addr().String()},
+		runtime.Ready,
 	)
+	ctx, cancel := context.WithTimeout(t.Context(), relayScenarioTimeout)
+	trace.RequireCleanup(t, "scenario deadline", func(context.Context) error {
+		cancel()
+		return nil
+	})
 	peerReadiness, err := trace.StartPhase(
 		testrun.PeerReadyMilestone,
-		relayPeerContext{Address: listener.Addr().String()},
+		relayPeerContext{Address: runtime.Ready.Address},
 	)
 	if err != nil {
 		t.Fatalf("start relay peer readiness trace: %v", err)
@@ -130,7 +134,7 @@ func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
 		t.Fatalf("create relay protocol fixture: %v", err)
 	}
 	sender, err := relaytransport.DialSender(ctx, relaytransport.SenderConfig{
-		RelayBaseURL:     runtime.BaseURL(),
+		RelayBaseURL:     runtime.Ready.BaseURL,
 		Init:             protocolFixture.init,
 		SenderPrivateKey: protocolFixture.privateKey,
 		Descriptor:       protocolFixture.descriptor,
@@ -147,7 +151,7 @@ func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
 	}
 
 	receiver, err := relaytransport.DialReceiver(ctx, relaytransport.ReceiverConfig{
-		RelayBaseURL: runtime.BaseURL(),
+		RelayBaseURL: runtime.Ready.BaseURL,
 		ShareID:      protocolFixture.init.ShareID,
 	})
 	if err != nil {
@@ -161,7 +165,7 @@ func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
 	}
 	relaySessionID := receiver.Channel().RelaySessionID()
 	if err := peerReadiness.Succeed(relayPeerContext{
-		Address:        listener.Addr().String(),
+		Address:        runtime.Ready.Address,
 		RelaySessionID: hex.EncodeToString(relaySessionID[:]),
 	}); err != nil {
 		t.Fatalf("record relay peer readiness: %v", err)

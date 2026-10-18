@@ -18,6 +18,7 @@ import (
 
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testoutputroot"
+	"github.com/windshare/windshare/internal/testrelaynative"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -423,7 +424,7 @@ func (proxy *relayPauseProxy) Endpoint() string {
 }
 
 func (proxy *relayPauseProxy) ForwardTo(address string) error {
-	if err := validateV2RelayAddress(address); err != nil {
+	if err := testrelaynative.ValidateListenerAddress(address); err != nil {
 		return fmt.Errorf("relay pause proxy target: %w", err)
 	}
 	proxy.mu.Lock()
