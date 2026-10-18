@@ -40,11 +40,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2CriticalRelayTransferScenario)
 	binaries := loadE2EBinaries(t)
-	relay := startV2Process(
-		t, scenario, v2RelayComponent, binaries.relay,
-		"-listen", "127.0.0.1:0", "-state-dir", filepath.Join(t.TempDir(), "relay-state"),
-	)
-	relayURL := "ws://" + waitV2RelayReady(t, relay)
+	relay := startV2Relay(t, scenario)
 
 	payload := []byte(v2CriticalPayload)
 	source := filepath.Join(t.TempDir(), "critical.txt")
@@ -53,7 +49,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 	}
 	share := startTracedV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", relayURL,
+		"share", source, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -116,8 +112,8 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	scenario := startV2Scenario(t, v2SenderReconnectScenario)
 	binaries := loadE2EBinaries(t)
 	proxy := startRelayPauseProxy(t, scenario)
-	relay := startLifecycleRelay(t, scenario, binaries, proxy, filepath.Join(t.TempDir(), "relay-state"))
-	_ = relay
+	fixture := newV2RelayFixture(t, scenario, proxy.Endpoint())
+	relay := startLifecycleRelay(t, fixture, proxy)
 
 	payload := bytes.Repeat([]byte("sender-reconnected\n"), 8192)
 	source := filepath.Join(t.TempDir(), "after-reconnect.bin")
@@ -126,7 +122,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	}
 	share := startV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", proxy.BaseURL(),
+		"share", source, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -184,8 +180,8 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	scenario := startV2Scenario(t, v2ExplicitStopScenario)
 	binaries := loadE2EBinaries(t)
 	proxy := startRelayPauseProxy(t, scenario)
-	stateDirectory := filepath.Join(t.TempDir(), "relay-state")
-	firstRelay := startLifecycleRelay(t, scenario, binaries, proxy, stateDirectory)
+	fixture := newV2RelayFixture(t, scenario, proxy.Endpoint())
+	firstRelay := startLifecycleRelay(t, fixture, proxy)
 
 	source := filepath.Join(t.TempDir(), "stopped-share.txt")
 	if err := os.WriteFile(source, []byte("must never be available after STOP"), 0o600); err != nil {
@@ -193,7 +189,7 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	}
 	share := startTracedV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", proxy.BaseURL(),
+		"share", source, "--relay", firstRelay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -216,8 +212,7 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	}
 	cancelPause()
 	firstRelay.stop(t)
-	secondRelay := startV2RelayBehindPausedProxy(t, scenario, binaries, proxy, stateDirectory)
-	_ = secondRelay
+	startV2RelayBehindPausedProxy(t, fixture, proxy)
 	if err := scenario.observe(v2RelayProxyResumeMilestone, nil, func() error {
 		proxy.Resume()
 		return nil
@@ -244,14 +239,12 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 
 func startLifecycleRelay(
 	t *testing.T,
-	scenario *v2Scenario,
-	binaries e2eBinaries,
+	fixture *v2RelayFixture,
 	proxy *relayPauseProxy,
-	stateDirectory string,
-) *v2Process {
+) *v2RelayProcess {
 	t.Helper()
-	relay := startV2RelayBehindPausedProxy(t, scenario, binaries, proxy, stateDirectory)
-	if err := scenario.observe(v2RelayProxyResumeMilestone, nil, func() error {
+	relay := startV2RelayBehindPausedProxy(t, fixture, proxy)
+	if err := fixture.scenario.observe(v2RelayProxyResumeMilestone, nil, func() error {
 		proxy.Resume()
 		return nil
 	}); err != nil {
@@ -262,23 +255,15 @@ func startLifecycleRelay(
 
 func startV2RelayBehindPausedProxy(
 	t *testing.T,
-	scenario *v2Scenario,
-	binaries e2eBinaries,
+	fixture *v2RelayFixture,
 	proxy *relayPauseProxy,
-	stateDirectory string,
-) *v2Process {
+) *v2RelayProcess {
 	t.Helper()
-	relay := startV2Process(
-		t, scenario, v2RelayComponent, binaries.relay,
-		"-listen", "127.0.0.1:0",
-		"-relay-base-url", proxy.BaseURL(),
-		"-state-dir", stateDirectory,
-	)
-	address := waitV2RelayReady(t, relay)
-	if err := scenario.observe(
+	relay := fixture.start(t)
+	if err := fixture.scenario.observe(
 		v2RelayProxyForwardMilestone,
 		nil,
-		func() error { return proxy.ForwardTo(address) },
+		func() error { return proxy.ForwardTo(relay.address) },
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -433,8 +418,8 @@ func startRelayPauseProxy(t *testing.T, scenario *v2Scenario) *relayPauseProxy {
 	return proxy
 }
 
-func (proxy *relayPauseProxy) BaseURL() string {
-	return "ws://" + proxy.listener.Addr().String()
+func (proxy *relayPauseProxy) Endpoint() string {
+	return "ws://" + proxy.listener.Addr().String() + v2RelayProxyEndpointPath
 }
 
 func (proxy *relayPauseProxy) ForwardTo(address string) error {

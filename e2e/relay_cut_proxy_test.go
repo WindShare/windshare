@@ -68,8 +68,8 @@ func startRelayCutProxy(t *testing.T, scenario *v2Scenario) *relayCutProxy {
 	return proxy
 }
 
-func (proxy *relayCutProxy) BaseURL() string {
-	return "ws://" + proxy.listener.Addr().String()
+func (proxy *relayCutProxy) Endpoint() string {
+	return "ws://" + proxy.listener.Addr().String() + v2RelayProxyEndpointPath
 }
 
 func (proxy *relayCutProxy) ForwardTo(address string) error {
