@@ -310,6 +310,11 @@ jobs:
           cache: false
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - name: Prepare standalone Linux relay build
+        run: |
+          rustup target add --toolchain stable x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
       - name: Install latest govulncheck
         env:
           GOBIN: ${{ runner.temp }}/go-tools
@@ -317,6 +322,10 @@ jobs:
           mkdir -p "$GOBIN"
           go install golang.org/x/vuln/cmd/govulncheck@latest
           echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Build and probe the native relay container
+        run: |
+          docker build -f deploy/wsrelay/Dockerfile -t windshare-relay-check .
+          docker run --rm windshare-relay-check --help
       - name: Certify the exact weekly root artifact on loop-ext4
         run: bash scripts/ci/linux/release.sh v0.0.0 "$GITHUB_SHA" linux-ext4
 

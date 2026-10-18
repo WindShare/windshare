@@ -158,7 +158,7 @@ fi
 
 binary_candidate="$BINARY_PATH.next.$operation_id"
 install -o root -g root -m 0755 "$artifact" "$binary_candidate"
-"$binary_candidate" -h >/dev/null 2>&1 || fail binary_probe_failed
+"$binary_candidate" --help >/dev/null 2>&1 || fail binary_probe_failed
 cp --preserve=all "$BINARY_PATH" "$ROLLBACK_PATH"
 previous_sha256="$current_sha256"
 

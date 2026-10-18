@@ -1,65 +1,56 @@
 # wsrelay deployment
 
-This workflow rebuilds the current relay source graph and safely replaces the binary on an already
-configured WindShare relay host. It deliberately leaves systemd, Caddy, TLS, state, and origin policy
-under the host's existing configuration.
+`wsrelay` is the Rust native relay. It serves encrypted application traffic and
+independent UDP STUN, with durable ownership and STOP history in SQLite.
+Keep the database and its WAL together, and run only one host per database.
+The former Go server and its bbolt state are retired.
 
-The single `wsrelay` executable also runs the controlled STUN service in the same process.
-It defaults to UDP 3478 and private STUN admin HTTP at `127.0.0.1:8081`.
-Allow UDP 3478 through the deployment firewall. Existing application relay health and
-rollback checks remain independent of STUN availability. See [STUN configuration](../../../docs/stun.md)
-for rate limits, health, disable flags, and explicit optional UDP 443 deployment.
-
-Build the same product as a container from the repository root:
+Build the container from the repository root:
 
 ```sh
 docker build -f deploy/wsrelay/Dockerfile -t windshare-wsrelay .
 docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
   -v windshare-relay-state:/state windshare-wsrelay \
-  -state-dir /state -relay-base-url wss://relay.example.com
+  --database /state/relay.sqlite --listen 0.0.0.0:8484 \
+  --public-endpoint wss://relay.example.com/v2/ws \
+  --origins https://app.example.com
 ```
 
-`-max-routes` defaults to 1,024 active routes, including registration, reconnect grace,
-and unresolved STOP transactions. A durable STOP releases its route slot. Permanent
-revocations remain in the disk index at `-state-dir/stopped-shares.bin`; preserve this
-file across restarts and allow only one relay process to own it. History consumes disk,
-not active route capacity. This pre-v1 index uses bbolt; legacy append-log files are
-rejected rather than silently discarding their revocations.
+The state volume must be writable by UID 65532. Terminate TLS at a reverse proxy.
+The public endpoint must be the exact canonical WebSocket URL used by clients;
+browser origins require an explicit allowlist. For a local trusted tunnel, add
+`--trusted-proxies 127.0.0.1,::1 --source-ip-header CF-Connecting-IP`.
+See the [native host](../../../relay-rust/crates/relay-native/README.md) for limits,
+source policy and recovery, and [STUN](../../../docs/stun.md) for UDP/admin settings.
 
-The state volume must be writable by container UID 65532. Terminate TLS at the host
-proxy as usual. The STUN admin port is private and is not published by this command.
-UDP 443 requires an explicit listener, port publication, available bind privileges,
-and no competing UDP service; TCP 443 on the TLS proxy does not supply UDP STUN.
-
-Build from the repository root on Windows:
+To extract a static Linux/amd64 executable on Windows, install Docker with Linux
+containers, then run:
 
 ```powershell
-pwsh -NoProfile -File scripts/deploy/wsrelay/build.ps1
+./scripts/deploy/wsrelay/build.ps1
 $manifest = Get-Content dist/deploy/wsrelay/manifest.json | ConvertFrom-Json
 ```
 
-The builder skips tests by default. Add `-RunTests` to run uncached `relay/...` tests before building.
-It targets static Linux/amd64 and writes the binary plus a JSON manifest to `dist/deploy/wsrelay/`.
-`source_graph_status` is derived from the relay's actual in-repository dependency graph, so unrelated
-working-tree files do not make the deployment provenance ambiguous.
+The builder uses the same Dockerfile, writes the binary and provenance manifest
+to `dist/deploy/wsrelay/`, and records changes in the Rust workspace and builder.
+Add `-RunTests` to run the local `make rust` gate first.
 
-Install the remote helper once:
+For an already configured systemd host, install the helper once:
 
-```bash
+```sh
 sudo install -o root -g root -m 0755 scripts/deploy/wsrelay/install.sh \
   /usr/local/sbin/windshare-install-wsrelay
 ```
 
-For each deployment, upload `wsrelay-linux-amd64`, then pass the exact manifest values:
+Configure `windshare-relay.service` to run `/usr/local/bin/wsrelay` with the Rust
+options above, listening on `127.0.0.1:8484`. Upload `wsrelay-linux-amd64`, then:
 
-```bash
+```sh
 sudo /usr/local/sbin/windshare-install-wsrelay \
   --artifact /tmp/wsrelay-linux-amd64 \
-  --sha256 "<manifest sha256>" \
-  --revision "<manifest revision>"
+  --sha256 "<manifest sha256>" --revision "<manifest revision>"
 ```
 
-The installer serializes deployments, verifies the artifact before switching, probes the new executable,
-restarts `windshare-relay.service`, waits for the loopback health endpoint, and restores
-`/usr/local/bin/wsrelay.previous` on failure. The last successful provenance is stored at
-`/etc/windshare-relay/deployment.env`.
+The helper verifies the executable, restarts the service, checks relay health and
+restores the previous binary on failure. It preserves service configuration and
+storage. The deployment record is `/etc/windshare-relay/deployment.env`.

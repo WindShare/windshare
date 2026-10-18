@@ -145,9 +145,9 @@ receiver-crash recovery and the 17 MiB browser download/hash scenario. `integrat
 test host with Go process E2E and covers independent relay candidates, exact-lane
 recovery, session shutdown and receive recovery with one job and output reservation.
 CLI cancellation tests inject relay cleanup; `connectivity/relayset` short tests
-inject dials and clocks. Neither suite uses Go server fixtures. Remaining operational
-interfaces, default server/release entry points and other Go relay fixtures have not
-been switched.
+inject dials and clocks. Default startup, container/deployment builds and release
+packaging now use the Rust native host. The incompatible Go server and its fixtures
+are retired; Go retains the wire contracts and clients.
 
 ## Cloudflare host
 

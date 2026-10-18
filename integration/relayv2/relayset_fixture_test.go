@@ -189,9 +189,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 				if err != nil {
 					return
 				}
-				admissions.Add(1)
-				go func() {
-					defer admissions.Done()
+				admissions.Go(func() {
 					result, err := factory.AdmitChannel(lifetime, channel)
 					lane := result.Lane
 					if result.Session != nil {
@@ -205,7 +203,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 					case admitted <- event:
 					case <-lifetime.Done():
 					}
-				}()
+				})
 			}
 		}()
 		t.Cleanup(func() {

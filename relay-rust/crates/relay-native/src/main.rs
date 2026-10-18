@@ -11,6 +11,25 @@ use windshare_relay_native::{
 };
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
+const USAGE: &str = "WindShare native relay
+Usage: wsrelay --database <path> [options]
+
+  --listen <IP:port>                       Bind address (default 127.0.0.1:8787)
+  --public-endpoint <ws(s)://host/v2/ws>    Canonical public WebSocket endpoint
+  --origins <HTTP(S) origins>              Comma-separated browser allowlist
+  --allow-localhost                       Allow localhost browser origins
+  --trusted-proxies <IPs>                 Peers trusted to supply source IP
+  --source-ip-header <name>               Required with --trusted-proxies
+  --max-business-connections <count>      Global business budget (default 256)
+  --max-control-connections <count>       Global control budget (default 32)
+  --max-business-connections-per-source <count>  Default 128
+  --max-control-connections-per-source <count>   Default 8
+  --stun-udp <IP:port,...>                 Empty disables STUN
+  --stun-admin <IP:port>                   Empty disables STUN admin HTTP
+  --stun-requests-per-second <count>       Per listener (default 1000)
+  --stun-source-requests-per-second <count> Per source (default 20)
+  --stun-max-sources <count>               Tracked sources (default 4096)
+  --help                                 Print this help without opening storage";
 
 struct Options {
     listen: SocketAddr,
@@ -107,6 +126,11 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
+        println!("{USAGE}");
+        return Ok(());
+    }
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
@@ -114,7 +138,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    let options = options(std::env::args().skip(1))?;
+    let options = options(args.into_iter())?;
     run(options, shutdown_signal()?).await
 }
 

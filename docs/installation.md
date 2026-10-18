@@ -43,12 +43,16 @@ Both contain the pinned Pion sources, patches, licenses and provenance required
 by the root module's local replacements. With Go installed, use the same installer
 above; the root `go.mod` selects source installation, which verifies the pinned source
 and builds `wind` even if a previous build left an executable beside it. Verification
-or build failure stops installation. To build the server:
+or build failure stops installation. The server uses Rust stable and a C compiler
+(for bundled SQLite). Build it separately:
 
 ```sh
-go run ./scripts/ci/_piondeps
-go build -trimpath -buildvcs=false -o wsrelay ./relay/cmd/wsrelay
+cd relay-rust
+rustup run stable cargo build --locked --release -p windshare-relay-native --bin relay-native
 ```
+
+The executable is `.target/release/relay-native` (`.exe` on Windows). Release ZIPs
+ship this Rust executable as `wsrelay`; see its `--help` and the deployment guide.
 
 Run source commands with `GOWORK=off`. Other Go dependencies are downloaded through
 the usual Go module mechanism. `go install github.com/windshare/windshare/cmd/wind@version`

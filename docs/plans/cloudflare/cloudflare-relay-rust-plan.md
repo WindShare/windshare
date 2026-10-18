@@ -106,8 +106,8 @@ and output reservation. CLI cancellation tests inject relay cleanup and retain e
 code and trace checks. `connectivity/relayset` no longer uses Go server fixtures;
 short tests inject dials and clocks.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
-the remaining cutover: default server/release entry points and other Go relay
-fixtures still target the incompatible old Go relay.
+the completed native cutover: default startup and release packaging use Rust;
+the incompatible Go server and its fixtures are retired.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

@@ -76,16 +76,11 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
 │   └── webrtc/                   Pion FrameChannels, terminal lifecycle, and native provider adaptation
-├── relay/
-│   ├── cmd/wsrelay/              Relay daemon entry and state/policy assembly
-│   ├── protocol/v2/              Authenticated relay control, proofs, and opaque routes
-│   ├── signaling/v2route/        Registration/resume/STOP authority and session routing
-│   ├── signaling/v2endpoint/     Authenticated WebSocket roles and bounded forwarding
-│   ├── httpapi/                  WebSocket upgrade, Origin policy, and admission hook
-│   ├── connectionlimit/          Global and per-source connection limits
-│   └── stunonly/                 Independent bounded UDP STUN listeners, health, and metrics
-├── relay-rust/                   Independent Cargo workspace for the Rust relay replacement
-│   └── crates/relay-core/        No-I/O kernel with strict sender-signature verification
+├── relay/protocol/v2/            Go wire contracts, authenticated proofs, and opaque routes
+├── relay-rust/                   Production relay Cargo workspace
+│   ├── crates/relay-core/        No-I/O kernel with strict sender-signature verification
+│   ├── crates/relay-native/      Native wsrelay host, SQLite, HTTP/WebSocket, and STUN
+│   └── crates/relay-cloudflare/  Worker and Durable Object host
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
