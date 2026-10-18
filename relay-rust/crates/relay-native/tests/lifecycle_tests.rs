@@ -4,7 +4,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::oneshot};
 use windshare_relay_core::lifecycle::Record;
-use windshare_relay_native::{Endpoint, OriginPolicy, Server};
+use windshare_relay_native::{ConnectionLimits, Endpoint, OriginPolicy, Server, SourcePolicy};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +69,8 @@ async fn go_capacity_client_drives_native_io_and_process_restart() {
     let server = Server::open(
         Endpoint::parse(&endpoint).unwrap(),
         OriginPolicy::default(),
+        SourcePolicy::default(),
+        ConnectionLimits::default(),
         &database,
     )
     .unwrap();
@@ -125,6 +127,8 @@ async fn shutdown_joins_connected_sockets_and_incomplete_upgrades() {
     let server = Server::open(
         Endpoint::parse(&endpoint).unwrap(),
         OriginPolicy::default(),
+        SourcePolicy::default(),
+        ConnectionLimits::default(),
         &directory.path().join("shutdown.sqlite"),
     )
     .unwrap();

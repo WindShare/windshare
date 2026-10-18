@@ -12,7 +12,8 @@ mod storage;
 pub mod stun;
 
 pub use config::Endpoint;
-pub use http::OriginPolicy;
+pub use connection::ConnectionLimits;
+pub use http::{OriginPolicy, SourcePolicy};
 pub use registry::Server;
 pub use storage::Database;
 

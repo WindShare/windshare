@@ -51,16 +51,49 @@ Generation allocation is durable; challenge entropy comes from the OS.
 JOIN reads its sealed descriptor from the confirmed authority cached by the actor,
 including after RESUME. Opaque forwarding and consumption never perform SQL.
 
-Validated WebSocket upgrades reserve one of 32 process-wide control slots before
-the 101 response; saturation returns 503. Health checks and rejected HTTP requests
-do not spend relay attempt tokens or allocate share actors. An upgrade transfers
-the transport and any pre-read frame bytes to the connection supervisor, releasing
-its HTTP slot. Ingress separates 256 process-wide business slots from those control
-slots; each share
-keeps 32 business and 8 control slots. New connections are rate-limited, and valid
-REGISTER/RESUME/JOIN initiations reserve business capacity before continuing. Signed
-STOP retains control capacity even when business slots are full. The socket supervisor
-and both descendants retain their process permit until their resources are destroyed.
+Validated WebSocket upgrades reserve global and source control capacity before the
+101 response; saturation returns 503. REGISTER/RESUME/JOIN initiations atomically
+exchange both control charges for business charges. STOP keeps its independent
+control capacity when global or source business capacity is full. Each share also
+keeps 32 business and 8 control slots. New connections remain rate-limited.
+
+| Connection option | Default |
+| --- | --- |
+| `--max-business-connections` | 256 |
+| `--max-control-connections` | 32 |
+| `--max-business-connections-per-source` | 128 |
+| `--max-control-connections-per-source` | 8 |
+
+Limits must be positive, with each source limit no larger than its global limit.
+Sources are socket IPs by default, without ports; IPv4-mapped IPv6 uses the same
+budget as IPv4. Users sharing a NAT share these budgets. Forwarded headers are
+ignored unless **both** `--trusted-proxies <comma-separated proxy IPs>` and
+`--source-ip-header <header-name>` are configured. Only exact matching socket peers
+may supply that header; it must contain exactly one IP, without a port or list.
+Missing, repeated or invalid trusted headers return 400, without fallback to the
+proxy IP. Other peers still use their socket IP. Health checks require no source header.
+
+For a local Cloudflare Tunnel connector, for example, add:
+
+```sh
+--trusted-proxies 127.0.0.1,::1 --source-ip-header CF-Connecting-IP
+```
+
+Trust only connector addresses under your control and restrict origin access to
+that connector. A general reverse proxy must overwrite the configured header;
+client-supplied forwarding chains are not parsed. With Cloudflare, keep Pseudo IPv4
+out of `Overwrite Headers` mode so
+[`CF-Connecting-IP`](https://developers.cloudflare.com/fundamentals/reference/http-headers/#cf-connecting-ip)
+retains the native client address. Worker subrequests can change its meaning.
+
+Health checks and rejected HTTP requests do not spend relay attempt tokens or
+allocate share actors. Upgrades transfer the transport and pre-read bytes to the
+connection supervisor, releasing the HTTP slot. Supervisor, reader and writer retain
+both relay charges until the last resource owner is destroyed; idle source entries
+are then removed. Failed admission never partially charges either budget, and closing
+does not refund attempt tokens. Structured `connection_admission_refused` traces
+include connection identity, source IP and distinct global/source/control/business
+or attempt-rate reasons; `connection_policy` records startup limits and proxy trust.
 
 Per-share actors serialize decisions; each connection supervisor owns separate reader
 and writer tasks. Slow writes cannot block inbound controls. Output has independent
@@ -100,7 +133,8 @@ or recall. These native ownership guarantees do not apply to Cloudflare buffers.
 `make rust` covers STUN Binding with Pion on IPv4/IPv6, malformed/oversized datagrams,
 virtual-time limits and I/O deadlines, listener/admin fault isolation and socket release.
 It also covers HTTP routing, Origin policy, bounded headers, virtual-time HTTP
-read/write deadlines, capacity isolation and upgrade handoff, plus blocked-write ingress,
+read/write deadlines, source isolation, trusted-header validation, admission rollback,
+STOP under full business budgets and upgrade handoff, plus blocked-write ingress,
 bounded queues, STOP submission fencing,
 joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
 cancelled-supervisor lease retention and fault-injected commit ordering. The existing

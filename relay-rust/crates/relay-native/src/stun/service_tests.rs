@@ -81,6 +81,8 @@ async fn failed_listener_health_is_independent_of_siblings_and_relay_and_shutdow
     let relay = Server::open(
         Endpoint::parse(&format!("ws://{relay_address}/v2/ws")).unwrap(),
         OriginPolicy::default(),
+        crate::SourcePolicy::default(),
+        crate::ConnectionLimits::default(),
         &directory.path().join("relay.sqlite"),
     )
     .unwrap();

@@ -17,10 +17,21 @@ async fn socket_pair() -> (TcpStream, TcpStream) {
 async fn http_slots_end_at_upgrade_and_non_upgrades_never_create_share_actors() {
     let (_directory, registry, _fixture) = registry();
     let registry = Arc::new(registry);
-    let capacity = Capacity::new(1, 1, CONNECTION_ATTEMPTS, registry.environment.now()).unwrap();
+    let capacity = Capacity::new(
+        ConnectionLimits {
+            business: 1,
+            controls: 1,
+            business_per_source: 1,
+            controls_per_source: 1,
+        },
+        CONNECTION_ATTEMPTS,
+        registry.environment.now(),
+    )
+    .unwrap();
     let ingress = Arc::new(Ingress::new(
         registry.endpoint.clone(),
         OriginPolicy::default(),
+        SourcePolicy::default(),
         capacity,
         registry.environment.clone(),
     ));

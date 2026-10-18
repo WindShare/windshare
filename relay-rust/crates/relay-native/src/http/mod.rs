@@ -1,7 +1,9 @@
 mod origin;
 mod route;
+mod source;
 
 pub use origin::OriginPolicy;
+pub use source::SourcePolicy;
 
 use crate::{
     config::{Endpoint, HTTP_REQUEST_TIMEOUT},
@@ -22,6 +24,7 @@ use std::{
     cell::RefCell,
     convert::Infallible,
     future::{Ready, ready},
+    net::SocketAddr,
     sync::Arc,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -34,6 +37,7 @@ type ResponseBody = Full<Bytes>;
 pub struct Ingress {
     endpoint: Endpoint,
     origins: OriginPolicy,
+    sources: SourcePolicy,
     capacity: Arc<Capacity>,
     environment: NativeEnvironment,
 }
@@ -49,12 +53,14 @@ impl Ingress {
     pub const fn new(
         endpoint: Endpoint,
         origins: OriginPolicy,
+        sources: SourcePolicy,
         capacity: Arc<Capacity>,
         environment: NativeEnvironment,
     ) -> Self {
         Self {
             endpoint,
             origins,
+            sources,
             capacity,
             environment,
         }
@@ -63,6 +69,7 @@ impl Ingress {
     pub async fn accept<S>(
         &self,
         stream: S,
+        peer: SocketAddr,
         connection: ConnectionRef,
     ) -> Result<Option<Upgrade<S>>>
     where
@@ -70,15 +77,25 @@ impl Ingress {
     {
         // The absolute budget covers both request reads and response writes.
         // A slow reader cannot keep HTTP or upgrade admission alive indefinitely.
-        tokio::time::timeout(HTTP_REQUEST_TIMEOUT, self.exchange(stream, connection)).await?
+        tokio::time::timeout(
+            HTTP_REQUEST_TIMEOUT,
+            self.exchange(stream, peer, connection),
+        )
+        .await?
     }
 
-    async fn exchange<S>(&self, stream: S, connection: ConnectionRef) -> Result<Option<Upgrade<S>>>
+    async fn exchange<S>(
+        &self,
+        stream: S,
+        peer: SocketAddr,
+        connection: ConnectionRef,
+    ) -> Result<Option<Upgrade<S>>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
         let service = RequestService {
             ingress: self,
+            peer,
             connection,
             upgrade: RefCell::new(None),
         };
@@ -111,8 +128,46 @@ impl Ingress {
 
 struct RequestService<'a> {
     ingress: &'a Ingress,
+    peer: SocketAddr,
     connection: ConnectionRef,
     upgrade: RefCell<Option<(ShareId, Arc<Admission>)>>,
+}
+
+impl RequestService<'_> {
+    fn upgrade(
+        &self,
+        request: &Request<Incoming>,
+        share: ShareId,
+        response: Response<ResponseBody>,
+    ) -> Response<ResponseBody> {
+        let source = match self
+            .ingress
+            .sources
+            .resolve(self.peer.ip(), request.headers())
+        {
+            Ok(source) => source,
+            Err(error) => {
+                tracing::debug!(event = "source_identity_refused", connection = ?self.connection,
+                    peer = %self.peer, %error);
+                return reply(StatusCode::BAD_REQUEST, "invalid proxy source identity\n");
+            }
+        };
+        self.ingress
+            .capacity
+            .accept(source, self.connection, self.ingress.environment.now())
+            .map_or_else(
+                |_| {
+                    reply(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "relay connection capacity exceeded\n",
+                    )
+                },
+                |admission| {
+                    *self.upgrade.borrow_mut() = Some((share, admission));
+                    response
+                },
+            )
+    }
 }
 
 impl Service<Request<Incoming>> for RequestService<'_> {
@@ -123,23 +178,9 @@ impl Service<Request<Incoming>> for RequestService<'_> {
     fn call(&self, request: Request<Incoming>) -> Self::Future {
         let response = match self.ingress.route(&request) {
             Route::Reply(response) => response,
-            Route::Upgrade { share, response } => {
-                match self.ingress.capacity.accept(self.ingress.environment.now()) {
-                    Ok(admission) => {
-                        *self.upgrade.borrow_mut() = Some((share, admission));
-                        response
-                    }
-                    Err(error) => {
-                        tracing::debug!(event = "control_connection_refused", connection = ?self.connection, %error);
-                        reply(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "relay connection capacity exceeded\n",
-                        )
-                    }
-                }
-            }
+            Route::Upgrade { share, response } => self.upgrade(&request, share, response),
         };
-        tracing::debug!(event = "http_request", connection = ?self.connection,
+        tracing::debug!(event = "http_request", connection = ?self.connection, peer = %self.peer,
             method = %request.method(), path = request.uri().path(),
             origin = ?request.headers().get_all(hyper::header::ORIGIN), status = response.status().as_u16());
         ready(Ok(response))

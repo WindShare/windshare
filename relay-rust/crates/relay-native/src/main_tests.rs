@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn connection_options_validate_source_budgets_and_proxy_trust_together() {
+    let parsed = options(
+        [
+            "--database",
+            "relay.sqlite",
+            "--max-business-connections",
+            "20",
+            "--max-control-connections",
+            "4",
+            "--max-business-connections-per-source",
+            "10",
+            "--max-control-connections-per-source",
+            "2",
+            "--trusted-proxies",
+            "127.0.0.1, ::1",
+            "--source-ip-header",
+            "CF-Connecting-IP",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .unwrap();
+    assert_eq!(parsed.connections.business, 20);
+    assert_eq!(parsed.connections.controls, 4);
+    assert_eq!(parsed.connections.business_per_source, 10);
+    assert_eq!(parsed.connections.controls_per_source, 2);
+    for args in [
+        vec!["--max-business-connections", "0"],
+        vec!["--max-control-connections", "0"],
+        vec!["--max-business-connections-per-source", "0"],
+        vec!["--max-control-connections-per-source", "0"],
+        vec!["--max-business-connections", "1"],
+        vec!["--max-control-connections", "1"],
+        vec!["--max-business-connections-per-source", "-1"],
+        vec!["--max-control-connections-per-source", "bad"],
+        vec!["--trusted-proxies", "127.0.0.1"],
+        vec!["--source-ip-header", "cf-connecting-ip"],
+        vec![
+            "--trusted-proxies",
+            "localhost",
+            "--source-ip-header",
+            "cf-connecting-ip",
+        ],
+        vec![
+            "--trusted-proxies",
+            "",
+            "--source-ip-header",
+            "cf-connecting-ip",
+        ],
+        vec![
+            "--trusted-proxies",
+            "127.0.0.1,",
+            "--source-ip-header",
+            "cf-connecting-ip",
+        ],
+        vec![
+            "--trusted-proxies",
+            "127.0.0.1",
+            "--source-ip-header",
+            "invalid header",
+        ],
+    ] {
+        assert!(
+            options(
+                ["--database", "relay.sqlite"]
+                    .into_iter()
+                    .chain(args)
+                    .map(str::to_owned)
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn origin_policy_is_validated_with_startup_options() {
     for args in [
         vec!["--database", "relay.sqlite"],
@@ -105,6 +180,8 @@ async fn process_composition_shuts_down_and_releases_storage_after_startup_failu
         database: database.clone(),
         public_endpoint: Some("ws://127.0.0.1:8787/v2/ws".to_owned()),
         origins: OriginPolicy::default(),
+        sources: SourcePolicy::default(),
+        connections: ConnectionLimits::default(),
         stun: stun::Config {
             udp_addresses: vec!["127.0.0.1:0".parse().unwrap()],
             admin_address: Some("127.0.0.1:0".parse().unwrap()),
