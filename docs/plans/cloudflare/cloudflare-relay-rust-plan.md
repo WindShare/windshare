@@ -56,8 +56,12 @@ host lease through cleanup, and isolates old mailboxes. Native recovery no longe
 on control-only ingress. Native window scheduling reads kernel occupancy and reserves
 grants only when their bounded control writer is available. Descriptors come from
 confirmed authority transactions; opaque forwarding performs no SQL.
-The coordinated production client cutover, STUN and operational endpoints remain
-pending; Go is still the product entry point.
+Native HTTP ingress now provides root `GET/HEAD /healthz`, an explicit browser
+Origin allowlist and opt-in localhost access. HTTP concurrency and read/write deadlines
+are independent of relay admission; validated upgrades transfer transport ownership
+and pre-read bytes into the existing connection supervisor. The coordinated production
+client cutover, STUN and remaining operational interfaces remain pending; Go is still
+the product entry point.
 The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, executes JOIN with confirmed descriptors,
 and forwards opaque envelopes synchronously through kernel submission. Cumulative

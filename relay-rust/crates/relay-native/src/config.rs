@@ -14,6 +14,8 @@ const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_BUSINESS_CONNECTIONS: usize = 256;
 pub const MAX_CONTROL_CONNECTIONS: usize = 32;
+pub const MAX_HTTP_REQUESTS: usize = 64;
+pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CONNECTION_ATTEMPTS: share::AttemptRate = share::AttemptRate {
     burst: 512,
     refill: Duration::from_millis(10),

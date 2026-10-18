@@ -4,7 +4,7 @@ This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulativ
 consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
 real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
 production Go/browser clients still await the coordinated cutover. The Go relay remains
-the product server until client integration, STUN and operational endpoints are ready.
+the product server until client integration, STUN and remaining operational interfaces are ready.
 
 From `relay-rust/`:
 
@@ -19,6 +19,22 @@ Keep the SQLite database and its WAL together; deleting storage deletes STOP his
 The parent directory must exist. JSON readiness goes to stdout; structured traces
 go to stderr, with kernel decisions enabled by `RUST_LOG=debug`.
 
+`GET /healthz` returns `200 ok`; `HEAD /healthz` returns the same status without a
+body. This is HTTP liveness, independent of share capacity, at the root path even
+when the public WebSocket endpoint has a base path. Unknown paths return 404 and
+unsupported methods return 405. HTTP bodies are rejected; ordinary replies close
+the connection. HTTP ingress has 64 concurrent slots, a 5-second read/write deadline,
+and a 16 KiB / 64-header limit, separate from relay admission.
+
+Browser WebSocket access requires `--origins https://app.example,https://other.example`.
+Entries are full HTTP(S) origins without paths, credentials, queries or fragments;
+host/scheme case and default ports are normalized. Invalid entries fail startup.
+Missing Origin is allowed for native clients; empty, `null`, repeated and unlisted
+origins are rejected with 403. Origin is browser policy, not client authentication.
+`--allow-localhost` additionally allows HTTP(S) origins on `localhost`, `127.0.0.1`
+and `[::1]` at any port for development; it is off by default. Neither Host nor
+proxy forwarding headers grant origin access.
+
 REGISTER creates ownership and descriptor in one SQLite transaction. The kernel
 permits REGISTERED only after that exact write is confirmed; ambiguous results retry
 the same write. STOP follows earlier writes, retains its permanent intent through
@@ -29,7 +45,12 @@ Generation allocation is durable; challenge entropy comes from the OS.
 JOIN reads its sealed descriptor from the confirmed authority cached by the actor,
 including after RESUME. Opaque forwarding and consumption never perform SQL.
 
-Ingress separates 256 process-wide business slots from 32 control slots; each share
+Validated WebSocket upgrades reserve one of 32 process-wide control slots before
+the 101 response; saturation returns 503. Health checks and rejected HTTP requests
+do not spend relay attempt tokens or allocate share actors. An upgrade transfers
+the transport and any pre-read frame bytes to the connection supervisor, releasing
+its HTTP slot. Ingress separates 256 process-wide business slots from those control
+slots; each share
 keeps 32 business and 8 control slots. New connections are rate-limited, and valid
 REGISTER/RESUME/JOIN initiations reserve business capacity before continuing. Signed
 STOP retains control capacity even when business slots are full. The socket supervisor
@@ -70,7 +91,9 @@ Recovery evidence depends on the boundary:
 Previously submitted network bytes may still arrive; release does not mean delivery
 or recall. These native ownership guarantees do not apply to Cloudflare buffers.
 
-`make rust` covers blocked-write ingress, bounded queues, STOP submission fencing,
+`make rust` covers HTTP routing, Origin policy, bounded headers, virtual-time HTTP
+read/write deadlines, capacity isolation and upgrade handoff, plus blocked-write ingress,
+bounded queues, STOP submission fencing,
 joined teardown, held writer destruction, actor reconstruction, stale-receipt isolation,
 cancelled-supervisor lease retention and fault-injected commit ordering. The existing
 Go-codec process scenario transfers 80 mixed-size frames per direction beyond asymmetric

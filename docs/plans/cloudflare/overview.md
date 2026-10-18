@@ -126,7 +126,10 @@ recovers committed ownership and interrupted STOP. Confirmed authority supplies
 the sealed JOIN descriptor without another SQL read. Native scheduling replenishes
 windows from kernel occupancy and defers grants until control-writer space is available.
 The Go-codec process scenario covers asymmetric windows, feedback replay, STOP with
-outstanding delivery and restart/RESUME. STUN, operational endpoints and the production
+outstanding delivery and restart/RESUME. Native HTTP ingress now serves root
+`GET/HEAD /healthz` and validates configurable WebSocket origins before relay admission.
+Bounded HTTP reads/writes use separate capacity; upgrades preserve pre-read bytes and
+existing connection teardown. STUN, remaining operational interfaces and the production
 client cutover remain pending; Go is still the product entry point.
 
 ## Cloudflare host
