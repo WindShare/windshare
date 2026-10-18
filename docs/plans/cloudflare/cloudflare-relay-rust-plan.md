@@ -95,10 +95,12 @@ ownership, permanent STOP and the reservation inventory still require authoritat
 Go and browser runtimes now activate their socket-free receive ledgers with
 capacity-bearing handshakes, explicit send grants, cumulative consumption on
 writer readiness and ordered settlement. Browser product fixtures build Rust
-`relay-native` and Go `wind`, including the 17 MiB download/hash scenario.
+`relay-native` and Go `wind`, including the 17 MiB download/hash scenario. Go process
+E2E uses the same binaries with isolated SQLite and stable endpoint identity across
+restarts, covering reconnect, permanent STOP and receiver-crash recovery.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
-the remaining cutover: default server/release entry points and Go product
-integration suites still target the incompatible old Go relay.
+the remaining cutover: default server/release entry points and `integration/`
+suites still target the incompatible old Go relay.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

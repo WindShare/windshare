@@ -27,7 +27,7 @@ type e2eBinaries struct {
 	processOwner string
 }
 
-type e2eBuildTarget struct {
+type e2eGoBuildTarget struct {
 	output    string
 	packageID string
 	arguments []string
@@ -127,7 +127,7 @@ func loadE2EBinaries(t *testing.T) e2eBinaries {
 // Child builds disable ambient workspaces so developer-machine configuration
 // cannot replace the repository's single production dependency graph.
 func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, error) {
-	plan, err := e2eBuildPlan(outDir, profile)
+	plan, err := e2eGoBuildPlan(outDir, profile)
 	if err != nil {
 		return e2eBinaries{}, err
 	}
@@ -139,8 +139,12 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 			return e2eBinaries{}, fmt.Errorf("build %s with %s profile: %w\n%s", target.packageID, profile, err, output)
 		}
 	}
+	relay := filepath.Join(outDir, exeName(e2eNativeRelayBinary))
+	if err := buildE2ENativeRelay(relay); err != nil {
+		return e2eBinaries{}, err
+	}
 	return e2eBinaries{
-		relay: plan[0].output, wind: plan[1].output, processOwner: plan[2].output,
+		relay: relay, wind: plan[0].output, processOwner: plan[1].output,
 	}, nil
 }
 
@@ -157,12 +161,11 @@ func e2eGoExecutable() string {
 	return "go"
 }
 
-func e2eBuildPlan(outDir string, profile e2eBuildProfile) ([]e2eBuildTarget, error) {
+func e2eGoBuildPlan(outDir string, profile e2eBuildProfile) ([]e2eGoBuildTarget, error) {
 	if err := profile.validate(); err != nil {
 		return nil, err
 	}
-	targets := []e2eBuildTarget{
-		{output: filepath.Join(outDir, exeName("wsrelay")), packageID: "./relay/cmd/wsrelay"},
+	targets := []e2eGoBuildTarget{
 		{output: filepath.Join(outDir, exeName("wind")), packageID: "./cmd/wind"},
 		{output: filepath.Join(outDir, exeName("testprocessowner")), packageID: "./cmd/testprocessowner"},
 	}
@@ -189,19 +192,18 @@ func (profile e2eBuildProfile) validate() error {
 	}
 }
 
-func TestE2EBuildPlanAppliesProfileToEveryChild(t *testing.T) {
+func TestE2EGoBuildPlanAppliesProfileToGoChildren(t *testing.T) {
 	t.Parallel()
 	for _, profile := range []e2eBuildProfile{e2eBuildProfilePlain, e2eBuildProfileRace} {
 		t.Run(string(profile), func(t *testing.T) {
 			t.Parallel()
-			plan, err := e2eBuildPlan(t.TempDir(), profile)
+			plan, err := e2eGoBuildPlan(t.TempDir(), profile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(plan) != 3 ||
-				plan[0].packageID != "./relay/cmd/wsrelay" ||
-				plan[1].packageID != "./cmd/wind" ||
-				plan[2].packageID != "./cmd/testprocessowner" {
+			if len(plan) != 2 ||
+				plan[0].packageID != "./cmd/wind" ||
+				plan[1].packageID != "./cmd/testprocessowner" {
 				t.Fatalf("build plan = %+v", plan)
 			}
 			for _, target := range plan {
@@ -212,7 +214,7 @@ func TestE2EBuildPlanAppliesProfileToEveryChild(t *testing.T) {
 			}
 		})
 	}
-	if _, err := e2eBuildPlan(t.TempDir(), "coverage"); err == nil {
+	if _, err := e2eGoBuildPlan(t.TempDir(), "coverage"); err == nil {
 		t.Fatal("unsupported build profile was accepted")
 	}
 }
@@ -224,7 +226,6 @@ func TestLongE2EChildBuildProfileMatchesParentInstrumentation(t *testing.T) {
 	binaries := loadE2EBinaries(t)
 	wantRace := currentE2EBuildProfile == e2eBuildProfileRace
 	for component, filename := range map[string]string{
-		"wsrelay":          binaries.relay,
 		"wind":             binaries.wind,
 		"testprocessowner": binaries.processOwner,
 	} {

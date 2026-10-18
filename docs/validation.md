@@ -2,8 +2,10 @@
 
 WindShare's validation entry points are local `make` gates, ordinary GitHub CI, weekly suites, and a manual release workflow.
 
-Browser product scenarios build Go `wind` and Rust `relay-native` once per suite;
-they require the installed stable Rust toolchain as well as Go and browser prerequisites.
+Go process E2E and browser product scenarios build Go `wind` and Rust `relay-native`
+once per suite. Both require the installed stable Rust toolchain; browser scenarios
+also need browser prerequisites. Cargo retains its incremental cache; each suite
+runs its own executable copy. Go race instrumentation applies only to Go children.
 
 ## Local gates
 

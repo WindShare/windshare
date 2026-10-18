@@ -3,9 +3,10 @@
 This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulative
 consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
 real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
-the Go `relayv2` runtime and browser receiver implement both. Browser product tests
-build this host alongside Go `wind`. Default server/release entry points and Go
-product integration suites remain pending; clients are incompatible with the legacy Go relay.
+the Go `relayv2` runtime and browser receiver implement both. Go process E2E and
+browser product tests build this host alongside Go `wind`. Default server/release
+entry points and `integration/` suites remain pending; clients are incompatible
+with the legacy Go relay.
 
 From `relay-rust/`:
 

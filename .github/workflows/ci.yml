@@ -274,6 +274,8 @@ jobs:
           go-version: stable
           check-latest: true
           cache-dependency-path: go.sum
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
       - name: Run the critical sender, relay, and receiver path once
         run: make e2e
 
