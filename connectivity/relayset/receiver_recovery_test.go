@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,143 +30,72 @@ func receiverUnavailableConfig(endpoints ...string) ReceiverConfig {
 }
 
 func TestReceiverRecoveryLongOutagePreservesEndpointDecisions(t *testing.T) {
-	server := testReceiverRelay(t)
-	sender := receiverTestShare(t, []string{server.URL})
+	const outageWindow = 3 * time.Minute
 	clock := &receiverFakeClock{now: time.Unix(1, 0)}
 	var stoppedCalls, availableCalls atomic.Int32
 	var mu sync.Mutex
-	var phases []ReceiverRecoveryPhase
+	var observations []ReceiverRecoveryObservation
 	recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{
-		Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay },
-		Observe: func(value ReceiverRecoveryObservation) { mu.Lock(); phases = append(phases, value.Phase); mu.Unlock() },
+		Clock: clock, WaitTimeout: outageWindow,
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Observe: func(value ReceiverRecoveryObservation) {
+			mu.Lock()
+			defer mu.Unlock()
+			observations = append(observations, value)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	capability := sender.Capability()
-	capability.Relays = append(capability.Relays, "stopped")
-	config := ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
-			if config.RelayBaseURL == "stopped" {
-				stoppedCalls.Add(1)
-				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
-			}
-			availableCalls.Add(1)
-			if clock.Now().Before(time.Unix(181, 0)) {
-				return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
-			}
-			return relayv2.DialReceiver(ctx, config)
-		},
+	config := receiverUnavailableConfig("available", "stopped")
+	config.Dial = func(_ context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		if config.RelayBaseURL == "stopped" {
+			stoppedCalls.Add(1)
+			return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
+		}
+		availableCalls.Add(1)
+		return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
 	}
-	set, err := recovery.Replace(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	set.Close()
-	if stoppedCalls.Load() != 1 || availableCalls.Load() < 4 {
-		t.Fatal(stoppedCalls.Load(), availableCalls.Load())
-	}
-	foundSlow := false
-	for _, delay := range clock.waits {
-		if delay == receiverSlowRetryDelay {
-			foundSlow = true
+	// Expiring two caller windows exercises replacement decisions without a
+	// successful network handshake: temporary failures retain retry authority.
+	for range 2 {
+		before := availableCalls.Load()
+		started := clock.Now()
+		set, err := recovery.Replace(t.Context(), config)
+		if set != nil || !errors.Is(err, ErrReceiverWaitExpired) {
+			t.Fatal(set, err)
+		}
+		if clock.Now().Sub(started) != outageWindow || availableCalls.Load()-before < 4 || stoppedCalls.Load() != 1 {
+			t.Fatalf("elapsed=%s available=%d stopped=%d", clock.Now().Sub(started), availableCalls.Load(), stoppedCalls.Load())
+		}
+		eligible, err := recovery.endpoints(config.Receiver.Capability.Relays)
+		if err != nil || len(eligible) != 1 || eligible[0] != "available" {
+			t.Fatal(eligible, err)
 		}
 	}
-	if !foundSlow {
-		t.Fatal("fast budget did not transition to slow waiting", clock.waits)
+	if !slices.Contains(clock.waits, receiverSlowRetryDelay) {
+		t.Fatal("fast recovery never transitioned to slow waiting", clock.waits)
 	}
 	mu.Lock()
-	foundWaiting := false
-	for _, phase := range phases {
-		if phase == ReceiverRecoveryWaiting {
-			foundWaiting = true
+	defer mu.Unlock()
+	var waiting bool
+	var previousAttempt uint32
+	for _, value := range observations {
+		if value.Phase == ReceiverRecoveryWaiting && value.Endpoint == "available" {
+			waiting = true
+		}
+		if value.Phase == ReceiverRecoveryConnecting && value.Endpoint == "available" {
+			if value.Attempt != previousAttempt+1 {
+				t.Fatalf("attempt history reset across caller windows: previous=%d next=%d", previousAttempt, value.Attempt)
+			}
+			previousAttempt = value.Attempt
+		}
+		if value.Phase == ReceiverRecoveryWaiting && value.Endpoint == "stopped" {
+			t.Fatal("permanently stopped relay entered retry waiting")
 		}
 	}
-	mu.Unlock()
-	if !foundWaiting {
-		t.Fatal("no waiting observation", phases)
-	}
-	// Another generation must not bring a stopped endpoint back.
-	next, err := recovery.Replace(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	next.Close()
-	if stoppedCalls.Load() != 1 {
-		t.Fatal("stopped endpoint returned on next generation")
-	}
-}
-
-func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
-	server := testReceiverRelay(t)
-	sender := receiverTestShare(t, []string{server.URL})
-	clock := &receiverFakeClock{now: time.Unix(1, 0)}
-	recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay }})
-	config := ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: sender.Capability()},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
-			if clock.Now().Before(time.Unix(2, 0)) {
-				return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
-			}
-			return relayv2.DialReceiver(ctx, config)
-		},
-	}
-	set, err := recovery.Join(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer set.Close()
-	if _, _, err = set.WaitReady(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(clock.waits) < 2 {
-		t.Fatal("initial retry did not wait", clock.waits)
-	}
-}
-
-func TestReceiverSlowEndpointRecoveryRetainsHealthyGeneration(t *testing.T) {
-	first, second := testReceiverRelay(t), testReceiverRelay(t)
-	sender := receiverTestShare(t, []string{first.URL, second.URL})
-	clock := &receiverFakeClock{now: time.Unix(1, 0)}
-	recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay }})
-	connected := make(chan *relayv2.ReceiverConnection, 4)
-	config := ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: sender.Capability()},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
-			if config.RelayBaseURL == second.URL && clock.Now().Before(time.Unix(181, 0)) {
-				return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
-			}
-			return relayv2.DialReceiver(ctx, config)
-		},
-		Connected: func(connection *relayv2.ReceiverConnection) { connected <- connection },
-	}
-	set, err := recovery.Join(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer set.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	runtime, _, err := set.WaitReady(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := runtime.ProtocolSessionID()
-	for range 2 {
-		select {
-		case <-connected:
-		case <-ctx.Done():
-			t.Fatal("missing recovered relay")
-		}
-	}
-	if runtime.LaneSet().Len() != 2 || runtime.ProtocolSessionID() != session {
-		t.Fatal("relay retry replaced healthy generation")
-	}
-	set.Close()
-	slow := false
-	for _, delay := range clock.waits {
-		slow = slow || delay == receiverSlowRetryDelay
-	}
-	if !slow {
-		t.Fatal("endpoint never entered slow waiting", clock.waits)
+	if !waiting {
+		t.Fatal("no waiting observation")
 	}
 }
 

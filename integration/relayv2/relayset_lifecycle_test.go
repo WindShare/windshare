@@ -1,4 +1,4 @@
-package relayset
+package relayv2_test
 
 import (
 	"context"
@@ -7,21 +7,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-type receiverRetryBarrierClock struct {
-	waiting chan struct{}
+type relaysetRetryBarrierClock struct {
+	waiting chan context.Context
 	release chan struct{}
 }
 
-func (clock *receiverRetryBarrierClock) Now() time.Time { return time.Unix(1, 0) }
+func (*relaysetRetryBarrierClock) Now() time.Time { return time.Unix(1, 0) }
 
-func (clock *receiverRetryBarrierClock) Wait(ctx context.Context, _ time.Duration) error {
-	close(clock.waiting)
+func (clock *relaysetRetryBarrierClock) Wait(ctx context.Context, _ time.Duration) error {
+	select {
+	case clock.waiting <- ctx:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -31,24 +37,20 @@ func (clock *receiverRetryBarrierClock) Wait(ctx context.Context, _ time.Duratio
 }
 
 func TestReceiverDoesNotRedialSessionThatStoppedDuringBackoff(t *testing.T) {
-	server := testReceiverRelay(t)
-	sender := receiverTestShare(t, []string{server.URL})
+	ctx, trace, urls := startRelaysetScenario(t, 1)
+	share := prepareRelaysetShare(t, ctx, trace, urls)
 	const unavailableEndpoint = "unavailable"
-	capability := sender.Capability()
+	capability := share.Capability()
 	capability.Relays = append(capability.Relays, unavailableEndpoint)
-	clock := &receiverRetryBarrierClock{waiting: make(chan struct{}), release: make(chan struct{})}
+	clock := &relaysetRetryBarrierClock{waiting: make(chan context.Context, 1), release: make(chan struct{})}
 	var unavailableAttempts atomic.Int32
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	set, err := NewReceiver(ctx, ReceiverConfig{
+	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Clock: clock, Receiver: liveshare.ReceiverConfig{Capability: capability},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
 			if config.RelayBaseURL != unavailableEndpoint {
 				return relayv2.DialReceiver(ctx, config)
 			}
 			if unavailableAttempts.Add(1) > 1 {
-				// A broken retry owner still terminates promptly so the assertion
-				// diagnoses an extra attempt without another wait or a timeout.
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
 			}
 			return nil, errors.New("endpoint temporarily unavailable")
@@ -62,45 +64,39 @@ func TestReceiverDoesNotRedialSessionThatStoppedDuringBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-clock.waiting:
-	case <-ctx.Done():
-		t.Fatal("unavailable endpoint did not enter backoff")
-	}
-	// Keep the relay-set owner alive while its session ends, exactly as it can
-	// while the continuation is still joining the old transfer generation.
+	waitContext := waitRelaysetEvent(t, ctx, clock.waiting)
+	// Ending the authenticated session must revoke retry authority even though
+	// the caller has not closed the relay set or its own lifetime.
 	runtime.Close()
-	close(clock.release)
-	joined := make(chan struct{})
-	go func() { set.workers.Wait(); close(joined) }()
-	select {
-	case <-joined:
-	case <-ctx.Done():
-		t.Fatal("old session endpoint workers did not stop")
+	waitRelaysetEvent(t, ctx, waitContext.Done())
+	if ctx.Err() != nil {
+		t.Fatal("session shutdown consumed the caller lifetime")
 	}
+	close(clock.release)
+	set.Close()
 	if attempts := unavailableAttempts.Load(); attempts != 1 {
 		t.Fatalf("retired session redialed after backoff: attempts=%d", attempts)
 	}
+	trace.RequireRecord(t, "session_backoff_retired", testrun.OutcomeSucceeded, nil)
+	trace.RequireSuccess(t)
 }
 
 func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
-	server := testReceiverRelay(t)
-	sender := receiverTestShare(t, []string{server.URL})
+	ctx, trace, urls := startRelaysetScenario(t, 1)
+	share := prepareRelaysetShare(t, ctx, trace, urls)
 	const lateEndpoint = "late"
-	capability := sender.Capability()
+	capability := share.Capability()
 	capability.Relays = append(capability.Relays, lateEndpoint)
 	late := make(chan *relayv2.ReceiverConnection, 1)
 	dialCanceled := make(chan struct{})
 	var connected atomic.Int32
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	set, err := NewReceiver(ctx, ReceiverConfig{
+	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Receiver: liveshare.ReceiverConfig{Capability: capability},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
 			if config.RelayBaseURL != lateEndpoint {
 				return relayv2.DialReceiver(ctx, config)
 			}
-			config.RelayBaseURL = server.URL
+			config.RelayBaseURL = urls[0]
 			candidate, err := relayv2.DialReceiver(ctx, config)
 			if err != nil {
 				return nil, err
@@ -108,8 +104,8 @@ func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
 			late <- candidate
 			<-ctx.Done()
 			close(dialCanceled)
-			// A provider can win connection establishment while cancellation is
-			// being delivered. Returning the owner transfers cleanup responsibility.
+			// Establishment can win concurrently with cancellation; returning
+			// the owner still transfers cleanup responsibility to the relay set.
 			return candidate, nil
 		},
 		Connected: func(*relayv2.ReceiverConnection) { connected.Add(1) },
@@ -122,25 +118,14 @@ func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var candidate *relayv2.ReceiverConnection
-	select {
-	case candidate = <-late:
-	case <-ctx.Done():
-		t.Fatal("secondary dial did not reach its result barrier")
-	}
+	candidate := waitRelaysetEvent(t, ctx, late)
 	runtime.BeginClose()
-	select {
-	case <-dialCanceled:
-	case <-ctx.Done():
-		t.Fatal("session stopping did not cancel its in-flight relay dial")
-	}
-	select {
-	case <-candidate.Done():
-	case <-ctx.Done():
-		t.Fatal("late relay connection was not disposed")
-	}
+	waitRelaysetEvent(t, ctx, dialCanceled)
+	waitRelaysetEvent(t, ctx, candidate.Done())
 	set.Close()
 	if connected.Load() != 1 || candidate.Channel().State() != framechannel.Closed {
 		t.Fatalf("late candidate admitted or retained: connections=%d state=%v", connected.Load(), candidate.Channel().State())
 	}
+	trace.RequireRecord(t, "late_candidate_disposed", testrun.OutcomeSucceeded, nil)
+	trace.RequireSuccess(t)
 }
