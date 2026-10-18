@@ -90,7 +90,14 @@ pub fn limits() -> Limits {
     let capacity =
         |frames| Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES));
     Limits {
-        connections: CONNECTION_LIMIT,
+        business_connections: CONNECTION_LIMIT,
+        handshakes: windshare_relay_core::share::HandshakeLimits {
+            concurrent: CONNECTION_LIMIT,
+            attempts: windshare_relay_core::share::AttemptRate {
+                burst: 64,
+                refill: Duration::from_millis(100),
+            },
+        },
         sessions: SESSION_LIMIT,
         retained_flows_per_connection: SESSION_LIMIT,
         // Experimental risk allowance, not evidence of physical release or a production default.

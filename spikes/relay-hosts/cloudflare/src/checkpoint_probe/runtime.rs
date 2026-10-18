@@ -280,7 +280,7 @@ impl Runtime {
         Ok(
             json!({"ready":true, "mode":self.image.mode, "writes":self.image.writes,
             "generations":usage, "last_refusal":self.last_refusal,
-            "admitted":admission.admitted, "retired_generations":admission.retired_generations,
+            "admitted":admission.business, "controls":admission.controls, "retired_generations":admission.retired_generations,
             "residual_frames":admission.residual.frames, "residual_bytes":admission.residual.encoded_bytes,
             "kernel_deadline_ms":self.relay.deadline().map(|at| at.0),
             "physical_release_proven":false, "clock":"frozen canonical fixture"}),

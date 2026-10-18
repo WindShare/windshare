@@ -13,6 +13,11 @@ The [pressure experiment](pressure.md) adds 512 MiB open/close/reset groups,
 independent memory controls and real Preview memory/outcome metrics. It supports
 continuing Cloudflare work, without proving physical release or a finite TTL.
 
+The [retirement follow-up](retirement.md) reproduces exhausted admission after
+consumed data loses feedback, compares explicit risk expiry on real Cloudflare,
+and observes complete old bursts after more than ten minutes. Its candidate
+policies remain separate from production kernel integration.
+
 ## Findings — 2026-10-17
 
 [Initial evidence](evidence/2026-10-17.json) records native and cloud closure runs.
