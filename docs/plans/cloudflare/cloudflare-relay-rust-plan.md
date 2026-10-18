@@ -98,8 +98,10 @@ writer readiness and ordered settlement. Browser product fixtures build Rust
 `relay-native` and Go `wind`, including the 17 MiB download/hash scenario. Go process
 E2E uses the same binaries with isolated SQLite and stable endpoint identity across
 restarts, covering reconnect, permanent STOP and receiver-crash recovery.
-`integration/relayv2` now shares the native test host with Go process E2E,
-preserving registration, descriptor and bidirectional frame checks.
+`integration/relayv2` shares the native test host with Go process E2E, covering
+registration, descriptors, bidirectional frames, independent relay candidates,
+exact-lane reconnection and session shutdown. `connectivity/relayset` no longer
+uses Go server fixtures; short tests inject dials and clocks.
 The [delivery contract](delivery-flow-contract.md#client-receive-ledgers) records
 the remaining cutover: default server/release entry points and other Go relay
 fixtures still target the incompatible old Go relay.

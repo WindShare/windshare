@@ -142,7 +142,9 @@ resolves source IPs without accepting arbitrary forwarding headers.
 Go process E2E and browser product fixtures now use Go `wind` and Rust
 `relay-native`, covering reconnect, permanent STOP, receiver-crash recovery and
 the 17 MiB browser download/hash scenario. `integration/relayv2` shares the native
-test host with Go process E2E. Remaining operational interfaces, default
+test host with Go process E2E and covers independent relay candidates, exact-lane
+recovery and session shutdown. `connectivity/relayset` has no Go server fixtures;
+its short tests inject dials and clocks. Remaining operational interfaces, default
 server/release entry points and other Go relay fixtures have not been switched.
 
 ## Cloudflare host

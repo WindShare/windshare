@@ -97,7 +97,7 @@ func TestRelayWebSocketRegistrationAndBidirectionalFrameExchange(t *testing.T) {
 	// Register directory cleanup first: the trace must retire the process before
 	// Windows can remove its SQLite files, including on a failed assertion.
 	fixture := testrelaynative.NewFixture(t.TempDir(), "")
-	trace, identity := startRelayScenario(t)
+	trace, identity := startRelayScenario(t, relayWebSocketScenario)
 	runtime, err := fixture.Start(t.Context(), relaySuite.owner, testrelaynative.Launch{
 		Executable: relaySuite.binary, WorkingDirectory: relaySuite.root, Identity: identity,
 	})
