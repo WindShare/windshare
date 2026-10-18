@@ -19,6 +19,10 @@ struct Vector {
     session_id: String,
     #[serde(rename = "sessionAdmittedB64")]
     admitted: String,
+    #[serde(rename = "descriptorUploadB64")]
+    descriptor_upload: String,
+    #[serde(rename = "descriptorDeliveryB64")]
+    descriptor_delivery: String,
 }
 
 #[test]
@@ -36,6 +40,26 @@ fn session_controls_and_opaque_metadata_follow_shared_vectors() {
         session
     );
     assert_eq!(RelaySessionId::new([0; SESSION_BYTES]), None);
+    let upload = bytes(&vector.descriptor_upload);
+    let object = crate::descriptor_upload::DescriptorUpload::decode(&upload).unwrap();
+    assert_eq!(
+        encode_descriptor(session, object.object()).unwrap(),
+        bytes(&vector.descriptor_delivery)
+    );
+}
+
+#[test]
+fn descriptor_delivery_keeps_the_full_boundary_and_rejects_invalid_sizes() {
+    let session = RelaySessionId::new([1; SESSION_BYTES]).unwrap();
+    assert!(encode_descriptor(session, &[]).is_err());
+    assert!(encode_descriptor(session, &vec![0; MAX_DESCRIPTOR_BYTES + 1]).is_err());
+    let object = vec![7; MAX_DESCRIPTOR_BYTES];
+    let encoded = encode_descriptor(session, &object).unwrap();
+    assert_eq!(
+        encoded.len(),
+        DESCRIPTOR_HEADER_BYTES + MAX_DESCRIPTOR_BYTES
+    );
+    assert_eq!(&encoded[DESCRIPTOR_HEADER_BYTES..], object);
 }
 
 fn invalid_layouts(encoded: &[u8]) -> Vec<Vec<u8>> {

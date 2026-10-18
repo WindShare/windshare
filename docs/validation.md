@@ -119,10 +119,11 @@ All use injected time; no live Cloudflare retention interval is inferred from th
 Go and browser socket-free receive-ledger tests cover shared connection bounds, FIFO
 receipts, frame/byte-aware batching across sessions, sparse flush, counter exhaustion,
 retirement settlement, replay and stale-generation isolation without timers or sockets.
-The native lifecycle host now runs REGISTER/RESUME/STOP and heartbeats on real
-WebSockets with SQLite persistence. Its Go-codec scenario generates fresh keys and
-proofs, restarts the binary after registration, resumes, stops independently and
-restarts again to verify permanent refusal. Connection tests block actual WebSocket
+The native host runs REGISTER/RESUME, JOIN, bidirectional forwarding, cumulative
+feedback, settlement, STOP and heartbeats on real WebSockets with SQLite persistence.
+Its Go-codec scenario transfers beyond asymmetric windows, replays feedback, verifies
+maximum frames and descriptors, restarts and resumes delivery, then stops with submitted
+debt and verifies permanent refusal across another restart. Connection tests block actual WebSocket
 writes over bounded in-memory I/O while reading inbound controls, verify joined
 task/queue release, terminal reply draining, heartbeat priority and shutdown.
 Real kernel receipts cover queue bounds and STOP fencing at synchronous writer handoff.
@@ -131,8 +132,8 @@ the host lease until their children exit, and old receipts cannot reach a new ac
 Fault-injected host tests hold commits across actor failure/cancellation,
 fail before commit, lose receipts and race STOP with ownership publication. A real
 SQLite trigger abort verifies rollback of the whole registration; restart retains
-committed ownership whose receipt was lost. JOIN/forwarding, client
-runtime cutover remain unimplemented. The Cloudflare lifecycle adapter now uses the
+committed ownership whose receipt was lost. Production client runtime cutover remains
+pending. The Cloudflare lifecycle adapter now uses the
 same authority-row transitions, real Worker entropy/time and SQLite. Injected host
 tests cover incomplete commits, permanent STOP, hibernation, partial attachment
 writes, lost-attachment isolation and absolute deadline/nonce preservation. Its

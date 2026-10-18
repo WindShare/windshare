@@ -42,17 +42,22 @@ WindShare 应允许每位用户将私人中转部署到自己的 Cloudflare 免�
 ## 当前建议
 
 Implementation progress is tracked in [Rust relay implementation](overview.md).
-The [native lifecycle host](../../../relay-rust/crates/relay-native/README.md) now
-executes real REGISTER/RESUME/STOP connections with SQLite authority, OS entropy
-and host timers. Its Go-codec process scenario verifies ownership recovery and
-permanent STOP across restarts. Native connections now supervise separate reader/writer
+The [native host](../../../relay-rust/crates/relay-native/README.md) now
+executes REGISTER/RESUME, JOIN, bidirectional opaque delivery, cumulative consumption,
+settlement and STOP with SQLite authority, OS entropy and host timers. Its Go-codec
+process scenario transfers beyond asymmetric receive windows, replays feedback and
+verifies STOP with outstanding delivery plus ownership recovery across restarts.
+Native connections supervise separate reader/writer
 tasks, bound output by frames and bytes, and synchronize permit rechecks with the
 kernel-to-writer handoff. Discard and physical-release receipts follow actual queue
 cleanup and joined transport teardown. An independent generation supervisor now fences
 actor reconstruction on connection descendants and storage work, retains the exclusive
 host lease through cleanup, and isolates old mailboxes. Native recovery no longer relies
-on control-only ingress. JOIN/data ingress and the coordinated client runtime cutover
-remain pending; Go is still the product entry point.
+on control-only ingress. Native window scheduling reads kernel occupancy and reserves
+grants only when their bounded control writer is available. Descriptors come from
+confirmed authority transactions; opaque forwarding performs no SQL.
+The coordinated production client cutover, STUN and operational endpoints remain
+pending; Go is still the product entry point.
 The [Cloudflare lifecycle host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, uses Worker entropy and time, executes the
 same authority-row transitions as native SQLite, and restores binary socket
@@ -71,7 +76,8 @@ ownership, permanent STOP and the reservation inventory still require authoritat
 Go and browser clients now have socket-free receive ledgers for both endpoint roles,
 shared connection capacity, cumulative feedback and ordered settlement. Their
 [delivery contract](delivery-flow-contract.md#client-receive-ledgers) keeps runtime
-activation coupled to Rust host integration; current wire semantics are unchanged.
+activation coupled to the coordinated cutover; production Go/browser connections
+still use the legacy handshake and incremental feedback.
 The [host experiments](../../../spikes/relay-hosts/README.md) support native synchronous
 submission. Cloudflare close/reset does not prove buffer release, and whole-object
 reset interrupts healthy peers. The [checkpoint experiment](../../../spikes/relay-hosts/checkpoint-recovery.md)

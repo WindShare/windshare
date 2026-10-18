@@ -9,6 +9,7 @@ pub const DATA_QUEUE_FRAMES: usize = 64;
 pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
+pub const DELIVERY_WINDOW: flow::Counts = flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_BUSINESS_CONNECTIONS: usize = 256;
@@ -26,8 +27,13 @@ const SHARE_CONNECTION_ATTEMPTS: share::AttemptRate = share::AttemptRate {
 };
 pub const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 pub const STORAGE_RETRY: Duration = Duration::from_millis(250);
-pub const MAX_CONTROL_BYTES: usize =
-    windshare_relay_core::descriptor_upload::MAX_DESCRIPTOR_BYTES + 12;
+pub const MAX_CONTROL_BYTES: usize = windshare_relay_core::descriptor_upload::MAX_DESCRIPTOR_BYTES
+    + windshare_relay_core::sessions::DESCRIPTOR_HEADER_BYTES;
+pub const MAX_MESSAGE_BYTES: usize = if MAX_DATA_BYTES > MAX_CONTROL_BYTES {
+    MAX_DATA_BYTES
+} else {
+    MAX_CONTROL_BYTES
+};
 const RELAY_IDENTITY_DOMAIN: &[u8] = b"windshare/v2 relay-identity\0";
 const WEBSOCKET_PATH: &str = "/v2/ws";
 
@@ -101,7 +107,7 @@ fn validate_dns(host: &str) -> Result<()> {
 }
 
 pub fn limits() -> share::Limits {
-    // These are native control-plane bounds, independent of Worker attachment limits.
+    // Native budgets are independent of Worker attachment and scheduling limits.
     let frame_bytes = u64::from(windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES);
     let capacity = |frames| flow::Counts::new(frames, frames * frame_bytes);
     share::Limits {

@@ -14,7 +14,10 @@ fn durable_transactions_replay_without_overwriting_other_authority() {
     database.execute(identity.share, &works[0]).unwrap();
     database.execute(identity.share, &works[0]).unwrap();
     assert!(matches!(
-        database.load(identity.share).unwrap(),
+        database
+            .load(identity.share)
+            .unwrap()
+            .map(|stored| stored.record()),
         Some(Record::Published(_))
     ));
     let first_generation = database.generation();
@@ -36,7 +39,10 @@ fn durable_transactions_replay_without_overwriting_other_authority() {
 
     let database = Database::open(&path, identity.relay).unwrap();
     assert!(matches!(
-        database.load(identity.share).unwrap(),
+        database
+            .load(identity.share)
+            .unwrap()
+            .map(|stored| stored.record()),
         Some(Record::Stopped(_))
     ));
     let connection = database.0.connection.lock().unwrap();

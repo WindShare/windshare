@@ -200,3 +200,87 @@ fn stop_and_unclassified_connections_never_acquire_delivery_capacity() {
     fixture.prepare_stop(&mut relay);
     assert!(relay.generations.ledger(&connection(99)).is_none());
 }
+
+#[test]
+fn window_offers_follow_all_occupancy_stages_and_never_refill_from_replays() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let joined = join_capacity(&fixture, &mut relay, 2, Counts::new(2, 2 * MAX_FRAME));
+    let flow = grants(&joined)[1].flow;
+    let target = Counts::new(4, 4 * MAX_FRAME);
+    let credit = relay.delivery_window(flow, target).unwrap();
+    assert_eq!(credit, Counts::new(1, MAX_FRAME));
+    assert_eq!(
+        relay
+            .handle(Input::Grant { flow, credit }, fixture.at)
+            .refusal,
+        None
+    );
+    assert_eq!(relay.delivery_window(flow, target), Some(Counts::ZERO));
+    let receipt = receive_from(
+        &mut relay,
+        flow.session(),
+        flow.permit().source(),
+        fixture.at,
+    );
+    assert_eq!(relay.delivery_window(flow, target), Some(Counts::ZERO));
+    assert_eq!(
+        relay
+            .submit(&receipt, fixture.at, |_| Submission::Complete)
+            .refusal,
+        None
+    );
+    assert_eq!(relay.delivery_window(flow, target), Some(Counts::ZERO));
+    let feedback = crate::flow::DeliveryConsumed::new(flow.session().wire_id(), Counts::new(1, 21))
+        .unwrap()
+        .encode();
+    let consume = || Input::Control {
+        connection: flow.destination(),
+        frame: &feedback,
+    };
+    assert_eq!(relay.handle(consume(), fixture.at).refusal, None);
+    let credit = relay.delivery_window(flow, target).unwrap();
+    assert_eq!(credit, Counts::new(1, 21));
+    assert_eq!(
+        relay
+            .handle(Input::Grant { flow, credit }, fixture.at)
+            .refusal,
+        None
+    );
+    assert_eq!(relay.handle(consume(), fixture.at).refusal, None);
+    assert_eq!(relay.delivery_window(flow, target), Some(Counts::ZERO));
+    let _ = relay.handle(
+        Input::Cancel {
+            participant: flow.destination(),
+            session: flow.session().wire_id(),
+        },
+        fixture.at,
+    );
+    assert_eq!(relay.delivery_window(flow, target), None);
+}
+
+#[test]
+fn grants_match_shared_wire_layout_and_check_increment_widths() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let (_, flows) = fixture.join(&mut relay, 2);
+    let flow = flows[0];
+    let vector: serde_json::Value = session_case("fresh-relay-registration-proof");
+    let mut expected = bytes(vector["sessionCreditB64"].as_str().unwrap());
+    // The engine allocates IDs, so only the vector's identity is replaced.
+    expected[8..16].copy_from_slice(flow.session().wire_id().as_bytes());
+    let grant = crate::flow::Grant {
+        flow,
+        credit: Counts::new(2, 100),
+    };
+    assert_eq!(grant.encode().unwrap().as_slice(), expected);
+    for credit in [
+        Counts::ZERO,
+        Counts::new(u64::from(u32::MAX) + 1, 1),
+        Counts::new(1, u64::MAX),
+    ] {
+        assert!(crate::flow::Grant { flow, credit }.encode().is_err());
+    }
+}

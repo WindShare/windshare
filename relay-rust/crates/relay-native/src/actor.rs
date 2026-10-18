@@ -1,13 +1,13 @@
 use crate::{
-    config::{STORAGE_RETRY, limits},
+    config::limits,
     connection::Outbox,
     environment::{Environment, Trace},
     generation::{Generation, Recovery},
     storage::Persistence,
 };
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Result, anyhow};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     future::pending,
     sync::{
         Arc,
@@ -21,27 +21,37 @@ use tokio::{
     time::Instant,
 };
 use windshare_relay_core::{
+    authority::StoredAuthority,
     lifecycle::ConnectionRef,
-    share::{Control, Identity, Input, Output, ShareRelay, Turn, WorkId, WorkResult},
+    share::{Identity, Input, ShareRelay, WorkId, WorkResult},
 };
+
+mod ingress;
+mod outputs;
+mod windows;
+use windows::Windows;
 
 pub enum Event {
     Connected(ConnectionRef, Outbox),
     Control(ConnectionRef, Vec<u8>),
+    Frame(ConnectionRef, Vec<u8>),
     Unsupported(ConnectionRef),
     Writable(ConnectionRef),
     Disconnected(ConnectionRef),
     Closed(ConnectionRef, oneshot::Sender<()>),
 }
 
-type Commit = JoinHandle<(WorkId, Result<()>)>;
+type Committed = (WorkId, Result<Option<StoredAuthority>>);
+type Commit = JoinHandle<Committed>;
 
 pub struct Actor<S, E> {
     relay: ShareRelay<Trace>,
     identity: Identity,
     store: S,
+    authority: Option<StoredAuthority>,
     environment: E,
     ports: BTreeMap<ConnectionRef, Outbox>,
+    windows: Windows,
     inbox: mpsc::Receiver<Event>,
     commit: Option<Commit>,
     retry: Option<(Instant, WorkId)>,
@@ -60,10 +70,11 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     ) -> Result<()> {
         let identity = generation.identity();
         let reader = store.clone();
-        let record = generation
+        let authority = generation
             .spawn_blocking(move || reader.load(identity.share))
             .await??;
-        let restored = recovery.restore(identity, record)?;
+        let restored =
+            recovery.restore(identity, authority.as_ref().map(StoredAuthority::record))?;
         let (relay, initial) =
             ShareRelay::restore(identity, limits(), &restored, Trace, environment.now())
                 .map_err(|error| anyhow!("restore refused: {error:?}"))?;
@@ -71,8 +82,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             relay,
             identity,
             store,
+            authority,
             environment,
             ports: BTreeMap::new(),
+            windows: Windows::default(),
             inbox,
             commit: None,
             retry: None,
@@ -97,13 +110,19 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             let turn = tokio::select! {
                 event = self.inbox.recv() => {
                     let Some(event) = event else { return Ok(()); };
-                    self.event(event)
+                    self.event(event)?;
+                    continue;
                 }
                 result = complete(&mut self.commit) => {
                     self.commit = None;
                     let (id, result) = result?;
                     let outcome = match result {
-                        Ok(()) => WorkResult::Complete,
+                        Ok(authority) => {
+                            // A JOIN can use descriptor bytes only from a confirmed
+                            // transaction, including after a lost receipt is retried.
+                            self.authority = authority;
+                            WorkResult::Complete
+                        }
                         Err(error) => {
                             tracing::error!(event = "storage_uncertain", share = ?self.identity.share,
                                 incarnation = ?id.incarnation(), work = id.sequence(), %error);
@@ -123,152 +142,6 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
-    fn event(&mut self, event: Event) -> Turn {
-        let now = self.environment.now();
-        match event {
-            Event::Connected(connection, writer) => {
-                self.ports.insert(connection, writer);
-                self.relay.handle(Input::Connected(connection), now)
-            }
-            Event::Control(connection, frame) => {
-                if !self.ports.contains_key(&connection) {
-                    return Turn::default();
-                }
-                let mut turn = self.relay.handle(
-                    Input::Control {
-                        connection,
-                        frame: &frame,
-                    },
-                    now,
-                );
-                if turn.refusal.is_some() {
-                    turn.outputs.extend(
-                        self.relay
-                            .handle(Input::Disconnected(connection), now)
-                            .outputs,
-                    );
-                }
-                turn
-            }
-            Event::Unsupported(connection) => {
-                let mut turn = Turn::default();
-                turn.outputs.push(Output::Send {
-                    connection,
-                    control: Control::Error(
-                        windshare_relay_core::error_frame::ErrorFrame::UnsupportedMode,
-                    ),
-                });
-                turn.outputs.push(Output::Close(connection));
-                turn
-            }
-            Event::Writable(connection) => self
-                .ports
-                .get_mut(&connection)
-                .and_then(|port| port.submit_next(&mut self.relay, now))
-                .unwrap_or_default(),
-            Event::Disconnected(connection) => {
-                self.ports.remove(&connection);
-                self.relay.handle(Input::Disconnected(connection), now)
-            }
-            Event::Closed(connection, applied) => {
-                self.ports.remove(&connection);
-                // The supervisor joined both halves and released the transport;
-                // removing this port also drops every unsubmitted destination frame.
-                tracing::debug!(event = "connection_released", share = ?self.identity.share, ?connection);
-                let turn = self.relay.handle(Input::Closed(connection), now);
-                let _ = applied.send(());
-                turn
-            }
-        }
-    }
-
-    fn outputs(&mut self, turn: Turn) -> Result<()> {
-        let mut outputs: VecDeque<_> = turn.outputs.into();
-        while let Some(output) = outputs.pop_front() {
-            let follow = match output {
-                Output::ChallengeNeeded(request) => Some(self.relay.handle(
-                    Input::Challenge {
-                        request,
-                        seed: self.environment.challenge()?,
-                    },
-                    self.environment.now(),
-                )),
-                Output::Send {
-                    connection,
-                    control,
-                } => {
-                    let probe = matches!(control, Control::ProbeAck(_));
-                    let bytes = encode(control)?;
-                    let sent = self.ports.get(&connection).is_some_and(|writer| {
-                        if probe {
-                            writer.probe(bytes)
-                        } else {
-                            writer.control(bytes)
-                        }
-                        .is_ok()
-                    });
-                    if sent {
-                        None
-                    } else {
-                        tracing::warn!(event = "control_writer_unavailable", share = ?self.identity.share, ?connection);
-                        self.ports.remove(&connection);
-                        Some(
-                            self.relay
-                                .handle(Input::Disconnected(connection), self.environment.now()),
-                        )
-                    }
-                }
-                Output::Close(connection) => {
-                    // Only an explicit kernel close drains ordered replies. Failure,
-                    // overflow and actor teardown abort instead of keeping writers alive.
-                    if let Some(port) = self.ports.remove(&connection) {
-                        port.finish();
-                    }
-                    None
-                }
-                Output::Work(work) => {
-                    ensure!(
-                        self.commit.is_none(),
-                        "kernel issued concurrent storage obligations"
-                    );
-                    let store = self.store.clone();
-                    let share = self.identity.share;
-                    tracing::debug!(event = "storage_started", ?share, work = work.id.sequence(),
-                        incarnation = ?work.id.incarnation());
-                    self.commit = Some(self.generation.spawn_blocking(move || {
-                        let result = store.execute(share, &work.operation);
-                        tracing::debug!(event = "storage_finished", ?share, work = work.id.sequence(),
-                            incarnation = ?work.id.incarnation(), ?result);
-                        (work.id, result)
-                    }));
-                    None
-                }
-                Output::Retry(id) => {
-                    self.retry = Some((Instant::now() + STORAGE_RETRY, id));
-                    None
-                }
-                Output::Discard(flow) => {
-                    if let Some(port) = self.ports.get_mut(&flow.destination()) {
-                        port.discard(flow);
-                    }
-                    // All unsubmitted ownership is in the destination port, never
-                    // in a writer future. A missing port has already dropped its queue.
-                    tracing::debug!(event = "flow_queue_discarded", share = ?self.identity.share, ?flow);
-                    Some(
-                        self.relay
-                            .handle(Input::Discarded(flow), self.environment.now()),
-                    )
-                }
-                Output::Received(_) => bail!("payload reached lifecycle-only host"),
-                Output::Reload => bail!("kernel requires authoritative reload"),
-            };
-            if let Some(turn) = follow {
-                outputs.extend(turn.outputs);
-            }
-        }
-        Ok(())
-    }
-
     fn wake(&self) -> Option<Instant> {
         let kernel = self.relay.deadline().map(|deadline| {
             Instant::now()
@@ -281,7 +154,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     }
 }
 
-async fn complete(commit: &mut Option<Commit>) -> Result<(WorkId, Result<()>)> {
+async fn complete(commit: &mut Option<Commit>) -> Result<Committed> {
     match commit {
         Some(task) => Ok(task.await?),
         None => pending().await,
@@ -293,19 +166,6 @@ async fn wait(at: Option<Instant>) {
         Some(at) => tokio::time::sleep_until(at).await,
         None => pending().await,
     }
-}
-
-fn encode(control: Control) -> Result<Vec<u8>> {
-    Ok(match control {
-        Control::Challenge(bytes) => bytes,
-        Control::Error(error) => error.encode().to_vec(),
-        Control::Registered(frame) => frame.encode().to_vec(),
-        Control::Stopped(frame) => frame.encode().to_vec(),
-        Control::ProbeAck(frame) => frame.encode().to_vec(),
-        Control::Descriptor { .. } | Control::Grant(_) | Control::Settlement(_) => {
-            bail!("delivery command reached lifecycle-only host")
-        }
-    })
 }
 
 #[cfg(test)]

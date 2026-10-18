@@ -1,5 +1,5 @@
 use crate::{
-    config::{Endpoint, MAX_CONTROL_BYTES, SOCKET_TIMEOUT},
+    config::{Endpoint, MAX_MESSAGE_BYTES, SOCKET_TIMEOUT},
     connection,
     registry::Registry,
 };
@@ -35,10 +35,10 @@ pub async fn serve(
     SockRef::from(&stream).set_linger(Some(Duration::ZERO))?;
     let mut routed = None;
     let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_CONTROL_BYTES))
-        .max_frame_size(Some(MAX_CONTROL_BYTES))
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
-        .max_write_buffer_size(MAX_CONTROL_BYTES * 2);
+        .max_write_buffer_size(MAX_MESSAGE_BYTES * 2);
     let upgrade = timeout(
         SOCKET_TIMEOUT,
         accept_hdr_async_with_config(
