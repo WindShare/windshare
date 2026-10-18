@@ -1,13 +1,12 @@
 use crate::{
     actor::{Actor, Event},
     config::{
-        CONNECTION_ATTEMPTS, Endpoint, MAILBOX_CAPACITY, MAX_BUSINESS_CONNECTIONS,
-        MAX_CONTROL_CONNECTIONS, MAX_HTTP_REQUESTS, MAX_RESIDENT_SHARES,
+        CONNECTION_ATTEMPTS, Endpoint, MAILBOX_CAPACITY, MAX_HTTP_REQUESTS, MAX_RESIDENT_SHARES,
     },
-    connection::Capacity,
+    connection::{Capacity, ConnectionLimits},
     environment::{Environment, NativeEnvironment, incarnation},
     generation::{Generation, Recovery},
-    http::{Ingress, OriginPolicy},
+    http::{Ingress, OriginPolicy, SourcePolicy},
     socket,
     storage::Database,
 };
@@ -145,12 +144,21 @@ impl Registry {
 pub struct Server {
     registry: Arc<Registry>,
     origins: OriginPolicy,
+    sources: SourcePolicy,
+    limits: ConnectionLimits,
 }
 
 impl Server {
     /// # Errors
     /// Refuses unknown authority, incompatible storage or too many recovering shares.
-    pub fn open(endpoint: Endpoint, origins: OriginPolicy, database: &Path) -> Result<Self> {
+    pub fn open(
+        endpoint: Endpoint,
+        origins: OriginPolicy,
+        sources: SourcePolicy,
+        limits: ConnectionLimits,
+        database: &Path,
+    ) -> Result<Self> {
+        limits.validate()?;
         let store = Database::open(database, endpoint.identity)?;
         let records = store.recoverable_records(MAX_RESIDENT_SHARES)?;
         let registry = Arc::new(Registry {
@@ -166,7 +174,12 @@ impl Server {
                 registry.attach(record.share())?;
             }
         }
-        Ok(Self { registry, origins })
+        Ok(Self {
+            registry,
+            origins,
+            sources,
+            limits,
+        })
     }
 
     /// Runs until shutdown, isolating each socket's waits from share decisions.
@@ -179,14 +192,14 @@ impl Server {
         shutdown: impl Future<Output = ()>,
     ) -> Result<()> {
         let slots = Capacity::new(
-            MAX_BUSINESS_CONNECTIONS,
-            MAX_CONTROL_CONNECTIONS,
+            self.limits,
             CONNECTION_ATTEMPTS,
             self.registry.environment.now(),
         )?;
         let ingress = Arc::new(Ingress::new(
             self.registry.endpoint.clone(),
             self.origins,
+            self.sources,
             slots,
             self.registry.environment.clone(),
         ));

@@ -62,6 +62,10 @@ are independent of relay admission; validated upgrades transfer transport owners
 and pre-read bytes into the existing connection supervisor. Independent native UDP
 STUN now provides IPv4/IPv6 Binding, bounded source/rate budgets, separate health/metrics
 and joined shutdown; Pion verifies its responses across native process restarts.
+Native admission now atomically charges global and per-source business/control budgets,
+retains them through transport-owner teardown, and preserves STOP under business
+saturation. Proxy source identity requires explicitly trusted socket IPs and a single-IP
+header; malformed trusted identity is refused before upgrade.
 The coordinated production client cutover and remaining operational interfaces remain
 pending; Go is still the product entry point.
 The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)

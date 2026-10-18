@@ -21,8 +21,9 @@ pub async fn serve(
     http_permit: OwnedSemaphorePermit,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
+    let peer = stream.peer_addr()?;
     let Some(upgrade) = (tokio::select! {
-        result = ingress.accept(stream, connection) => result?,
+        result = ingress.accept(stream, peer, connection) => result?,
         () = connection::stopped(&mut shutdown) => return Ok(()),
     }) else {
         return Ok(());

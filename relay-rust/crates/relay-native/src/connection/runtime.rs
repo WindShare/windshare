@@ -1,8 +1,8 @@
-use super::{Admission, Closure, channel};
+use super::{Admission, Closure, channel, transport::AdmittedSocket};
 use crate::{actor::Event, config::SOCKET_TIMEOUT, generation::Generation};
 use anyhow::{Result, anyhow, bail};
 use futures_util::{Stream, StreamExt};
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{Notify, mpsc, oneshot, watch},
@@ -13,8 +13,23 @@ use windshare_relay_core::lifecycle::ConnectionRef;
 
 /// The caller must configure the transport so dropping both halves also releases
 /// its send buffers. TCP uses abortive close; a close request alone is not evidence.
-pub async fn run<I>(
+pub fn run<I>(
     socket: WebSocketStream<I>,
+    events: mpsc::Sender<Event>,
+    connection: ConnectionRef,
+    shutdown: watch::Receiver<bool>,
+    generation: Generation,
+    admission: Arc<Admission>,
+) -> impl Future<Output = Result<()>>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let socket = AdmittedSocket::new(socket, Arc::clone(&admission));
+    supervise(socket, events, connection, shutdown, generation, admission)
+}
+
+async fn supervise<I>(
+    socket: AdmittedSocket<WebSocketStream<I>>,
     events: mpsc::Sender<Event>,
     connection: ConnectionRef,
     mut shutdown: watch::Receiver<bool>,
@@ -44,9 +59,7 @@ where
         read(source, read_events, connection, read_flush, read_admission).await
     }));
     let write_events = events.clone();
-    let write_admission = Arc::clone(&admission);
     let writer = tasks.spawn(generation.track(async move {
-        let _admission = write_admission;
         writer.run(sink, flush, write_events, connection).await?;
         Ok(Closure::Drain)
     }));
@@ -164,7 +177,7 @@ where
                         .await
                         .map_err(|_| anyhow!("share actor unavailable"))?;
                 } else if supported_control(&bytes) {
-                    admission.inspect(&bytes, connection)?;
+                    admission.inspect(&bytes)?;
                     events
                         .send(Event::Control(connection, bytes.to_vec()))
                         .await

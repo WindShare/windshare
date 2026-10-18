@@ -19,8 +19,11 @@ use windshare_relay_core::{
 };
 
 mod admission;
+mod limits;
 pub use admission::{Admission, Capacity};
+pub use limits::ConnectionLimits;
 mod runtime;
+mod transport;
 mod writer;
 pub use runtime::{run, stopped};
 pub use writer::Writer;
