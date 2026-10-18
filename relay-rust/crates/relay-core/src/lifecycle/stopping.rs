@@ -20,9 +20,6 @@ pub enum StopCleanup {
     None,
     /// An unauthenticated handshake and its exact connection resources.
     Reservation(OperationId),
-    /// An in-flight or fenced publication: quiesce its writes and remove its
-    /// descriptor/prepared resources without deleting the STOP record.
-    Publication(OperationId),
     /// The published owner's exact connection lifetime and its relay sessions.
     Owner(ConnectionRef),
 }
@@ -30,7 +27,7 @@ pub enum StopCleanup {
 impl StopCleanup {
     pub(super) const fn operation(self) -> Option<OperationId> {
         match self {
-            Self::Reservation(id) | Self::Publication(id) => Some(id),
+            Self::Reservation(id) => Some(id),
             Self::None | Self::Owner(_) => None,
         }
     }
@@ -107,8 +104,8 @@ pub enum StopStep {
 /// One idempotent host obligation in an irreversible STOP.
 ///
 /// Hosts serialize durable record changes per share.
-/// Publication writes are conditional on absence/their exact unresolved record;
-/// rollback and expiry delete only their own records. Neither may replace or
+/// Registration is conditional on absence; replacement and expiry require
+/// the exact prior record. Neither may replace or
 /// delete a stopping/stopped record, even if a callback arrives late.
 ///
 /// Every step is idempotent. Failure or an ambiguous result is retried with the
@@ -243,14 +240,6 @@ impl<O: Observer> ShareLifecycle<O> {
             // A reservation is not authenticated ownership. An attacker naming
             // another instance must not prevent the sender's valid STOP.
             State::Reserved(pending) => return Ok(StopCleanup::Reservation(pending.id)),
-            State::Publishing(pending) => (
-                *pending.init.registration(),
-                StopCleanup::Publication(pending.id),
-            ),
-            State::Fenced(unresolved) => (
-                unresolved.registration,
-                StopCleanup::Publication(unresolved.id),
-            ),
             State::Published(published) => (
                 published.route.registration,
                 StopCleanup::Owner(published.owner.connection),

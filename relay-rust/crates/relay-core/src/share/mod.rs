@@ -48,7 +48,7 @@ use crate::{
 };
 use alloc::collections::{BTreeMap, VecDeque};
 use deadlines::{Deadlines, Key};
-use storage::{StopBarrier, Task};
+use storage::Task;
 
 // Work-ID exhaustion fences this runtime even when its stored ownership is valid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,7 +109,7 @@ pub struct ShareRelay<O> {
     last_session: u64,
     last_work: u64,
     tasks: VecDeque<Task>,
-    stop_barrier: Option<StopBarrier>,
+    stop_barrier: Option<crate::lifecycle::StopWork>,
     checkpointing: checkpoint_tracking::Checkpointing,
     observer: O,
 }

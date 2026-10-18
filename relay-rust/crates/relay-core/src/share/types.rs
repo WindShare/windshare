@@ -4,7 +4,7 @@ use crate::{
     error_frame::ErrorFrame,
     flow::{Counts, FlowKey, Grant, ReceivedFrame, SettlementNotice},
     identifiers::{RelaySessionId, ShareId},
-    lifecycle::{ConnectionRef, Incarnation, OperationId, Record},
+    lifecycle::{ConnectionRef, Incarnation, OwnedRoute, Record},
     registration::Registered,
     sessions::{OpaqueHeader, SessionKey},
     stop::Stopped,
@@ -139,9 +139,10 @@ pub struct Work {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Storage {
-    /// Atomically create this unresolved record and its authenticated descriptor.
-    Publish {
-        record: Box<Record>,
+    /// Create this complete ownership with its authenticated descriptor only
+    /// when absent. Replaying the exact row succeeds; other authority conflicts.
+    Register {
+        ownership: Box<OwnedRoute>,
         descriptor: Vec<u8>,
     },
     /// Replace only the exact expected record. An already-applied next record is
@@ -150,16 +151,11 @@ pub enum Storage {
         expected: Option<Box<Record>>,
         next: Option<Box<Record>>,
     },
-    /// Quiesce this attempt's writes and remove its descriptor/resources. Delete a
-    /// lifecycle record only if it is this exact attempt's unresolved publication.
-    RemovePublication(OperationId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkResult {
     Complete,
-    /// Publication only: proves that no record, resource or outstanding write remains.
-    Aborted,
     Uncertain,
 }
 

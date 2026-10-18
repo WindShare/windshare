@@ -11,14 +11,19 @@ use windshare_relay_core::{
     registration::RegisterInit,
     sessions::{OpaqueHeader, SessionAdmitted},
     share::{
-        Control, Identity, Input, Limits, Output, Responsibility, Restore, ShareRelay, Submission,
-        Turn, WorkResult,
+        AttemptRate, Control, HandshakeLimits, Identity, Input, Limits, Output, Responsibility,
+        Restore, ShareRelay, Submission, Turn, WorkResult,
     },
 };
 
 pub const FRAME_BYTES: usize = OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const WINDOW: usize = 8;
 const CONNECTION_CAPACITY: u64 = 16;
+const CONNECTION_LIMIT: usize = 32;
+const HANDSHAKE_LIMIT: usize = 8;
+// Frozen fixture time must allow setup and replacement attempts without replenishment.
+const ATTEMPT_BURST: u32 = 64;
+const ATTEMPT_REFILL: Duration = Duration::from_millis(100);
 const SESSION_LIMIT: usize = 24;
 const STARTUP_RESERVE: u64 = 2;
 const REGISTRATION_BUDGET: u64 = 5_000;
@@ -74,7 +79,14 @@ impl Scenario {
         let init = RegisterInit::decode(&frame("registerInitB64")).unwrap();
         let capacity = |frames| Counts::new(frames, frames * FRAME_BYTES as u64);
         let limits = Limits {
-            connections: 32,
+            business_connections: CONNECTION_LIMIT,
+            handshakes: HandshakeLimits {
+                concurrent: HANDSHAKE_LIMIT,
+                attempts: AttemptRate {
+                    burst: ATTEMPT_BURST,
+                    refill: ATTEMPT_REFILL,
+                },
+            },
             sessions: SESSION_LIMIT,
             retained_flows_per_connection: SESSION_LIMIT,
             retirement: windshare_relay_core::share::RetirementPolicy::PhysicalRelease,
@@ -97,7 +109,7 @@ impl Scenario {
         let (relay, initial) = ShareRelay::restore(
             identity,
             limits,
-            &Restore::restarted(None, Responsibility::Released),
+            &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace::default(),
             now,
         )
@@ -189,19 +201,13 @@ impl Scenario {
                 Output::Work(work) => {
                     use windshare_relay_core::share::Storage;
                     match work.operation {
-                        Storage::Publish { record, .. } => {
+                        Storage::Register { ownership, .. } => {
                             assert!(self.stored.is_none());
-                            self.stored = Some(*record);
+                            self.stored = Some(Record::Published(*ownership));
                         }
                         Storage::CompareExchange { expected, next } => {
                             assert_eq!(self.stored, expected.map(|r| *r));
                             self.stored = next.map(|r| *r);
-                        }
-                        Storage::RemovePublication(id) => {
-                            if matches!(self.stored, Some(Record::Unresolved(value)) if value.id() == id)
-                            {
-                                self.stored = None;
-                            }
                         }
                     }
                     Some(self.relay.handle(

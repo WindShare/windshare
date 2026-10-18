@@ -89,7 +89,7 @@ minutes; the experiment cannot locate those bytes within the forwarding path.
 Production integration must give retired risk an explicit policy-based end,
 without restoring old authority or making ordinary reconnects wait for a global reset.
 
-结论：**保留共享 Rust 语义内核；退役与局部恢复已实现。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。消费反馈和存储编排的简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+结论：**保留共享 Rust 语义内核；退役与局部恢复已实现。** Cloudflare 的退役策略须以前置残留实验为依据。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。注册已合并为单次原子保存，保留提交确认屏障；消费反馈简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 
@@ -117,7 +117,7 @@ Go 与浏览器对两种中转统一每 15 秒发送递增 nonce 的 `WS2H`，�
 
 共享内核采用 `no_std + alloc`，由每分享 `share::ShareRelay` 统一持有生命周期、握手、连接、会话与交付账本。`handle(input, now)` 返回有序控制发送、存储、清理命令与下一截止时间；内核负责 wire ID 分配、撤销扇出、持久化屏障和恢复校验。同步 `submit` 在同一独占借用中完成许可复核、FIFO 记账与宿主提交，socket 等待放在调用之前。适配器只执行 I/O、提供容量与调度；休眠宿主在事件末刷新发生变化的连接附件，唤醒时由内核逐连接校验并恢复关联会话。原生不启用附件变更记录，热路径无需逐帧快照。交付元数据采用按需分配、有硬上限的稳定索引槽池，握手连接不预留 flow 槽位，快照仅保存仍需保留的 flow 及其索引；连接与会话上限不等于每连接的预分配长度。统一 `observation::Observer` 输出决策，平台仅补充运行环境字段。
 
-生命周期自身区分等待所有权持久化确认的 `Activating` 与已可服务的 `Published`。注册与 RESUME 复用同一提交屏障；确认事件必须匹配操作身份并满足原握手截止时间，才能允许 REGISTERED、JOIN 和转发。`ShareRelay` 负责提交顺序和失败隔离，不另设可服务状态来重新解释生命周期。Cloudflare 可利用同步 SQLite 与 [output gate](https://developers.cloudflare.com/durable-objects/reference/glossary/) 简化提交编排，但不能删除操作身份、提交屏障和 STOP 约束；原生仍须处理持久化结果不确定，存储 I/O 留在适配器。
+生命周期自身区分等待持久化确认的 `Activating` 与已可服务的 `Published`。REGISTER 在一次原子 SQL 写入中保存所有权与 descriptor；RESUME 条件替换所有权，二者复用提交屏障。确认必须匹配操作身份并满足原握手截止时间，才能允许 REGISTERED、JOIN 和转发。结果不确定时重试原写入或重新读取权威状态确认，不推断失败；断线、超时和 STOP 撤权后，后续持久化按序执行，迟到确认不能重新开放服务。重启保留已提交但回执丢失的所有权，按存活连接恢复或进入固定宽限。`ShareRelay` 负责提交顺序，不另设可服务状态；存储 I/O 留在适配器，Cloudflare 的 [output gate](https://developers.cloudflare.com/durable-objects/reference/glossary/) 继续约束提交前的外部可见性。
 
 ```text
 Go CLI / 浏览器 / 未来客户端

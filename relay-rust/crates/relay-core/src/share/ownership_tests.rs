@@ -68,8 +68,7 @@ fn stop_during_uncertain_ownership_commit_never_acknowledges_registration() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.prepare_stop(&mut relay);
-    let publication = fixture.begin_registration(&mut relay);
-    let ownership = work(&complete(&mut relay, &publication, fixture.at));
+    let ownership = fixture.begin_registration(&mut relay);
     let uncertain = relay.handle(
         Input::Completed {
             id: ownership.id,

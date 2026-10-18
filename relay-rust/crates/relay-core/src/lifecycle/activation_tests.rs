@@ -9,14 +9,7 @@ fn pending(
         fixture.register(engine);
         ownership_commit(fixture.resume(engine, connection(1, 2)))
     } else {
-        let publication = fixture.publish(engine);
-        ownership_commit(engine.handle(
-            Event::PublicationFinished {
-                id: publication.id,
-                result: PublicationResult::Committed,
-            },
-            fixture.at,
-        ))
+        fixture.publish(engine)
     }
 }
 

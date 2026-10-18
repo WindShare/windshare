@@ -83,16 +83,9 @@ impl Fixture {
             },
             self.now(false),
         ));
-        let ownership = work(relay.handle(
-            Input::Completed {
-                id: publication.id,
-                result: WorkResult::Complete,
-            },
-            self.now(false),
-        ));
         let _ = relay.handle(
             Input::Completed {
-                id: ownership.id,
+                id: publication.id,
                 result: WorkResult::Complete,
             },
             self.now(false),
@@ -111,12 +104,7 @@ impl Fixture {
             },
             self.now(false),
         ));
-        vec![
-            publication.operation,
-            ownership.operation,
-            stopping.operation,
-            stopped.operation,
-        ]
+        vec![publication.operation, stopping.operation, stopped.operation]
     }
     pub fn begin(&self, relay: &mut ShareRelay<Trace>, stop: bool) {
         let connection = connection(if stop { 2 } else { 1 });

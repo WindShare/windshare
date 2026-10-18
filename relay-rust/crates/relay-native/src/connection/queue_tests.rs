@@ -38,30 +38,35 @@ impl Scenario {
             },
             at,
         );
-        let mut turn = relay.handle(
+        let turn = relay.handle(
             Input::Control {
                 connection: connection(1),
                 frame: &fixture.bytes("descriptorUploadB64"),
             },
             at,
         );
-        for _ in 0..2 {
-            let work = turn
-                .outputs
-                .into_iter()
-                .find_map(|out| match out {
-                    Output::Work(work) => Some(work),
-                    _ => None,
-                })
-                .unwrap();
-            turn = relay.handle(
-                Input::Completed {
-                    id: work.id,
-                    result: WorkResult::Complete,
-                },
-                at,
-            );
-        }
+        let work = turn
+            .outputs
+            .into_iter()
+            .find_map(|out| match out {
+                Output::Work(work) => Some(work),
+                _ => None,
+            })
+            .unwrap();
+        let registered = relay.handle(
+            Input::Completed {
+                id: work.id,
+                result: WorkResult::Complete,
+            },
+            at,
+        );
+        assert!(registered.outputs.iter().any(|output| matches!(
+            output,
+            Output::Send {
+                control: Control::Registered(_),
+                ..
+            }
+        )));
         let _ = relay.handle(Input::Connected(connection(3)), at);
         let turn = relay.handle(
             Input::Control {

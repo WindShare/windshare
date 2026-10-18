@@ -7,8 +7,8 @@ use crate::{
 };
 
 use super::{
-    Action, Cancellation, ConnectionRef, Event, Incarnation, OperationId, OwnershipId,
-    PublicationResult, Refusal, ShareLifecycle, State, StopCleanup, StopResult, StopStep,
+    Action, Cancellation, ConnectionRef, Event, Incarnation, OperationId, OwnershipId, Refusal,
+    ShareLifecycle, State, StopCleanup, StopResult, StopStep,
 };
 
 /// Lifecycle phases shared by both platform adapters.
@@ -18,10 +18,6 @@ pub enum Phase {
     Vacant,
     /// A handshake owns the route while authenticating.
     Reserved,
-    /// Authentication finished; persistence/resources are not yet confirmed.
-    Publishing,
-    /// An abandoned or uncertain publication must be reconciled.
-    Fenced,
     /// Authenticated ownership is waiting for its final durable confirmation.
     Activating,
     /// A sender connection owns the visible route.
@@ -46,8 +42,6 @@ pub enum ObservedEvent {
     Reserve,
     /// A handshake supplied its authenticated upload.
     Publish,
-    /// Host publication or reconciliation result.
-    PublicationFinished(PublicationResult),
     /// The exact ownership record was durably confirmed.
     OwnershipCommitted,
     /// The attempt lost its owner or failed.
@@ -82,8 +76,6 @@ pub enum ObservedEvent {
 pub enum Decision {
     /// Reserved route capacity.
     Reserved,
-    /// Requested host publication.
-    Publish,
     /// Requested the final durability barrier for publication or resume.
     CommitOwnership {
         /// Exact former owner whose authority was revoked immediately.
@@ -116,8 +108,6 @@ pub enum Decision {
     SessionRetired(Retirement),
     /// Released an unpublished attempt.
     Released,
-    /// Kept a possibly committed transaction hidden.
-    Reconcile,
     /// Rejected or ignored an input.
     Refused(Refusal),
     /// No lifecycle work was needed.
@@ -139,7 +129,7 @@ pub struct Observation {
     /// grace route lost. Its epoch stays unchanged across restores.
     pub ownership: Option<OwnershipId>,
     /// Attempt being acted on, including stale callback identities, a
-    /// restored unresolved operation and a re-adopted owner.
+    /// pending ownership commit and a re-adopted owner.
     pub operation: Option<OperationId>,
     /// Requesting connection, present even before a reservation exists, or
     /// the owner a disconnect or restored record names.
@@ -202,11 +192,6 @@ pub(super) const fn event_context(
             Some(publication.id()),
             Some(publication.id().connection()),
         ),
-        Event::PublicationFinished { id, result } => (
-            ObservedEvent::PublicationFinished(*result),
-            Some(*id),
-            Some(id.connection()),
-        ),
         Event::OwnershipCommitted(id) => (
             ObservedEvent::OwnershipCommitted,
             Some(*id),
@@ -251,7 +236,9 @@ pub(super) const fn event_context(
 pub(super) const fn decision(action: &Action<'_>) -> Decision {
     match action {
         Action::Reserved(_) => Decision::Reserved,
-        Action::Publish(_) => Decision::Publish,
+        Action::Register(request) => Decision::CommitOwnership {
+            replaced: request.ownership.replaced(),
+        },
         Action::Registered(_) => Decision::Registered,
         Action::CommitOwnership(commit) => Decision::CommitOwnership {
             replaced: commit.replaced(),
@@ -266,7 +253,6 @@ pub(super) const fn decision(action: &Action<'_>) -> Decision {
         Action::JoinReady(_) => Decision::JoinReady,
         Action::Joined(joined) => Decision::Joined(joined.session.key()),
         Action::Released(_) => Decision::Released,
-        Action::Reconcile(_) => Decision::Reconcile,
         Action::Refused(reason) => Decision::Refused(*reason),
         Action::None => Decision::None,
     }

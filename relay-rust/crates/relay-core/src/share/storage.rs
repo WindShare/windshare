@@ -5,33 +5,32 @@ use super::{
 };
 use crate::{
     clock::UnixMillis,
-    lifecycle::{Event, PublicationResult, StopResult, StopWork},
+    lifecycle::{Event, OwnershipCommit, StopResult, StopWork},
 };
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum AfterWrite {
     None,
     Ownership {
         id: OperationId,
         replaced: Option<ConnectionRef>,
     },
-    Stop(StopWork),
+    // STOP retains a full cleanup identity; keeping it off the queue entry
+    // avoids charging that space to every ordinary write, especially on Wasm.
+    Stop(Box<StopWork>),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum TaskKind {
-    Publish {
-        id: OperationId,
-        record: Record,
+    Register {
+        ownership: OwnershipCommit,
         descriptor: Vec<u8>,
     },
     Write {
         next: Option<Record>,
         after: AfterWrite,
     },
-    Reconcile(OperationId),
-    Quiesce(OperationId),
 }
 #[derive(Debug)]
 pub(super) struct Task {
@@ -43,12 +42,6 @@ enum Dispatch {
     Queued,
     Executing(Work),
     Retry(Work),
-}
-
-#[derive(Debug)]
-pub(super) struct StopBarrier {
-    pub work: StopWork,
-    pub publication: Option<OperationId>,
 }
 
 impl<O: Observer> ShareRelay<O> {
@@ -75,17 +68,17 @@ impl<O: Observer> ShareRelay<O> {
         };
         self.last_work = sequence;
         let operation = match &task.kind {
-            TaskKind::Publish {
-                record, descriptor, ..
-            } => Storage::Publish {
-                record: Box::new(*record),
+            TaskKind::Register {
+                ownership,
+                descriptor,
+            } => Storage::Register {
+                ownership: Box::new(ownership.ownership()),
                 descriptor: descriptor.clone(),
             },
             TaskKind::Write { next, .. } => Storage::CompareExchange {
                 expected: self.stored.map(Box::new),
                 next: next.map(Box::new),
             },
-            TaskKind::Reconcile(id) | TaskKind::Quiesce(id) => Storage::RemovePublication(*id),
         };
         let work = Work {
             id: WorkId {
@@ -128,11 +121,7 @@ impl<O: Observer> ShareRelay<O> {
             self.trace(None, RelayDecision::StaleCompletion(id), now);
             return;
         }
-        let publication = matches!(
-            self.tasks.front().map(|task| &task.kind),
-            Some(TaskKind::Publish { .. })
-        );
-        if result != WorkResult::Complete && !publication {
+        if result != WorkResult::Complete {
             let task = self.tasks.front_mut().expect("matched work");
             let Dispatch::Executing(work) =
                 core::mem::replace(&mut task.dispatch, Dispatch::Queued)
@@ -147,55 +136,21 @@ impl<O: Observer> ShareRelay<O> {
         self.trace(None, RelayDecision::WorkCompleted { id, result }, now);
         let task = self.tasks.pop_front().expect("matched work");
         match task.kind {
-            TaskKind::Publish { id, record, .. } => {
-                let result = match result {
-                    WorkResult::Complete => {
-                        self.stored = Some(record);
-                        PublicationResult::Committed
-                    }
-                    WorkResult::Aborted => PublicationResult::Aborted,
-                    WorkResult::Uncertain => {
-                        // Establish absence before a queued STOP/other write chooses its CAS
-                        // precondition. A late publication never races the stop record.
-                        self.tasks.push_front(Task {
-                            kind: TaskKind::Reconcile(id),
-                            dispatch: Dispatch::Queued,
-                        });
-                        PublicationResult::Uncertain
-                    }
-                };
-                self.lifecycle_event(Event::PublicationFinished { id, result }, None, now, turn);
+            TaskKind::Register { ownership, .. } => {
+                self.stored = Some(ownership.record());
+                self.after_write(
+                    AfterWrite::Ownership {
+                        id: ownership.id(),
+                        replaced: ownership.replaced(),
+                    },
+                    now,
+                    turn,
+                );
             }
             TaskKind::Write { next, after } => {
                 self.stored = next;
                 self.after_write(after, now, turn);
             }
-            TaskKind::Reconcile(id) => {
-                self.forget_publication(id);
-                self.lifecycle_event(
-                    Event::PublicationFinished {
-                        id,
-                        result: PublicationResult::Aborted,
-                    },
-                    None,
-                    now,
-                    turn,
-                );
-            }
-            TaskKind::Quiesce(id) => {
-                self.forget_publication(id);
-                if let Some(barrier) = &mut self.stop_barrier
-                    && barrier.publication == Some(id)
-                {
-                    barrier.publication = None;
-                }
-            }
-        }
-    }
-
-    fn forget_publication(&mut self, id: OperationId) {
-        if matches!(self.stored, Some(Record::Unresolved(record)) if record.id() == id) {
-            self.stored = None;
         }
     }
 
@@ -210,7 +165,7 @@ impl<O: Observer> ShareRelay<O> {
             }
             AfterWrite::Stop(work) => self.lifecycle_event(
                 Event::StopFinished {
-                    work,
+                    work: *work,
                     result: StopResult::Complete,
                 },
                 None,
@@ -225,18 +180,16 @@ impl<O: Observer> ShareRelay<O> {
         // detached generations. Settling ledgers keep their charge independently
         // of this barrier; waiting for their removal would make STOP unfinishable
         // on hosts that cannot prove transport-buffer release.
-        let ready = self.stop_barrier.as_ref().is_some_and(|barrier| {
-            barrier.publication.is_none()
-                && self
-                    .ledgers
-                    .values()
-                    .all(crate::flow::ConnectionLedger::queues_discarded)
-        });
+        let ready = self.stop_barrier.is_some()
+            && self
+                .ledgers
+                .values()
+                .all(crate::flow::ConnectionLedger::queues_discarded);
         if ready {
-            let barrier = self.stop_barrier.take().expect("ready stop barrier");
+            let work = self.stop_barrier.take().expect("ready stop barrier");
             self.lifecycle_event(
                 Event::StopFinished {
-                    work: barrier.work,
+                    work,
                     result: StopResult::Complete,
                 },
                 None,

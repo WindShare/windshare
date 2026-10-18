@@ -1,25 +1,17 @@
 //! Atomic authority-row transitions shared by SQL hosts. Hosts own transactions;
-//! the interpretation of publication, compare-exchange and cleanup is identical.
+//! registration creates ownership and descriptor as one durable fact.
 use crate::{
     descriptor_upload::MAX_DESCRIPTOR_BYTES,
     identifiers::{DescriptorDigest, RelayIdentity, ShareId},
-    lifecycle::{OperationId, Record},
+    lifecycle::Record,
     share::Storage,
 };
 use alloc::vec::Vec;
 
-const OPERATION_KEY_BYTES: usize = 40;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Publication {
-    Absent,
-    Present { descriptor: Vec<u8>, key: Vec<u8> },
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredAuthority {
     record: Record,
-    publication: Publication,
+    descriptor: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,30 +19,23 @@ pub enum Error {
     Record,
     Identity,
     Descriptor,
-    Publication,
     Conflict,
-    Cleanup,
 }
 
 impl StoredAuthority {
     /// Decode and validate an authoritative SQL row before using any of its fields.
     ///
     /// # Errors
-    /// Rejects partial publications, corrupt descriptors and foreign authority.
+    /// Rejects missing/corrupt descriptors and foreign authority.
     pub fn decode(
         relay: RelayIdentity,
         share: ShareId,
         record: &[u8],
         descriptor: Option<Vec<u8>>,
-        publication: Option<Vec<u8>>,
     ) -> Result<Self, Error> {
         let value = Self {
             record: Record::decode(record).map_err(|_| Error::Record)?,
-            publication: match (descriptor, publication) {
-                (None, None) => Publication::Absent,
-                (Some(descriptor), Some(key)) => Publication::Present { descriptor, key },
-                _ => return Err(Error::Publication),
-            },
+            descriptor,
         };
         value.validate(relay, share)?;
         Ok(value)
@@ -63,33 +48,20 @@ impl StoredAuthority {
 
     #[must_use]
     pub fn descriptor(&self) -> Option<&[u8]> {
-        match &self.publication {
-            Publication::Absent => None,
-            Publication::Present { descriptor, .. } => Some(descriptor),
-        }
-    }
-
-    #[must_use]
-    pub fn publication_key(&self) -> Option<&[u8]> {
-        match &self.publication {
-            Publication::Absent => None,
-            Publication::Present { key, .. } => Some(key),
-        }
+        self.descriptor.as_deref()
     }
 
     fn validate(&self, relay: RelayIdentity, share: ShareId) -> Result<(), Error> {
         if self.record.relay() != relay || self.record.share() != share {
             return Err(Error::Identity);
         }
-        if let Publication::Present { descriptor, key } = &self.publication
-            && (descriptor.is_empty()
-                || descriptor.len() > MAX_DESCRIPTOR_BYTES
-                || key.len() != OPERATION_KEY_BYTES)
+        if self
+            .descriptor()
+            .is_some_and(|bytes| bytes.is_empty() || bytes.len() > MAX_DESCRIPTOR_BYTES)
         {
-            return Err(Error::Publication);
+            return Err(Error::Descriptor);
         }
         let registration = match &self.record {
-            Record::Unresolved(record) => Some(record.registration()),
             Record::Published(record) => Some(record.route().registration()),
             Record::Grace(record) => Some(record.route().registration()),
             Record::Stopping(_) | Record::Stopped(_) => None,
@@ -101,8 +73,8 @@ impl StoredAuthority {
         {
             return Err(Error::Descriptor);
         }
-        if matches!(self.record, Record::Stopped(_)) && self.descriptor().is_some() {
-            return Err(Error::Publication);
+        if matches!(self.record, Record::Stopped(_)) && self.descriptor.is_some() {
+            return Err(Error::Descriptor);
         }
         Ok(())
     }
@@ -111,7 +83,8 @@ impl StoredAuthority {
 /// Compute the next complete row inside the host's serialized transaction.
 ///
 /// # Errors
-/// Conflicting ownership and cleanup of another live attempt never mutate storage.
+/// Conflicting ownership never mutates storage. A lost completion is resolved by
+/// replaying the exact write, not by assuming failure or deleting the registration.
 pub fn apply(
     relay: RelayIdentity,
     share: ShareId,
@@ -122,18 +95,17 @@ pub fn apply(
         current.validate(relay, share)?;
     }
     match operation {
-        Storage::Publish { record, descriptor } => {
-            let Record::Unresolved(unresolved) = **record else {
-                return Err(Error::Publication);
-            };
+        Storage::Register {
+            ownership,
+            descriptor,
+        } => {
             let next = StoredAuthority {
-                record: **record,
-                publication: Publication::Present {
-                    descriptor: descriptor.clone(),
-                    key: operation_key(unresolved.id()),
-                },
+                record: Record::Published(**ownership),
+                descriptor: Some(descriptor.clone()),
             };
             next.validate(relay, share)?;
+            // Owner connection lifetimes are never reused. Exact row equality
+            // therefore confirms this write without a separate publication key.
             if current.is_some_and(|row| row != &next) {
                 return Err(Error::Conflict);
             }
@@ -148,10 +120,10 @@ pub fn apply(
             next.map(|record| {
                 let value = StoredAuthority {
                     record,
-                    publication: if matches!(record, Record::Stopped(_)) {
-                        Publication::Absent
+                    descriptor: if matches!(record, Record::Stopped(_)) {
+                        None
                     } else {
-                        current.map_or(Publication::Absent, |row| row.publication.clone())
+                        current.and_then(|row| row.descriptor.clone())
                     },
                 };
                 value.validate(relay, share)?;
@@ -159,33 +131,5 @@ pub fn apply(
             })
             .transpose()
         }
-        Storage::RemovePublication(id) => {
-            if id.share() != share || id.relay() != relay {
-                return Err(Error::Identity);
-            }
-            let Some(current) = current else {
-                return Ok(None);
-            };
-            if matches!(current.record, Record::Unresolved(record) if record.id() == *id) {
-                return Ok(None);
-            }
-            let mut next = current.clone();
-            if current.publication_key() == Some(operation_key(*id).as_slice()) {
-                if !matches!(current.record, Record::Stopping(_)) {
-                    return Err(Error::Cleanup);
-                }
-                next.publication = Publication::Absent;
-            }
-            Ok(Some(next))
-        }
     }
-}
-
-fn operation_key(operation: OperationId) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(OPERATION_KEY_BYTES);
-    bytes.extend_from_slice(operation.incarnation().as_bytes());
-    bytes.extend_from_slice(&operation.connection().id.get().to_be_bytes());
-    bytes.extend_from_slice(&operation.connection().generation.get().to_be_bytes());
-    bytes.extend_from_slice(&operation.sequence().get().to_be_bytes());
-    bytes
 }

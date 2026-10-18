@@ -1,14 +1,12 @@
 //! Durable share records: the only facts a host persists, and the only input
 //! that constructs a share lifecycle.
 //!
-//! Reservations and resume attempts never reach storage. A publication
-//! transaction stores its unresolved record before it can commit, and
-//! REGISTERED first replaces that record with the published route and its
-//! ownership; every RESUME rewrites that ownership before its acknowledgement.
-//! A crash at any point therefore restores a fenced attempt that still needs
-//! reconciliation, or a route whose sender may already hold REGISTERED, never
-//! a revived attempt the lifecycle fenced. Restoring the stored ownership over
-//! its surviving owner is no ownership change, so its sessions stay valid.
+//! Reservations and resume attempts never reach storage. REGISTER creates the
+//! complete ownership and descriptor atomically; RESUME replaces that ownership.
+//! The runtime waits for exact commit evidence before service or REGISTERED.
+//! An authoritative read after a crash can establish commitment even when the
+//! completion or response was lost. Surviving owners keep their sessions;
+//! absent owners enter grace instead of rolling back a committed registration.
 //!
 //! Losing the owner stores the lost ownership and an absolute grace deadline.
 //! Only a restore that finds the stored owner gone derives one, so later
@@ -34,9 +32,8 @@ use super::{
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 4;
+const FORMAT: u8 = 5;
 
-const UNRESOLVED: u8 = 1;
 const PUBLISHED: u8 = 2;
 const GRACE: u8 = 3;
 const STOPPED: u8 = 4;
@@ -44,7 +41,6 @@ const STOPPING: u8 = 5;
 
 const CLEANUP_NONE: u8 = 0;
 const CLEANUP_RESERVATION: u8 = 1;
-const CLEANUP_PUBLICATION: u8 = 2;
 const CLEANUP_OWNER: u8 = 3;
 
 // Format and kind, then the relay identity and share ID every record names.
@@ -58,45 +54,18 @@ const CONNECTION_BYTES: usize = ConnectionRef::ENCODED_BYTES;
 const OPERATION_BYTES: usize = 16 + CONNECTION_BYTES + 8;
 // Epoch, then the owner connection.
 const OWNERSHIP_BYTES: usize = 8 + CONNECTION_BYTES;
-// A grace deadline beside the lost ownership keeps grace records within the
-// unresolved bound that hosts size storage from.
-const _: () = assert!(8 + OWNERSHIP_BYTES <= OPERATION_BYTES);
-
-// Instance, key hash and stop ID.
+// Grace retains the registration, deadline and lost ownership.
+const GRACE_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + 8 + OWNERSHIP_BYTES;
+// STOP with a reservation is one byte larger: both operation identities survive.
 const STOP_FACT_BYTES: usize = 16 + 16 + 16;
-// The cleanup tag and at most one publication operation keep a stopping
-// record smaller than an unresolved publication.
-const _: () = assert!(STOP_FACT_BYTES + 1 + OPERATION_BYTES <= REGISTRATION_BYTES);
+const STOPPING_BYTES: usize =
+    HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES + 1 + OPERATION_BYTES;
+const _: () = assert!(GRACE_BYTES <= STOPPING_BYTES);
 
-/// Largest encoded record, an unresolved publication; hosts may size storage
-/// columns from it.
-pub const MAX_RECORD_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + OPERATION_BYTES;
+/// Largest encoded record, a STOP retaining a reserved handshake.
+pub const MAX_RECORD_BYTES: usize = STOPPING_BYTES;
 
-/// A publication whose transaction may have committed.
-///
-/// Neither a timeout nor a restart may forget it: only reconciliation of this
-/// exact operation, ending in `PublicationResult::Aborted`, removes it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct UnresolvedPublication {
-    pub(super) id: OperationId,
-    pub(super) registration: Registration,
-}
-
-impl UnresolvedPublication {
-    /// Returns the operation whose resources and record need reconciliation.
-    #[must_use]
-    pub const fn id(&self) -> OperationId {
-        self.id
-    }
-
-    /// Returns the registration the transaction may have stored.
-    #[must_use]
-    pub const fn registration(&self) -> &Registration {
-        &self.registration
-    }
-}
-
-/// A registration the lifecycle acknowledged with REGISTERED. Every owner
+/// A durably committed registration, even if REGISTERED was lost. Every owner
 /// that resumes it serves these same facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublishedRoute {
@@ -125,7 +94,7 @@ impl PublishedRoute {
     }
 }
 
-/// A published route and the ownership that served it when last written.
+/// A committed route and the ownership entitled to serve it after confirmation.
 ///
 /// Naming the ownership lets a restore re-adopt an owner that survived, such
 /// as a hibernated socket, without writing or changing the ownership its
@@ -144,7 +113,7 @@ impl OwnedRoute {
         &self.route
     }
 
-    /// Returns the ownership that served the route.
+    /// Returns the ownership entitled to serve the route after confirmation.
     #[must_use]
     pub const fn ownership(&self) -> OwnershipId {
         self.route.ownership(self.epoch, self.owner)
@@ -244,10 +213,8 @@ impl StoppedShare {
 /// records that lifecycle outputs name. Absence means the share is vacant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Record {
-    /// Stored by the publication transaction, from `PublishRequest::record`.
-    Unresolved(UnresolvedPublication),
-    /// Replaces the unresolved record before REGISTERED, and the stored record
-    /// before every RESUME acknowledgement, from `PublishedRegistration::record`.
+    /// Committed ownership, created with its descriptor by REGISTER or replaced
+    /// by RESUME. Runtime service still waits for exact durable confirmation.
     Published(OwnedRoute),
     /// Replaces the owned record once its owner is gone, from
     /// `GraceRoute::record`; removed when the route lapses.
@@ -265,7 +232,6 @@ impl Record {
     #[must_use]
     pub const fn relay(&self) -> RelayIdentity {
         match self {
-            Self::Unresolved(unresolved) => unresolved.id.relay,
             Self::Published(owned) => owned.route.relay,
             Self::Grace(grace) => grace.route.relay,
             Self::Stopping(pending) => pending.id().relay(),
@@ -277,7 +243,6 @@ impl Record {
     #[must_use]
     pub const fn share(&self) -> ShareId {
         match self {
-            Self::Unresolved(unresolved) => unresolved.registration.route().share_id(),
             Self::Published(owned) => owned.route.registration.route().share_id(),
             Self::Grace(grace) => grace.route.registration.route().share_id(),
             Self::Stopping(pending) => pending.id().share(),
@@ -289,7 +254,6 @@ impl Record {
     #[must_use]
     pub fn encode(&self) -> EncodedRecord {
         let kind = match self {
-            Self::Unresolved(_) => UNRESOLVED,
             Self::Published(_) => PUBLISHED,
             Self::Grace(_) => GRACE,
             Self::Stopping(_) => STOPPING,
@@ -300,10 +264,6 @@ impl Record {
             .put(self.relay().as_bytes())
             .put(self.share().as_bytes());
         match self {
-            Self::Unresolved(unresolved) => {
-                put_registration(&mut out, &unresolved.registration);
-                put_operation(&mut out, unresolved.id);
-            }
             Self::Published(owned) => {
                 put_registration(&mut out, &owned.route.registration);
                 put_ownership(&mut out, owned.epoch, owned.owner);
@@ -339,13 +299,6 @@ impl Record {
         let relay = RelayIdentity::new(take(&mut body)?).ok_or(RecordError::Field)?;
         let share_id = take(&mut body)?;
         let record = match kind {
-            UNRESOLVED => {
-                let registration = read_registration(&mut body, share_id)?;
-                Self::Unresolved(UnresolvedPublication {
-                    id: read_operation(&mut body, relay, registration.route().share_id())?,
-                    registration,
-                })
-            }
             PUBLISHED => Self::Published(OwnedRoute {
                 route: read_route(&mut body, relay, share_id)?,
                 epoch: OwnershipEpoch::new(nonzero(&mut body)?),
@@ -459,13 +412,8 @@ fn put_cleanup(out: &mut Writer<MAX_RECORD_BYTES>, cleanup: StopCleanup) {
         StopCleanup::None => {
             out.put(&[CLEANUP_NONE]);
         }
-        StopCleanup::Reservation(id) | StopCleanup::Publication(id) => {
-            let kind = if matches!(cleanup, StopCleanup::Reservation(_)) {
-                CLEANUP_RESERVATION
-            } else {
-                CLEANUP_PUBLICATION
-            };
-            out.put(&[kind]);
+        StopCleanup::Reservation(id) => {
+            out.put(&[CLEANUP_RESERVATION]);
             put_operation(out, id);
         }
         StopCleanup::Owner(owner) => {
@@ -497,9 +445,6 @@ fn read_cleanup(
     match take::<1>(body)?[0] {
         CLEANUP_NONE => Ok(StopCleanup::None),
         CLEANUP_RESERVATION => Ok(StopCleanup::Reservation(read_operation(
-            body, relay, share,
-        )?)),
-        CLEANUP_PUBLICATION => Ok(StopCleanup::Publication(read_operation(
             body, relay, share,
         )?)),
         CLEANUP_OWNER => Ok(StopCleanup::Owner(read_connection(body)?)),

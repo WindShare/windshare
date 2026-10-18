@@ -79,20 +79,18 @@ fn final_record_restores_stopped_even_when_its_commit_callback_was_lost() {
 }
 
 #[test]
-fn stored_stop_preserves_publication_identity_and_cannot_restore_with_either_old_incarnation() {
+fn stored_stop_preserves_reserved_handshake_and_rejects_both_old_incarnations() {
     let fixture = Fixture::new();
     let mut original = fixture.engine();
-    let publication = fixture.publish(&mut original);
-    // A new incarnation first reconciles the unknown publication, then STOP
-    // adopts its exact cleanup obligation without erasing the old operation.
-    let (mut reconciler, _) = fixture
-        .restore(Some(publication.record()), restarted())
-        .unwrap();
-    let work = stop(&fixture, &mut reconciler, fixture.at);
-    let pending = work.pending();
-    assert_ne!(pending.id().incarnation(), publication.id.incarnation());
-    assert_eq!(pending.cleanup(), StopCleanup::Publication(publication.id));
-    for incarnation in [pending.id().incarnation(), publication.id.incarnation()] {
+    let reservation = fixture.reserve(&mut original, connection(1, 1), fixture.at);
+    let mut pending = stop(&fixture, &mut original, fixture.at).pending();
+    // A restored handshake may carry an older identity than the STOP operation.
+    pending.id.incarnation = restarted();
+    assert_eq!(
+        pending.cleanup(),
+        StopCleanup::Reservation(reservation.id())
+    );
+    for incarnation in [pending.id().incarnation(), reservation.id().incarnation()] {
         assert_eq!(
             fixture.restore(Some(pending.record()), incarnation).err(),
             Some(RestoreError::ReusedIncarnation)
@@ -104,13 +102,7 @@ fn stored_stop_preserves_publication_identity_and_cannot_restore_with_either_old
     assert_eq!(action, Action::Stop(StopWork::Retire(pending)));
     assert_eq!(
         engine
-            .handle(
-                Event::PublicationFinished {
-                    id: publication.id,
-                    result: PublicationResult::Aborted,
-                },
-                fixture.at
-            )
+            .handle(Event::OwnershipCommitted(reservation.id()), fixture.at)
             .action,
         Action::Refused(Refusal::StaleOperation)
     );
@@ -185,7 +177,6 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
         registration.registration().descriptor_digest(),
         registration.registration().resume_token_hash(),
     );
-    let publication = fixture.publish(&mut fixture.engine()).id;
     let published = fixture.register(&mut fixture.engine());
     let route = PublishedRoute {
         relay: fixture.relay(),
@@ -203,10 +194,6 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
             owner,
             fixture.at.saturating_add(SENDER_GRACE),
         )),
-        Record::Unresolved(UnresolvedPublication {
-            id: publication,
-            registration: other,
-        }),
     ] {
         let (mut engine, _) = fixture.restore(Some(stored), restarted()).unwrap();
         let before = engine.phase();

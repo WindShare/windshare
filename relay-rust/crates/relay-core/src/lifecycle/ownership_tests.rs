@@ -396,7 +396,7 @@ fn resume_admission_refuses_before_a_challenge_when_it_can_never_commit() {
         begin(&mut engine, fixture.resume_init()),
         Action::Refused(Refusal::Starting)
     );
-    let Action::Publish(request) = engine
+    let Action::Register(_request) = engine
         .handle(
             Event::Publish(fixture.authenticate(reservation)),
             fixture.at,
@@ -413,19 +413,6 @@ fn resume_admission_refuses_before_a_challenge_when_it_can_never_commit() {
         begin(&mut engine, fixture.resume_init()),
         Action::Refused(Refusal::Starting)
     );
-    let uncertain = Event::PublicationFinished {
-        id: request.id,
-        result: PublicationResult::Uncertain,
-    };
-    assert_eq!(
-        engine.handle(uncertain, fixture.at).action,
-        Action::Reconcile(request.id)
-    );
-    assert_eq!(
-        begin(&mut engine, fixture.resume_init()),
-        Action::Refused(Refusal::PublicationUncertain)
-    );
-
     // Another registration's route or a stopped instance never resumes.
     let mut engine = fixture.engine();
     fixture.register(&mut engine);

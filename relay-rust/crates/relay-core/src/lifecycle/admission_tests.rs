@@ -248,10 +248,6 @@ fn only_peer_refusals_have_wire_responses() {
         (Refusal::InvalidReceiver, Some(ErrorFrame::Malformed)),
         (Refusal::Occupied, Some(ErrorFrame::AlreadyRegistered)),
         (
-            Refusal::PublicationUncertain,
-            Some(ErrorFrame::Admission(retry)),
-        ),
-        (
             Refusal::SequenceExhausted,
             Some(ErrorFrame::Admission(retry)),
         ),

@@ -11,10 +11,8 @@ fn durable_transactions_replay_without_overwriting_other_authority() {
     let database = Database::open(&path, identity.relay).unwrap();
     assert!(Database::open(&path, identity.relay).is_err());
     assert!(database.load(identity.share).unwrap().is_none());
-    for work in &works[..2] {
-        database.execute(identity.share, work).unwrap();
-        database.execute(identity.share, work).unwrap();
-    }
+    database.execute(identity.share, &works[0]).unwrap();
+    database.execute(identity.share, &works[0]).unwrap();
     assert!(matches!(
         database.load(identity.share).unwrap(),
         Some(Record::Published(_))
@@ -28,21 +26,12 @@ fn durable_transactions_replay_without_overwriting_other_authority() {
         database.recoverable_records(10).unwrap().as_slice(),
         [Record::Published(_)]
     ));
-    for work in &works[2..] {
+    for work in &works[1..] {
         database.execute(identity.share, work).unwrap();
         database.execute(identity.share, work).unwrap();
     }
     assert!(database.execute(identity.share, &works[0]).is_err());
     assert!(database.execute(identity.share, &works[1]).is_err());
-    let Storage::Publish { record, .. } = &works[0] else {
-        panic!()
-    };
-    let Record::Unresolved(record) = **record else {
-        panic!()
-    };
-    database
-        .execute(identity.share, &Storage::RemovePublication(record.id()))
-        .unwrap();
     drop(database);
 
     let database = Database::open(&path, identity.relay).unwrap();
@@ -52,46 +41,74 @@ fn durable_transactions_replay_without_overwriting_other_authority() {
     ));
     let connection = database.0.connection.lock().unwrap();
     let empty: bool = connection
-        .query_row(
-            "SELECT descriptor IS NULL AND publication IS NULL FROM shares",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT descriptor IS NULL FROM shares", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     drop(connection);
     assert!(empty);
 }
 
 #[test]
-fn publication_cleanup_is_operation_scoped_and_atomic() {
+fn registration_rollback_leaves_no_partial_row_and_retry_commits_the_complete_authority() {
     let fixture = Fixture::new();
     let identity = fixture.identity();
     let directory = tempfile::tempdir().unwrap();
     let database =
         Database::open(&directory.path().join("authority.sqlite"), identity.relay).unwrap();
     let works = fixture.works();
-    let Storage::Publish { record, .. } = &works[0] else {
-        panic!()
+    let Storage::Register {
+        ownership,
+        descriptor,
+    } = &works[0]
+    else {
+        panic!("registration");
     };
-    let Record::Unresolved(unresolved) = **record else {
-        panic!()
-    };
-    database.execute(identity.share, &works[0]).unwrap();
-    let remove = Storage::RemovePublication(unresolved.id());
-    database.execute(identity.share, &remove).unwrap();
-    database.execute(identity.share, &remove).unwrap();
+    database.0.connection.lock().unwrap().execute_batch(
+        "CREATE TRIGGER fail_registration AFTER INSERT ON shares BEGIN SELECT RAISE(ABORT, 'injected'); END;"
+    ).unwrap();
+    assert!(database.execute(identity.share, &works[0]).is_err());
     assert!(database.load(identity.share).unwrap().is_none());
-
+    database
+        .0
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_registration")
+        .unwrap();
     database.execute(identity.share, &works[0]).unwrap();
-    database.execute(identity.share, &works[1]).unwrap();
-    assert!(database.execute(identity.share, &remove).is_err());
-    database.execute(identity.share, &works[2]).unwrap();
-    database.execute(identity.share, &remove).unwrap();
-    assert!(matches!(
-        database.load(identity.share).unwrap(),
-        Some(Record::Stopping(_))
-    ));
-    database.execute(identity.share, &works[3]).unwrap();
+    database.execute(identity.share, &works[0]).unwrap();
+    let stored = read(
+        &database.0.connection.lock().unwrap(),
+        identity.relay,
+        identity.share,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(stored.record(), Record::Published(**ownership));
+    assert_eq!(stored.descriptor(), Some(descriptor.as_slice()));
+    let mut corrupt = descriptor.clone();
+    corrupt[0] ^= 1;
+    assert!(
+        database
+            .execute(
+                identity.share,
+                &Storage::Register {
+                    ownership: ownership.clone(),
+                    descriptor: corrupt,
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(
+        read(
+            &database.0.connection.lock().unwrap(),
+            identity.relay,
+            identity.share
+        )
+        .unwrap(),
+        Some(stored)
+    );
 }
 
 #[test]

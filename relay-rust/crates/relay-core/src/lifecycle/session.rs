@@ -92,9 +92,7 @@ impl<O: Observer> ShareLifecycle<O> {
             State::Activating(_) | State::Published(_) => RetirementReason::OwnerReplaced,
             State::Grace(_) => RetirementReason::OwnerDisconnected,
             State::Stopping(_) | State::Stopped(_) => RetirementReason::Stopped,
-            State::Vacant | State::Reserved(_) | State::Publishing(_) | State::Fenced(_) => {
-                RetirementReason::OwnerUnavailable
-            }
+            State::Vacant | State::Reserved(_) => RetirementReason::OwnerUnavailable,
         }
     }
 }

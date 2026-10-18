@@ -9,7 +9,7 @@ use windshare_relay_core::{
     lifecycle::{ConnectionRef, Incarnation},
     registration::RegisterInit,
     sessions::OpaqueHeader,
-    share::{CheckpointBudget, Identity, Limits},
+    share::{AttemptRate, CheckpointBudget, HandshakeLimits, Identity, Limits},
 };
 
 pub const SENDER: u64 = 1;
@@ -19,6 +19,10 @@ pub const WINDOW_FRAMES: u64 = 8;
 pub const ATTACHMENT_BYTES: usize = 16_384;
 pub const ENVELOPE_BYTES: usize = 512;
 const CONNECTION_LIMIT: usize = 3;
+const HANDSHAKE_LIMIT: usize = 3;
+// Frozen fixture time must allow setup and replacement attempts without replenishment.
+const ATTEMPT_BURST: u32 = 64;
+const ATTEMPT_REFILL: Duration = Duration::from_millis(100);
 const RETIRED_GENERATIONS: usize = 2;
 const SESSION_LIMIT: usize = 2;
 const CONNECTION_FRAMES: u64 = 16;
@@ -91,11 +95,11 @@ pub fn limits() -> Limits {
         |frames| Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES));
     Limits {
         business_connections: CONNECTION_LIMIT,
-        handshakes: windshare_relay_core::share::HandshakeLimits {
-            concurrent: CONNECTION_LIMIT,
-            attempts: windshare_relay_core::share::AttemptRate {
-                burst: 64,
-                refill: Duration::from_millis(100),
+        handshakes: HandshakeLimits {
+            concurrent: HANDSHAKE_LIMIT,
+            attempts: AttemptRate {
+                burst: ATTEMPT_BURST,
+                refill: ATTEMPT_REFILL,
             },
         },
         sessions: SESSION_LIMIT,
