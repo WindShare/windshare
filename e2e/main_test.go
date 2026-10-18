@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"debug/buildinfo"
 	"errors"
 	"fmt"
@@ -10,6 +11,9 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/windshare/windshare/internal/testrelaynative"
 )
 
 type e2eBuildProfile string
@@ -17,6 +21,7 @@ type e2eBuildProfile string
 const (
 	goExecutableEnvironment                 = "WINDSHARE_GO_EXECUTABLE"
 	goWorkspaceEnvironment                  = "GOWORK"
+	e2eRelayBuildTimeout                    = 5 * time.Minute
 	e2eBuildProfilePlain    e2eBuildProfile = "plain"
 	e2eBuildProfileRace     e2eBuildProfile = "race"
 )
@@ -139,8 +144,10 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 			return e2eBinaries{}, fmt.Errorf("build %s with %s profile: %w\n%s", target.packageID, profile, err, output)
 		}
 	}
-	relay := filepath.Join(outDir, exeName(e2eNativeRelayBinary))
-	if err := buildE2ENativeRelay(relay); err != nil {
+	buildContext, cancelBuild := context.WithTimeout(context.Background(), e2eRelayBuildTimeout)
+	defer cancelBuild()
+	relay, err := testrelaynative.Build(buildContext, repoRoot(), outDir)
+	if err != nil {
 		return e2eBinaries{}, err
 	}
 	return e2eBinaries{
