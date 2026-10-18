@@ -53,6 +53,7 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		assertWriteMagic(t, socket, "WS2U")
 
 		sessionID := relaySessionID(1)
+		grantReceiverCredit(t, socket, sessionID, v2.SenderWindowFrames, v2.SenderWindowBytes)
 		route, _ := (v2.OpaqueRoute{RelaySessionID: sessionID, Ciphertext: []byte("incoming")}).MarshalBinary()
 		socket.respond(route)
 		channel, err := sender.Accept(context.Background())
@@ -125,7 +126,6 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 			t.Fatal("default receiver unexpectedly enabled lifecycle observations")
 		}
 		assertWriteMagic(t, socket, "WS2J")
-		assertWriteMagic(t, socket, v2.ReceiveCreditMagic)
 		if err := receiver.Channel().Send(context.Background(), []byte("request")); err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +219,7 @@ func TestClientErrorsAndQueueBounds(t *testing.T) {
 
 	linkContext := t.Context()
 	blocked := newScriptedSocket()
-	l := newLink(linkContext, blocked, false)
+	l := newTestLink(linkContext, blocked, false)
 	id := relaySessionID(5)
 	boundedChannel := newChannel(id, l)
 	l.channels[id] = boundedChannel
@@ -240,11 +240,11 @@ func TestClientErrorsAndQueueBounds(t *testing.T) {
 
 	channel := newChannel(relaySessionID(6), l)
 	for range channelReceiveFrames {
-		if !channel.deliver([]byte{1}) {
+		if err := channel.deliver([]byte{1}); err != nil {
 			t.Fatal("receive queue filled early")
 		}
 	}
-	if channel.deliver([]byte{2}) {
+	if err := channel.deliver([]byte{2}); err == nil {
 		t.Fatal("receive queue exceeded bound")
 	}
 	l.failChannel(channel, LifecycleRetirementIngressFailure, ErrIngressOverflow)
@@ -252,7 +252,7 @@ func TestClientErrorsAndQueueBounds(t *testing.T) {
 		t.Fatalf("channel close reason = %v", channel.Err())
 	}
 
-	fixed := newLink(context.Background(), newScriptedSocket(), true)
+	fixed := newTestLink(context.Background(), newScriptedSocket(), true)
 	if created, ok := fixed.channel(relaySessionID(7)); created != nil || ok {
 		t.Fatal("fixed receiver accepted an unknown session")
 	}
@@ -264,13 +264,13 @@ func TestClientErrorsAndQueueBounds(t *testing.T) {
 
 func TestSessionRetiredControlClosesOnlyExactChannelAndIsIdempotent(t *testing.T) {
 	socket := newScriptedSocket()
-	l := newLink(context.Background(), socket, false)
-	old := l.installFixed(relaySessionID(21))
-	sibling := l.installFixed(relaySessionID(22))
+	l := newTestLink(context.Background(), socket, false)
+	old := installGrantedChannel(l, relaySessionID(21))
+	sibling := installGrantedChannel(l, relaySessionID(22))
 	l.start()
 	defer l.stop(nil)
 
-	retired, _ := (v2.SessionRetired{RelaySessionID: old.id}).MarshalBinary()
+	retired, _ := (v2.SettlementNotice{RelaySessionID: old.id}).MarshalBinary()
 	socket.respond(retired)
 	select {
 	case _, open := <-old.Recv():
@@ -288,13 +288,13 @@ func TestSessionRetiredControlClosesOnlyExactChannelAndIsIdempotent(t *testing.T
 	// terminal no-ops; none may disturb a healthy sibling.
 	socket.respond(retired)
 	unknownID := relaySessionID(23)
-	unknown, _ := (v2.SessionRetired{RelaySessionID: unknownID}).MarshalBinary()
+	unknown, _ := (v2.SettlementNotice{RelaySessionID: unknownID}).MarshalBinary()
 	socket.respond(unknown)
-	locallyClosed := l.installFixed(relaySessionID(24))
+	locallyClosed := installGrantedChannel(l, relaySessionID(24))
 	if err := locallyClosed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	closedControl, _ := (v2.SessionRetired{RelaySessionID: locallyClosed.id}).MarshalBinary()
+	closedControl, _ := (v2.SettlementNotice{RelaySessionID: locallyClosed.id}).MarshalBinary()
 	socket.respond(closedControl)
 	siblingRoute, _ := (v2.OpaqueRoute{
 		RelaySessionID: sibling.id, Ciphertext: []byte("healthy-after-retirement"),
@@ -333,8 +333,8 @@ func TestSessionRetiredControlClosesOnlyExactChannelAndIsIdempotent(t *testing.T
 }
 
 func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing.T) {
-	l := newLink(context.Background(), newScriptedSocket(), false)
-	channel := l.installFixed(relaySessionID(9))
+	l := newTestLink(context.Background(), newScriptedSocket(), false)
+	channel := installGrantedChannel(l, relaySessionID(9))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sendDone := make(chan error, 1)
@@ -374,8 +374,8 @@ func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing
 		t.Fatalf("send after natural close = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 	}
 
-	acceptedLink := newLink(context.Background(), newScriptedSocket(), false)
-	acceptedChannel := acceptedLink.installFixed(relaySessionID(10))
+	acceptedLink := newTestLink(context.Background(), newScriptedSocket(), false)
+	acceptedChannel := installGrantedChannel(acceptedLink, relaySessionID(10))
 	acceptedDone := make(chan error, 1)
 	go func() {
 		acceptedDone <- acceptedChannel.Send(context.Background(), framechannel.Frame("accepted"))
@@ -387,8 +387,8 @@ func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing
 		framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
 		t.Fatalf("post-admission link failure = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 	}
-	failedLink := newLink(context.Background(), newScriptedSocket(), false)
-	failedChannel := failedLink.installFixed(relaySessionID(11))
+	failedLink := newTestLink(context.Background(), newScriptedSocket(), false)
+	failedChannel := installGrantedChannel(failedLink, relaySessionID(11))
 	linkErr := errors.New("link failed before admission")
 	failedLink.stop(linkErr)
 	if err := failedChannel.Send(context.Background(), framechannel.Frame("after-failure")); !errors.Is(err, linkErr) || framechannel.SendDispositionOf(err) != framechannel.SendRejected {
@@ -398,8 +398,8 @@ func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing
 
 func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByClose(t *testing.T) {
 	t.Run("pre-admission rejection keeps channel open", func(t *testing.T) {
-		link := newLink(context.Background(), newScriptedSocket(), false)
-		channel := link.installFixed(relaySessionID(12))
+		link := newTestLink(context.Background(), newScriptedSocket(), false)
+		channel := installGrantedChannel(link, relaySessionID(12))
 		if err := channel.SendTerminal(context.Background(), nil); !errors.Is(err, ErrFrameBounds) ||
 			framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 			t.Fatalf("invalid terminal = %v disposition=%d", err, framechannel.SendDispositionOf(err))
@@ -434,8 +434,8 @@ func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByC
 
 	t.Run("admitted terminal owns close ordering", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			link := newLink(context.Background(), newScriptedSocket(), false)
-			channel := link.installFixed(relaySessionID(13))
+			link := newTestLink(context.Background(), newScriptedSocket(), false)
+			channel := installGrantedChannel(link, relaySessionID(13))
 			terminalResult := make(chan error, 1)
 			go func() {
 				terminalResult <- channel.SendTerminal(context.Background(), framechannel.Frame("terminal"))
@@ -470,11 +470,11 @@ func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByC
 
 func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 	t.Run("published reservation wins before queue insertion", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleTerminalReserved, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(31))
+		channel := installGrantedChannel(link, relaySessionID(31))
 
 		terminalResult := make(chan error, 1)
 		go func() {
@@ -517,11 +517,11 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 	})
 
 	t.Run("close winner rejects a later terminal as retired", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleRetired, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(32))
+		channel := installGrantedChannel(link, relaySessionID(32))
 
 		closeResult := make(chan error, 1)
 		go func() { closeResult <- channel.Close() }()
@@ -543,8 +543,8 @@ func TestRelayCloseAndTerminalReservationHaveOneLinearization(t *testing.T) {
 
 func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	t.Run("earlier natural channel retirement survives later link failure", func(t *testing.T) {
-		link := newLink(context.Background(), newScriptedSocket(), false)
-		channel := link.installFixed(relaySessionID(33))
+		link := newTestLink(context.Background(), newScriptedSocket(), false)
+		channel := installGrantedChannel(link, relaySessionID(33))
 		if err := channel.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -565,11 +565,11 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	})
 
 	t.Run("deferred natural retirement keeps identity while later failure drains exactly", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleSendAdmitted, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(37))
+		channel := installGrantedChannel(link, relaySessionID(37))
 
 		terminalResult := make(chan error, 1)
 		go func() {
@@ -595,8 +595,8 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	})
 
 	t.Run("earlier natural link retirement survives later link failure", func(t *testing.T) {
-		link := newLink(context.Background(), newScriptedSocket(), false)
-		channel := link.installFixed(relaySessionID(38))
+		link := newTestLink(context.Background(), newScriptedSocket(), false)
+		channel := installGrantedChannel(link, relaySessionID(38))
 		link.stop(nil)
 		link.stop(errors.New("failure after link close"))
 		if link.Err() != nil || channel.Err() != nil {
@@ -609,11 +609,11 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 	})
 
 	t.Run("published link failure wins before local close and drains its exact cause", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleLinkRetiring, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(34))
+		channel := installGrantedChannel(link, relaySessionID(34))
 
 		sendResult := make(chan error, 1)
 		go func() {
@@ -653,11 +653,11 @@ func TestRelayRetirementCauseIsMonotonicAcrossLinkAndChannel(t *testing.T) {
 
 func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 	t.Run("completed cancellation wins before natural retirement admission", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleTerminalReserved, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(35))
+		channel := installGrantedChannel(link, relaySessionID(35))
 		ctx, cancel := context.WithCancel(context.Background())
 
 		request, err := channel.prepareSend(ctx, framechannel.Frame("terminal"), true)
@@ -689,11 +689,11 @@ func TestRelayCancellationAndAdmissionHaveOneLinearization(t *testing.T) {
 	})
 
 	t.Run("irreversible admission keeps later cancellation accepted", func(t *testing.T) {
-		link := newLinkWithLifecycleStream(
+		link := newTestLinkWithLifecycleStream(
 			context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
 		)
 		gate := newLifecycleStageGate(LifecycleSendAdmitted, link.lifecycleTrace())
-		channel := link.installFixed(relaySessionID(36))
+		channel := installGrantedChannel(link, relaySessionID(36))
 		ctx, cancel := context.WithCancel(context.Background())
 
 		terminalResult := make(chan error, 1)

@@ -21,6 +21,9 @@ type DialOptions struct {
 	HTTPClient *http.Client
 	Header     http.Header
 	Heartbeat  HeartbeatConfig
+	// ReceiveCapacity is shared by every session on this physical connection.
+	// Zero selects the native default; partial declarations are invalid.
+	ReceiveCapacity v2.ReceiveCapacity
 	// LifecycleObservationCapacity enables a producer-owned bounded stream.
 	// Zero disables lifecycle observation without allocating producer work.
 	LifecycleObservationCapacity int
@@ -71,6 +74,11 @@ type SenderConnection struct {
 }
 
 func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, error) {
+	capacity, err := normalizeReceiveCapacity(config.Dial.ReceiveCapacity)
+	if err != nil {
+		return nil, err
+	}
+	config.Dial.ReceiveCapacity = capacity
 	if config.Dial.LifecycleObservationCapacity < 0 {
 		return nil, ErrLifecycleObservationCapacity
 	}
@@ -98,7 +106,8 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 		_ = socket.Close(websocket.StatusProtocolError, "")
 		return nil, cause
 	}
-	initBytes, _ := config.Init.MarshalBinary()
+	init := v2.DeliveryRegisterInit{Registration: config.Init, ReceiveCapacity: capacity}
+	initBytes, _ := init.MarshalBinary()
 	if err := writeRegistration(ctx, socket, initBytes, &stats); err != nil {
 		return fail(err)
 	}
@@ -122,7 +131,7 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 	if err != nil {
 		return fail(ErrProtocol)
 	}
-	proof, err := v2.NewRegisterProof(config.Init, challenge, endpoint.Identity, config.SenderPrivateKey)
+	proof, err := v2.NewDeliveryRegisterProof(init, challenge, endpoint.Identity, config.SenderPrivateKey)
 	if err != nil {
 		return fail(err)
 	}
@@ -152,10 +161,10 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 		return fail(ErrProtocol)
 	}
 	socket.SetReadLimit(v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes)
-	link := newLinkWithLifecycleStream(
-		context.Background(), socket, false, config.Dial.LifecycleObservationCapacity,
-	)
-	link.heartbeat = config.Dial.Heartbeat
+	link, err := newLink(context.Background(), socket, false, config.Dial)
+	if err != nil {
+		return fail(err)
+	}
 	link.start()
 	return &SenderConnection{endpoint: endpoint, link: link, stats: stats}, nil
 }
@@ -223,6 +232,11 @@ type ReceiverConnection struct {
 }
 
 func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnection, error) {
+	capacity, err := normalizeReceiveCapacity(config.Dial.ReceiveCapacity)
+	if err != nil {
+		return nil, err
+	}
+	config.Dial.ReceiveCapacity = capacity
 	if config.Dial.LifecycleObservationCapacity < 0 {
 		return nil, ErrLifecycleObservationCapacity
 	}
@@ -233,7 +247,7 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 	if err != nil {
 		return nil, errors.Join(ErrProtocol, err)
 	}
-	joinBytes, err := (v2.Join{ShareID: config.ShareID}).MarshalBinary()
+	joinBytes, err := (v2.DeliveryJoin{ShareID: config.ShareID, ReceiveCapacity: capacity}).MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
@@ -264,11 +278,15 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 		return fail(ErrProtocol)
 	}
 	socket.SetReadLimit(v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes)
-	link := newLinkWithLifecycleStream(
-		context.Background(), socket, true, config.Dial.LifecycleObservationCapacity,
-	)
+	link, err := newLink(context.Background(), socket, true, config.Dial)
+	if err != nil {
+		return fail(err)
+	}
 	channel := link.installFixed(delivery.RelaySessionID)
-	link.heartbeat = config.Dial.Heartbeat
+	if channel == nil {
+		link.cancel()
+		return fail(ErrProtocol)
+	}
 	link.start()
 	return &ReceiverConnection{
 		endpoint: endpoint, descriptor: append([]byte(nil), delivery.Object...), channel: channel, link: link,

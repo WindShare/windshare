@@ -1,11 +1,11 @@
 # Relay delivery flow contract
 
-The Rust native host and its Go-codec process scenario exercise capacity-carrying
-handshakes, cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). The production
-Go/browser runtime cutover remains pending: those connections still use capacity-less
-handshakes and 24-byte receive-credit deltas. Mode is never inferred from frame
-length or shifted between meanings. Staged entry points: Go
-`DeliveryRegisterInit`/`DeliveryJoin`, browser `delivery-handshake-codec.ts`.
+The Go `relayv2` runtime and Rust hosts use capacity-carrying handshakes,
+cumulative `WS2B` and final settlement (`WS2N`/`WS2S`). The native process scenario
+uses real `DialSender`/`DialReceiver`/`Channel` APIs. Browser activation and the
+default server/build cutover remain pending; the legacy Go server and browser
+still use capacity-less handshakes and 24-byte receive-credit deltas and cannot
+interoperate with the new Go runtime. There is no wire-format fallback.
 
 Capacity is declared per direction at admission and consumed by per-grant
 allowances. Admission reserves both startup allowances before granting either, so
@@ -36,6 +36,13 @@ tail. Hosts serialize ledger access, retain payloads with receipts, flush sparse
 consumption before a bounded deadline, and send ordered controls outside content
 credit; delayed callbacks keep their session token.
 
+Go takes its immutable declaration and ledger capacity from
+`DialOptions.ReceiveCapacity` (default: 256 frames / 16 MiB per connection).
+Both roles wait for explicit `WS2W`, account full envelopes before retaining
+payloads, and flush partial consumption within 10 ms when the writer is available.
+Remote retirement drains accepted frames; owner close discards and joins their
+workers. Retired flows retain accounting until the ordered writer issues `WS2S`.
+
 ## Initial receive capacity
 
 `WS2R` (REGISTER, RESUME) and `WS2J` append two unsigned network-order u64
@@ -61,6 +68,12 @@ grants also obey protected-startup and ordinary-pool limits. If either direction
 cannot fund the configured startup grant, admission rolls back both and emits
 neither grant nor descriptor; a capacity below one startup grant is valid but
 cannot admit.
+
+The protected startup pool is capped inside that effective capacity, leaving at
+least one startup grant's capacity for ordinary replenishment when it fits.
+This prevents existing flows from spending a smaller declaration's startup reserve
+without deadlocking a single-window peer. Checkpoint restoration enforces the
+same partition. Concurrent full windows still require sufficient shared capacity.
 
 ## Cumulative `WS2B`
 

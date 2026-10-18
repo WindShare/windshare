@@ -128,17 +128,9 @@ func (l *link) closeChannelLocked(
 	stored := record
 	channel.retirement = &stored
 	channel.pendingNatural = nil
-	if channel.incoming == nil {
-		close(channel.recv)
-	} else {
-		close(channel.incoming)
-		if record.source == LifecycleRetirementLocalClose || record.source == LifecycleRetirementLinkClose {
-			channel.stopReceiving()
-		}
-	}
-	if l.channels[channel.id] == channel {
-		delete(l.channels, channel.id)
-	}
+	l.receives.retire(channel.receive, record.source == LifecycleRetirementLocalClose ||
+		record.source == LifecycleRetirementLinkClose || record.source == LifecycleRetirementTerminal ||
+		record.source == LifecycleRetirementIngressFailure)
 	l.drainQueueLocked(channel.id, consequence.sendError())
 	return retirementTransition{
 		applied: true, record: record, consequence: consequence,
@@ -194,13 +186,11 @@ func (l *link) settleTerminal(
 }
 
 type Channel struct {
-	id               v2.RelaySessionID
-	link             *link
-	recv             chan framechannel.Frame
-	incoming         chan framechannel.Frame
-	receiveAbort     chan struct{}
-	receiveDone      chan struct{}
-	receiveAbortOnce sync.Once
+	id        v2.RelaySessionID
+	link      *link
+	recv      chan framechannel.Frame
+	receive   *receiveFlow
+	announced bool
 
 	mu             sync.Mutex
 	state          framechannel.ChannelState
@@ -210,10 +200,11 @@ type Channel struct {
 }
 
 func newChannel(id v2.RelaySessionID, link *link) *Channel {
-	if link.fixed {
-		return newReceiverChannel(id, link)
+	receive, err := link.receives.open(id)
+	if err != nil {
+		return nil
 	}
-	return &Channel{id: id, link: link, recv: make(chan framechannel.Frame, channelReceiveFrames), state: framechannel.Open}
+	return &Channel{id: id, link: link, recv: receive.recv, receive: receive, state: framechannel.Open}
 }
 
 func (c *Channel) RelaySessionID() v2.RelaySessionID { return c.id }
@@ -344,25 +335,6 @@ func (c *Channel) Close() error {
 	if done != nil {
 		<-done
 	}
-	if c.receiveDone != nil {
-		<-c.receiveDone
-	}
+	<-c.receive.done
 	return nil
-}
-
-func (c *Channel) deliver(frame []byte) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.state != framechannel.Open {
-		return false
-	}
-	if c.incoming != nil {
-		return c.deliverReceived(frame)
-	}
-	select {
-	case c.recv <- bytes.Clone(frame):
-		return true
-	default:
-		return false
-	}
 }

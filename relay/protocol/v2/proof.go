@@ -52,6 +52,13 @@ func NewRegisterProof(init RegisterInit, challenge Challenge, relayIdentity Rela
 	if err != nil {
 		return RegisterProof{}, err
 	}
+	return signRegisterProof(init, preimage, senderPrivateKey)
+}
+
+func signRegisterProof(init RegisterInit, preimage []byte, senderPrivateKey ed25519.PrivateKey) (RegisterProof, error) {
+	if len(senderPrivateKey) != ed25519.PrivateKeySize {
+		return RegisterProof{}, ErrProof
+	}
 	publicKey := senderPrivateKey.Public().(ed25519.PublicKey)
 	hash, err := senderKeyHash(publicKey)
 	if err != nil || subtle.ConstantTimeCompare(hash[:], init.PKHash[:]) != 1 {

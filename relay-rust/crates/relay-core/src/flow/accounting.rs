@@ -180,8 +180,4 @@ impl Limits {
     pub const fn startup_grant(self) -> Counts {
         self.startup_grant
     }
-
-    pub(super) const fn regular(self) -> Counts {
-        self.total.sub(self.startup_reserve)
-    }
 }

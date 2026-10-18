@@ -120,6 +120,51 @@ fn unused_startup_bytes_do_not_block_admission_when_ordinary_capacity_is_free() 
 }
 
 #[test]
+fn smaller_declarations_protect_startup_capacity_through_restore() {
+    let fixture = Fixture::new();
+    let mut engine = fixture.engine();
+    let published = fixture.register(&mut engine);
+    let destination = published.owner.connection();
+    let mut ledger = ConnectionLedger::new(
+        fixture.relay(),
+        destination,
+        limits(),
+        3,
+        FlowTrace::default(),
+    )
+    .unwrap();
+    ledger
+        .declare_capacity(
+            flow::ReceiveCapacity::new(4, 4 * MAX_FRAME).unwrap(),
+            fixture.at,
+        )
+        .unwrap();
+    let first = join(&fixture, &mut engine, connection(2, 1), 2, fixture.at);
+    let route = first
+        .check_route(&engine, Direction::ToSender, fixture.at)
+        .unwrap();
+    let flow = ledger.open(&route, fixture.at).unwrap().flow;
+    let credit = ledger.window_credit(flow, counts(8)).unwrap();
+    assert_eq!(credit, counts(2));
+    let _ = ledger.grant(flow, &route, credit, fixture.at).unwrap();
+    assert_eq!(ledger.window_credit(flow, counts(8)), Some(Counts::ZERO));
+    let mut ledger = restore_ledger(&fixture, destination, &ledger);
+    assert_eq!(
+        ledger.grant(flow, &route, counts(1), fixture.at),
+        Err(FlowRefusal::DeliveryCapacity)
+    );
+    let second = join(&fixture, &mut engine, connection(3, 1), 3, fixture.at);
+    open(
+        &mut ledger,
+        &engine,
+        &second,
+        Direction::ToSender,
+        fixture.at,
+    );
+    assert_eq!(ledger.usage().total(), counts(4));
+}
+
+#[test]
 fn metadata_capacity_is_bounded_independently_of_available_delivery_memory() {
     let fixture = Fixture::new();
     let mut engine = fixture.engine();
