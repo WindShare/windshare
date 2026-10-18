@@ -97,6 +97,6 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 | Catalog and content | `core/catalog`, `core/content`, `core/session/{catalogflow,contentflow}` | `web/src/catalog`, `web/src/content` |
 | Session, envelope, lanes | `core/session/protocolsession`, `core/session/sessionruntime` | `web/src/session` |
 | Direct-path signaling | `connectivity/v2signal` | `web/src/connectivity` |
-| Relay protocol | `relay/protocol/v2`, `relay/signaling`, `transport/relayv2` | `web/src/transport` |
+| Relay protocol | `relay/protocol/v2`, `relay-rust/crates/relay-core`, `transport/relayv2` | `web/src/transport` |
 
 The Rust relay kernel is `relay-rust/crates/relay-core`, and `make vectors` checks the shared vectors. Security boundaries are in the [threat model](威胁模型.md).

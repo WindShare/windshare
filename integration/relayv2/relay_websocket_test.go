@@ -48,9 +48,10 @@ const (
 var relayDescriptorPlaintext = []byte{0xa1, 0x00, 0x01}
 
 type relayProtocolFixture struct {
-	init       v2.RegisterInit
-	descriptor []byte
-	privateKey ed25519.PrivateKey
+	init        v2.RegisterInit
+	descriptor  []byte
+	privateKey  ed25519.PrivateKey
+	resumeToken v2.ResumeToken
 }
 
 type relayPeerContext struct {
@@ -327,7 +328,7 @@ func newRelayProtocolFixture() (relayProtocolFixture, error) {
 	if err != nil {
 		return relayProtocolFixture{}, fmt.Errorf("create fresh relay registration: %w", err)
 	}
-	return relayProtocolFixture{init: init, descriptor: descriptor, privateKey: privateKey}, nil
+	return relayProtocolFixture{init: init, descriptor: descriptor, privateKey: privateKey, resumeToken: resumeToken}, nil
 }
 
 func closeRelayConnection(name string, connection relayConnectionOwner) error {

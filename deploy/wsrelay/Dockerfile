@@ -1,18 +1,16 @@
-FROM golang:1.26.5 AS build
+FROM rust:1-alpine AS build
+RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
-COPY go.mod go.sum ./
-COPY third_party ./third_party
-RUN go mod download
-COPY internal ./internal
-COPY relay ./relay
-RUN CGO_ENABLED=0 go build -trimpath -o /wsrelay ./relay/cmd/wsrelay \
+COPY relay-rust ./relay-rust
+RUN cargo build --manifest-path relay-rust/Cargo.toml --locked --release \
+    --package windshare-relay-native --bin relay-native --target-dir /build \
     && mkdir /state && chown 65532:65532 /state
 
 FROM scratch
-COPY --from=build /wsrelay /wsrelay
+COPY --from=build /build/release/relay-native /wsrelay
 COPY --from=build --chown=65532:65532 /state /state
 USER 65532:65532
 EXPOSE 8484/tcp 3478/udp
 VOLUME ["/state"]
 ENTRYPOINT ["/wsrelay"]
-CMD ["-state-dir", "/state"]
+CMD ["--database", "/state/relay.sqlite", "--listen", "0.0.0.0:8484"]

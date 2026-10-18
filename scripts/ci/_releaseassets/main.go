@@ -42,15 +42,16 @@ func buildAssets(source, archive, out, version, commit string) error {
 	if runtime.GOOS == "windows" {
 		extension = ".exe"
 	}
-	for _, item := range []struct{ name, path string }{{"wind", "./cmd/wind"}, {"wsrelay", "./relay/cmd/wsrelay"}} {
-		command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", filepath.Join(staging, item.name+extension), item.path)
-		command.Dir = source
-		command.Env = buildEnvironment()
-		if output, err := command.CombinedOutput(); err != nil {
-			return fmt.Errorf("build %s: %s: %w", item.name, output, err)
-		}
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", filepath.Join(staging, "wind"+extension), "./cmd/wind")
+	command.Dir = source
+	command.Env = buildEnvironment()
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("build wind: %s: %w", output, err)
 	}
-	for _, path := range []string{"LICENSE", "NOTICE", "docs/installation.md", "docs/stun.md", "scripts/deploy/wsrelay/README.md", "third_party/pion/README.md", "third_party/pion/manifest.json", "third_party/pion/ice/LICENSE", "third_party/pion/webrtc/LICENSE"} {
+	if err := buildNativeRelay(source, filepath.Join(staging, "wsrelay"+extension)); err != nil {
+		return err
+	}
+	for _, path := range []string{"LICENSE", "NOTICE", "docs/installation.md", "docs/stun.md", "scripts/deploy/wsrelay/README.md", "relay-rust/crates/relay-native/README.md", "third_party/pion/README.md", "third_party/pion/manifest.json", "third_party/pion/ice/LICENSE", "third_party/pion/webrtc/LICENSE"} {
 		if err := copyFile(filepath.Join(source, filepath.FromSlash(path)), filepath.Join(staging, filepath.FromSlash(path))); err != nil {
 			return err
 		}

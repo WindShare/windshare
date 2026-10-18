@@ -3,10 +3,9 @@
 This host runs REGISTER/RESUME, JOIN, bidirectional opaque forwarding, cumulative
 consumption, settlement, independent STOP and heartbeats through `ShareRelay` on
 real WebSockets. It requires the capacity-bearing handshake and cumulative feedback;
-the Go `relayv2` runtime and browser receiver implement both. Go process E2E and
-browser product tests build this host alongside Go `wind`. Default server/release
-entry points and `integration/` suites remain pending; clients are incompatible
-with the legacy Go relay.
+the Go `relayv2` runtime and browser receiver implement both. This is the default
+server; release ZIPs ship it as `wsrelay`. Go process E2E, integration and browser
+product tests use this host alongside Go `wind`. The legacy Go server is retired.
 
 From `relay-rust/`:
 
@@ -31,7 +30,7 @@ and a 16 KiB / 64-header limit, separate from relay admission.
 Independent UDP STUN Binding listeners default to `0.0.0.0:3478` and `[::]:3478`;
 their private health/metrics HTTP listener defaults to `127.0.0.1:8081`.
 UDP/admin failures leave relay traffic available. Ctrl-C (or SIGTERM on Unix)
-joins STUN and relay teardown. See [STUN configuration](../../../docs/stun.md#native-rust-host)
+joins STUN and relay teardown. See [STUN configuration](../../../docs/stun.md#stun-service-in-wsrelay)
 for flags, protocol boundaries, limits and health semantics.
 
 Browser WebSocket access requires `--origins https://app.example,https://other.example`.
