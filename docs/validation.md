@@ -93,13 +93,13 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 - progressive catalog, direct/TURN switching, and browser/Pion interoperability scenarios;
 - Firefox and WebKit product scenarios and component contracts (including native-size relay bursts), and periodic Chromium component contracts;
 - Windows browser and process smoke tests;
-- Linux and Windows native-output release-artifact checks.
+- Linux and Windows native-output release-artifact checks, plus the Linux relay container build/probe.
 
 ## Release workflow
 
 [Source and Binary Release](../.github/workflows/release.yml) is started manually with an exact commit SHA and a root `vX.Y.Z` version. Resolution runs on the default branch and binds the version to a default-branch revision.
 
-Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and native-output gates. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
+Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and native-output gates. The `wsrelay` asset is built from Rust with a static C runtime; Linux needs the stable `x86_64-unknown-linux-musl` target and `musl-gcc`. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
 
 Local release scripts validate and package but never publish. See [installation](installation.md) for the supported clone, source-bundle, and binary paths.
 
