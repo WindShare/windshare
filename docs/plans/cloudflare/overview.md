@@ -139,9 +139,10 @@ The native process scenario verifies responses with Pion across restarts.
 Global and per-source connection budgets now share atomic admission and teardown;
 separate control budgets preserve STOP under business saturation. Explicit proxy trust
 resolves source IPs without accepting arbitrary forwarding headers.
-Browser product fixtures now use Go `wind` and Rust `relay-native`, including
-the 17 MiB download/hash scenario. Remaining operational interfaces, default
-server/release entry points and Go product integration suites have not been switched.
+Go process E2E and browser product fixtures now use Go `wind` and Rust
+`relay-native`, covering reconnect, permanent STOP, receiver-crash recovery and
+the 17 MiB browser download/hash scenario. Remaining operational interfaces,
+default server/release entry points and `integration/` suites have not been switched.
 
 ## Cloudflare host
 

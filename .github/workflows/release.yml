@@ -74,6 +74,8 @@ jobs:
           go-version: stable
           check-latest: true
           cache: false
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
       - name: Install latest govulncheck
         env:
           GOBIN: ${{ runner.temp }}/go-tools
@@ -125,6 +127,8 @@ jobs:
           go-version: stable
           check-latest: true
           cache: false
+      - name: Prepare Rust native relay toolchain
+        run: rustup toolchain install stable --profile minimal
       - name: Install latest govulncheck
         shell: pwsh
         env:

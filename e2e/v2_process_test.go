@@ -4,16 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,7 +40,6 @@ const (
 	v2PionRelayCutTailName            = "z-after-cut.txt"
 	v2PionRelayCutTailPayload         = "content requested after the relay cut\n"
 
-	v2RelayComponent             = "wsrelay"
 	v2ShareCommandComponent      = "wind_share"
 	v2GetCommandComponent        = "wind_get"
 	v2ResumeListCommandComponent = "wind_resume_list"
@@ -325,54 +321,6 @@ func waitV2Match(t *testing.T, process *v2Process, expression *regexp.Regexp, st
 	return match[1]
 }
 
-func waitV2RelayReady(t *testing.T, process *v2Process) string {
-	t.Helper()
-	phaseContext := v2ProcessPhaseContext{Component: process.component}
-	phase := process.scenario.startPhase(t, v2ProcessReadinessMilestone, phaseContext)
-	if process.component != v2RelayComponent {
-		t.Fatalf("relay readiness requested from component %q", process.component)
-	}
-	readyContext, cancel := context.WithTimeout(t.Context(), v2ProcessTimeout)
-	defer cancel()
-	event, err := process.owned.Events().Next(readyContext)
-	if err != nil {
-		t.Fatalf(
-			"read private relay readiness event: run_id=%s operation_id=%s scenario=%s err=%v stdout=%q stderr=%q",
-			process.scenario.operation.RunID(), process.scenario.operation.ID(), process.scenario.operation.Scenario(), err,
-			process.stdout.diagnosticString(), process.stderr.diagnosticString(),
-		)
-	}
-	if event.Component != v2RelayComponent || event.Milestone != testrun.ListenerReadyMilestone ||
-		event.Outcome != string(testrun.OutcomeSucceeded) {
-		t.Fatalf("unexpected private relay readiness event: %#v", event)
-	}
-	var payload testrun.ListenerReadyContext
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		t.Fatalf("decode private relay readiness payload: %v", err)
-	}
-	if err := validateV2RelayAddress(payload.Address); err != nil {
-		t.Fatal(err)
-	}
-	process.scenario.succeedPhase(t, phase, phaseContext)
-	return payload.Address
-}
-
-func validateV2RelayAddress(address string) error {
-	host, rawPort, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("listener-ready address %q: %w", address, err)
-	}
-	port, err := strconv.Atoi(rawPort)
-	if err != nil || port < 1 || port > 65_535 {
-		return fmt.Errorf("listener-ready address %q has invalid port", address)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("listener-ready address %q is not loopback", address)
-	}
-	return nil
-}
-
 func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2ProgressiveCatalogScenario)
@@ -391,14 +339,8 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 		t.Fatal(err)
 	}
 
-	relayState := filepath.Join(t.TempDir(), "relay-state")
-	relay := startV2Process(
-		t, scenario, v2RelayComponent, binaries.relay,
-		"-listen", "127.0.0.1:0", "-state-dir", relayState,
-	)
-	address := waitV2RelayReady(t, relay)
-	relayURL := "ws://" + address
-	share := startV2Process(t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relayURL)
+	relay := startV2Relay(t, scenario)
+	share := startV2Process(t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relay.baseURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -468,20 +410,11 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	}
 
 	proxy := startRelayCutProxy(t, scenario)
-	relay := startV2Process(
-		t,
-		scenario,
-		v2RelayComponent,
-		binaries.relay,
-		"-listen", "127.0.0.1:0",
-		"-relay-base-url", proxy.BaseURL(),
-		"-state-dir", filepath.Join(t.TempDir(), "relay-state"),
-	)
-	relayAddress := waitV2RelayReady(t, relay)
+	relay := newV2RelayFixture(t, scenario, proxy.Endpoint()).start(t)
 	if err := scenario.observe(
 		v2RelayProxyForwardMilestone,
 		nil,
-		func() error { return proxy.ForwardTo(relayAddress) },
+		func() error { return proxy.ForwardTo(relay.address) },
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +425,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		v2ShareCommandComponent,
 		binaries.wind,
 		"share", source,
-		"--relay", proxy.BaseURL(),
+		"--relay", relay.baseURL,
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
@@ -646,13 +579,9 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 		}
 	}
 
-	relay := startV2Process(
-		t, scenario, v2RelayComponent, binaries.relay,
-		"-listen", "127.0.0.1:0", "-state-dir", filepath.Join(t.TempDir(), "relay-state"),
-	)
-	address := waitV2RelayReady(t, relay)
+	relay := startV2Relay(t, scenario)
 	share := startV2Process(
-		t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", "ws://"+address,
+		t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
