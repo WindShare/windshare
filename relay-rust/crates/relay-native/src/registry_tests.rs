@@ -126,6 +126,7 @@ async fn rebuild_waits_for_writer_destruction_and_fences_old_callbacks() {
                     connection,
                     stopping,
                     old.generation.clone(),
+                    crate::test_support::socket_admission(),
                 ),
             )
             .unwrap(),
@@ -226,6 +227,7 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
                     reference(1),
                     stopping,
                     old.generation.clone(),
+                    crate::test_support::socket_admission(),
                 ),
             )
             .unwrap(),

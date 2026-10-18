@@ -46,11 +46,12 @@ impl RetirementPolicy {
     }
 }
 
-/// Admitted includes handshakes, communicating sockets and unfinished retirement.
+/// Business includes communicating data sockets and unfinished delivery retirement.
 /// Residual counts cover retired generations only; live delivery keeps its own budget.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConnectionUsage {
-    pub admitted: usize,
+    pub business: usize,
+    pub controls: usize,
     pub retired_generations: usize,
     pub residual: Counts,
     /// Conservative reservations across admitted and retired unavailable generations.
@@ -59,8 +60,9 @@ pub struct ConnectionUsage {
 
 impl Limits {
     pub(super) fn generation_limit(self) -> Result<usize, Error> {
-        self.connections
-            .checked_add(self.retirement.generations())
+        self.business_connections
+            .checked_add(self.handshakes.concurrent)
+            .and_then(|value| value.checked_add(self.retirement.generations()))
             .ok_or(Error::Configuration)
     }
 }
@@ -85,7 +87,8 @@ impl<O: Observer> ShareRelay<O> {
                 usage.residual.encoded_bytes += residual.encoded_bytes;
             }
         }
-        usage.admitted = self.ledgers.len() + self.unavailable.len() - usage.retired_generations;
+        usage.controls = self.controls.len();
+        usage.business = self.ledgers.len() + self.unavailable.len() - usage.retired_generations;
         usage
     }
 

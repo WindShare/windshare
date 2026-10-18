@@ -44,6 +44,33 @@ const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 /// first-frame budget for a sender shutting down on a congested uplink.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The validated first frame also lets hosts reserve process-wide capacity.
+/// Naming an intent grants no sender authority and never bypasses the handshake.
+#[derive(Debug)]
+pub enum Initiation {
+    Register(RegisterInit),
+    Join(Join),
+    Stop(StopInit),
+}
+
+impl Initiation {
+    /// # Errors
+    /// Rejects malformed or non-initial control frames.
+    pub fn decode(frame: &[u8]) -> Result<Self, FrameError> {
+        match frame.first_chunk().copied() {
+            Some(REGISTER_INIT_MAGIC) => RegisterInit::decode(frame).map(Self::Register),
+            Some(JOIN_MAGIC) => Join::decode(frame).map(Self::Join),
+            Some(STOP_INIT_MAGIC) => StopInit::decode(frame).map(Self::Stop),
+            _ => Err(FrameError::Header),
+        }
+    }
+
+    #[must_use]
+    pub const fn uses_business_capacity(&self) -> bool {
+        matches!(self, Self::Register(_) | Self::Join(_))
+    }
+}
+
 /// What the handshake is waiting for, as structured traces label it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
@@ -399,20 +426,16 @@ impl ControlHandshake {
         frame: &'f [u8],
         now: UnixMillis,
     ) -> Result<Step<'f>, CloseReason> {
-        match frame.first_chunk().copied() {
-            Some(REGISTER_INIT_MAGIC) => Ok(self.registration(RegisterInit::decode(frame)?, now)),
-            Some(STOP_INIT_MAGIC) => self.stop(StopInit::decode(frame)?, now),
-            Some(JOIN_MAGIC) => {
-                let join = Join::decode(frame)?;
-                Ok(Step::Complete(Outcome::Join(JoinRequest::new(
-                    self.relay,
-                    self.connection,
-                    join.share_id(),
-                    join.receive_capacity(),
-                    now,
-                ))))
-            }
-            _ => Err(CloseReason::Malformed(FrameError::Header)),
+        match Initiation::decode(frame)? {
+            Initiation::Register(init) => Ok(self.registration(init, now)),
+            Initiation::Stop(init) => self.stop(init, now),
+            Initiation::Join(join) => Ok(Step::Complete(Outcome::Join(JoinRequest::new(
+                self.relay,
+                self.connection,
+                join.share_id(),
+                join.receive_capacity(),
+                now,
+            )))),
         }
     }
 

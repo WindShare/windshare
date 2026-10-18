@@ -25,6 +25,12 @@ and retry the same obligation; operation-scoped cleanup cannot erase another own
 Startup restores pending work and original persisted grace deadlines. Generation
 allocation is durable; challenge entropy comes from the OS.
 
+Ingress separates 256 process-wide business slots from 32 control slots; each share
+keeps 32 business and 8 control slots. New connections are rate-limited, and valid
+REGISTER/RESUME/JOIN initiations reserve business capacity before continuing. Signed
+STOP retains control capacity even when business slots are full. The socket supervisor
+and both descendants retain their process permit until their resources are destroyed.
+
 Per-share actors serialize decisions; each connection supervisor owns separate reader
 and writer tasks. Slow writes cannot block inbound controls. Output has independent
 frame/byte bounds, reserved control capacity and coalesced priority heartbeat replies.

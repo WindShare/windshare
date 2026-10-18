@@ -18,7 +18,7 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
         let (mut relay, _) = Relay::restore(
             fixture.identity(1),
             limits,
-            &Restore::restarted(None, Responsibility::Released),
+            &Restore::restarted(None, Responsibility::Released { previous: None }),
             Trace::default(),
             fixture.at,
         )
@@ -30,10 +30,8 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
                     .refusal,
                 None
             );
-            let usage = relay.ledgers[&connection(id)].metadata_usage();
-            assert_eq!(usage.retained_flows, 0);
-            assert_eq!(usage.allocated_slots, 0);
-            assert_eq!(usage.limit, sessions);
+            assert!(!relay.ledgers.contains_key(&connection(id)));
+            assert!(relay.controls.contains_key(&connection(id)));
         }
         let encoded = relay.checkpoint().unwrap().encode();
         if let Some(expected) = &checkpoint_bytes {
@@ -54,7 +52,7 @@ fn sharing_allocates_sender_fanout_and_one_slot_per_receiver() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released),
+        &Restore::restarted(None, Responsibility::Released { previous: None }),
         Trace::default(),
         fixture.at,
     )

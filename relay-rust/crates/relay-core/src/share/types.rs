@@ -15,8 +15,10 @@ use alloc::vec::Vec;
 /// Platform capacity is supplied explicitly; the shared engine has no platform defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// Admission slots, including generations still waiting for safe retirement.
-    pub connections: usize,
+    /// Business slots, including generations still waiting for safe retirement.
+    pub business_connections: usize,
+    /// Independent bounded ingress for first frames and authenticated STOP.
+    pub handshakes: super::HandshakeLimits,
     /// Live/provisional sessions. Retired sessions cannot consume new admission.
     pub sessions: usize,
     /// All live and unsettled retired flows in each destination ledger.
@@ -28,6 +30,7 @@ pub struct Limits {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Capacity,
+    HandshakeRate,
     UnknownConnection,
     UnknownSession,
     Unavailable,

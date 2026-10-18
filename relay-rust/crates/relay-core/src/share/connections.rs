@@ -9,11 +9,9 @@ use super::{
 };
 use crate::{
     clock::UnixMillis,
-    flow::ConnectionLedger,
     handshake::{AdmissionRequest, Outcome, Step},
     heartbeat::Liveness,
     lifecycle::{Cancellation, Event},
-    observation::Journal,
     registration::RegistrationMode,
     sessions::{EndReason, Event as SessionEvent},
 };
@@ -30,25 +28,36 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
-        if self.ledgers.contains_key(&connection) || self.unavailable.contains_key(&connection) {
+        if self.connections.contains_key(&connection)
+            || self.ledgers.contains_key(&connection)
+            || self.unavailable.contains_key(&connection)
+        {
             return Err(Error::UnknownConnection);
         }
-        if self.connection_usage().admitted >= self.limits.connections {
-            self.trace(Some(connection), RelayDecision::Capacity, now);
+        let usage = self.connection_usage();
+        if usage.controls >= self.limits.handshakes.concurrent {
+            self.trace(
+                Some(connection),
+                RelayDecision::ControlCapacity { usage },
+                now,
+            );
             return Err(Error::Capacity);
+        }
+        let previous = self.handshake_rate.state();
+        let accepted = self.handshake_rate.attempt(now);
+        if self.handshake_rate.state() != previous {
+            self.checkpointing.retention_changed();
+        }
+        if !accepted {
+            self.trace(Some(connection), RelayDecision::HandshakeRateLimited, now);
+            return Err(Error::HandshakeRate);
         }
         let handshake = ControlHandshake::open(self.identity.relay, connection, now);
         self.deadlines
             .set(Key::Handshake(connection), handshake.deadline());
-        let ledger = ConnectionLedger::new(
-            self.identity.relay,
-            connection,
-            self.limits.delivery,
-            self.limits.retained_flows_per_connection,
-            Journal::default(),
-        )
-        .map_err(|_| Error::Configuration)?;
-        self.ledgers.insert(connection, ledger);
+        let deadline = now.saturating_add(super::admission::CONTROL_LIFETIME);
+        self.controls.insert(connection, deadline);
+        self.deadlines.set(Key::Control(connection), Some(deadline));
         self.connections.insert(
             connection,
             Connection {
@@ -74,11 +83,35 @@ impl<O: Observer> ShareRelay<O> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
+        let first = self.connections.get(&connection).is_some_and(|entry| {
+            matches!(
+                &entry.role, Role::Handshake { handshake, .. }
+                    if handshake.phase() == crate::handshake::Phase::AwaitingFirstFrame
+            )
+        });
+        if first
+            && crate::handshake::Initiation::decode(frame)
+                .is_ok_and(|intent| intent.uses_business_capacity())
+            && let Err(error) = self.admit_business(connection, now)
+        {
+            Self::send(
+                turn,
+                connection,
+                Control::Error(crate::error_frame::ErrorFrame::Admission(
+                    crate::error_frame::RetryAfter::IMMEDIATE,
+                )),
+            );
+            self.disconnect(connection, now, turn);
+            return Err(error);
+        }
         let entry = self
             .connections
             .get_mut(&connection)
             .ok_or(Error::UnknownConnection)?;
-        if matches!(entry.role, Role::Established(_) | Role::Closing) {
+        if matches!(
+            entry.role,
+            Role::Established(_) | Role::Stopping | Role::Closing
+        ) {
             return self.connection_control(connection, frame, now, turn);
         }
         let role = mem::replace(&mut entry.role, Role::Closing);
@@ -192,10 +225,14 @@ impl<O: Observer> ShareRelay<O> {
             }
             Step::Complete(outcome) => {
                 if let Some(entry) = self.connections.get_mut(&connection) {
-                    let liveness = Liveness::established(now);
-                    self.deadlines
-                        .set(Key::Liveness(connection), Some(liveness.deadline()));
-                    entry.role = Role::Established(liveness);
+                    if matches!(outcome, Outcome::Stop(_)) {
+                        entry.role = Role::Stopping;
+                    } else {
+                        let liveness = Liveness::established(now);
+                        self.deadlines
+                            .set(Key::Liveness(connection), Some(liveness.deadline()));
+                        entry.role = Role::Established(liveness);
+                    }
                     self.checkpointing.changed(connection);
                 }
                 if matches!(outcome, Outcome::Join(_) | Outcome::Stop(_)) {
@@ -319,6 +356,7 @@ impl<O: Observer> ShareRelay<O> {
             entry.role = Role::Closing;
             self.checkpointing.changed(connection);
             self.deadlines.set(Key::Handshake(connection), None);
+            self.deadlines.set(Key::Control(connection), None);
             self.deadlines.set(Key::Liveness(connection), None);
             turn.outputs.push(Output::Close(connection));
         }
@@ -374,6 +412,9 @@ impl<O: Observer> ShareRelay<O> {
     pub(super) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
         self.disconnect(connection, now, turn);
         let was_connected = self.connections.remove(&connection).is_some();
+        // Control sockets never submitted opaque data; losing communication can
+        // release their logical admission without asserting transport-byte release.
+        self.release_control(connection);
         self.deadlines.set(Key::Handshake(connection), None);
         self.deadlines.set(Key::Liveness(connection), None);
         if self.ledgers.contains_key(&connection) {

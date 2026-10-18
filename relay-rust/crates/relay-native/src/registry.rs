@@ -1,7 +1,11 @@
 use crate::{
     actor::{Actor, Event},
-    config::{Endpoint, MAILBOX_CAPACITY, MAX_CONNECTIONS, MAX_RESIDENT_SHARES},
-    environment::{NativeEnvironment, incarnation},
+    config::{
+        CONNECTION_ATTEMPTS, Endpoint, MAILBOX_CAPACITY, MAX_BUSINESS_CONNECTIONS,
+        MAX_CONTROL_CONNECTIONS, MAX_RESIDENT_SHARES,
+    },
+    connection::Capacity,
+    environment::{Environment, NativeEnvironment, incarnation},
     generation::{Generation, Recovery},
     socket,
     storage::Database,
@@ -19,7 +23,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{Semaphore, mpsc, watch},
+    sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
 };
 use windshare_relay_core::{
@@ -172,7 +176,12 @@ impl Server {
         listener: TcpListener,
         shutdown: impl Future<Output = ()>,
     ) -> Result<()> {
-        let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let slots = Capacity::new(
+            MAX_BUSINESS_CONNECTIONS,
+            MAX_CONTROL_CONNECTIONS,
+            CONNECTION_ATTEMPTS,
+            self.registry.environment.now(),
+        )?;
         let mut tasks = JoinSet::new();
         let (stop_connections, stopping) = watch::channel(false);
         let mut next_connection = NonZeroU64::MIN;
@@ -187,9 +196,12 @@ impl Server {
                 }
                 accepted = listener.accept() => {
                     let (stream, peer) = match accepted { Ok(value) => value, Err(error) => break Err(error.into()) };
-                    let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
-                        tracing::warn!(event = "connection_capacity", %peer);
-                        continue;
+                    let admission = match slots.accept(self.registry.environment.now()) {
+                        Ok(admission) => admission,
+                        Err(error) => {
+                            tracing::warn!(event = "control_connection_refused", %peer, %error);
+                            continue;
+                        }
                     };
                     let id = next_connection;
                     let Some(next) = next_connection.checked_add(1) else {
@@ -204,8 +216,7 @@ impl Server {
                     let registry = Arc::clone(&self.registry);
                     let stopping = stopping.clone();
                     tasks.spawn(async move {
-                        let _slot = slot;
-                        if let Err(error) = socket::serve(stream, endpoint, registry, connection, stopping).await {
+                        if let Err(error) = socket::serve(stream, endpoint, registry, connection, stopping, admission).await {
                             tracing::debug!(event = "socket_ended", ?connection, %peer, %error);
                         }
                     });
