@@ -10,10 +10,10 @@
   "deployments": [
     {
       "preview": "retention-58c8483f5c9d",
-      "url": "https://retention-58c8483f5c9d-windshare-relay-host-probe.doraemonkey.workers.dev",
+      "url": "https://retention-58c8483f5c9d-windshare-relay-host-probe.workers.example.invalid",
       "deployment": "685fe313-d969-4232-bc6a-856eaba24310",
       "created_on": "2026-10-18T07:56:31.173Z",
-      "immutable_url": "https://685fe313-windshare-relay-host-probe.doraemonkey.workers.dev",
+      "immutable_url": "https://685fe313-windshare-relay-host-probe.workers.example.invalid",
       "namespaces": {
         "BRIDGE_PROBE": {
           "class_name": "BridgeProbe",
@@ -47,10 +47,10 @@
     },
     {
       "preview": "risk-e60683e46c89",
-      "url": "https://risk-e60683e46c89-windshare-relay-host-probe.doraemonkey.workers.dev",
+      "url": "https://risk-e60683e46c89-windshare-relay-host-probe.workers.example.invalid",
       "deployment": "f4ac4ed6-f8cb-4863-92c2-6dfc803e1a75",
       "created_on": "2026-10-18T08:01:06.945601Z",
-      "immutable_url": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev",
+      "immutable_url": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid",
       "namespaces": {
         "BRIDGE_PROBE": {
           "class_name": "BridgeProbe",
@@ -275,7 +275,7 @@
   },
   "kernel_feedback_loss": {
     "started_at": "2026-10-18T08:03:07.888Z",
-    "base": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev",
+    "base": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid",
     "frame_bytes": 1024,
     "fixture_clock": "frozen",
     "physical_release_proven": false,
@@ -415,7 +415,7 @@
         "run": "checkpoint-693ca969-41ca-4686-b20f-e92dc23ebcd9",
         "mode": "attachments",
         "kind": "ack-loss-exhaustion",
-        "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-693ca969-41ca-4686-b20f-e92dc23ebcd9",
+        "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/checkpoint/checkpoint-693ca969-41ca-4686-b20f-e92dc23ebcd9",
         "before_fault": {
           "admitted": 2,
           "boot": "0.27580567070562423-1792310589833",
@@ -957,7 +957,7 @@
         "run": "checkpoint-90bdbb36-3ce6-4469-8839-b5c42eb452f5",
         "mode": "sqlite_mirror",
         "kind": "ack-loss-exhaustion",
-        "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/checkpoint/checkpoint-90bdbb36-3ce6-4469-8839-b5c42eb452f5",
+        "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/checkpoint/checkpoint-90bdbb36-3ce6-4469-8839-b5c42eb452f5",
         "before_fault": {
           "admitted": 2,
           "boot": "0.13667093336019476-1792310602624",
@@ -1500,7 +1500,7 @@
   },
   "policy_recovery": {
     "run": "risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a",
-    "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a",
+    "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a",
     "started_at": "2026-10-18T08:07:53.020Z",
     "scope": "experimental policy persistence; not production kernel integration",
     "physical_release_proven": false,
@@ -2104,7 +2104,7 @@
     "finished_at": "2026-10-18T08:08:32.375Z"
   },
   "metrics": {
-    "query": "{viewer{accounts(filter:{accountTag:\"fb1b5468362a79b5545d660ace3e8f9d\"}){long_close:durableObjectsPeriodicGroups(limit:1000,filter:{datetime_geq:\"2026-10-18T07:55:00Z\",datetime_leq:\"2026-10-18T08:30:00Z\",namespaceId:\"237a2c9a997c4a29817abb681602fa23\"}){dimensions{datetimeMinute objectId}max{memoryUsageBytes activeWebsocketConnections}} policy:durableObjectsPeriodicGroups(limit:1000,filter:{datetime_geq:\"2026-10-18T07:55:00Z\",datetime_leq:\"2026-10-18T08:30:00Z\",namespaceId:\"b50db141315f4a329094ae2f25bfe5cb\"}){dimensions{datetimeMinute objectId}max{memoryUsageBytes activeWebsocketConnections}}}}}",
+    "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){long_close:durableObjectsPeriodicGroups(limit:1000,filter:{datetime_geq:\"2026-10-18T07:55:00Z\",datetime_leq:\"2026-10-18T08:30:00Z\",namespaceId:\"237a2c9a997c4a29817abb681602fa23\"}){dimensions{datetimeMinute objectId}max{memoryUsageBytes activeWebsocketConnections}} policy:durableObjectsPeriodicGroups(limit:1000,filter:{datetime_geq:\"2026-10-18T07:55:00Z\",datetime_leq:\"2026-10-18T08:30:00Z\",namespaceId:\"b50db141315f4a329094ae2f25bfe5cb\"}){dimensions{datetimeMinute objectId}max{memoryUsageBytes activeWebsocketConnections}}}}}",
     "queried_at": "2026-10-18T08:21:55.059Z",
     "response": {
       "success": true,
@@ -3127,7 +3127,7 @@
         "preview": "risk-e60683e46c89",
         "outcome": "exception",
         "eventType": "fetch",
-        "message": "POST https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a/reset"
+        "message": "POST https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a/reset"
       },
       {
         "timestamp": 1792310896334,
@@ -3135,7 +3135,7 @@
         "outcome": "aborted",
         "object": "c3e56d792153aedae67adc54ed3f2710973061ec85aaa7fb05a8e211131c5a8b",
         "eventType": "fetch",
-        "message": "POST https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a/reset"
+        "message": "POST https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-recovery-968cb5e1-7a80-4f11-9a36-69a563e7d81a/reset"
       },
       {
         "timestamp": 1792310896334,
@@ -3779,7 +3779,7 @@
     {
       "evidence_file": "pressure-close-21694ab5-fead-4676-bbe2-ab3f04f8c030.json",
       "run": "close-21694ab5-fead-4676-bbe2-ab3f04f8c030",
-      "endpoint": "https://685fe313-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/close-21694ab5-fead-4676-bbe2-ab3f04f8c030",
+      "endpoint": "https://685fe313-windshare-relay-host-probe.workers.example.invalid/pressure/close-21694ab5-fead-4676-bbe2-ab3f04f8c030",
       "mode": "close",
       "started_at": "2026-10-18T07:56:44.667Z",
       "finished_at": "2026-10-18T08:07:56.509Z",
@@ -6299,7 +6299,7 @@
     {
       "evidence_file": "pressure-live-484c4f75-ff80-41ea-878b-e17f89650625.json",
       "run": "live-484c4f75-ff80-41ea-878b-e17f89650625",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/live-484c4f75-ff80-41ea-878b-e17f89650625",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/live-484c4f75-ff80-41ea-878b-e17f89650625",
       "mode": "live",
       "started_at": "2026-10-18T08:04:25.372Z",
       "finished_at": "2026-10-18T08:15:01.976Z",
@@ -7945,7 +7945,7 @@
     {
       "evidence_file": "risk-f0db86f2-a40b-4f24-85b8-ab5ed9a35b38.json",
       "run": "risk-f0db86f2-a40b-4f24-85b8-ab5ed9a35b38",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-f0db86f2-a40b-4f24-85b8-ab5ed9a35b38",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-f0db86f2-a40b-4f24-85b8-ab5ed9a35b38",
       "policy": "immediate",
       "disposition": "abort",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",
@@ -8502,7 +8502,7 @@
     {
       "evidence_file": "risk-d5762fc0-81aa-43fc-a87e-449ed2b0b0bf.json",
       "run": "risk-d5762fc0-81aa-43fc-a87e-449ed2b0b0bf",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-d5762fc0-81aa-43fc-a87e-449ed2b0b0bf",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-d5762fc0-81aa-43fc-a87e-449ed2b0b0bf",
       "policy": "immediate",
       "disposition": "hold",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",
@@ -17953,7 +17953,7 @@
     {
       "evidence_file": "risk-49b77d01-cc3d-4073-afb9-91ce0be24aac.json",
       "run": "risk-49b77d01-cc3d-4073-afb9-91ce0be24aac",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-49b77d01-cc3d-4073-afb9-91ce0be24aac",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-49b77d01-cc3d-4073-afb9-91ce0be24aac",
       "policy": "cooldown",
       "disposition": "hold",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",
@@ -23432,7 +23432,7 @@
     {
       "evidence_file": "risk-faebcfa3-30a8-40ef-9ebc-f05fbb453724.json",
       "run": "risk-faebcfa3-30a8-40ef-9ebc-f05fbb453724",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-faebcfa3-30a8-40ef-9ebc-f05fbb453724",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-faebcfa3-30a8-40ef-9ebc-f05fbb453724",
       "policy": "strict",
       "disposition": "hold",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",
@@ -24381,7 +24381,7 @@
     {
       "evidence_file": "risk-00f36bf1-06a7-4d24-9051-eb04305ecb7d.json",
       "run": "risk-00f36bf1-06a7-4d24-9051-eb04305ecb7d",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-00f36bf1-06a7-4d24-9051-eb04305ecb7d",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-00f36bf1-06a7-4d24-9051-eb04305ecb7d",
       "policy": "immediate",
       "disposition": "abort",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",
@@ -33599,7 +33599,7 @@
     {
       "evidence_file": "risk-b3538667-c44b-4121-a89d-14406fe425aa.json",
       "run": "risk-b3538667-c44b-4121-a89d-14406fe425aa",
-      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.doraemonkey.workers.dev/pressure/risk-b3538667-c44b-4121-a89d-14406fe425aa",
+      "endpoint": "https://f4ac4ed6-windshare-relay-host-probe.workers.example.invalid/pressure/risk-b3538667-c44b-4121-a89d-14406fe425aa",
       "policy": "strict",
       "disposition": "consume",
       "scope": "bounded platform policy probe; not the production ShareRelay or a WindShare download",

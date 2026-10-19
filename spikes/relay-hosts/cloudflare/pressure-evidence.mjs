@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { posix } from 'node:path';
+import { formatPublicEvidence } from '../public-evidence.mjs';
 
 // Explicit filenames keep older or unrelated local runs out of the report.
 const inputs = process.argv.slice(2);
@@ -105,7 +106,7 @@ const result = {
   versions: { rust: '1.99.0', node: process.version, worker: '0.8.7',
     worker_build: '0.8.7', wasm_bindgen: '0.2.129', wrangler: '4.151.1', ws: '8.22.0',
     rustls: '0.23.46', tokio_tungstenite: '0.30.0' },
-  deployment: { worker: 'windshare-relay-host-probe', account: 'fb1b5468362a79b5545d660ace3e8f9d',
+  deployment: { worker: 'windshare-relay-host-probe', account: '<ACCOUNT_ID>',
     preview: 'pressure-93669b45f5ed', namespace: '94eabe8033364e42b9e05f4484fa0349',
     v1: 'c56f2e7e-3f0d-467a-8c80-954c5202f2c1', v2: '827d675a-3207-4d1d-be03-9d46f25bea61',
     final: finalDeployment.deployment.id,
@@ -132,5 +133,5 @@ const result = {
   },
 };
 const output = new URL('../evidence/2026-10-17-pressure.json', import.meta.url);
-await writeFile(output, JSON.stringify(result, null, 2) + '\n');
+await writeFile(output, formatPublicEvidence(result));
 console.log(JSON.stringify({ output: fileURLToPath(output), summary: result.summary }, null, 2));

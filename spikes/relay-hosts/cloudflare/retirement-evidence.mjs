@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { formatPublicEvidence } from '../public-evidence.mjs';
 
 const directory = new URL('./.evidence/', import.meta.url);
 const manifestName = process.argv[2];
@@ -99,7 +100,7 @@ const result = {
   interpretation: manifest.interpretation,
 };
 const output = new URL('../evidence/' + manifest.date + '-retirement.json', import.meta.url);
-await writeFile(output, JSON.stringify(result, null, 2) + '\n');
+await writeFile(output, formatPublicEvidence(result));
 console.log(JSON.stringify({ output: fileURLToPath(output),
   runs: runs.map(run => ({ run: run.run, policy: run.policy, disposition: run.disposition, mode: run.mode,
     result: run.result, ...run.summary, ping_errors: run.healthy.errors.length })) }, null, 2));

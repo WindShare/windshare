@@ -4,6 +4,9 @@ These opt-in probes investigate the `ShareRelay::submit` critical section,
 checkpoint recovery and the host evidence required by `Input::Closed`.
 Production adapters and the Go/browser protocol cutover remain unfinished.
 
+Published evidence anonymizes account IDs and personal Worker hostnames; raw captures
+stay in ignored `.evidence/` directories.
+
 The [checkpoint experiment](checkpoint-recovery.md) now connects the real kernel
 to Cloudflare attachments and a SQLite mirror control. It distinguishes normal
 hibernation, missing attachments, disconnect callbacks and abrupt reset. Exact
