@@ -176,6 +176,10 @@ and automatically resumes sender publication and the original browser task throu
 final hash check. Deployment propagation took about five minutes; command success alone
 is not evidence of an object switch.
 
+The [Fork ? Actions workflow](../../cloudflare-relay.md) now provisions private deployments
+and exports an age-encrypted CLI configuration. Subsequent updates retain the registration
+secret, address and share namespace; failed first uploads recover the committed configuration.
+
 ## Host evidence
 
 [Host probes](../../../spikes/relay-hosts/README.md) exercise the real kernel with

@@ -43,7 +43,11 @@ responsibility baseline. Existing identities require a manifest even without aut
 or surviving sockets. Cleanup-generated settlement notices run before subsequent
 close commands. No descriptor or payload appears in traces.
 
-From this directory, with the Rust Wasm target and `worker-build` installed:
+For personal deployment, follow [Fork ? GitHub Actions](../../../docs/cloudflare-relay.md).
+It generates registration authority once, delivers an encrypted import configuration,
+and retains the address, secret and SQLite namespace through upstream updates.
+
+For local development, from this directory with the Rust Wasm target and `worker-build` installed:
 
 ```sh
 npm ci
@@ -62,6 +66,9 @@ Worker. Do not delete storage to update code: that would erase permanent STOP.
 ## Validation
 
 `make rust` includes native fault-injected host tests and Wasm compilation/Clippy.
+`make hygiene` covers deployment lifecycle contracts; the opt-in
+[deployment smoke](../../../docs/validation.md#ordinary-github-ci) verifies encrypted
+CLI import, stable credentials/namespace and retained STOP on a real Worker.
 The shared Go codec client is at `relay-rust/tests/_goclient`.
 [Recorded Preview evidence](tests/preview-evidence.md) covers live signatures,
 bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP

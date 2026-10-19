@@ -16,7 +16,13 @@ func main() {
 	external := flag.String("endpoint", "", "Rust host endpoint")
 	preview := flag.Bool("preview", false, "Cloudflare Preview delivery and recovery scenario")
 	idle := flag.Duration("hibernate-idle", 20*time.Second, "bounded hibernation observation interval")
+	deploymentPhase := flag.String("deployment-phase", "", "prepare or verify a real deployment")
+	deploymentState := flag.String("deployment-state", "", "private fixture file spanning a deployment")
 	flag.Parse()
+	if *deploymentPhase != "" {
+		deploymentProbe(*external, *deploymentPhase, *deploymentState)
+		return
+	}
 	if *preview {
 		cloudflare(*external, *idle)
 		return

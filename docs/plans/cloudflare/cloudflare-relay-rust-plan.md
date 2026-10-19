@@ -234,7 +234,12 @@ than restoring stale credits or claiming physical release.
 
 ## 部署体验
 
-首版支持用户 **Fork 当前 WindShare 仓库，通过 GitHub Actions 自动部署到 Cloudflare**。用户首次配置部署权限并启用工作流，部署时生成发送端注册凭据，导入后照常分享；以后通过 `Sync fork → Update branch` 同步上游稳定部署分支，由 Actions 更新原部署，首版不另建 CLI 部署器。
+[Fork → GitHub Actions deployment](../../cloudflare-relay.md) is implemented on `main`.
+The first deployment generates registration authority and seals the import configuration
+to the user's local age key. Repository Variables/Secrets hold deployment inputs; the
+Worker retains the credential and encrypted export together. Updates verify the stored
+identity and reuse the existing SQLite namespace. Interrupted uploads can be retried
+without regenerating credentials. No separate CLI deployer is required.
 
 部署参数与凭据通过 Variables／Secrets 配置，避免修改源码造成同步冲突；更新保留中转地址、注册凭据与必要持久状态。个人配置分开保存公开地址、私有注册凭据与允许的候选集合，贯穿首次注册、恢复、重新发布和 STOP；凭据只授权发送端注册，不进入分享链接。候选保持现有并行策略，仅私人模式只发布并连接私人候选。接收者无需账户或额外配置。
 
