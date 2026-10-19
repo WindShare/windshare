@@ -139,6 +139,15 @@ run now verifies real Worker redeployment, runtime version switching during down
 retained credentials/storage and automatic recovery of the original task. Object
 propagation took about five minutes; it is observed independently of command completion.
 
+Receiver-only disconnect isolation now preserves session discard semantics through
+shared ingress, including after routing metadata collection. Late opaque frames and
+sender admission confirmations cannot close the shared sender or renew credit/liveness;
+protocol violations retain precise refusals. Deterministic kernel/native/Cloudflare
+tests cover cleanup and hibernation, and the ordinary browser gate includes paired
+49 MiB downloads with four receiver-only interruptions and connection-continuity checks.
+The [live Cloudflare isolation run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md#receiver-only-disconnect-isolation)
+also passes with both file hashes correct and no sender or healthy-sibling reconnect.
+
 结论：**共享 Rust 语义内核及原生默认入口切换已完成。** Cloudflare 已跑通正式分享与下载，并验证对象故障和真实重部署后的原任务自动续传；清理完成后结束风险预留仍不等同于物理缓冲释放；不逐帧写库或重置整个分享清理单个慢连接。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。

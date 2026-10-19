@@ -2,6 +2,17 @@ import { expect, test } from '@playwright/test'
 
 import { runDownloadScenario } from './cloudflare/download-scenario'
 import { IsolatedDeployment } from './cloudflare/isolated-deployment'
+import { runCloudflareIsolationScenario } from './cloudflare/isolation-scenario'
+
+test('Cloudflare receiver interruptions preserve the sender and healthy sibling', async ({ browser, page }, testInfo) => {
+  const worker = new IsolatedDeployment(testInfo.outputPath('deployment'))
+  try {
+    const { target } = await worker.provision()
+    await runCloudflareIsolationScenario(browser, page, testInfo, target)
+  } finally {
+    await worker.dispose()
+  }
+})
 
 for (const kind of ['object-reset', 'redeploy'] as const) {
   test(`the original Cloudflare download continues after ${kind}`, async ({ page, request }, testInfo) => {

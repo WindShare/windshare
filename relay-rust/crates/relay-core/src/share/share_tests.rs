@@ -598,6 +598,9 @@ fn native_actor_can_move_between_executor_threads() {
     assert_send::<Relay>();
 }
 
+#[path = "session_ingress_tests.rs"]
+mod session_ingress;
+
 #[path = "ordering_tests.rs"]
 mod ordering;
 
