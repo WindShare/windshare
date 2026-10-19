@@ -15,7 +15,7 @@ const MIB = 1024 * 1024
 
 function startSender(executable, source, frontend, deployment, output) {
   const child = spawn(executable, ['share', source, '--front-url', frontend, '--trace', join(output, 'sender.ndjson')], {
-    cwd: REPOSITORY, env: { ...process.env, WINDSHARE_RELAY_CONFIG: deployment.relayConfig },
+    cwd: REPOSITORY, env: { ...process.env, WINDSHARE_CONFIG: deployment.relayConfig },
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   let stderr = ''

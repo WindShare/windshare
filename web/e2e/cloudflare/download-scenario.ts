@@ -84,7 +84,7 @@ export async function runDownloadScenario(
       'share', source, '--front-url', url, '--trace', senderTrace, '--browser-trace', '--block-size', String(BLOCK_BYTES),
     ], {
       cwd: REPOSITORY_ROOT,
-      environment: { ...process.env, WINDSHARE_RELAY_CONFIG: target.configPath },
+      environment: { ...process.env, WINDSHARE_CONFIG: target.configPath },
       operationId: 'cloudflare-' + interruption.kind,
       disclosure: { stdout: 'capability', stderr: 'private' },
     })

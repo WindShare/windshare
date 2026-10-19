@@ -35,7 +35,7 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	}
 	share := startTracedV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", relays[0].baseURL, "--relay", relays[1].baseURL,
+		"share", source, "--front-url", v2FrontendBaseURL, "--relay", relays[0].baseURL, "--relay", relays[1].baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capability, err := link.Parse(shareLink)

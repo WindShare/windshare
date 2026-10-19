@@ -48,7 +48,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 	}
 	share := startTracedV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", relay.baseURL,
+		"share", source, "--front-url", v2FrontendBaseURL, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -121,7 +121,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	}
 	share := startV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
-		"share", source, "--relay", relay.baseURL,
+		"share", source, "--front-url", v2FrontendBaseURL, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
