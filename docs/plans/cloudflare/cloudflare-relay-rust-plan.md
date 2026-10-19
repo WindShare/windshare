@@ -256,7 +256,7 @@ than restoring stale credits or claiming physical release.
 
 Cloudflare 的消息大小、对象吞吐、CPU、休眠和配额只能出现在 Cloudflare 适配器配置与部署诊断中。共享引擎只表达协议安全上限和过载结果，原生默认值不得引用免费套餐数值。Cloudflare 调整政策时，普通服务器部署不需要修改配置或重新发布。
 
-产品应把免费部署描述为适合个人及轻量使用，不应承诺无限传输量、公共服务容量或 SLA。
+产品应把免费部署描述为适合个人及轻量使用，不应承诺无限传输量、公共服务容量或 SLA。2026-10-19 的[生产配置实测](../../../relay-rust/crates/relay-cloudflare/tests/capacity-evidence.md)覆盖单分享、1–2 个接收端与空闲心跳；入口 Worker CPU 余量和完整计费指标仍需补齐，暂不能给出每日传输量承诺。
 
 ## 外部资料
 
