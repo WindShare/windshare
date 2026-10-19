@@ -66,17 +66,30 @@ The shared Go codec client is at `relay-rust/tests/_goclient`.
 bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP
 and Alarm expiry.
 
-For the CLI/browser recovery scenario, use an isolated Preview with `tests/entry.mjs`
-as described below. Set `WINDSHARE_RELAY_CONFIG` to a saved configuration containing
-that one credentialed candidate, and `WINDSHARE_RELAY_PREVIEW_SECRET` to its test secret.
-Run `pnpm exec playwright test --config playwright.cloudflare.config.ts` from `web/`.
-The test builds `wind`, disables browser P2P, and resets the share once after at least
-4 MiB is written. It verifies automatic sender recovery, the same browser task and
-monotonic progress, no re-request of the recorded completed blocks, and the 17 MiB hash.
-JSON evidence and sender/browser traces go to `web/test-results/cloudflare/`.
-This opt-in scenario is absent from ordinary browser gates; it does not test redeployment.
+For CLI/browser recovery, log in with the package's pinned Wrangler, then run from `web/`:
 
-For an isolated real-cloud run, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
+```sh
+pnpm exec playwright test --config playwright.cloudflare.config.ts
+# Only the real deployment scenario:
+pnpm exec playwright test --config playwright.cloudflare.config.ts --grep redeploy
+```
+
+Each scenario creates and deletes its own randomly named Worker with isolated SQLite
+and generated test credentials. It builds Rust and `wind`, disables browser P2P,
+then resets the object or runs `wrangler deploy --durable-objects-code-update-mode immediate`
+after 4 MiB is written. Immediate switching is requested only by the test.
+[Global propagation](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates)
+can still take minutes, so reset uses 17 MiB and redeployment uses 97 MiB with real
+browser origin storage. Redeployment retains the address, secrets and namespace;
+runtime version/code identity and a persisted marker verify the switch while content
+is still outstanding. Both scenarios check one browser task, monotonic progress,
+completed-block retention and the final hash. Lost connections must recover automatically.
+Evidence, command logs and sender/browser traces go to `web/test-results/cloudflare/`;
+temporary credentials are removed during cleanup. If cleanup fails, the recorded
+Worker name identifies the owned resource to delete. These cloud scenarios are opt-in
+and absent from ordinary browser gates.
+
+For protocol-level probes, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
 Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate
 `PREVIEW_TEST_SECRET`, then run:
 

@@ -169,10 +169,12 @@ remains enforced. This is an admission policy, not a physical buffer TTL. The
 passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hibernation
 with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
 The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
-loads a saved credentialed candidate and passes a 17 MiB relay-only download/hash
-check with one object reset after 4 MiB is written. Sender publication and the same
-browser task recover automatically; recorded completed blocks are retained.
-Redeployment, repeated disruptions and automated deployment remain pending.
+loads a saved credentialed candidate and covers object reset plus real redeployment
+of an isolated Worker at its stable address. The 97 MiB deployment run observes the
+new object version while downloading, preserves credentials/storage and completed blocks,
+and automatically resumes sender publication and the original browser task through the
+final hash check. Deployment propagation took about five minutes; command success alone
+is not evidence of an object switch. Repeated disruptions and automated deployment remain pending.
 
 ## Host evidence
 
