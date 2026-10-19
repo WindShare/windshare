@@ -285,6 +285,8 @@ function projectTransferTraceEvent(
 ): TraceEventObservationV2 {
   if (event.name === 'transfer_progress') {
     return observation(event.name, {
+      operation_id: event.operationId,
+      transfer_job_id: event.transferJobId,
       discovered_files: decimal(event.discoveredFiles),
       discovered_bytes: decimal(event.discoveredBytes),
       received_object_bytes: decimal(event.receivedObjectBytes),
