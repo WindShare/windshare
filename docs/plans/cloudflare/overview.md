@@ -174,7 +174,7 @@ of an isolated Worker at its stable address. The 97 MiB deployment run observes 
 new object version while downloading, preserves credentials/storage and completed blocks,
 and automatically resumes sender publication and the original browser task through the
 final hash check. Deployment propagation took about five minutes; command success alone
-is not evidence of an object switch. Repeated disruptions and automated deployment remain pending.
+is not evidence of an object switch.
 
 ## Host evidence
 
