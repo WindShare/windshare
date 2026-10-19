@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/cmd/wind/internal/relaycommand"
 	"github.com/windshare/windshare/cmd/wind/internal/relayconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
@@ -61,6 +62,9 @@ const usageText = `Usage:
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
+  ` + commandmeta.Name + ` relay import <file|-> [-v|--verbose]
+      Validate and replace the saved relay candidate set. '-' reads JSON from stdin.
+
   ` + commandmeta.Name + ` resume list -o <directory>
       List destination-owned incomplete, resumable, cleanup-pending, and attention state.
       Locally ambiguous children are reported as item-blocked.
@@ -93,6 +97,7 @@ type App struct {
 	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
 	loadRelayCandidates     func() ([]senderrelay.Candidate, error)
+	saveRelayCandidates     func([]senderrelay.Candidate) error
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -103,6 +108,7 @@ func Main() int {
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		platformSetupStatus: &setupStatus,
 		loadRelayCandidates: relayconfig.Load,
+		saveRelayCandidates: relayconfig.Save,
 	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {
@@ -110,30 +116,15 @@ func Main() int {
 		app.closeTerminalOutput()
 		return ExitFailure
 	}
-	app.revisionCapacityTrace = &capacitytrace.Router{}
-	application, err := app.newApplication()
-	if err != nil {
-		app.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
-		_ = trace.close()
-		app.closeTerminalOutput()
-		return ExitFailure
-	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	app.processTrace = trace
-	app.application = application
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
 		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
 	)
-	if err := application.Close(context.Background()); err != nil {
-		app.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
-		if code == ExitOK {
-			code = ExitFailure
-		}
-	}
 	if err := trace.close(); err != nil {
 		app.writeCompleteLine("%s: publish test trace: %v", commandmeta.Name, err)
 		if code == ExitOK {
@@ -147,6 +138,18 @@ func Main() int {
 // Run 分派子命令。stdlib flag 不认子命令,这里手工分派(§6.9 工程要求:
 // 不引 CLI 框架)。
 func (a *App) Run(ctx context.Context, args []string) (code int) {
+	// Local configuration does not need a transfer engine or network resources.
+	if len(args) != 0 && args[0] == "relay" {
+		runner := relaycommand.Runner{Input: a.Stdin, Output: a.stderrWriter(), Save: a.saveRelayCandidates}
+		switch runner.Run(ctx, args[1:]) {
+		case relaycommand.ResultOK:
+			return ExitOK
+		case relaycommand.ResultUsage:
+			return ExitUsage
+		default:
+			return ExitFailure
+		}
+	}
 	if a.application == nil {
 		application, err := a.newApplication()
 		if err != nil {

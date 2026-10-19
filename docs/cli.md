@@ -30,13 +30,26 @@ Windows sources are admitted by file identity and write-excluding handle capabil
 
 ### Saved relays
 
-Save `windshare/relays.json` in your user configuration directory: `%APPDATA%` on Windows,
-`$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or `~/Library/Application Support` on macOS.
-`WINDSHARE_RELAY_CONFIG` can select another file.
+Import a JSON configuration once:
+
+```text
+wind relay import relay.json
+wind share <path...>
+```
 
 ```json
 {"relays":[{"url":"https://your-relay.example","registration_token":"your-registration-secret"}]}
 ```
+
+Use `wind relay import -` to read JSON from stdin; `-v` adds structured import diagnostics
+without credentials. Import validates and replaces the **entire allowed candidate set**;
+it does not merge old candidates. Invalid input or a failed write preserves the saved file.
+Import only saves configuration; it does not contact the relays.
+
+The file is stored as `windshare/relays.json` in your user configuration directory:
+`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or
+`~/Library/Application Support` on macOS. `WINDSHARE_RELAY_CONFIG` selects another file
+for both import and sharing. Manual editing remains supported.
 
 Ordinary `wind share <path...>` reuses this list; it does not add default relays.
 Without a saved file, the existing default applies. Up to eight candidates are supported;
