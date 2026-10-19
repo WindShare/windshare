@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { deploymentConfig, FULL_DEPLOYMENT, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, SHARE_BINDING, SHARE_CLASS, STATE_BINDING } from './deployment.mjs';
 import { endpointFor } from './routing.mjs';
 
@@ -73,6 +74,29 @@ test('updates need no readable secret and retain the address, encrypted export a
   assert.equal(second.namespaceId, first.namespaceId);
   assert.deepEqual(h.remote, before);
   assert.ok(!Object.hasOwn(h.plans[1], 'credential'));
+});
+
+test('switching frontend hosting in either direction preserves deployment identity and relay authority', async () => {
+  const scenario = harness();
+  const publish = scenario.options.deploy;
+  let mode = FULL_DEPLOYMENT;
+  const configurations = [];
+  scenario.options.deploy = async plan => {
+    configurations.push(deploymentConfig({}, scenario.options.inputs, mode));
+    await publish(plan);
+  };
+  const first = await deployRelay(scenario.options);
+  scenario.options.newToken = scenario.options.encrypt = () => assert.fail('hosting changes must retain credentials');
+  for (const nextMode of [RELAY_ONLY_DEPLOYMENT, FULL_DEPLOYMENT]) {
+    mode = nextMode;
+    const next = await deployRelay(scenario.options);
+    assert.equal(next.kind, 'update');
+    assert.deepEqual(next.state, first.state);
+    assert.equal(next.namespaceId, first.namespaceId);
+  }
+  assert.deepEqual(configurations.map(config => Object.hasOwn(config, 'assets')), [true, false, true]);
+  assert.equal(Object.hasOwn(first.state, 'mode'), false);
+  assert.equal(scenario.encrypted.length, 1);
 });
 
 test('lost first-deployment response recovers the same configuration on rerun', async () => {

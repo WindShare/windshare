@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareClient } from './cloudflare.mjs';
+import { FULL_DEPLOYMENT, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const wrangler = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare/node_modules/wrangler/bin/wrangler.js');
@@ -16,8 +17,10 @@ const keyFile = join(directory, 'identity.key');
 const stateFile = join(directory, 'share.json');
 const savedConfig = join(directory, 'saved-relays.json');
 const outputDirectory = join(directory, 'export');
+const HOSTING_REQUEST_TIMEOUT_MS = 30_000;
 const env = { ...process.env, CLOUDFLARE_WORKER_NAME: workerName, WINDSHARE_DEPLOYMENT_OUTPUT: outputDirectory,
   WINDSHARE_RELAY_CONFIG: savedConfig, CI: 'true', WRANGLER_SEND_METRICS: 'false',
+  CLOUDFLARE_DEPLOYMENT_MODE: FULL_DEPLOYMENT,
   CLOUDFLARE_RELAY_DOMAIN: '', CLOUDFLARE_ZONE_ID: '' };
 const paths = [keyFile, stateFile, savedConfig, join(outputDirectory, 'relay.json.age'), join(outputDirectory, 'deployment.json')];
 
@@ -29,6 +32,30 @@ function command(program, args, input, capture = false) {
   });
   assert.ok(!result.error && result.status === 0, `${program} failed (exit ${result.status})`);
   return result.stdout;
+}
+
+async function verifyHosting(deployment) {
+  const request = path => fetch(new URL(path, deployment.endpoint), {
+    headers: { 'Sec-Fetch-Mode': 'navigate' }, signal: AbortSignal.timeout(HOSTING_REQUEST_TIMEOUT_MS), redirect: 'error',
+  });
+  const response = await request('/');
+  if (deployment.mode === FULL_DEPLOYMENT) {
+    assert.equal(deployment.frontendUrl, deployment.endpoint);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('Content-Type'), /text\/html/);
+    const html = await response.text();
+    const modulePath = html.match(/<script\b[^>]*\bsrc="([^"]+)"/)?.[1];
+    assert.ok(modulePath, 'frontend must load its JavaScript bundle');
+    const moduleResponse = await request(modulePath);
+    assert.equal(moduleResponse.status, 200);
+    assert.match(moduleResponse.headers.get('Content-Type'), /javascript/);
+  } else {
+    assert.equal(deployment.frontendUrl, null);
+    assert.equal(response.status, 400);
+  }
+  const relay = await request('/v2/ws');
+  assert.equal(relay.status, 400, 'relay paths must not fall through to the SPA');
+  assert.doesNotMatch(relay.headers.get('Content-Type') ?? '', /text\/html/);
 }
 
 let attempted = false;
@@ -45,6 +72,7 @@ try {
   const run = () => command(process.execPath, ['scripts/deploy/cloudflare/run.mjs']);
   run();
   const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
+  await verifyHosting(before);
   const firstExport = await readFile(join(outputDirectory, 'relay.json.age'), 'utf8');
   const plaintext = command('age', ['--decrypt', '-i', keyFile, join(outputDirectory, 'relay.json.age')], undefined, true);
   command('go', ['run', './cmd/wind', 'relay', 'import', '-'], plaintext);
@@ -55,10 +83,15 @@ try {
   const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
     '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);
   probe('prepare');
-  run();
-  assert.deepEqual(JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8')), before);
-  assert.equal(await readFile(join(outputDirectory, 'relay.json.age'), 'utf8'), firstExport);
-  probe('verify');
+  for (const mode of [RELAY_ONLY_DEPLOYMENT, FULL_DEPLOYMENT]) {
+    env.CLOUDFLARE_DEPLOYMENT_MODE = mode;
+    run();
+    const after = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
+    assert.deepEqual(after, { ...before, mode, frontendUrl: mode === FULL_DEPLOYMENT ? before.endpoint : null });
+    assert.equal(await readFile(join(outputDirectory, 'relay.json.age'), 'utf8'), firstExport);
+    await verifyHosting(after);
+    probe('verify');
+  }
   console.log(JSON.stringify({ event: 'smoke_passed', workerName, ...before }));
 } finally {
   try {

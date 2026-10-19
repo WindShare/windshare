@@ -1,7 +1,10 @@
-# Private Cloudflare relay
+# Cloudflare deployment
 
-Fork this repository and use **Deploy private Cloudflare relay** in GitHub Actions.
-No source edits or local Wrangler installation are needed. This optional relay is for
+Fork this repository and use **Deploy WindShare to Cloudflare** in GitHub Actions.
+By default, one Worker hosts the frontend and private relay at the same address.
+The frontend uses [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/);
+`/v2/*` requests reach the relay. Set `CLOUDFLARE_DEPLOYMENT_MODE=relay-only` to omit the frontend.
+No source edits or local Wrangler installation are needed. This optional deployment is for
 personal, light use; Cloudflare's [Free-plan quotas](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 still apply.
 
@@ -26,29 +29,35 @@ still apply.
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `CLOUDFLARE_API_TOKEN` | The Cloudflare deployment token |
-   | Variable | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+   | Secret | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
    | Variable | `CLOUDFLARE_WORKER_NAME` | A new, stable lowercase name, e.g. `windshare-private` |
    | Variable | `WINDSHARE_CONFIG_RECIPIENT` | Your public `age1...` key |
    | Variable | `CLOUDFLARE_RELAY_ENABLED` | `true` |
+   | Variable (optional) | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default) or `relay-only` |
    | Variable (optional pair) | `CLOUDFLARE_RELAY_DOMAIN` | Custom hostname, e.g. `relay.example.com` |
-   | Variable (optional pair) | `CLOUDFLARE_ZONE_ID` | That hostname's Cloudflare zone ID |
+   | Secret (optional pair) | `CLOUDFLARE_ZONE_ID` | That hostname's Cloudflare zone ID |
 
-4. Enable Actions in the fork, then run **Deploy private Cloudflare relay** on `main`.
+   IDs use Secrets to reduce CI-log exposure; they do not grant access without a token.
+   Hostnames remain Variables because sharing links and deployment artifacts contain them.
+
+4. Enable Actions in the fork, then run **Deploy WindShare to Cloudflare** on `main`.
    The first run generates a random registration credential and publishes the Worker.
    Its summary shows your custom domain or `https://<name>.<subdomain>.workers.dev`.
    Custom domains get managed DNS/TLS; workers.dev and preview URLs are disabled in that mode.
 5. Download and extract the **windshare-relay-config** artifact. In its directory, with
-   [WindShare installed](installation.md), decrypt and import:
+   [WindShare installed](../installation.md), decrypt and import:
 
    ```sh
    age --decrypt -i /path/to/windshare.key relay.json.age | wind relay import -
-   wind share <path>
+   wind share <path> --front-url https://<your-worker-address>
    ```
 
    This works in PowerShell and POSIX shells. Import replaces the entire allowed relay
    set, so this configuration uses **only your private relay**. To allow additional
    relays, decrypt to a private JSON file and edit its `relays` array before importing;
-   see [saved relays](cli.md#saved-relays). Receivers still open ordinary sharing links.
+   see [saved relays](../cli.md#saved-relays). `--front-url` selects the frontend in sharing
+   links; importing relay settings does not set it. In `relay-only` mode, use your
+   separately hosted frontend's URL. The workflow summary includes the commands.
 
 The registration credential is separate from the Cloudflare API token. It lives in the
 Worker's `REGISTRATION_SECRET`; only its age-encrypted import copy is published as an
@@ -57,10 +66,14 @@ key never goes to GitHub or Cloudflare. Keep it and the imported local configura
 
 ## Updates and recovery
 
-Use **Sync fork → Update branch** on `main`. Changes to the relay, deployment scripts
+Use **Sync fork → Update branch** on `main`. Changes to the relay, frontend, deployment scripts
 or workflow trigger an update automatically. Documentation-only syncs need no deployment;
 the workflow can always be run manually. Settings remain in repository Variables/Secrets,
 outside Git, so syncing upstream does not overwrite them.
+
+To switch modes, change `CLOUDFLARE_DEPLOYMENT_MODE` and rerun the workflow. `relay-only`
+skips frontend dependencies/build/upload and removes the hosted frontend. Returning to
+`full` restores it. Both modes preserve the relay identity, credentials and share storage.
 
 Updates preserve the Worker name/address, registration secret, encrypted import copy,
 `SHARES` binding and its SQLite namespace. They apply code without deleting storage;
@@ -72,7 +85,7 @@ active object has already switched versions.
   the next run recovers its encrypted configuration without generating another credential.
 - Artifacts expire after 30 days. Rerun the workflow to download the same encrypted copy.
 - To renew deployment access, replace only `CLOUDFLARE_API_TOKEN`; imported clients stay valid.
-- Keep the account, Worker name, route Variables (or workers.dev subdomain) and recipient key unchanged.
+- Keep the account, Worker name, route settings (or workers.dev subdomain) and recipient key unchanged.
   Changing the account/name selects a different deployment. Address or recipient drift,
   missing secret/storage, or an unmanaged Worker with the same name fails explicitly.
   Restore the original settings instead of deleting the Worker or editing its state bindings.
