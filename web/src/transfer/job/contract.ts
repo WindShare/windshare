@@ -227,6 +227,8 @@ export type TransferTraceEvent =
     }>
   | Readonly<{
       name: 'transfer_progress'
+      operationId: string
+      transferJobId: string
       discoveredFiles: bigint
       discoveredBytes: bigint
       receivedObjectBytes: bigint

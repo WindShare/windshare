@@ -66,11 +66,15 @@ The shared Go codec client is at `relay-rust/tests/_goclient`.
 bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP
 and Alarm expiry.
 
-For the production CLI/browser download scenario, set `WINDSHARE_RELAY_CONFIG`
-to a saved configuration containing one credentialed Cloudflare candidate, then run
-`pnpm exec playwright test --config playwright.cloudflare.config.ts` from `web/`.
-This opt-in run builds `wind`, disables browser P2P, verifies a 17 MiB download hash,
-and records the actual relay bytes; ordinary browser gates do not require cloud access.
+For the CLI/browser recovery scenario, use an isolated Preview with `tests/entry.mjs`
+as described below. Set `WINDSHARE_RELAY_CONFIG` to a saved configuration containing
+that one credentialed candidate, and `WINDSHARE_RELAY_PREVIEW_SECRET` to its test secret.
+Run `pnpm exec playwright test --config playwright.cloudflare.config.ts` from `web/`.
+The test builds `wind`, disables browser P2P, and resets the share once after at least
+4 MiB is written. It verifies automatic sender recovery, the same browser task and
+monotonic progress, no re-request of the recorded completed blocks, and the 17 MiB hash.
+JSON evidence and sender/browser traces go to `web/test-results/cloudflare/`.
+This opt-in scenario is absent from ordinary browser gates; it does not test redeployment.
 
 For an isolated real-cloud run, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
 Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate

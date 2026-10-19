@@ -131,10 +131,12 @@ The CLI loads a saved candidate set for ordinary sharing; only public URLs enter
 capabilities. Fresh REGISTER and recovery re-registration use the bound credential,
 while RESUME and STOP retain independent authentication. See [CLI configuration](../../cli.md#saved-relays).
 The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
-passes a 17 MiB download/hash check with P2P disabled. Product disconnect/redeployment
-recovery and automated deployment are the next steps.
+passes a 17 MiB download/hash check with P2P disabled, including one Preview object
+reset after 4 MiB is written. Sender publication and the original browser task recover
+automatically without re-requesting the recorded completed blocks. Deployment during
+transfer, repeated disruptions and automated deployment remain pending.
 
-结论：**共享 Rust 语义内核及原生默认入口切换已完成。** Cloudflare 已跑通正式分享与下载，下一步验证产品断线续传和部署更新。清理完成后结束风险预留仍不等同于物理缓冲释放；不逐帧写库或重置整个分享清理单个慢连接。
+结论：**共享 Rust 语义内核及原生默认入口切换已完成。** Cloudflare 已跑通正式分享与下载，并验证一次对象故障后的原任务自动续传；下一步验证部署中断与部署更新。清理完成后结束风险预留仍不等同于物理缓冲释放；不逐帧写库或重置整个分享清理单个慢连接。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 

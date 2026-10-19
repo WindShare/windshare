@@ -768,6 +768,8 @@ describe('browser diagnostics production composition', () => {
   it('projects complete capacity scheduling progress independently from file outcomes', () => {
     const projected = projectV2ReceiverTraceEvent(Object.freeze({
       name: 'transfer_progress',
+      operationId: 'BQAAAAAAAAAAAAAAAAAAAA',
+      transferJobId: 'BgAAAAAAAAAAAAAAAAAAAA',
       discoveredFiles: 2n,
       discoveredBytes: 10n,
       receivedObjectBytes: 8n,
@@ -787,6 +789,8 @@ describe('browser diagnostics production composition', () => {
     }))
 
     expect(projected.payload).toMatchObject({
+      operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+      transfer_job_id: 'BgAAAAAAAAAAAAAAAAAAAA',
       capacity_waiting_files: '1',
       capacity_accumulated_wait_ms: '125',
       capacity_wait_attempts: '2',
