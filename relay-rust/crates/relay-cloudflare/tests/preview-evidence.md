@@ -5,10 +5,10 @@ host ran behind the authenticated `entry.mjs` test wrapper, with isolated SQLite
 Durable Object state.
 
 - Worker: `windshare-relay-cloudflare`; Preview: `delivery-eaf31bb4369f`.
-- Account: `fb1b5468362a79b5545d660ace3e8f9d`.
+- Account: `<ACCOUNT_ID>`.
 - Deployment: `c4bab88c-9bfc-400d-ae03-5e2a1fe2e1b4`.
-- Stable URL: `https://delivery-eaf31bb4369f-windshare-relay-cloudflare.doraemonkey.workers.dev`.
-- Deployment URL: `https://c4bab88c-windshare-relay-cloudflare.doraemonkey.workers.dev`.
+- Stable URL: `https://delivery-eaf31bb4369f-windshare-relay-cloudflare.workers.example.invalid`.
+- Deployment URL: `https://c4bab88c-windshare-relay-cloudflare.workers.example.invalid`.
 - Source base: `d786f8fff0d6a92183bb398c18ca1554c65069e0` plus this change.
 - Tested Wasm SHA-256: `16fbe9edf835aa6fd4944a9c8f723e2dca8ec16e111628d3aa3b147d7bac8ef6`.
 - Working-tree source-manifest SHA-256: `9117c58551c85173b395d08fb5ba113d809fc51dfbe0783195a9499ae5cc16f3`.
