@@ -126,7 +126,7 @@ func assertImportTrace(t *testing.T, output string, want []string) {
 	t.Helper()
 	var messages []string
 	var operationID string
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if !strings.HasPrefix(line, "{") {
 			continue
 		}
