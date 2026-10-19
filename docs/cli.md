@@ -30,6 +30,9 @@ Windows sources are admitted by file identity and write-excluding handle capabil
 
 ### Saved relays
 
+For a personal Cloudflare relay, use the [Fork ? Actions deployment](cloudflare-relay.md)
+and decrypt its configuration directly into `wind relay import -`.
+
 Import a JSON configuration once:
 
 ```text
