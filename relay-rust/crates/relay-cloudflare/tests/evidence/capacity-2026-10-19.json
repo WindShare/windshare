@@ -1,0 +1,2924 @@
+{
+  "schema": 1,
+  "date": "2026-10-19",
+  "plan": {
+    "name": "Workers Free",
+    "evidence": "Authenticated account Workers plans page displayed Free, $0 and Current plan; Paid displayed Upgrade."
+  },
+  "build": {
+    "revision": "e48643f3f90ca7fb0b7722f4ef0dae968216082b",
+    "node": "v24.16.0",
+    "wrangler": "4.151.1",
+    "playwright": "1.62.1",
+    "wasmSha256": "c939a09f5cddd1db4edacda4130bf29f0e557eca16b10e07635d73eaa54b2526",
+    "entrySha256": "9246f6c98281db76bb4ea569fb0f44811a590bc3c0df191b8ab4d8c5792c0e51",
+    "cliSha256": "4aaaee885cbd5028ed18ae21042a10fcf2e6d70fb0c32e7db1f9a8b6aedc3156",
+    "configurationSha256": "92848cbbce5ff3a4d0be271ef5b9ca834c993a7535c118f1f42eac5cae1779e6",
+    "proxyEnvironmentPresent": [
+      "ALL_PROXY",
+      "HTTP_PROXY"
+    ]
+  },
+  "workingTreeNote": "Pre-existing changes were present in docs, repository instructions and portal footer. Build hashes identify the tested artifacts.",
+  "scenarios": [
+    {
+      "scenario": {
+        "name": "idle",
+        "fileMiB": 1,
+        "feedbackDelaysMs": [
+          0
+        ],
+        "idleMs": 300000
+      },
+      "workerName": "worker-1",
+      "startedAt": "2026-10-19T08:02:22.902Z",
+      "completedAt": "2026-10-19T08:07:22.913Z",
+      "elapsedMs": 300011.2214,
+      "sourceBytes": 1048576,
+      "sourceSha256": "867ad6ccd3ac3ec8b1753372b1e5c081409a3271e242bddedc776712b091f57e",
+      "peerTransport": "disabled",
+      "outcome": "passed",
+      "aggregateMiBPerSecond": 0,
+      "downloads": [],
+      "browserBefore": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-1",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 259
+              },
+              "WS2B": {
+                "messages": 2,
+                "bytes": 64
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 4,
+                "bytes": 96
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 604
+              }
+            }
+          }
+        }
+      ],
+      "browserAfter": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-1",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 259
+              },
+              "WS2B": {
+                "messages": 2,
+                "bytes": 64
+              },
+              "WS2H": {
+                "messages": 20,
+                "bytes": 320
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 4,
+                "bytes": 96
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 604
+              },
+              "WS2A": {
+                "messages": 20,
+                "bytes": 320
+              }
+            }
+          }
+        }
+      ],
+      "deployment": {
+        "workerName": "worker-1",
+        "versionId": "deployment-1",
+        "namespaceId": "namespace-1",
+        "compatibility": {
+          "migration_tag": "v1",
+          "compatibility_date": "2026-10-17",
+          "compatibility_flags": [
+            "web_socket_auto_reply_to_close"
+          ],
+          "usage_model": "standard"
+        }
+      },
+      "cleanup": {
+        "workerName": "worker-1",
+        "deleted": true,
+        "at": "2026-10-19T08:07:25.295Z"
+      },
+      "platformSnapshot": {
+        "queriedAt": "2026-10-19T08:19:56.294Z",
+        "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){periodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}}invocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){dimensions{type status coloCode}sum{requests errors}}storage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){max{storedBytes}}}}}",
+        "data": {
+          "invocations": [],
+          "periodic": [],
+          "storage": []
+        }
+      },
+      "invocationLogSnapshot": {
+        "query": {
+          "queryId": "windshare-capacity-idle-invocations",
+          "dry": true,
+          "view": "events",
+          "chart": false,
+          "ignoreSeries": true,
+          "limit": 2000,
+          "timeframe": {
+            "from": 1792396920000,
+            "to": 1792397280000
+          },
+          "parameters": {
+            "filters": [
+              {
+                "key": "$workers.scriptName",
+                "operation": "eq",
+                "type": "string",
+                "value": "worker-1"
+              },
+              {
+                "key": "$metadata.type",
+                "operation": "eq",
+                "type": "string",
+                "value": "cf-worker-event"
+              }
+            ]
+          }
+        },
+        "returnedEvents": 69,
+        "querySamplingLevel": 1,
+        "groups": {
+          "durableObject/hibernatableWebSocket//ok": {
+            "count": 2,
+            "cpuMs": 5,
+            "wallMs": 8,
+            "maxCpuMs": 4,
+            "maxWallMs": 6,
+            "p95CpuMs": 4
+          },
+          "durableObject/hibernatableWebSocket/message/ok": {
+            "count": 53,
+            "cpuMs": 92,
+            "wallMs": 922,
+            "maxCpuMs": 14,
+            "maxWallMs": 82,
+            "p95CpuMs": 6
+          },
+          "durableObject/alarm//ok": {
+            "count": 10,
+            "cpuMs": 1,
+            "wallMs": 318,
+            "maxCpuMs": 1,
+            "maxWallMs": 35,
+            "p95CpuMs": 1
+          },
+          "stateless/fetch//canceled": {
+            "count": 2,
+            "cpuMs": 20,
+            "wallMs": 446,
+            "maxCpuMs": 10,
+            "maxWallMs": 383,
+            "p95CpuMs": 10
+          },
+          "durableObject/fetch//canceled": {
+            "count": 2,
+            "cpuMs": 40,
+            "wallMs": 249,
+            "maxCpuMs": 38,
+            "maxWallMs": 216,
+            "p95CpuMs": 38
+          }
+        }
+      }
+    },
+    {
+      "scenario": {
+        "name": "single",
+        "fileMiB": 32,
+        "feedbackDelaysMs": [
+          0
+        ]
+      },
+      "workerName": "worker-2",
+      "startedAt": "2026-10-19T08:07:35.640Z",
+      "completedAt": "2026-10-19T08:10:14.944Z",
+      "elapsedMs": 159304.0979,
+      "sourceBytes": 33554432,
+      "sourceSha256": "b1a2f97d94bb55c24b77cc91244f6a6733fbc003a887000df52aa7e49242abbc",
+      "peerTransport": "disabled",
+      "outcome": "passed",
+      "aggregateMiBPerSecond": 0.20087367758792601,
+      "downloads": [
+        {
+          "feedbackDelayMs": 0,
+          "bytes": 33554432,
+          "sha256": "b1a2f97d94bb55c24b77cc91244f6a6733fbc003a887000df52aa7e49242abbc",
+          "elapsedMs": 159303.3226
+        }
+      ],
+      "browserBefore": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-2",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 259
+              },
+              "WS2B": {
+                "messages": 2,
+                "bytes": 64
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 4,
+                "bytes": 96
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 604
+              }
+            }
+          }
+        }
+      ],
+      "browserAfter": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-2",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 38,
+                "bytes": 4077
+              },
+              "WS2B": {
+                "messages": 581,
+                "bytes": 18592
+              },
+              "WS2H": {
+                "messages": 10,
+                "bytes": 160
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 38,
+                "bytes": 912
+              },
+              "WS2O": {
+                "messages": 581,
+                "bytes": 33629408
+              },
+              "WS2A": {
+                "messages": 10,
+                "bytes": 160
+              }
+            }
+          }
+        }
+      ],
+      "deployment": {
+        "workerName": "worker-2",
+        "versionId": "deployment-2",
+        "namespaceId": "namespace-2",
+        "compatibility": {
+          "migration_tag": "v1",
+          "compatibility_date": "2026-10-17",
+          "compatibility_flags": [
+            "web_socket_auto_reply_to_close"
+          ],
+          "usage_model": "standard"
+        }
+      },
+      "cleanup": {
+        "workerName": "worker-2",
+        "deleted": true,
+        "at": "2026-10-19T08:10:18.429Z"
+      },
+      "platformSnapshot": {
+        "queriedAt": "2026-10-19T08:19:56.683Z",
+        "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){periodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}}invocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){dimensions{type status coloCode}sum{requests errors}}storage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){max{storedBytes}}}}}",
+        "data": {
+          "invocations": [
+            {
+              "dimensions": {
+                "coloCode": "SJC",
+                "status": "clientDisconnected",
+                "type": "http"
+              },
+              "sum": {
+                "errors": 1,
+                "requests": 1
+              }
+            },
+            {
+              "dimensions": {
+                "coloCode": "SJC",
+                "status": "success",
+                "type": "hibernation"
+              },
+              "sum": {
+                "errors": 0,
+                "requests": 886
+              }
+            },
+            {
+              "dimensions": {
+                "coloCode": "SJC",
+                "status": "success",
+                "type": "alarm"
+              },
+              "sum": {
+                "errors": 0,
+                "requests": 5
+              }
+            }
+          ],
+          "periodic": [
+            {
+              "count": 1,
+              "dimensions": {
+                "datetimeMinute": "2026-10-19T08:09:00Z",
+                "objectId": "object-1"
+              },
+              "max": {
+                "activeWebsocketConnections": 2,
+                "memoryUsageBytes": 22604647
+              },
+              "sum": {
+                "activeTime": 408836,
+                "cpuTime": 196353,
+                "duration": 0.052331008,
+                "exceededCpuErrors": 0,
+                "exceededMemoryErrors": 0,
+                "fatalInternalErrors": 0,
+                "inboundWebsocketMsgCount": 0,
+                "outboundWebsocketMsgCount": 322,
+                "rowsRead": 4,
+                "rowsWritten": 3
+              }
+            },
+            {
+              "count": 1,
+              "dimensions": {
+                "datetimeMinute": "2026-10-19T08:07:00Z",
+                "objectId": "object-1"
+              },
+              "max": {
+                "activeWebsocketConnections": 2,
+                "memoryUsageBytes": 13184486
+              },
+              "sum": {
+                "activeTime": 866446,
+                "cpuTime": 374665,
+                "duration": 0.110905088,
+                "exceededCpuErrors": 0,
+                "exceededMemoryErrors": 0,
+                "fatalInternalErrors": 0,
+                "inboundWebsocketMsgCount": 0,
+                "outboundWebsocketMsgCount": 494,
+                "rowsRead": 7,
+                "rowsWritten": 15
+              }
+            },
+            {
+              "count": 1,
+              "dimensions": {
+                "datetimeMinute": "2026-10-19T08:08:00Z",
+                "objectId": "object-1"
+              },
+              "max": {
+                "activeWebsocketConnections": 2,
+                "memoryUsageBytes": 21033156
+              },
+              "sum": {
+                "activeTime": 444690,
+                "cpuTime": 282171,
+                "duration": 0.05692032,
+                "exceededCpuErrors": 0,
+                "exceededMemoryErrors": 0,
+                "fatalInternalErrors": 0,
+                "inboundWebsocketMsgCount": 0,
+                "outboundWebsocketMsgCount": 450,
+                "rowsRead": 0,
+                "rowsWritten": 0
+              }
+            }
+          ],
+          "storage": []
+        }
+      },
+      "invocationLogSnapshot": {
+        "query": {
+          "queryId": "windshare-capacity-single-invocations",
+          "dry": true,
+          "view": "events",
+          "chart": false,
+          "ignoreSeries": true,
+          "limit": 2000,
+          "timeframe": {
+            "from": 1792397220000,
+            "to": 1792397460000
+          },
+          "parameters": {
+            "filters": [
+              {
+                "key": "$workers.scriptName",
+                "operation": "eq",
+                "type": "string",
+                "value": "worker-2"
+              },
+              {
+                "key": "$metadata.type",
+                "operation": "eq",
+                "type": "string",
+                "value": "cf-worker-event"
+              }
+            ]
+          }
+        },
+        "returnedEvents": 1210,
+        "querySamplingLevel": 1,
+        "groups": {
+          "durableObject/alarm//ok": {
+            "count": 5,
+            "cpuMs": 1,
+            "wallMs": 187,
+            "maxCpuMs": 1,
+            "maxWallMs": 67,
+            "p95CpuMs": 1
+          },
+          "durableObject/hibernatableWebSocket//ok": {
+            "count": 2,
+            "cpuMs": 4,
+            "wallMs": 65,
+            "maxCpuMs": 4,
+            "maxWallMs": 59,
+            "p95CpuMs": 4
+          },
+          "durableObject/hibernatableWebSocket/message/ok": {
+            "count": 1199,
+            "cpuMs": 109,
+            "wallMs": 613,
+            "maxCpuMs": 8,
+            "maxWallMs": 73,
+            "p95CpuMs": 1
+          },
+          "stateless/fetch//canceled": {
+            "count": 2,
+            "cpuMs": 28,
+            "wallMs": 454,
+            "maxCpuMs": 20,
+            "maxWallMs": 386,
+            "p95CpuMs": 20
+          },
+          "durableObject/fetch//canceled": {
+            "count": 2,
+            "cpuMs": 42,
+            "wallMs": 192,
+            "maxCpuMs": 41,
+            "maxWallMs": 165,
+            "p95CpuMs": 41
+          }
+        }
+      }
+    },
+    {
+      "scenario": {
+        "name": "paired",
+        "fileMiB": 16,
+        "feedbackDelaysMs": [
+          0,
+          400
+        ]
+      },
+      "workerName": "worker-3",
+      "startedAt": "2026-10-19T08:10:31.239Z",
+      "completedAt": "2026-10-19T08:13:01.716Z",
+      "elapsedMs": 150476.94529999996,
+      "sourceBytes": 16777216,
+      "sourceSha256": "bec2b1ca6eb33441fb66450cbc639bc72c9b461121350fd333f2a5c327a099e2",
+      "peerTransport": "disabled",
+      "outcome": "passed",
+      "aggregateMiBPerSecond": 0.21265716110998173,
+      "downloads": [
+        {
+          "feedbackDelayMs": 0,
+          "bytes": 16777216,
+          "sha256": "bec2b1ca6eb33441fb66450cbc639bc72c9b461121350fd333f2a5c327a099e2",
+          "elapsedMs": 86387.43259999994
+        },
+        {
+          "feedbackDelayMs": 400,
+          "bytes": 16777216,
+          "sha256": "bec2b1ca6eb33441fb66450cbc639bc72c9b461121350fd333f2a5c327a099e2",
+          "elapsedMs": 150476.44819999998
+        }
+      ],
+      "browserBefore": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-3",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 259
+              },
+              "WS2B": {
+                "messages": 2,
+                "bytes": 64
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 4,
+                "bytes": 96
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 604
+              }
+            }
+          }
+        },
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-3",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 259
+              },
+              "WS2B": {
+                "messages": 2,
+                "bytes": 64
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 4,
+                "bytes": 96
+              },
+              "WS2O": {
+                "messages": 2,
+                "bytes": 604
+              }
+            }
+          }
+        }
+      ],
+      "browserAfter": [
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-3",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 21,
+                "bytes": 2269
+              },
+              "WS2B": {
+                "messages": 293,
+                "bytes": 9376
+              },
+              "WS2H": {
+                "messages": 10,
+                "bytes": 160
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 20,
+                "bytes": 480
+              },
+              "WS2O": {
+                "messages": 293,
+                "bytes": 16815358
+              },
+              "WS2A": {
+                "messages": 10,
+                "bytes": 160
+              }
+            }
+          }
+        },
+        {
+          "opened": 1,
+          "closed": 0,
+          "shareId": "share-3",
+          "errors": [],
+          "counts": {
+            "sent": {
+              "WS2J": {
+                "messages": 1,
+                "bytes": 36
+              },
+              "WS2O": {
+                "messages": 22,
+                "bytes": 2373
+              },
+              "WS2B": {
+                "messages": 291,
+                "bytes": 9312
+              },
+              "WS2H": {
+                "messages": 10,
+                "bytes": 160
+              }
+            },
+            "received": {
+              "WS2D": {
+                "messages": 1,
+                "bytes": 247
+              },
+              "WS2W": {
+                "messages": 23,
+                "bytes": 552
+              },
+              "WS2O": {
+                "messages": 293,
+                "bytes": 16815384
+              },
+              "WS2A": {
+                "messages": 10,
+                "bytes": 160
+              }
+            }
+          }
+        }
+      ],
+      "deployment": {
+        "workerName": "worker-3",
+        "versionId": "deployment-3",
+        "namespaceId": "namespace-3",
+        "compatibility": {
+          "migration_tag": "v1",
+          "compatibility_date": "2026-10-17",
+          "compatibility_flags": [
+            "web_socket_auto_reply_to_close"
+          ],
+          "usage_model": "standard"
+        }
+      },
+      "cleanup": {
+        "workerName": "worker-3",
+        "deleted": true,
+        "at": "2026-10-19T08:13:04.330Z"
+      },
+      "platformSnapshot": {
+        "queriedAt": "2026-10-19T08:19:57.211Z",
+        "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){periodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}}invocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){dimensions{type status coloCode}sum{requests errors}}storage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){max{storedBytes}}}}}",
+        "data": {
+          "invocations": [],
+          "periodic": [],
+          "storage": []
+        }
+      },
+      "invocationLogSnapshot": {
+        "query": {
+          "queryId": "windshare-capacity-paired-invocations",
+          "dry": true,
+          "view": "events",
+          "chart": false,
+          "ignoreSeries": true,
+          "limit": 2000,
+          "timeframe": {
+            "from": 1792397400000,
+            "to": 1792397640000
+          },
+          "parameters": {
+            "filters": [
+              {
+                "key": "$workers.scriptName",
+                "operation": "eq",
+                "type": "string",
+                "value": "worker-3"
+              },
+              {
+                "key": "$metadata.type",
+                "operation": "eq",
+                "type": "string",
+                "value": "cf-worker-event"
+              }
+            ]
+          }
+        },
+        "returnedEvents": 1269,
+        "querySamplingLevel": 1,
+        "groups": {
+          "durableObject/alarm//ok": {
+            "count": 5,
+            "cpuMs": 1,
+            "wallMs": 73,
+            "maxCpuMs": 1,
+            "maxWallMs": 19,
+            "p95CpuMs": 1
+          },
+          "durableObject/hibernatableWebSocket//ok": {
+            "count": 3,
+            "cpuMs": 8,
+            "wallMs": 37,
+            "maxCpuMs": 5,
+            "maxWallMs": 29,
+            "p95CpuMs": 5
+          },
+          "durableObject/hibernatableWebSocket/message/ok": {
+            "count": 1255,
+            "cpuMs": 256,
+            "wallMs": 1216,
+            "maxCpuMs": 11,
+            "maxWallMs": 50,
+            "p95CpuMs": 1
+          },
+          "stateless/fetch//canceled": {
+            "count": 3,
+            "cpuMs": 36,
+            "wallMs": 578,
+            "maxCpuMs": 18,
+            "maxWallMs": 443,
+            "p95CpuMs": 18
+          },
+          "durableObject/fetch//canceled": {
+            "count": 3,
+            "cpuMs": 52,
+            "wallMs": 121,
+            "maxCpuMs": 47,
+            "maxWallMs": 92,
+            "p95CpuMs": 47
+          }
+        }
+      }
+    }
+  ],
+  "analyticsRecheck": {
+    "recordedAt": "2026-10-19T08:33:00.911Z",
+    "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){idlePeriodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}} idleInvocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){dimensions{type status coloCode}sum{requests errors}} idleStorage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:02:00Z\",datetime_leq:\"2026-10-19T08:08:00Z\",namespaceId:\"namespace-1\"}){max{storedBytes}}\nsinglePeriodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}} singleInvocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){dimensions{type status coloCode}sum{requests errors}} singleStorage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:07:00Z\",datetime_leq:\"2026-10-19T08:11:00Z\",namespaceId:\"namespace-2\"}){max{storedBytes}}\npairedPeriodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}} pairedInvocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){dimensions{type status coloCode}sum{requests errors}} pairedStorage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:10:00Z\",datetime_leq:\"2026-10-19T08:14:00Z\",namespaceId:\"namespace-3\"}){max{storedBytes}}}}}",
+    "response": {
+      "success": true,
+      "status": 200,
+      "result": {
+        "viewer": {
+          "accounts": [
+            {
+              "idleInvocations": [],
+              "idlePeriodic": [],
+              "idleStorage": [],
+              "pairedInvocations": [],
+              "pairedPeriodic": [],
+              "pairedStorage": [],
+              "singleInvocations": [
+                {
+                  "dimensions": {
+                    "coloCode": "SJC",
+                    "status": "clientDisconnected",
+                    "type": "http"
+                  },
+                  "sum": {
+                    "errors": 2,
+                    "requests": 2
+                  }
+                },
+                {
+                  "dimensions": {
+                    "coloCode": "SJC",
+                    "status": "success",
+                    "type": "hibernation"
+                  },
+                  "sum": {
+                    "errors": 0,
+                    "requests": 1004
+                  }
+                },
+                {
+                  "dimensions": {
+                    "coloCode": "SJC",
+                    "status": "success",
+                    "type": "alarm"
+                  },
+                  "sum": {
+                    "errors": 0,
+                    "requests": 5
+                  }
+                }
+              ],
+              "singlePeriodic": [
+                {
+                  "count": 1,
+                  "dimensions": {
+                    "datetimeMinute": "2026-10-19T08:07:00Z",
+                    "objectId": "object-1"
+                  },
+                  "max": {
+                    "activeWebsocketConnections": 2,
+                    "memoryUsageBytes": 13184486
+                  },
+                  "sum": {
+                    "activeTime": 866446,
+                    "cpuTime": 374665,
+                    "duration": 0.110905088,
+                    "exceededCpuErrors": 0,
+                    "exceededMemoryErrors": 0,
+                    "fatalInternalErrors": 0,
+                    "inboundWebsocketMsgCount": 0,
+                    "outboundWebsocketMsgCount": 494,
+                    "rowsRead": 7,
+                    "rowsWritten": 15
+                  }
+                },
+                {
+                  "count": 1,
+                  "dimensions": {
+                    "datetimeMinute": "2026-10-19T08:08:00Z",
+                    "objectId": "object-1"
+                  },
+                  "max": {
+                    "activeWebsocketConnections": 2,
+                    "memoryUsageBytes": 21033156
+                  },
+                  "sum": {
+                    "activeTime": 444690,
+                    "cpuTime": 282171,
+                    "duration": 0.05692032,
+                    "exceededCpuErrors": 0,
+                    "exceededMemoryErrors": 0,
+                    "fatalInternalErrors": 0,
+                    "inboundWebsocketMsgCount": 0,
+                    "outboundWebsocketMsgCount": 450,
+                    "rowsRead": 0,
+                    "rowsWritten": 0
+                  }
+                }
+              ],
+              "singleStorage": []
+            }
+          ]
+        }
+      },
+      "errors": [],
+      "messages": []
+    }
+  },
+  "idleInterval": {
+    "recordedAt": "2026-10-19T08:39:19.668Z",
+    "from": "2026-10-19T08:02:22.902Z",
+    "to": "2026-10-19T08:07:22.913Z",
+    "success": true,
+    "errors": [],
+    "count": 59,
+    "statistics": {
+      "elapsed": 0.294551401,
+      "rows_read": 4935832,
+      "bytes_read": 440447857,
+      "abr_level": 1
+    },
+    "events": [
+      {
+        "at": 1792397242385,
+        "id": "request-1",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397228773,
+        "id": "request-2",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397227387,
+        "id": "request-3",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397213465,
+        "id": "request-4",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 4
+      },
+      {
+        "at": 1792397213461,
+        "id": "request-5",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 31
+      },
+      {
+        "at": 1792397212391,
+        "id": "request-6",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 35
+      },
+      {
+        "at": 1792397198459,
+        "id": "request-7",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397197381,
+        "id": "request-8",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 4,
+        "wallMs": 36
+      },
+      {
+        "at": 1792397183455,
+        "id": "request-9",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 1,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397183412,
+        "id": "request-10",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 31
+      },
+      {
+        "at": 1792397182389,
+        "id": "request-11",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 35
+      },
+      {
+        "at": 1792397168435,
+        "id": "request-12",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397167383,
+        "id": "request-13",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 4,
+        "wallMs": 37
+      },
+      {
+        "at": 1792397153426,
+        "id": "request-14",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 8
+      },
+      {
+        "at": 1792397153420,
+        "id": "request-15",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 31
+      },
+      {
+        "at": 1792397152379,
+        "id": "request-16",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 36
+      },
+      {
+        "at": 1792397138412,
+        "id": "request-17",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 0
+      },
+      {
+        "at": 1792397137378,
+        "id": "request-18",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 35
+      },
+      {
+        "at": 1792397123416,
+        "id": "request-19",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 14
+      },
+      {
+        "at": 1792397123403,
+        "id": "request-20",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 31
+      },
+      {
+        "at": 1792397122376,
+        "id": "request-21",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397108399,
+        "id": "request-22",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397107382,
+        "id": "request-23",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 36
+      },
+      {
+        "at": 1792397093404,
+        "id": "request-24",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 14
+      },
+      {
+        "at": 1792397093391,
+        "id": "request-25",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 32
+      },
+      {
+        "at": 1792397092373,
+        "id": "request-26",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397078386,
+        "id": "request-27",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397077380,
+        "id": "request-28",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397063398,
+        "id": "request-29",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 18
+      },
+      {
+        "at": 1792397063380,
+        "id": "request-30",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 32
+      },
+      {
+        "at": 1792397062375,
+        "id": "request-31",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 6,
+        "wallMs": 39
+      },
+      {
+        "at": 1792397048373,
+        "id": "request-32",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397047372,
+        "id": "request-33",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 36
+      },
+      {
+        "at": 1792397033364,
+        "id": "request-34",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 0
+      },
+      {
+        "at": 1792397032371,
+        "id": "request-35",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 34
+      },
+      {
+        "at": 1792397032371,
+        "id": "request-36",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 35
+      },
+      {
+        "at": 1792397018368,
+        "id": "request-37",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397017369,
+        "id": "request-38",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 35
+      },
+      {
+        "at": 1792397003347,
+        "id": "request-39",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792397002371,
+        "id": "request-40",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 35
+      },
+      {
+        "at": 1792396989278,
+        "id": "request-41",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 32
+      },
+      {
+        "at": 1792396988345,
+        "id": "request-42",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396987371,
+        "id": "request-43",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 3,
+        "wallMs": 37
+      },
+      {
+        "at": 1792396973329,
+        "id": "request-44",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396972371,
+        "id": "request-45",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 36
+      },
+      {
+        "at": 1792396958309,
+        "id": "request-46",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396957367,
+        "id": "request-47",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 9,
+        "wallMs": 43
+      },
+      {
+        "at": 1792396946872,
+        "id": "request-48",
+        "type": "alarm",
+        "outcome": "ok",
+        "cpuMs": 1,
+        "wallMs": 32
+      },
+      {
+        "at": 1792396944467,
+        "id": "request-49",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396944277,
+        "id": "request-50",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396944276,
+        "id": "request-51",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396944088,
+        "id": "request-52",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396944072,
+        "id": "request-53",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396943881,
+        "id": "request-54",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396943881,
+        "id": "request-55",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 2,
+        "wallMs": 2
+      },
+      {
+        "at": 1792396943881,
+        "id": "request-56",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 0,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396943310,
+        "id": "request-57",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 1,
+        "wallMs": 1
+      },
+      {
+        "at": 1792396943096,
+        "id": "request-58",
+        "type": "hibernatableWebSocket",
+        "outcome": "ok",
+        "cpuMs": 5,
+        "wallMs": 6
+      },
+      {
+        "at": 1792396942909,
+        "id": "request-59",
+        "type": "fetch",
+        "outcome": "canceled",
+        "cpuMs": 10,
+        "wallMs": 63
+      }
+    ]
+  },
+  "control": {
+    "purpose": "Keep an owned deployment alive while querying analytics; repeat new-share connection establishment.",
+    "buildReused": true,
+    "deployment": {
+      "workerName": "worker-4",
+      "versionId": "deployment-4",
+      "namespaceId": "namespace-4",
+      "compatibility": {
+        "migration_tag": "v1",
+        "compatibility_date": "2026-10-17",
+        "compatibility_flags": [
+          "web_socket_auto_reply_to_close"
+        ],
+        "usage_model": "standard"
+      }
+    },
+    "results": [
+      {
+        "scenario": {
+          "name": "idle-control",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 300000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:29:31.061Z",
+        "completedAt": "2026-10-19T08:34:31.068Z",
+        "elapsedMs": 300007.1865,
+        "sourceBytes": 1048576,
+        "sourceSha256": "831414b8da71ac2400d7e00f35028d98edd38891b7ae4840d66e79cc238ebb5b",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-4",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-4",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                },
+                "WS2H": {
+                  "messages": 20,
+                  "bytes": 320
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                },
+                "WS2A": {
+                  "messages": 20,
+                  "bytes": 320
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-0",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:34.553Z",
+        "completedAt": "2026-10-19T08:34:35.561Z",
+        "elapsedMs": 1008.0445000000182,
+        "sourceBytes": 1048576,
+        "sourceSha256": "204a4f68d496f695d67b3193f344b74b19cf598ca05718dce1ae61906c18da3c",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-5",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-5",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-1",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:38.915Z",
+        "completedAt": "2026-10-19T08:34:39.924Z",
+        "elapsedMs": 1008.8081000000238,
+        "sourceBytes": 1048576,
+        "sourceSha256": "747b370977e39ce8ce53cf6302836fed4fa4a81862cab75eacdf8e27bcac9c80",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-6",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-6",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-2",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:43.175Z",
+        "completedAt": "2026-10-19T08:34:44.176Z",
+        "elapsedMs": 1000.9872999999789,
+        "sourceBytes": 1048576,
+        "sourceSha256": "e0ae3087521830b5a6ee200c82b8de3c49832375a143e15db481460e17b6ef4b",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-7",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-7",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-3",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:47.404Z",
+        "completedAt": "2026-10-19T08:34:48.407Z",
+        "elapsedMs": 1003.2462999999989,
+        "sourceBytes": 1048576,
+        "sourceSha256": "0a5064937bbda68bf806287ea1047f82c88359fb0820dc7aab11d85177d6acac",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-8",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-8",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-4",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:51.686Z",
+        "completedAt": "2026-10-19T08:34:52.694Z",
+        "elapsedMs": 1007.7032999999938,
+        "sourceBytes": 1048576,
+        "sourceSha256": "806ec44f3cc762bef66d64b597ad8ad2c4776a115b73ef4bf8752020b6dfe7ef",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-9",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-9",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-5",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:34:56.025Z",
+        "completedAt": "2026-10-19T08:34:57.032Z",
+        "elapsedMs": 1007.056900000025,
+        "sourceBytes": 1048576,
+        "sourceSha256": "f3e61760f8e7a12d8341bc53c5d11126bc244f278b6b85da63e9f9a7730c78fb",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-10",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-10",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-6",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:35:00.372Z",
+        "completedAt": "2026-10-19T08:35:01.380Z",
+        "elapsedMs": 1008.0210000000079,
+        "sourceBytes": 1048576,
+        "sourceSha256": "80efa2ee2a32cec201f98828e7ae61ef567cc049cc47b300f99a5357f9ad5176",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-11",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-11",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "scenario": {
+          "name": "connect-7",
+          "fileMiB": 1,
+          "feedbackDelaysMs": [
+            0
+          ],
+          "idleMs": 1000
+        },
+        "workerName": "worker-4",
+        "startedAt": "2026-10-19T08:35:06.890Z",
+        "completedAt": "2026-10-19T08:35:07.896Z",
+        "elapsedMs": 1006.804999999993,
+        "sourceBytes": 1048576,
+        "sourceSha256": "7f23252890207a92db82249f6d6c65bdca598070c7deecbba47018e88225c9a7",
+        "peerTransport": "disabled",
+        "outcome": "passed",
+        "aggregateMiBPerSecond": 0,
+        "downloads": [],
+        "browserBefore": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-12",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ],
+        "browserAfter": [
+          {
+            "opened": 1,
+            "closed": 0,
+            "shareId": "share-12",
+            "errors": [],
+            "counts": {
+              "sent": {
+                "WS2J": {
+                  "messages": 1,
+                  "bytes": 36
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 259
+                },
+                "WS2B": {
+                  "messages": 2,
+                  "bytes": 64
+                }
+              },
+              "received": {
+                "WS2D": {
+                  "messages": 1,
+                  "bytes": 247
+                },
+                "WS2W": {
+                  "messages": 4,
+                  "bytes": 96
+                },
+                "WS2O": {
+                  "messages": 2,
+                  "bytes": 604
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "cleanup": {
+      "workerName": "worker-4",
+      "deleted": true,
+      "at": "2026-10-19T08:38:11.865Z"
+    },
+    "liveAnalytics": {
+      "recordedAt": "2026-10-19T08:33:00.917Z",
+      "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){periodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}}invocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){dimensions{type status coloCode}sum{requests errors}}storage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){max{storedBytes}}}}}",
+      "response": {
+        "success": true,
+        "status": 200,
+        "result": {
+          "viewer": {
+            "accounts": [
+              {
+                "invocations": [],
+                "periodic": [],
+                "storage": []
+              }
+            ]
+          }
+        },
+        "errors": [],
+        "messages": []
+      }
+    },
+    "finalAnalytics": {
+      "recordedAt": "2026-10-19T08:37:22.137Z",
+      "deploymentPresent": true,
+      "query": "{viewer{accounts(filter:{accountTag:\"<ACCOUNT_ID>\"}){periodic:durableObjectsPeriodicGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){dimensions{datetimeMinute objectId}count sum{activeTime cpuTime duration rowsRead rowsWritten inboundWebsocketMsgCount outboundWebsocketMsgCount exceededCpuErrors exceededMemoryErrors fatalInternalErrors}max{memoryUsageBytes activeWebsocketConnections}}invocations:durableObjectsInvocationsAdaptiveGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){dimensions{type status coloCode}sum{requests errors}}storage:durableObjectsSqlStorageGroups(limit:100,filter:{datetime_geq:\"2026-10-19T08:29:00Z\",datetime_leq:\"2026-10-19T08:40:00Z\",namespaceId:\"namespace-4\"}){max{storedBytes}}}}}",
+      "response": {
+        "success": true,
+        "status": 200,
+        "result": {
+          "viewer": {
+            "accounts": [
+              {
+                "invocations": [
+                  {
+                    "dimensions": {
+                      "coloCode": "SJC",
+                      "status": "clientDisconnected",
+                      "type": "http"
+                    },
+                    "sum": {
+                      "errors": 4,
+                      "requests": 4
+                    }
+                  },
+                  {
+                    "dimensions": {
+                      "coloCode": "SJC",
+                      "status": "success",
+                      "type": "hibernation"
+                    },
+                    "sum": {
+                      "errors": 0,
+                      "requests": 51
+                    }
+                  },
+                  {
+                    "dimensions": {
+                      "coloCode": "SJC",
+                      "status": "success",
+                      "type": "alarm"
+                    },
+                    "sum": {
+                      "errors": 0,
+                      "requests": 7
+                    }
+                  }
+                ],
+                "periodic": [
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:36:00Z",
+                      "objectId": "object-2"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 0,
+                      "memoryUsageBytes": 3730712
+                    },
+                    "sum": {
+                      "activeTime": 35032,
+                      "cpuTime": 2915,
+                      "duration": 0.004484096,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 0,
+                      "rowsRead": 7,
+                      "rowsWritten": 3
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:34:00Z",
+                      "objectId": "object-3"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 4006304
+                    },
+                    "sum": {
+                      "activeTime": 364322,
+                      "cpuTime": 67926,
+                      "duration": 0.046633216,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 16,
+                      "rowsRead": 11,
+                      "rowsWritten": 18
+                    }
+                  },
+                  {
+                    "count": 2,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:31:00Z",
+                      "objectId": "object-4"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 3824272
+                    },
+                    "sum": {
+                      "activeTime": 98945,
+                      "cpuTime": 10868,
+                      "duration": 0.01266496,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 4,
+                      "rowsRead": 10,
+                      "rowsWritten": 4
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:34:00Z",
+                      "objectId": "object-5"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 4006329
+                    },
+                    "sum": {
+                      "activeTime": 186068,
+                      "cpuTime": 88077,
+                      "duration": 0.023816704,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 16,
+                      "rowsRead": 11,
+                      "rowsWritten": 18
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:35:00Z",
+                      "objectId": "object-2"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 4006008
+                    },
+                    "sum": {
+                      "activeTime": 2045691,
+                      "cpuTime": 48048,
+                      "duration": 0.261848448,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 16,
+                      "rowsRead": 10,
+                      "rowsWritten": 17
+                    }
+                  },
+                  {
+                    "count": 2,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:30:00Z",
+                      "objectId": "object-4"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 4352013
+                    },
+                    "sum": {
+                      "activeTime": 107605,
+                      "cpuTime": 11055,
+                      "duration": 0.013773440000000001,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 4,
+                      "rowsRead": 10,
+                      "rowsWritten": 4
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:35:00Z",
+                      "objectId": "object-4"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 0,
+                      "memoryUsageBytes": 3792712
+                    },
+                    "sum": {
+                      "activeTime": 7890,
+                      "cpuTime": 1489,
+                      "duration": 0.00100992,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 0,
+                      "rowsRead": 3,
+                      "rowsWritten": 0
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:32:00Z",
+                      "objectId": "object-4"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 3805336
+                    },
+                    "sum": {
+                      "activeTime": 62288,
+                      "cpuTime": 3829,
+                      "duration": 0.007972864,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 2,
+                      "rowsRead": 5,
+                      "rowsWritten": 2
+                    }
+                  },
+                  {
+                    "count": 1,
+                    "dimensions": {
+                      "datetimeMinute": "2026-10-19T08:34:00Z",
+                      "objectId": "object-4"
+                    },
+                    "max": {
+                      "activeWebsocketConnections": 2,
+                      "memoryUsageBytes": 3814865
+                    },
+                    "sum": {
+                      "activeTime": 69865,
+                      "cpuTime": 12002,
+                      "duration": 0.00894272,
+                      "exceededCpuErrors": 0,
+                      "exceededMemoryErrors": 0,
+                      "fatalInternalErrors": 0,
+                      "inboundWebsocketMsgCount": 0,
+                      "outboundWebsocketMsgCount": 3,
+                      "rowsRead": 9,
+                      "rowsWritten": 5
+                    }
+                  }
+                ],
+                "storage": []
+              }
+            ]
+          }
+        },
+        "errors": [],
+        "messages": []
+      }
+    },
+    "invocationLogSnapshot": {
+      "recordedAt": "2026-10-19T08:38:41.556Z",
+      "query": {
+        "queryId": "windshare-capacity-control-invocations",
+        "dry": true,
+        "view": "events",
+        "chart": false,
+        "ignoreSeries": true,
+        "limit": 2000,
+        "timeframe": {
+          "from": 1792398540000,
+          "to": 1792399200000
+        },
+        "parameters": {
+          "filters": [
+            {
+              "key": "$workers.scriptName",
+              "operation": "eq",
+              "type": "string",
+              "value": "worker-4"
+            },
+            {
+              "key": "$metadata.type",
+              "operation": "eq",
+              "type": "string",
+              "value": "cf-worker-event"
+            }
+          ]
+        }
+      },
+      "success": true,
+      "errors": [],
+      "returnedEvents": 245,
+      "statistics": {
+        "elapsed": 0.155504594,
+        "rows_read": 4073937,
+        "bytes_read": 743614851,
+        "abr_level": 1
+      },
+      "groups": {
+        "durableObject/alarm//ok": {
+          "count": 28,
+          "cpuMs": 39,
+          "wallMs": 818,
+          "maxCpuMs": 6
+        },
+        "durableObject/jsrpc//ok": {
+          "count": 2,
+          "cpuMs": 2,
+          "wallMs": 33,
+          "maxCpuMs": 1
+        },
+        "durableObject/alarm//canceled": {
+          "count": 1,
+          "cpuMs": 0,
+          "wallMs": 29,
+          "maxCpuMs": 0
+        },
+        "durableObject/hibernatableWebSocket//ok": {
+          "count": 19,
+          "cpuMs": 56,
+          "wallMs": 66,
+          "maxCpuMs": 8
+        },
+        "durableObject/hibernatableWebSocket/message/ok": {
+          "count": 158,
+          "cpuMs": 249,
+          "wallMs": 1665,
+          "maxCpuMs": 12
+        },
+        "stateless/fetch//canceled": {
+          "count": 18,
+          "cpuMs": 98,
+          "wallMs": 5371,
+          "maxCpuMs": 21
+        },
+        "durableObject/fetch//canceled": {
+          "count": 19,
+          "cpuMs": 313,
+          "wallMs": 3308,
+          "maxCpuMs": 51
+        }
+      },
+      "edge": [
+        {
+          "at": 1792398907076,
+          "cpuMs": 1,
+          "wallMs": 41,
+          "outcome": "canceled",
+          "requestId": "request-60"
+        },
+        {
+          "at": 1792398905757,
+          "cpuMs": 1,
+          "wallMs": 1987,
+          "outcome": "canceled",
+          "requestId": "request-61"
+        },
+        {
+          "at": 1792398900698,
+          "cpuMs": 1,
+          "wallMs": 182,
+          "outcome": "canceled",
+          "requestId": "request-62"
+        },
+        {
+          "at": 1792398899479,
+          "cpuMs": 1,
+          "wallMs": 325,
+          "outcome": "canceled",
+          "requestId": "request-63"
+        },
+        {
+          "at": 1792398896182,
+          "cpuMs": 1,
+          "wallMs": 49,
+          "outcome": "canceled",
+          "requestId": "request-64"
+        },
+        {
+          "at": 1792398895175,
+          "cpuMs": 1,
+          "wallMs": 380,
+          "outcome": "canceled",
+          "requestId": "request-65"
+        },
+        {
+          "at": 1792398891845,
+          "cpuMs": 1,
+          "wallMs": 41,
+          "outcome": "canceled",
+          "requestId": "request-66"
+        },
+        {
+          "at": 1792398890860,
+          "cpuMs": 1,
+          "wallMs": 346,
+          "outcome": "canceled",
+          "requestId": "request-67"
+        },
+        {
+          "at": 1792398887580,
+          "cpuMs": 2,
+          "wallMs": 45,
+          "outcome": "canceled",
+          "requestId": "request-68"
+        },
+        {
+          "at": 1792398886573,
+          "cpuMs": 1,
+          "wallMs": 291,
+          "outcome": "canceled",
+          "requestId": "request-69"
+        },
+        {
+          "at": 1792398883304,
+          "cpuMs": 9,
+          "wallMs": 35,
+          "outcome": "canceled",
+          "requestId": "request-70"
+        },
+        {
+          "at": 1792398882304,
+          "cpuMs": 1,
+          "wallMs": 262,
+          "outcome": "canceled",
+          "requestId": "request-71"
+        },
+        {
+          "at": 1792398878025,
+          "cpuMs": 2,
+          "wallMs": 361,
+          "outcome": "canceled",
+          "requestId": "request-72"
+        },
+        {
+          "at": 1792398874718,
+          "cpuMs": 8,
+          "wallMs": 49,
+          "outcome": "canceled",
+          "requestId": "request-73"
+        },
+        {
+          "at": 1792398873598,
+          "cpuMs": 21,
+          "wallMs": 393,
+          "outcome": "canceled",
+          "requestId": "request-74"
+        },
+        {
+          "at": 1792398571188,
+          "cpuMs": 16,
+          "wallMs": 57,
+          "outcome": "canceled",
+          "requestId": "request-75"
+        },
+        {
+          "at": 1792398570138,
+          "cpuMs": 16,
+          "wallMs": 60,
+          "outcome": "canceled",
+          "requestId": "request-76"
+        },
+        {
+          "at": 1792398568144,
+          "cpuMs": 14,
+          "wallMs": 467,
+          "outcome": "canceled",
+          "requestId": "request-77"
+        }
+      ],
+      "edgeAbove10Ms": 4
+    },
+    "storageInspection": {
+      "recordedAt": "2026-10-19T08:35:19.282Z",
+      "phase": "after idle workload",
+      "namespace": "namespace-4",
+      "objectId": "object-4",
+      "queries": [
+        {
+          "sql": "SELECT key, length(value) AS value_bytes FROM relay_lifecycle ORDER BY key"
+        }
+      ],
+      "response": {
+        "result": {
+          "results": [
+            {
+              "columns": [
+                "key",
+                "value_bytes"
+              ],
+              "rows": [
+                [
+                  "authority",
+                  1401
+                ],
+                [
+                  "identity",
+                  290
+                ],
+                [
+                  "manifest",
+                  89
+                ]
+              ],
+              "meta": {
+                "rows_read": 3,
+                "rows_written": 0
+              }
+            }
+          ]
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      },
+      "pagePragmasAttempt": {
+        "result": {
+          "results": [],
+          "error": "not authorized: SQLITE_AUTH"
+        },
+        "success": true,
+        "errors": [],
+        "messages": [],
+        "status": 200
+      }
+    }
+  },
+  "interpretation": {
+    "throughput": "Observed client path including local proxy/network and browser finalization, not relay saturation throughput.",
+    "delayedReceiver": "400 ms delay of WS2B consumption feedback, not OS bandwidth shaping.",
+    "periodicCoverage": "Incomplete. Missing samples are unknown, not zero. Multiple queries returned different subsets.",
+    "memory": "Sampled entire isolate memory, not true peak RSS or a per-object bound.",
+    "logCpu": "Integer millisecond invocation measurements are not a substitute for periodic CPU totals.",
+    "dailyCapacity": "No 24-hour test or validated daily byte quota.",
+    "metricTimeScope": "Namespace lifecycle windows include setup/cleanup; browser elapsed measures only the workload."
+  },
+  "policy": {
+    "checkedOn": "2026-10-19",
+    "edgeWorker": {
+      "requestsPerDay": 100000,
+      "cpuMillisecondsPerRequest": 10,
+      "memoryMB": 128
+    },
+    "sqliteDurableObjects": {
+      "requestsPerDay": 100000,
+      "durationGBSecondsPerDay": 13000,
+      "rowsReadPerDay": 5000000,
+      "rowsWrittenPerDay": 100000,
+      "storedGB": 5,
+      "incomingWebSocketMessagesPerRequestEquivalent": 20,
+      "rowsPerSetAlarm": 1
+    },
+    "sources": [
+      "https://developers.cloudflare.com/workers/platform/limits/",
+      "https://developers.cloudflare.com/durable-objects/platform/pricing/",
+      "https://developers.cloudflare.com/durable-objects/platform/limits/",
+      "https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/"
+    ]
+  },
+  "privacy": {
+    "identifiers": "Account, Worker, namespace, object, share, deployment and request identifiers use consistent anonymous labels.",
+    "originalCaptures": "Kept only in the Git-ignored local test-results directory."
+  }
+}

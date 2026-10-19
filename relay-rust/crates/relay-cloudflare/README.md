@@ -94,6 +94,11 @@ temporary credentials are removed during cleanup. If cleanup fails, the recorded
 Worker name identifies the owned resource to delete. These cloud scenarios are opt-in
 and absent from ordinary browser gates.
 
+[Production capacity evidence](tests/capacity-evidence.md) records Free-plan policy,
+CPU/memory observations, heartbeat/Alarm accounting, throughput and measurement gaps.
+Run `node web/scripts/cloudflare-capacity/run.mjs` from the repository root to repeat
+its isolated production workloads.
+
 For protocol-level probes, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
 Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate
 `PREVIEW_TEST_SECRET`, then run:
