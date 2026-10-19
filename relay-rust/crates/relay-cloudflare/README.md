@@ -52,8 +52,9 @@ npx wrangler secret put REGISTRATION_SECRET
 npx wrangler deploy
 ```
 
-For `wind share`, save the stable deployment base URL without `/v2/ws` and the
-registration secret once; subsequent shares load them automatically. Protocol probes
+For `wind share`, import a [relay configuration](../../../docs/cli.md#saved-relays)
+with `wind relay import relay.json`, using the stable deployment base URL without
+`/v2/ws` and the registration secret. Subsequent shares load it automatically. Protocol probes
 that take an endpoint use the full URL ending in `/v2/ws`. Endpoint identity is retained in
 storage; an alternate hostname is a different relay identity, even for the same
 Worker. Do not delete storage to update code: that would erase permanent STOP.
