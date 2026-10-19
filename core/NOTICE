@@ -4,4 +4,7 @@ Copyright 2026 WindShare contributors
 This product includes software developed as part of the WindShare project
 (https://github.com/windshare/windshare).
 
-Licensed under the Apache License, Version 2.0.
+Licensed under the GNU Affero General Public License, version 3 or
+(at your option) any later version published by the Free Software Foundation.
+SPDX-License-Identifier: AGPL-3.0-or-later
+See LICENSE for the full terms. Third-party components retain their own licenses.
