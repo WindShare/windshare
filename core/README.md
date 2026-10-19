@@ -48,4 +48,4 @@ make ci
 `testvectors/` is the single canonical Go↔TypeScript protocol-vector
 inventory and is included in the root module release archive.
 
-Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Licensed under AGPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
