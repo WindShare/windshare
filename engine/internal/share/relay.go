@@ -12,7 +12,7 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-func prepareRelay(prepared Prepared, relayURL string, d Dependencies, o *observations) (Relay, error) {
+func prepareRelay(prepared Prepared, candidate senderrelay.Candidate, d Dependencies, o *observations) (Relay, error) {
 	material := prepared.Registration()
 	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
 	if err != nil {
@@ -26,7 +26,7 @@ func prepareRelay(prepared Prepared, relayURL string, d Dependencies, o *observa
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := v2.NormalizeRelayEndpoint(relayURL)
+	endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func prepareRelay(prepared Prepared, relayURL string, d Dependencies, o *observa
 		capacity = relayv2.DefaultLifecycleObservationCapacity
 	}
 	relay, err := d.Relay(senderrelay.Config{
-		RelayURL: relayURL, Fresh: register, ResumeToken: resumeToken,
+		Candidate: candidate, Fresh: register, ResumeToken: resumeToken,
 		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
 		LifecycleObservationCapacity: capacity,
 		ObserveConnection:            o.attachRelay,

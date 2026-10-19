@@ -6,7 +6,8 @@ upgrades without evicting healthy connections, and passes real
 REGISTER, RESUME, JOIN, session admission, cumulative consumption, settlement, STOP
 and heartbeat controls to `ShareRelay`. Opaque envelopes remain event-owned and pass
 through the kernel's synchronous `submit` before WebSocket delivery in either direction.
-Descriptors come only from confirmed authority rows. Production client cutover is still pending.
+Descriptors come only from confirmed authority rows. The Go sender accepts saved
+[relay configuration](../../../docs/cli.md#saved-relays), including registration credentials.
 
 Fresh REGISTER requires `Authorization: Bearer <REGISTRATION_SECRET>` on the
 upgrade. The edge overwrites its internal permission header and stores permission
@@ -51,7 +52,9 @@ npx wrangler secret put REGISTRATION_SECRET
 npx wrangler deploy
 ```
 
-Use the stable deployment URL ending in `/v2/ws`. Endpoint identity is retained in
+For `wind share`, save the stable deployment base URL without `/v2/ws` and the
+registration secret once; subsequent shares load them automatically. Protocol probes
+that take an endpoint use the full URL ending in `/v2/ws`. Endpoint identity is retained in
 storage; an alternate hostname is a different relay identity, even for the same
 Worker. Do not delete storage to update code: that would erase permanent STOP.
 
@@ -62,6 +65,12 @@ The shared Go codec client is at `relay-rust/tests/_goclient`.
 [Recorded Preview evidence](tests/preview-evidence.md) covers live signatures,
 bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP
 and Alarm expiry.
+
+For the production CLI/browser download scenario, set `WINDSHARE_RELAY_CONFIG`
+to a saved configuration containing one credentialed Cloudflare candidate, then run
+`pnpm exec playwright test --config playwright.cloudflare.config.ts` from `web/`.
+This opt-in run builds `wind`, disables browser P2P, verifies a 17 MiB download hash,
+and records the actual relay bytes; ordinary browser gates do not require cloud access.
 
 For an isolated real-cloud run, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
 Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate

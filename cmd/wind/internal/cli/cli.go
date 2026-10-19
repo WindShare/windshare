@@ -15,7 +15,9 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/cmd/wind/internal/relayconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/platformsetup"
@@ -44,6 +46,8 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
+      Saved relays load from the user config directory's windshare/relays.json (or WINDSHARE_RELAY_CONFIG).
+      --relay overrides the saved candidate set, retaining credentials for matching addresses.
 
   ` + commandmeta.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
   ` + commandmeta.Name + ` get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
@@ -88,6 +92,7 @@ type App struct {
 	revisionCapacityTrace   *capacitytrace.Router
 	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
+	loadRelayCandidates     func() ([]senderrelay.Candidate, error)
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -97,6 +102,7 @@ func Main() int {
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		platformSetupStatus: &setupStatus,
+		loadRelayCandidates: relayconfig.Load,
 	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {

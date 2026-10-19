@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"io"
 	"math"
 	"path/filepath"
@@ -100,7 +101,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			t.Fatalf("parse=%d", parse)
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
-			!reflect.DeepEqual(request.relayURLs, []string{"wss://relay.example"}) ||
+			!reflect.DeepEqual(request.relays, []senderrelay.Candidate{{PublicURL: "wss://relay.example"}}) ||
 			request.link.frontURL != "https://app.example" ||
 			request.chunkSize != 65536 ||
 			!request.link.splitKey {

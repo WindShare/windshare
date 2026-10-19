@@ -23,7 +23,7 @@ func (senderRelayRecoveryStoppedError) Error() string { return "sender relay rec
 var ErrStopped = senderRelayRecoveryStoppedError{}
 
 type Config struct {
-	RelayURL                     string
+	Candidate                    Candidate
 	Fresh                        v2.RegisterInit
 	ResumeToken                  v2.ResumeToken
 	PrivateKey                   ed25519.PrivateKey
@@ -84,7 +84,7 @@ type Lifecycle struct {
 
 func New(config Config) (*Lifecycle, error) {
 	resume, err := relayv2.ResumeInit(config.Fresh)
-	if err != nil || config.RelayURL == "" || len(config.PrivateKey) != ed25519.PrivateKeySize ||
+	if err != nil || config.Candidate.Validate() != nil || len(config.PrivateKey) != ed25519.PrivateKeySize ||
 		len(config.Descriptor) == 0 || len(config.Descriptor) > v2.MaxDescriptorBytes ||
 		sha256.Sum256(config.Descriptor) != config.Fresh.DescriptorDigest || sha256.Sum256(config.ResumeToken[:]) != config.Fresh.ResumeTokenHash {
 		return nil, errors.Join(relayv2.ErrProtocol, err)
@@ -291,7 +291,7 @@ func (lifecycle *Lifecycle) Cleanup(ctx context.Context) error {
 		var stopErr error
 		if lifecycle.attempted {
 			stopErr = relayv2.Stop(ctx, relayv2.StopConfig{
-				RelayBaseURL:     lifecycle.config.RelayURL,
+				RelayBaseURL:     lifecycle.config.Candidate.PublicURL,
 				ShareID:          lifecycle.config.Fresh.ShareID,
 				ShareInstance:    lifecycle.config.Fresh.ShareInstance,
 				PKHash:           lifecycle.config.Fresh.PKHash,

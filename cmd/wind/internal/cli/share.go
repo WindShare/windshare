@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
@@ -83,7 +84,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
-		Source: shareFileSource(request.paths), RelayURLs: append([]string(nil), request.relayURLs...), ChunkSize: request.chunkSize,
+		Source: shareFileSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
 		Diagnostics: runtime.detailedDiagnosticsEnabled(), TraceLifecycle: runtime.traceRecordingEnabled() || a.processTrace != nil,
 	}
 }
