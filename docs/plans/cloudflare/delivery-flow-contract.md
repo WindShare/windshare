@@ -144,6 +144,13 @@ receipt: a fully consumed flow may release metadata once discard is confirmed
 without waiting for `WS2S`, and the ordered notice remains necessary with an
 inert late acknowledgement.
 
+Late `WS2O` and `WS2M` for retired sessions are discarded without refusing the
+shared source connection. Collection must preserve this behavior: an absent,
+previously allocated session ID is inert, using the checkpointed allocation
+watermark rather than unbounded tombstones. Discards neither grant credit nor
+refresh liveness. Live or retained sessions still validate exact participants;
+unallocated IDs and protocol violations remain refusals.
+
 ## Permanent STOP
 
 `STOPPED` confirms durable revocation, unsubmitted-queue discard and quiescent

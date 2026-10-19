@@ -18,6 +18,14 @@ pub enum Observation {
     },
 }
 
+/// Session-scoped ingress, retained in diagnostics after its routing record is gone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionInputKind {
+    Frame,
+    Admission,
+    Cancellation,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelayDecision {
     Connected,
@@ -72,6 +80,10 @@ pub enum RelayDecision {
         usage: crate::share::ConnectionUsage,
     },
     BusinessAdmitted,
+    CollectedSessionInput {
+        session: crate::identifiers::RelaySessionId,
+        kind: SessionInputKind,
+    },
     StaleCompletion(crate::share::WorkId),
     StorageUncertain(crate::share::WorkId),
     WorkIssued(crate::share::WorkId),

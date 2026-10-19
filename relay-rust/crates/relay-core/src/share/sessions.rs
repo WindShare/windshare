@@ -8,6 +8,7 @@ use crate::{
     flow::Grant,
     join::JoinRequest,
     lifecycle::{Event, Joined},
+    observation::SessionInputKind,
     sessions::{
         Action, Direction, EndReason, Event as SessionEvent, Phase, Retirement, RetirementReason,
         SessionAdmitted,
@@ -217,12 +218,15 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        let key = self
-            .sessions
-            .get(&id)
-            .ok_or(Error::UnknownSession)?
-            .session
-            .key();
+        let Some(entry) = self.sessions.get(&id) else {
+            return self.discard_collected_session(
+                participant,
+                id,
+                SessionInputKind::Cancellation,
+                now,
+            );
+        };
+        let key = entry.session.key();
         let action = self.session_event(
             id,
             SessionEvent::End {
@@ -233,8 +237,8 @@ impl<O: Observer> ShareRelay<O> {
             now,
             turn,
         );
-        if matches!(action, Some(Action::Refused(_))) {
-            return Err(Error::Unavailable);
+        if let Some(Action::Refused(reason)) = action {
+            return Err(Error::Session(reason));
         }
         if matches!(action, Some(Action::None)) {
             self.accepted_inbound(participant, now);
@@ -255,12 +259,43 @@ impl<O: Observer> ShareRelay<O> {
             now,
             turn,
         ) {
-            Some(Action::Active | Action::None) => {
+            Some(Action::Active) => {
                 self.accepted_inbound(sender, now);
                 Ok(())
             }
-            _ => Err(Error::Unavailable),
+            Some(Action::Discard(_)) => Ok(()),
+            Some(Action::Refused(reason)) => Err(Error::Session(reason)),
+            None => self.discard_collected_session(
+                sender,
+                frame.session(),
+                SessionInputKind::Admission,
+                now,
+            ),
+            Some(Action::Forward(_) | Action::None) => {
+                unreachable!("admission must activate or be rejected")
+            }
         }
+    }
+
+    pub(super) fn discard_collected_session(
+        &mut self,
+        source: ConnectionRef,
+        id: RelaySessionId,
+        kind: SessionInputKind,
+        now: UnixMillis,
+    ) -> Result<(), Error> {
+        // Collection can precede frames already in flight on the shared sender.
+        // The persisted, never-reused ID watermark avoids unbounded tombstones.
+        // No route, credit or liveness is restored by discarding these inputs.
+        if u64::from_be_bytes(*id.as_bytes()) > self.last_session {
+            return Err(Error::UnknownSession);
+        }
+        self.trace(
+            Some(source),
+            RelayDecision::CollectedSessionInput { session: id, kind },
+            now,
+        );
+        Ok(())
     }
 
     pub(super) fn collect_session(

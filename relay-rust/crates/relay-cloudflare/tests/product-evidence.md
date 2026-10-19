@@ -95,6 +95,35 @@ SHA-256: `9a8ab4cae35eedc28893588d1b0326eb90efc31632d388c3440c93524d7edc06`.
 Both scenarios' Workers and temporary credentials were removed; an account inventory
 confirmed no remaining `windshare-redeploy-*` Workers from this work.
 
-Reproduce using the [Cloudflare host instructions](../README.md#validation).
+## Receiver-only disconnect isolation
+
+2026-10-19, Windows/Chromium, source base `764a7b20f363d2e7a894baee6a0d83372c1dd963`
+plus the shared ingress fix. Production Rust host and real `wind`, P2P disabled.
+
+- Worker: `windshare-redeploy-3f9dcb1e8fd7`; version:
+  `46184836-3aaa-4043-a8a3-2c4e8fd91b50`.
+- Two browsers downloaded the same 51,380,224-byte file. One receiver interrupted its
+  own connection four times after 2 MiB each; the sibling remained in flight.
+- The sender never reconnected. The healthy browser retained its original socket
+  throughout; the interrupted browser used five connections and completed automatically.
+- Both hashes matched `1144c0a4576885c843626df4540c223e3cc0023a3283aede3cd7b128fa661031`.
+  The complete scenario, including provisioning/cleanup, took 322 seconds.
+- Three consecutive native runs also passed. Deterministic kernel and both-host tests
+  cover late data/admission, metadata collection, hibernation, credit and liveness.
+- Both temporary Workers and their credential files were removed; the account
+  inventory confirmed neither Worker remained.
+
+The first cloud attempt hit its initial 180-second completion budget after receiving
+about 43 MiB. Its aggregate sibling counter included one closure without timing, so
+it did not establish isolation. The passing run records a pre-download connection
+baseline and individual close events, using the existing cloud suite's 600-second
+completion budget. Connection-continuity and hash assertions remain mandatory.
+
+Run `pnpm exec playwright test --config playwright.cloudflare.config.ts --grep "receiver interruptions"`
+from `web/`. This run's JSON, sender/browser traces and deployment identity are under
+`web/test-results/receiver-isolation-cloudflare-diagnostic/`; the native regression
+is included in `make browser`.
+
+Reproduce the other scenarios using the [Cloudflare host instructions](../README.md#validation).
 JSON evidence, deployment identities and sender/browser NDJSON are retained by the
 opt-in configuration, which is absent from ordinary browser gates.
