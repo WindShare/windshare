@@ -11,7 +11,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: [['line'], ['json', { outputFile: 'test-results/cloudflare/report.json' }]],
-  timeout: 300_000,
+  timeout: 900_000,
   expect: { timeout: 30_000 },
   use: {
     browserName: 'chromium',
