@@ -43,7 +43,7 @@ responsibility baseline. Existing identities require a manifest even without aut
 or surviving sockets. Cleanup-generated settlement notices run before subsequent
 close commands. No descriptor or payload appears in traces.
 
-For personal deployment, follow [Fork ? GitHub Actions](../../../docs/cloudflare-relay.md).
+For personal deployment, follow [Fork ? GitHub Actions](../../../docs/deploy/cloudflare-relay.md).
 It generates registration authority once, delivers an encrypted import configuration,
 and retains the address, secret and SQLite namespace through upstream updates.
 

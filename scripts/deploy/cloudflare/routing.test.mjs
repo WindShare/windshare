@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deploymentConfig, endpointFor, prepareRoute, readRoute, sameRoute, verifyRoute } from './routing.mjs';
+import { endpointFor, prepareRoute, readRoute, sameRoute, verifyRoute } from './routing.mjs';
 
 const inputs = {
   accountId: 'a'.repeat(32), workerName: 'private-relay',
@@ -28,24 +28,6 @@ test('custom domains are explicit complete identities, not URL fragments', () =>
   assert.ok(sameRoute(inputs.route, structuredClone(inputs.route)));
   assert.ok(!sameRoute(inputs.route, { ...inputs.route, zoneId: 'c'.repeat(32) }));
   assert.ok(!sameRoute(inputs.route, { kind: 'workers-dev' }));
-});
-
-test('generated deployment config preserves build/storage and uses only the chosen route', () => {
-  const host = { main: 'build/index.js', build: { command: 'worker-build --release --locked' },
-    durable_objects: { bindings: [{ name: 'SHARES', class_name: 'ShareRelayObject' }] },
-    migrations: [{ tag: 'v1', new_sqlite_classes: ['ShareRelayObject'] }], workers_dev: true };
-  const custom = deploymentConfig(host, inputs);
-  assert.deepEqual(custom.routes, [{ pattern: inputs.route.hostname, zone_id: inputs.route.zoneId, custom_domain: true }]);
-  assert.equal(custom.workers_dev, false);
-  assert.equal(custom.preview_urls, false);
-  assert.deepEqual(custom.build, host.build);
-  assert.deepEqual(custom.durable_objects, host.durable_objects);
-  assert.deepEqual(custom.migrations, host.migrations);
-  assert.equal(custom.main, host.main);
-  assert.equal(host.workers_dev, true);
-  const defaultRoute = deploymentConfig(host, { ...inputs, route: { kind: 'workers-dev' } });
-  assert.deepEqual(defaultRoute.routes, []);
-  assert.equal(defaultRoute.workers_dev, true);
 });
 
 test('a new or already-owned custom domain can deploy without a workers.dev subdomain', async () => {

@@ -83,14 +83,14 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Chromium | Relay smoke, sustained native-size block bursts, and short browser contracts. |
 | Windows | Native build, vet, short tests, and compatible-name restoration checks. |
 
-The opt-in [Cloudflare deployment workflow](cloudflare-relay.md) runs independently
-on relay updates to `main` or manual dispatch. `make hygiene` covers its offline
+The opt-in [Cloudflare deployment workflow](deploy/cloudflare-relay.md) runs independently
+on relay/frontend updates to `main` or manual dispatch. `make hygiene` covers its offline
 first-deploy/update/failure-recovery contracts. To run its opt-in live check, install
-`age`, `age-keygen`, `worker-build`, Go and the pinned Wrangler, set
+`age`, `age-keygen`, `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, then run
 `node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated Worker, imports
-its encrypted configuration, verifies registration and permanent STOP across an
-update, and deletes its Worker and temporary credentials.
+its encrypted configuration, verifies frontend routing, registration and permanent
+STOP across `full` → `relay-only` → `full` updates, then deletes its Worker and temporary credentials.
 
 ## Weekly CI
 
