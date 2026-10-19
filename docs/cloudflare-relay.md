@@ -9,11 +9,10 @@ still apply.
 
 1. In Cloudflare, create your account's **workers.dev** subdomain under Workers & Pages,
    or choose an unused hostname in an active Cloudflare zone.
-   Create a [Workers API token](https://developers.cloudflare.com/workers/authorization/workers/)
-   with **Workers / Admin at the Workers product scope**, restricted to this account.
-   Creating the first Worker requires this role; Editor only updates existing Workers.
-   For a custom domain, also grant **Zone / Workers Routes / Edit** and
-   **Zone / Zone / Read**, restricted to its zone. No GitHub write token is needed.
+   Create a token with **Account / Workers / Admin** for your account. For custom domains,
+   also grant **Zone / Workers Routes / Edit** and **Zone / Zone / Read** for that zone.
+   The [step-by-step token setup guide (中文)](cloudflare-api-token.zh-CN.md) shows every
+   browser step, including saving `CLOUDFLARE_API_TOKEN` in GitHub Secrets.
 2. Install [age](https://github.com/FiloSottile/age#installation) locally and run outside
    the repository:
 
