@@ -15,11 +15,11 @@ const workerName = 'windshare-actions-test-' + randomUUID().replaceAll('-', '').
 const directory = await mkdtemp(join(tmpdir(), 'windshare-deploy-smoke-'));
 const keyFile = join(directory, 'identity.key');
 const stateFile = join(directory, 'share.json');
-const savedConfig = join(directory, 'saved-relays.json');
+const savedConfig = join(directory, 'saved-config.json');
 const outputDirectory = join(directory, 'export');
 const HOSTING_REQUEST_TIMEOUT_MS = 30_000;
 const env = { ...process.env, CLOUDFLARE_WORKER_NAME: workerName, WINDSHARE_DEPLOYMENT_OUTPUT: outputDirectory,
-  WINDSHARE_RELAY_CONFIG: savedConfig, CI: 'true', WRANGLER_SEND_METRICS: 'false',
+  WINDSHARE_CONFIG: savedConfig, CI: 'true', WRANGLER_SEND_METRICS: 'false',
   CLOUDFLARE_DEPLOYMENT_MODE: FULL_DEPLOYMENT,
   CLOUDFLARE_RELAY_DOMAIN: '', CLOUDFLARE_ZONE_ID: '' };
 const paths = [keyFile, stateFile, savedConfig, join(outputDirectory, 'relay.json.age'), join(outputDirectory, 'deployment.json')];
@@ -75,9 +75,9 @@ try {
   await verifyHosting(before);
   const firstExport = await readFile(join(outputDirectory, 'relay.json.age'), 'utf8');
   const plaintext = command('age', ['--decrypt', '-i', keyFile, join(outputDirectory, 'relay.json.age')], undefined, true);
-  command('go', ['run', './cmd/wind', 'relay', 'import', '-'], plaintext);
+  command('go', ['run', './cmd/wind', 'config', 'import', '-', '--front-url', before.frontendUrl], plaintext);
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
-  assert.deepEqual(imported, JSON.parse(plaintext));
+  assert.deepEqual(imported, { ...JSON.parse(plaintext), front_url: before.frontendUrl });
   assert.equal(imported.relays[0].url, before.endpoint);
   env.WINDSHARE_RELAY_REGISTRATION_SECRET = imported.relays[0].registration_token;
   const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',

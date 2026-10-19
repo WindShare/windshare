@@ -1,6 +1,6 @@
 //go:build windows
 
-package relayconfig
+package shareconfig
 
 import (
 	"os"
@@ -13,10 +13,10 @@ import (
 )
 
 func TestWindowsReplacementKeepsOwnerOnlyAccess(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "relays.json")
+	path := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv(PathEnvironment, path)
 	for range 2 {
-		if err := Save([]senderrelay.Candidate{{PublicURL: "https://relay.example", RegistrationToken: "private-token"}}); err != nil {
+		if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example", RegistrationToken: "private-token"}}}); err != nil {
 			t.Fatal(err)
 		}
 		descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
@@ -49,7 +49,7 @@ func TestWindowsReplacementKeepsOwnerOnlyAccess(t *testing.T) {
 
 func TestWindowsFailedReplacementPreservesPreviousConfiguration(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "relays.json")
+	path := filepath.Join(directory, "config.json")
 	t.Setenv(PathEnvironment, path)
 	before := []byte("previous bytes")
 	if err := os.WriteFile(path, before, privateFileMode); err != nil {
@@ -67,7 +67,7 @@ func TestWindowsFailedReplacementPreservesPreviousConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(handle)
-	if err := Save([]senderrelay.Candidate{{PublicURL: "https://replacement.example"}}); err == nil {
+	if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://replacement.example"}}}); err == nil {
 		t.Fatal("replacement of a locked destination succeeded")
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {

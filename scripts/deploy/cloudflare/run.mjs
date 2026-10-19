@@ -99,10 +99,10 @@ async function main() {
       `Deployment: \`${result.state.deploymentId}\` (${result.kind})`, '',
       'Download the **windshare-relay-config** artifact, extract it, then run:', '',
       '\`\`\`sh',
-      'age --decrypt -i windshare.key relay.json.age | wind relay import -',
-      `wind share <path> --front-url ${frontendUrl ?? 'https://<your-frontend>'}`,
+      `age --decrypt -i windshare.key relay.json.age | wind config import - --front-url ${frontendUrl ?? 'https://<your-frontend>'}`,
+      'wind share <path>',
       '\`\`\`', '',
-      'Import replaces the complete allowed relay set. Use --front-url to select the website in sharing links.',
+      'Import saves the frontend and replaces the complete relay set. Future shares reuse both settings.',
       'Keep your local age key. Updates preserve this address, registration credential and share storage.',
       'A completed deployment does not mean every active object has switched versions yet.', '',
     ].join('\n'));

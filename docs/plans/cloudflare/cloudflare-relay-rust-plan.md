@@ -127,10 +127,10 @@ old authority or resetting healthy peers. Deterministic tests cover saturation,
 automatic recovery and stale feedback; native production client cutover is complete.
 
 Sender requests now bind each public relay URL to a private registration credential.
-The CLI imports a complete candidate set with `wind relay import <file|->` and
-loads it for ordinary sharing; only public URLs enter capabilities. Fresh REGISTER
+The CLI imports sharing defaults with `wind config import <file|-> --front-url <url>` and
+loads them for ordinary sharing; only public URLs enter capabilities. Fresh REGISTER
 and recovery re-registration use the bound credential,
-while RESUME and STOP retain independent authentication. See [CLI configuration](../../cli.md#saved-relays).
+while RESUME and STOP retain independent authentication. See [CLI configuration](../../cli.md#sharing-defaults).
 The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
 passes a 17 MiB download/hash check with P2P disabled, including one Preview object
 reset after 4 MiB is written. Sender publication and the original browser task recover

@@ -15,10 +15,9 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
-	"github.com/windshare/windshare/cmd/wind/internal/relaycommand"
-	"github.com/windshare/windshare/cmd/wind/internal/relayconfig"
+	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
+	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/platformsetup"
@@ -35,19 +34,12 @@ const (
 	ExitDrift   = 4 // 快照漂移中止:分享期间文件被修改(§6.3)
 )
 
-// The local defaults describe the browser-facing gateway started by dev.ps1.
-// Vite owns that origin and proxies the relay path, so generated capabilities
-// never expose the relay's private development listener.
-const (
-	DefaultRelayURL = "ws://localhost:38384"
-	DefaultFrontURL = "http://localhost:38384"
-)
-
 const usageText = `Usage:
   ` + commandmeta.Name + ` share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
-      Saved relays load from the user config directory's windshare/relays.json (or WINDSHARE_RELAY_CONFIG).
+      Sharing defaults load from the user config directory's windshare/config.json (or WINDSHARE_CONFIG).
+      --front-url overrides the saved frontend for this share. An explicit frontend and relay selection are required.
       --relay overrides the saved candidate set, retaining credentials for matching addresses.
 
   ` + commandmeta.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
@@ -62,8 +54,8 @@ const usageText = `Usage:
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
-  ` + commandmeta.Name + ` relay import <file|-> [-v|--verbose]
-      Validate and replace the saved relay candidate set. '-' reads JSON from stdin.
+  ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
+      Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
   ` + commandmeta.Name + ` resume list -o <directory>
       List destination-owned incomplete, resumable, cleanup-pending, and attention state.
@@ -96,8 +88,8 @@ type App struct {
 	revisionCapacityTrace   *capacitytrace.Router
 	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
-	loadRelayCandidates     func() ([]senderrelay.Candidate, error)
-	saveRelayCandidates     func([]senderrelay.Candidate) error
+	loadShareConfig         func() (shareconfig.Config, error)
+	saveShareConfig         func(shareconfig.Config) error
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -107,8 +99,8 @@ func Main() int {
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		platformSetupStatus: &setupStatus,
-		loadRelayCandidates: relayconfig.Load,
-		saveRelayCandidates: relayconfig.Save,
+		loadShareConfig:     shareconfig.Load,
+		saveShareConfig:     shareconfig.Save,
 	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {
@@ -139,12 +131,12 @@ func Main() int {
 // 不引 CLI 框架)。
 func (a *App) Run(ctx context.Context, args []string) (code int) {
 	// Local configuration does not need a transfer engine or network resources.
-	if len(args) != 0 && args[0] == "relay" {
-		runner := relaycommand.Runner{Input: a.Stdin, Output: a.stderrWriter(), Save: a.saveRelayCandidates}
+	if len(args) != 0 && args[0] == "config" {
+		runner := configcommand.Runner{Input: a.Stdin, Output: a.stderrWriter(), Save: a.saveShareConfig}
 		switch runner.Run(ctx, args[1:]) {
-		case relaycommand.ResultOK:
+		case configcommand.ResultOK:
 			return ExitOK
-		case relaycommand.ResultUsage:
+		case configcommand.ResultUsage:
 			return ExitUsage
 		default:
 			return ExitFailure

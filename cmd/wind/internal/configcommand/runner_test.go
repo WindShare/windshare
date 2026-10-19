@@ -1,4 +1,4 @@
-package relaycommand
+package configcommand
 
 import (
 	"bytes"
@@ -11,10 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
-const importedConfiguration = `{"relays":[{"url":"https://private.example?route=one","registration_token":"secret-canary"}]}`
+const importedConfiguration = `{"front_url":"https://front.example/app","relays":[{"url":"https://private.example?route=one","registration_token":"secret-canary"}]}`
 
 func TestImportFromFileAndStdin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "downloaded configuration.json")
@@ -24,11 +25,11 @@ func TestImportFromFileAndStdin(t *testing.T) {
 	for _, source := range []string{path, "-"} {
 		t.Run(source, func(t *testing.T) {
 			var output bytes.Buffer
-			var saved []senderrelay.Candidate
+			var saved shareconfig.Config
 			runner := Runner{
 				Input: strings.NewReader(importedConfiguration), Output: &output,
-				Save: func(candidates []senderrelay.Candidate) error {
-					saved = candidates
+				Save: func(config shareconfig.Config) error {
+					saved = config
 					return nil
 				},
 			}
@@ -36,7 +37,7 @@ func TestImportFromFileAndStdin(t *testing.T) {
 				t.Fatal("import failed:", result, output.String())
 			}
 			want := []senderrelay.Candidate{{PublicURL: "https://private.example?route=one", RegistrationToken: "secret-canary"}}
-			if !reflect.DeepEqual(saved, want) {
+			if !reflect.DeepEqual(saved.Relays, want) || saved.FrontURL != "https://front.example/app" {
 				t.Fatal("import lost address-bound credentials")
 			}
 			assertPrivateOutput(t, output.String())
@@ -61,6 +62,9 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 		{name: "unreadable file", args: []string{"import", filepath.Join(t.TempDir(), "secret-canary")}, want: ResultFailure},
 		{name: "invalid input", args: []string{"import", "-"}, input: "secret-canary", want: ResultUsage},
 		{name: "empty set", args: []string{"import", "-"}, input: `{"relays":[]}`, want: ResultUsage},
+		{name: "empty frontend override", args: []string{"import", "-", "--front-url", ""}, input: importedConfiguration, want: ResultUsage},
+		{name: "invalid frontend override", args: []string{"import", "-", "--front-url", "wss://secret-canary"}, input: importedConfiguration, want: ResultUsage},
+		{name: "invalid frontend document", args: []string{"import", "-"}, input: `{"front_url":"https://front.example#secret-canary","relays":[{"url":"https://relay.example"}]}`, want: ResultUsage},
 		{name: "trailing document", args: []string{"import", "-"}, input: importedConfiguration + "{}", want: ResultUsage},
 		{name: "save failure", args: []string{"import", "-", "-v"}, input: importedConfiguration,
 			saveError: errors.New("secret-canary"), want: ResultFailure, saves: 1},
@@ -70,7 +74,7 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 			saves := 0
 			runner := Runner{
 				Input: strings.NewReader(scenario.input), Output: &output,
-				Save: func([]senderrelay.Candidate) error {
+				Save: func(shareconfig.Config) error {
 					saves++
 					return scenario.saveError
 				},
@@ -83,11 +87,25 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 	}
 }
 
+func TestImportFrontendOverrideReplacesTheDocumentChoice(t *testing.T) {
+	var saved shareconfig.Config
+	runner := Runner{
+		Input: strings.NewReader(importedConfiguration),
+		Save:  func(config shareconfig.Config) error { saved = config; return nil },
+	}
+	if result := runner.Run(context.Background(), []string{"import", "--front-url", "https://another.example", "-"}); result != ResultOK {
+		t.Fatal("frontend override failed:", result)
+	}
+	if saved.FrontURL != "https://another.example" || len(saved.Relays) != 1 || saved.Relays[0].RegistrationToken != "secret-canary" {
+		t.Fatal("frontend override changed relay authority or failed to replace the document choice")
+	}
+}
+
 func TestImportHelpAndCancellationHaveNoSideEffects(t *testing.T) {
 	saves := 0
 	runner := Runner{
 		Input: strings.NewReader(importedConfiguration),
-		Save:  func([]senderrelay.Candidate) error { saves++; return nil },
+		Save:  func(shareconfig.Config) error { saves++; return nil },
 	}
 	for _, args := range [][]string{{"help"}, {"--help"}, {"import", "--help"}} {
 		if result := runner.Run(context.Background(), args); result != ResultOK {
@@ -141,7 +159,7 @@ func assertImportTrace(t *testing.T, output string, want []string) {
 		if operationID == "" {
 			operationID = event.OperationID
 		}
-		if event.Operation != "relay_import" || operationID == "" || event.OperationID != operationID {
+		if event.Operation != "config_import" || operationID == "" || event.OperationID != operationID {
 			t.Fatal("import trace lost operation correlation")
 		}
 		messages = append(messages, event.Message)

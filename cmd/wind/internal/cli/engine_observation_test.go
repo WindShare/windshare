@@ -175,7 +175,7 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 		},
 	}
 	missing := filepath.Join(t.TempDir(), "missing")
-	code := app.Run(context.Background(), []string{"share", missing, "--trace", filepath.Join(t.TempDir(), "trace.ndjson")})
+	code := app.Run(context.Background(), []string{"share", missing, "--front-url", "https://front.example", "--relay", "https://relay.example", "--trace", filepath.Join(t.TempDir(), "trace.ndjson")})
 	if code != ExitUsage {
 		t.Fatalf("missing source exit = %d", code)
 	}

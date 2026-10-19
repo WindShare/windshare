@@ -1,4 +1,4 @@
-package relayconfig
+package shareconfig
 
 import (
 	"bytes"
@@ -7,20 +7,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 const (
 	privateDirectoryMode = 0o700
 	privateFileMode      = 0o600
-	stagingFilePrefix    = ".relays-import-"
+	stagingFilePrefix    = ".config-import-"
 )
 
 // Save replaces the entire allowed set. Merging would silently retain providers
 // that a newly imported private-only configuration deliberately excludes.
-func Save(candidates []senderrelay.Candidate) error {
-	data, err := encode(candidates)
+func Save(config Config) error {
+	data, err := encode(config)
 	if err != nil {
 		return err
 	}
@@ -31,13 +29,13 @@ func Save(candidates []senderrelay.Candidate) error {
 	return replaceConfiguration(path, data)
 }
 
-func encode(candidates []senderrelay.Candidate) ([]byte, error) {
-	if err := validate(candidates); err != nil {
+func encode(config Config) ([]byte, error) {
+	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	config := document{Relays: make([]savedRelay, 0, len(candidates))}
-	for _, candidate := range candidates {
-		config.Relays = append(config.Relays, savedRelay{
+	disk := document{FrontURL: config.FrontURL, Relays: make([]savedRelay, 0, len(config.Relays))}
+	for _, candidate := range config.Relays {
+		disk.Relays = append(disk.Relays, savedRelay{
 			URL: candidate.PublicURL, RegistrationToken: candidate.RegistrationToken,
 		})
 	}
@@ -46,7 +44,7 @@ func encode(candidates []senderrelay.Candidate) ([]byte, error) {
 	// Tokens are opaque ASCII, not HTML. Escaping them could expand a valid
 	// imported document beyond the same reader's bounded configuration budget.
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(config); err != nil {
+	if err := encoder.Encode(disk); err != nil {
 		return nil, err
 	}
 	// Keep a document accepted at the input limit readable after serialization.
@@ -63,7 +61,7 @@ func replaceConfiguration(path string, data []byte) (err error) {
 	}
 	info, err := os.Lstat(path)
 	if err == nil && !info.Mode().IsRegular() {
-		return errors.New("relay configuration destination must be a regular file")
+		return errors.New("sharing configuration destination must be a regular file")
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

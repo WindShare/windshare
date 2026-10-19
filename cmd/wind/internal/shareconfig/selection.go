@@ -1,4 +1,4 @@
-package relayconfig
+package shareconfig
 
 import (
 	"slices"
@@ -8,14 +8,14 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-// Select treats a saved list or explicit override as the complete allowed set.
-// Default infrastructure is used only when no selection has been configured.
-func Select(saved []senderrelay.Candidate, override []string, defaultURL string) ([]senderrelay.Candidate, error) {
+// SelectRelays treats a saved list or explicit override as the complete allowed
+// set. No infrastructure is added implicitly, including development listeners.
+func SelectRelays(saved []senderrelay.Candidate, override []string) ([]senderrelay.Candidate, error) {
 	if len(override) == 0 {
 		if len(saved) != 0 {
 			return slices.Clone(saved), nil
 		}
-		return []senderrelay.Candidate{{PublicURL: defaultURL}}, nil
+		return nil, ErrConfig
 	}
 	credentials := make(map[string]string, len(saved))
 	for _, candidate := range saved {

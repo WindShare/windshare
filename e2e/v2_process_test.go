@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	v2FrontendBaseURL             = "https://front.example"
 	v2ProcessTimeout              = 30 * time.Second
 	v2DurableResumeProcessTimeout = 90 * time.Second
 	v2OwnedProcessDeadline        = 5 * time.Minute
@@ -340,7 +341,7 @@ func TestLongV2ProcessProgressiveCatalogConcurrentReceiversAndSelection(t *testi
 	}
 
 	relay := startV2Relay(t, scenario)
-	share := startV2Process(t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relay.baseURL)
+	share := startV2Process(t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--front-url", v2FrontendBaseURL, "--relay", relay.baseURL)
 	linkExpression := regexp.MustCompile(`(?m)^Link: (\S+)$`)
 	shareLink := waitV2Match(t, share, linkExpression, share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
@@ -424,7 +425,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		scenario,
 		v2ShareCommandComponent,
 		binaries.wind,
-		"share", source,
+		"share", source, "--front-url", v2FrontendBaseURL,
 		"--relay", relay.baseURL,
 		"--block-size", fmt.Sprint(v2PionRelayCutBlockBytes),
 	)
@@ -581,7 +582,7 @@ func TestLongV2ProcessResumesDurableOutputAfterReceiverCrash(t *testing.T) {
 
 	relay := startV2Relay(t, scenario)
 	share := startV2Process(
-		t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--relay", relay.baseURL,
+		t, scenario, v2ShareCommandComponent, binaries.wind, "share", root, "--front-url", v2FrontendBaseURL, "--relay", relay.baseURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)

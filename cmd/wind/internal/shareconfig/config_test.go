@@ -1,4 +1,4 @@
-package relayconfig
+package shareconfig
 
 import (
 	"errors"
@@ -8,8 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 func TestDecodeRejectsIncompleteAmbiguousAndOversizedConfiguration(t *testing.T) {
@@ -36,28 +34,28 @@ func TestSavedCandidatesAndExplicitSelectionKeepAuthorityBoundToAddress(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := Select(saved, nil, "https://default.example")
-	if err != nil || !reflect.DeepEqual(selected, saved) {
+	selected, err := SelectRelays(saved.Relays, nil)
+	if err != nil || !reflect.DeepEqual(selected, saved.Relays) {
 		t.Fatal("saved selection was not preserved")
 	}
 	selected[0].RegistrationToken = "changed"
-	if saved[0].RegistrationToken != "one-token" {
+	if saved.Relays[0].RegistrationToken != "one-token" {
 		t.Fatal("selection borrowed mutable caller storage")
 	}
-	selected, err = Select(saved, []string{"wss://TWO.example:443/", "https://other.example", "https://one.example?route=other"}, "https://default.example")
+	selected, err = SelectRelays(saved.Relays, []string{"wss://TWO.example:443/", "https://other.example", "https://one.example?route=other"})
 	if err != nil || len(selected) != 3 || selected[0].RegistrationToken != "two-token" ||
 		selected[1].RegistrationToken != "" || selected[2].RegistrationToken != "" {
 		t.Fatal("override moved registration authority across addresses")
 	}
-	selected, err = Select(nil, nil, "https://default.example")
-	if err != nil || !reflect.DeepEqual(selected, []senderrelay.Candidate{{PublicURL: "https://default.example"}}) {
-		t.Fatal("unconfigured default changed")
+	selected, err = SelectRelays(nil, nil)
+	if !errors.Is(err, ErrConfig) || len(selected) != 0 {
+		t.Fatal("unconfigured relay silently fell back")
 	}
-	selected, err = Select(saved, []string{"https://two.example", "wss://two.example:443/"}, "https://default.example")
+	selected, err = SelectRelays(saved.Relays, []string{"https://two.example", "wss://two.example:443/"})
 	if err != nil || len(selected) != 1 || selected[0].RegistrationToken != "two-token" {
 		t.Fatal("equivalent explicit candidates were not deduplicated")
 	}
-	if _, err := Select(saved, []string{"invalid"}, "https://default.example"); err == nil {
+	if _, err := SelectRelays(saved.Relays, []string{"invalid"}); err == nil {
 		t.Fatal("invalid override accepted")
 	}
 }
@@ -73,14 +71,14 @@ func TestLoadDefaultsAndExplicitFileFailures(t *testing.T) {
 	if err := os.Unsetenv(PathEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	if candidates, err := Load(); err != nil || len(candidates) != 0 {
+	if candidates, err := Load(); err != nil || len(candidates.Relays) != 0 {
 		t.Fatalf("missing default=%v", err)
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(base, "windshare", "relays.json")
+	path := filepath.Join(base, "windshare", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +87,7 @@ func TestLoadDefaultsAndExplicitFileFailures(t *testing.T) {
 	}
 	for range 2 {
 		candidates, err := Load()
-		if err != nil || len(candidates) != 1 || candidates[0].RegistrationToken != "saved-token" {
+		if err != nil || len(candidates.Relays) != 1 || candidates.Relays[0].RegistrationToken != "saved-token" {
 			t.Fatal("saved configuration was not reusable")
 		}
 	}

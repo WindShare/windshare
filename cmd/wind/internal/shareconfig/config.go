@@ -1,5 +1,5 @@
-// Package relayconfig owns the sender's private, local relay selection.
-package relayconfig
+// Package shareconfig owns persistent frontend and relay choices for sharing.
+package shareconfig
 
 import (
 	"encoding/json"
@@ -13,16 +13,24 @@ import (
 )
 
 const (
-	PathEnvironment = "WINDSHARE_RELAY_CONFIG"
+	PathEnvironment = "WINDSHARE_CONFIG"
 	maxConfigBytes  = 64 * 1024
 )
 
-var ErrConfig = errors.New("invalid relay configuration")
+var ErrConfig = errors.New("invalid sharing configuration")
+
+// A relay-only export can omit FrontURL. Sharing requires an explicit frontend
+// before starting any network work; a relay address does not imply a website.
+type Config struct {
+	FrontURL string
+	Relays   []senderrelay.Candidate
+}
 
 // Disk credentials are decoded explicitly rather than making the engine's
 // candidate serializable with its private registration authority.
 type document struct {
-	Relays []savedRelay `json:"relays"`
+	FrontURL string       `json:"front_url,omitempty"`
+	Relays   []savedRelay `json:"relays"`
 }
 
 type savedRelay struct {
@@ -38,36 +46,36 @@ func configurationPath() (path string, explicit bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	return filepath.Join(directory, "windshare", "relays.json"), false, nil
+	return filepath.Join(directory, "windshare", "config.json"), false, nil
 }
 
-func Load() ([]senderrelay.Candidate, error) {
+func Load() (Config, error) {
 	path, explicit, err := configurationPath()
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	file, err := os.Open(path)
 	if !explicit && errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return Config{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	defer file.Close()
 	return Decode(file)
 }
 
-func Decode(reader io.Reader) ([]senderrelay.Candidate, error) {
+func Decode(reader io.Reader) (Config, error) {
 	limited := &io.LimitedReader{R: reader, N: maxConfigBytes + 1}
 	decoder := json.NewDecoder(limited)
 	decoder.DisallowUnknownFields()
 	var config document
 	if err := decoder.Decode(&config); err != nil {
-		return nil, ErrConfig
+		return Config{}, ErrConfig
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
-		return nil, ErrConfig
+		return Config{}, ErrConfig
 	}
 	candidates := make([]senderrelay.Candidate, 0, len(config.Relays))
 	for _, relay := range config.Relays {
@@ -75,17 +83,21 @@ func Decode(reader io.Reader) ([]senderrelay.Candidate, error) {
 			PublicURL: relay.URL, RegistrationToken: relay.RegistrationToken,
 		})
 	}
-	if err := validate(candidates); err != nil {
-		return nil, err
+	result := Config{FrontURL: config.FrontURL, Relays: candidates}
+	if err := result.Validate(); err != nil {
+		return Config{}, err
 	}
-	return candidates, nil
+	return result, nil
 }
 
-func validate(candidates []senderrelay.Candidate) error {
-	if len(candidates) == 0 || len(candidates) > relayset.MaximumEndpoints {
+func (config Config) Validate() error {
+	if config.FrontURL != "" && ValidateFrontURL(config.FrontURL) != nil {
 		return ErrConfig
 	}
-	if _, err := senderrelay.PublicURLs(candidates); err != nil {
+	if len(config.Relays) == 0 || len(config.Relays) > relayset.MaximumEndpoints {
+		return ErrConfig
+	}
+	if _, err := senderrelay.PublicURLs(config.Relays); err != nil {
 		return ErrConfig
 	}
 	return nil

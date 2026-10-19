@@ -1,5 +1,5 @@
-// Package relaycommand imports a sender's complete local relay selection.
-package relaycommand
+// Package configcommand imports persistent frontend and relay choices.
+package configcommand
 
 import (
 	"context"
@@ -12,9 +12,8 @@ import (
 	"os"
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
-	"github.com/windshare/windshare/cmd/wind/internal/relayconfig"
+	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 type Result uint8
@@ -25,15 +24,15 @@ const (
 	ResultUsage
 )
 
-const Usage = "Usage: " + commandmeta.Name + " relay import <file|-> [-v|--verbose]\n" +
-	"  Replace the saved relay candidate set; '-' reads JSON from stdin.\n"
+const Usage = "Usage: " + commandmeta.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]\n" +
+	"  Replace sharing defaults; --front-url saves the website address; '-' reads JSON from stdin.\n"
 
 // Runner keeps the destination authority injected so embedded callers cannot
 // accidentally modify the developer's personal configuration.
 type Runner struct {
 	Input  io.Reader
 	Output io.Writer
-	Save   func([]senderrelay.Candidate) error
+	Save   func(shareconfig.Config) error
 }
 
 func (runner Runner) Run(ctx context.Context, args []string) Result {
@@ -59,65 +58,74 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		sourceKind = "stdin"
 	}
 	log := slog.New(slog.NewJSONHandler(traceOutput, nil)).With(
-		"operation", "relay_import", "operation_id", rand.Text(), "source", sourceKind)
+		"operation", "config_import", "operation_id", rand.Text(), "source", sourceKind)
 	log.Info("started")
 	if err := ctx.Err(); err != nil {
 		log.Info("failed", "stage", "read", "reason", "cancelled")
-		_, _ = fmt.Fprintln(output, "relay import: cancelled; saved configuration was not changed")
+		_, _ = fmt.Fprintln(output, "config import: cancelled; saved configuration was not changed")
 		return ResultFailure
 	}
-	candidates, err := runner.read(request.source)
+	config, err := runner.read(request.source)
 	if err != nil {
-		if errors.Is(err, relayconfig.ErrConfig) {
+		if errors.Is(err, shareconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
-			_, _ = fmt.Fprintf(output, "relay import: invalid relay configuration; expected 1–%d distinct relay URLs and valid optional registration tokens\n", relayset.MaximumEndpoints)
+			_, _ = fmt.Fprintf(output, "config import: invalid sharing configuration; expected an optional HTTP(S) front_url, 1–%d distinct relay URLs and valid optional registration tokens\n", relayset.MaximumEndpoints)
 			return ResultUsage
 		}
 		log.Info("failed", "stage", "read", "reason", "source_unreadable")
-		_, _ = fmt.Fprintln(output, "relay import: cannot read the input file or stdin; saved configuration was not changed")
+		_, _ = fmt.Fprintln(output, "config import: cannot read the input file or stdin; saved configuration was not changed")
 		return ResultFailure
 	}
-	log.Info("validated", "candidate_count", len(candidates))
+	if request.frontURL != "" {
+		config.FrontURL = request.frontURL
+	}
+	log.Info("validated", "candidate_count", len(config.Relays), "front_url", config.FrontURL, "frontend_override", request.frontURL != "")
 	if ctx.Err() != nil {
 		log.Info("failed", "stage", "save", "reason", "cancelled")
-		_, _ = fmt.Fprintln(output, "relay import: cancelled; saved configuration was not changed")
+		_, _ = fmt.Fprintln(output, "config import: cancelled; saved configuration was not changed")
 		return ResultFailure
 	}
 	if runner.Save == nil {
 		log.Info("failed", "stage", "save", "reason", "destination_unavailable")
-		_, _ = fmt.Fprintln(output, "relay import: configuration storage is unavailable")
+		_, _ = fmt.Fprintln(output, "config import: configuration storage is unavailable")
 		return ResultFailure
 	}
-	if err := runner.Save(candidates); err != nil {
+	if err := runner.Save(config); err != nil {
 		log.Info("failed", "stage", "save", "reason", "write_failed")
-		_, _ = fmt.Fprintln(output, "relay import: cannot save configuration; check the user config directory or WINDSHARE_RELAY_CONFIG")
+		_, _ = fmt.Fprintln(output, "config import: cannot save configuration; check the user config directory or WINDSHARE_CONFIG")
 		return ResultFailure
 	}
-	log.Info("committed", "candidate_count", len(candidates))
-	_, _ = fmt.Fprintf(output, "Saved %d relay candidate(s). Future shares use this complete set.\n", len(candidates))
+	log.Info("committed", "candidate_count", len(config.Relays), "frontend_configured", config.FrontURL != "")
+	_, _ = fmt.Fprintf(output, "Saved sharing configuration with %d relay candidate(s).\n", len(config.Relays))
+	if config.FrontURL == "" {
+		_, _ = fmt.Fprintln(output, "No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
+	} else {
+		_, _ = fmt.Fprintf(output, "Frontend: %s. Future shares use these defaults.\n", config.FrontURL)
+	}
 	return ResultOK
 }
 
-func (runner Runner) read(source string) ([]senderrelay.Candidate, error) {
+func (runner Runner) read(source string) (shareconfig.Config, error) {
 	if source == "-" {
 		if runner.Input == nil {
-			return nil, io.ErrUnexpectedEOF
+			return shareconfig.Config{}, io.ErrUnexpectedEOF
 		}
-		return relayconfig.Decode(runner.Input)
+		return shareconfig.Decode(runner.Input)
 	}
 	file, err := os.Open(source)
 	if err != nil {
-		return nil, err
+		return shareconfig.Config{}, err
 	}
-	candidates, decodeErr := relayconfig.Decode(file)
+	candidates, decodeErr := shareconfig.Decode(file)
 	// Close the source before replacement so importing the saved file itself
 	// also works on hosts that deny renaming an open destination.
 	return candidates, errors.Join(decodeErr, file.Close())
 }
 
 type importRequest struct {
-	source  string
-	verbose bool
+	source   string
+	verbose  bool
+	frontURL string
 }
 
 func parse(args []string) (importRequest, error) {
@@ -128,10 +136,17 @@ func parse(args []string) (importRequest, error) {
 		return importRequest{}, errors.New("expected import")
 	}
 	var request importRequest
-	flags := flag.NewFlagSet("relay import", flag.ContinueOnError)
+	flags := flag.NewFlagSet("config import", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&request.verbose, "v", false, "emit structured import diagnostics")
 	flags.BoolVar(&request.verbose, "verbose", false, "emit structured import diagnostics")
+	flags.Func("front-url", "save this frontend base URL for future shares", func(value string) error {
+		if err := shareconfig.ValidateFrontURL(value); err != nil {
+			return err
+		}
+		request.frontURL = value
+		return nil
+	})
 	args = args[1:]
 	var paths []string
 	for {

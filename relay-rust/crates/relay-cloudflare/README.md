@@ -7,7 +7,7 @@ REGISTER, RESUME, JOIN, session admission, cumulative consumption, settlement, S
 and heartbeat controls to `ShareRelay`. Opaque envelopes remain event-owned and pass
 through the kernel's synchronous `submit` before WebSocket delivery in either direction.
 Descriptors come only from confirmed authority rows. The Go sender accepts saved
-[relay configuration](../../../docs/cli.md#saved-relays), including registration credentials.
+[sharing defaults](../../../docs/cli.md#sharing-defaults), including registration credentials.
 
 Fresh REGISTER requires `Authorization: Bearer <REGISTRATION_SECRET>` on the
 upgrade. The edge overwrites its internal permission header and stores permission
@@ -56,9 +56,9 @@ npx wrangler secret put REGISTRATION_SECRET
 npx wrangler deploy
 ```
 
-For `wind share`, import a [relay configuration](../../../docs/cli.md#saved-relays)
-with `wind relay import relay.json`, using the stable deployment base URL without
-`/v2/ws` and the registration secret. Subsequent shares load it automatically. Protocol probes
+For `wind share`, import [sharing defaults](../../../docs/cli.md#sharing-defaults)
+with `wind config import relay.json --front-url https://your-frontend.example`, using the stable relay base URL without
+`/v2/ws` and the registration secret. Subsequent shares reuse both settings. Protocol probes
 that take an endpoint use the full URL ending in `/v2/ws`. Endpoint identity is retained in
 storage; an alternate hostname is a different relay identity, even for the same
 Worker. Do not delete storage to update code: that would erase permanent STOP.

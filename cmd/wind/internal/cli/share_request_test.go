@@ -14,6 +14,7 @@ func TestShareRequestOwnsVerboseAndTraceOptionsAcrossInterleavedArguments(t *tes
 	t.Cleanup(app.closeTerminalOutput)
 	request, parse := app.parseShareRequest([]string{
 		"selected-one", "-v", "selected-two", "--trace", tracePath,
+		"--front-url", "https://front.example", "--relay", "https://relay.example",
 	})
 	target, targetErr := request.observation.traceTarget()
 	expected, _ := runtrace.ExactFile(tracePath)
