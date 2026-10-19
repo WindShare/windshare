@@ -145,6 +145,87 @@ async fn unrelated_ingress_is_isolated_and_wire_settlement_reclaims_shared_sende
 }
 
 #[tokio::test]
+async fn receiver_loss_discards_late_data_and_admission_without_closing_shared_connections() {
+    let mut host = published().await;
+    let (receiver, retired) = joined(&mut host, 3).await;
+    let (port, mut healthy, _) = crate::connection::channel(connection(4));
+    host.tx
+        .send(Event::Connected(connection(4), port))
+        .await
+        .unwrap();
+    host.tx
+        .send(Event::Control(connection(4), host.fixture.bytes("joinB64")))
+        .await
+        .unwrap();
+    let descriptor = read(&mut healthy).await;
+    let session = RelaySessionId::new(descriptor[8..16].try_into().unwrap()).unwrap();
+    host.tx
+        .send(Event::Frame(connection(3), opaque(retired)))
+        .await
+        .unwrap();
+    // JOIN can leave replenishment controls ahead of the next payload.
+    loop {
+        let frame = read(&mut host.sender).await;
+        if frame.starts_with(b"WS2O") {
+            assert_eq!(frame, opaque(retired));
+            break;
+        }
+        assert!(frame.starts_with(b"WS2W"));
+    }
+    host.tx
+        .send(Event::Disconnected(connection(3)))
+        .await
+        .unwrap();
+    drop(receiver);
+    let notice = SettlementNotice::decode(&read(&mut host.sender).await).unwrap();
+    assert_eq!(notice.session(), retired);
+    for settled in [false, true] {
+        if settled {
+            let ack = SettlementAck::new(retired, notice.total())
+                .unwrap()
+                .encode()
+                .to_vec();
+            host.tx
+                .send(Event::Control(connection(1), ack))
+                .await
+                .unwrap();
+        }
+        host.tx
+            .send(Event::Frame(connection(1), opaque(retired)))
+            .await
+            .unwrap();
+        let mut admitted = host.fixture.bytes("sessionAdmittedB64");
+        admitted[8..16].copy_from_slice(retired.as_bytes());
+        host.tx
+            .send(Event::Control(connection(1), admitted))
+            .await
+            .unwrap();
+        host.tx
+            .send(Event::Frame(connection(1), opaque(session)))
+            .await
+            .unwrap();
+        loop {
+            let frame = read(&mut healthy).await;
+            if frame.starts_with(b"WS2O") {
+                assert_eq!(frame, opaque(session));
+                break;
+            }
+            assert!(frame.starts_with(b"WS2W"));
+        }
+    }
+    host.tx
+        .send(Event::Frame(connection(4), opaque(session)))
+        .await
+        .unwrap();
+    assert_eq!(read(&mut host.sender).await, opaque(session));
+    assert!(
+        host.attempts.try_recv().is_err(),
+        "session loss must not persist owner detachment"
+    );
+    drop(host);
+}
+
+#[tokio::test]
 async fn full_control_writer_defers_credit_and_readiness_resumes_without_double_grants() {
     let mut host = published().await;
     let (mut receiver, session) = joined(&mut host, 3).await;

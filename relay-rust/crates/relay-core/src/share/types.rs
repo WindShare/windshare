@@ -47,6 +47,7 @@ pub enum Error {
     Flow(crate::flow::Refusal),
     Frame(crate::wire::FrameError),
     Forward(crate::sessions::ForwardRefusal),
+    Session(crate::sessions::Refusal),
 }
 
 #[derive(Debug)]
@@ -202,6 +203,8 @@ pub enum Control {
 pub struct Turn {
     pub outputs: Vec<Output>,
     pub deadline: Option<UnixMillis>,
+    /// Invalid input or failed host work. Retired/collected session ingress is
+    /// discarded successfully without a receipt, credit or liveness refresh.
     pub refusal: Option<Error>,
 }
 

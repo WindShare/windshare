@@ -1,14 +1,13 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, type APIRequestContext, type Download, type Page, type TestInfo } from '@playwright/test'
-import { createServer } from 'vite'
 
 import { DirectProcess } from '../fixtures/direct-process'
+import { startProductFrontend } from '../fixtures/product-frontend'
 import type { RelayTarget } from './isolated-deployment'
 import { RelayTestControl, type RelayStatus } from './relay-control'
 import { EVIDENCE_POLL_MILLISECONDS, RecoveryEvidence, senderRecoveryEvidence, senderTraceSequence } from './recovery-evidence'
@@ -27,26 +26,6 @@ const PROGRESS_BYTES = 4 * BLOCK_BYTES
 export interface DownloadInterruption {
   readonly kind: 'object-reset' | 'redeploy'
   readonly run: (control: RelayTestControl, before: RelayStatus) => Promise<unknown>
-}
-
-async function startFrontend(output: string) {
-  const vite = await createServer({
-    root: join(REPOSITORY_ROOT, 'web'), cacheDir: join(output, 'vite-cache'), logLevel: 'error',
-    server: { host: '127.0.0.1', port: 0, strictPort: true, hmr: false, watch: null },
-  })
-  try {
-    const listener = vite.httpServer
-    if (!listener) throw new Error('Vite listener unavailable')
-    const listening = once(listener, 'listening')
-    listener.listen(0, '127.0.0.1')
-    await listening
-    const address = listener.address()
-    if (!address || typeof address === 'string') throw new Error('Vite address unavailable')
-    return { vite, url: `http://127.0.0.1:${address.port}` }
-  } catch (error) {
-    await vite.close()
-    throw error
-  }
 }
 
 function observeBrowser(page: Page) {
@@ -92,7 +71,7 @@ export async function runDownloadScenario(
   const payload = randomBytes(fileBytes)
   const source = join(output, 'cloudflare.bin')
   await writeFile(source, payload)
-  const { vite, url } = await startFrontend(output)
+  const { vite, url } = await startProductFrontend(output)
   let sender: DirectProcess | undefined
   const observation = observeBrowser(page)
   const { sockets, downloads } = observation

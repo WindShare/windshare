@@ -221,6 +221,61 @@ fn cancellation_settles_without_closing_the_shared_sender() {
 }
 
 #[test]
+fn receiver_loss_and_hibernation_discard_late_ingress_without_closing_siblings() {
+    let f = Fixture::new();
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.registered(&mut runtime, &f);
+    let retired = join(&mut host, &mut runtime, &f, 2);
+    let healthy = join(&mut host, &mut runtime, &f, 3);
+    forward(&mut host, &mut runtime, 2, retired, 1);
+    host.close(connection(2)).unwrap();
+    runtime
+        .event(&mut host, Input::Disconnected(connection(2)))
+        .unwrap();
+    let ack = SettlementAck::new(retired, Counts::new(1, 21))
+        .unwrap()
+        .encode();
+    for boot in 1..=3 {
+        if boot == 2 {
+            runtime
+                .control(&mut host, connection(1), &ack, false)
+                .unwrap();
+        }
+        if boot == 3 {
+            drop(runtime);
+            runtime = host.restore(boot).unwrap();
+        }
+        let before = host.sent.len();
+        let writes = (host.writes, host.manifest_writes);
+        forward(&mut host, &mut runtime, 1, retired, 1);
+        admit(&mut host, &mut runtime, &f, retired);
+        assert_eq!(
+            host.sent.len(),
+            before,
+            "discarded inputs cannot forward or grant credit"
+        );
+        assert_eq!((host.writes, host.manifest_writes), writes);
+        assert!(host.live.contains(&connection(1)));
+        assert!(host.live.contains(&connection(3)));
+        for source in [3, 1] {
+            let destination = if source == 1 { 3 } else { 1 };
+            let before = host.sent.len();
+            forward(&mut host, &mut runtime, source, healthy, 1);
+            assert!(host.sent[before..].contains(&(connection(destination), opaque(healthy, 1))));
+            consume(
+                &mut host,
+                &mut runtime,
+                destination,
+                healthy,
+                Counts::new(u64::from(boot), u64::from(boot) * 21),
+            );
+        }
+        admit(&mut host, &mut runtime, &f, healthy);
+    }
+}
+
+#[test]
 fn uncertain_payload_handoff_retires_only_its_destination_and_dependent_flow() {
     let f = Fixture::new();
     let mut host = Memory::new(&f);

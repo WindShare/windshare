@@ -77,8 +77,12 @@ pnpm exec playwright test --config playwright.cloudflare.config.ts --grep redepl
 
 Each scenario creates and deletes its own randomly named Worker with isolated SQLite
 and generated test credentials. It builds Rust and `wind`, disables browser P2P,
-then resets the object or runs `wrangler deploy --durable-objects-code-update-mode immediate`
-after 4 MiB is written. Immediate switching is requested only by the test.
+then exercises receiver isolation, object reset or redeployment. The isolation
+scenario downloads the same 49 MiB file in two browsers, disconnects one receiver
+four times, and checks that the sender and healthy sibling retain their connections
+and both files match. Recovery scenarios reset the object or run
+`wrangler deploy --durable-objects-code-update-mode immediate` after 4 MiB is written.
+Immediate switching is requested only by the test.
 [Global propagation](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates)
 can still take minutes, so reset uses 17 MiB and redeployment uses 97 MiB with real
 browser origin storage. Redeployment retains the address, secrets and namespace;

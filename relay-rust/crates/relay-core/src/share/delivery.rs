@@ -6,6 +6,7 @@ use super::{
 use crate::{
     clock::UnixMillis,
     flow::{Counts, Feedback, FlowKey, ReceivedFrame},
+    observation::SessionInputKind,
     sessions::{Action, Event as SessionEvent, OpaqueHeader},
 };
 
@@ -52,8 +53,14 @@ impl<O: Observer> ShareRelay<O> {
         }
         let id = header.session();
         let action = self.session_event(id, SessionEvent::Frame { source, header }, now, turn);
-        let Some(Action::Forward(permit)) = action else {
-            return Err(Error::Unavailable);
+        let permit = match action {
+            Some(Action::Forward(permit)) => permit,
+            Some(Action::Discard(_)) => return Ok(()),
+            Some(Action::Refused(reason)) => return Err(Error::Session(reason)),
+            None => {
+                return self.discard_collected_session(source, id, SessionInputKind::Frame, now);
+            }
+            Some(Action::Active | Action::None) => unreachable!("frame must route or be rejected"),
         };
         let entry = self.sessions.get(&id).ok_or(Error::UnknownSession)?;
         let flow = *entry
