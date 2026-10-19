@@ -38,7 +38,7 @@ export async function runCloudflareIsolationScenario(
       'share', source, '--front-url', url, '--trace', senderTrace, '--block-size', String(ISOLATION_BLOCK_BYTES),
     ], {
       cwd: REPOSITORY_ROOT,
-      environment: { ...process.env, WINDSHARE_RELAY_CONFIG: target.configPath },
+      environment: { ...process.env, WINDSHARE_CONFIG: target.configPath },
       operationId: 'cloudflare-receiver-isolation',
       disclosure: { stdout: 'capability', stderr: 'private' },
     })

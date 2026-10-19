@@ -144,7 +144,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 	t.Run("missing source fails before relay registration", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
 		missing := filepath.Join(t.TempDir(), "missing")
-		if code := app.Run(context.Background(), []string{"share", missing}); code != ExitUsage {
+		if code := app.Run(context.Background(), []string{"share", missing, "--front-url", "https://front.example", "--relay", "https://relay.example"}); code != ExitUsage {
 			t.Fatalf("exit=%d want=%d stderr=%q", code, ExitUsage, stderr.String())
 		}
 		if !strings.Contains(stderr.String(), "unexpected error") || strings.Contains(stderr.String(), missing) {

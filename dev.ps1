@@ -193,7 +193,7 @@ try {
     Write-Host "  Relay:    $publicRelayBaseUrl"
     Write-Host ''
     Write-Host 'Create a local share from another terminal:'
-    Write-Host '  go run ./cmd/wind share "<file-or-folder>"'
+    Write-Host ('  go run ./cmd/wind share "<file-or-folder>" --front-url {0} --relay {0}' -f $frontendUri)
     Write-Host ''
     Write-Host 'Press Ctrl+C to stop both services.'
 

@@ -48,16 +48,16 @@ still apply.
    [WindShare installed](../installation.md), decrypt and import:
 
    ```sh
-   age --decrypt -i /path/to/windshare.key relay.json.age | wind relay import -
-   wind share <path> --front-url https://<your-worker-address>
+   age --decrypt -i /path/to/windshare.key relay.json.age | wind config import - --front-url https://<your-worker-address>
+   wind share <path>
    ```
 
-   This works in PowerShell and POSIX shells. Import replaces the entire allowed relay
-   set, so this configuration uses **only your private relay**. To allow additional
+   This works in PowerShell and POSIX shells. Import saves your frontend and replaces
+   the entire relay set, so future shares use **only your private relay**. To allow additional
    relays, decrypt to a private JSON file and edit its `relays` array before importing;
-   see [saved relays](../cli.md#saved-relays). `--front-url` selects the frontend in sharing
-   links; importing relay settings does not set it. In `relay-only` mode, use your
-   separately hosted frontend's URL. The workflow summary includes the commands.
+   see [sharing defaults](../cli.md#sharing-defaults). In `relay-only` mode, pass your
+   separately hosted frontend's URL during import. Full same-origin deployments generate
+   links without `r=`. The workflow summary includes the commands.
 
 The registration credential is separate from the Cloudflare API token. It lives in the
 Worker's `REGISTRATION_SECRET`; only its age-encrypted import copy is published as an

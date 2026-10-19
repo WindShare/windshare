@@ -106,14 +106,15 @@ func TestPublishedLinksPreserveCapabilityAndResolveRelays(t *testing.T) {
 func TestBrowserTraceRequestIsIndependentOfSenderTrace(t *testing.T) {
 	app := &App{Stderr: io.Discard}
 	t.Cleanup(app.closeTerminalOutput)
-	request, outcome := app.parseShareRequest([]string{"root", "--browser-trace", "--split-key"})
+	args := []string{"root", "--front-url", "https://front.example", "--relay", "https://relay.example"}
+	request, outcome := app.parseShareRequest(append(args, "--browser-trace", "--split-key"))
 	if outcome != requestParseReady || !request.link.browserTrace || !request.link.splitKey {
 		t.Fatalf("unexpected request: %+v outcome: %v", request, outcome)
 	}
 	if request.observation.traceEnabled() {
 		t.Fatal("browser trace enabled sender trace")
 	}
-	request, outcome = app.parseShareRequest([]string{"root"})
+	request, outcome = app.parseShareRequest(args)
 	if outcome != requestParseReady || request.link.browserTrace {
 		t.Fatal("ordinary links enable browser tracing")
 	}

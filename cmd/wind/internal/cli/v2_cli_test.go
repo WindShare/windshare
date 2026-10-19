@@ -176,7 +176,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int, stopO
 	})
 	go func() {
 		defer close(finished)
-		result <- app.Run(shareContext, []string{"share", file, "--relay", relays.ReadyRelayURL(), "--trace", userTracePath})
+		result <- app.Run(shareContext, []string{"share", file, "--relay", relays.ReadyRelayURL(), "--front-url", "https://front.example", "--trace", userTracePath})
 	}()
 	waitV2PrivateMilestones(t, privateSink, processTraceSenderReady, 1)
 	cancelShare()

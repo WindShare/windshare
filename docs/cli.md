@@ -28,42 +28,45 @@ If every relay is temporarily unreachable, `share` waits and retries until one i
 
 Windows sources are admitted by file identity and write-excluding handle capabilities, including eligible removable and network volumes. Filesystems with weak change metadata keep the same revision while its handle remains open; reopening creates a new revision, so old download ranges are never mixed with potentially changed content.
 
-### Saved relays
+### Sharing defaults
 
-For a personal Cloudflare relay, use the [Fork ? Actions deployment](deploy/cloudflare-relay.md)
-and decrypt its configuration directly into `wind relay import -`.
+For a personal Cloudflare deployment, follow the [deployment guide](deploy/cloudflare-relay.md).
 
 Import a JSON configuration once:
 
 ```text
-wind relay import relay.json
+wind config import config.json
 wind share <path...>
 ```
 
 ```json
-{"relays":[{"url":"https://your-relay.example","registration_token":"your-registration-secret"}]}
+{"front_url":"https://your-site.example","relays":[{"url":"https://your-site.example","registration_token":"your-registration-secret"}]}
 ```
 
-Use `wind relay import -` to read JSON from stdin; `-v` adds structured import diagnostics
-without credentials. Import validates and replaces the **entire allowed candidate set**;
-it does not merge old candidates. Invalid input or a failed write preserves the saved file.
-Import only saves configuration; it does not contact the relays.
+`wind config import <file|-> --front-url <url>` sets or overrides the document's frontend
+before saving; `-` reads stdin and `-v` adds structured diagnostics. Import replaces the
+**entire configuration**, without merging old relays or frontend choices. Invalid input
+or a failed write preserves the saved file. Import does not contact the deployment.
 
-The file is stored as `windshare/relays.json` in your user configuration directory:
+The file is stored as `windshare/config.json` in your user configuration directory:
 `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or
-`~/Library/Application Support` on macOS. `WINDSHARE_RELAY_CONFIG` selects another file
+`~/Library/Application Support` on macOS. `WINDSHARE_CONFIG` selects another file
 for both import and sharing. Manual editing remains supported.
 
-Ordinary `wind share <path...>` reuses this list; it does not add default relays.
-Without a saved file, the existing default applies. Up to eight candidates are supported;
+Ordinary `wind share <path...>` reuses these defaults. A single relay at the frontend's
+origin produces a link without `r=`; separate origins and multiple relays retain their hints.
+`front_url` must be an HTTP(S) base URL without credentials, query or fragment; subpaths are allowed.
+Relay-only exports may omit it, but sharing then requires `--front-url`. There is no implicit
+localhost or public-service fallback. Up to eight candidates are supported;
 omit `registration_token` for a relay that allows public registration. Use a base URL
 without `/v2/ws`. Protect this local file like a password; only public URLs enter links.
 The token is sent as a Bearer credential for REGISTER, including re-registration after recovery;
 RESUME and STOP retain their independent authentication.
 
-Repeat `--relay <url>` to override the candidate set for one share. Matching saved addresses
-retain their credentials; a different path or query never inherits them. Invalid or unreadable
-configuration fails explicitly. Delete the file to return to the built-in default.
+`--front-url <url>` and repeated `--relay <url>` independently override one share without
+changing saved defaults. Matching relay addresses retain their credentials; a different
+path or query never inherits them. Without saved defaults, supply both options explicitly.
+Invalid or unreadable configuration fails explicitly.
 
 ## Download
 
