@@ -234,7 +234,7 @@ than restoring stale credits or claiming physical release.
 
 ## 部署体验
 
-[Fork → GitHub Actions deployment](../../cloudflare-relay.md) is implemented on `main`.
+[Fork → GitHub Actions deployment](../../deploy/cloudflare-relay.md) is implemented on `main`.
 The first deployment generates registration authority and seals the import configuration
 to the user's local age key. Repository Variables/Secrets hold deployment inputs; the
 Worker retains the credential and encrypted export together. Updates verify the stored

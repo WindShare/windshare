@@ -81,9 +81,9 @@
 
 ## 6. 继续部署
 
-Token 配置完成。回到[中转部署指南](cloudflare-relay.md#first-deployment)，继续生成本地 age 密钥并填写其余 Variables，然后运行 **Deploy private Cloudflare relay**。
+Token 配置完成。回到[部署指南](cloudflare-relay.md#first-deployment)，继续生成本地 age 密钥并填写其余 Secrets 和 Variables，然后运行 **Deploy WindShare to Cloudflare**。默认同时部署前端和中转；只需中转时，设置 `CLOUDFLARE_DEPLOYMENT_MODE=relay-only`。
 
-保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy private Cloudflare relay → Run workflow** 中选择 `main`，再点击 **Run workflow**。运行成功后会出现绿色勾号。
+保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy WindShare to Cloudflare → Run workflow** 中选择 `main`，再点击 **Run workflow**。运行成功后会出现绿色勾号。
 
 ## 遇到问题时
 

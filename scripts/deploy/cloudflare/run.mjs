@@ -6,19 +6,21 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareClient } from './cloudflare.mjs';
+import { deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, STATE_BINDING, validateHostConfig } from './deployment.mjs';
-import { deploymentConfig } from './routing.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const hostDirectory = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare');
 const COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
+const FRONTEND_BUILD_COMMAND = 'pnpm build';
 const operationId = process.env.GITHUB_RUN_ID ?? randomUUID();
 
 function command(program, args, options = {}) {
+  const { env, ...commandOptions } = options;
   const result = spawnSync(program, args, {
     cwd: hostDirectory, stdio: 'inherit', timeout: COMMAND_TIMEOUT_MS, windowsHide: true,
-    env: { ...process.env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'info' },
-    ...options,
+    env: { ...process.env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'info', ...env },
+    ...commandOptions,
   });
   // Child-process exception objects can contain stdin, including registration
   // authority. Report only exit information, never serialize the spawn result.
@@ -50,13 +52,14 @@ async function publish(plan, config) {
 }
 
 async function main() {
+  const mode = readDeploymentMode(process.env);
   const inputs = readInputs(process.env);
   const require = createRequire(join(hostDirectory, 'package.json'));
   const { experimental_readRawConfig, unstable_readConfig } = require('wrangler');
   const source = { config: join(hostDirectory, 'wrangler.toml') };
   validateHostConfig(unstable_readConfig(source));
-  const config = deploymentConfig(experimental_readRawConfig(source).rawConfig, inputs);
-  const log = (event, fields) => console.log(JSON.stringify({ event, operationId, ...fields }));
+  const config = deploymentConfig(experimental_readRawConfig(source).rawConfig, inputs, mode);
+  const log = (event, fields) => console.log(JSON.stringify({ event, operationId, mode, ...fields }));
   const client = cloudflareClient({ ...inputs, apiToken: process.env.CLOUDFLARE_API_TOKEN });
   log('deployment_started', { workerName: inputs.workerName, revision: process.env.GITHUB_SHA });
   const result = await deployRelay({
@@ -64,25 +67,42 @@ async function main() {
     encrypt: (plaintext, recipient) => command('age', ['--encrypt', '--armor', '--recipient', recipient], {
       stdio: ['pipe', 'pipe', 'inherit'], input: plaintext, encoding: 'utf8',
     }).replaceAll('\r\n', '\n'),
-    deploy: plan => publish(plan, config),
+    deploy: async plan => {
+      if (mode === FULL_DEPLOYMENT) {
+        log('frontend_build_started', { deploymentId: plan.state.deploymentId });
+        command(FRONTEND_BUILD_COMMAND, [], {
+          cwd: join(repositoryRoot, 'web'), shell: true,
+          env: { WIND_BUILD_REVISION: process.env.GITHUB_SHA ?? process.env.WIND_BUILD_REVISION },
+        });
+        log('frontend_build_completed', { deploymentId: plan.state.deploymentId });
+      } else {
+        log('frontend_omitted', { deploymentId: plan.state.deploymentId });
+      }
+      await publish(plan, config);
+    },
   });
+  const frontendUrl = mode === FULL_DEPLOYMENT ? result.state.endpoint : null;
   const outputDirectory = resolve(process.env.WINDSHARE_DEPLOYMENT_OUTPUT ?? join(tmpdir(), 'windshare-relay-config'));
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(join(outputDirectory, 'relay.json.age'), result.state.encryptedConfig);
   await writeFile(join(outputDirectory, 'deployment.json'), JSON.stringify({
     endpoint: result.state.endpoint, deploymentId: result.state.deploymentId,
     namespaceId: result.namespaceId, revision: process.env.GITHUB_SHA,
+    mode, frontendUrl,
   }, null, 2) + '\n');
   if (process.env.GITHUB_STEP_SUMMARY) {
     await appendFile(process.env.GITHUB_STEP_SUMMARY, [
-      '### WindShare private relay', '',
-      `Address: ${result.state.endpoint}`, '',
+      '### WindShare Cloudflare deployment', '',
+      `Mode: ${mode}`, '',
+      `Relay: ${result.state.endpoint}`, '',
+      frontendUrl ? `Frontend: ${frontendUrl}` : 'Frontend: hosted separately (relay-only deployment).', '',
       `Deployment: \`${result.state.deploymentId}\` (${result.kind})`, '',
       'Download the **windshare-relay-config** artifact, extract it, then run:', '',
       '\`\`\`sh',
       'age --decrypt -i windshare.key relay.json.age | wind relay import -',
+      `wind share <path> --front-url ${frontendUrl ?? 'https://<your-frontend>'}`,
       '\`\`\`', '',
-      'Import replaces the complete allowed relay set. Ordinary sharing now uses this private relay.',
+      'Import replaces the complete allowed relay set. Use --front-url to select the website in sharing links.',
       'Keep your local age key. Updates preserve this address, registration credential and share storage.',
       'A completed deployment does not mean every active object has switched versions yet.', '',
     ].join('\n'));

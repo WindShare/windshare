@@ -27,19 +27,6 @@ export function sameRoute(left, right) {
     (left.hostname === right.hostname && left.zoneId === right.zoneId));
 }
 
-// The checked-in host owns build/storage semantics; repository Variables own
-// deployment identity. Keep the generated config beside the source so relative
-// build and module paths retain their original meaning.
-export function deploymentConfig(host, inputs) {
-  return {
-    ...host, name: inputs.workerName, account_id: inputs.accountId,
-    workers_dev: inputs.route.kind === 'workers-dev', preview_urls: false,
-    routes: inputs.route.kind === 'custom-domain'
-      ? [{ pattern: inputs.route.hostname, zone_id: inputs.route.zoneId, custom_domain: true }]
-      : [],
-  };
-}
-
 function ownsDomain(domain, inputs) {
   return domain.hostname === inputs.route.hostname && domain.zone_id === inputs.route.zoneId &&
     domain.service === inputs.workerName && domain.environment === 'production';
