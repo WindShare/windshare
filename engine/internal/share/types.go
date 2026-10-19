@@ -45,7 +45,7 @@ func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type Request struct {
 	Source         liveshare.FileSourceFactory
-	RelayURLs      []string
+	Relays         []senderrelay.Candidate
 	ChunkSize      uint32
 	Diagnostics    bool
 	TraceLifecycle bool

@@ -2,12 +2,15 @@ package engine
 
 import (
 	"context"
+	"slices"
 
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/share"
 	"github.com/windshare/windshare/engine/internal/task"
 )
 
 type ShareRequest = share.Request
+type ShareRelayCandidate = senderrelay.Candidate
 type ShareResult = share.Result
 type ShareReady = share.Ready
 type ShareObservation = share.Observation
@@ -43,7 +46,7 @@ type ShareTask struct {
 
 func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*ShareTask, error) {
 	controller := share.NewController()
-	request.RelayURLs = append([]string(nil), request.RelayURLs...)
+	request.Relays = slices.Clone(request.Relays)
 	injected := engine.config.Share
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),

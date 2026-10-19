@@ -28,6 +28,27 @@ If every relay is temporarily unreachable, `share` waits and retries until one i
 
 Windows sources are admitted by file identity and write-excluding handle capabilities, including eligible removable and network volumes. Filesystems with weak change metadata keep the same revision while its handle remains open; reopening creates a new revision, so old download ranges are never mixed with potentially changed content.
 
+### Saved relays
+
+Save `windshare/relays.json` in your user configuration directory: `%APPDATA%` on Windows,
+`$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or `~/Library/Application Support` on macOS.
+`WINDSHARE_RELAY_CONFIG` can select another file.
+
+```json
+{"relays":[{"url":"https://your-relay.example","registration_token":"your-registration-secret"}]}
+```
+
+Ordinary `wind share <path...>` reuses this list; it does not add default relays.
+Without a saved file, the existing default applies. Up to eight candidates are supported;
+omit `registration_token` for a relay that allows public registration. Use a base URL
+without `/v2/ws`. Protect this local file like a password; only public URLs enter links.
+The token is sent as a Bearer credential for REGISTER, including re-registration after recovery;
+RESUME and STOP retain their independent authentication.
+
+Repeat `--relay <url>` to override the candidate set for one share. Matching saved addresses
+retain their credentials; a different path or query never inherits them. Invalid or unreadable
+configuration fails explicitly. Delete the file to return to the built-in default.
+
 ## Download
 
 ```text

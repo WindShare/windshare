@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -73,8 +74,16 @@ type activeShare struct {
 
 func (s *activeShare) start(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
+	urls, err := senderrelay.PublicURLs(request.Relays)
+	if err != nil || len(urls) > relayset.MaximumEndpoints {
+		return task.FailureUsage, errors.Join(ErrConfiguration, err)
+	}
+	candidates := make(map[string]senderrelay.Candidate, len(request.Relays))
+	for _, candidate := range request.Relays {
+		candidates[candidate.PublicURL] = candidate
+	}
 	config := liveshare.SenderConfig{
-		Source: o.sourceFactory(request.Source), Relays: request.RelayURLs, ChunkSize: request.ChunkSize,
+		Source: o.sourceFactory(request.Source), Relays: urls, ChunkSize: request.ChunkSize,
 		Random: d.Control.Random, Now: d.Control.Now,
 		CatalogTracer: o, RootPrefetchTracer: o,
 		RevisionCapacity: d.RevisionCapacity, CatalogBudget: d.CatalogBudget, CacheBudget: d.CacheBudget,
@@ -82,7 +91,6 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if request.Diagnostics {
 		config.RevisionTracer = o
 	}
-	var err error
 	s.prepared, err = d.Prepare(ctx, config)
 	if err != nil {
 		return task.FailureUsage, err
@@ -93,8 +101,12 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if err := s.prepared.AuthorizeRegistration(); err != nil {
 		return task.FailureLocal, err
 	}
-	s.relays, err = d.Relays(resourceContext, request.RelayURLs, func(_ context.Context, url string) (relayset.SenderEndpoint, error) {
-		return prepareRelay(s.prepared, url, d, o)
+	s.relays, err = d.Relays(resourceContext, urls, func(_ context.Context, url string) (relayset.SenderEndpoint, error) {
+		candidate, ok := candidates[url]
+		if !ok {
+			return nil, ErrConfiguration
+		}
+		return prepareRelay(s.prepared, candidate, d, o)
 	})
 	if err != nil {
 		return task.FailureNetwork, err

@@ -29,6 +29,7 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 				}
 			}}
 			config := newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock())
+			config.Candidate.RegistrationToken = "candidate-private-token"
 			descriptor := bytes.Clone(config.Descriptor)
 			lifecycle, err := New(config)
 			if err != nil {
@@ -53,6 +54,13 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 				t.Fatal("republish changed descriptor bytes")
 			}
 			for _, attempt := range configs {
+				wantAuthorization := "Bearer " + config.Candidate.RegistrationToken
+				if attempt.Init.Mode == v2.RegistrationResume {
+					wantAuthorization = ""
+				}
+				if attempt.Dial.Header.Get("Authorization") != wantAuthorization {
+					t.Fatal("registration credential did not follow REGISTER/RESUME authority")
+				}
 				if attempt.ResumeToken != config.ResumeToken || !bytes.Equal(attempt.SenderPrivateKey, config.PrivateKey) {
 					t.Fatal("recovery authority changed")
 				}

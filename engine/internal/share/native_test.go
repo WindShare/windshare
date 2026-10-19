@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,7 +85,11 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 		return true
 	}
 	endpoint := &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}
+	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", RegistrationToken: "private-deployment-token"}
 	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
+		if config.Candidate != candidate {
+			t.Error("relay assembly lost candidate registration authority")
+		}
 		if config.Fresh.ShareID == (v2.ShareID{}) || len(config.Descriptor) == 0 {
 			t.Error("registration authority missing")
 		}
@@ -95,11 +100,14 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan task.Completion[Result], 1)
 	go func() {
-		done <- Run(ctx, Request{Source: nativeSource([]string{root}), RelayURLs: []string{"https://relay.example"}, Diagnostics: true, TraceLifecycle: true}, dependencies)
+		done <- Run(ctx, Request{Source: nativeSource([]string{root}), Relays: []senderrelay.Candidate{candidate}, Diagnostics: true, TraceLifecycle: true}, dependencies)
 	}()
 	ready, err := dependencies.Controller.Ready(context.Background())
 	if err != nil || ready.SelectedRootSummary.SelectedCount() != 1 {
 		t.Fatalf("ready=%+v err=%v", ready, err)
+	}
+	if !slices.Equal(ready.Capability.Relays, []string{candidate.PublicURL}) {
+		t.Fatal("capability contains private relay configuration")
 	}
 	mu.Lock()
 	acquired, prefetch := false, false
@@ -137,7 +145,7 @@ func TestNativeSourceAcquisitionFailureKeepsCorrelatedTypedEvidence(t *testing.T
 		acquired = value.ShareInstance
 		return nil, failure
 	})
-	result := Run(context.Background(), Request{Source: source, RelayURLs: []string{"https://relay.example"}}, dependencies)
+	result := Run(context.Background(), Request{Source: source, Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}, dependencies)
 	if !errors.Is(result.Err, failure) || result.CleanupError != nil || acquired.IsZero() {
 		t.Fatalf("result=%+v", result)
 	}
@@ -171,7 +179,7 @@ func TestRelayAssemblyRetainsNativeAuthorityAndRejectsInvalidMaterial(t *testing
 	if err := prepared.AuthorizeRegistration(); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := prepareRelay(prepared, "https://relay.example", dependencies, o)
+	relay, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "https://relay.example"}, dependencies, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +196,11 @@ func TestRelayAssemblyRetainsNativeAuthorityAndRejectsInvalidMaterial(t *testing
 		}
 	}
 	dependencies.Control.Random = exhaustedRandom{}
-	if _, err := prepareRelay(prepared, "https://relay.example", dependencies, o); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "https://relay.example"}, dependencies, o); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("entropy error=%v", err)
 	}
 	dependencies.Control.Random = rand.Reader
-	if _, err := prepareRelay(prepared, "invalid-endpoint", dependencies, o); err == nil {
+	if _, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "invalid-endpoint"}, dependencies, o); err == nil {
 		t.Fatal("invalid endpoint accepted")
 	}
 }

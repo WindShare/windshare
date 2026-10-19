@@ -500,7 +500,7 @@ func newSenderRelayTestConfig(
 		t.Fatal(err)
 	}
 	return Config{
-		RelayURL:    "https://relay.example",
+		Candidate:   Candidate{PublicURL: "https://relay.example"},
 		Fresh:       fresh,
 		ResumeToken: resumeToken,
 		PrivateKey:  privateKey,
