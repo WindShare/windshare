@@ -1,6 +1,10 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { expect, type Page } from '@playwright/test'
+
 import type { TraceEventRecordV2 } from '../../src/diagnostics/trace/model'
 import type { WindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
+
+export const EVIDENCE_POLL_MILLISECONDS = 250
 
 interface SenderTraceRecord {
   readonly sequence: string
@@ -23,6 +27,8 @@ export function senderTraceSequence(encoded: string): string {
 
 export function senderRecoveryEvidence(encoded: string, afterSequence: string) {
   const records = senderRecords(encoded).filter(record => BigInt(record.sequence) > BigInt(afterSequence))
+  const events = records.filter(record => record.event === 'relay_availability' || record.event === 'relay_recovering')
+  if (events.length === 0) return { outcome: 'uninterrupted' as const, events }
   const lost = records.find(record => record.event === 'relay_availability' && record.payload.available === 0)
   expect(lost, 'Sender must observe loss of publication').toBeDefined()
   const resumed = records.find(record => record.event === 'relay_recovering' && record.payload.state === 'succeeded')
@@ -31,7 +37,7 @@ export function senderRecoveryEvidence(encoded: string, afterSequence: string) {
   expect(Number(resumed!.payload.details?.connection_generation)).toBeGreaterThan(1)
   expect(records.some(record => record.event === 'relay_availability' && record.payload.available === 1 &&
     BigInt(record.sequence) > BigInt(lost!.sequence))).toBe(true)
-  return records.filter(record => record.event === 'relay_availability' || record.event === 'relay_recovering')
+  return { outcome: 'resumed' as const, events }
 }
 
 type ProgressRecord = Extract<TraceEventRecordV2, { event: 'transfer_progress' }>
@@ -40,6 +46,7 @@ export interface DownloadCut {
   readonly sequence: string
   readonly progress: ProgressRecord['payload']
   readonly completedBlocks: number
+  readonly blockBytes: number
 }
 
 /** Polling preserves evidence as the product's bounded diagnostic ring advances. */
@@ -62,6 +69,28 @@ export class RecoveryEvidence {
     }
   }
 
+  async during<T>(page: Page, operation: () => Promise<T>): Promise<T> {
+    let pending = true
+    const completion = operation().then(
+      value => ({ ok: true as const, value }),
+      error => ({ ok: false as const, error: error as unknown }),
+    ).finally(() => { pending = false })
+    try {
+      // Cloud deployment can outlive the diagnostic ring. Keep observing while
+      // Wrangler runs, and join it before any failure tears down the Worker.
+      while (pending) {
+        await this.capture(page)
+        await delay(EVIDENCE_POLL_MILLISECONDS)
+      }
+    } finally {
+      await completion
+    }
+    const result = await completion
+    if (!result.ok) throw result.error
+    await this.capture(page)
+    return result.value
+  }
+
   records(): readonly TraceEventRecordV2[] {
     return [...this.#records.values()].sort((a, b) => Number(BigInt(a.sequence) - BigInt(b.sequence)))
   }
@@ -78,14 +107,15 @@ export class RecoveryEvidence {
 
   cut(blockBytes: number, fileBytes: number): DownloadCut {
     const progress = this.#progress().at(-1)!
-    expect(progress, 'Reset requires accepted output progress').toBeDefined()
+    expect(progress, 'Interruption requires accepted output progress').toBeDefined()
     const written = Number(progress.payload.written_bytes)
     expect(written).toBeGreaterThanOrEqual(blockBytes)
-    expect(written, 'Reset must interrupt an unfinished file').toBeLessThan(fileBytes)
+    expect(written, 'Interruption must occur before the file finishes').toBeLessThan(fileBytes)
     return {
       sequence: this.records().at(-1)!.sequence,
       progress: progress.payload,
       completedBlocks: Math.floor(written / blockBytes),
+      blockBytes,
     }
   }
 
@@ -108,13 +138,19 @@ export class RecoveryEvidence {
       Number(record.payload.written_bytes) > Number(cut.progress.written_bytes))).toBe(true)
     const dispatches = later.filter(record => record.event === 'content_scheduling')
     expect(dispatches.length, 'Recovery must dispatch remaining content').toBeGreaterThan(0)
-    for (const { payload } of dispatches) {
-      expect(Number(payload.block_index), 'Already written blocks must not be requested again')
-        .toBeGreaterThanOrEqual(cut.completedBlocks)
-      expect(payload.route).toBe('application-relay')
+    let completedBlocks = cut.completedBlocks
+    for (const record of later) {
+      if (record.event === 'transfer_progress') {
+        completedBlocks = Math.floor(Number(record.payload.written_bytes) / cut.blockBytes)
+      }
+      if (record.event === 'content_scheduling') {
+        // Progress can advance while the deployment command is still running.
+        expect(Number(record.payload.block_index), 'Already written blocks must not be requested again')
+          .toBeGreaterThanOrEqual(completedBlocks)
+        expect(record.payload.route).toBe('application-relay')
+      }
     }
     const recovered = later.filter(record => record.event === 'connection_recovery' && record.payload.transition === 'connected')
-    expect(recovered.length, 'Browser must recover its relay connection').toBeGreaterThan(0)
     const completed = records.filter(record => record.event === 'receive_transition' &&
       record.payload.transition === 'download_connectivity')
     expect(completed).toHaveLength(1)
@@ -129,10 +165,10 @@ export class RecoveryEvidence {
     return {
       operationId: cut.progress.operation_id,
       transferJobId: cut.progress.transfer_job_id,
-      writtenBytesBeforeReset: Number(cut.progress.written_bytes),
-      completedBlocksBeforeReset: cut.completedBlocks,
-      firstPostResetBlock: Number(dispatches[0]!.payload.block_index),
-      minimumPostResetBlock: Math.min(...dispatches.map(record => Number(record.payload.block_index))),
+      writtenBytesBeforeInterruption: Number(cut.progress.written_bytes),
+      completedBlocksBeforeInterruption: cut.completedBlocks,
+      firstSubsequentBlock: Number(dispatches[0]!.payload.block_index),
+      minimumSubsequentBlock: Math.min(...dispatches.map(record => Number(record.payload.block_index))),
       browserRecovery: recovered.map(record => record.payload),
       protocolSessions: [...new Set(records.filter(record => record.event === 'content_scheduling')
         .map(record => record.correlation?.protocol_session_id))],

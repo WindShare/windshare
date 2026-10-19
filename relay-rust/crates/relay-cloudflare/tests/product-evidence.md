@@ -54,6 +54,47 @@ checks document loads and stable browser runtime identity. The run above passed.
 This establishes one fault recovery, not redeployment, repeated disruption, disk/crash
 recovery or STOP durability. The run's Preview was deleted after evidence retention.
 
+## Real deployment during download
+
+2026-10-19, Windows, Chromium/Playwright 1.62.1, Wrangler 4.151.1.
+Source base: `42dcea496376fd4450aba526429c8923d7948414` plus this scenario.
+Production Rust host with the test-only observer; the compiled observer revision changes,
+while the Rust Wasm hash remains the baseline above.
+
+- Regular Worker: `windshare-redeploy-ae95fc6430b4`; share: `OSaSWpMloZjw9mJ3`.
+  Both deployments use the same workers.dev address and SQLite namespace.
+- Deployment IDs: `0a580e8b-3745-4163-8332-261647d27fc7` ?
+  `536fc379-489d-4cab-a7c6-84ec76aefaec`.
+  Runtime version IDs: `849ce095-8517-4687-91c8-ec50a56ecfd0` ?
+  `74d800f8-591f-4230-b245-a0adef156dbd`.
+- After 4 MiB was written, ordinary `wrangler deploy` requested immediate object
+  replacement. The entry updated first; the object changed about five minutes later,
+  with 70 MiB written and the file unfinished. Its boot and compiled revision changed;
+  the persistent marker and original registration credential survived. Secrets were
+  supplied only at creation. No reset endpoint was called.
+- The original socket closed. Sender signed RESUME restored publication in about one
+  second, generation 1 ? 2. Browser generation 2 continued operation
+  `mRgdlMlzlKkujf_THMpaLg`, job `kVC3jNyWv3u06fpBXU0lOw`, without another click or reload.
+  The first recovered content request was block 70; blocks 0?69 were retained.
+  Continuous trace collection also checks progress accepted while deployment was pending.
+- Completed 101,711,872 bytes (97 MiB) in 458,251 ms; 103,121,649 received relay wire
+  bytes across three browser connection attempts, with P2P disabled.
+  Source/download SHA-256:
+  `32374edb3482ade391bf1067ad12db39ebd7bdc6f033e04df0d5cfff445e27c1`.
+  CLI SHA-256: `eec7fd852d7c48fac701e26eaa7e5716f813e776934ec4e0de44eb348d78094c`.
+
+Earlier 30-second observation windows saw the new entry with the old object and
+correctly failed to establish in-flight replacement. Even an HTTP-only object probe
+remained on the old code for two minutes. The longer product run above passed.
+This is one deployment recovery, not a propagation-time guarantee, schema migration,
+repeated-disruption test or automated deployment. The owned Worker was deleted.
+
+The refactored reset scenario also passed on a fresh regular Worker, share
+`KpNWhw3b_i5WlQis`: 17 MiB in 90,296 ms, resuming at block 4 after one reset.
+SHA-256: `9a8ab4cae35eedc28893588d1b0326eb90efc31632d388c3440c93524d7edc06`.
+Both scenarios' Workers and temporary credentials were removed; an account inventory
+confirmed no remaining `windshare-redeploy-*` Workers from this work.
+
 Reproduce using the [Cloudflare host instructions](../README.md#validation).
-The opt-in configuration records JSON evidence and sender/browser NDJSON, and is
-absent from ordinary browser gates.
+JSON evidence, deployment identities and sender/browser NDJSON are retained by the
+opt-in configuration, which is absent from ordinary browser gates.

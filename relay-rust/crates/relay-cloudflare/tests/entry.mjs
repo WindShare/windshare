@@ -1,4 +1,4 @@
-// Preview-only fault injection around the production Rust host; no protocol decisions.
+// Isolated-test observations/faults around the production Rust host; no protocol decisions.
 import { DurableObject } from "cloudflare:workers";
 import RustWorker, { ShareRelayObject as RustShareRelay } from "../build/index.js";
 
@@ -18,15 +18,28 @@ export class ShareRelayObject extends DurableObject {
     if (url.pathname.startsWith("/__test/")) {
       if (!authorized(request, this.env)) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/__test/status" && request.method === "GET") {
+        // Only explicit test status reads touch this sentinel; payload forwarding
+        // stays entirely in Rust and never pays for the deployment observation.
+        const markerKey = "__test_storage_marker";
+        let storageMarker = await this.ctx.storage.get(markerKey);
+        if (!storageMarker) {
+          storageMarker = crypto.randomUUID();
+          await this.ctx.storage.put(markerKey, storageMarker);
+        }
         return Response.json({
           boot: this.boot,
+          versionId: this.env.TEST_VERSION?.id ?? null,
+          revision: typeof __WINDSHARE_TEST_REVISION__ === "undefined" ? null : __WINDSHARE_TEST_REVISION__,
+          storageMarker,
+          registrationCredentialMatches: !!this.env.REGISTRATION_SECRET
+            && request.headers.get("X-Test-Registration-Credential") === this.env.REGISTRATION_SECRET,
           now: Date.now(),
           sockets: this.ctx.getWebSockets().map(socket => ({
             tags: this.ctx.getTags(socket), state: socket.readyState,
             attachmentBytes: socket.deserializeAttachment()?.byteLength ?? 0,
           })),
           alarm: await this.ctx.storage.getAlarm(),
-        });
+        }, { headers: { "Cache-Control": "no-store" } });
       }
       if (url.pathname === "/__test/route-mismatch" && request.method === "GET") {
         // Model another public hostname resolving to the same Worker/object.
@@ -57,6 +70,9 @@ export default class PreviewEntrypoint extends RustWorker {
     if (shares.length !== 1 || !/^[A-Za-z0-9_-]{16}$/.test(shares[0])) {
       return new Response("invalid route", { status: 400 });
     }
-    return this.env.SHARES.getByName(shares[0]).fetch(request);
+    const response = await this.env.SHARES.getByName(shares[0]).fetch(request);
+    const headers = new Headers(response.headers);
+    headers.set("X-Test-Worker-Version", this.env.TEST_VERSION?.id ?? "");
+    return new Response(response.body, { status: response.status, headers });
   }
 }
