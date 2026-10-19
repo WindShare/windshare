@@ -57,10 +57,10 @@ func validateReleaseMetadata(stageDirectory string) error {
 	if actual := modfile.ModulePath(goMod); actual != modulePath {
 		return fmt.Errorf("go.mod module path is %q, want %q", actual, modulePath)
 	}
-	if err := requireText(filepath.Join(stageDirectory, "LICENSE"), "Apache License", "Version 2.0"); err != nil {
+	if err := requireText(filepath.Join(stageDirectory, "LICENSE"), "GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3, 19 November 2007"); err != nil {
 		return err
 	}
-	if err := requireText(filepath.Join(stageDirectory, "NOTICE"), "WindShare"); err != nil {
+	if err := requireText(filepath.Join(stageDirectory, "NOTICE"), "WindShare", "SPDX-License-Identifier: AGPL-3.0-or-later"); err != nil {
 		return err
 	}
 	if err := validateVectorInventory(stageDirectory); err != nil {
