@@ -1,6 +1,6 @@
 # 浏览器产品验证恢复执行计划
 
-> 历史参考：`E:\Doraemon\IT\Repository\WindShare-before-c0d5dcc` 固定在大幅删除前的提交 `39c3adf`，便于直接查看旧实现。
+> 历史参考：`WindShare-before-c0d5dcc` 固定在大幅删除前的提交 `39c3adf`，便于直接查看旧实现。
 >
 > 状态：待执行。目标是恢复产品关键行为的直接验证归属，不恢复 Browsergate、OIDC/broker、密封证据、截图或视频证据、精确 SHA 归并、权限沙箱或托管进程证据控制面。实现完成后，长期命令只保留在 `docs/validation.md` 和 `web/README.md`。
 
