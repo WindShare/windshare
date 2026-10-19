@@ -148,9 +148,9 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
 	lifecycle.resumeNext, lifecycle.attempted = true, true
 	connection, err := lifecycle.config.Dialer.Dial(dialContext, relayv2.SenderConfig{
-		RelayBaseURL: lifecycle.config.RelayURL, Init: init, SenderPrivateKey: lifecycle.config.PrivateKey,
+		RelayBaseURL: lifecycle.config.Candidate.PublicURL, Init: init, SenderPrivateKey: lifecycle.config.PrivateKey,
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
-		Dial: relayv2.DialOptions{LifecycleObservationCapacity: lifecycle.config.LifecycleObservationCapacity},
+		Dial: lifecycle.config.Candidate.registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume),
 	})
 	if err == nil {
 		err = dialContext.Err()

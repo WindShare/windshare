@@ -168,7 +168,9 @@ remains enforced. This is an admission policy, not a physical buffer TTL. The
 [live Preview run](../../../relay-rust/crates/relay-cloudflare/tests/preview-evidence.md)
 passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hibernation
 with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
-Real Go-client and browser validation against Cloudflare remain pending.
+The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
+loads a saved credentialed candidate and passes a 17 MiB relay-only download/hash
+check. Product reconnect/redeployment validation and automated deployment remain pending.
 
 ## Host evidence
 

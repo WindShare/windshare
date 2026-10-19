@@ -6,13 +6,15 @@ import (
 	"math"
 	"slices"
 
+	"github.com/windshare/windshare/cmd/wind/internal/relayconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 )
 
 type shareRequest struct {
 	paths       []string
-	relayURLs   []string
+	relays      []senderrelay.Candidate
 	link        shareLinkPresentation
 	chunkSize   uint32
 	observation observationOptions
@@ -21,7 +23,7 @@ type shareRequest struct {
 func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcome) {
 	flags := a.newFlagSet("share")
 	var relayURLs []string
-	flags.Func("relay", "relay server base URL; repeat to use multiple relays", func(value string) error {
+	flags.Func("relay", "override saved relay selection; repeat to use multiple relays", func(value string) error {
 		if value == "" {
 			return errors.New("relay URL is empty")
 		}
@@ -51,9 +53,6 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		_, _ = fmt.Fprintf(a.stderrWriter(), "share: %s\n", observationOptionDiagnostic(err))
 		return shareRequest{}, requestParseUsageFailure
 	}
-	if len(relayURLs) == 0 {
-		relayURLs = []string{DefaultRelayURL}
-	}
 	if len(paths) == 0 || *frontURL == "" {
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: at least one path, a relay URL, and a frontend URL are required")
 		return shareRequest{}, requestParseUsageFailure
@@ -66,8 +65,24 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: block size is outside the suite-02 range")
 		return shareRequest{}, requestParseUsageFailure
 	}
+	// The process entry point supplies personal configuration. Embedded callers
+	// and tests must not acquire authority from the developer's machine implicitly.
+	var saved []senderrelay.Candidate
+	if a.loadRelayCandidates != nil {
+		var err error
+		saved, err = a.loadRelayCandidates()
+		if err != nil {
+			_, _ = fmt.Fprintln(a.stderrWriter(), "share: cannot load relay configuration; check windshare/relays.json or WINDSHARE_RELAY_CONFIG")
+			return shareRequest{}, requestParseUsageFailure
+		}
+	}
+	relays, err := relayconfig.Select(saved, relayURLs, DefaultRelayURL)
+	if err != nil {
+		_, _ = fmt.Fprintln(a.stderrWriter(), "share: invalid relay candidates")
+		return shareRequest{}, requestParseUsageFailure
+	}
 	return shareRequest{
-		paths: paths, relayURLs: relayURLs,
+		paths: paths, relays: relays,
 		link:      shareLinkPresentation{frontURL: *frontURL, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(chunkSize), observation: observation,
 	}, requestParseReady

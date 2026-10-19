@@ -67,8 +67,8 @@ Native admission now atomically charges global and per-source business/control b
 retains them through transport-owner teardown, and preserves STOP under business
 saturation. Proxy source identity requires explicitly trusted socket IPs and a single-IP
 header; malformed trusted identity is refused before upgrade.
-The default server/build entry points and remaining operational interfaces remain
-pending; Go is still the default relay entry point.
+Default startup, container/deployment builds and release packaging now use Rust
+`relay-native`; the Go server is retired. Go retains clients and wire contracts.
 The [Cloudflare host](../../../relay-rust/crates/relay-cloudflare/README.md)
 now routes real upgrades by `share_id`, executes JOIN with confirmed descriptors,
 and forwards opaque envelopes synchronously through kernel submission. Cumulative
@@ -124,9 +124,17 @@ Some close-requested old peers still deliver complete bursts after more than ten
 minutes; the experiment cannot locate those bytes within the forwarding path.
 The kernel now gives retired risk an explicit policy-based end without restoring
 old authority or resetting healthy peers. Deterministic tests cover saturation,
-automatic recovery and stale feedback; production client cutover remains pending.
+automatic recovery and stale feedback; native production client cutover is complete.
 
-结论：**保留共享 Rust 语义内核；有限风险退出、退役与局部恢复已实现。** Cloudflare 选择清理完成后立即结束风险预留，实验不支持将等待时间解释为物理释放保证。优先保证日常下载、多人分享和常见断线续传，不逐帧写库或重置整个分享清理单个慢连接。注册已合并为单次原子保存，保留提交确认屏障；消费反馈简化独立评估。Cloudflare 资源表现不可控则暂缓交付，不阻塞原生；若长期搁置，再评估原生 Rust 替换的独立收益。同步更新客户端、协议与构建入口，以责任边界和行为收益判断设计，不以代码量为目标。
+Sender requests now bind each public relay URL to a private registration credential.
+The CLI loads a saved candidate set for ordinary sharing; only public URLs enter
+capabilities. Fresh REGISTER and recovery re-registration use the bound credential,
+while RESUME and STOP retain independent authentication. See [CLI configuration](../../cli.md#saved-relays).
+The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
+passes a 17 MiB download/hash check with P2P disabled. Product disconnect/redeployment
+recovery and automated deployment are the next steps.
+
+结论：**共享 Rust 语义内核及原生默认入口切换已完成。** Cloudflare 已跑通正式分享与下载，下一步验证产品断线续传和部署更新。清理完成后结束风险预留仍不等同于物理缓冲释放；不逐帧写库或重置整个分享清理单个慢连接。
 
 引擎签发绑定 `relay_identity`、分享、会话、来源/目标连接及其代次、方向和协议版本的 `ForwardPermit`，统一创建、替换与撤销。许可只表达路由授权；STOP 或连接替换后，排队帧和延迟回调不得沿用已撤销的许可。
 

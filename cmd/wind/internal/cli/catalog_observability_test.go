@@ -43,7 +43,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 	}
 	defer func() { _ = application.Close(context.Background()) }()
 	current, err := application.StartShare(context.Background(), engine.ShareRequest{
-		Source: shareFileSource([]string{sharedPath}), RelayURLs: []string{DefaultRelayURL}, ChunkSize: catalog.MinChunkSize,
+		Source: shareFileSource([]string{sharedPath}), Relays: []engine.ShareRelayCandidate{{PublicURL: DefaultRelayURL}}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
