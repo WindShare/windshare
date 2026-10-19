@@ -170,7 +170,9 @@ passed bidirectional transfers beyond asymmetric windows, duplicate feedback, hi
 with unconsumed debt, fault RESUME, ordered STOP and Alarm expiry.
 The [production CLI/browser run](../../../relay-rust/crates/relay-cloudflare/tests/product-evidence.md)
 loads a saved credentialed candidate and passes a 17 MiB relay-only download/hash
-check. Product reconnect/redeployment validation and automated deployment remain pending.
+check with one object reset after 4 MiB is written. Sender publication and the same
+browser task recover automatically; recorded completed blocks are retained.
+Redeployment, repeated disruptions and automated deployment remain pending.
 
 ## Host evidence
 

@@ -479,6 +479,8 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
     lifecycle_state: 'receiving',
   }),
   observation('transfer_progress', {
+    operation_id: OPERATION_ID,
+    transfer_job_id: OPERATION_ID,
     discovered_files: '2',
     discovered_bytes: '1024',
     received_object_bytes: '600',

@@ -502,10 +502,12 @@ export function validateTransferProgress(payload: UnknownRecord): void {
     'capacity_waiting_files', 'capacity_accumulated_wait_ms', 'capacity_wait_attempts',
   ] as const
   exactKeys(payload, [
-    ...decimalKeys, 'content_lanes', 'capacity_wait_visible',
+    ...decimalKeys, 'operation_id', 'transfer_job_id', 'content_lanes', 'capacity_wait_visible',
     'discovery', 'partial',
   ], [],
     'transfer_progress payload')
+  canonicalIdentity(payload.operation_id, 'transfer progress operation ID')
+  canonicalIdentity(payload.transfer_job_id, 'transfer progress job ID')
   decimalFields(payload, decimalKeys, 'transfer progress')
   uint32(payload.content_lanes, 'transfer progress content lanes')
   booleanValue(payload.capacity_wait_visible, 'capacity wait visibility')

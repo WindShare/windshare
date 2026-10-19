@@ -33,6 +33,8 @@ export type CapacityWaitTransitionPayloadV1 = Readonly<{
 }>
 
 export type TransferProgressPayloadV1 = Readonly<{
+  operation_id: string
+  transfer_job_id: string
   discovered_files: string
   discovered_bytes: string
   received_object_bytes: string

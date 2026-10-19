@@ -136,6 +136,8 @@ export class V2TransferObservers {
 
     this.#emit(() => Object.freeze({
       name: 'transfer_progress',
+      operationId: this.#options.intent.operationId,
+      transferJobId: this.#options.transferJobId,
       discoveredFiles: BigInt(state.measure.discoveredFiles),
       discoveredBytes: state.measure.discoveredBytes,
       receivedObjectBytes: state.receivedObjectBytes,
