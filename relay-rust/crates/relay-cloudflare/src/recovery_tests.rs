@@ -110,7 +110,12 @@ fn uncertain_stop_receipts_cannot_erase_the_persisted_stop_intent() {
         host.fail_write = Some((write, committed));
         assert!(
             runtime
-                .control(&mut host, connection(2), &f.frame("stopProofB64"), false)
+                .control(
+                    &mut host,
+                    connection(2),
+                    &f.frame("stopProofB64"),
+                    crate::runtime::RegistrationAccess::Denied
+                )
                 .is_err()
         );
         assert!(

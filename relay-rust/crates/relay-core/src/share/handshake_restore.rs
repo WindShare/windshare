@@ -50,7 +50,10 @@ impl<O: Observer> ShareRelay<O> {
                 .set(Key::Handshake(connection), handshake.deadline());
             entry.role = Role::Handshake {
                 handshake: Box::new(handshake),
-                transcript: HandshakeCheckpoint::new(transcript.opened),
+                transcript: HandshakeCheckpoint {
+                    binding: transcript.binding,
+                    ..HandshakeCheckpoint::new(transcript.opened)
+                },
             };
             let mut replay = Turn::default();
             for step in &transcript.steps {

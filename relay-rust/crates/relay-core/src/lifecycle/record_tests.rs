@@ -67,6 +67,7 @@ impl Fixture {
 
     fn route(&self) -> PublishedRoute {
         PublishedRoute {
+            attribution: crate::access::Attribution::Anonymous,
             relay: self.relay,
             registration: self.registration(),
         }
@@ -134,6 +135,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
             fixture.published(),
             [
                 fixture.prefix(PUBLISHED, &fixture.register_init, registration_body),
+                crate::access::Attribution::Anonymous.encode().to_vec(),
                 ownership.clone(),
             ]
             .concat(),
@@ -142,6 +144,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
             fixture.grace(),
             [
                 fixture.prefix(GRACE, &fixture.register_init, registration_body),
+                crate::access::Attribution::Anonymous.encode().to_vec(),
                 GRACE_DEADLINE.to_be_bytes().to_vec(),
                 ownership,
             ]
@@ -170,7 +173,7 @@ fn records_persist_registration_ownership_and_stop_facts_in_the_shared_frame_ord
             .encode()
             .as_bytes()
             .len(),
-        MAX_RECORD_BYTES
+        STOPPING_BYTES
     );
 }
 
@@ -198,7 +201,7 @@ fn stopping_records_preserve_the_exact_cleanup_obligation_in_bounded_bytes() {
         let record = pending.record();
         let encoded = record.encode();
         let raw = encoded.as_bytes();
-        let tag_offset = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES;
+        let tag_offset = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES + 1;
         assert_eq!(raw.len(), tag_offset + 1 + width);
         assert!(raw.len() <= MAX_RECORD_BYTES);
         assert_eq!(raw[tag_offset], tag);
@@ -228,7 +231,7 @@ fn stopping_records_preserve_the_exact_cleanup_obligation_in_bounded_bytes() {
 fn stopping_records_reject_unknown_cleanup_and_zero_operation_or_connection_fields() {
     let fixture = Fixture::new();
     let operation = fixture.operation();
-    let cleanup_start = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES;
+    let cleanup_start = HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES + 1;
     let pending_start = HEADER_BYTES + STOP_FACT_BYTES;
     for cleanup in [
         StopCleanup::Reservation(operation),
@@ -289,12 +292,12 @@ fn stored_bytes_that_this_kernel_did_not_write_are_refused() {
         (edit(&published, 46..62, 0), RecordError::Field),
         // The owner's epoch, connection slot and generation, also after a
         // grace deadline, and the stop ID.
-        (edit(&published, 142..150, 0), RecordError::Field),
-        (edit(&published, 150..158, 0), RecordError::Field),
-        (edit(&published, 158..166, 0), RecordError::Field),
-        (edit(&grace, 150..158, 0), RecordError::Field),
-        (edit(&grace, 158..166, 0), RecordError::Field),
-        (edit(&grace, 166..174, 0), RecordError::Field),
+        (edit(&published, 175..183, 0), RecordError::Field),
+        (edit(&published, 183..191, 0), RecordError::Field),
+        (edit(&published, 191..199, 0), RecordError::Field),
+        (edit(&grace, 183..191, 0), RecordError::Field),
+        (edit(&grace, 191..199, 0), RecordError::Field),
+        (edit(&grace, 199..207, 0), RecordError::Field),
         (edit(&stopped, 78..94, 0), RecordError::Field),
     ];
     for (bytes, error) in cases {

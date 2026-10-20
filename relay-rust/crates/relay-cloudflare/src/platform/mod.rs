@@ -3,7 +3,9 @@
     reason = "Workers execute JS futures on one isolate thread"
 )]
 
+mod access;
 mod edge;
+pub use access::AccessObject;
 mod io;
 mod recovery;
 mod storage;
@@ -142,16 +144,89 @@ impl ShareRelayObject {
             host.database.put(IMAGE, &ready.image)?;
             let pair = api(WebSocketPair::new())?;
             let tag = persistence::tag(connection);
-            let may_register =
-                api(req.headers().get(edge::REGISTER_HEADER))?.as_deref() == Some("1");
+            let digest = api(req.headers().get(access::CREDENTIAL_HEADER))?;
+            let credential_tag = digest.map(|digest| format!("{}{digest}", access::CREDENTIAL_TAG));
             let mut tags = vec![tag.as_str()];
-            if may_register {
-                tags.push(edge::REGISTER_TAG);
+            if let Some(credential_tag) = &credential_tag {
+                tags.push(credential_tag.as_str());
             }
             self.state.accept_websocket_with_tags(&pair.server, &tags);
             ready.runtime.event(host, Input::Connected(connection))?;
             api(Response::from_websocket(pair.client))
         })
+    }
+
+    async fn registration_access(
+        &self,
+        ws: &WebSocket,
+        message: &WebSocketIncomingMessage,
+        connection: windshare_relay_core::lifecycle::ConnectionRef,
+    ) -> crate::runtime::RegistrationAccess {
+        use crate::runtime::RegistrationAccess;
+        use windshare_relay_core::registration::{RegisterInit, RegistrationMode};
+        let WebSocketIncomingMessage::Binary(bytes) = message else {
+            return RegistrationAccess::Denied;
+        };
+        let Ok(init) = RegisterInit::decode(bytes) else {
+            return RegistrationAccess::Denied;
+        };
+        if init.mode() != RegistrationMode::Fresh {
+            return RegistrationAccess::Denied;
+        }
+        // Authorization records drive revocation. Bind their target before any
+        // remote side effect, using the object's restored identity as authority.
+        let route = init.registration().route();
+        let matches_object = matches!(&*self.loaded.borrow(), Loaded::Ready(ready)
+            if route.share_id() == ready.identity.share);
+        if !matches_object {
+            worker::console_log!(
+                "{}",
+                json!({"event":"registration_route_refused",
+                "operation_id":persistence::tag(connection),
+                "share_id":access::text_id(route.share_id().as_bytes())})
+            );
+            return RegistrationAccess::Denied;
+        }
+        let digest = self
+            .state
+            .get_tags(ws)
+            .iter()
+            .find_map(|tag| tag.strip_prefix(access::CREDENTIAL_TAG).map(str::to_string));
+        let Some(digest) = digest else {
+            return RegistrationAccess::Denied;
+        };
+        let body = json!({"digest":digest, "share_id":access::text_id(init.registration().route().share_id().as_bytes()),
+            "operation_id":persistence::tag(connection)});
+        let resolve = async {
+            let request = Request::new_with_init(
+                "https://internal/internal/authorize",
+                worker::RequestInit::new()
+                    .with_method(Method::Post)
+                    .with_body(Some(body.to_string().into())),
+            )?;
+            let mut response = access::fetch(&self.env, request).await?;
+            if response.status_code() == 403 {
+                return Ok(RegistrationAccess::Denied);
+            }
+            if response.status_code() != 200 {
+                return Ok(RegistrationAccess::Unavailable);
+            }
+            let value: serde_json::Value = response.json().await?;
+            let attribution =
+                serde_json::from_value(value["attribution"].clone()).map_err(failure)?;
+            Ok::<_, worker::Error>(RegistrationAccess::Granted(attribution))
+        };
+        match resolve.await {
+            Ok(access) => access,
+            Err(error) => {
+                worker::console_log!(
+                    "{}",
+                    json!({"event":"registration_access_unavailable",
+                    "operation_id":persistence::tag(connection),"share_id":access::text_id(init.registration().route().share_id().as_bytes()),"reason":error.to_string()})
+                );
+                RegistrationAccess::Unavailable
+            }
+        }
     }
 
     fn disconnected(&self, ws: &WebSocket) -> HostResult<()> {
@@ -174,7 +249,46 @@ impl DurableObject for ShareRelayObject {
         }
     }
 
-    async fn fetch(&self, req: Request) -> Result<Response> {
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        if req.method() == Method::Post && req.path() == "/internal/terminate" {
+            let body: serde_json::Value = req.json().await?;
+            let credential = access::parse_id::<16>(body["credential_id"].as_str().unwrap_or(""))?;
+            let database = storage::Database::open(&self.state).map_err(failure)?;
+            // Empty targets need no runtime, but must retain the same fence as
+            // live targets. Unknown or damaged authority must still fail closed.
+            if database.uninitialized().map_err(failure)? && self.state.get_websockets().is_empty()
+            {
+                database
+                    .put(
+                        &format!("access-stop:{}", access::text_id(&credential)),
+                        &true,
+                    )
+                    .map_err(failure)?;
+                return Response::from_json(&json!({"ok":true}));
+            }
+            let stop_id =
+                windshare_relay_core::identifiers::StopId::new(io::random().map_err(failure)?)
+                    .ok_or_else(|| failure("zero stop identifier"))?;
+            let result = (|| {
+                self.initialize(None)?;
+                self.with_runtime(|ready, host| {
+                    // Fence an authorization response still in flight when revocation arrived.
+                    ready.database.put(
+                        &format!("access-stop:{}", access::text_id(&credential)),
+                        &true,
+                    )?;
+                    ready.runtime.event(
+                        host,
+                        Input::Terminate {
+                            credential,
+                            stop_id,
+                        },
+                    )?;
+                    api(Response::from_json(&json!({"ok":true})))
+                })
+            })();
+            return self.finish(result).await;
+        }
         if req.method() != Method::Get
             || !req
                 .headers()
@@ -197,24 +311,32 @@ impl DurableObject for ShareRelayObject {
         ws: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
-        let result = (|| {
-            self.initialize(None)?;
-            let connection = io::connection(&self.state, &ws)?;
-            let may_register = self
-                .state
-                .get_tags(&ws)
-                .iter()
-                .any(|tag| tag == edge::REGISTER_TAG);
-            self.with_runtime(|ready, host| match message {
-                WebSocketIncomingMessage::Binary(bytes) => {
-                    ready.runtime.message(host, connection, bytes, may_register)
-                }
-                WebSocketIncomingMessage::String(_) => {
-                    host.close(connection)?;
-                    ready.runtime.event(host, Input::Disconnected(connection))
-                }
-            })
-        })();
+        self.initialize(None).map_err(failure)?;
+        let connection = io::connection(&self.state, &ws).map_err(failure)?;
+        let access = self.registration_access(&ws, &message, connection).await;
+        let result = self.with_runtime(|ready, host| match message {
+            WebSocketIncomingMessage::Binary(bytes) => {
+                let access = match access {
+                    crate::runtime::RegistrationAccess::Granted(
+                        windshare_relay_core::access::Attribution::Credential {
+                            credential, ..
+                        },
+                    ) if ready
+                        .database
+                        .get::<bool>(&format!("access-stop:{}", access::text_id(&credential)))?
+                        .unwrap_or(false) =>
+                    {
+                        crate::runtime::RegistrationAccess::Denied
+                    }
+                    access => access,
+                };
+                ready.runtime.message(host, connection, bytes, access)
+            }
+            WebSocketIncomingMessage::String(_) => {
+                host.close(connection)?;
+                ready.runtime.event(host, Input::Disconnected(connection))
+            }
+        });
         self.finish(result).await
     }
 

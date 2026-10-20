@@ -37,6 +37,7 @@ impl StopCleanup {
 /// Delivery ledgers survive separately even after this transaction is complete.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PendingStop {
+    pub(super) origin: StopOrigin,
     pub(super) id: OperationId,
     // Relay identity comes from the operation; storing it twice would make
     // every lifecycle state and observation copy needlessly large.
@@ -46,11 +47,18 @@ pub struct PendingStop {
     pub(super) cleanup: StopCleanup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StopOrigin {
+    Sender,
+    Administrator,
+}
+
 impl PendingStop {
     pub(super) fn new(id: OperationId, stopped: StoppedShare, cleanup: StopCleanup) -> Self {
         debug_assert_eq!(id.relay(), stopped.relay);
         debug_assert_eq!(id.share(), stopped.route.share_id());
         Self {
+            origin: StopOrigin::Sender,
             id,
             route: stopped.route,
             share_instance: stopped.share_instance,
@@ -234,6 +242,57 @@ impl<O: Observer> ShareLifecycle<O> {
         Action::Stop(work)
     }
 
+    pub(super) fn terminate(&mut self, credential: [u8; 16], stop_id: StopId) -> Action<'static> {
+        let (registration, attribution, connection, cleanup) = match self.state {
+            State::Reserved(pending) => (
+                *pending.init.registration(),
+                pending.attribution,
+                pending.id.connection(),
+                StopCleanup::Reservation(pending.id),
+            ),
+            State::Published(published) => (
+                published.route.registration,
+                published.route.attribution,
+                published.owner.connection(),
+                StopCleanup::Owner(published.owner.connection()),
+            ),
+            State::Activating(commit) => (
+                commit.route.route.registration,
+                commit.route.route.attribution,
+                commit.route.owner,
+                StopCleanup::Owner(commit.route.owner),
+            ),
+            State::Grace(grace) => (
+                grace.route.registration,
+                grace.route.attribution,
+                grace.owner,
+                StopCleanup::None,
+            ),
+            State::Vacant | State::Stopping(_) | State::Stopped(_) => return Action::None,
+        };
+        if !matches!(attribution, crate::access::Attribution::Credential { credential: id, .. } if id == credential)
+        {
+            return Action::None;
+        }
+        let Some(sequence) = self.next_sequence() else {
+            return Action::Refused(Refusal::SequenceExhausted);
+        };
+        let mut pending = PendingStop::new(
+            self.operation(connection, sequence),
+            StoppedShare {
+                relay: self.relay,
+                route: registration.route(),
+                share_instance: registration.share_instance(),
+                stop_id,
+            },
+            cleanup,
+        );
+        pending.origin = StopOrigin::Administrator;
+        let work = StopWork::Persist(pending);
+        self.state = State::Stopping(work);
+        Action::Stop(work)
+    }
+
     fn stop_cleanup(&self, init: &StopInit) -> Result<StopCleanup, Refusal> {
         let (registration, cleanup) = match self.state {
             State::Vacant => return Ok(StopCleanup::None),
@@ -267,7 +326,10 @@ impl<O: Observer> ShareLifecycle<O> {
             StopWork::Retire(pending) => StopWork::Commit(pending),
             StopWork::Commit(pending) => {
                 self.state = State::Stopped(pending.stopped());
-                return acknowledge(pending.id.connection, pending.stopped());
+                return match pending.origin {
+                    StopOrigin::Sender => acknowledge(pending.id.connection, pending.stopped()),
+                    StopOrigin::Administrator => Action::None,
+                };
             }
         };
         self.state = State::Stopping(next);

@@ -216,6 +216,7 @@ impl OwnershipId {
 pub(super) struct Pending {
     pub id: OperationId,
     pub init: RegisterInit,
+    pub attribution: crate::access::Attribution,
     pub deadline: UnixMillis,
 }
 

@@ -32,7 +32,7 @@ use super::{
 
 /// Persisted layout version. Decoders refuse every other value, so a future
 /// layout can never be misread as this one.
-const FORMAT: u8 = 5;
+const FORMAT: u8 = 6;
 
 const PUBLISHED: u8 = 2;
 const GRACE: u8 = 3;
@@ -47,7 +47,7 @@ const CLEANUP_OWNER: u8 = 3;
 const HEADER_BYTES: usize = 1 + 1 + 32 + 12;
 // Instance, key hash, descriptor digest and resume commitment: the WS2R body
 // after its share ID, which the header already holds.
-const REGISTRATION_BYTES: usize = 16 + 16 + 32 + 32;
+const REGISTRATION_BYTES: usize = 16 + 16 + 32 + 32 + crate::access::Attribution::ENCODED_BYTES;
 // Connection slot and generation.
 const CONNECTION_BYTES: usize = ConnectionRef::ENCODED_BYTES;
 // Incarnation and connection, then the attempt sequence.
@@ -59,11 +59,14 @@ const GRACE_BYTES: usize = HEADER_BYTES + REGISTRATION_BYTES + 8 + OWNERSHIP_BYT
 // STOP with a reservation is one byte larger: both operation identities survive.
 const STOP_FACT_BYTES: usize = 16 + 16 + 16;
 const STOPPING_BYTES: usize =
-    HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES + 1 + OPERATION_BYTES;
-const _: () = assert!(GRACE_BYTES <= STOPPING_BYTES);
+    HEADER_BYTES + STOP_FACT_BYTES + OPERATION_BYTES + 1 + 1 + OPERATION_BYTES;
 
 /// Largest encoded record, a STOP retaining a reserved handshake.
-pub const MAX_RECORD_BYTES: usize = STOPPING_BYTES;
+pub const MAX_RECORD_BYTES: usize = if GRACE_BYTES > STOPPING_BYTES {
+    GRACE_BYTES
+} else {
+    STOPPING_BYTES
+};
 
 /// A durably committed registration, even if REGISTERED was lost. Every owner
 /// that resumes it serves these same facts.
@@ -71,9 +74,15 @@ pub const MAX_RECORD_BYTES: usize = STOPPING_BYTES;
 pub struct PublishedRoute {
     pub(super) relay: RelayIdentity,
     pub(super) registration: Registration,
+    pub(super) attribution: crate::access::Attribution,
 }
 
 impl PublishedRoute {
+    #[must_use]
+    pub const fn attribution(&self) -> crate::access::Attribution {
+        self.attribution
+    }
+
     /// Returns the published facts, including the resume commitment.
     #[must_use]
     pub const fn registration(&self) -> &Registration {
@@ -266,16 +275,22 @@ impl Record {
         match self {
             Self::Published(owned) => {
                 put_registration(&mut out, &owned.route.registration);
+                out.put(&owned.route.attribution.encode());
                 put_ownership(&mut out, owned.epoch, owned.owner);
             }
             Self::Grace(grace) => {
                 put_registration(&mut out, &grace.route.registration);
+                out.put(&grace.route.attribution.encode());
                 out.put(&grace.deadline.0.to_be_bytes());
                 put_ownership(&mut out, grace.epoch, grace.owner);
             }
             Self::Stopping(pending) => {
                 put_stopped(&mut out, pending.stopped());
                 put_operation(&mut out, pending.id);
+                out.put(&[match pending.origin {
+                    super::stopping::StopOrigin::Sender => 0,
+                    super::stopping::StopOrigin::Administrator => 1,
+                }]);
                 put_cleanup(&mut out, pending.cleanup);
             }
             Self::Stopped(stopped) => put_stopped(&mut out, *stopped),
@@ -313,11 +328,16 @@ impl Record {
             STOPPING => {
                 let stopped = read_stopped(&mut body, relay, share_id)?;
                 let share = stopped.route.share_id();
-                Self::Stopping(PendingStop::new(
-                    read_operation(&mut body, relay, share)?,
-                    stopped,
-                    read_cleanup(&mut body, relay, share)?,
-                ))
+                let id = read_operation(&mut body, relay, share)?;
+                let origin = match take::<1>(&mut body)?[0] {
+                    0 => super::stopping::StopOrigin::Sender,
+                    1 => super::stopping::StopOrigin::Administrator,
+                    _ => return Err(RecordError::Field),
+                };
+                let mut pending =
+                    PendingStop::new(id, stopped, read_cleanup(&mut body, relay, share)?);
+                pending.origin = origin;
+                Self::Stopping(pending)
             }
             STOPPED => Self::Stopped(read_stopped(&mut body, relay, share_id)?),
             _ => return Err(RecordError::Kind),
@@ -514,6 +534,7 @@ fn read_route(
     Ok(PublishedRoute {
         relay,
         registration: read_registration(body, share_id)?,
+        attribution: crate::access::Attribution::decode(take(body)?).ok_or(RecordError::Field)?,
     })
 }
 

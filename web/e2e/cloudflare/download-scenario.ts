@@ -92,7 +92,7 @@ export async function runDownloadScenario(
     const capability = ready[1]!
     sender.consumeReadiness()
     expect(new URL(capability).searchParams.getAll('r')).toEqual([target.url])
-    expect(capability).not.toContain(target.registrationToken)
+    expect(capability).not.toContain(target.accessKey)
     // Every encrypted file record must cross this relay, independent of local P2P reachability.
     await page.addInitScript(() => {
       Object.defineProperties(window, {
@@ -105,7 +105,7 @@ export async function runDownloadScenario(
     const action = page.getByRole('button', { name: 'Download file', exact: true })
     await expect(action).toBeEnabled()
     const shareId = new URL(sockets[0]!.url).searchParams.get('share_id')!
-    control = new RelayTestControl(request, target.url, target.testSecret, target.registrationToken, shareId)
+    control = new RelayTestControl(request, target.url, target.testSecret, target.accessKey, shareId)
     const started = Date.now()
     await action.click()
     await expect.poll(async () => {
@@ -145,7 +145,7 @@ export async function runDownloadScenario(
       expect(browserRecovery.browserRecovery, 'A lost connection must recover automatically').not.toHaveLength(0)
     }
     const senderArtifact = await readFile(senderTrace, 'utf8')
-    expect(senderArtifact).not.toContain(target.registrationToken)
+    expect(senderArtifact).not.toContain(target.accessKey)
     const senderRecovery = senderRecoveryEvidence(senderArtifact, senderCut)
     if (interruption.kind === 'object-reset') {
       expect(originalSocket.closed).toBe(true)

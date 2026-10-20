@@ -16,10 +16,10 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
-	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/internal/platformsetup"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -53,6 +53,12 @@ const usageText = `Usage:
       If the link has no key, use --key or enter the key interactively.
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
+
+  ` + commandmeta.Name + ` relay add <url> [--name <device>] [--no-browser]
+  ` + commandmeta.Name + ` relay onboard <url> [--name <device>] [--no-browser]
+      Discover relay access and approve this device in the browser. Onboard selects only that private relay.
+  ` + commandmeta.Name + ` relay cancel <url>
+      Cancel a pending enrollment.
 
   ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
@@ -88,8 +94,8 @@ type App struct {
 	revisionCapacityTrace   *capacitytrace.Router
 	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
-	loadShareConfig         func() (shareconfig.Config, error)
-	saveShareConfig         func(shareconfig.Config) error
+	loadShareConfig         func() (relayconfig.Config, error)
+	saveShareConfig         func(relayconfig.Config) error
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -99,8 +105,8 @@ func Main() int {
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
 		platformSetupStatus: &setupStatus,
-		loadShareConfig:     shareconfig.Load,
-		saveShareConfig:     shareconfig.Save,
+		loadShareConfig:     relayconfig.Load,
+		saveShareConfig:     relayconfig.Save,
 	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {
@@ -111,6 +117,8 @@ func Main() int {
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
+	app.engineConfig.RelaySetup.Store = relayconfig.FileStore{}
+	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
 	app.processTrace = trace
 	code := runCLIWithInterruptEscalation(
 		interrupts,
@@ -164,6 +172,8 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 		return ExitUsage
 	}
 	switch args[0] {
+	case "relay":
+		return a.runRelay(ctx, args[1:])
 	case "share":
 		return a.runShare(ctx, args[1:])
 	case "get":

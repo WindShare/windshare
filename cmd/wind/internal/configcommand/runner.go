@@ -12,8 +12,7 @@ import (
 	"os"
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
-	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
-	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 type Result uint8
@@ -32,7 +31,7 @@ const Usage = "Usage: " + commandmeta.Name + " config import <file|-> [--front-u
 type Runner struct {
 	Input  io.Reader
 	Output io.Writer
-	Save   func(shareconfig.Config) error
+	Save   func(relayconfig.Config) error
 }
 
 func (runner Runner) Run(ctx context.Context, args []string) Result {
@@ -67,9 +66,9 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 	config, err := runner.read(request.source)
 	if err != nil {
-		if errors.Is(err, shareconfig.ErrConfig) {
+		if errors.Is(err, relayconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
-			_, _ = fmt.Fprintf(output, "config import: invalid sharing configuration; expected an optional HTTP(S) front_url, 1–%d distinct relay URLs and valid optional registration tokens\n", relayset.MaximumEndpoints)
+			_, _ = fmt.Fprintf(output, "config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url\n", relayconfig.MaximumProfiles)
 			return ResultUsage
 		}
 		log.Info("failed", "stage", "read", "reason", "source_unreadable")
@@ -79,7 +78,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	if request.frontURL != "" {
 		config.FrontURL = request.frontURL
 	}
-	log.Info("validated", "candidate_count", len(config.Relays), "front_url", config.FrontURL, "frontend_override", request.frontURL != "")
+	log.Info("validated", "candidate_count", len(config.Profiles), "front_url", config.FrontURL, "frontend_override", request.frontURL != "")
 	if ctx.Err() != nil {
 		log.Info("failed", "stage", "save", "reason", "cancelled")
 		_, _ = fmt.Fprintln(output, "config import: cancelled; saved configuration was not changed")
@@ -95,8 +94,8 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		_, _ = fmt.Fprintln(output, "config import: cannot save configuration; check the user config directory or WINDSHARE_CONFIG")
 		return ResultFailure
 	}
-	log.Info("committed", "candidate_count", len(config.Relays), "frontend_configured", config.FrontURL != "")
-	_, _ = fmt.Fprintf(output, "Saved sharing configuration with %d relay candidate(s).\n", len(config.Relays))
+	log.Info("committed", "candidate_count", len(config.Profiles), "frontend_configured", config.FrontURL != "")
+	_, _ = fmt.Fprintf(output, "Saved sharing configuration with %d relay candidate(s).\n", len(config.Profiles))
 	if config.FrontURL == "" {
 		_, _ = fmt.Fprintln(output, "No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
 	} else {
@@ -105,18 +104,18 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	return ResultOK
 }
 
-func (runner Runner) read(source string) (shareconfig.Config, error) {
+func (runner Runner) read(source string) (relayconfig.Config, error) {
 	if source == "-" {
 		if runner.Input == nil {
-			return shareconfig.Config{}, io.ErrUnexpectedEOF
+			return relayconfig.Config{}, io.ErrUnexpectedEOF
 		}
-		return shareconfig.Decode(runner.Input)
+		return relayconfig.Decode(runner.Input)
 	}
 	file, err := os.Open(source)
 	if err != nil {
-		return shareconfig.Config{}, err
+		return relayconfig.Config{}, err
 	}
-	candidates, decodeErr := shareconfig.Decode(file)
+	candidates, decodeErr := relayconfig.Decode(file)
 	// Close the source before replacement so importing the saved file itself
 	// also works on hosts that deny renaming an open destination.
 	return candidates, errors.Join(decodeErr, file.Close())
@@ -141,7 +140,7 @@ func parse(args []string) (importRequest, error) {
 	flags.BoolVar(&request.verbose, "v", false, "emit structured import diagnostics")
 	flags.BoolVar(&request.verbose, "verbose", false, "emit structured import diagnostics")
 	flags.Func("front-url", "save this frontend base URL for future shares", func(value string) error {
-		if err := shareconfig.ValidateFrontURL(value); err != nil {
+		if err := relayconfig.ValidateFrontURL(value); err != nil {
 			return err
 		}
 		request.frontURL = value

@@ -404,6 +404,12 @@ type RelayError struct {
 }
 
 func (err *RelayError) Error() string {
+	switch err.Code {
+	case v2.ErrorAccessDenied:
+		return "relay access refused; enroll this device again or install a valid access key"
+	case v2.ErrorAccessUnavailable:
+		return "relay access service temporarily unavailable"
+	}
 	return fmt.Sprintf("relay v2 rejected request with code %d", err.Code)
 }
 

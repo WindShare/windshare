@@ -181,7 +181,9 @@ func classifyRegistrationFailure(resume bool, failure error) (resumeNext, termin
 	case v2.ErrorNotFound:
 		// Only an authenticated absent RESUME authorizes reuse of the fresh publication.
 		return !resume, false
-	case v2.ErrorMalformed, v2.ErrorUnsupportedMode, v2.ErrorShareIDCollision,
+	case v2.ErrorAccessUnavailable:
+		return resume, false
+	case v2.ErrorAccessDenied, v2.ErrorMalformed, v2.ErrorUnsupportedMode, v2.ErrorShareIDCollision,
 		v2.ErrorInvalidProof, v2.ErrorDescriptorInvalid, v2.ErrorStopped:
 		return true, true
 	default:

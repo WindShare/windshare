@@ -142,6 +142,22 @@ impl<O: Observer> ShareRelay<O> {
                 }
                 result
             }
+            Input::Register(grant) => self.register(grant, now, turn),
+            Input::Terminate {
+                credential,
+                stop_id,
+            } => {
+                self.lifecycle_event(
+                    crate::lifecycle::Event::Terminate {
+                        credential,
+                        stop_id,
+                    },
+                    None,
+                    now,
+                    turn,
+                );
+                Ok(())
+            }
             Input::Control { connection, frame } => self.control(connection, frame, now, turn),
             Input::Challenge { request, seed } => {
                 if request.incarnation != self.identity.incarnation {

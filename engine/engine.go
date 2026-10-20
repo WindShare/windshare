@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relaysetup"
 )
 
 const (
@@ -44,6 +45,7 @@ type managedTask interface {
 // Engine owns aggregate capacity across native operations. Once Close begins,
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
+	relaySetup    *relaysetup.Service
 	mu            sync.Mutex
 	config        Config
 	random        *lockedReader
@@ -106,7 +108,8 @@ func New(config Config) (*Engine, error) {
 		return nil, fmt.Errorf("create engine identity: %w", err)
 	}
 	return &Engine{
-		config: config, random: random, identity: hex.EncodeToString(identity[:]),
+		relaySetup: relaysetup.New(config.RelaySetup),
+		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
 		tasks: make(map[task.ID]managedTask), closed: make(chan struct{}),
 	}, nil

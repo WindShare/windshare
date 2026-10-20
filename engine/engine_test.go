@@ -229,4 +229,10 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 	if _, err := application.StartShare(context.Background(), ShareRequest{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed share = %v", err)
 	}
+	if _, err := application.StartRelaySetup(context.Background(), RelaySetupRequest{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed relay setup = %v", err)
+	}
+	if err := application.CancelRelaySetup(context.Background(), "https://relay.example"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed relay cancellation = %v", err)
+	}
 }
