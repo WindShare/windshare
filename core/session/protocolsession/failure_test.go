@@ -25,8 +25,8 @@ func TestOperationFailureSchemaSpansAllFrozenServiceScopes(t *testing.T) {
 			3: failure.Retryable, 4: operationFailureRetryValue(failure), 5: failure.Message,
 		}
 		if failure.PeerAttempt != nil {
-			fields[0] = uint64(2)
-			fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence}
+			fields[0] = uint64(3)
+			fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence, uint64(failure.PeerAttempt.PeerSlot)}
 		}
 		canonical, err := EncodeBody(fields)
 		if err != nil || !bytes.Equal(encoded, canonical) {

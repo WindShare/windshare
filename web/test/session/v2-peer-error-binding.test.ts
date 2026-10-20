@@ -5,7 +5,7 @@ import { decodeV2OperationErrorControl, encodeV2Body, encodeV2Message, V2_MESSAG
 import { V2OperationRouter, V2_OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/v2-operation-router'
 
 const vector = JSON.parse(readFileSync(new URL('../../../core/testvectors/v2-peer-signaling.json', import.meta.url), 'utf8')) as {
- senderPublicKeyB64: string; peerPathIdB64: string; attemptIdB64: string
+ senderPublicKeyB64: string; peerPathIdB64: string; attemptIdB64: string; peerSlot: number
  controlBinding: { shareInstanceB64: string; protocolSessionIdB64: string; operationIdB64: string; laneId: number; laneEpoch: number }
  peerErrors: readonly { code: number; bodyB64: string; signedBodyB64: string; sequence: string }[]
 }
@@ -31,13 +31,13 @@ it('verifies Go signed peer errors and confines delayed terminal codes after tom
   let now = 0
   let terminal = false
   const router = new V2OperationRouter(() => { terminal = true }, () => now)
-  router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, attempt, 1n, 'v=0'])).close()
+  router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([3, path, attempt, 1n, vector.peerSlot, 'v=0'])).close()
   now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
   const currentId = new Uint8Array(16).fill(70)
-  const current = router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([2, path, currentId, 2n, 'v=0']))
+  const current = router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([3, path, currentId, 2n, vector.peerSlot, 'v=0']))
   const message = await authenticated(item)
   expect(decodeV2OperationErrorControl(message.body)).toMatchObject({
-   code: item.code, peerAttempt: { peerPathId: path, attemptId: attempt, attemptSequence: 1n },
+   code: item.code, peerAttempt: { peerPathId: path, attemptId: attempt, attemptSequence: 1n, peerSlot: vector.peerSlot },
   })
   await expect(router.route(message, 9, 1)).resolves.toBeUndefined()
   expect(terminal).toBe(false)
@@ -48,8 +48,8 @@ it('verifies Go signed peer errors and confines delayed terminal codes after tom
 })
 
 it('rejects missing, malformed, zero, overflowing, and cross-scope peer identities', () => {
- const valid = new Map<number, unknown>([[0,2],[1,5],[2,0x5002],[3,false],[4,null],[5,'expired'],[6,[path,attempt,1n]]])
- for (const binding of [null, [], [path, attempt], [path, attempt, 0n], [path, attempt, 1n << 64n], [new Uint8Array(16), attempt, 1n], [path, new Uint8Array(15), 1n]]) {
+ const valid = new Map<number, unknown>([[0,3],[1,5],[2,0x5002],[3,false],[4,null],[5,'expired'],[6,[path,attempt,1n,0]]])
+ for (const binding of [null, [], [path, attempt], [path, attempt, 1n], [path, attempt, 0n, 0], [path, attempt, 1n << 64n, 0], [new Uint8Array(16), attempt, 1n, 0], [path, new Uint8Array(15), 1n, 0], [path, attempt, 1n, 4], [path, attempt, 1n, -1]]) {
   const fields = new Map(valid); fields.set(6,binding)
   expect(() => decodeV2OperationErrorControl(encodeV2Body(fields))).toThrow()
  }

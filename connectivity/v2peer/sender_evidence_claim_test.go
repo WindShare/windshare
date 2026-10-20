@@ -97,6 +97,7 @@ func recoverableRejectedOffer(t *testing.T, binding v2signal.Binding) []byte {
 		binding.PeerPathID[:],
 		binding.AttemptID[:],
 		binding.AttemptSequence,
+		uint64(binding.PeerSlot),
 		uint64(7),
 	})
 }

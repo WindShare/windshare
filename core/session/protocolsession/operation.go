@@ -83,7 +83,7 @@ type OperationTable struct {
 	active          map[OperationID]activeOperation
 	tombstones      map[OperationID]operationTombstone
 	terminal        bool
-	peerPaths       map[[16]byte]*retiredPeerPath
+	peerSlots       map[uint8]*retiredPeerSlot
 	capacityChanged chan struct{}
 }
 
@@ -108,7 +108,7 @@ func NewOperationTableWithContinuations(
 		continuations: continuations,
 		active:        make(map[OperationID]activeOperation),
 		tombstones:    make(map[OperationID]operationTombstone),
-		peerPaths:     make(map[[16]byte]*retiredPeerPath),
+		peerSlots:     make(map[uint8]*retiredPeerSlot),
 	}, nil
 }
 

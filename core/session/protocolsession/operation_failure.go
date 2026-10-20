@@ -25,7 +25,7 @@ const (
 	MaxOperationFailureRetryAfter   = 30 * time.Second
 
 	operationFailureSchemaVersion     = uint64(1)
-	peerOperationFailureSchemaVersion = uint64(2)
+	peerOperationFailureSchemaVersion = uint64(3)
 	directoryOperationCodeFirst       = uint16(0x2001)
 	directoryOperationCodeLast        = uint16(0x2008)
 	revisionOperationCodeFirst        = uint16(0x3001)
@@ -79,7 +79,7 @@ func EncodeOperationFailure(failure OperationFailure) ([]byte, error) {
 			return nil, ErrInvalidOperationFailure
 		}
 		fields[0] = peerOperationFailureSchemaVersion
-		fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence}
+		fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence, uint64(failure.PeerAttempt.PeerSlot)}
 	} else if failure.PeerAttempt != nil {
 		return nil, ErrInvalidOperationFailure
 	}

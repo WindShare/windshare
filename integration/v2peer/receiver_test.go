@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/session/peerslot"
 	"sync"
 	"testing"
 	"time"
@@ -650,6 +651,7 @@ func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) 
 		ctx,
 		receiverIntegrationSignaling{operation: signalingOperation},
 		receiverIntegrationLanes{lane: lane, channels: receiverChannels},
+		integrationPeerSlot(t, &peerslot.Pool{}),
 	)
 	if err != nil {
 		failIntegrationPhase(
@@ -899,10 +901,12 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 		helloSent:      firstLaneHelloSent,
 		laneOutcome:    firstLaneOutcome,
 	}
+	peerSlots := &peerslot.Pool{}
 	firstAttempt, err := receiverFactory.Start(
 		ctx,
 		receiverIntegrationSignaling{operation: firstOperation},
 		firstLanes,
+		integrationPeerSlot(t, peerSlots),
 	)
 	if err != nil {
 		t.Fatalf("start first controlled Pion attempt: %v", err)
@@ -1045,6 +1049,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 		ctx,
 		receiverIntegrationSignaling{operation: secondOperation},
 		secondLanes,
+		integrationPeerSlot(t, peerSlots),
 	)
 	if err != nil {
 		t.Fatalf("start replacement Pion attempt: %v", err)

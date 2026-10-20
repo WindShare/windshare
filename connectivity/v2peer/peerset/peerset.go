@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
@@ -94,6 +95,7 @@ type PeerSet struct {
 	paths           map[pathKey]*Path
 	prewarmed       map[protocolsession.ProtocolSessionID]bool
 	controlHandlers map[protocolsession.ProtocolSessionID]func([]byte) error
+	slots           map[protocolsession.ProtocolSessionID]*peerslot.Pool
 }
 
 func New(config Config) (*PeerSet, error) {
@@ -109,7 +111,7 @@ func New(config Config) (*PeerSet, error) {
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), controlHandlers: make(map[protocolsession.ProtocolSessionID]func([]byte) error)}, nil
+	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), controlHandlers: make(map[protocolsession.ProtocolSessionID]func([]byte) error), slots: make(map[protocolsession.ProtocolSessionID]*peerslot.Pool)}, nil
 }
 func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if ctx == nil || (config.Start == nil && config.Prepare == nil) || config.Demand > ContentDemand {
@@ -129,14 +131,24 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if config.Demand == BrowseDemand && s.prewarmed[config.SessionID] {
 		return nil, ErrPathTerminal
 	}
+	pool := s.slots[config.SessionID]
+	if pool == nil {
+		pool = &peerslot.Pool{}
+		s.slots[config.SessionID] = pool
+	}
+	slot, err := pool.Acquire()
+	if err != nil {
+		return nil, err
+	}
 	if config.Demand == BrowseDemand {
 		if config.Native != nil && !config.Native.ClaimPrewarm([16]byte(config.SessionID)) {
+			slot.Close()
 			return nil, ErrPathTerminal
 		}
 		s.prewarmed[config.SessionID] = true
 	}
 	child, cancel := context.WithCancel(ctx)
-	path := &Path{owner: s, config: config, key: key, ctx: child, cancel: cancel,
+	path := &Path{owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot,
 		resourceChanges: make(chan struct{}, 1), demand: config.Demand, wake: make(chan struct{}, 1), done: make(chan struct{}), ready: make(chan struct{})}
 	s.paths[key] = path
 	go path.run()
@@ -157,7 +169,7 @@ type Path struct {
 	cancel                           context.CancelFunc
 	mu                               sync.Mutex
 	demand                           Demand
-	sequence                         uint64
+	slot                             *peerslot.Lease
 	current                          Attempt
 	lane                             sessionruntime.LaneIdentity
 	result                           Result

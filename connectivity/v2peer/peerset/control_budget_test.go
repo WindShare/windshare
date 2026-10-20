@@ -18,7 +18,7 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 	defer native.Close(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	path := &Path{owner: owner, config: PathConfig{Native: native, StopAfterWave: true}, key: pathKey{path: v2signal.PeerPathID{3}}, ctx: ctx, cancel: cancel, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
+	path := &Path{owner: owner, slot: testPeerSlot(t), config: PathConfig{Native: native, StopAfterWave: true}, key: pathKey{path: v2signal.PeerPathID{3}}, ctx: ctx, cancel: cancel, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
 	wave := recoveryWave{started: clock.Now()}
 	started := wave.started
 	for attempt := range AttemptsPerWave {

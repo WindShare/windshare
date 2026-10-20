@@ -260,7 +260,7 @@ describe('v2 operation replay ownership', () => {
       V2_MESSAGE_KIND.operationError,
       operationId,
       encodeV2Body(new Map<number, unknown>([
-        [0, 2], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'negotiation failed'], [6, [peerPathId, attemptId, 1n]],
+        [0, 3], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'negotiation failed'], [6, [peerPathId, attemptId, 1n, 0]],
       ])),
     )
     const raced = await Promise.allSettled([
@@ -350,9 +350,9 @@ describe('v2 operation tombstone and admission ownership', () => {
     for (const message of [
       peerAnswer(unknownId, path, identity(115), 'current', 2n),
       peerAnswer(unknownId, path, attempt, 'future', 3n),
-      peerAnswer(unknownId, identity(117), attempt, 'unknown path'),
+      peerAnswer(unknownId, identity(117), attempt, 'unknown slot', 1n, 1),
       encodeV2Message(V2_MESSAGE_KIND.peerAnswer, unknownId, encodeV2Body([])),
-      operationError(unknownId, 'peer', 'unknown path'),
+      operationError(unknownId, 'peer', 'unknown slot', undefined, 1),
       operationError(unknownId, 'peer', 'current wrong operation', [path, identity(115), 2n]),
       operationError(unknownId, 'peer', 'future', [path, attempt, 3n]),
       encodeV2Message(V2_MESSAGE_KIND.operationError, unknownId, encodeV2Body(new Map([[0, 1]]))),
@@ -632,11 +632,12 @@ function peerAnswer(
   attemptId: Uint8Array<ArrayBuffer>,
   sdp: string,
   sequence = 1n,
+  peerSlot = 0,
 ) {
   return encodeV2Message(
     V2_MESSAGE_KIND.peerAnswer,
     operationId,
-    encodeV2Body([2, peerPathId, attemptId, sequence, sdp]),
+    encodeV2Body([3, peerPathId, attemptId, sequence, peerSlot, sdp]),
   )
 }
 
@@ -645,7 +646,7 @@ function peerOfferBody(
   attemptId: Uint8Array<ArrayBuffer>,
   sequence = 1n,
 ): Uint8Array<ArrayBuffer> {
-  return encodeV2Body([2, peerPathId, attemptId, sequence, 'v=0\r\ns=offer\r\n'])
+  return encodeV2Body([3, peerPathId, attemptId, sequence, 0, 'v=0\r\ns=offer\r\n'])
 }
 
 function peerCandidate(
@@ -658,10 +659,11 @@ function peerCandidate(
     V2_MESSAGE_KIND.peerCandidate,
     operationId,
     encodeV2Body([
-      2,
+      3,
       peerPathId,
       attemptId,
       1n,
+      0,
       `candidate:${seed} 1 udp 1 192.0.2.${seed} ${5_000 + seed} typ host`,
       'data',
       0,
@@ -688,14 +690,15 @@ function operationError(
   scope: 'block' | 'directory' | 'peer' | 'revision',
   message: string,
   binding?: readonly [Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>, bigint],
+  peerSlot = 0,
 ) {
   const [scopeId, code] = operationErrorRegistry(scope)
   return encodeV2Message(
     V2_MESSAGE_KIND.operationError,
     operationId,
     encodeV2Body(new Map<number, unknown>([
-      [0, scope === 'peer' ? 2 : 1], [1, scopeId], [2, code], [3, false], [4, null], [5, message],
-      ...(scope === 'peer' ? [[6, binding ?? [identity(201), identity(202), 1n]]] as [number, unknown][] : []),
+      [0, scope === 'peer' ? 3 : 1], [1, scopeId], [2, code], [3, false], [4, null], [5, message],
+      ...(scope === 'peer' ? [[6, [...(binding ?? [identity(201), identity(202), 1n]), peerSlot]]] as [number, unknown][] : []),
     ])),
   )
 }

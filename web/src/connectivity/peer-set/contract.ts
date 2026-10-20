@@ -1,4 +1,5 @@
 import { browserConnectivityClock } from '../clock'
+import type { PeerAttemptOrdinal, PeerSlotLease } from '../../session/peer-slots/slots'
 import type { PeerAttemptBudget } from './budget'
 import type { ICEEndpointPool, AttemptICEProfile } from '../ice-policy/endpoints'
 import type { PeerProviderFact } from './provider-facts'
@@ -152,7 +153,7 @@ export const browserV2PeerRecoveryClock: V2PeerRecoveryClock = Object.freeze({
     browserConnectivityClock.sleep(Math.ceil(milliseconds), signal),
 })
 
-export interface V2PeerAttemptContext {
+export interface V2PeerAttemptContext extends PeerAttemptOrdinal {
   readonly admissionWaitBudgetMilliseconds?: number
   readonly iceProfile?: AttemptICEProfile
   readonly observeICEFact?: (fact: PeerProviderFact) => void
@@ -236,6 +237,7 @@ export interface V2PeerRecoveryDependencies {
 }
 
 export interface V2PeerRecoverySupervisorOptions {
+  readonly slot: PeerSlotLease
   readonly onUnavailable?: () => void
   readonly network?: PeerNetworkGeneration
   readonly endpoints?: ICEEndpointPool

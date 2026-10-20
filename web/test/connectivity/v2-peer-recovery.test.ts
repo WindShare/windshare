@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PeerSlotPool } from '../../src/session/peer-slots/slots'
 import { PeerAttemptBudget } from '../../src/connectivity/peer-set/budget'
 import { V2PeerSet } from '../../src/connectivity/peer-set/peer-set'
 
@@ -128,6 +129,7 @@ describe('demand-driven peer set', () => {
     otherContent.close()
     await peers.close()
     const replacement = new V2PeerRecoverySupervisor({
+      slot: new PeerSlotPool().acquire(),
       protocolSessionId: createV2ProtocolSessionIdentity(identity(10)), peerPathId: PEER_PATH_ID,
       attempts: new ScriptedAttempts(['pending']), budget, clock,
     })
@@ -392,6 +394,7 @@ function fixture(
     clock,
     events,
     supervisor: new V2PeerRecoverySupervisor({
+      slot: new PeerSlotPool().acquire(),
       protocolSessionId: SESSION_ID,
       peerPathId: PEER_PATH_ID,
       attempts,
@@ -771,6 +774,7 @@ describe('v2 peer recovery supervisor', () => {
     const attempts = new ScriptedAttempts([TRANSIENT])
     const clock = new ManualClock()
     const options = {
+      slot: new PeerSlotPool().acquire(),
       protocolSessionId: SESSION_ID,
       peerPathId: PEER_PATH_ID,
       attempts,

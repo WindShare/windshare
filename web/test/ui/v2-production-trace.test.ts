@@ -1,5 +1,6 @@
 import { emitRelayHeartbeat, emitRelayDelivery } from '../../src/diagnostics/trace/connection-payload'
 import { describe, expect, it, vi } from 'vitest'
+import { PeerSlotPool } from '../../src/session/peer-slots/slots'
 import {
   createV2PeerPathIdentityValue,
   createV2ProtocolSessionIdentity,
@@ -455,6 +456,7 @@ describe('peer recovery terminal trace', () => {
     })
     const createAttempt = vi.fn(() => { throw new Error('Stopped sessions cannot start attempts') })
     const supervisor = new V2PeerRecoverySupervisor({
+      slot: new PeerSlotPool().acquire(),
       ...correlation,
       attempts: { createAttempt },
       trace: createConnectivityTraceSource(composition.trace),

@@ -75,6 +75,7 @@ func (p *Path) closeResources() {
 	}
 	p.owner.mu.Lock()
 	delete(p.owner.paths, p.key)
+	p.slot.Close()
 	p.owner.mu.Unlock()
 }
 func (p *Path) stopReason() *Result {
@@ -183,13 +184,13 @@ func (p *Path) takeDeferred() func(time.Duration) {
 	return func(used time.Duration) { reserved.settle(true, used) }
 }
 func (p *Path) freshBinding() (v2signal.Binding, error) {
-	if p.sequence == ^uint64(0) {
-		return v2signal.Binding{}, ErrPathTerminal
+	ordinal, err := p.slot.Next()
+	if err != nil {
+		return v2signal.Binding{}, err
 	}
-	p.sequence++
-	binding := v2signal.Binding{PeerPathID: p.key.path, AttemptSequence: p.sequence}
+	binding := v2signal.Binding{PeerSlot: ordinal.Slot, PeerPathID: p.key.path, AttemptSequence: ordinal.Sequence}
 	p.owner.mu.Lock()
-	_, err := io.ReadFull(p.owner.config.Random, binding.AttemptID[:])
+	_, err = io.ReadFull(p.owner.config.Random, binding.AttemptID[:])
 	p.owner.mu.Unlock()
 	if err != nil || binding.Validate() != nil {
 		return binding, errors.Join(ErrConfig, err)

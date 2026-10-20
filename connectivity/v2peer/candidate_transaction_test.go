@@ -243,7 +243,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverAttempt, err := receiverPeerFactory.Start(ctx, receiverSignaling, receiverRuntime)
+	receiverAttempt, err := receiverPeerFactory.Start(ctx, receiverSignaling, receiverRuntime, testPeerSlot(t))
 	if err != nil {
 		t.Fatal(err)
 	}

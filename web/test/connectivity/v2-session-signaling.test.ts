@@ -151,8 +151,8 @@ describe('v2 authenticated session signaling', () => {
     let seed = 1
     const randomBytes = (length: number) => new Uint8Array(length).fill(seed++)
     const peerPathId = createV2PeerPathIdentity(randomBytes)
-    const first = createV2PeerBindingForPath(peerPathId, randomBytes)
-    const second = createV2PeerBindingForPath(peerPathId, randomBytes)
+    const first = createV2PeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 1n }, randomBytes)
+    const second = createV2PeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 2n }, randomBytes)
 
     expect(first.peerPathId).toEqual(peerPathId)
     expect(second.peerPathId).toEqual(peerPathId)
@@ -167,7 +167,7 @@ describe('v2 authenticated session signaling', () => {
     let current: ((event: V2ConnectivityTraceEvent) => void) | undefined
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
-      Object.freeze({ peerPathId: identity(36), attemptId: identity(37), attemptSequence: 1n }),
+      Object.freeze({ peerPathId: identity(36), attemptId: identity(37), attemptSequence: 1n, peerSlot: 0 }),
       { get current() { return current } },
     )
     let candidatePayloadConstructed = false
@@ -199,7 +199,7 @@ describe('v2 authenticated session signaling', () => {
     const sessionKeys = protocolKeys()
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(41),
-      attemptId: identity(42), attemptSequence: 1n,
+      attemptId: identity(42), attemptSequence: 1n, peerSlot: 0,
     })
     const router = signalingRouter()
     const session = new SignalingSessionFacade(router)
@@ -237,7 +237,7 @@ describe('v2 authenticated session signaling', () => {
       sdp: 'v=0\r\na=setup:actpass\r\n',
     })
 
-    const answerBody = [2, binding.peerPathId, binding.attemptId, binding.attemptSequence, 'v=0\r\na=setup:active\r\n']
+    const answerBody = [3, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 'v=0\r\na=setup:active\r\n']
     const answer = await signSenderOperationControl({
       kind: V2_MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
@@ -264,10 +264,11 @@ describe('v2 authenticated session signaling', () => {
     channel.receive(await senderSealer.seal(replayedAnswer.message.plaintext))
 
     const candidateBody = [
-      2,
+      3,
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
+    binding.peerSlot,
       'candidate:1 1 udp 1 192.0.2.1 5000 typ host',
       'data',
       0,
@@ -302,10 +303,11 @@ describe('v2 authenticated session signaling', () => {
       privateKey: senderKeys.privateKey,
     })
     const distinctCandidateBody = [
-      2,
+      3,
       binding.peerPathId,
       binding.attemptId,
       binding.attemptSequence,
+    binding.peerSlot,
       'candidate:3 1 udp 1 192.0.2.3 5002 typ host',
       'data',
       0,
@@ -374,7 +376,7 @@ describe('v2 authenticated session signaling', () => {
     const router = signalingRouter()
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(46),
-      attemptId: identity(47), attemptSequence: 1n,
+      attemptId: identity(47), attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
     const route = new V2SessionSignalingRoute(
@@ -400,7 +402,7 @@ describe('v2 authenticated session signaling', () => {
     await router.route(encodeV2Message(
       V2_MESSAGE_KIND.peerAnswer,
       requireValue(session.operation).id,
-      encodeV2Body([2, binding.peerPathId, binding.attemptId, binding.attemptSequence, 'v=0\r\ns=answer\r\n']),
+      encodeV2Body([3, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 'v=0\r\ns=answer\r\n']),
     ))
     await router.route(encodeV2Message(
       V2_MESSAGE_KIND.peerCandidate,
@@ -434,7 +436,7 @@ describe('v2 authenticated session signaling', () => {
     const router = signalingRouter()
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(51),
-      attemptId: identity(52), attemptSequence: 1n,
+      attemptId: identity(52), attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
     const attemptDiagnostics: V2ConnectivityTraceEvent[] = []
@@ -457,7 +459,7 @@ describe('v2 authenticated session signaling', () => {
       V2_MESSAGE_KIND.operationError,
       requireValue(session.operation).id,
       encodeV2Body(new Map<number, unknown>([
-        [0, 2], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'peer rejected'], [6, [binding.peerPathId, binding.attemptId, binding.attemptSequence]],
+        [0, 3], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'peer rejected'], [6, [binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot]],
       ])),
     ))
     const peerFailure = await failedRead.then(
@@ -503,7 +505,7 @@ describe('v2 authenticated signaling contract failures', () => {
     const router = signalingRouter()
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(61),
-      attemptId: identity(62), attemptSequence: 1n,
+      attemptId: identity(62), attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
     const traces: V2ConnectivityTraceEvent[] = []
@@ -599,10 +601,11 @@ function requireValue<T>(value: T | undefined): T {
 
 function encodedCandidateBody(binding: V2PeerBinding, seed: number): Uint8Array<ArrayBuffer> {
   return encodeV2Body([
-    2,
+    3,
     binding.peerPathId,
     binding.attemptId,
     binding.attemptSequence,
+    binding.peerSlot,
     `candidate:${seed} 1 udp 1 192.0.2.${seed} ${5_000 + seed} typ host`,
     'data',
     0,

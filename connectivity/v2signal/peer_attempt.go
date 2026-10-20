@@ -8,6 +8,7 @@ func (authority peerContinuationAuthority) PeerAttemptBinding() protocolsession.
 
 func protocolBinding(binding Binding) protocolsession.PeerAttemptBinding {
 	return protocolsession.PeerAttemptBinding{
+		PeerSlot:   binding.PeerSlot,
 		PeerPathID: [16]byte(binding.PeerPathID), AttemptID: [16]byte(binding.AttemptID), AttemptSequence: binding.AttemptSequence,
 	}
 }

@@ -12,6 +12,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
@@ -220,15 +221,18 @@ type ReceiverAttempt struct {
 	transport         *ownedPeerDataChannel
 }
 
+// Start borrows a session-owned slot; the caller retains it until the attempt
+// has joined. Successive physical paths must share the same session pool.
 func (factory *ReceiverFactory) Start(
 	parent context.Context,
 	signaling ReceiverSignaling,
 	lanes ReceiverLaneSession,
+	slot *peerslot.Lease,
 ) (*ReceiverAttempt, error) {
 	if factory == nil {
 		return nil, ErrConfig
 	}
-	binding, err := factory.newBinding()
+	binding, err := factory.newBinding(slot)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +313,11 @@ func (factory *ReceiverFactory) startPreparedConnection(parent context.Context, 
 	return attempt, nil
 }
 
-func (factory *ReceiverFactory) newBinding() (v2signal.Binding, error) {
+func (factory *ReceiverFactory) newBinding(slot *peerslot.Lease) (v2signal.Binding, error) {
+	ordinal, err := slot.Next()
+	if err != nil {
+		return v2signal.Binding{}, err
+	}
 	factory.readMu.Lock()
 	defer factory.readMu.Unlock()
 	pathID, err := readReceiverSignalID[v2signal.PeerPathID](factory.random)
@@ -320,7 +328,7 @@ func (factory *ReceiverFactory) newBinding() (v2signal.Binding, error) {
 	if err != nil {
 		return v2signal.Binding{}, err
 	}
-	return v2signal.Binding{PeerPathID: pathID, AttemptID: attemptID, AttemptSequence: 1}, nil
+	return v2signal.Binding{PeerSlot: ordinal.Slot, PeerPathID: pathID, AttemptID: attemptID, AttemptSequence: ordinal.Sequence}, nil
 }
 
 func readReceiverSignalID[T ~[v2signal.IdentityBytes]byte](source io.Reader) (T, error) {

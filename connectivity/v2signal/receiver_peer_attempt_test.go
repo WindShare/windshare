@@ -89,6 +89,7 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		future.AttemptSequence++
 		otherPath := binding
 		otherPath.PeerPathID[0]++
+		otherPath.PeerSlot++
 		for _, wrong := range []Binding{future, otherPath} {
 			if _, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(unknown, wrong, kind)); !errors.Is(e, protocolsession.ErrUnknownOperation) {
 				t.Fatalf("unknown binding %d: %v", kind, e)
@@ -134,18 +135,21 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 	if d, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(wrongID, current, protocolsession.MessageOperationError)); e != nil || d != protocolsession.OperationDrop {
 		t.Fatal("retired older sequence was not collected", d, e)
 	}
-	for index := 1; index <= protocolsession.MaximumPeerContinuationPaths; index++ {
+	// Physical replacements reuse the slot's monotonic sequence, even after
+	// all per-operation tombstones have been collected.
+	for index := 1; index <= 32; index++ {
 		next := binding
 		next.PeerPathID[0] += byte(index)
+		next.AttemptSequence = uint64(131 + index)
 		admission, e := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer(protocolsession.OperationID{byte(index), 2}, next))
-		if index == protocolsession.MaximumPeerContinuationPaths {
-			if !errors.Is(e, protocolsession.ErrContinuationAuthority) {
-				t.Fatal("path budget expanded", e)
-			}
-		} else if e != nil {
+		if e != nil {
 			t.Fatal(e)
 		} else if e = table.CancelGeneration(admission.Generation); e != nil {
 			t.Fatal(e)
+		}
+		now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
+		if d, e := table.Observe(protocolsession.DirectionReceiverToSender, offer(oldID, binding)); e != nil || d != protocolsession.OperationDrop {
+			t.Fatal("replacement resurrected an old physical path", d, e)
 		}
 	}
 }

@@ -109,6 +109,7 @@ func peerContinuationScope(binding Binding) protocolsession.OperationContinuatio
 	_, _ = digest.Write([]byte(peerContinuationScopeDomain))
 	_, _ = digest.Write(binding.PeerPathID[:])
 	_, _ = digest.Write(binding.AttemptID[:])
+	_, _ = digest.Write([]byte{binding.PeerSlot})
 	_, _ = digest.Write(binary.BigEndian.AppendUint64(nil, binding.AttemptSequence))
 	var scope protocolsession.OperationContinuationScope
 	copy(scope[:], digest.Sum(nil))

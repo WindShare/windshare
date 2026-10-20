@@ -295,7 +295,9 @@ func (receiver *Receiver) admit(ctx context.Context, connection *relayv2.Receive
 	if prepared.Descriptor().ShareInstance() != runtime.Descriptor().ShareInstance() || prepared.Descriptor().SyntheticRoot() != runtime.Descriptor().SyntheticRoot() {
 		return ErrReceiverAuthentication
 	}
-	grant, err := runtime.RequestLane(ctx, lane.ID)
+	// A lane number is a recyclable session slot, not this endpoint's identity.
+	// Another route may have occupied the old slot while the relay was offline.
+	grant, err := runtime.RequestLane(ctx, 0)
 	if err != nil {
 		return err
 	}

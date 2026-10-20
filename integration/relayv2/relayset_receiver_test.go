@@ -9,12 +9,13 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-func TestReceiverFirstUsableSessionDoesNotWaitForExtraRelayAndReconnectsExactLane(t *testing.T) {
+func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T) {
 	ctx, trace, urls := startRelaysetScenario(t, 2)
 	share := prepareRelaysetShare(t, ctx, trace, urls)
 	release := make(chan struct{})
@@ -100,6 +101,7 @@ func TestReceiverFirstUsableSessionDoesNotWaitForExtraRelayAndReconnectsExactLan
 		resume := waitRelaysetEvent(t, ctx, retrying)
 		waitRelaysetEvent(t, ctx, oldDone)
 		requireRelaysetLive(t, runtime, primary, initial.Lane)
+		expectedLanes := 2
 		if index == 1 {
 			// This is the first catalog request, so a local cache cannot mask a
 			// healthy transport that stopped forwarding during secondary recovery.
@@ -107,12 +109,41 @@ func TestReceiverFirstUsableSessionDoesNotWaitForExtraRelayAndReconnectsExactLan
 			if err != nil || root.EntryCount() != 1 {
 				t.Fatalf("healthy relay could not browse during outage: entries=%d err=%v", root.EntryCount(), err)
 			}
+			// Lane allocation is transport-neutral. An independently attached
+			// channel takes the retired slot just as a direct or TURN path would.
+			shareID, err := v2.ShareIDFromBytes(share.Registration().ShareID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contender, err := relayv2.DialReceiver(ctx, relayv2.ReceiverConfig{RelayBaseURL: urls[0], ShareID: shareID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			trace.RequireCleanup(t, "competing receiver", func(context.Context) error { return contender.Close() })
+			grant, err := runtime.RequestLane(ctx, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runtime.AttachLane(ctx, grant, contender.Channel(), transfer.LaneRouteRelay); err != nil {
+				t.Fatal(err)
+			}
+			occupied := share.waitAdmission(t, ctx, contender)
+			if occupied.Lane.ID != oldLane.ID || occupied.Lane.Epoch != oldLane.Epoch+1 {
+				t.Fatalf("competing channel did not reuse retired slot: previous=%+v occupied=%+v", oldLane, occupied)
+			}
+			expectedLanes++
 		}
 		close(resume)
 		additional = waitRelaysetEvent(t, ctx, connected)
 		attached = share.waitAdmission(t, ctx, additional)
-		if attached.Kind != sessionruntime.SenderChannelAttachedLane || attached.Lane.ID != oldLane.ID || attached.Lane.Epoch != oldLane.Epoch+1 {
-			t.Fatalf("recovery replaced logical lane: previous=%+v recovered=%+v", oldLane, attached)
+		if attached.Kind != sessionruntime.SenderChannelAttachedLane {
+			t.Fatalf("recovery did not attach to the existing session: %+v", attached)
+		}
+		if index == 0 && (attached.Lane.ID != oldLane.ID || attached.Lane.Epoch != oldLane.Epoch+1) {
+			t.Fatalf("recovery did not reuse a free slot: previous=%+v recovered=%+v", oldLane, attached)
+		}
+		if index == 1 && attached.Lane.ID == oldLane.ID {
+			t.Fatalf("recovery displaced the competing channel: %+v", attached)
 		}
 		if additional == previous || attached.Session == previous.Channel().RelaySessionID() {
 			t.Fatal("recovery reused the retired relay connection")
@@ -122,7 +153,7 @@ func TestReceiverFirstUsableSessionDoesNotWaitForExtraRelayAndReconnectsExactLan
 		}
 		requireRelaysetLive(t, runtime, additional, attached.Lane)
 		requireRelaysetLive(t, runtime, primary, initial.Lane)
-		if runtime.ProtocolSessionID() != sessionID || runtime.LaneSet().Len() != 2 || primaryDials.Load() != 1 || secondaryDials.Load() != int32(index+2) {
+		if runtime.ProtocolSessionID() != sessionID || runtime.LaneSet().Len() != expectedLanes || primaryDials.Load() != 1 || secondaryDials.Load() != int32(index+2) {
 			t.Fatalf("recovery disturbed healthy session: primary=%d secondary=%d lanes=%d", primaryDials.Load(), secondaryDials.Load(), runtime.LaneSet().Len())
 		}
 		trace.RequireRecord(t, "relay_lane_recovered", testrun.OutcomeSucceeded, attached)
