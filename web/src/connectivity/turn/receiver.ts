@@ -18,6 +18,7 @@ export interface TurnReceiverOptions {
   readonly open: (grant: TurnGrant) => void
   readonly retire: (pathId: Uint8Array<ArrayBuffer>) => Promise<void>
   readonly observe?: (event: TurnObservation) => void
+  readonly profilesChanged?: (profiles: readonly string[]) => void
   readonly measure?: (pathId: Uint8Array<ArrayBuffer>) => { usefulBytes: number; unhelpful: boolean }
 }
 export interface TurnObservation {
@@ -25,7 +26,7 @@ export interface TurnObservation {
   readonly provider?: string
   readonly account?: string
   readonly pathId?: string
-  readonly state: 'available' | 'connecting' | 'ready' | 'retired' | 'unavailable'
+  readonly state: 'available' | 'connecting' | 'ready' | 'retired' | 'unavailable' | 'withdrawn'
   readonly reason?: string
   readonly usefulBytes?: number
 }
@@ -37,6 +38,8 @@ interface Path {
   reported: number
 }
 
+type Inventory = Extract<ReturnType<typeof decodeTurnControl>, { kind: 'available' }>
+
 /** Delegation outlives relay connections and never owns a download job. */
 export class TurnReceiver {
   readonly #options: TurnReceiverOptions
@@ -46,7 +49,7 @@ export class TurnReceiver {
   readonly #retired = new Set<string>()
   readonly #tasks = new Set<Promise<unknown>>()
   readonly #unsubscribe: () => void
-  #available: Extract<ReturnType<typeof decodeTurnControl>, { kind: 'available' }> | undefined
+  #available: Inventory | undefined
   #demand: AbortController | undefined
   #active = false
   #sequence = 0n
@@ -60,12 +63,7 @@ export class TurnReceiver {
       const message = decodeTurnControl(body)
       if (!equalBytes(message.sessionId, this.#sessionId)) return
       if (message.kind === 'available') {
-        // Profiles belong to this protocol generation, just like recovery
-        // budgets. Repeated advertisements cannot grow that bounded inventory.
-        if (this.#available !== undefined) return
-        this.#available = message
-        for (const profile of message.profiles) this.#emit({ profile, state: 'available' })
-        this.#startDemand()
+        this.#replaceInventory(message)
         return
       }
       if (this.#available === undefined || !equalBytes(message.ownerPathId, this.#available.ownerPathId)) return
@@ -116,6 +114,26 @@ export class TurnReceiver {
       this.#lifetime.abort()
     }
     await Promise.allSettled([...this.#tasks])
+  }
+
+  #replaceInventory(message: Inventory): void {
+    // Advertisement revisions replace inventory without resetting demand
+    // authority. Replays cannot restore services removed by newer settings.
+    const previous = this.#available
+    if (previous !== undefined && (!equalBytes(message.ownerPathId, previous.ownerPathId) ||
+      message.sequence <= previous.sequence)) return
+    this.#available = message
+    for (const path of this.#paths.values()) {
+      if (!message.profiles.includes(path.grant.profile)) this.#retire(path.grant.pathId)
+    }
+    this.#options.profilesChanged?.(message.profiles)
+    for (const profile of previous?.profiles ?? []) {
+      if (!message.profiles.includes(profile)) this.#emit({ profile, state: 'withdrawn' })
+    }
+    for (const profile of message.profiles) {
+      if (!previous?.profiles.includes(profile)) this.#emit({ profile, state: 'available' })
+    }
+    this.#startDemand()
   }
 
   #startDemand(): void {

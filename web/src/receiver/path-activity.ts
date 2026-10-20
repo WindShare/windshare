@@ -80,7 +80,7 @@ export class ReceiverPathActivity {
     if (current === undefined || !matches(current.admission, fact)) return
     current.lastContent = this.#now()
     const service = current.admission.turnService
-    if (service !== undefined) {
+    if (service !== undefined && this.#turnServices.has(service.profile)) {
       this.#turnUseful.set(service.profile, Math.min(Number.MAX_SAFE_INTEGER,
         (this.#turnUseful.get(service.profile) ?? 0) + fact.usefulBytes))
     }
@@ -89,6 +89,12 @@ export class ReceiverPathActivity {
 
   turn(generation: number, event: TurnObservation): void {
     if (this.#closed || generation !== this.#generation) return
+    if (event.state === 'withdrawn') {
+      this.#turnServices.delete(event.profile)
+      this.#turnUseful.delete(event.profile)
+      this.#refresh()
+      return
+    }
     const previous = this.#turnServices.get(event.profile)
     if (event.state === 'retired' && previous?.pathId !== event.pathId) return
     // Content observations survive path replacement; periodic service events

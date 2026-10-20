@@ -14,6 +14,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnpath"
 )
 
 // InitialCheckingTimeout follows RFC 8863's default transaction window. It
@@ -55,6 +56,7 @@ type Event struct {
 	Pair                *PairFacts
 	TURN                *TURNResourceSnapshot
 	TURNService         *iceconfig.Identity
+	TURNCleanup         turnpath.CleanupOutcome
 }
 
 type Connection struct {
@@ -234,12 +236,11 @@ func (c *Connection) Close() error {
 			// allocations first while TURN control sockets can still write.
 			c.closeErr, forced = c.turn.shutdown(c.SCTP().Transport().ICETransport().Stop)
 			c.closeErr = errors.Join(c.closeErr, c.PeerConnection.Close())
+			outcome := turnpath.CleanupProtocol
 			if forced {
-				c.observe("turn_close_forced", "protocol_cleanup_deadline")
-			} else {
-				// This records local protocol cleanup, not a server acknowledgment.
-				c.observe("turn_close_protocol", "")
+				outcome = turnpath.CleanupDeadline
 			}
+			c.observeTURNCleanup(outcome)
 		} else {
 			c.closeErr = c.PeerConnection.Close()
 		}

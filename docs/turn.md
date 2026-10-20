@@ -56,7 +56,8 @@ Credentials are acquired only for preview/download demand. Sharing and browsing
 do not contact TURN issuers. The session permits two services plus one temporary
 replacement path, reserving direct-attempt capacity. Both ends authenticate a
 new lane before retiring the old lane. Failed renewal leaves a still-valid lane
-available. Unhelpful sampled paths cool down before another attempt. Scheduling
+available. Canceled or superseded requests do not impose a failure cooldown.
+Unhelpful sampled paths cool down before another attempt. Scheduling
 uses real content measurements; comparable paths prefer direct, then owner TURN,
 then application relays. `p2p-only` admits direct traffic only; `relay-only`
 creates no ICE connections. Process admission permits 16 ordinary TURN connections
@@ -67,8 +68,13 @@ cost; queued renewals retain the old path while waiting for capacity.
 
 `local_budget_bytes: 0` disables the local limit. Nonzero limits share socket
 usage across all profiles, shares and recipients using that account in one
-Engine instance. Counters reset with the Engine. Exhaustion stops issuance and
-retires that account's paths, leaving other services available. Socket samples
+Engine instance. Counters reset with the Engine. `ConfigureTURN` preserves usage
+by account ID, including removal/re-import, and updates running sessions. New
+requests use the latest settings; existing leases retain their issuing source.
+Removing an account/profile or lowering its limit below usage retires affected
+paths. Raising a limit permits new leases without reviving revoked ones.
+Exhaustion stops issuance and retires that account's paths, leaving other services
+available. Socket samples
 include local TURN/TLS framing and retries visible to the process, separately
 from receiver-confirmed useful content. Sampling, in-flight data, external
 credential reuse and other applications mean this is **not an account-wide
@@ -77,6 +83,8 @@ zero-overage guarantee**.
 Connection details show the TURN service, health and useful received bytes.
 CLI traces associate issuance, replacement, retirement, selected pairs and
 socket counters with their service, session, path and available attempt IDs.
+Cleanup distinguishes local protocol completion from a forced deadline; neither
+claims remote deallocation acknowledgment.
 Engine callers can inspect `TURNStatus()` and subscribe through
 `TURNDependencies.Observe`; local shutdown and provider-confirmed revocation are
 separate events. Cloudflare supports credential revocation; static and coturn

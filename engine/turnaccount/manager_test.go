@@ -98,8 +98,8 @@ func TestCanceledIssuanceReturnsCapacity(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if m.Snapshot()[0].ActiveLeases != 0 {
-		t.Fatal("cancellation leaked capacity")
+	if m.Snapshot()[0].ActiveLeases != 0 || m.Snapshot()[0].LastFailure != "" {
+		t.Fatalf("cancellation leaked capacity or fabricated provider failure: %+v", m.Snapshot())
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)

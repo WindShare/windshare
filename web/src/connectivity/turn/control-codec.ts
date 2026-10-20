@@ -96,7 +96,6 @@ export function decodeTurnControl(body: Uint8Array): TurnControl {
     case TURN_CONTROL.available: {
       count(fields, 6)
       const profiles = requireArray(fields[5], MAX_URLS, 'TURN profiles').map(identifier)
-      if (profiles.length === 0) throw new RangeError('No TURN profiles')
       return { ...header, kind: 'available', profiles }
     }
     default: throw new TypeError('Invalid TURN control kind')

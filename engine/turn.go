@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/windshare/windshare/engine/turnaccount"
@@ -12,8 +11,8 @@ import (
 	"github.com/windshare/windshare/engine/turnprovider"
 )
 
-// ConfigureTURN is local setup, not credential acquisition. An account budget
-// cannot be reset underneath running shares by re-importing the same settings.
+// ConfigureTURN publishes local settings without contacting issuers. Account IDs
+// retain their Engine-lifetime usage; existing leases keep their issuing source.
 func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
 	config = config.Clone()
 	engine.mu.Lock()
@@ -32,9 +31,6 @@ func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
 	if bytes.Equal(before, after) {
 		return nil
 	}
-	if len(engine.tasks) != 0 || len(engine.config.TURN.Accounts) != 0 {
-		return errors.New("TURN account settings require a new Engine instance")
-	}
 	dependencies := engine.config.TURNDependencies
 	if dependencies.Now == nil {
 		dependencies.Now = engine.config.Now
@@ -43,15 +39,9 @@ func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	owner, err := turnaccount.New(prepared)
-	if err != nil {
+	if err = engine.turn.Reconfigure(prepared); err != nil {
 		return err
 	}
-	if err = engine.turn.Close(); err != nil {
-		_ = owner.Close()
-		return err
-	}
-	engine.turn = owner
 	engine.config.TURN = config
 	return nil
 }

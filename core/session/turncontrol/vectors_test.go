@@ -17,6 +17,7 @@ func TestTURNControlVectors(t *testing.T) {
 	path := [16]byte{4}
 	messages := []Message{
 		Available{header, []string{"primary", "secondary"}},
+		Available{header, []string{}},
 		Demand{header, time.Minute},
 		Grant{Authority: header, PathID: path, Replaces: [16]byte{5}, Provider: "coturn", Account: "home", Profile: "primary",
 			CredentialKind: Expiring, Username: "123:user", Password: "delegated-password", ValidFor: time.Hour, URLs: []string{"turn:127.0.0.1:3478?transport=udp", "turns:example.org:443?transport=tcp"}},

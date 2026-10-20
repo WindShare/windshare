@@ -69,7 +69,7 @@ func Encode(message Message) ([]byte, error) {
 		}
 		fields = append(base(unavailableKind), value.Profile, uint64(value.RetryAfter/time.Millisecond), value.Reason)
 	case Available:
-		if len(value.Profiles) == 0 || len(value.Profiles) > MaximumURLs {
+		if len(value.Profiles) > MaximumURLs {
 			return nil, ErrMessage
 		}
 		for _, profile := range value.Profiles {
@@ -77,7 +77,11 @@ func Encode(message Message) ([]byte, error) {
 				return nil, ErrMessage
 			}
 		}
-		fields = append(base(availableKind), value.Profiles)
+		profiles := value.Profiles
+		if profiles == nil {
+			profiles = []string{}
+		}
+		fields = append(base(availableKind), profiles)
 	default:
 		return nil, ErrMessage
 	}

@@ -18,6 +18,7 @@ type accountFixture struct {
 	fail          bool
 }
 
+func (f *accountFixture) Inventory() Inventory { return Inventory{Revision: 1, Profiles: f.Profiles()} }
 func (f *accountFixture) Profiles() []Profile {
 	return []Profile{{Identity: iceconfig.Identity{Provider: "test", Account: "account", Profile: "profile"}}}
 }
@@ -140,6 +141,13 @@ func TestCanceledDemandCannotPublishLateAuthority(t *testing.T) {
 	}
 	if _, closed := accounts.counts(); closed != 1 {
 		t.Fatal("late credential not released")
+	}
+	if !s.services[0].retryAt.IsZero() {
+		t.Fatal("canceled demand started a failure cooldown")
+	}
+	issueNext(t, s)
+	if s.services[0].pending == nil || s.services[0].pending.grant.Authority.Sequence != 3 {
+		t.Fatal("new demand did not immediately acquire its own credentials")
 	}
 }
 

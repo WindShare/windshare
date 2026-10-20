@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/windshare/windshare/connectivity/turnpath"
 )
 
 // NativeConnectivitySpec contains only bounded facts. Raw provider errors and
@@ -36,6 +38,7 @@ type NativeTURNFacts struct {
 	Milestone, Reason          string
 	UsefulBytes                uint64
 	Resources                  *NativeTURNResources
+	Cleanup                    turnpath.CleanupOutcome
 }
 
 type NativeTURNResources struct {
@@ -170,7 +173,7 @@ func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
 }
 func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	if !spec.Command.Valid() || !slices.Contains([]string{"sender", "receiver", "unknown"}, spec.Side) ||
-		!slices.Contains([]string{"turn_path", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind) ||
+		!validNativeConnectivityKind(spec) ||
 		!slices.Contains([]string{"unknown", "new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, spec.State) {
 		return false
 	}
@@ -226,12 +229,23 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	return true
 }
 
+func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
+	if spec.TURN != nil && spec.TURN.Cleanup.Valid() && spec.Kind == spec.TURN.Cleanup.EventKind() {
+		return true
+	}
+	return slices.Contains([]string{"turn_path", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
+}
+
 func validNativeTURN(spec NativeConnectivitySpec) bool {
 	facts := spec.TURN
 	if facts == nil {
 		return spec.Kind != "turn_path"
 	}
-	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable"}, facts.Milestone) ||
+	if facts.Cleanup != 0 && (!facts.Cleanup.Valid() || spec.Kind != facts.Cleanup.EventKind() ||
+		facts.Reason != facts.Cleanup.Reason() || facts.Resources == nil) {
+		return false
+	}
+	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "issuance_discarded", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable"}, facts.Milestone) ||
 		(spec.Kind == "turn_path") != (facts.Milestone != "") {
 		return false
 	}
