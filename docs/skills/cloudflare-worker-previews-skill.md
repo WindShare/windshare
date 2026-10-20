@@ -1,6 +1,6 @@
 # Cloudflare Worker Previews for the Rust relay
 
-Use this runbook for the Worker/Durable Object adapter from the [Rust relay plan](../plans/cloudflare/cloudflare-relay-rust-plan.md), or bounded platform probes before adapter integration. Keep Rust domain tests local and use `wrangler dev` for iteration; Previews provide real Cloudflare execution with isolated Durable Object state.
+Use this runbook for the Worker/Durable Object adapter from the [Rust relay plan](../.archive/2026.10.20/cloudflare/cloudflare-relay-rust-plan.md), or bounded platform probes before adapter integration. Keep Rust domain tests local and use `wrangler dev` for iteration; Previews provide real Cloudflare execution with isolated Durable Object state.
 
 Official documentation and Wrangler 4.151.1 checked on 2026-10-17. The [host probes](../../spikes/relay-hosts/README.md) exercised a Rust Worker, SQLite, WebSocket callbacks and Alarm execution. Recheck the linked documentation and installed CLI help when tooling changes.
 
