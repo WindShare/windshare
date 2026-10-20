@@ -5,12 +5,63 @@ import (
 	"encoding/json"
 	"go/build"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestMaintainedGoFilesIncludeUntrackedSources(t *testing.T) {
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = root
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		path = filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "--quiet")
+	git("config", "core.excludesfile", filepath.Join(root, ".git", "info", "exclude"))
+	for _, file := range []string{"tracked.go", "deleted.go", "ignored/tracked.go", "staged.go"} {
+		write(file, "package example\n")
+	}
+	git("add", "--", "*.go")
+	write(".gitignore", "ignored/\n")
+	write("tracked.go", "package example\n\nconst Updated = true\n")
+	write("new.go", "package example\n")
+	write("new package/文件_test.go", "package example\n")
+	write("ignored/generated.go", "package example\n")
+	write("notes.txt", "not Go source\n")
+	if err := os.Remove(filepath.Join(root, "deleted.go")); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := goSourceCandidates(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := maintainedGoFiles(root, candidates, manifest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	want := []string{"ignored/tracked.go", "new package/文件_test.go", "new.go", "staged.go", "tracked.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("maintained working-tree sources = %q, want %q", got, want)
+	}
+}
 
 func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	root := t.TempDir()
@@ -38,9 +89,9 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 		{Name: "ice", Files: []sourceFile{{Path: "source.go"}}},
 		{Name: "webrtc", Files: []sourceFile{{Path: "source.go"}}},
 	}}
-	tracked := append([]string{"third_party/pion/ice/source.go", "third_party/pion/webrtc/source.go"}, owned...)
-	tracked = append(tracked, "deleted.go", "")
-	got, err := maintainedGoFiles(root, tracked, projection)
+	candidates := append([]string{"third_party/pion/ice/source.go", "third_party/pion/webrtc/source.go"}, owned...)
+	candidates = append(candidates, "deleted.go", "")
+	got, err := maintainedGoFiles(root, candidates, projection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +100,7 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	}
 	for _, invalid := range []string{"../escape.go", "file.txt"} {
 		if _, err := maintainedGoFiles(root, []string{invalid}, projection); err == nil {
-			t.Fatalf("invalid tracked path accepted: %q", invalid)
+			t.Fatalf("invalid source path accepted: %q", invalid)
 		}
 	}
 }

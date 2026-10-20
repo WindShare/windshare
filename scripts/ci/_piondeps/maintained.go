@@ -19,11 +19,9 @@ func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
 	if err := verify(root, true); err != nil {
 		return err
 	}
-	command := exec.Command("git", "ls-files", "-z", "--", "*.go")
-	command.Dir = root
-	tracked, err := command.Output()
+	candidates, err := goSourceCandidates(root)
 	if err != nil {
-		return fmt.Errorf("list tracked Go sources: %w", err)
+		return err
 	}
 	raw, err := os.ReadFile(filepath.Join(root, "third_party", "pion", "manifest.json"))
 	if err != nil {
@@ -33,7 +31,7 @@ func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
 	if err = json.Unmarshal(raw, &sources); err != nil {
 		return err
 	}
-	files, err := maintainedGoFiles(root, strings.Split(string(tracked), "\x00"), sources)
+	files, err := maintainedGoFiles(root, candidates, sources)
 	if err != nil {
 		return err
 	}
@@ -60,7 +58,19 @@ func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
 	return nil
 }
 
-func maintainedGoFiles(root string, tracked []string, verified manifest) ([]string, error) {
+func goSourceCandidates(root string) ([]string, error) {
+	// Local validation precedes git add. Staging a new source must not change its
+	// coverage, while ignored build and scratch artifacts must remain excluded.
+	command := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard", "--deduplicate", "-z", "--", "*.go")
+	command.Dir = root
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list working-tree Go sources: %w", err)
+	}
+	return strings.Split(string(output), "\x00"), nil
+}
+
+func maintainedGoFiles(root string, candidates []string, verified manifest) ([]string, error) {
 	excluded := make(map[string]bool)
 	for _, module := range verified.Modules {
 		for _, file := range module.Files {
@@ -68,12 +78,12 @@ func maintainedGoFiles(root string, tracked []string, verified manifest) ([]stri
 		}
 	}
 	var files []string
-	for _, file := range tracked {
+	for _, file := range candidates {
 		if file == "" || excluded[file] {
 			continue
 		}
 		if !safeRelative(file) || !strings.HasSuffix(file, ".go") {
-			return nil, fmt.Errorf("invalid tracked Go source path: %q", file)
+			return nil, fmt.Errorf("invalid Go source path: %q", file)
 		}
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(file)))
 		if os.IsNotExist(err) {
@@ -83,7 +93,7 @@ func maintainedGoFiles(root string, tracked []string, verified manifest) ([]stri
 			return nil, err
 		}
 		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("tracked Go source is not a regular file: %s", file)
+			return nil, fmt.Errorf("Go source is not a regular file: %s", file)
 		}
 		files = append(files, file)
 	}

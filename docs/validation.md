@@ -39,7 +39,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make workflow-lint` | actionlint. |
 | `make lint` | golangci-lint over production packages. |
 | `make vet` | `go vet` over production packages. |
-| `make gopls` | gopls diagnostics at hint severity over tracked Go sources. |
+| `make gopls` | gopls diagnostics at hint severity over tracked and non-ignored new Go sources. |
 | `make sloc` | sloc-guard source-size limits. |
 
 The ordinary gate set shared by `make ci` and `make ci-parallel`:
@@ -54,7 +54,7 @@ The root `go.mod` owns all production Go packages. Core is `./core/...`; non-cor
 
 Coverage is gated on the core and non-core totals and on each package, with no per-file floor. The thresholds live in `.testcoverage.yml` and `core/.testcoverage.yml`. `internal/perfevidence` and `spikes/webrtc` are separate evidence modules outside the production set.
 
-`make gopls` covers tracked Go sources except the pinned Pion projection, whose source hashes, root replacements, and patches are reproduced first.
+`make gopls` includes new Go files before `git add`, excluding ignored artifacts and the pinned Pion projection, whose source hashes, root replacements, and patches are reproduced first.
 
 ### Rust relay
 
