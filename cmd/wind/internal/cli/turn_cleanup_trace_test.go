@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pion/turn/v5"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -90,5 +91,73 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 	}
 	if len(found) != 2 || found[turnpath.CleanupDeadline.EventKind()] != "protocol_cleanup_deadline" || found[turnpath.CleanupProtocol.EventKind()] != "" {
 		t.Fatalf("cleanup distinction lost: %+v", found)
+	}
+}
+
+func TestTURNRecoveryEvidenceReachesTrace(t *testing.T) {
+	target, err := runtrace.ExactFile(filepath.Join(t.TempDir(), "recovery.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := runtrace.Open(target, clievent.CommandShare, runtrace.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recorder.Close() })
+	identity := iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
+	for _, evidence := range []provider.Event{
+		{Milestone: "turn_binding", TURNBinding: &turn.BindingEvent{Status: turn.BindingMismatch, Code: 400,
+			Channel: 0x4000, RelayedAddress: "127.0.0.1:10", PeerAddress: "127.0.0.1:20"}},
+		{Milestone: "turn_route", TURNRoute: &provider.TURNRouteEvent{Server: "turn:localhost:3478", Outcome: "started"}},
+	} {
+		evidence.TURNService, evidence.TURN = &identity, &provider.TURNResourceSnapshot{ActiveSockets: 1}
+		event, err := projectNativeObservation(clievent.CommandShare, nativepeer.Observation{
+			Subject:  nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender},
+			Provider: &evidence,
+		})
+		if err != nil || !recorder.Record(event) {
+			t.Fatalf("recovery evidence rejected: %v", err)
+		}
+	}
+	recorder.Close()
+	body, err := os.ReadFile(recorder.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for line := range strings.SplitSeq(strings.TrimSpace(string(body)), "\n") {
+		var record struct {
+			Payload struct {
+				Kind string
+				TURN struct {
+					Binding *struct {
+						Status, Peer, Allocation string
+						Code                     int
+					}
+					Route *struct{ Server, Local, Outcome string }
+				}
+			}
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		switch record.Payload.Kind {
+		case "turn_binding":
+			binding := record.Payload.TURN.Binding
+			if binding == nil || binding.Status != "mismatch" || binding.Code != 400 ||
+				binding.Peer != "127.0.0.1:20" || binding.Allocation != "127.0.0.1:10" {
+				t.Fatalf("binding attribution lost: %s", line)
+			}
+			found++
+		case "turn_route":
+			route := record.Payload.TURN.Route
+			if route == nil || route.Server != "turn:localhost:3478" || route.Local != "system" || route.Outcome != "started" {
+				t.Fatalf("route decision lost: %s", line)
+			}
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatalf("missing recovery evidence: %d", found)
 	}
 }

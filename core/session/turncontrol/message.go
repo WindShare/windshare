@@ -121,3 +121,21 @@ type Report struct {
 
 func (m Report) Header() Header { return m.Authority }
 func (Report) turnMessage()     {}
+
+type RecoveryReason uint8
+
+const (
+	AllocationStateMismatch RecoveryReason = iota + 1
+	ChannelUnavailable
+)
+
+// Recover requests a bounded replacement without retiring a still-usable lane.
+// The grant authority and path ID make duplicate or stale requests harmless.
+type Recover struct {
+	Authority Header
+	PathID    [IdentityBytes]byte
+	Reason    RecoveryReason
+}
+
+func (m Recover) Header() Header { return m.Authority }
+func (Recover) turnMessage()     {}

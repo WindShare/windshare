@@ -39,7 +39,29 @@ type NativeTURNFacts struct {
 	UsefulBytes                uint64
 	Resources                  *NativeTURNResources
 	Cleanup                    turnpath.CleanupOutcome
+	Binding                    *NativeTURNBinding
+	Route                      *NativeTURNRoute
 }
+
+type NativeTURNBinding struct {
+	Status           string
+	Code             int
+	Channel          uint16
+	Peer, Allocation netip.AddrPort
+}
+
+type NativeTURNRoute struct {
+	Server  string
+	Local   netip.Addr
+	Outcome string
+}
+
+const (
+	maximumTURNTraceURLBytes = 2048
+	maximumSTUNErrorCode     = 699
+	minimumTURNChannel       = 0x4000
+	maximumTURNChannel       = 0x7fff
+)
 
 type NativeTURNResources struct {
 	ActiveSockets, OpenedSockets     uint64
@@ -54,6 +76,14 @@ func (facts *NativeTURNFacts) clone() *NativeTURNFacts {
 	if copy.Resources != nil {
 		resources := *copy.Resources
 		copy.Resources = &resources
+	}
+	if copy.Binding != nil {
+		binding := *copy.Binding
+		copy.Binding = &binding
+	}
+	if copy.Route != nil {
+		route := *copy.Route
+		copy.Route = &route
 	}
 	return &copy
 }
@@ -233,19 +263,22 @@ func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
 	if spec.TURN != nil && spec.TURN.Cleanup.Valid() && spec.Kind == spec.TURN.Cleanup.EventKind() {
 		return true
 	}
-	return slices.Contains([]string{"turn_path", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
+	return slices.Contains([]string{"turn_path", "turn_binding", "turn_route", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
 }
 
 func validNativeTURN(spec NativeConnectivitySpec) bool {
 	facts := spec.TURN
 	if facts == nil {
-		return spec.Kind != "turn_path"
+		return spec.Kind != "turn_path" && spec.Kind != "turn_binding" && spec.Kind != "turn_route"
+	}
+	if !validTURNRecoveryFacts(spec.Kind, facts) {
+		return false
 	}
 	if facts.Cleanup != 0 && (!facts.Cleanup.Valid() || spec.Kind != facts.Cleanup.EventKind() ||
 		facts.Reason != facts.Cleanup.Reason() || facts.Resources == nil) {
 		return false
 	}
-	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "issuance_discarded", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable"}, facts.Milestone) ||
+	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "issuance_discarded", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable", "recovery_requested"}, facts.Milestone) ||
 		(spec.Kind == "turn_path") != (facts.Milestone != "") {
 		return false
 	}
@@ -259,6 +292,22 @@ func validNativeTURN(spec NativeConnectivitySpec) bool {
 			}
 			return false
 		}
+	}
+	return true
+}
+
+func validTURNRecoveryFacts(kind string, facts *NativeTURNFacts) bool {
+	if (kind == "turn_binding") != (facts.Binding != nil) || (kind == "turn_route") != (facts.Route != nil) {
+		return false
+	}
+	if binding := facts.Binding; binding != nil {
+		return slices.Contains([]string{"active", "retrying", "rejected", "mismatch", "expired", "exhausted"}, binding.Status) &&
+			binding.Code >= 0 && binding.Code <= maximumSTUNErrorCode && binding.Channel >= minimumTURNChannel && binding.Channel <= maximumTURNChannel &&
+			binding.Peer.IsValid() && binding.Allocation.IsValid()
+	}
+	if route := facts.Route; route != nil {
+		return len(route.Server) > 0 && len(route.Server) <= maximumTURNTraceURLBytes &&
+			slices.Contains([]string{"started", "allocated", "failed", "canceled", "capacity"}, route.Outcome)
 	}
 	return true
 }

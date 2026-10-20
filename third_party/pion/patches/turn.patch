@@ -1,27 +1,715 @@
+diff --git a/binding_event.go b/binding_event.go
+new file mode 100644
+--- /dev/null
++++ b/binding_event.go
+@@ -0,0 +1,18 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package turn
++
++import "github.com/pion/turn/v5/internal/client"
++
++type BindingStatus = client.BindingStatus
++type BindingEvent = client.BindingEvent
++
++const (
++	BindingActive    = client.BindingActive
++	BindingRetrying  = client.BindingRetrying
++	BindingRejected  = client.BindingRejected
++	BindingMismatch  = client.BindingMismatch
++	BindingExpired   = client.BindingExpired
++	BindingExhausted = client.BindingExhausted
++)
+diff --git a/client.go b/client.go
+--- a/client.go
++++ b/client.go
+@@ -47,6 +47,7 @@
+ 	Conn           net.PacketConn // Listening socket (net.PacketConn)
+ 	Net            transport.Net
+ 	LoggerFactory  logging.LoggerFactory
++	OnBindingEvent func(BindingEvent)
+ 
+ 	// PermissionTimeout sets the refresh interval of permissions. Defaults to 2 minutes.
+ 	PermissionRefreshInterval time.Duration
+@@ -96,6 +97,7 @@
+ 	permissionRefreshInterval time.Duration
+ 	bindingRefreshInterval    time.Duration
+ 	bindingCheckInterval      time.Duration
++	onBindingEvent            func(BindingEvent)
+ }
+ 
+ // inferAddressFamilyFromConn attempts to determine the address
+@@ -248,6 +250,7 @@
+ 		requestedAddressFamily:    requestedAddressFamily,
+ 		permissionRefreshInterval: config.PermissionRefreshInterval,
+ 		bindingRefreshInterval:    config.bindingRefreshInterval,
++		onBindingEvent:            config.OnBindingEvent,
+ 		bindingCheckInterval:      config.bindingCheckInterval,
+ 	}
+ 
+@@ -473,108 +476,6 @@
+ 	return relayed, lifetime, nonce, reservationToken, nil
+ }
+ 
+-// Allocate sends a TURN allocation request to the given transport address.
+-func (c *Client) Allocate() (net.PacketConn, error) {
+-	if err := c.allocTryLock.Lock(); err != nil {
+-		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
+-	}
+-	defer c.allocTryLock.Unlock()
+-
+-	relayedConn := c.relayedUDPConn()
+-	if relayedConn != nil {
+-		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, relayedConn.LocalAddr().String())
+-	}
+-
+-	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoUDP)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	relayedAddr := &net.UDPAddr{
+-		IP:   relayed.IP,
+-		Port: relayed.Port,
+-	}
+-
+-	relayedConn = client.NewUDPConn(&client.AllocationConfig{
+-		Client:                    c,
+-		RelayedAddr:               relayedAddr,
+-		ServerAddr:                c.turnServerAddr,
+-		Realm:                     c.realm,
+-		Username:                  c.username,
+-		Integrity:                 c.integrity,
+-		Nonce:                     nonce,
+-		Lifetime:                  lifetime.Duration,
+-		Net:                       c.net,
+-		Log:                       c.log,
+-		PermissionRefreshInterval: c.permissionRefreshInterval,
+-		BindingRefreshInterval:    c.bindingRefreshInterval,
+-		BindingCheckInterval:      c.bindingCheckInterval,
+-	})
+-	c.setRelayedUDPConn(relayedConn)
+-	c.setReservationToken(reservationToken)
+-
+-	return relayedConn, nil
+-}
+-
+-// AllocateTCP creates a new TCP allocation at the TURN server.
+-func (c *Client) AllocateTCP() (*client.TCPAllocation, error) {
+-	if err := c.allocTryLock.Lock(); err != nil {
+-		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
+-	}
+-	defer c.allocTryLock.Unlock()
+-
+-	allocation := c.getTCPAllocation()
+-	if allocation != nil {
+-		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, allocation.Addr())
+-	}
+-
+-	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoTCP)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	relayedAddr := &net.TCPAddr{
+-		IP:   relayed.IP,
+-		Port: relayed.Port,
+-	}
+-
+-	allocation = client.NewTCPAllocation(&client.AllocationConfig{
+-		Client:      c,
+-		RelayedAddr: relayedAddr,
+-		ServerAddr:  c.turnServerAddr,
+-		Realm:       c.realm,
+-		Username:    c.username,
+-		Integrity:   c.integrity,
+-		Nonce:       nonce,
+-		Lifetime:    lifetime.Duration,
+-		Net:         c.net,
+-		Log:         c.log,
+-	})
+-
+-	c.setTCPAllocation(allocation)
+-	c.setReservationToken(reservationToken)
+-
+-	return allocation, nil
+-}
+-
+-// CreatePermission Issues a CreatePermission request for the supplied addresses
+-// as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
+-func (c *Client) CreatePermission(addrs ...net.Addr) error {
+-	if conn := c.relayedUDPConn(); conn != nil {
+-		if err := conn.CreatePermissions(addrs...); err != nil {
+-			return err
+-		}
+-	}
+-
+-	if allocation := c.getTCPAllocation(); allocation != nil {
+-		if err := allocation.CreatePermissions(addrs...); err != nil {
+-			return err
+-		}
+-	}
+-
+-	return nil
+-}
+-
+ // PerformTransaction performs STUN transaction.
+ func (c *Client) PerformTransaction(msg *stun.Message, to net.Addr, ignoreResult bool) (client.TransactionResult,
+ 	error,
+@@ -613,13 +514,6 @@
+ 	}
+ 
+ 	return res, nil
+-}
+-
+-// OnDeallocated is called when de-allocation of relay address has been complete.
+-// (Called by UDPConn).
+-func (c *Client) OnDeallocated(net.Addr) {
+-	c.setRelayedUDPConn(nil)
+-	c.setTCPAllocation(nil)
+ }
+ 
+ // HandleInbound handles data received.
+diff --git a/client_allocation.go b/client_allocation.go
+new file mode 100644
+--- /dev/null
++++ b/client_allocation.go
+@@ -0,0 +1,122 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++package turn
++
++import (
++	"fmt"
++	"net"
++
++	"github.com/pion/turn/v5/internal/client"
++	"github.com/pion/turn/v5/internal/proto"
++)
++
++// Allocate sends a TURN allocation request to the given transport address.
++func (c *Client) Allocate() (net.PacketConn, error) {
++	if err := c.allocTryLock.Lock(); err != nil {
++		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
++	}
++	defer c.allocTryLock.Unlock()
++
++	relayedConn := c.relayedUDPConn()
++	if relayedConn != nil {
++		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, relayedConn.LocalAddr().String())
++	}
++
++	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoUDP)
++	if err != nil {
++		return nil, err
++	}
++
++	relayedAddr := &net.UDPAddr{
++		IP:   relayed.IP,
++		Port: relayed.Port,
++	}
++
++	relayedConn = client.NewUDPConn(&client.AllocationConfig{
++		Client:                    c,
++		RelayedAddr:               relayedAddr,
++		ServerAddr:                c.turnServerAddr,
++		Realm:                     c.realm,
++		Username:                  c.username,
++		Integrity:                 c.integrity,
++		Nonce:                     nonce,
++		Lifetime:                  lifetime.Duration,
++		Net:                       c.net,
++		Log:                       c.log,
++		PermissionRefreshInterval: c.permissionRefreshInterval,
++		BindingRefreshInterval:    c.bindingRefreshInterval,
++		OnBindingEvent:            c.onBindingEvent,
++		BindingCheckInterval:      c.bindingCheckInterval,
++	})
++	c.setRelayedUDPConn(relayedConn)
++	c.setReservationToken(reservationToken)
++
++	return relayedConn, nil
++}
++
++// AllocateTCP creates a new TCP allocation at the TURN server.
++func (c *Client) AllocateTCP() (*client.TCPAllocation, error) {
++	if err := c.allocTryLock.Lock(); err != nil {
++		return nil, fmt.Errorf("%w: %s", errOneAllocateOnly, err.Error())
++	}
++	defer c.allocTryLock.Unlock()
++
++	allocation := c.getTCPAllocation()
++	if allocation != nil {
++		return nil, fmt.Errorf("%w: %s", errAlreadyAllocated, allocation.Addr())
++	}
++
++	relayed, lifetime, nonce, reservationToken, err := c.sendAllocateRequest(proto.ProtoTCP)
++	if err != nil {
++		return nil, err
++	}
++
++	relayedAddr := &net.TCPAddr{
++		IP:   relayed.IP,
++		Port: relayed.Port,
++	}
++
++	allocation = client.NewTCPAllocation(&client.AllocationConfig{
++		Client:      c,
++		RelayedAddr: relayedAddr,
++		ServerAddr:  c.turnServerAddr,
++		Realm:       c.realm,
++		Username:    c.username,
++		Integrity:   c.integrity,
++		Nonce:       nonce,
++		Lifetime:    lifetime.Duration,
++		Net:         c.net,
++		Log:         c.log,
++	})
++
++	c.setTCPAllocation(allocation)
++	c.setReservationToken(reservationToken)
++
++	return allocation, nil
++}
++
++// CreatePermission Issues a CreatePermission request for the supplied addresses
++// as described in https://datatracker.ietf.org/doc/html/rfc5766#section-9
++func (c *Client) CreatePermission(addrs ...net.Addr) error {
++	if conn := c.relayedUDPConn(); conn != nil {
++		if err := conn.CreatePermissions(addrs...); err != nil {
++			return err
++		}
++	}
++
++	if allocation := c.getTCPAllocation(); allocation != nil {
++		if err := allocation.CreatePermissions(addrs...); err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
++
++// OnDeallocated is called when de-allocation of relay address has been complete.
++// (Called by UDPConn).
++func (c *Client) OnDeallocated(net.Addr) {
++	c.setRelayedUDPConn(nil)
++	c.setTCPAllocation(nil)
++}
+diff --git a/internal/client/allocation.go b/internal/client/allocation.go
+--- a/internal/client/allocation.go
++++ b/internal/client/allocation.go
+@@ -31,6 +31,7 @@
+ 	PermissionRefreshInterval time.Duration
+ 	BindingRefreshInterval    time.Duration
+ 	BindingCheckInterval      time.Duration
++	OnBindingEvent            func(BindingEvent)
+ }
+ 
+ type allocation struct {
+diff --git a/internal/client/binding.go b/internal/client/binding.go
+--- a/internal/client/binding.go
++++ b/internal/client/binding.go
+@@ -29,6 +29,7 @@
+ 	bindingStateReady
+ 	bindingStateRefresh
+ 	bindingStateFailed
++	bindingStateMismatch
+ )
+ 
+ type binding struct {
+@@ -38,7 +39,11 @@
+ 	mgr          *bindingManager // Read-only
+ 	muBind       sync.Mutex      // Thread-safe, for ChannelBind ops
+ 	_refreshedAt time.Time       // Protected by mutex
+-	mutex        sync.RWMutex    // Thread-safe
++	lastUsed     atomic.Int64
++	retryAt      time.Time    // Protected by muBind
++	failures     int          // Protected by muBind
++	expired      bool         // Protected by muBind
++	mutex        sync.RWMutex // Thread-safe
+ }
+ 
+ func (b *binding) setState(state bindingState) {
+@@ -66,7 +71,8 @@
+ func (b *binding) ok() bool {
+ 	state := b.state()
+ 
+-	return state == bindingStateReady || state == bindingStateRefresh || state == bindingStateReadyUnknown
++	return (state == bindingStateReady || state == bindingStateRefresh || state == bindingStateReadyUnknown) &&
++		time.Since(b.refreshedAt()) < channelBindingLifetime
+ }
+ 
+ // Thread-safe binding map.
+@@ -100,11 +106,16 @@
+ 	mgr.mutex.Lock()
+ 	defer mgr.mutex.Unlock()
+ 
++	// Concurrent first writes must share one mapping, including after a reply
++	// was lost while the server had already installed the channel.
++	if existing := mgr.addrMap[addr.String()]; existing != nil {
++		return existing
++	}
++
+ 	b := &binding{
+-		number:       mgr.assignChannelNumber(),
+-		addr:         addr,
+-		mgr:          mgr,
+-		_refreshedAt: time.Now(),
++		number: mgr.assignChannelNumber(),
++		addr:   addr,
++		mgr:    mgr,
+ 	}
+ 
+ 	mgr.chanMap[b.number] = b
+diff --git a/internal/client/binding_recovery.go b/internal/client/binding_recovery.go
+new file mode 100644
+--- /dev/null
++++ b/internal/client/binding_recovery.go
+@@ -0,0 +1,109 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package client
++
++import (
++	"errors"
++	"fmt"
++	"time"
++
++	"github.com/pion/stun/v4"
++)
++
++const (
++	channelBindingLifetime = 10 * time.Minute
++	bindingDemandLifetime  = time.Minute
++	bindingRetryDelay      = time.Second
++	maximumBindingFailures = 4
++)
++
++// BindingStatus reports protocol evidence. Only the embedding application knows
++// whether an allocation carries enough demand to justify replacing its path.
++type BindingStatus uint8
++
++const (
++	BindingActive BindingStatus = iota + 1
++	BindingRetrying
++	BindingRejected
++	BindingMismatch
++	BindingExpired
++	BindingExhausted
++)
++
++func (s BindingStatus) String() string {
++	switch s {
++	case BindingActive:
++		return "active"
++	case BindingRetrying:
++		return "retrying"
++	case BindingRejected:
++		return "rejected"
++	case BindingMismatch:
++		return "mismatch"
++	case BindingExpired:
++		return "expired"
++	case BindingExhausted:
++		return "exhausted"
++	default:
++		return "unknown"
++	}
++}
++
++type BindingEvent struct {
++	Status         BindingStatus
++	PeerAddress    string
++	RelayedAddress string
++	Channel        uint16
++	Code           int
++}
++
++type channelBindResponseError struct{ code int }
++
++func (e channelBindResponseError) Error() string {
++	return fmt.Sprintf("TURN ChannelBind rejected: %d", e.code)
++}
++
++func (c *UDPConn) observeBinding(bound *binding, status BindingStatus, code int) {
++	c.log.Debugf("TURN binding transition: peer=%s channel=%d status=%d code=%d", bound.addr, bound.number, status, code)
++	if c.onBindingEvent != nil {
++		c.onBindingEvent(BindingEvent{Status: status, PeerAddress: bound.addr.String(),
++			RelayedAddress: c.relayedAddr.String(), Channel: bound.number, Code: code})
++	}
++}
++
++func (c *UDPConn) handleBindChannelError(bound *binding, _ bindingState, err error) {
++	now := time.Now()
++	status, code := BindingRejected, 0
++	var response channelBindResponseError
++	if errors.As(err, &response) {
++		code = response.code
++	}
++	bound.muBind.Lock()
++	switch {
++	case code == int(stun.CodeBadRequest) || code == int(stun.CodeAllocMismatch):
++		// Keep the number for inbound ChannelData, but stop trusting it for
++		// outgoing traffic. A new number could compound a lost response.
++		bound.setState(bindingStateMismatch)
++		status = BindingMismatch
++	case errors.Is(err, errChannelBindTransactionFailed) || errors.Is(err, errTryAgain) ||
++		code == int(stun.CodeServerError) || code == int(stun.CodeInsufficientCapacity):
++		bound.failures++
++		if bound.failures >= maximumBindingFailures {
++			bound.setState(bindingStateFailed)
++			status = BindingExhausted
++		} else {
++			bound.retryAt = now.Add(bindingRetryDelay << (bound.failures - 1))
++			if !bound.refreshedAt().IsZero() && now.Sub(bound.refreshedAt()) < channelBindingLifetime {
++				bound.setState(bindingStateReadyUnknown)
++			} else {
++				bound.setState(bindingStateUnknown)
++			}
++			status = BindingRetrying
++		}
++	default:
++		bound.setState(bindingStateFailed)
++	}
++	bound.muBind.Unlock()
++	c.observeBinding(bound, status, code)
++}
+diff --git a/internal/client/binding_recovery_test.go b/internal/client/binding_recovery_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/client/binding_recovery_test.go
+@@ -0,0 +1,110 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package client
++
++import (
++	"errors"
++	"net"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/pion/logging"
++)
++
++func recoveryFixture() (*UDPConn, *binding) {
++	conn := &UDPConn{closeCh: make(chan struct{}), bindingRefreshInterval: defaultBindingRefreshInterval,
++		allocation: allocation{relayedAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000},
++			log: logging.NewDefaultLoggerFactory().NewLogger("test")}}
++	bound := newBindingManager().create(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2000})
++	bound.lastUsed.Store(time.Now().UnixNano())
++	return conn, bound
++}
++
++func TestBindingFailureScopesAndRetryBudget(t *testing.T) {
++	for _, code := range []int{400, 403, 437, 500, 508} {
++		t.Run(channelBindResponseError{code}.Error(), func(t *testing.T) {
++			conn, bound := recoveryFixture()
++			bound.setRefreshedAt(time.Now())
++			bound.setState(bindingStateReady)
++			var event BindingEvent
++			conn.onBindingEvent = func(value BindingEvent) { event = value }
++			conn.handleBindChannelError(bound, bindingStateReady, channelBindResponseError{code})
++			switch code {
++			case 400, 437:
++				if bound.ok() || event.Status != BindingMismatch {
++					t.Fatal("untrusted mapping remained usable")
++				}
++				if _, started := conn.startBinding(bound); started {
++					t.Fatal("mismatch retried in the same allocation")
++				}
++			case 403:
++				if bound.ok() || event.Status != BindingRejected {
++					t.Fatal("permanent rejection was not isolated")
++				}
++			case 500, 508:
++				if !bound.ok() || event.Status != BindingRetrying {
++					t.Fatal("transient response destroyed confirmed mapping")
++				}
++				if _, started := conn.startBinding(bound); started {
++					t.Fatal("retry ignored backoff")
++				}
++				for range maximumBindingFailures - 1 {
++					conn.handleBindChannelError(bound, bindingStateReady, channelBindResponseError{code})
++				}
++				if event.Status != BindingExhausted || bound.ok() {
++					t.Fatal("retry budget was not finite")
++				}
++			}
++		})
++	}
++}
++
++func TestUnknownBindingRetainsNumberWithoutInventingSuccess(t *testing.T) {
++	conn, bound := recoveryFixture()
++	number := bound.number
++	conn.handleBindChannelError(bound, bindingStateIdle, errors.Join(errChannelBindTransactionFailed, errors.New("lost response")))
++	if bound.ok() {
++		t.Fatal("a new binding was treated as confirmed after timeout")
++	}
++	bound.retryAt = time.Now().Add(-time.Second)
++	if _, started := conn.startBinding(bound); !started || bound.number != number {
++		t.Fatal("retry changed peer mapping")
++	}
++}
++
++func TestExpiredBindingStopsChannelDataAndIdleBindingsDoNotRefresh(t *testing.T) {
++	conn, bound := recoveryFixture()
++	bound.setState(bindingStateReady)
++	bound.setRefreshedAt(time.Now().Add(-channelBindingLifetime))
++	if bound.ok() {
++		t.Fatal("expired binding can still send ChannelData")
++	}
++	bound.lastUsed.Store(time.Now().Add(-bindingDemandLifetime).UnixNano())
++	if _, started := conn.startBinding(bound); started {
++		t.Fatal("unused probe binding refreshed")
++	}
++}
++
++func TestConcurrentFirstWritesShareOneChannel(t *testing.T) {
++	mgr := newBindingManager()
++	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2000}
++	var work sync.WaitGroup
++	bindings := make(chan *binding, 64)
++	for range cap(bindings) {
++		work.Add(1)
++		go func() { defer work.Done(); bindings <- mgr.create(addr) }()
++	}
++	work.Wait()
++	close(bindings)
++	first := <-bindings
++	for bound := range bindings {
++		if bound != first {
++			t.Fatal("one peer acquired competing channels")
++		}
++	}
++	if mgr.size() != 1 {
++		t.Fatal("duplicate mapping retained")
++	}
++}
 diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
-index f84c405..f8df29f 100644
 --- a/internal/client/udp_conn.go
 +++ b/internal/client/udp_conn.go
-@@ -501,10 +501,12 @@ func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState
+@@ -45,6 +45,7 @@
+ 	closeCh                chan struct{}     // Thread-safe
+ 	closeMutex             sync.Mutex        // Thread-safe
+ 	bindingRefreshInterval time.Duration     // Read-only
++	onBindingEvent         func(BindingEvent)
+ 	allocation
+ }
+ 
+@@ -55,6 +56,7 @@
+ 		readCh:                 make(chan *inboundData, maxReadQueueSize),
+ 		closeCh:                make(chan struct{}),
+ 		bindingRefreshInterval: defaultBindingRefreshInterval,
++		onBindingEvent:         config.OnBindingEvent,
+ 		allocation: allocation{
+ 			client:      config.Client,
+ 			relayedAddr: config.RelayedAddr,
+@@ -227,6 +229,7 @@
+ 	if !ok {
+ 		bound = c.bindingMgr.create(addr)
+ 	}
++	bound.lastUsed.Store(time.Now().UnixNano())
+ 
+ 	//nolint:nestif
+ 	if !bound.ok() {
+@@ -440,9 +443,16 @@
+ 	// Block only callers with the same binding until
+ 	// the binding transaction has been complete
+ 	bound.muBind.Lock()
+-	defer bound.muBind.Unlock()
+-
++	expired := !bound.expired && !bound.refreshedAt().IsZero() &&
++		time.Since(bound.refreshedAt()) >= channelBindingLifetime
++	if expired {
++		bound.expired = true
++	}
+ 	startState, ok := c.startBinding(bound)
++	bound.muBind.Unlock()
++	if expired {
++		c.observeBinding(bound, BindingExpired, 0)
++	}
+ 	if !ok {
+ 		return
+ 	}
+@@ -454,6 +464,10 @@
+ 
+ func (c *UDPConn) startBinding(bound *binding) (bindingState, bool) {
+ 	startState := bound.state()
++	if c.isClosed() || time.Since(time.Unix(0, bound.lastUsed.Load())) >= bindingDemandLifetime ||
++		time.Now().Before(bound.retryAt) {
++		return startState, false
++	}
+ 	switch {
+ 	case startState == bindingStateIdle || startState == bindingStateUnknown:
+ 		bound.setState(bindingStateRequest)
+@@ -481,69 +495,13 @@
  		return
  	}
  
-+	// A rejected binding belongs to one peer address, not the allocation. Keep
-+	// other channels alive and use Send indications for this address. Failed
-+	// bindings are not retried, so a permanent rejection cannot create a loop.
- 	bound.setState(bindingStateFailed)
++	bound.muBind.Lock()
+ 	bound.setRefreshedAt(time.Now())
++	bound.failures, bound.expired = 0, false
++	bound.retryAt = time.Time{}
+ 	bound.setState(bindingStateReady)
+-}
+-
+-func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState, err error) {
+-	if c.recoverChannelBindBadRequest(bound, startState, err) {
+-		return
+-	}
+-
+-	c.log.Warnf("Failed to bind channel %d: %s", bound.number, err)
+-	if errors.Is(err, errChannelBindTransactionFailed) {
+-		if bindingStateWasReady(startState) {
+-			bound.setState(bindingStateReadyUnknown)
+-		} else {
+-			bound.setState(bindingStateUnknown)
+-		}
+-
+-		return
+-	}
+-
+-	bound.setState(bindingStateFailed)
 -	if errors.Is(err, errChannelBindBadRequest) {
 -		c.closeAfterChannelBindBadRequest(bound)
 -	}
-+	c.log.Warnf("ChannelBind rejected for %s on channel %d; retaining TURN allocation and using Send indications",
-+		bound.addr, bound.number)
- }
- 
- func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindingState, err error) bool {
-@@ -534,18 +536,6 @@ func bindingStateWasReady(state bindingState) bool {
- 	return state == bindingStateReady || state == bindingStateReadyUnknown
- }
- 
+-}
+-
+-func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindingState, err error) bool {
+-	if !errors.Is(err, errChannelBindBadRequest) {
+-		return false
+-	}
+-	if !bindingStateWasReady(startState) {
+-		return false
+-	}
+-
+-	// If this binding was previously confirmed, a refresh transaction failure or
+-	// unexpected 400 does not prove that the saved channel mapping is wrong. The
+-	// server may still have the old binding, and switching channels would be
+-	// worse because it can trigger "same peer with different channel number" (like what we get from Coturn).
+-	// This Keep the saved mapping usable and retry refresh later.
+-	c.log.Warnf(
+-		"ChannelBind returned 400 for saved binding %s on channel %d; keeping binding ready",
+-		bound.addr,
+-		bound.number,
+-	)
+-	bound.setState(bindingStateReady)
+-
+-	return true
+-}
+-
+-func bindingStateWasReady(state bindingState) bool {
+-	return state == bindingStateReady || state == bindingStateReadyUnknown
+-}
+-
 -func (c *UDPConn) closeAfterChannelBindBadRequest(bound *binding) {
 -	c.log.Warnf(
 -		"ChannelBind rejected with 400 for %s on channel %d; closing TURN allocation",
@@ -32,8 +720,20 @@ index f84c405..f8df29f 100644
 -	if err := c.Close(); err != nil && !errors.Is(err, errAlreadyClosed) {
 -		c.log.Warnf("Failed to close TURN allocation after ChannelBind 400: %s", err)
 -	}
--}
--
++	bound.muBind.Unlock()
++	c.observeBinding(bound, BindingActive, 0)
+ }
+ 
  func (c *UDPConn) bind(bound *binding) error {
- 	setters := []stun.Setter{
- 		stun.TransactionID,
+@@ -591,10 +549,8 @@
+ 		c.setNonceFromMsg(res)
+ 
+ 		return errTryAgain
+-	case stun.CodeBadRequest:
+-		return fmt.Errorf("%w: %w: received error %d", errCannotBindChannel, errChannelBindBadRequest, code.Code)
+ 	default:
+-		return fmt.Errorf("%w: received error %d", errCannotBindChannel, code.Code) // nolint:err113
++		return channelBindResponseError{code: int(code.Code)}
+ 	}
+ }
+ 

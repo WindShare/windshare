@@ -31,6 +31,7 @@ type AllocationConfig struct {
 	PermissionRefreshInterval time.Duration
 	BindingRefreshInterval    time.Duration
 	BindingCheckInterval      time.Duration
+	OnBindingEvent            func(BindingEvent)
 }
 
 type allocation struct {

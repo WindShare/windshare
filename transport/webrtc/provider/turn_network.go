@@ -71,7 +71,7 @@ func (n *turnNetwork) reserve() error {
 	if n.stopping {
 		return net.ErrClosed
 	}
-	if n.reserved >= n.capacity.request.Sockets {
+	if n.reserved >= n.capacity.socketLimit() {
 		return ErrTURNCapacity
 	}
 	// The reservation also covers sockets whose OS dial has not completed.
@@ -105,12 +105,15 @@ func (n *turnNetwork) remove(socket netCloser) {
 }
 
 func (n *turnNetwork) ListenPacket(network, address string) (net.PacketConn, error) {
+	return n.listenPacket(n.ctx, network, address)
+}
+func (n *turnNetwork) listenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
 	if err := n.reserve(); err != nil {
 		return nil, err
 	}
 	defer n.opening.Done()
 	var config net.ListenConfig
-	socket, err := config.ListenPacket(n.ctx, network, address)
+	socket, err := config.ListenPacket(ctx, network, address)
 	if err != nil {
 		n.release()
 		return nil, err
@@ -125,6 +128,9 @@ func (n *turnNetwork) ListenPacket(network, address string) (net.PacketConn, err
 }
 
 func (n *turnNetwork) DialTCP(network string, local, remote *net.TCPAddr) (transport.TCPConn, error) {
+	return n.dialTCP(n.ctx, network, local, remote)
+}
+func (n *turnNetwork) dialTCP(ctx context.Context, network string, local, remote *net.TCPAddr) (transport.TCPConn, error) {
 	if err := n.reserve(); err != nil {
 		return nil, err
 	}
@@ -133,7 +139,7 @@ func (n *turnNetwork) DialTCP(network string, local, remote *net.TCPAddr) (trans
 	if local != nil {
 		dialer.LocalAddr = local
 	}
-	socket, err := dialer.DialContext(n.ctx, network, remote.String())
+	socket, err := dialer.DialContext(ctx, network, remote.String())
 	if err != nil {
 		n.release()
 		return nil, err
@@ -154,18 +160,21 @@ func (n *turnNetwork) DialTCP(network string, local, remote *net.TCPAddr) (trans
 }
 
 func (n *turnNetwork) ResolveTCPAddr(network, address string) (*net.TCPAddr, error) {
-	if err := n.ctx.Err(); err != nil {
+	return n.resolveTCPAddr(n.ctx, network, address)
+}
+func (n *turnNetwork) resolveTCPAddr(ctx context.Context, network, address string) (*net.TCPAddr, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	host, portText, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	port, err := net.DefaultResolver.LookupPort(n.ctx, network, portText)
+	port, err := net.DefaultResolver.LookupPort(ctx, network, portText)
 	if err != nil {
 		return nil, err
 	}
-	addresses, err := net.DefaultResolver.LookupNetIP(n.ctx, "ip4", host)
+	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
 	if err != nil {
 		return nil, err
 	}

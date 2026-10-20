@@ -8,16 +8,6 @@
       "sum": "h1:asS17nbHJrzlVQl8fiSJaipxrxSY3Dq6DWgmB+0VwpI=",
       "files": [
         {
-          "path": "LICENSE",
-          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
-          "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
-        },
-        {
-          "path": "LICENSES/MIT.txt",
-          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
-          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
-        },
-        {
           "path": "active_tcp.go",
           "upstream_sha256": "abb629c04a321d2317a8147a0e881cd4584b5704bbb43f675f1cb88bd9ddbea8",
           "sha256": "abb629c04a321d2317a8147a0e881cd4584b5704bbb43f675f1cb88bd9ddbea8"
@@ -115,7 +105,7 @@
         {
           "path": "gather.go",
           "upstream_sha256": "7347acf4562ea983103cb88d26cd1061cdf6adbf5771534bd872b5c7ea47f274",
-          "sha256": "0dbcbbdc743ed393e5f1a424b25f8ddbc390f490113b9ae0c3dc30faf0395be7"
+          "sha256": "6fbd4956c06c91ad7d8d921e9e077cbe81c808c842ed96b6b2056632aee147e3"
         },
         {
           "path": "go.mod",
@@ -188,6 +178,16 @@
           "sha256": "8e24749994e2c1270fac5c5c7a89a6dcab062eb9b5a6d4f9e1670556d8d424ff"
         },
         {
+          "path": "LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+          "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "LICENSES/MIT.txt",
+          "upstream_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
           "path": "mdns.go",
           "upstream_sha256": "0d440b205d7497101322dd2204d4fa13cb31cd52648aadadef140b2ca35a918d",
           "sha256": "0d440b205d7497101322dd2204d4fa13cb31cd52648aadadef140b2ca35a918d"
@@ -209,7 +209,7 @@
         },
         {
           "path": "provider_config.go",
-          "sha256": "fc6dc2ca70464a35f14d0c7b945e0d099f2fab07df67166a10fb91556e4f560d"
+          "sha256": "bbd178e10b9653dba264645987abac7c84de549dbf135c4a3d21a16fdf5e98e3"
         },
         {
           "path": "provider_priority.go",
@@ -218,6 +218,10 @@
         {
           "path": "provider_tcp.go",
           "sha256": "ed3ca2f93557ec06ecbf2609c6be5bfa997c1dff8816c5a801a47f174a53d3a9"
+        },
+        {
+          "path": "provider_turn.go",
+          "sha256": "42552166afc316c5b91ed8a9b3e8701e6513ee2cd8ae0b949ccd3cafcf14f8e6"
         },
         {
           "path": "rand.go",
@@ -1047,9 +1051,17 @@
           "sha256": "6457f6f5afbd6c22e19073a969d983a62300d66118a4465346a6606dd42f386b"
         },
         {
+          "path": "binding_event.go",
+          "sha256": "61527be9bf655a6766ed95cf195d5d2797dabb614c042f3d1956ec197ced6bcf"
+        },
+        {
           "path": "client.go",
           "upstream_sha256": "595b29d2be6f7cf1a30c3a44c14fe9ce898842d11c5be8942cb98a9c19aa2383",
-          "sha256": "595b29d2be6f7cf1a30c3a44c14fe9ce898842d11c5be8942cb98a9c19aa2383"
+          "sha256": "4e66ee93f9188d5e8ea77bc08a033ada35eeae7a7fc5f294e1cf0286bf7888cf"
+        },
+        {
+          "path": "client_allocation.go",
+          "sha256": "21171da74ca04ce107e295d4dea64d778516fb3b7505b130a5547429e56e7dd1"
         },
         {
           "path": "e2e/e2e.go",
@@ -1072,14 +1084,14 @@
           "sha256": "eb3009cf05710323025a507f6c9aac07f4e205e9129c479d5fce608bcc5622a4"
         },
         {
-          "path": "internal/allocation/allocation_manager.go",
-          "upstream_sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407",
-          "sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407"
-        },
-        {
           "path": "internal/allocation/allocation.go",
           "upstream_sha256": "a75f2cbb3feafc8c58a227251081829e38d985ff8a609a8b84b20bf0754bd302",
           "sha256": "a75f2cbb3feafc8c58a227251081829e38d985ff8a609a8b84b20bf0754bd302"
+        },
+        {
+          "path": "internal/allocation/allocation_manager.go",
+          "upstream_sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407",
+          "sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407"
         },
         {
           "path": "internal/allocation/channel_bind.go",
@@ -1114,12 +1126,20 @@
         {
           "path": "internal/client/allocation.go",
           "upstream_sha256": "2d9f6c5843ddf8a59b66d5c832480a03f2c2e9fab7c30f01b1c795dedc09b697",
-          "sha256": "2d9f6c5843ddf8a59b66d5c832480a03f2c2e9fab7c30f01b1c795dedc09b697"
+          "sha256": "da2c638304f2f5b96f16bc8d874f922d43567e793ae9e9753774c9b3e12e4d23"
         },
         {
           "path": "internal/client/binding.go",
           "upstream_sha256": "71b1aa9aa886bc3b1c361c6654e47f119517d6801a7fb47abdb1440d4a1def52",
-          "sha256": "71b1aa9aa886bc3b1c361c6654e47f119517d6801a7fb47abdb1440d4a1def52"
+          "sha256": "c10e4302eac73498ca9626ccfd91515cf379c2f75c4979815b82b30d7d87f48a"
+        },
+        {
+          "path": "internal/client/binding_recovery.go",
+          "sha256": "d3f421eeffb18ab93f6e933509a5dd12ef3ec80d7d549a43863ce367943b266d"
+        },
+        {
+          "path": "internal/client/binding_recovery_test.go",
+          "sha256": "d9bc269f451cde0f546158a200d3701cab31216d0e25daa6deef0d4d202a8112"
         },
         {
           "path": "internal/client/client.go",
@@ -1164,7 +1184,7 @@
         {
           "path": "internal/client/udp_conn.go",
           "upstream_sha256": "ab694a042ab440ef3354bb19984eda1ef7715c9c3ad84be0fe4b930a36c3f9cf",
-          "sha256": "d495c052850dcc2c62dba0691339f47b1c01216d79e43e94fa3e350e520729e5"
+          "sha256": "a7187f45d4098a1947212ded7646aa404e03bc29897006a485a19ddfca388724"
         },
         {
           "path": "internal/ipnet/util.go",
@@ -1312,14 +1332,14 @@
           "sha256": "b4611515752e41c3d25baf83a1af83df57a781eca52ed75a94bce8042fc4045d"
         },
         {
-          "path": "server_config.go",
-          "upstream_sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8",
-          "sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8"
-        },
-        {
           "path": "server.go",
           "upstream_sha256": "2bf7dc7a9d09df58245e63e96dccfd005eb6f403e189d6f335e6467478ef92df",
           "sha256": "2bf7dc7a9d09df58245e63e96dccfd005eb6f403e189d6f335e6467478ef92df"
+        },
+        {
+          "path": "server_config.go",
+          "upstream_sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8",
+          "sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8"
         },
         {
           "path": "stun_conn.go",

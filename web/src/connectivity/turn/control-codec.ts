@@ -1,6 +1,7 @@
 import { decodeCanonicalCbor, encodeCanonicalCbor, requireArray, requireBytes, requireText, requireUnsigned } from '../../protocol/cbor'
 
-export const TURN_CONTROL = Object.freeze({ demand: 1, grant: 2, ready: 3, retire: 4, unavailable: 5, available: 6, report: 7 } as const)
+export const TURN_CONTROL = Object.freeze({ demand: 1, grant: 2, ready: 3, retire: 4, unavailable: 5, available: 6, report: 7, recover: 8 } as const)
+export const TURN_RECOVERY = Object.freeze({ allocationStateMismatch: 1, channelUnavailable: 2 } as const)
 export const TURN_RETIRE = Object.freeze({ idle: 1, replaced: 2, expired: 3, budget: 4, revoked: 5, unhelpful: 6 } as const)
 export const TURN_DEMAND_LIFETIME_MS = 120_000
 export const TURN_MAX_CREDENTIAL_LIFETIME_MS = 48 * 60 * 60 * 1000
@@ -36,6 +37,7 @@ export type TurnControl =
   | (TurnHeader & { readonly kind: 'unavailable'; readonly profile: string; readonly retryAfterMs: number; readonly reason: string })
   | (TurnHeader & { readonly kind: 'available'; readonly profiles: readonly string[] })
   | (TurnHeader & { readonly kind: 'report'; readonly pathId: Uint8Array<ArrayBuffer>; readonly usefulBytes: bigint })
+  | (TurnHeader & { readonly kind: 'recover'; readonly pathId: Uint8Array<ArrayBuffer>; readonly reason: number })
 
 export function isTurnControl(body: Uint8Array): boolean {
   return body.length > 2 && body[0]! >= 0x86 && body[0]! <= 0x8f && body[1] === SCHEMA
@@ -53,6 +55,7 @@ export function encodeTurnControl(message: TurnControl): Uint8Array<ArrayBuffer>
     case 'unavailable': fields.push(message.profile, message.retryAfterMs, message.reason); break
     case 'available': fields.push([...message.profiles]); break
     case 'report': fields.push(message.pathId, message.usefulBytes); break
+    case 'recover': fields.push(message.pathId, message.reason); break
   }
   const body = encodeCanonicalCbor(fields)
   decodeTurnControl(body)
@@ -82,6 +85,12 @@ export function decodeTurnControl(body: Uint8Array): TurnControl {
       const usefulBytes = requireUnsigned(fields[6], 'TURN useful bytes')
       if (usefulBytes > 0xffff_ffff_ffff_ffffn) throw new RangeError('Invalid TURN useful bytes')
       return { ...header, kind: 'report', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN path', true), usefulBytes }
+    }
+    case TURN_CONTROL.recover: {
+      count(fields, 7)
+      const reason = Number(requireUnsigned(fields[6], 'TURN recovery'))
+      if (reason < TURN_RECOVERY.allocationStateMismatch || reason > TURN_RECOVERY.channelUnavailable) throw new TypeError('Invalid TURN recovery')
+      return { ...header, kind: 'recover', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN recovery path', true), reason }
     }
     case TURN_CONTROL.retire: {
       count(fields, 7)
