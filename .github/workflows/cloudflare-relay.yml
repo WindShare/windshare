@@ -49,11 +49,11 @@ jobs:
       - name: Validate deployment inputs
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
-          CLOUDFLARE_RELAY_DOMAIN: ${{ vars.CLOUDFLARE_RELAY_DOMAIN }}
+          CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
-          CLOUDFLARE_CONSOLE_DOMAIN: ${{ vars.CLOUDFLARE_CONSOLE_DOMAIN }}
+          CLOUDFLARE_CONSOLE_DOMAIN: ${{ secrets.CLOUDFLARE_CONSOLE_DOMAIN }}
         run: |
           node --input-type=module -e "
             import { readDeploymentMode } from './scripts/deploy/cloudflare/configuration.mjs';
@@ -86,19 +86,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
-          CLOUDFLARE_RELAY_DOMAIN: ${{ vars.CLOUDFLARE_RELAY_DOMAIN }}
+          CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
-          CLOUDFLARE_CONSOLE_DOMAIN: ${{ vars.CLOUDFLARE_CONSOLE_DOMAIN }}
-          WINDSHARE_DEPLOYMENT_OUTPUT: ${{ runner.temp }}/windshare-deployment
+          CLOUDFLARE_CONSOLE_DOMAIN: ${{ secrets.CLOUDFLARE_CONSOLE_DOMAIN }}
           RUSTUP_TOOLCHAIN: stable
         run: node scripts/deploy/cloudflare/run.mjs
-      - name: Publish deployment addresses
-        uses: actions/upload-artifact@v4
-        with:
-          name: windshare-deployment
-          path: |
-            ${{ runner.temp }}/windshare-deployment/deployment.json
-          if-no-files-found: error
-          retention-days: 30
