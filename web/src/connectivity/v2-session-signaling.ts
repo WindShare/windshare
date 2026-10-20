@@ -1,3 +1,4 @@
+import type { PeerAttemptOrdinal } from '../session/peer-slots/slots'
 import {
   type V2AttemptOrdinalCorrelation,
   type V2CandidateCounts,
@@ -337,9 +338,10 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
 }
 
 export function createV2PeerBinding(
+  ordinal: PeerAttemptOrdinal,
   randomBytes: (length: number) => Uint8Array = secureRandomBytes,
 ): V2PeerBinding {
-  return createV2PeerBindingForPath(createV2PeerPathIdentity(randomBytes), randomBytes)
+  return createV2PeerBindingForPath(createV2PeerPathIdentity(randomBytes), ordinal, randomBytes)
 }
 
 export function createV2PeerPathIdentity(
@@ -350,8 +352,8 @@ export function createV2PeerPathIdentity(
 
 export function createV2PeerBindingForPath(
   peerPathId: Uint8Array,
+  ordinal: PeerAttemptOrdinal,
   randomBytes: (length: number) => Uint8Array = secureRandomBytes,
-  attemptSequence = 1n,
 ): V2PeerBinding {
   if (peerPathId.byteLength !== 16 || !peerPathId.some((item) => item !== 0)) {
     throw new V2SessionSignalingError('Peer path identity must be a nonzero 16-byte value')
@@ -359,7 +361,8 @@ export function createV2PeerBindingForPath(
   return Object.freeze({
     peerPathId: peerPathId.slice(),
     attemptId: nonzeroIdentity(randomBytes),
-    attemptSequence,
+    peerSlot: ordinal.peerSlot,
+    attemptSequence: ordinal.attemptSequence,
   })
 }
 
@@ -424,6 +427,7 @@ function snapshotBinding(binding: V2PeerBinding): V2PeerBinding {
     peerPathId: binding.peerPathId.slice(),
     attemptId: binding.attemptId.slice(),
     attemptSequence: binding.attemptSequence,
+    peerSlot: binding.peerSlot,
   })
 }
 

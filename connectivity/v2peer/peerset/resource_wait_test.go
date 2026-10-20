@@ -12,7 +12,7 @@ import (
 func TestResourceDeferralsPreserveNegotiationAllowanceButNotWaveDeadline(t *testing.T) {
 	clock := newClock()
 	owner, _ := New(Config{Clock: clock})
-	path := &Path{owner: owner, ctx: t.Context(), key: pathKey{path: v2signal.PeerPathID{1}}, config: PathConfig{StopAfterWave: true}, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
+	path := &Path{owner: owner, slot: testPeerSlot(t), ctx: t.Context(), key: pathKey{path: v2signal.PeerPathID{1}}, config: PathConfig{StopAfterWave: true}, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
 	wave := recoveryWave{started: clock.Now()}
 	started := wave.started
 	for range AttemptsPerWave + 1 {
@@ -57,7 +57,7 @@ func TestResourceRetryRemainsCancelable(t *testing.T) {
 	clock := newClock()
 	owner, _ := New(Config{Clock: clock})
 	ctx, cancel := context.WithCancel(t.Context())
-	path := &Path{owner: owner, ctx: ctx, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
+	path := &Path{owner: owner, slot: testPeerSlot(t), ctx: ctx, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
 	wave := recoveryWave{started: clock.Now(), attempts: 1, opportunities: 1}
 	done := make(chan *Result, 1)
 	go func() {

@@ -216,7 +216,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverAttempt, err := receiverFactory.Start(ctx, receiverSignaling, receiverRuntime)
+	receiverAttempt, err := receiverFactory.Start(ctx, receiverSignaling, receiverRuntime, testPeerSlot(t))
 	if err != nil {
 		t.Fatal(err)
 	}

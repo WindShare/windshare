@@ -9,6 +9,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
@@ -304,6 +305,7 @@ func TestPathIdentityAndCapacityAreIndependent(t *testing.T) {
 	}
 	paths := make([]*Path, 0, MaximumPaths)
 	for i := range MaximumPaths {
+		session[0] = byte(i/peerslot.Count + 1)
 		path, err := owner.Open(context.Background(), PathConfig{SessionID: session, PeerPathID: v2signal.PeerPathID{byte(i + 1)}, Demand: ContentDemand, Start: start})
 		if err != nil {
 			t.Fatal(err)

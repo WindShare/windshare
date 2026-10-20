@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/windshare/windshare/core/session/peerslot"
 )
 
 func TestFrozenPeerSignalingBodiesAndOperationKinds(t *testing.T) {
@@ -109,6 +110,15 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	if err := binding.RequireSame(other); !errors.Is(err, ErrSignalBinding) {
 		t.Fatalf("binding substitution error = %v", err)
 	}
+	other = binding
+	other.PeerSlot++
+	if err := binding.RequireSame(other); !errors.Is(err, ErrSignalBinding) {
+		t.Fatalf("slot substitution error = %v", err)
+	}
+	other.PeerSlot = peerslot.Count
+	if err := other.Validate(); !errors.Is(err, ErrInvalidSignal) {
+		t.Fatalf("slot capacity error = %v", err)
+	}
 	if err := binding.RequireSame(binding); err != nil || binding.String() == "" {
 		t.Fatalf("stable binding = %q, %v", binding, err)
 	}
@@ -123,7 +133,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	}
 
 	valid, _ := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
-	nonCanonical := append([]byte{0x98, 0x05}, valid[1:]...)
+	nonCanonical := append([]byte{0x98, 0x06}, valid[1:]...)
 	if _, err := DecodeOffer(nonCanonical); !errors.Is(err, ErrNonCanonicalSignal) {
 		t.Fatalf("noncanonical array error = %v", err)
 	}
@@ -131,6 +141,13 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	if err := signalDecMode.Unmarshal(valid, &fields); err != nil {
 		t.Fatal(err)
 	}
+	originalSlot := fields[4]
+	fields[4], _ = signalEncMode.Marshal(uint64(peerslot.Count))
+	invalidSlot, _ := signalEncMode.Marshal(fields)
+	if _, err := DecodeOffer(invalidSlot); !errors.Is(err, ErrInvalidSignal) {
+		t.Fatalf("out-of-range slot error = %v", err)
+	}
+	fields[4] = originalSlot
 	zeroPath, _ := signalEncMode.Marshal(make([]byte, IdentityBytes))
 	fields[1] = zeroPath
 	hostile, _ := signalEncMode.Marshal(fields)
@@ -149,7 +166,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 }
 
 func testBinding() Binding {
-	binding := Binding{AttemptSequence: 1}
+	binding := Binding{PeerSlot: 2, AttemptSequence: 1}
 	for index := range binding.PeerPathID {
 		binding.PeerPathID[index] = byte(index + 1)
 		binding.AttemptID[index] = byte(index + 0x21)

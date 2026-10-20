@@ -564,7 +564,7 @@ func newReceiverHarnessWithContext(
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := factory.Start(parent, signaling, lanes)
+	attempt, err := factory.Start(parent, signaling, lanes, testPeerSlot(t))
 	if err != nil {
 		t.Fatal(err)
 	}

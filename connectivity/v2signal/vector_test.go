@@ -24,6 +24,7 @@ const (
 )
 
 type peerSignalingVector struct {
+	PeerSlot           uint8                    `json:"peerSlot"`
 	PeerErrors         []peerBoundErrorVector   `json:"peerErrors"`
 	AttemptSequence    string                   `json:"attemptSequence"`
 	FailureScopes      []peerFailureVector      `json:"failureScopes"`
@@ -145,6 +146,7 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 	return peerSignalingVector{
 		SchemaVersion:   SignalingSchemaVersion,
 		AttemptSequence: strconv.FormatUint(binding.AttemptSequence, 10),
+		PeerSlot:        binding.PeerSlot,
 		FailureScopes:   buildPeerFailureVectors(),
 		PeerErrors:      buildPeerBoundErrorVectors(t, signingKey, base, operationID),
 		PathControls:    buildPeerPathControlVectors(t, signingKey, base),

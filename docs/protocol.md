@@ -70,7 +70,7 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 | Blocks | `REQUEST_BLOCKS`, `BLOCK_FRAGMENT` |
 | Operation end | `OPERATION_COMPLETE`, `OPERATION_ERROR`, `CANCEL` |
 | Lanes | `LANE_ATTACH` |
-| Direct path | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
+| Peer paths | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
 | Session | `SESSION_TERMINAL` |
 
 ## Identities
@@ -85,9 +85,10 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 | `LeaseID` | One read grant on an opened revision |
 | `ProtocolSessionID` | One authenticated receiver–sender session |
 | `OperationID` | One request and its responses within a session |
-| `LaneID`, `LaneEpoch` | A lane within a session, and the generation of the channel carrying it |
+| `LaneID`, `LaneEpoch` | A reusable session lane slot, and its current channel generation |
 | `RelaySessionID` | One receiver connection's route through a relay |
-| `PeerPathID`, `AttemptID` | A direct path, and one negotiation attempt on it |
+| `PeerPathID`, `AttemptID` | A direct or TURN path, and one negotiation attempt on it |
+| `PeerSlot`, `AttemptSequence` | A reusable session negotiation slot, and its increasing sequence across physical path replacements |
 
 ## Code
 
@@ -96,7 +97,7 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 | Link, keys, sender objects | `core/link`, `core/internal/keyderiv`, `core/senderobject` | `web/src/crypto` |
 | Catalog and content | `core/catalog`, `core/content`, `core/session/{catalogflow,contentflow}` | `web/src/catalog`, `web/src/content` |
 | Session, envelope, lanes | `core/session/protocolsession`, `core/session/sessionruntime` | `web/src/session` |
-| Direct-path signaling | `connectivity/v2signal` | `web/src/connectivity` |
+| Peer signaling | `connectivity/v2signal`, `core/session/peerslot` | `web/src/connectivity`, `web/src/session/peer-slots` |
 | Relay protocol | `relay/protocol/v2`, `relay-rust/crates/relay-core`, `transport/relayv2` | `web/src/transport` |
 
 The Rust relay kernel is `relay-rust/crates/relay-core`, and `make vectors` checks the shared vectors. Security boundaries are in the [threat model](威胁模型.md).

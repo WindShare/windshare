@@ -143,7 +143,7 @@ var rejectedOfferIdentityDecoding = func() cbor.DecMode {
 // one terminal stream even though the offer itself must remain unusable.
 func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	var fields []cbor.RawMessage
-	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 4 {
+	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 5 {
 		return v2signal.Binding{}, false
 	}
 	var version uint64
@@ -159,7 +159,8 @@ func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	var binding v2signal.Binding
 	copy(binding.PeerPathID[:], pathBytes)
 	copy(binding.AttemptID[:], attemptBytes)
-	if rejectedOfferIdentityDecoding.Unmarshal(fields[3], &binding.AttemptSequence) != nil {
+	if rejectedOfferIdentityDecoding.Unmarshal(fields[3], &binding.AttemptSequence) != nil ||
+		rejectedOfferIdentityDecoding.Unmarshal(fields[4], &binding.PeerSlot) != nil {
 		return v2signal.Binding{}, false
 	}
 	if binding.Validate() != nil {

@@ -1,4 +1,5 @@
 import { racePeerAttempt, cancelPeerAttempt } from './attempt-race'
+import type { PeerSlotLease } from '../../session/peer-slots/slots'
 import { PeerRecoveryTrace } from './trace'
 import { PeerAttemptBudget } from './budget'
 import { PeerProfilePlanner } from './profile-planner'
@@ -58,6 +59,7 @@ export class V2PeerRecoverySupervisor {
   readonly #protocolSessionId: V2ProtocolSessionIdentity
   readonly #peerPathId: V2PeerPathIdentity
   readonly #attempts: V2PeerRecoveryAttemptFactory
+  readonly #slot: PeerSlotLease
   readonly #policy: V2PeerRecoveryPolicy
   readonly #clock: V2PeerRecoveryClock
   readonly #random: () => number
@@ -94,6 +96,7 @@ export class V2PeerRecoverySupervisor {
     this.#protocolSessionId = createV2ProtocolSessionIdentity(options.protocolSessionId.copyBytes())
     this.#peerPathId = createV2PeerPathIdentityValue(options.peerPathId.copyBytes())
     this.#attempts = options.attempts
+    this.#slot = options.slot
     this.#policy = createV2PeerRecoveryPolicy(options.policy)
     this.#clock = options.clock ?? browserV2PeerRecoveryClock
     this.#random = options.random ?? Math.random
@@ -234,7 +237,7 @@ export class V2PeerRecoverySupervisor {
     return this.sessionTerminated(Object.freeze({
       authority: 'protocol-session-terminal',
       code: 'generation-retired',
-    }))
+    })).finally(() => this.#slot.close())
   }
 
   join(): Promise<void> {
@@ -387,6 +390,7 @@ export class V2PeerRecoverySupervisor {
     const startedAt = this.#now()
     const iceProfile = this.#profiles.select(wave.ordinal, sessionAttemptOrdinal, startedAt)
     const context: V2PeerAttemptContext = Object.freeze({
+      ...this.#slot.next(),
       admissionWaitBudgetMilliseconds: Math.max(0, Math.min(
         wave.remaining(this.#now()).wave, wave.remaining(this.#now()).session) - Math.min(
         this.#policy.waveElapsedBudgetMilliseconds,
