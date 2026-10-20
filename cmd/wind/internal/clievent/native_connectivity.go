@@ -231,15 +231,8 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	if !validNativeTURN(spec) {
 		return false
 	}
-	if (spec.Kind == "provider_diagnostic") != (spec.Diagnostic != nil) {
+	if !validNativeProviderDiagnostic(spec) {
 		return false
-	}
-	if d := spec.Diagnostic; d != nil {
-		if spec.State != "unknown" || !slices.Contains([]string{"ice", "turnc"}, d.Scope) ||
-			!slices.Contains([]string{"warning", "error"}, d.Severity) ||
-			len(d.Message) > NativeProviderDiagnosticMessageLimit || !utf8.ValidString(d.Message) {
-			return false
-		}
 	}
 	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
 		return false
@@ -285,6 +278,17 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 		}
 	}
 	return true
+}
+
+func validNativeProviderDiagnostic(spec NativeConnectivitySpec) bool {
+	if spec.Diagnostic == nil {
+		return spec.Kind != "provider_diagnostic"
+	}
+	d := spec.Diagnostic
+	return spec.Kind == "provider_diagnostic" && spec.State == "unknown" &&
+		slices.Contains([]string{"ice", "turnc"}, d.Scope) &&
+		slices.Contains([]string{"warning", "error"}, d.Severity) &&
+		len(d.Message) <= NativeProviderDiagnosticMessageLimit && utf8.ValidString(d.Message)
 }
 
 func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
