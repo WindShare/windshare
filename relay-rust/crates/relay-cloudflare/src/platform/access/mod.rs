@@ -200,7 +200,7 @@ impl AccessObject {
         let deadline = db
             .next_termination()?
             .into_iter()
-            .chain(Self::next_turn_deadline(&db)?)
+            .chain(db.next_turn_deadline()?)
             .min()
             .map_or(cleanup, |at| {
                 at.max(now.saturating_add(MINIMUM_ALARM_DELAY_MS))
@@ -283,7 +283,7 @@ impl DurableObject for AccessObject {
         db.cleanup(io::now().0)?;
         self.revoke_turn_leases(&db).await?;
         self.terminate_shares(&db).await?;
-        if Self::has_turn_work(&db)?
+        if db.next_turn_deadline()?.is_some()
             || db.next_termination()?.is_some()
             || db
                 .list::<windshare_relay_access::Enrollment>("enrollment:")?

@@ -7,7 +7,7 @@
     "build": "worker-build --release",
     "dev": "wrangler dev",
     "preview": "wrangler preview",
-    "test:access": "worker-build --release --locked && node --test tests/access.test.mjs tests/turn.test.mjs tests/turn-usage.test.mjs"
+    "test:access": "worker-build --release --locked && node --test tests/access.test.mjs tests/turn.test.mjs tests/turn-lifecycle.test.mjs tests/turn-usage.test.mjs"
   },
   "devDependencies": {
     "wrangler": "4.151.1",

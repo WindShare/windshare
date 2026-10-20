@@ -14,20 +14,8 @@ use worker::{Method, Request, Response, Result};
 
 const PROVISION_KEY: &str = "turn:provision";
 const ENABLED_KEY: &str = "turn:enabled";
-const LEASE_PREFIX: &str = "turn_lease:";
-const RETENTION_MS: u64 = 60 * 60 * 1000;
 const MAX_BODY_BYTES: usize = 4096;
 
-fn lease_key(id: &str) -> String {
-    format!("{LEASE_PREFIX}{id}")
-}
-fn save(db: &Database, lease: &Lease) -> Result<()> {
-    db.put(
-        &lease_key(&lease.id),
-        lease,
-        Some(lease.expires_at.saturating_add(RETENTION_MS)),
-    )
-}
 fn enabled(db: &Database) -> Result<bool> {
     Ok(db.get::<bool>(ENABLED_KEY)?.unwrap_or(true))
 }
@@ -177,12 +165,7 @@ impl AccessObject {
         }
     }
     fn turn_status(&self, db: &Database, now: u64) -> Result<Response> {
-        let mut counts = serde_json::Map::new();
-        for mut lease in db.list::<Lease>(LEASE_PREFIX)? {
-            lease.settle_expiry(now);
-            let count = counts.entry(lease.status().to_string()).or_insert(json!(0));
-            *count = json!(count.as_u64().unwrap_or(0) + 1);
-        }
+        let counts = db.turn_lease_counts(now)?;
         reply(
             &json!({"ready":self.turn_ready(db)?,"enabled":enabled(db)?,"leases":counts,"analytics_available":analytics::available(&self.env)}),
             200,
