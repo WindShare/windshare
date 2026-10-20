@@ -55,6 +55,13 @@ pub enum Input<'a> {
     /// The host allocates a never-reused lifetime before accepting this socket.
     /// Hibernating hosts must persist their generation allocator independently.
     Connected(ConnectionRef),
+    /// Current host authorization bound to this exact fresh registration.
+    Register(crate::access::RegistrationGrant),
+    /// Host-authenticated administration is independent of sender signatures.
+    Terminate {
+        credential: [u8; 16],
+        stop_id: crate::identifiers::StopId,
+    },
     Control {
         connection: ConnectionRef,
         frame: &'a [u8],

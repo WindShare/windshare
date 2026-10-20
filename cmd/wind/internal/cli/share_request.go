@@ -7,10 +7,10 @@ import (
 	"math"
 	"slices"
 
-	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 type shareRequest struct {
@@ -68,7 +68,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	}
 	// The process entry point supplies personal configuration. Embedded callers
 	// and tests must not acquire authority from the developer's machine implicitly.
-	var saved shareconfig.Config
+	var saved relayconfig.Config
 	if a.loadShareConfig != nil {
 		var err error
 		saved, err = a.loadShareConfig()
@@ -86,11 +86,11 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	if !frontOverride {
 		*frontURL = saved.FrontURL
 	}
-	if err := shareconfig.ValidateFrontURL(*frontURL); err != nil {
+	if err := relayconfig.ValidateFrontURL(*frontURL); err != nil {
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: configure a frontend URL with wind config import <file|-> --front-url <url>, or pass --front-url for this share; expected an HTTP(S) base URL without credentials, query or fragment")
 		return shareRequest{}, requestParseUsageFailure
 	}
-	relays, err := shareconfig.SelectRelays(saved.Relays, relayURLs)
+	relays, err := relayconfig.SelectRelays(saved, relayURLs)
 	if err != nil {
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: configure relay candidates with wind config import <file|->, or pass --relay for this share")
 		return shareRequest{}, requestParseUsageFailure

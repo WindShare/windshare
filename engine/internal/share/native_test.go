@@ -85,7 +85,7 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 		return true
 	}
 	endpoint := &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}
-	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", RegistrationToken: "private-deployment-token"}
+	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", AccessKey: "private-deployment-token"}
 	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
 		if config.Candidate != candidate {
 			t.Error("relay assembly lost candidate registration authority")

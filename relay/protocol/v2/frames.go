@@ -378,9 +378,11 @@ const (
 	ErrorAdmission
 	ErrorStopped
 	ErrorResumeStale
+	ErrorAccessDenied
+	ErrorAccessUnavailable
 )
 
-func (c ErrorCode) valid() bool { return c >= ErrorMalformed && c <= ErrorResumeStale }
+func (c ErrorCode) valid() bool { return c >= ErrorMalformed && c <= ErrorAccessUnavailable }
 
 type ErrorFrame struct {
 	Code       ErrorCode
@@ -389,7 +391,7 @@ type ErrorFrame struct {
 
 func (f ErrorFrame) MarshalBinary() ([]byte, error) {
 	if !f.Code.valid() || f.RetryAfter < 0 || f.RetryAfter > 30*time.Second || f.RetryAfter%time.Millisecond != 0 ||
-		(f.Code != ErrorStarting && f.Code != ErrorAdmission && f.RetryAfter != 0) {
+		(f.Code != ErrorStarting && f.Code != ErrorAdmission && f.Code != ErrorAccessUnavailable && f.RetryAfter != 0) {
 		return nil, ErrMalformed
 	}
 	result := append([]byte("WS2E"), WireVersion, 0)

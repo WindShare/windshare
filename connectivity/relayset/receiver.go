@@ -58,7 +58,7 @@ func receiverEndpointRetryable(err error) bool {
 		return true
 	}
 	switch rejection.Code {
-	case v2.ErrorNotFound, v2.ErrorStarting, v2.ErrorAdmission:
+	case v2.ErrorNotFound, v2.ErrorStarting, v2.ErrorAdmission, v2.ErrorAccessUnavailable:
 		return true
 	default:
 		return false

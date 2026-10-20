@@ -106,7 +106,12 @@ func startV2Process(
 	t.Helper()
 	phaseContext := v2ProcessPhaseContext{Component: component}
 	phase := scenario.startPhase(t, v2ProcessStartMilestone, phaseContext)
-	environment, err := testprocess.InheritEnvironment(nil)
+	// Child processes own their relay selection and must never inherit personal access keys.
+	configPath := filepath.Join(t.TempDir(), "sharing.json")
+	if err := os.WriteFile(configPath, []byte(`{"profiles":[],"active_relays":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment, err := testprocess.InheritEnvironment(map[string]string{"WINDSHARE_CONFIG": configPath})
 	if err != nil {
 		t.Fatalf("prepare %s child environment: %v", component, err)
 	}

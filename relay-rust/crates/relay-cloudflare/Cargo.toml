@@ -10,6 +10,7 @@ description = "Cloudflare Worker and Durable Object relay host for WindShare"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+windshare-relay-access = { path = "../relay-access" }
 windshare-relay-core = { path = "../relay-core" }
 anyhow = "1"
 base64 = "0.23.1"

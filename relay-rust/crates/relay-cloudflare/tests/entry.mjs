@@ -1,6 +1,7 @@
 // Isolated-test observations/faults around the production Rust host; no protocol decisions.
 import { DurableObject } from "cloudflare:workers";
 import RustWorker, { ShareRelayObject as RustShareRelay } from "../build/index.js";
+export { AccessObject } from "../build/index.js";
 
 function authorized(request, env) {
   return !!env.PREVIEW_TEST_SECRET
@@ -26,13 +27,18 @@ export class ShareRelayObject extends DurableObject {
           storageMarker = crypto.randomUUID();
           await this.ctx.storage.put(markerKey, storageMarker);
         }
+        const credential = request.headers.get("X-Test-Access-Key") ?? "";
+        const digest = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(credential)))))
+          .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        const access = await this.env.ACCESS.getByName("authority").fetch("https://internal/internal/authorize", {
+          method: "POST", body: JSON.stringify({ digest, share_id: url.searchParams.get("share_id"), operation_id: "preview-status" }),
+        });
         return Response.json({
           boot: this.boot,
           versionId: this.env.TEST_VERSION?.id ?? null,
           revision: typeof __WINDSHARE_TEST_REVISION__ === "undefined" ? null : __WINDSHARE_TEST_REVISION__,
           storageMarker,
-          registrationCredentialMatches: !!this.env.REGISTRATION_SECRET
-            && request.headers.get("X-Test-Registration-Credential") === this.env.REGISTRATION_SECRET,
+          accessCredentialAccepted: access.status === 200,
           now: Date.now(),
           sockets: this.ctx.getWebSockets().map(socket => ({
             tags: this.ctx.getTags(socket), state: socket.readyState,
@@ -66,6 +72,17 @@ export default class PreviewEntrypoint extends RustWorker {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/__test/")) return super.fetch(request);
     if (!authorized(request, this.env)) return new Response("unauthorized", { status: 401 });
+    if (url.pathname === "/__test/access" && request.method === "POST") {
+      const { action, body } = await request.json();
+      if (!["login", "enrollments", "enrollments/approve", "enrollments/claim", "enrollments/installed"].includes(action)) {
+        return new Response("unknown management operation", { status: 400 });
+      }
+      const consoleOrigin = this.env.CONSOLE_ORIGIN;
+      return this.env.ACCESS.getByName("authority").fetch(consoleOrigin + "/api/" + action, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: consoleOrigin,
+          Cookie: request.headers.get("Cookie") ?? "" }, body: JSON.stringify(body),
+      });
+    }
     const shares = url.searchParams.getAll("share_id");
     if (shares.length !== 1 || !/^[A-Za-z0-9_-]{16}$/.test(shares[0])) {
       return new Response("invalid route", { status: 400 });

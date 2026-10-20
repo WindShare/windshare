@@ -6,40 +6,34 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareClient } from './cloudflare.mjs';
-import { deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
+import { consoleConfig, deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, STATE_BINDING, validateHostConfig } from './deployment.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const hostDirectory = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare');
 const COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
-const FRONTEND_BUILD_COMMAND = 'pnpm build';
 const operationId = process.env.GITHUB_RUN_ID ?? randomUUID();
 
 function command(program, args, options = {}) {
   const { env, ...commandOptions } = options;
   const result = spawnSync(program, args, {
     cwd: hostDirectory, stdio: 'inherit', timeout: COMMAND_TIMEOUT_MS, windowsHide: true,
-    env: { ...process.env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'info', ...env },
-    ...commandOptions,
+    env: { ...process.env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'info', ...env }, ...commandOptions,
   });
-  // Child-process exception objects can contain stdin, including registration
-  // authority. Report only exit information, never serialize the spawn result.
-  if (result.error || result.status !== 0) throw new Error(`${program} failed (exit ${result.status ?? 'unavailable'}).`);
-  return result.stdout;
+  if (result.error || result.status !== 0) throw new Error(program + ' failed (exit ' + (result.status ?? 'unavailable') + ').');
 }
-
-async function publish(plan, config) {
-  const configPath = join(hostDirectory, `wrangler.actions-${randomUUID()}.json`);
-  const args = ['deploy', '--config', configPath, '--keep-vars'];
+async function publish(plan, config, ownerPassword) {
+  const configPath = join(hostDirectory, 'wrangler.actions-' + randomUUID() + '.json');
+  const args = ['deploy', '--config', configPath, '--keep-vars', '--var', STATE_BINDING + ':' + JSON.stringify(plan.state)];
   let secretDirectory;
   try {
     await writeFile(configPath, JSON.stringify(config), { flag: 'wx' });
-    if (plan.kind === 'create') {
-      if (process.env.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${plan.credential}`);
-      secretDirectory = await mkdtemp(join(tmpdir(), 'windshare-registration-'));
+    if (ownerPassword !== undefined) {
+      if (process.env.GITHUB_ACTIONS === 'true') console.log('::add-mask::' + ownerPassword);
+      secretDirectory = await mkdtemp(join(tmpdir(), 'windshare-owner-'));
       const secretsFile = join(secretDirectory, 'secrets.json');
-      await writeFile(secretsFile, JSON.stringify({ [SECRET_BINDING]: plan.credential }), { mode: 0o600, flag: 'wx' });
-      args.push('--secrets-file', secretsFile, '--var', `${STATE_BINDING}:${JSON.stringify(plan.state)}`);
+      await writeFile(secretsFile, JSON.stringify({ [SECRET_BINDING]: ownerPassword }), { mode: 0o600, flag: 'wx' });
+      args.push('--secrets-file', secretsFile);
     }
     command(process.execPath, [join(hostDirectory, 'node_modules/wrangler/bin/wrangler.js'), ...args]);
   } finally {
@@ -50,7 +44,6 @@ async function publish(plan, config) {
     }
   }
 }
-
 async function main() {
   const mode = readDeploymentMode(process.env);
   const inputs = readInputs(process.env);
@@ -58,59 +51,43 @@ async function main() {
   const { experimental_readRawConfig, unstable_readConfig } = require('wrangler');
   const source = { config: join(hostDirectory, 'wrangler.toml') };
   validateHostConfig(unstable_readConfig(source));
-  const config = deploymentConfig(experimental_readRawConfig(source).rawConfig, inputs, mode);
+  const host = experimental_readRawConfig(source).rawConfig;
   const log = (event, fields) => console.log(JSON.stringify({ event, operationId, mode, ...fields }));
-  const client = cloudflareClient({ ...inputs, apiToken: process.env.CLOUDFLARE_API_TOKEN });
+  const client = workerName => cloudflareClient({ accountId: inputs.accountId, workerName, apiToken: process.env.CLOUDFLARE_API_TOKEN });
   log('deployment_started', { workerName: inputs.workerName, revision: process.env.GITHUB_SHA });
   const result = await deployRelay({
-    inputs, cloudflare: client, log,
-    encrypt: (plaintext, recipient) => command('age', ['--encrypt', '--armor', '--recipient', recipient], {
-      stdio: ['pipe', 'pipe', 'inherit'], input: plaintext, encoding: 'utf8',
-    }).replaceAll('\r\n', '\n'),
+    inputs, cloudflare: client(inputs.workerName), consoleCloudflare: client(inputs.workerName + '-console'), log,
     deploy: async plan => {
-      if (mode === FULL_DEPLOYMENT) {
-        log('frontend_build_started', { deploymentId: plan.state.deploymentId });
-        command(FRONTEND_BUILD_COMMAND, [], {
-          cwd: join(repositoryRoot, 'web'), shell: true,
-          env: { WIND_BUILD_REVISION: process.env.GITHUB_SHA ?? process.env.WIND_BUILD_REVISION },
-        });
-        log('frontend_build_completed', { deploymentId: plan.state.deploymentId });
-      } else {
-        log('frontend_omitted', { deploymentId: plan.state.deploymentId });
-      }
-      await publish(plan, config);
+      if (mode === FULL_DEPLOYMENT) command('pnpm build', [], {
+        cwd: join(repositoryRoot, 'web'), shell: true,
+        env: { WIND_BUILD_REVISION: process.env.GITHUB_SHA ?? process.env.WIND_BUILD_REVISION },
+      });
+      await publish(plan, deploymentConfig(host, inputs, mode, plan.state), inputs.ownerPassword);
     },
+    deployConsole: plan => publish(plan, consoleConfig(host, inputs, plan.state)),
   });
   const frontendUrl = mode === FULL_DEPLOYMENT ? result.state.endpoint : null;
-  const outputDirectory = resolve(process.env.WINDSHARE_DEPLOYMENT_OUTPUT ?? join(tmpdir(), 'windshare-relay-config'));
+  const onboarding = 'wind relay onboard ' + result.state.endpoint;
+  const outputDirectory = resolve(process.env.WINDSHARE_DEPLOYMENT_OUTPUT ?? join(tmpdir(), 'windshare-deployment'));
   await mkdir(outputDirectory, { recursive: true });
-  await writeFile(join(outputDirectory, 'relay.json.age'), result.state.encryptedConfig);
   await writeFile(join(outputDirectory, 'deployment.json'), JSON.stringify({
-    endpoint: result.state.endpoint, deploymentId: result.state.deploymentId,
-    namespaceId: result.namespaceId, revision: process.env.GITHUB_SHA,
-    mode, frontendUrl,
+    endpoint: result.state.endpoint, consoleUrl: result.state.consoleEndpoint, onboarding,
+    deploymentId: result.state.deploymentId, namespaceId: result.namespaceId, accessNamespaceId: result.accessNamespaceId,
+    revision: process.env.GITHUB_SHA, mode, frontendUrl,
   }, null, 2) + '\n');
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    await appendFile(process.env.GITHUB_STEP_SUMMARY, [
-      '### WindShare Cloudflare deployment', '',
-      `Mode: ${mode}`, '',
-      `Relay: ${result.state.endpoint}`, '',
-      frontendUrl ? `Frontend: ${frontendUrl}` : 'Frontend: hosted separately (relay-only deployment).', '',
-      `Deployment: \`${result.state.deploymentId}\` (${result.kind})`, '',
-      'Download the **windshare-relay-config** artifact, extract it, then run:', '',
-      '\`\`\`sh',
-      `age --decrypt -i windshare.key relay.json.age | wind config import - --front-url ${frontendUrl ?? 'https://<your-frontend>'}`,
-      'wind share <path>',
-      '\`\`\`', '',
-      'Import saves the frontend and replaces the complete relay set. Future shares reuse both settings.',
-      'Keep your local age key. Updates preserve this address, registration credential and share storage.',
-      'A completed deployment does not mean every active object has switched versions yet.', '',
-    ].join('\n'));
-  }
-  log('configuration_exported', { deploymentId: result.state.deploymentId, outputDirectory });
+  const summary = [
+    '### WindShare Cloudflare deployment', '', 'Mode: ' + mode, '',
+    'Relay: ' + result.state.endpoint, '', 'Console: ' + result.state.consoleEndpoint, '',
+    frontendUrl ? 'Frontend: ' + frontendUrl : 'Frontend: hosted separately (pass --front-url when sharing).', '',
+    'Run this command and approve the device in the console with your owner password:', '',
+    '    ' + onboarding, '    wind share <path>', '',
+    'Onboarding keeps existing profiles and selects only this private relay. P2P stays enabled.',
+    'Updates preserve relay identity, enrolled credentials and share storage. Changing the owner password signs administrators out.', '',
+  ].join('\n');
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary);
+  console.log(summary);
+  log('onboarding_ready', { deploymentId: result.state.deploymentId, consoleUrl: result.state.consoleEndpoint, onboarding });
 }
-
-// Keep this entry point separate from the injected controller used by offline tests.
 main().catch(error => {
   console.error(JSON.stringify({ event: 'deployment_failed', operationId, message: error.message }));
   process.exitCode = 1;

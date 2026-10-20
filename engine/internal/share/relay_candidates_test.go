@@ -12,8 +12,8 @@ import (
 
 func TestEveryRelayReceivesOnlyItsOwnRegistrationCredential(t *testing.T) {
 	candidates := []senderrelay.Candidate{
-		{PublicURL: "https://one.example", RegistrationToken: "private-one"},
-		{PublicURL: "https://two.example", RegistrationToken: "private-two"},
+		{PublicURL: "https://one.example", AccessKey: "private-one"},
+		{PublicURL: "https://two.example", AccessKey: "private-two"},
 	}
 	dependencies := nativeDependencies(t)
 	assembled := make(chan senderrelay.Candidate, len(candidates))

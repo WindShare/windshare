@@ -71,6 +71,8 @@ export const V2_RELAY_ERROR = Object.freeze({
   admission: 10,
   stopped: 11,
   resumeStale: 12,
+  accessDenied: 13,
+  accessUnavailable: 14,
 } as const)
 export type V2RelayErrorCode = (typeof V2_RELAY_ERROR)[keyof typeof V2_RELAY_ERROR]
 
@@ -644,12 +646,12 @@ function decodeConnectionProbe(encoded: Uint8Array, magic: string): bigint {
 }
 
 function validErrorCode(code: number): code is V2RelayErrorCode {
-  return code >= V2_RELAY_ERROR.malformed && code <= V2_RELAY_ERROR.resumeStale
+  return code >= V2_RELAY_ERROR.malformed && code <= V2_RELAY_ERROR.accessUnavailable
 }
 
 export function encodeV2RelayError(frame: V2RelayErrorFrame): Uint8Array<ArrayBuffer> {
   const retryAllowed =
-    frame.code === V2_RELAY_ERROR.starting || frame.code === V2_RELAY_ERROR.admission
+    frame.code === V2_RELAY_ERROR.starting || frame.code === V2_RELAY_ERROR.admission || frame.code === V2_RELAY_ERROR.accessUnavailable
   if (
     !validErrorCode(frame.code) ||
     !Number.isInteger(frame.retryAfterMilliseconds) ||

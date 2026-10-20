@@ -148,7 +148,7 @@ func semanticCases(t *testing.T) []any {
 		map[string]any{"name": "relay-registration-errors", "codes": map[string]uint16{
 			"malformed": 1, "unsupported-mode": 2, "share-id-collision": 3, "already-registered": 4,
 			"challenge-expired": 5, "invalid-proof": 6, "descriptor-invalid": 7, "not-found": 8,
-			"starting": 9, "admission": 10, "stopped": 11, "resume-stale": 12,
+			"starting": 9, "admission": 10, "stopped": 11, "resume-stale": 12, "access-denied": 13, "access-unavailable": 14,
 		}},
 		map[string]any{
 			"name": "relay-route-lifecycle", "crashGraceSeconds": fmt.Sprint(senderCrashGraceSeconds),

@@ -1177,10 +1177,31 @@
           "accepted": false
         },
         {
-          "name": "error/unknown-code-after-last",
+          "name": "error/access-denied",
           "frame": "WS2E",
           "direction": "relay-to-client",
           "encodedB64": "V1MyRQIAAA0AAAAA",
+          "accepted": true
+        },
+        {
+          "name": "error/access-unavailable",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAA4AAHUw",
+          "accepted": true
+        },
+        {
+          "name": "error/retry-on-access-denied",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAA0AAAPo",
+          "accepted": false
+        },
+        {
+          "name": "error/unknown-code-after-last",
+          "frame": "WS2E",
+          "direction": "relay-to-client",
+          "encodedB64": "V1MyRQIAAA8AAAAA",
           "accepted": false
         },
         {

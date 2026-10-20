@@ -71,6 +71,12 @@ impl Database {
         ))
     }
 
+    pub fn uninitialized(&self) -> Result<bool> {
+        Ok(self.bytes(IMAGE)?.is_none()
+            && self.bytes(AUTHORITY)?.is_none()
+            && self.bytes(MANIFEST)?.is_none())
+    }
+
     pub fn authority(&self, identity: Identity) -> Result<Option<StoredAuthority>> {
         self.get::<AuthorityRow>(AUTHORITY)?
             .map(|row| row.decode(identity.relay, identity.share))

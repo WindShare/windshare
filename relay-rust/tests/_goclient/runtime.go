@@ -26,7 +26,7 @@ func registerRuntime(endpoint string, f fixture, resume bool) runtimeSender {
 	}
 	wire := newRuntimeWire()
 	header := http.Header{}
-	if secret := os.Getenv("WINDSHARE_RELAY_REGISTRATION_SECRET"); !resume && secret != "" {
+	if secret := os.Getenv("WINDSHARE_RELAY_ACCESS_KEY"); !resume && secret != "" {
 		header.Set("Authorization", "Bearer "+secret)
 	}
 	sender, err := relayv2.DialSender(ctx, relayv2.SenderConfig{

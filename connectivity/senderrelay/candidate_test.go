@@ -17,9 +17,9 @@ func TestCandidateRejectsAmbiguousAddressesAndInvalidHeaderValues(t *testing.T) 
 		{PublicURL: "https://relay.example#private"},
 		{PublicURL: "https://relay.example?%73hare_id=preselected"},
 		{PublicURL: "https://relay.example?share_id=x;another=y"},
-		{PublicURL: "https://relay.example", RegistrationToken: "token\r\nInjected: value"},
-		{PublicURL: "https://relay.example", RegistrationToken: "with spaces"},
-		{PublicURL: "https://relay.example", RegistrationToken: strings.Repeat("x", MaxRegistrationTokenBytes+1)},
+		{PublicURL: "https://relay.example", AccessKey: "token\r\nInjected: value"},
+		{PublicURL: "https://relay.example", AccessKey: "with spaces"},
+		{PublicURL: "https://relay.example", AccessKey: strings.Repeat("x", MaxAccessKeyBytes+1)},
 	} {
 		if candidate.Validate() == nil {
 			t.Fatal("invalid candidate accepted")
@@ -28,13 +28,13 @@ func TestCandidateRejectsAmbiguousAddressesAndInvalidHeaderValues(t *testing.T) 
 	if _, err := PublicURLs([]Candidate{{PublicURL: "https://relay.example"}, {PublicURL: "wss://RELAY.example:443/"}}); err == nil {
 		t.Fatal("competing aliases accepted")
 	}
-	candidate := Candidate{PublicURL: "https://relay.example?region=one", RegistrationToken: "private-token"}
+	candidate := Candidate{PublicURL: "https://relay.example?region=one", AccessKey: "private-token"}
 	urls, err := PublicURLs([]Candidate{candidate})
 	if err != nil || len(urls) != 1 || urls[0] != candidate.PublicURL {
 		t.Fatalf("public addresses=%v error=%v", urls, err)
 	}
 	encoded, err := json.Marshal(candidate)
-	if err != nil || strings.Contains(string(encoded), candidate.RegistrationToken) {
+	if err != nil || strings.Contains(string(encoded), candidate.AccessKey) {
 		t.Fatal("generic candidate serialization exposed registration authority")
 	}
 }
@@ -50,7 +50,7 @@ func TestRegistrationCredentialCannotFollowRedirect(t *testing.T) {
 	}))
 	defer server.Close()
 	config := newSenderRelayTestConfig(t, nil, nil, nil)
-	config.Candidate = Candidate{PublicURL: server.URL, RegistrationToken: "bound-token"}
+	config.Candidate = Candidate{PublicURL: server.URL, AccessKey: "bound-token"}
 	_, err := relayv2.DialSender(t.Context(), relayv2.SenderConfig{
 		RelayBaseURL: config.Candidate.PublicURL, Init: config.Fresh, SenderPrivateKey: config.PrivateKey,
 		ResumeToken: config.ResumeToken, Descriptor: config.Descriptor,
@@ -73,7 +73,7 @@ func TestStopDoesNotUseDeploymentRegistrationAuthority(t *testing.T) {
 	defer server.Close()
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 	config := newSenderRelayTestConfig(t, endpoint, nil, nil)
-	config.Candidate = Candidate{PublicURL: server.URL, RegistrationToken: "register-only"}
+	config.Candidate = Candidate{PublicURL: server.URL, AccessKey: "register-only"}
 	lifecycle, err := New(config)
 	if err != nil {
 		t.Fatal(err)

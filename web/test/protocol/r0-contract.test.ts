@@ -928,6 +928,8 @@ describe('R0 resource and state-machine contract', () => {
         admission: 10,
         stopped: 11,
         'resume-stale': 12,
+        'access-denied': 13,
+        'access-unavailable': 14,
       },
     })
   })

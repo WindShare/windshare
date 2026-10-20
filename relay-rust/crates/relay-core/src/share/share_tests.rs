@@ -96,13 +96,22 @@ impl Fixture {
         field: &str,
         at: UnixMillis,
     ) -> Turn {
-        relay.handle(
-            Input::Control {
+        let frame = self.frame(field);
+        let input = match RegisterInit::decode(&frame) {
+            Ok(init) if init.mode() == crate::registration::RegistrationMode::Fresh => {
+                Input::Register(crate::access::RegistrationGrant::new(
+                    connection,
+                    init,
+                    crate::access::Attribution::Anonymous,
+                    UnixMillis(at.0 + REGISTRATION_BUDGET),
+                ))
+            }
+            _ => Input::Control {
                 connection,
-                frame: &self.frame(field),
+                frame: &frame,
             },
-            at,
-        )
+        };
+        relay.handle(input, at)
     }
     fn begin_registration(&self, relay: &mut Relay) -> Work {
         let sender = connection(1);
@@ -633,6 +642,9 @@ mod settlement;
 
 #[path = "responsibility_tests.rs"]
 mod responsibility;
+
+#[path = "access_tests.rs"]
+mod access;
 
 #[path = "stopping_tests.rs"]
 mod stopping;

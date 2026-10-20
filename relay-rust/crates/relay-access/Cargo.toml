@@ -1,0 +1,14 @@
+[package]
+name = "windshare-relay-access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "I/O-free relay access and enrollment decisions"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+sha2 = { version = "0.11.1", default-features = false }
+
+[lints]
+workspace = true

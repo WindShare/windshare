@@ -10,19 +10,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/shareconfig"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	t.Setenv(shareconfig.PathEnvironment, path)
+	t.Setenv(relayconfig.PathEnvironment, path)
 	var stdout, stderr bytes.Buffer
 	app := &App{
-		Stdin:  strings.NewReader(`{"relays":[{"url":"https://private.example","registration_token":"private-import-canary"}]}`),
+		Stdin:  strings.NewReader(`{"active_relays":["https://private.example"],"profiles":[{"url":"https://private.example","access_key":"private-import-canary"}]}`),
 		Stdout: &stdout, Stderr: &stderr,
-		saveShareConfig: shareconfig.Save, loadShareConfig: shareconfig.Load,
+		saveShareConfig: relayconfig.Save, loadShareConfig: relayconfig.Load,
 	}
 	t.Cleanup(app.closeTerminalOutput)
 	if code := app.Run(context.Background(), []string{"config", "import", "-", "--front-url", "https://private.example"}); code != ExitOK {
@@ -34,7 +34,7 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	if stdout.Len() != 0 || strings.Contains(stderr.String(), "private-import-canary") {
 		t.Fatal("import leaked configuration or wrote to the capability stream")
 	}
-	expected := []senderrelay.Candidate{{PublicURL: "https://private.example", RegistrationToken: "private-import-canary"}}
+	expected := []senderrelay.Candidate{{PublicURL: "https://private.example", AccessKey: "private-import-canary"}}
 	request, outcome := app.parseShareRequest([]string{"root"})
 	if outcome != requestParseReady || !reflect.DeepEqual(request.relays, expected) || request.link.frontURL != "https://private.example" {
 		t.Fatal("ordinary share did not use the imported complete candidate set")
@@ -62,7 +62,7 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.Stdin = strings.NewReader(`{"relays":[]}`)
+	app.Stdin = strings.NewReader(`{"active_relays":["https://private.example"],"profiles":[]}`)
 	if code := app.Run(context.Background(), []string{"config", "import", "-"}); code != ExitUsage {
 		t.Fatal("invalid import did not return a usage error")
 	}
@@ -73,8 +73,8 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 }
 
 func TestConfigImportMapsStorageFailure(t *testing.T) {
-	app := testApp(`{"relays":[{"url":"https://relay.example"}]}`)
-	app.saveShareConfig = func(shareconfig.Config) error { return os.ErrPermission }
+	app := testApp(`{"active_relays":["https://relay.example"],"profiles":[{"url":"https://relay.example"}]}`)
+	app.saveShareConfig = func(relayconfig.Config) error { return os.ErrPermission }
 	t.Cleanup(app.closeTerminalOutput)
 	if code := app.Run(context.Background(), []string{"config", "import", "-"}); code != ExitFailure {
 		t.Fatal("storage error did not fail the command:", code)

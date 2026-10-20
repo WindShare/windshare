@@ -6,7 +6,7 @@ import { deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode, RELAY_ONLY_DEPLO
 
 const inputs = {
   accountId: 'a'.repeat(32), workerName: 'private-relay',
-  route: { kind: 'custom-domain', hostname: 'relay.example.com', zoneId: 'b'.repeat(32) },
+  route: { kind: 'custom-domain', hostname: 'relay.example.com', consoleHostname: 'console.relay.example.com', zoneId: 'b'.repeat(32) },
 };
 const host = {
   main: 'build/index.js', build: { command: 'worker-build --release --locked' },
@@ -33,13 +33,13 @@ test('generated deployment config preserves build/storage and uses only the chos
     const custom = deploymentConfig(host, inputs, mode);
     assert.equal(custom.name, inputs.workerName);
     assert.equal(custom.account_id, inputs.accountId);
-    assert.deepEqual(custom.routes, [{ pattern: inputs.route.hostname, zone_id: inputs.route.zoneId, custom_domain: true }]);
+    assert.deepEqual(custom.routes, [inputs.route.hostname,inputs.route.consoleHostname].map(pattern => ({pattern,zone_id:inputs.route.zoneId,custom_domain:true})));
     assert.equal(custom.workers_dev, false);
     assert.equal(custom.preview_urls, false);
     assert.deepEqual(custom.build, host.build);
     assert.deepEqual(custom.durable_objects, host.durable_objects);
     assert.deepEqual(custom.migrations, host.migrations);
-    assert.equal(custom.main, host.main);
+    assert.equal(custom.main, 'entry.mjs');
     const defaultRoute = deploymentConfig(host, { ...inputs, route: { kind: 'workers-dev' } }, mode);
     assert.deepEqual(defaultRoute.routes, []);
     assert.equal(defaultRoute.workers_dev, true);
@@ -53,7 +53,8 @@ test('full deployments serve the built SPA while reserving relay paths for the W
   const frontendDirectory = fileURLToPath(new URL('../../../web/dist', import.meta.url));
   assert.equal(resolve(hostDirectory, config.assets.directory), frontendDirectory);
   assert.equal(config.assets.not_found_handling, 'single-page-application');
-  assert.deepEqual(config.assets.run_worker_first, ['/v2/*']);
+  assert.equal(config.assets.run_worker_first, true);
+  assert.equal(config.assets.binding,'ASSETS');
 });
 
 test('relay-only deployments remove frontend assets even when the previous config included them', () => {

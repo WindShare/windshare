@@ -15,6 +15,7 @@
 
 extern crate alloc;
 
+pub mod access;
 pub mod authentication;
 pub mod authority;
 pub mod challenge;

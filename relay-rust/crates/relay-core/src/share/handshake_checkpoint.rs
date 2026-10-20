@@ -26,6 +26,7 @@ pub(super) enum Step {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Binding {
     Unbound,
+    Fresh(crate::access::Attribution),
     Resume(Option<OwnershipId>),
 }
 
@@ -62,7 +63,7 @@ impl HandshakeCheckpoint {
     }
     pub fn applicable(&self, stored: Option<Record>) -> bool {
         match self.binding {
-            Binding::Unbound => true,
+            Binding::Unbound | Binding::Fresh(_) => true,
             Binding::Resume(observed) => observed == ownership(stored),
         }
     }
@@ -71,6 +72,10 @@ impl HandshakeCheckpoint {
         out.extend_from_slice(&self.opened.0.to_be_bytes());
         match self.binding {
             Binding::Unbound => out.push(0),
+            Binding::Fresh(attribution) => {
+                out.push(3);
+                out.extend_from_slice(&attribution.encode());
+            }
             Binding::Resume(None) => out.push(1),
             Binding::Resume(Some(owner)) => {
                 out.push(2);
@@ -102,6 +107,10 @@ impl HandshakeCheckpoint {
         let opened = UnixMillis(u64::from_be_bytes(field(&mut body)?));
         let binding = match field::<1>(&mut body)? {
             [0] => Binding::Unbound,
+            [3] => Binding::Fresh(
+                crate::access::Attribution::decode(field(&mut body)?)
+                    .ok_or(Error::InvalidCheckpoint)?,
+            ),
             [1] => Binding::Resume(None),
             [2] => {
                 let relay =

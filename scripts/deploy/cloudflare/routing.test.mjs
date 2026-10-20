@@ -4,13 +4,13 @@ import { endpointFor, prepareRoute, readRoute, sameRoute, verifyRoute } from './
 
 const inputs = {
   accountId: 'a'.repeat(32), workerName: 'private-relay',
-  route: { kind: 'custom-domain', hostname: 'relay.example.com', zoneId: 'b'.repeat(32) },
+  route: { kind: 'custom-domain', hostname: 'relay.example.com', consoleHostname: 'console.relay.example.com', zoneId: 'b'.repeat(32) },
 };
 const zone = () => ({ id: inputs.route.zoneId, account: { id: inputs.accountId }, name: 'example.com', status: 'active' });
 const domain = () => ({ hostname: inputs.route.hostname, zone_id: inputs.route.zoneId,
   service: inputs.workerName, environment: 'production', enabled: true, previews_enabled: false });
 const cloudflare = () => ({
-  zone: async () => zone(), domains: async () => [domain()],
+  zone: async () => zone(), domains: async hostname => [{...domain(),hostname}],
   subdomain: () => assert.fail('custom domains do not require workers.dev'),
   route: async () => ({ enabled: false, previews_enabled: false }),
 });
@@ -49,7 +49,7 @@ test('zone and domain ownership failures stop deployment before changing routing
     const client = cloudflare(), value = zone();
     mutate(value);
     client.zone = async () => value;
-    await assert.rejects(prepareRoute(inputs, client), /active zone/);
+    await assert.rejects(prepareRoute(inputs, client), /active zone|outside the selected zone/);
   }
   for (const mutate of [
     value => { value.service = 'another-worker'; },

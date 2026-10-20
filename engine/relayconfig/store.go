@@ -1,4 +1,4 @@
-package shareconfig
+package relayconfig
 
 import (
 	"bytes"
@@ -18,25 +18,17 @@ const (
 // Save replaces the entire allowed set. Merging would silently retain providers
 // that a newly imported private-only configuration deliberately excludes.
 func Save(config Config) error {
-	data, err := encode(config)
-	if err != nil {
-		return err
-	}
-	path, _, err := configurationPath()
-	if err != nil {
-		return err
-	}
-	return replaceConfiguration(path, data)
+	return (FileStore{}).Save(config)
 }
 
 func encode(config Config) ([]byte, error) {
-	if err := config.Validate(); err != nil {
+	if err := config.validateFields(); err != nil {
 		return nil, err
 	}
-	disk := document{FrontURL: config.FrontURL, Relays: make([]savedRelay, 0, len(config.Relays))}
-	for _, candidate := range config.Relays {
-		disk.Relays = append(disk.Relays, savedRelay{
-			URL: candidate.PublicURL, RegistrationToken: candidate.RegistrationToken,
+	disk := document{FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, Pending: config.Pending}
+	for _, candidate := range config.Profiles {
+		disk.Profiles = append(disk.Profiles, savedRelay{
+			URL: candidate.PublicURL, AccessKey: candidate.AccessKey,
 		})
 	}
 	var buffer bytes.Buffer

@@ -86,11 +86,13 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 The opt-in [Cloudflare deployment workflow](deploy/cloudflare-relay.md) runs independently
 on relay/frontend updates to `main` or manual dispatch. `make hygiene` covers its offline
 first-deploy/update/failure-recovery contracts. To run its opt-in live check, install
-`age`, `age-keygen`, `worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
+`worker-build`, Go, pnpm, Web dependencies and the pinned Wrangler, set
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, then run
-`node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated Worker, imports
-its encrypted configuration, verifies frontend routing, registration and permanent
-STOP across `full` → `relay-only` → `full` updates, then deletes its Worker and temporary credentials.
+`node scripts/deploy/cloudflare/smoke.mjs`. It creates an isolated relay and companion console,
+imports a per-device credential, verifies separate origins, registration and permanent
+STOP across `full` → `relay-only` → `full` updates, then deletes its Workers and temporary files.
+Local SQLite/API and Go protocol access tests run with `npm run test:access` in
+`relay-rust/crates/relay-cloudflare`; they require no Cloudflare account.
 
 ## Weekly CI
 

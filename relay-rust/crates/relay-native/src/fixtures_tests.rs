@@ -115,13 +115,20 @@ impl Fixture {
         } else {
             "registerInitB64"
         });
-        let turn = relay.handle(
+        let input = if stop {
             Input::Control {
                 connection,
                 frame: &init,
-            },
-            now,
-        );
+            }
+        } else {
+            Input::Register(windshare_relay_core::access::RegistrationGrant::new(
+                connection,
+                RegisterInit::decode(&init).unwrap(),
+                windshare_relay_core::access::Attribution::Anonymous,
+                UnixMillis(now.0 + 5_000),
+            ))
+        };
+        let turn = relay.handle(input, now);
         let request = turn
             .outputs
             .into_iter()

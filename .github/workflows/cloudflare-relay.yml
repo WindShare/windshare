@@ -57,14 +57,18 @@ jobs:
         run: pnpm -C web install --frozen-lockfile
       - name: Install Rust Wasm toolchain
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
-      - name: Install Worker builder and configuration encryption
+      - name: Install Worker builder
         run: |
           cargo +stable install worker-build --version 0.8.7 --locked
-          sudo apt-get update
-          sudo apt-get install --yes age
       - name: Install pinned Wrangler
         working-directory: relay-rust/crates/relay-cloudflare
         run: npm ci
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check local access lifecycle
+        working-directory: relay-rust/crates/relay-cloudflare
+        run: npm run test:access
       - name: Deploy and verify retained identity
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -72,16 +76,16 @@ jobs:
           CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_RELAY_DOMAIN: ${{ vars.CLOUDFLARE_RELAY_DOMAIN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          WINDSHARE_CONFIG_RECIPIENT: ${{ vars.WINDSHARE_CONFIG_RECIPIENT }}
-          WINDSHARE_DEPLOYMENT_OUTPUT: ${{ runner.temp }}/windshare-relay-config
+          WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
+          CLOUDFLARE_CONSOLE_DOMAIN: ${{ vars.CLOUDFLARE_CONSOLE_DOMAIN }}
+          WINDSHARE_DEPLOYMENT_OUTPUT: ${{ runner.temp }}/windshare-deployment
           RUSTUP_TOOLCHAIN: stable
         run: node scripts/deploy/cloudflare/run.mjs
-      - name: Publish encrypted import configuration
+      - name: Publish deployment addresses
         uses: actions/upload-artifact@v4
         with:
-          name: windshare-relay-config
+          name: windshare-deployment
           path: |
-            ${{ runner.temp }}/windshare-relay-config/relay.json.age
-            ${{ runner.temp }}/windshare-relay-config/deployment.json
+            ${{ runner.temp }}/windshare-deployment/deployment.json
           if-no-files-found: error
           retention-days: 30

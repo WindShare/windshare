@@ -186,6 +186,7 @@ pub(super) const fn event_context(
     event: &Event<'_>,
 ) -> (ObservedEvent, Option<OperationId>, Option<ConnectionRef>) {
     match event {
+        Event::Terminate { stop_id, .. } => (ObservedEvent::Stop(*stop_id), None, None),
         Event::Reserve { connection, .. } => (ObservedEvent::Reserve, None, Some(*connection)),
         Event::Publish(publication) => (
             ObservedEvent::Publish,
