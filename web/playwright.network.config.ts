@@ -21,7 +21,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'line',
   timeout: NETWORK_TEST_TIMEOUT_MILLISECONDS,
-  globalSetup: './e2e/fixtures/direct-product-setup.ts',
+  globalSetup: './e2e/fixtures/network-product-setup.ts',
   // Native preparation has its own budget, outside each product test's timeout.
   globalTimeout: DIRECT_PRODUCT_BUILD_TIMEOUT_MILLISECONDS + NETWORK_HARD_TIMEOUT_MILLISECONDS,
   expect: { timeout: 20_000 },

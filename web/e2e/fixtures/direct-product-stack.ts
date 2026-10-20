@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createServer as createViteServer, type ViteDevServer } from 'vite'
 
+import { RelayRequestProxy } from './relay-request-proxy'
 import { DirectProcess } from './direct-process'
 import { preparedDirectBinaryPaths, type DirectBinaryPaths } from './direct-product-binaries'
 
@@ -24,6 +25,7 @@ export interface DirectShareOptions {
   readonly relayUrl?: string
   readonly senderTrace?: boolean
   readonly turn?: object
+  readonly configuration?: object
 }
 
 export interface DirectStackTrace {
@@ -132,7 +134,7 @@ export class DirectProductStack {
     }
     // Keep test relay authority independent of the developer's saved profiles.
     const configPath = join(this.#requireRoot(), `${operationId}-config.json`)
-    await writeFile(configPath, JSON.stringify({ profiles: [], active_relays: [], ...(options.turn === undefined ? {} : { turn: options.turn }) }), { mode: 0o600 })
+    await writeFile(configPath, JSON.stringify(options.configuration ?? { profiles: [], active_relays: [], ...(options.turn === undefined ? {} : { turn: options.turn }) }), { mode: 0o600 })
     const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
       environment: { ...localGoEnvironment(), WINDSHARE_CONFIG: configPath },
@@ -196,8 +198,8 @@ export class DirectProductStack {
     return completeBoundary < 0 ? '' : encoded.slice(0, completeBoundary + 1)
   }
 
-  async createRelayCutProxy(): Promise<RelayCutProxy> {
-    const proxy = await RelayCutProxy.start(this.#requireRelayUrl())
+  async createRelayCutProxy(relayUrl = this.#requireRelayUrl()): Promise<RelayCutProxy> {
+    const proxy = await RelayCutProxy.start(relayUrl)
     this.#proxies.push(proxy)
     return proxy
   }
@@ -411,7 +413,9 @@ export class RelayCutProxy {
     }
     client.on('error', settle).on('close', settle)
     upstream.on('error', settle).on('close', settle)
-    client.pipe(upstream)
+    const request = new RelayRequestProxy(host, port)
+    request.on('error', settle)
+    client.pipe(request).pipe(upstream)
     upstream.pipe(client)
   }
 }

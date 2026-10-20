@@ -4,6 +4,7 @@ mod request;
 mod sessions;
 mod storage;
 mod termination;
+mod turn;
 
 use super::io;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -21,6 +22,13 @@ const MAX_RECORDS: usize = 1000;
 const CLEANUP_INTERVAL_MS: u64 = 60_000;
 const MINIMUM_ALARM_DELAY_MS: u64 = 1_000;
 const COOKIE_NAME: &str = "__Host-windshare_admin";
+
+pub fn turn_endpoint(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/turn/capability" | "/api/turn/issue" | "/api/turn/renew" | "/api/turn/revoke"
+    )
+}
 
 #[durable_object]
 pub struct AccessObject {
@@ -88,6 +96,9 @@ impl AccessObject {
     }
 
     async fn route(&self, mut req: Request) -> Result<Response> {
+        if turn_endpoint(&req.path()) {
+            return self.turn_device(req).await;
+        }
         let db = Database::open(&self.state)?;
         let now = io::now().0;
         let path = req.path();
@@ -158,13 +169,17 @@ impl AccessObject {
             (Method::Post, "/api/login") => self.login(&db, &req, &body, now),
             (Method::Post, "/api/enrollments") => self.enroll(&db, &req, &body, now),
             (Method::Post, "/api/enrollments/claim") => Self::claim(&db, &body, now),
-            (Method::Post, "/api/enrollments/installed") => Self::installed(&db, &body, now),
+            (Method::Post, "/api/enrollments/installed") => self.installed(&db, &body, now),
             (Method::Post, "/api/enrollments/cancel") => Self::cancel(&db, &body, now),
             _ => {
                 if !self.authenticated(&db, &req, now)? {
                     return reply(&json!({"error":"login_required"}), 401);
                 }
-                self.manage(&db, &req, &body, now)
+                if req.method() == Method::Get && path == "/api/turn/usage" {
+                    self.turn_usage(&db).await
+                } else {
+                    self.manage(&db, &req, &body, now)
+                }
             }
         }?;
         if response.status_code() != 200 && response.status_code() != 201 {
@@ -181,8 +196,12 @@ impl AccessObject {
     async fn schedule(&self) -> Result<()> {
         let now = io::now().0;
         let cleanup = now.saturating_add(CLEANUP_INTERVAL_MS);
-        let deadline = Database::open(&self.state)?
+        let db = Database::open(&self.state)?;
+        let deadline = db
             .next_termination()?
+            .into_iter()
+            .chain(Self::next_turn_deadline(&db)?)
+            .min()
             .map_or(cleanup, |at| {
                 at.max(now.saturating_add(MINIMUM_ALARM_DELAY_MS))
                     .min(cleanup)
@@ -262,8 +281,10 @@ impl DurableObject for AccessObject {
     async fn alarm(&self) -> Result<Response> {
         let db = Database::open(&self.state)?;
         db.cleanup(io::now().0)?;
+        self.revoke_turn_leases(&db).await?;
         self.terminate_shares(&db).await?;
-        if db.next_termination()?.is_some()
+        if Self::has_turn_work(&db)?
+            || db.next_termination()?.is_some()
             || db
                 .list::<windshare_relay_access::Enrollment>("enrollment:")?
                 .iter()

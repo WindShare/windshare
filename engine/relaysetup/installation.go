@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 // installation is shared by preflight and commit so the acknowledgement cannot
@@ -36,6 +37,34 @@ func installation(saved relayconfig.Config, address, accessKey, frontend string,
 	}
 	saved.Pending = nil
 	return saved, saved.Validate()
+}
+
+// Discovery is optional inventory. A malformed capability must not undo device
+// enrollment, and adding a deployment must not consume the manual account quota.
+func installManagedService(saved *relayconfig.Config, address string, references []turnconfig.ManagedService) {
+	if len(references) != 1 {
+		return
+	}
+	reference := references[0]
+	if reference.Validate() != nil || !sameRelay(reference.RelayURL, address) {
+		return
+	}
+	for _, current := range saved.ManagedTURN {
+		if current.ServiceID == reference.ServiceID && !sameRelay(current.RelayURL, address) {
+			return
+		}
+	}
+	saved.ManagedTURN = slices.Clone(saved.ManagedTURN)
+	for i, current := range saved.ManagedTURN {
+		if sameRelay(current.RelayURL, address) {
+			reference.LocalBudgetBytes = current.LocalBudgetBytes
+			saved.ManagedTURN[i] = reference
+			return
+		}
+	}
+	if len(saved.ManagedTURN) < relayconfig.MaximumProfiles {
+		saved.ManagedTURN = append(saved.ManagedTURN, reference)
+	}
 }
 
 func installationResult(saved relayconfig.Config, address, credentialID string) Result {

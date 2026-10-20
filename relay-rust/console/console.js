@@ -85,10 +85,33 @@ function renderCredentials(credentials) {
     actions.append(revoke); row.append(info, actions); root.append(row);
   }
 }
-async function refresh() {
-  const [enrollments, credentials] = await Promise.all([api('enrollments'), api('credentials')]);
-  pending = enrollments.enrollments; renderEnrollments(); renderCredentials(credentials.credentials);
+let turnEnabled = true;
+function renderTURN(value) {
+  turnEnabled = value.enabled;
+  element('turn-panel').hidden = false;
+  element('turn-state').textContent = !value.ready ? 'Setup is incomplete. Rerun the deployment to finish.' :
+    value.enabled ? 'Enabled: available automatically for preview and download demand.' : 'Disabled: no new credentials will be issued.';
+  element('turn-toggle').textContent = value.enabled ? 'Disable TURN' : 'Enable TURN';
+  element('turn-usage').hidden = !value.analytics_available;
+  const counts = value.leases;
+  element('turn-leases').textContent = (counts.active || 0) + ' active; ' +
+    (counts.revocation_pending || 0) + ' revocations pending; ' +
+    (counts.revoked || 0) + ' revocations confirmed; ' + (counts.expired || 0) + ' expired';
 }
+async function refresh() {
+  const [enrollments, credentials, session] = await Promise.all([api('enrollments'), api('credentials'), api('session')]);
+  pending = enrollments.enrollments; renderEnrollments(); renderCredentials(credentials.credentials);
+  if (session.capabilities?.managed_turn) renderTURN(await api('turn/status'));
+}
+element('turn-toggle').addEventListener('click', event => action(event.target, async () => {
+  renderTURN(await api('turn/settings', { enabled: !turnEnabled }));
+}));
+element('turn-usage').addEventListener('click', event => action(event.target, async () => {
+  const value = await api('turn/usage');
+  element('turn-estimate').textContent = value.first_date + ' to ' + value.last_date + ' UTC: ' +
+    value.egress_bytes.toLocaleString() + ' egress bytes, ' + value.ingress_bytes.toLocaleString() +
+    ' ingress bytes. Sampled provider estimate; not an invoice or a spending cap.';
+}));
 element('code').value = new URL(location.href).searchParams.get('code') || '';
 element('code').addEventListener('input', renderEnrollments);
 element('login').addEventListener('submit', event => {

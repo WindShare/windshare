@@ -141,7 +141,7 @@ impl AccessObject {
             }
         }
     }
-    pub(super) fn installed(db: &Database, body: &Value, now: u64) -> Result<Response> {
+    pub(super) fn installed(&self, db: &Database, body: &Value, now: u64) -> Result<Response> {
         let Some(mut enrollment) = load(db, body)? else {
             return refusal(Refusal::Expired);
         };
@@ -161,9 +161,13 @@ impl AccessObject {
             "enrollment_installed",
             &json!({"enrollment_id":text_id(&enrollment.id)}),
         );
-        reply(&json!({"ok":true}), 200)
+        let managed = self.turn_reference(db)?;
+        reply(
+            &json!({"ok":true,"managed_turn":if managed.is_null() { json!([]) } else { json!([managed]) }}),
+            200,
+        )
     }
-    pub(super) fn cancel(db: &Database, body: &Value, _now: u64) -> Result<Response> {
+    pub(super) fn cancel(db: &Database, body: &Value, now: u64) -> Result<Response> {
         let Some(mut enrollment) = load(db, body)? else {
             return reply(&json!({"ok":true}), 200);
         };
@@ -175,6 +179,7 @@ impl AccessObject {
         if let Some(id) = credential {
             db.remove_credential(id)?;
             db.queue_termination(&text_id(&id))?;
+            Self::withdraw_turn(db, Some(&text_id(&id)), now)?;
         }
         db.put(
             &key("enrollment", &enrollment.id),

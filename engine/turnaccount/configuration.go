@@ -3,6 +3,7 @@ package turnaccount
 import (
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/turnpath"
@@ -14,6 +15,7 @@ type configuration struct {
 	revision                   uint64
 	accounts                   map[string]Account
 	profiles                   map[string]Profile
+	services                   map[string]ManagedService
 	accountOrder, profileOrder []string
 }
 
@@ -24,7 +26,7 @@ func prepare(config Config) (configuration, error) {
 	}
 	for _, account := range config.Accounts {
 		id := iceconfig.Identity{Provider: account.Provider, Account: account.ID, Profile: "validation"}
-		if id.Validate() != nil || account.Source == nil {
+		if id.Validate() != nil || account.Source == nil || strings.HasPrefix(account.ID, managedPrefix) {
 			return result, ErrConfiguration
 		}
 		if _, exists := result.accounts[account.ID]; exists {
@@ -42,7 +44,7 @@ func prepare(config Config) (configuration, error) {
 			return result, ErrConfiguration
 		}
 		id := iceconfig.Identity{Provider: account.Provider, Account: profile.AccountID, Profile: profile.ID}
-		if id.Validate() != nil || len(profile.URLs) > iceconfig.MaximumURLs {
+		if id.Validate() != nil || len(profile.URLs) > iceconfig.MaximumURLs || strings.HasPrefix(profile.ID, managedPrefix) {
 			return result, ErrConfiguration
 		}
 		seen := map[string]bool{}
@@ -56,21 +58,30 @@ func prepare(config Config) (configuration, error) {
 		result.profiles[profile.ID] = profile
 		result.profileOrder = append(result.profileOrder, profile.ID)
 	}
+	if err := prepareServices(&result, config.Services); err != nil {
+		return configuration{}, err
+	}
 	return result, nil
 }
 
 // Reconfigure publishes accounts and profiles atomically. Clock and observer
 // dependencies remain owned by the Manager constructed in New.
 func (m *Manager) Reconfigure(config Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	config.Services = m.settings.Services
+	return m.applyLocked(config)
+}
+
+func (m *Manager) applyLocked(config Config) error {
+	if m.closed {
+		return ErrClosed
+	}
 	next, err := prepare(config)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return ErrClosed
-	}
+	m.settings = cloneConfig(config)
 	next.revision = m.current.revision + 1
 	for id := range next.accounts {
 		if m.ledgers[id] == nil {
@@ -92,7 +103,6 @@ func (m *Manager) Reconfigure(config Config) error {
 	}
 	close(m.changed)
 	m.changed = make(chan struct{})
-	m.mu.Unlock()
 	slog.Debug("TURN configuration applied", "config_revision", next.revision,
 		"accounts", len(next.accounts), "profiles", len(next.profiles), "revoked_leases", revoked)
 	return nil

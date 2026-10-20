@@ -11,11 +11,10 @@ import (
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 type shareRequest struct {
-	turn        turnconfig.Config
+	sharing     relayconfig.Config
 	paths       []string
 	relays      []senderrelay.Candidate
 	link        shareLinkPresentation
@@ -98,8 +97,8 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
-		turn:  saved.TURN,
-		paths: paths, relays: relays,
+		sharing: saved,
+		paths:   paths, relays: relays,
 		link:      shareLinkPresentation{frontURL: *frontURL, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(chunkSize), observation: observation,
 	}, requestParseReady

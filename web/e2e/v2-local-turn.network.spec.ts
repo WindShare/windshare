@@ -14,6 +14,7 @@ import {
   relayReceiverUrl,
 } from './fixtures/direct-product-stack'
 import { LocalTurnServer } from './fixtures/local-turn-server'
+import { turnFixture } from '../../relay-rust/crates/relay-cloudflare/tests/turn-fixture.mjs'
 import { NetworkEventLog } from './fixtures/network-event-log'
 import {
   createCapabilityRedactor,
@@ -24,10 +25,17 @@ const SCENARIO_ID = 'chromium-turn-route'
 const FILE_NAME = 'turn-route.bin'
 const TRANSFER_BYTES = HOT_SWITCH_TRANSFER_BLOCKS * DIRECT_TEST_BLOCK_BYTES
 
-test('renews owner-issued native and browser TURN paths after application relay loss', async ({ page }, testInfo) => {
+test('discovers deployment TURN and renews native/browser paths after application relay loss', async ({ page }, testInfo) => {
   const stack = new DirectProductStack(SCENARIO_ID)
   const turn = new LocalTurnServer()
   const events = new NetworkEventLog()
+  const browserDiagnostics: string[] = []
+  page.on('pageerror', error => browserDiagnostics.push(error.message))
+  page.on('requestfailed', request => browserDiagnostics.push(new URL(request.url()).pathname + ': ' + request.failure()?.errorText))
+  page.on('websocket', socket => {
+    socket.on('socketerror', error => browserDiagnostics.push('WebSocket: ' + error))
+  })
+  let managed: Awaited<ReturnType<typeof turnFixture>> | undefined
   let primaryFailure: unknown
   let redactor: ReturnType<typeof createCapabilityRedactor> | undefined
   try {
@@ -38,9 +46,16 @@ test('renews owner-issued native and browser TURN paths after application relay 
 
     const payload = deterministicBytes(TRANSFER_BYTES)
     const expectedHash = createHash('sha256').update(payload).digest('hex')
-    const proxy = await stack.createRelayCutProxy()
+    managed = await turnFixture({ lifetimeMs: 60_000, provider: async (request: Request) =>
+      request.url.endsWith('/revoke') ? new Response(null, { status: 204 }) :
+        Response.json({ iceServers: [turn.issueCredentials()] }, { status: 201 }) })
+    expect((await managed.provision()).status).toBe('ready')
+    const credential = await managed.admin('credentials', { name: 'browser sender' })
+    // Begin with no cached capability: discovery must add it without blocking the share.
+    const configuration = { ...credential.configuration, managed_turn: [] }
+    const proxy = await stack.createRelayCutProxy(managed.origin.replace(/^http:/u, 'ws:'))
     const path = await stack.createFile(FILE_NAME, payload)
-    const share = await stack.share(path, { turn: turn.ownerConfiguration, senderTrace: true })
+    const share = await stack.share(path, { relayUrl: managed.origin, configuration, senderTrace: true })
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
       completeUrl: navigationUrl,
@@ -166,6 +181,7 @@ test('renews owner-issued native and browser TURN paths after application relay 
       operationId: 'chromium-turn-route-test',
       milestone: 'failed',
       events: events.snapshot(),
+      browserDiagnostics,
       turn: turn.diagnostic(),
       processes: stack.diagnostic(),
     } as const
@@ -192,6 +208,7 @@ test('renews owner-issued native and browser TURN paths after application relay 
       milestone: 'process-snapshot',
       turn: diagnostic.turn,
       processes: diagnostic.processes,
+      browserDiagnostics: diagnostic.browserDiagnostics,
     }))
     await testInfo.attach('turn-route-diagnostic', {
       body: redactor?.text(diagnostic) ?? JSON.stringify(diagnostic),
@@ -200,6 +217,7 @@ test('renews owner-issued native and browser TURN paths after application relay 
   }
   await releasePageOutput(page).catch(() => undefined)
   const cleanup = await Promise.allSettled([turn.dispose(), stack.dispose()])
+  if (managed) cleanup.push(...await Promise.allSettled([managed.dispose()]))
   const failures = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : [])
   const allFailures = [...(primaryFailure === undefined ? [] : [primaryFailure]), ...failures]
   try {
