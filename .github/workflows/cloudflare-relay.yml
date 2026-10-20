@@ -46,8 +46,21 @@ jobs:
           cache-dependency-path: relay-rust/crates/relay-cloudflare/package-lock.json
       - name: Check deployment lifecycle
         run: node --test scripts/deploy/cloudflare/*.test.mjs
-      - name: Validate deployment mode
-        run: node --input-type=module -e "import { readDeploymentMode } from './scripts/deploy/cloudflare/configuration.mjs'; readDeploymentMode(process.env);"
+      - name: Validate deployment inputs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_RELAY_DOMAIN: ${{ vars.CLOUDFLARE_RELAY_DOMAIN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          WINDSHARE_OWNER_PASSWORD: ${{ secrets.WINDSHARE_OWNER_PASSWORD }}
+          CLOUDFLARE_CONSOLE_DOMAIN: ${{ vars.CLOUDFLARE_CONSOLE_DOMAIN }}
+        run: |
+          node --input-type=module -e "
+            import { readDeploymentMode } from './scripts/deploy/cloudflare/configuration.mjs';
+            import { readInputs } from './scripts/deploy/cloudflare/deployment.mjs';
+            readDeploymentMode(process.env);
+            readInputs(process.env);
+          "
       - uses: pnpm/action-setup@v6
         if: env.CLOUDFLARE_DEPLOYMENT_MODE == 'full'
         with:
