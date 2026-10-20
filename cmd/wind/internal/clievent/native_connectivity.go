@@ -6,12 +6,13 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/windshare/windshare/connectivity/turnpath"
 )
 
-// NativeConnectivitySpec contains only bounded facts. Raw provider errors and
-// signaling descriptions cannot enter the command event contract.
+// NativeConnectivitySpec separates bounded provider diagnostics from transport
+// states so log messages cannot masquerade as connection transitions.
 type NativeConnectivitySpec struct {
 	Command           Command
 	Session           ProtocolSessionID
@@ -24,6 +25,7 @@ type NativeConnectivitySpec struct {
 	Kind              string
 	State             string
 	At                time.Time
+	Diagnostic        *NativeProviderDiagnosticFacts
 	Candidate         *NativeCandidateFacts
 	Pair              *NativePairFacts
 	Reachability      *NativeReachabilityFacts
@@ -31,6 +33,14 @@ type NativeConnectivitySpec struct {
 	Admission         *NativeAdmissionFacts
 	Socket            *NativeSocketFacts
 	TURN              *NativeTURNFacts
+}
+
+const NativeProviderDiagnosticMessageLimit = 4096
+
+type NativeProviderDiagnosticFacts struct {
+	Scope    string
+	Severity string
+	Message  string
 }
 
 type NativeTURNFacts struct {
@@ -136,6 +146,10 @@ func NewNativeConnectivityObserved(spec NativeConnectivitySpec) (NativeConnectiv
 	if !validNativeConnectivity(spec) {
 		return NativeConnectivityObserved{}, ErrInvalidEvent
 	}
+	if spec.Diagnostic != nil {
+		copied := *spec.Diagnostic
+		spec.Diagnostic = &copied
+	}
 	if spec.Candidate != nil {
 		copied := *spec.Candidate
 		spec.Candidate = &copied
@@ -168,6 +182,10 @@ func (value NativeConnectivityObserved) Command() Command { return value.spec.Co
 func (NativeConnectivityObserved) Level() Level           { return LevelDebug }
 func (value NativeConnectivityObserved) Facts() NativeConnectivitySpec {
 	spec := value.spec
+	if spec.Diagnostic != nil {
+		copied := *spec.Diagnostic
+		spec.Diagnostic = &copied
+	}
 	if spec.Candidate != nil {
 		copied := *spec.Candidate
 		spec.Candidate = &copied
@@ -211,6 +229,9 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 		return false
 	}
 	if !validNativeTURN(spec) {
+		return false
+	}
+	if !validNativeProviderDiagnostic(spec) {
 		return false
 	}
 	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
@@ -259,7 +280,21 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	return true
 }
 
+func validNativeProviderDiagnostic(spec NativeConnectivitySpec) bool {
+	if spec.Diagnostic == nil {
+		return spec.Kind != "provider_diagnostic"
+	}
+	d := spec.Diagnostic
+	return spec.Kind == "provider_diagnostic" && spec.State == "unknown" &&
+		slices.Contains([]string{"ice", "turnc"}, d.Scope) &&
+		slices.Contains([]string{"warning", "error"}, d.Severity) &&
+		len(d.Message) <= NativeProviderDiagnosticMessageLimit && utf8.ValidString(d.Message)
+}
+
 func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
+	if spec.Kind == "provider_diagnostic" {
+		return true
+	}
 	if spec.TURN != nil && spec.TURN.Cleanup.Valid() && spec.Kind == spec.TURN.Cleanup.EventKind() {
 		return true
 	}

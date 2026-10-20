@@ -2,6 +2,7 @@ import { racePeerAttempt, cancelPeerAttempt } from './attempt-race'
 import type { PeerSlotLease } from '../../session/peer-slots/slots'
 import { PeerRecoveryTrace } from './trace'
 import { PeerAttemptBudget } from './budget'
+import { PeerRetryBackoff, type PeerRetryDelay } from './backoff'
 import { PeerProfilePlanner } from './profile-planner'
 import { PeerRecoveryWave as WaveBudget, type PeerPathNotice } from './wave'
 import type { PeerProviderFact } from './provider-facts'
@@ -31,7 +32,6 @@ import {
 } from '../v2-peer-failure'
 import {
   browserV2PeerRecoveryClock,
-  calculateV2PeerRetryDelay,
   createV2PeerRecoveryPolicy,
   V2_PEER_BUDGET_REFILL_MILLISECONDS,
   V2_PEER_BROWSE_RETENTION_MILLISECONDS,
@@ -64,7 +64,7 @@ export class V2PeerRecoverySupervisor {
   readonly #slot: PeerSlotLease
   readonly #policy: V2PeerRecoveryPolicy
   readonly #clock: V2PeerRecoveryClock
-  readonly #random: () => number
+  readonly #backoff: PeerRetryBackoff
   readonly #trace: PeerRecoveryTrace
   readonly #budget: PeerAttemptBudget
   readonly #profiles: PeerProfilePlanner
@@ -90,7 +90,6 @@ export class V2PeerRecoverySupervisor {
   #activeSince: number | undefined
   #lastNow: number | undefined
   #waveOrdinal = 0
-  #authenticatedNotBefore = 0
   #terminal: V2ProtocolSessionTerminalSnapshot | undefined
   #pendingWave: PendingWave | undefined
 
@@ -102,7 +101,7 @@ export class V2PeerRecoverySupervisor {
     this.#slot = options.slot
     this.#policy = createV2PeerRecoveryPolicy(options.policy)
     this.#clock = options.clock ?? browserV2PeerRecoveryClock
-    this.#random = options.random ?? Math.random
+    this.#backoff = new PeerRetryBackoff(this.#policy, options.random ?? Math.random)
     this.#trace = new PeerRecoveryTrace(this.#protocolSessionId, this.#peerPathId, options.trace)
     this.#profiles = new PeerProfilePlanner(options.endpoints, options.network)
     this.#onUnavailable = options.onUnavailable ?? (() => undefined)
@@ -536,48 +535,35 @@ export class V2PeerRecoverySupervisor {
     signal: AbortSignal,
   ): Promise<boolean> {
     const now = this.#now()
-    if (decision.reason === 'admission-limited') {
-      this.#authenticatedNotBefore = Math.max(
-        this.#authenticatedNotBefore,
-        now + decision.authenticatedRetryAfterMilliseconds,
-      )
-    }
+    this.#backoff.retain(decision, now)
     const exhaustion = wave.exhaustion(this.#now(), true)
     if (exhaustion !== undefined) {
       this.#exhaust(exhaustion, wave.ordinal)
       return false
     }
 
-    let localDelay: number
+    let backoff: PeerRetryDelay
     try {
-      localDelay = calculateV2PeerRetryDelay(
-        this.#policy,
-        retryOrdinal,
-        this.#random(),
-      )
+      backoff = this.#backoff.schedule(now, retryOrdinal, wave.delayedOpportunity(now))
     } catch {
       this.#stopPath('local-contract')
       return false
     }
-    const authenticatedDelay = Math.max(0, this.#authenticatedNotBefore - now)
-    const delay = Math.max(localDelay, authenticatedDelay, wave.delayedOpportunity(now))
     this.#trace.emit(
       () => Object.freeze({
         stage: 'backoff-scheduled',
         waveOrdinal: wave.ordinal,
         retryOrdinal,
-        localDelayMilliseconds: localDelay,
-        authenticatedRetryAfterMilliseconds: authenticatedDelay,
-        effectiveDelayMilliseconds: delay,
+        ...backoff,
       }),
       attemptId,
     )
     const reason = failure.kind === 'local-transient' ? failure.reason : decision.reason
-    return this.#waitForRetry(delay, reason, wave, retryOrdinal, signal)
+    return this.#waitForRetry(backoff.effectiveDelayMilliseconds, reason, wave, retryOrdinal, signal)
   }
 
   async #waitForRetainedNotBefore(wave: WaveBudget, signal: AbortSignal): Promise<boolean> {
-    const delay = Math.max(0, this.#authenticatedNotBefore - this.#now())
+    const delay = this.#backoff.retainedDelay(this.#now())
     if (delay === 0) return true
     return this.#waitForRetry(delay, 'retained-backoff', wave, 0, signal)
   }
