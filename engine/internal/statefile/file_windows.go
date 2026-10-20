@@ -1,6 +1,6 @@
 //go:build windows
 
-package relayconfig
+package statefile
 
 import (
 	"os"

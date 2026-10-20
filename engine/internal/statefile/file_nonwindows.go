@@ -1,6 +1,6 @@
 //go:build !windows
 
-package relayconfig
+package statefile
 
 import "os"
 
@@ -9,5 +9,8 @@ func createPrivateFile(path string) (*os.File, error) {
 }
 
 func replaceFile(source, destination string) error {
-	return os.Rename(source, destination)
+	if err := os.Rename(source, destination); err != nil {
+		return err
+	}
+	return syncDirectory(destination)
 }

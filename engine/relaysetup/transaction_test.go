@@ -14,28 +14,28 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-func pendingCredential(now time.Time) relayconfig.Config {
+func pendingCredential(now time.Time) Snapshot {
 	saved := prior()
 	saved.Pending = expiredPending(now)
-	saved.Pending.State = relayconfig.SetupInstalling
-	saved.Pending.CredentialID, saved.Pending.AccessKey = "credential", "claimed-key"
-	saved.Pending.ExpiresAt = now.Add(time.Minute).UnixMilli()
+	saved.Pending = saved.Pending.withPhase(installing{Enrollment: saved.Pending.enrollment(), Credential: credential{ID: "credential", AccessKey: "claimed-key"}})
+	setExpiry(saved.Pending, now.Add(time.Minute).UnixMilli())
 	return saved
 }
 
 func TestImportDuringApprovalCannotBeOverwrittenByCheckpointsOrInstallation(t *testing.T) {
 	for _, operation := range []Operation{AddProfile, PrivateOnboarding} {
 		t.Run(string(operation), func(t *testing.T) {
-			store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
-			if err := store.Save(prior()); err != nil {
+			settings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+			store := FileStore{Settings: settings}
+			if err := settings.Save(prior().Config); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Unix(100, 0)
 			saved := prior()
 			saved.Pending = expiredPending(now)
-			saved.Pending.ExpiresAt = now.Add(time.Minute).UnixMilli()
-			saved.Pending.Operation = string(operation)
-			if _, err := store.Update(t.Context(), func(current *relayconfig.Config) error {
+			setExpiry(saved.Pending, now.Add(time.Minute).UnixMilli())
+			saved.Pending.Operation = operation
+			if _, err := store.Update(t.Context(), func(current *Snapshot) error {
 				current.Pending = saved.Pending
 				return nil
 			}); err != nil {
@@ -51,7 +51,7 @@ func TestImportDuringApprovalCannotBeOverwrittenByCheckpointsOrInstallation(t *t
 					case "/api/enrollments/claim":
 						// A distinct store models a separate CLI importer. The OS lock
 						// must be released throughout approval and HTTP calls.
-						if err := (relayconfig.FileStore{Path: store.Path}).Save(imported); err != nil {
+						if err := (relayconfig.FileStore{Path: settings.Path}).Save(imported); err != nil {
 							t.Fatal(err)
 						}
 						return response(200, map[string]string{"credential_id": "credential", "access_key": "key"})
@@ -71,7 +71,7 @@ func TestImportDuringApprovalCannotBeOverwrittenByCheckpointsOrInstallation(t *t
 			}
 			current, err := store.Load()
 			if err != nil || current.SettingsRevision() != imported.SettingsRevision() ||
-				current.Pending == nil || current.Pending.AccessKey != "key" {
+				current.Pending == nil || current.Pending.credential().AccessKey != "key" {
 				t.Fatalf("import or cancellation authority was lost: %+v, %v", current, err)
 			}
 			if err := service.Cancel(t.Context(), saved.Pending.RelayURL); err != nil {
@@ -136,7 +136,7 @@ func TestAcknowledgedDiskFailureCanBeCancelledAndCancellationCanResume(t *testin
 			return response(200, map[string]bool{"ok": true})
 		case "/api/enrollments/cancel":
 			cancellationRequests++
-			if !confirmed || store.saved.Pending.State != relayconfig.SetupCancelling {
+			if !confirmed || store.saved.Pending.phase.stage() != (cancelling{}).stage() {
 				t.Fatal("cancellation lost acknowledgement or durable cancellation fence")
 			}
 			return response(200, map[string]bool{"ok": true})
@@ -203,7 +203,7 @@ func TestExpiryAfterClaimClearsTheCurrentCheckpoint(t *testing.T) {
 	now := time.Unix(100, 0)
 	saved := prior()
 	saved.Pending = expiredPending(now)
-	saved.Pending.ExpiresAt = now.Add(time.Minute).UnixMilli()
+	setExpiry(saved.Pending, now.Add(time.Minute).UnixMilli())
 	store := &memoryStore{saved: saved}
 	service := New(Dependencies{Store: store, Now: func() time.Time { return now },
 		HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {

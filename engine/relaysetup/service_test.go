@@ -16,11 +16,11 @@ import (
 )
 
 type memoryStore struct {
-	saved       relayconfig.Config
+	saved       Snapshot
 	failInstall bool
 }
 
-func clone(config relayconfig.Config) relayconfig.Config {
+func clone(config Snapshot) Snapshot {
 	config.Profiles = slices.Clone(config.Profiles)
 	config.ActiveRelays = slices.Clone(config.ActiveRelays)
 	if config.Pending != nil {
@@ -29,27 +29,34 @@ func clone(config relayconfig.Config) relayconfig.Config {
 	}
 	return config
 }
-func (store *memoryStore) Load() (relayconfig.Config, error) { return clone(store.saved), nil }
-func (store *memoryStore) Save(config relayconfig.Config) error {
+func (store *memoryStore) Load() (Snapshot, error) { return clone(store.saved), nil }
+func (store *memoryStore) Save(config Snapshot) error {
 	if store.failInstall && config.Pending == nil {
 		return errors.New("disk unavailable")
 	}
-	if err := config.Validate(); err != nil {
-		return err
+	if config.SettingsRevision() != store.saved.SettingsRevision() {
+		if err := config.Config.Validate(); err != nil {
+			return err
+		}
+	}
+	if config.Pending != nil {
+		if err := config.Pending.validate(); err != nil {
+			return err
+		}
 	}
 	store.saved = clone(config)
 	return nil
 }
-func (store *memoryStore) Update(ctx context.Context, change func(*relayconfig.Config) error) (relayconfig.Config, error) {
+func (store *memoryStore) Update(ctx context.Context, change func(*Snapshot) error) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
 	current := clone(store.saved)
 	if err := change(&current); err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
 	if err := store.Save(current); err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
 	return clone(current), nil
 }
@@ -61,9 +68,9 @@ func response(status int, value any) (*http.Response, error) {
 	body, _ := json.Marshal(value)
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 }
-func prior() relayconfig.Config {
-	return relayconfig.Config{FrontURL: "https://chosen.example", Profiles: []senderrelay.Candidate{{PublicURL: "https://public.example"}},
-		ActiveRelays: []string{"https://public.example"}}
+func prior() Snapshot {
+	return Snapshot{Config: relayconfig.Config{FrontURL: "https://chosen.example", Profiles: []senderrelay.Candidate{{PublicURL: "https://public.example"}},
+		ActiveRelays: []string{"https://public.example"}}}
 }
 func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {
 	store := &memoryStore{saved: prior()}
@@ -121,13 +128,13 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 			if claims == 2 {
 				return response(503, map[string]any{"error": "temporarily_unavailable", "retry_after_ms": 1000})
 			}
-			if body["claim_secret"] == "" || store.saved.Pending.EnrollmentID != "enrollment" {
+			if body["claim_secret"] == "" || store.saved.Pending.enrollment().ID != "enrollment" {
 				t.Fatal("claim preceded durable enrollment")
 			}
 			return response(200, map[string]string{"access_key": "client-only-key", "credential_id": "credential"})
 		case "/api/enrollments/installed":
 			confirmations++
-			if store.saved.Pending.AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 ||
+			if store.saved.Pending.credential().AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 ||
 				!slices.Equal(store.saved.ActiveRelays, []string{"https://public.example"}) {
 				t.Fatal("incomplete setup changed the active selection")
 			}
@@ -150,7 +157,7 @@ func TestPrivateEnrollmentResumesClaimedInstallationWithoutChangingSelectionsEar
 	if _, err := New(dependencies).Run(t.Context(), request, nil); err == nil {
 		t.Fatal("disk failure was not surfaced")
 	}
-	if store.saved.Pending == nil || store.saved.Pending.AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 {
+	if store.saved.Pending == nil || store.saved.Pending.credential().AccessKey != "client-only-key" || len(store.saved.Profiles) != 1 {
 		t.Fatal("lost pending installation")
 	}
 	store.failInstall = false

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-
-	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 func (service *Service) Cancel(ctx context.Context, address string) error {
@@ -24,13 +22,13 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 	if !sameRelay(saved.Pending.RelayURL, address) {
 		return ErrPendingSetup
 	}
-	saved, err = service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+	saved, err = service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if err := ownsPending(*current, saved.Pending); err != nil {
 			return err
 		}
 		// Commit the cancellation fence before contacting the server so another
 		// process cannot install a credential whose revocation is in flight.
-		current.Pending.State = relayconfig.SetupCancelling
+		current.Pending = current.Pending.withPhase(cancelling{EnrollmentID: current.Pending.enrollment().ID})
 		return nil
 	})
 	if err != nil {
@@ -39,8 +37,8 @@ func (service *Service) Cancel(ctx context.Context, address string) error {
 	return service.finishCancellation(ctx, saved.Pending)
 }
 
-func (service *Service) finishCancellation(ctx context.Context, pending *relayconfig.PendingSetup) error {
-	if pending.EnrollmentID != "" {
+func (service *Service) finishCancellation(ctx context.Context, pending *PendingSetup) error {
+	if pending.enrollment().ID != "" {
 		var response map[string]any
 		err := service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments/cancel"), claimant(pending), &response)
 		if err != nil && !errors.Is(err, ErrExpired) {
@@ -50,6 +48,6 @@ func (service *Service) finishCancellation(ctx context.Context, pending *relayco
 	if err := service.clearPending(ctx, pending); err != nil {
 		return err
 	}
-	service.emit(nil, Progress{Stage: "cancelled", OperationID: pending.OperationID, EnrollmentID: pending.EnrollmentID})
+	service.emit(nil, Progress{Stage: "cancelled", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 	return nil
 }

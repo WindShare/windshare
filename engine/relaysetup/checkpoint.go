@@ -2,57 +2,51 @@ package relaysetup
 
 import (
 	"context"
-
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-func ownsPending(current relayconfig.Config, pending *relayconfig.PendingSetup) error {
+func ownsPending(current Snapshot, pending *PendingSetup) error {
 	if current.Pending == nil || current.Pending.OperationID != pending.OperationID {
 		return ErrSetupSuperseded
 	}
 	return nil
 }
 
-func (service *Service) currentPending(pending *relayconfig.PendingSetup) (relayconfig.Config, error) {
+func (service *Service) currentPending(pending *PendingSetup) (Snapshot, error) {
 	current, err := service.dependencies.Store.Load()
 	if err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
 	if err := ownsPending(current, pending); err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
-	if current.Pending.State != pending.State {
-		return relayconfig.Config{}, ErrSetupSuperseded
+	if current.Pending.phase.stage() != pending.phase.stage() {
+		return Snapshot{}, ErrSetupSuperseded
 	}
 	return current, nil
 }
 
-func (service *Service) checkpoint(ctx context.Context, pending *relayconfig.PendingSetup, change func(*relayconfig.PendingSetup)) (relayconfig.Config, error) {
-	return service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+func (service *Service) checkpoint(ctx context.Context, pending *PendingSetup, change func(*PendingSetup) setupPhase) (Snapshot, error) {
+	return service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if err := ownsPending(*current, pending); err != nil {
 			return err
 		}
-		if current.Pending.State != pending.State {
+		if current.Pending.phase.stage() != pending.phase.stage() {
 			return ErrSetupSuperseded
 		}
-		change(current.Pending)
+		current.Pending = current.Pending.withPhase(change(current.Pending))
 		return nil
 	})
 }
 
-func (service *Service) clearPending(ctx context.Context, pending *relayconfig.PendingSetup) error {
-	_, err := service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+func (service *Service) clearPending(ctx context.Context, pending *PendingSetup) error {
+	_, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if err := ownsPending(*current, pending); err != nil {
 			return err
 		}
-		if current.Pending.State != pending.State {
+		if current.Pending.phase.stage() != pending.phase.stage() {
 			return ErrSetupSuperseded
 		}
 		current.Pending = nil
-		if current.Profiles == nil {
-			current.Profiles = []senderrelay.Candidate{}
-		}
 		return nil
 	})
 	return err

@@ -6,16 +6,24 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-func expiredPending(now time.Time) *relayconfig.PendingSetup {
-	return &relayconfig.PendingSetup{State: relayconfig.SetupEnrolling, SettingsRevision: prior().SettingsRevision(),
-		OperationID: "operation", RelayURL: "https://private.example",
-		ConsoleURL: "https://console.example", DeviceName: "Laptop", ClaimSecret: encode(make([]byte, 32)),
-		Operation: string(AddProfile), EnrollmentID: "enrollment", UserCode: "ABCD-EFGH",
-		VerificationURL: "https://console.example/", IntervalMS: 5000, ExpiresAt: now.Add(-time.Minute).UnixMilli()}
+func expiredPending(now time.Time) *PendingSetup {
+	return &PendingSetup{setupIntent: setupIntent{SettingsRevision: prior().SettingsRevision(),
+		OperationID: "operation", RelayURL: "https://private.example", ConsoleURL: "https://console.example",
+		DeviceName: "Laptop", ClaimSecret: encode(make([]byte, claimSecretBytes)), Operation: AddProfile},
+		phase: awaiting{Enrollment: enrollment{ID: "enrollment", UserCode: "ABCD-EFGH", VerificationURL: "https://console.example/",
+			IntervalMS: 5000, ExpiresAt: now.Add(-time.Minute).UnixMilli()}}}
+}
+func setExpiry(pending *PendingSetup, expires int64) {
+	switch phase := pending.phase.(type) {
+	case awaiting:
+		phase.Enrollment.ExpiresAt = expires
+		pending.phase = phase
+	case installing:
+		phase.Enrollment.ExpiresAt = expires
+		pending.phase = phase
+	}
 }
 func TestExpiredEnrollmentCanBeRestartedWithoutChangingSelections(t *testing.T) {
 	now := time.Unix(100, 0)
@@ -37,8 +45,7 @@ func TestCancellationOfClaimedCredentialDoesNotInstallIt(t *testing.T) {
 	now := time.Unix(100, 0)
 	saved := prior()
 	saved.Pending = expiredPending(now)
-	saved.Pending.CredentialID, saved.Pending.AccessKey = "credential", "claimed-key"
-	saved.Pending.State = relayconfig.SetupInstalling
+	saved.Pending = saved.Pending.withPhase(installing{Enrollment: saved.Pending.enrollment(), Credential: credential{ID: "credential", AccessKey: "claimed-key"}})
 	store := &memoryStore{saved: saved}
 	service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path != "/api/enrollments/cancel" {
@@ -57,7 +64,7 @@ func TestCancellationInterruptsAnActiveApprovalAndSerializesStorage(t *testing.T
 	now := time.Unix(100, 0)
 	saved := prior()
 	saved.Pending = expiredPending(now)
-	saved.Pending.ExpiresAt = now.Add(time.Minute).UnixMilli()
+	setExpiry(saved.Pending, now.Add(time.Minute).UnixMilli())
 	store := &memoryStore{saved: saved}
 	waiting := make(chan struct{})
 	service := New(Dependencies{Store: store, Now: func() time.Time { return now },

@@ -61,7 +61,10 @@ contact the deployment.
 The file is stored as `windshare/config.json` in your user configuration directory:
 `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or
 `~/Library/Application Support` on macOS. `WINDSHARE_CONFIG` selects another file
-for both import and sharing. Manual editing remains supported.
+for both import and sharing. Manual editing remains supported. This file contains only
+user settings. Rebuildable TURN discovery lives in `config.json.state/turn/`; interrupted
+setup records live in `config.json.state/setup/` and are removed on completion. Neither
+is included in configuration imports or exports.
 
 Ordinary `wind share <path...>` reuses these defaults. A single relay at the frontend's
 origin produces a link without `r=`; separate origins and multiple relays retain their hints.

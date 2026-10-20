@@ -63,7 +63,7 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 			}
 			var stdout, stderr bytes.Buffer
 			app := &App{Stdout: &stdout, Stderr: &stderr, engineConfig: engine.Config{RelaySetup: relaysetup.Dependencies{
-				Store: store, HTTP: server.Client(),
+				Store: relaysetup.FileStore{Settings: store}, HTTP: server.Client(),
 				OpenBrowser: func(_ context.Context, _ string) error {
 					t.Error("headless command opened a browser")
 					return nil
@@ -74,7 +74,7 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 				t.Fatal("setup failed", code, stderr.String())
 			}
 			saved, err := store.Load()
-			if err != nil || saved.Pending != nil || len(saved.Profiles) != 2 ||
+			if err != nil || len(saved.Profiles) != 2 ||
 				saved.Profiles[1].AccessKey != "cli-access-key-canary" || saved.FrontURL != initial.FrontURL {
 				t.Fatal("setup did not persist a complete profile", err)
 			}

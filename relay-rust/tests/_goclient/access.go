@@ -63,8 +63,14 @@ func accessScenario(endpoint, console string) {
 	directory, err := os.MkdirTemp("", "windshare-access-client-")
 	check(err)
 	path := filepath.Join(directory, "configuration.json")
-	defer func() { _ = os.Remove(path); _ = os.Remove(path + ".lock"); _ = os.Remove(directory) }()
-	store := relayconfig.FileStore{Path: path}
+	defer func() {
+		_ = os.Remove(path)
+		_ = os.Remove(path + ".lock")
+		_ = os.Remove(filepath.Join(path+".state", "setup"))
+		_ = os.Remove(path + ".state")
+		_ = os.Remove(directory)
+	}()
+	store := relaysetup.FileStore{Settings: relayconfig.FileStore{Path: path}}
 	service := relaysetup.New(relaysetup.Dependencies{Store: store})
 	installed, err := service.Run(context.Background(), relaysetup.Request{
 		URL: strings.TrimSuffix(endpoint, v2.WebSocketPath), DeviceName: "Enrolled device", Operation: relaysetup.PrivateOnboarding,

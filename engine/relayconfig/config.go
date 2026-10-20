@@ -2,6 +2,8 @@
 package relayconfig
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/turnconfig"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -23,41 +26,19 @@ const (
 var ErrConfig = errors.New("invalid sharing configuration")
 
 type Config struct {
-	ManagedTURN  []turnconfig.ManagedService
-	TURN         turnconfig.Config
-	FrontURL     string
-	Profiles     []senderrelay.Candidate
-	ActiveRelays []string
-	Pending      *PendingSetup
-}
-
-// Pending setup survives process interruption without publishing a partial selection.
-type PendingSetup struct {
-	State            SetupState `json:"state"`
-	SettingsRevision string     `json:"settings_revision"`
-	OperationID      string     `json:"operation_id"`
-	RelayURL         string     `json:"relay_url"`
-	ConsoleURL       string     `json:"console_url"`
-	FrontURL         string     `json:"front_url,omitempty"`
-	DeviceName       string     `json:"device_name"`
-	ClaimSecret      string     `json:"claim_secret"`
-	Operation        string     `json:"operation"`
-	EnrollmentID     string     `json:"enrollment_id,omitempty"`
-	UserCode         string     `json:"user_code,omitempty"`
-	VerificationURL  string     `json:"verification_url,omitempty"`
-	ExpiresAt        int64      `json:"expires_at,omitempty"`
-	IntervalMS       int64      `json:"interval_ms,omitempty"`
-	AccessKey        string     `json:"access_key,omitempty"`
-	CredentialID     string     `json:"credential_id,omitempty"`
+	ManagedTURNPolicies []turnconfig.ManagedPolicy
+	TURN                turnconfig.Config
+	FrontURL            string
+	Profiles            []senderrelay.Candidate
+	ActiveRelays        []string
 }
 
 type document struct {
-	ManagedTURN  []turnconfig.ManagedService `json:"managed_turn,omitempty"`
-	TURN         *turnconfig.Config          `json:"turn,omitempty"`
-	FrontURL     string                      `json:"front_url,omitempty"`
-	Profiles     []savedRelay                `json:"profiles"`
-	ActiveRelays []string                    `json:"active_relays,omitempty"`
-	Pending      *PendingSetup               `json:"pending_setup,omitempty"`
+	ManagedTURNPolicies []turnconfig.ManagedPolicy `json:"managed_turn_policies,omitempty"`
+	TURN                *turnconfig.Config         `json:"turn,omitempty"`
+	FrontURL            string                     `json:"front_url,omitempty"`
+	Profiles            []savedRelay               `json:"profiles"`
+	ActiveRelays        []string                   `json:"active_relays,omitempty"`
 }
 type savedRelay struct {
 	URL       string `json:"url"`
@@ -83,16 +64,16 @@ func Load() (Config, error) {
 	return loadPath(path, !explicit)
 }
 func loadPath(path string, missingAllowed bool) (Config, error) {
-	file, err := os.Open(path)
+	data, err := statefile.ReadSettings(context.Background(), path)
 	if missingAllowed && errors.Is(err, os.ErrNotExist) {
 		return Config{}, nil
 	}
 	if err != nil {
 		return Config{}, err
 	}
-	defer file.Close()
-	return Decode(file)
+	return Decode(bytes.NewReader(data))
 }
+
 func Decode(reader io.Reader) (Config, error) {
 	limited := &io.LimitedReader{R: reader, N: maxConfigBytes + 1}
 	decoder := json.NewDecoder(limited)
@@ -105,7 +86,7 @@ func Decode(reader io.Reader) (Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
 		return Config{}, ErrConfig
 	}
-	result := Config{ManagedTURN: disk.ManagedTURN, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, Pending: disk.Pending}
+	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays}
 	if disk.TURN != nil {
 		result.TURN = *disk.TURN
 	}
@@ -132,7 +113,7 @@ func (config Config) validateFields() error {
 	if config.FrontURL != "" && ValidateFrontURL(config.FrontURL) != nil {
 		return ErrConfig
 	}
-	if (config.Profiles == nil && config.Pending == nil) || len(config.Profiles) > MaximumProfiles ||
+	if config.Profiles == nil || len(config.Profiles) > MaximumProfiles ||
 		len(config.ActiveRelays) > relayset.MaximumEndpoints {
 		return ErrConfig
 	}
@@ -144,17 +125,16 @@ func (config Config) validateFields() error {
 		endpoint, _ := v2.NormalizeRelayEndpoint(profile.PublicURL)
 		saved[endpoint.DialURL] = true
 	}
-	services := map[string]bool{}
-	deployments := map[string]bool{}
-	if len(config.ManagedTURN) > MaximumProfiles {
+	policies := map[string]bool{}
+	if len(config.ManagedTURNPolicies) > MaximumProfiles {
 		return ErrConfig
 	}
-	for _, service := range config.ManagedTURN {
-		endpoint, err := v2.NormalizeRelayEndpoint(service.RelayURL)
-		if err != nil || service.Validate() != nil || !saved[endpoint.DialURL] || services[service.ServiceID] || deployments[endpoint.DialURL] {
+	for _, policy := range config.ManagedTURNPolicies {
+		endpoint, err := v2.NormalizeRelayEndpoint(policy.RelayURL)
+		if err != nil || policy.Validate() != nil || !saved[endpoint.DialURL] || policies[endpoint.DialURL] {
 			return ErrConfig
 		}
-		services[service.ServiceID], deployments[endpoint.DialURL] = true, true
+		policies[endpoint.DialURL] = true
 	}
 	seen := map[string]bool{}
 	for _, address := range config.ActiveRelays {
@@ -163,9 +143,6 @@ func (config Config) validateFields() error {
 			return ErrConfig
 		}
 		seen[endpoint.DialURL] = true
-	}
-	if config.Pending != nil && !config.Pending.valid() {
-		return ErrConfig
 	}
 	return nil
 }
@@ -184,5 +161,17 @@ func (store FileStore) Load() (Config, error) {
 	return loadPath(store.Path, true)
 }
 func (store FileStore) Save(config Config) error {
-	return store.replaceSettings(config)
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	return store.save(config)
+}
+
+// Location identifies the namespace shared by settings and durable setup commits.
+func (store FileStore) Location() (string, error) {
+	if store.Path != "" {
+		return store.Path, nil
+	}
+	path, _, err := configurationPath()
+	return path, err
 }

@@ -1,8 +1,10 @@
 package turnservice
 
 import (
+	"github.com/windshare/windshare/engine/turnprovider"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/turnpath"
 )
@@ -20,6 +22,12 @@ func TestWatchUsesCurrentDeviceAuthorityWhileDiscoveryIsPending(t *testing.T) {
 		return reply(http.StatusServiceUnavailable, "{}"), nil
 	})
 	config.Profiles[0].AccessKey = "replacement-device"
+	if err := registry.cache.Save(t.Context(), config.Profiles[0], turnprovider.Capability{ServiceID: "cf-service", Enabled: true}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Configure(config); err != nil {
+		t.Fatal(err)
+	}
 	stop := registry.Watch(t.Context(), config.Profiles)
 	defer stop()
 	<-started

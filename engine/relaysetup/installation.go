@@ -7,7 +7,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 // installation is shared by preflight and commit so the acknowledgement cannot
@@ -35,36 +34,7 @@ func installation(saved relayconfig.Config, address, accessKey, frontend string,
 	if saved.FrontURL == "" {
 		saved.FrontURL = frontend
 	}
-	saved.Pending = nil
 	return saved, saved.Validate()
-}
-
-// Discovery is optional inventory. A malformed capability must not undo device
-// enrollment, and adding a deployment must not consume the manual account quota.
-func installManagedService(saved *relayconfig.Config, address string, references []turnconfig.ManagedService) {
-	if len(references) != 1 {
-		return
-	}
-	reference := references[0]
-	if reference.Validate() != nil || !sameRelay(reference.RelayURL, address) {
-		return
-	}
-	for _, current := range saved.ManagedTURN {
-		if current.ServiceID == reference.ServiceID && !sameRelay(current.RelayURL, address) {
-			return
-		}
-	}
-	saved.ManagedTURN = slices.Clone(saved.ManagedTURN)
-	for i, current := range saved.ManagedTURN {
-		if sameRelay(current.RelayURL, address) {
-			reference.LocalBudgetBytes = current.LocalBudgetBytes
-			saved.ManagedTURN[i] = reference
-			return
-		}
-	}
-	if len(saved.ManagedTURN) < relayconfig.MaximumProfiles {
-		saved.ManagedTURN = append(saved.ManagedTURN, reference)
-	}
 }
 
 func installationResult(saved relayconfig.Config, address, credentialID string) Result {
@@ -72,34 +42,34 @@ func installationResult(saved relayconfig.Config, address, credentialID string) 
 }
 
 func (service *Service) install(ctx context.Context, revision, address, accessKey, credentialID, frontend string, operation Operation) (Result, error) {
-	saved, err := service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+	saved, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
 		}
 		if current.SettingsRevision() != revision {
 			return ErrSettingsChanged
 		}
-		next, err := installation(*current, address, accessKey, frontend, operation)
+		next, err := installation(current.Config, address, accessKey, frontend, operation)
 		if err == nil {
-			*current = next
+			current.Config = next
 		}
 		return err
 	})
 	if err != nil {
 		return Result{}, err
 	}
-	return installationResult(saved, address, credentialID), nil
+	return installationResult(saved.Config, address, credentialID), nil
 }
 
-func pendingInstallation(current relayconfig.Config, pending *relayconfig.PendingSetup) (relayconfig.Config, error) {
+func pendingInstallation(current Snapshot, pending *PendingSetup) (relayconfig.Config, error) {
 	if err := ownsPending(current, pending); err != nil {
 		return relayconfig.Config{}, err
 	}
-	if current.Pending.State != relayconfig.SetupInstalling {
+	if current.Pending.phase.stage() != (installing{}).stage() {
 		return relayconfig.Config{}, ErrSetupSuperseded
 	}
 	if current.SettingsRevision() != pending.SettingsRevision {
 		return relayconfig.Config{}, ErrSettingsChanged
 	}
-	return installation(current, pending.RelayURL, pending.AccessKey, pending.FrontURL, Operation(pending.Operation))
+	return installation(current.Config, pending.RelayURL, pending.credential().AccessKey, pending.FrontURL, pending.Operation)
 }

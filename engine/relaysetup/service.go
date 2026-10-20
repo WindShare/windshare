@@ -5,13 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/turnprovider"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/windshare/windshare/engine/relayconfig"
 )
 
 type Operation string
@@ -31,14 +31,19 @@ var (
 )
 
 type Store interface {
-	Load() (relayconfig.Config, error)
-	Update(context.Context, func(*relayconfig.Config) error) (relayconfig.Config, error)
+	Load() (Snapshot, error)
+	Update(context.Context, func(*Snapshot) error) (Snapshot, error)
 }
+type DiscoveryCache interface {
+	Save(context.Context, senderrelay.Candidate, turnprovider.Capability, time.Time) error
+}
+
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 type Dependencies struct {
 	Store       Store
+	Cache       DiscoveryCache
 	HTTP        HTTPClient
 	OpenBrowser func(context.Context, string) error
 	Now         func() time.Time
@@ -124,7 +129,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		return Result{}, err
 	}
 	if saved.Pending != nil {
-		if !sameRelay(saved.Pending.RelayURL, request.URL) || saved.Pending.Operation != string(request.Operation) {
+		if !sameRelay(saved.Pending.RelayURL, request.URL) || saved.Pending.Operation != request.Operation {
 			return Result{}, ErrPendingSetup
 		}
 		return service.continueEnrollment(ctx, saved, progress, request.NoBrowser)
@@ -142,23 +147,23 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	if request.DeviceName == "" {
 		return Result{}, errors.New("device name is required")
 	}
-	secret := make([]byte, 32)
+	secret := make([]byte, claimSecretBytes)
 	if _, err := io.ReadFull(service.dependencies.Random, secret); err != nil {
 		return Result{}, err
 	}
-	operation := make([]byte, 16)
+	operation := make([]byte, operationIDBytes)
 	if _, err := io.ReadFull(service.dependencies.Random, operation); err != nil {
 		return Result{}, err
 	}
-	saved.Pending = &relayconfig.PendingSetup{
-		State: relayconfig.SetupEnrolling, SettingsRevision: saved.SettingsRevision(),
-		OperationID: encode(operation), RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL,
-		FrontURL: discovery.FrontendURL, DeviceName: request.DeviceName, ClaimSecret: encode(secret),
-		Operation: string(request.Operation),
-	}
+	saved.Pending = &PendingSetup{setupIntent: setupIntent{
+		SettingsRevision: saved.SettingsRevision(), OperationID: encode(operation),
+		RelayURL: discovery.RelayURL, ConsoleURL: discovery.ConsoleURL, FrontURL: discovery.FrontendURL,
+		DeviceName: request.DeviceName, ClaimSecret: encode(secret), Operation: request.Operation,
+	}, phase: requesting{}}
+
 	// Persist the claimant before the first request; a lost response can recover by digest.
 	pending := saved.Pending
-	saved, err = service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+	saved, err = service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		if current.Pending != nil {
 			return ErrPendingSetup
 		}
@@ -166,7 +171,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 			return ErrSettingsChanged
 		}
 		// Detect capacity and selection failures before asking anyone to approve.
-		if _, err := installation(*current, pending.RelayURL, "", pending.FrontURL, request.Operation); err != nil {
+		if _, err := installation(current.Config, pending.RelayURL, "", pending.FrontURL, request.Operation); err != nil {
 			return err
 		}
 		current.Pending = pending
