@@ -39,7 +39,7 @@ type manifest struct {
 func main() {
 	root := flag.String("root", ".", "repository root")
 	reproduce := flag.Bool("reproduce", false, "replay patches against checksum-verified upstream modules")
-	maintained := flag.Bool("maintained-go-files", false, "list tracked Go sources after verifying and reproducing dependency exclusions")
+	maintained := flag.Bool("maintained-go-files", false, "list working-tree Go sources after verifying and reproducing dependency exclusions")
 	nul := flag.Bool("0", false, "separate maintained Go paths with NUL instead of newline")
 	flag.Parse()
 	if *maintained {
