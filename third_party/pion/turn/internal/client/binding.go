@@ -29,6 +29,7 @@ const (
 	bindingStateReady
 	bindingStateRefresh
 	bindingStateFailed
+	bindingStateMismatch
 )
 
 type binding struct {
@@ -38,7 +39,11 @@ type binding struct {
 	mgr          *bindingManager // Read-only
 	muBind       sync.Mutex      // Thread-safe, for ChannelBind ops
 	_refreshedAt time.Time       // Protected by mutex
-	mutex        sync.RWMutex    // Thread-safe
+	lastUsed     atomic.Int64
+	retryAt      time.Time    // Protected by muBind
+	failures     int          // Protected by muBind
+	expired      bool         // Protected by muBind
+	mutex        sync.RWMutex // Thread-safe
 }
 
 func (b *binding) setState(state bindingState) {
@@ -66,7 +71,8 @@ func (b *binding) refreshedAt() time.Time {
 func (b *binding) ok() bool {
 	state := b.state()
 
-	return state == bindingStateReady || state == bindingStateRefresh || state == bindingStateReadyUnknown
+	return (state == bindingStateReady || state == bindingStateRefresh || state == bindingStateReadyUnknown) &&
+		time.Since(b.refreshedAt()) < channelBindingLifetime
 }
 
 // Thread-safe binding map.
@@ -100,11 +106,16 @@ func (mgr *bindingManager) create(addr net.Addr) *binding {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 
+	// Concurrent first writes must share one mapping, including after a reply
+	// was lost while the server had already installed the channel.
+	if existing := mgr.addrMap[addr.String()]; existing != nil {
+		return existing
+	}
+
 	b := &binding{
-		number:       mgr.assignChannelNumber(),
-		addr:         addr,
-		mgr:          mgr,
-		_refreshedAt: time.Now(),
+		number: mgr.assignChannelNumber(),
+		addr:   addr,
+		mgr:    mgr,
 	}
 
 	mgr.chanMap[b.number] = b

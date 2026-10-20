@@ -21,8 +21,10 @@ The narrow patches in `patches/` add:
 - Complete universal UDP mux initialization before its socket reader starts.
 - Cancellable TURN allocation transactions and allocation deletion before closing
   their control transport, including rejected candidates.
-- Peer-scoped ChannelBind rejection: preserve the allocation and confirmed channels,
-  using Send indications for rejected bindings without repeatedly retrying them.
+- Channel binding expiry, bounded transient retries with stable channel numbers,
+  peer-scoped indication fallback, and structured recovery evidence.
+- An injected TURN route plan with cancellable UDP/TCP/TLS egress attempts and
+  explicit allocation ownership; direct candidate filters remain independent.
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses
 independent sockets per peer path; cross-path shared remote-tuple demultiplexing
@@ -41,7 +43,7 @@ Reproduce it from checksum-verified upstream modules in a temporary directory:
 
 ```sh
 go run ./scripts/ci/_piondeps -reproduce
-go test -race ./connectivity/socketauthority ./transport/webrtc/provider
+go test -race github.com/pion/turn/v5/internal/client ./connectivity/socketauthority ./transport/webrtc/provider
 ```
 
 Reproduction reads the module cache and applies patches only to temporary copies.

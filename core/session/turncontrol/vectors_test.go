@@ -23,6 +23,7 @@ func TestTURNControlVectors(t *testing.T) {
 			CredentialKind: Expiring, Username: "123:user", Password: "delegated-password", ValidFor: time.Hour, URLs: []string{"turn:127.0.0.1:3478?transport=udp", "turns:example.org:443?transport=tcp"}},
 		Grant{Authority: header, PathID: path, Provider: "standard", Account: "home", Profile: "primary", CredentialKind: Fixed, Username: "fixed-user", Password: "fixed-password", URLs: []string{"turn:example.org"}},
 		Ready{header, path}, Retire{header, path, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"}, Report{header, path, 1 << 40},
+		Recover{header, path, AllocationStateMismatch}, Recover{header, path, ChannelUnavailable},
 	}
 	type vector struct {
 		Body []byte `json:"bodyB64"`

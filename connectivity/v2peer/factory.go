@@ -534,7 +534,8 @@ func (handler *senderHandler) Run(ctx context.Context) error {
 		handler.turn = turnpath.NewSender(turnpath.SenderConfig{
 			Accounts: handler.factory.turn, SessionID: [16]byte(handler.session.ProtocolSessionID()),
 			Send: controls.SendPeerPathControl, Now: handler.factory.now,
-			Observe: handler.factory.native.ObserveTURN,
+			Observe:           handler.factory.native.ObserveTURN,
+			NetworkGeneration: handler.factory.native.NetworkGeneration,
 			Retire: func(path [16]byte) {
 				handler.mu.Lock()
 				var attempts []*peerAttempt

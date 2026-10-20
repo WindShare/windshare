@@ -16,6 +16,7 @@ const (
 	unavailableKind
 	availableKind
 	reportKind
+	recoverKind
 )
 
 var encoder, _ = cbor.CoreDetEncOptions().EncMode()
@@ -57,6 +58,11 @@ func Encode(message Message) ([]byte, error) {
 			return nil, ErrMessage
 		}
 		fields = append(base(reportKind), value.PathID[:], value.UsefulBytes)
+	case Recover:
+		if value.PathID == ([IdentityBytes]byte{}) || value.Reason < AllocationStateMismatch || value.Reason > ChannelUnavailable {
+			return nil, ErrMessage
+		}
+		fields = append(base(recoverKind), value.PathID[:], uint64(value.Reason))
 	case Retire:
 		if value.PathID == ([IdentityBytes]byte{}) || value.Reason < Idle || value.Reason > Unhelpful {
 			return nil, ErrMessage
@@ -69,13 +75,8 @@ func Encode(message Message) ([]byte, error) {
 		}
 		fields = append(base(unavailableKind), value.Profile, uint64(value.RetryAfter/time.Millisecond), value.Reason)
 	case Available:
-		if len(value.Profiles) > MaximumURLs {
+		if !validProfiles(value.Profiles) {
 			return nil, ErrMessage
-		}
-		for _, profile := range value.Profiles {
-			if !identifier(profile) {
-				return nil, ErrMessage
-			}
 		}
 		profiles := value.Profiles
 		if profiles == nil {
@@ -90,6 +91,18 @@ func Encode(message Message) ([]byte, error) {
 		return nil, ErrMessage
 	}
 	return body, nil
+}
+
+func validProfiles(profiles []string) bool {
+	if len(profiles) > MaximumURLs {
+		return false
+	}
+	for _, profile := range profiles {
+		if !identifier(profile) {
+			return false
+		}
+	}
+	return true
 }
 
 func validGrant(value Grant) bool {
@@ -153,6 +166,14 @@ func Decode(body []byte) (Message, error) {
 		if decode(fields[5:], &value.PathID, &value.UsefulBytes) != nil {
 			return nil, ErrMessage
 		}
+		message = value
+	case recoverKind:
+		value := Recover{Authority: h}
+		var reason uint64
+		if decode(fields[5:], &value.PathID, &reason) != nil || reason > uint64(ChannelUnavailable) {
+			return nil, ErrMessage
+		}
+		value.Reason = RecoveryReason(reason)
 		message = value
 	case retireKind:
 		value := Retire{Authority: h}

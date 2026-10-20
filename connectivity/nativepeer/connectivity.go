@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	"net/netip"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ type AttemptRequest struct {
 	ProtocolSessionID  [16]byte
 	ReplacesPeerPathID [16]byte
 	Binding            v2signal.Binding
+	OnTURNRecovery     func(turncontrol.RecoveryReason)
 }
 type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
@@ -96,6 +98,7 @@ type NativePeerConnectivity struct {
 	poll                  sync.Mutex
 	config                Config
 	turnResources         *provider.TURNResourceOwner
+	turnRoutes            provider.TURNRoutePlanner
 	paths                 map[pathKey]*pathResources
 	facts                 *icepolicy.FactStore
 	generation            uint64
@@ -186,6 +189,14 @@ func (n *NativePeerConnectivity) Generation(session [16]byte, path v2signal.Peer
 		return resource.generation
 	}
 	return 0
+}
+
+// NetworkGeneration includes snapshots without a live path, so exhausted
+// recovery budgets can be reconsidered after the network changes.
+func (n *NativePeerConnectivity) NetworkGeneration() uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.generation
 }
 func (n *NativePeerConnectivity) NewPeerConnection(ctx context.Context, request AttemptRequest) (*provider.Connection, error) {
 	prepared, err := n.PrepareAttempt(ctx, request)

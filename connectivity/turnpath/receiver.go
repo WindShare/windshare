@@ -51,6 +51,7 @@ type Receiver struct {
 	sequence, activation uint64
 	inventoryRevision    uint64
 	refresh              time.Time
+	recoveries           map[[16]byte]turncontrol.RecoveryReason
 }
 
 func NewReceiver(config ReceiverConfig) *Receiver {
@@ -58,7 +59,7 @@ func NewReceiver(config ReceiverConfig) *Receiver {
 		config.Now = time.Now
 	}
 	return &Receiver{config: config, messages: make(chan turncontrol.Message, 32), demands: make(chan bool, 1),
-		paths: make(map[[16]byte]*receiverPath), retired: make(map[[16]byte]time.Time)}
+		paths: make(map[[16]byte]*receiverPath), retired: make(map[[16]byte]time.Time), recoveries: make(map[[16]byte]turncontrol.RecoveryReason)}
 }
 func (r *Receiver) Handle(body []byte) error {
 	message, err := turncontrol.Decode(body)
@@ -207,6 +208,7 @@ func (r *Receiver) maintain(ctx context.Context) {
 		}
 	}
 	r.refreshDemand(ctx, now, active)
+	r.requestRecoveries(ctx)
 	for _, path := range r.paths {
 		reason := path.retirementReason(now, active)
 		if reason == 0 {

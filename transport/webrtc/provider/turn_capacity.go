@@ -23,7 +23,8 @@ var (
 	ErrTURNReservation = errors.New("invalid TURN reservation")
 )
 
-// TURNRequest reserves the whole gathering envelope before signaling starts.
+// TURNRequest reserves initial routes before signaling. Backup routes acquire
+// additional slots without queueing; each closed route returns its own slot.
 // Replaces identifies actual predecessor ownership, never an unbounded bypass.
 type TURNRequest struct {
 	ProtocolSessionID  [16]byte
@@ -87,6 +88,7 @@ type TURNReservation struct {
 	request                TURNRequest
 	predecessor, successor *TURNReservation
 	claimed, closed        bool
+	unstarted              int
 }
 
 var processTURNCapacity = NewTURNCapacity()
@@ -161,7 +163,7 @@ func (c *TURNCapacity) tryAcquireLocked(owner *TURNResourceOwner, request TURNRe
 	if request.ReplacesPeerPathID != ([16]byte{}) {
 		predecessor = c.paths[turnPathKey{owner, request.ProtocolSessionID, request.ReplacesPeerPathID}]
 	}
-	lease := &TURNReservation{owner: c, scope: owner, request: request}
+	lease := &TURNReservation{owner: c, scope: owner, request: request, unstarted: request.Sockets}
 	if predecessor != nil {
 		if admitted, err := c.reserveReplacementLocked(lease, predecessor); !admitted {
 			return nil, err

@@ -89,7 +89,8 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 			return s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
 				Budget: budget, Native: receiver.Factory.NativeConnectivity(), Controls: controls, ICE: ice, Demand: ContentDemand,
 				Prepare: func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {
-					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces})
+					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
+						OnTURNRecovery: func(reason turncontrol.RecoveryReason) { s.turn.Recover(grant.PathID, reason) }})
 					if err != nil {
 						return PreparedStarter{}, err
 					}

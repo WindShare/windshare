@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/transport/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/socketauthority"
@@ -13,6 +14,50 @@ import (
 type turnTestInterfaceNet struct {
 	transport.Net
 	interfaces []*transport.Interface
+}
+
+func TestTURNFailedEgressUsesSourceBoundBackupOverUDPAndTCP(t *testing.T) {
+	for _, protocol := range []string{"udp", "tcp"} {
+		t.Run(protocol, func(t *testing.T) {
+			endpoint, server := localTURN(t, protocol)
+			authority := socketauthority.New(socketauthority.Config{})
+			t.Cleanup(func() { _ = authority.Close() })
+			connection := turnConnection(t, testLease(t, authority, 1, "127.0.0.1"), endpoint)
+			plan := connection.turnGathering.plan
+			// An unassigned source fails immediately on both transports, without
+			// an external blackhole or a real transaction timeout in this test.
+			plan.initial[0].LocalAddress = netip.MustParseAddr("192.0.2.99")
+			backup := plan.initial[0]
+			backup.LocalAddress = netip.MustParseAddr("127.0.0.1")
+			plan.backup = []ice.TURNRoute{backup}
+			success := make(chan ice.TURNRoute, 1)
+			plan.succeeded = func(route ice.TURNRoute) { success <- route }
+			if _, err := connection.CreateDataChannel("backup", nil); err != nil {
+				t.Fatal(err)
+			}
+			gathered := pion.GatheringCompletePromise(connection.PeerConnection)
+			offer, err := connection.CreateOffer(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = connection.SetLocalDescription(offer); err != nil {
+				t.Fatal(err)
+			}
+			await(t, gathered)
+			if route := await(t, success); route.LocalAddress != backup.LocalAddress {
+				t.Fatal("gathering ignored the requested local egress")
+			}
+			awaitTURNAllocations(t, server, 1)
+			stats, _ := connection.TURNResources()
+			if stats.ActiveSockets != 1 || connection.request.TURNReservation.socketLimit() != 1 {
+				t.Fatal("failed egress retained capacity")
+			}
+			if err = connection.Close(); err != nil {
+				t.Fatal(err)
+			}
+			awaitTURNAllocations(t, server, 0)
+		})
+	}
 }
 
 func (n turnTestInterfaceNet) Interfaces() ([]*transport.Interface, error) { return n.interfaces, nil }

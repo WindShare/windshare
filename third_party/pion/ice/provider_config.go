@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/pion/turn/v5"
 )
 
 // MappedEndpoint binds a verified externally allocated endpoint to its real
@@ -35,6 +37,8 @@ type ProviderConfig struct {
 	// follow every base's first candidate.
 	// Unlisted bases follow listed bases; an empty snapshot keeps Pion defaults.
 	LocalAddressOrder []netip.Addr
+	GatherTURN        func(context.Context, TURNRouteAttempt)
+	OnTURNBinding     func(turn.BindingEvent)
 }
 
 // WithProviderConfig preserves legacy behavior when the config is empty.

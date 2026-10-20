@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
+	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func (a *App) observeSenderPeerAttempt(observation v2peer.SenderAttemptObservation) {
@@ -103,6 +104,7 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 				Cleanup: p.TURNCleanup, Reason: p.TURNCleanup.Reason(),
 				Resources: &clievent.NativeTURNResources{ActiveSockets: uint64(p.TURN.ActiveSockets), OpenedSockets: p.TURN.OpenedSockets,
 					TransportSent: p.TURN.TransportSent, TransportReceived: p.TURN.TransportReceived}}
+			projectTURNRecoveryFacts(spec.TURN, p)
 		}
 	}
 	if r := value.Reachability; r != nil {
@@ -117,6 +119,18 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		spec.Reachability = &clievent.NativeReachabilityFacts{Local: r.Endpoint.Local, Remote: r.Scope.Remote, Protocol: protocol, Reason: nativeReachabilityReason(r.Error), ServerEpoch: r.ServerEpoch, ServerRestarted: r.ServerRestarted}
 	}
 	return clievent.NewNativeConnectivityObserved(spec)
+}
+
+func projectTURNRecoveryFacts(facts *clievent.NativeTURNFacts, event *provider.Event) {
+	if binding := event.TURNBinding; binding != nil {
+		peer, _ := netip.ParseAddrPort(binding.PeerAddress)
+		allocation, _ := netip.ParseAddrPort(binding.RelayedAddress)
+		facts.Binding = &clievent.NativeTURNBinding{Status: binding.Status.String(), Code: binding.Code,
+			Channel: binding.Channel, Peer: peer, Allocation: allocation}
+	}
+	if route := event.TURNRoute; route != nil {
+		facts.Route = &clievent.NativeTURNRoute{Server: route.Server, Local: route.LocalAddress, Outcome: route.Outcome}
+	}
 }
 func nativeObservedAddress(value string) string {
 	if address, err := netip.ParseAddr(value); err == nil {

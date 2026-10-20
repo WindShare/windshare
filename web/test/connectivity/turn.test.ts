@@ -28,11 +28,14 @@ it('preserves bounded endpoint alternatives, expiry, authority and unsigned usef
     { ...header, kind: 'demand', holdForMs: 120_000 }, { ...header, kind: 'ready', pathId: grant.pathId },
     { ...header, kind: 'retire', pathId: grant.pathId, reason: 2 },
     { ...header, kind: 'unavailable', profile: 'primary', retryAfterMs: 10_000, reason: 'unavailable' },
-    { ...header, kind: 'report', pathId: grant.pathId, usefulBytes: 1n << 40n }]
+    { ...header, kind: 'report', pathId: grant.pathId, usefulBytes: 1n << 40n },
+    { ...header, kind: 'recover', pathId: grant.pathId, reason: 1 },
+    { ...header, kind: 'recover', pathId: grant.pathId, reason: 2 }]
   for (const message of messages) expect(decodeTurnControl(encodeTurnControl(message))).toEqual(message)
   expect(turnRTCConfiguration(grant)).toMatchObject({ iceTransportPolicy: 'relay', iceServers: [{ urls: grant.urls }] })
   expect(() => encodeTurnControl({ ...grant, replaces: grant.pathId })).toThrow()
   expect(() => encodeTurnControl({ ...header, kind: 'demand', holdForMs: 120_001 })).toThrow()
+  for (const reason of [0, 3]) expect(() => encodeTurnControl({ ...header, kind: 'recover', pathId: grant.pathId, reason })).toThrow()
   expect(() => turnRTCConfiguration({ ...grant, urls: ['turn:[::1]:3478'] })).toThrow()
   expect(() => turnRTCConfiguration({ ...grant, urls: ['turns:localhost:443?transport=udp'] })).toThrow()
 })

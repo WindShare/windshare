@@ -27,6 +27,7 @@ type PreparedAttempt struct {
 	mu                    sync.Mutex
 	permit                *attemptPermit
 	turn                  *provider.TURNReservation
+	turnPlan              *provider.TURNPlan
 	transferred, released bool
 	stop                  func()
 	done                  chan struct{}
@@ -125,18 +126,14 @@ func (p *PreparedAttempt) reserveTURN(ctx context.Context) error {
 	if !relayed {
 		return nil
 	}
-	addressCount := 0
-	for _, address := range selectAddresses(p.snapshot.Addresses()) {
-		if address.Is4() {
-			addressCount++
-		}
+	plan, err := p.native.turnRoutes.Plan(p.snapshot.GenerationID(), relay, selectAddresses(p.snapshot.Addresses()))
+	if err != nil {
+		return err
 	}
-	// The pinned gatherer opens one TURN control socket per URL/local IPv4
-	// address. Reserve that bounded envelope before any offer or dial.
-	cost := min(provider.MaximumTURNPathSockets, len(relay.URLs())*max(1, addressCount))
+	p.turnPlan = plan
 	reservation, err := p.native.turnResources.Acquire(ctx, provider.TURNRequest{
 		ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path),
-		ReplacesPeerPathID: p.request.ReplacesPeerPathID, Service: relay.Identity(), Sockets: cost,
+		ReplacesPeerPathID: p.request.ReplacesPeerPathID, Service: relay.Identity(), Sockets: plan.InitialSockets(),
 	})
 	if err != nil {
 		return err
@@ -266,7 +263,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 	}
 	config := provider.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
 		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, TURNReservation: p.turn, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
-		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile}
+		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile, TURNPlan: p.turnPlan, OnTURNRecovery: p.request.OnTURNRecovery}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding, now)
 	config.Observe = func(event provider.Event) {
 		observer(event)

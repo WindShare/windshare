@@ -45,6 +45,7 @@ type UDPConn struct {
 	closeCh                chan struct{}     // Thread-safe
 	closeMutex             sync.Mutex        // Thread-safe
 	bindingRefreshInterval time.Duration     // Read-only
+	onBindingEvent         func(BindingEvent)
 	allocation
 }
 
@@ -55,6 +56,7 @@ func NewUDPConn(config *AllocationConfig) *UDPConn {
 		readCh:                 make(chan *inboundData, maxReadQueueSize),
 		closeCh:                make(chan struct{}),
 		bindingRefreshInterval: defaultBindingRefreshInterval,
+		onBindingEvent:         config.OnBindingEvent,
 		allocation: allocation{
 			client:      config.Client,
 			relayedAddr: config.RelayedAddr,
@@ -227,6 +229,7 @@ func (c *UDPConn) WriteTo(payload []byte, addr net.Addr) (int, error) { //nolint
 	if !ok {
 		bound = c.bindingMgr.create(addr)
 	}
+	bound.lastUsed.Store(time.Now().UnixNano())
 
 	//nolint:nestif
 	if !bound.ok() {
@@ -440,9 +443,16 @@ func (c *UDPConn) maybeBind(bound *binding) {
 	// Block only callers with the same binding until
 	// the binding transaction has been complete
 	bound.muBind.Lock()
-	defer bound.muBind.Unlock()
-
+	expired := !bound.expired && !bound.refreshedAt().IsZero() &&
+		time.Since(bound.refreshedAt()) >= channelBindingLifetime
+	if expired {
+		bound.expired = true
+	}
 	startState, ok := c.startBinding(bound)
+	bound.muBind.Unlock()
+	if expired {
+		c.observeBinding(bound, BindingExpired, 0)
+	}
 	if !ok {
 		return
 	}
@@ -454,6 +464,10 @@ func (c *UDPConn) maybeBind(bound *binding) {
 
 func (c *UDPConn) startBinding(bound *binding) (bindingState, bool) {
 	startState := bound.state()
+	if c.isClosed() || time.Since(time.Unix(0, bound.lastUsed.Load())) >= bindingDemandLifetime ||
+		time.Now().Before(bound.retryAt) {
+		return startState, false
+	}
 	switch {
 	case startState == bindingStateIdle || startState == bindingStateUnknown:
 		bound.setState(bindingStateRequest)
@@ -481,59 +495,13 @@ func (c *UDPConn) bindChannel(bound *binding, startState bindingState) {
 		return
 	}
 
+	bound.muBind.Lock()
 	bound.setRefreshedAt(time.Now())
+	bound.failures, bound.expired = 0, false
+	bound.retryAt = time.Time{}
 	bound.setState(bindingStateReady)
-}
-
-func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState, err error) {
-	if c.recoverChannelBindBadRequest(bound, startState, err) {
-		return
-	}
-
-	c.log.Warnf("Failed to bind channel %d: %s", bound.number, err)
-	if errors.Is(err, errChannelBindTransactionFailed) {
-		if bindingStateWasReady(startState) {
-			bound.setState(bindingStateReadyUnknown)
-		} else {
-			bound.setState(bindingStateUnknown)
-		}
-
-		return
-	}
-
-	// A rejected binding belongs to one peer address, not the allocation. Keep
-	// other channels alive and use Send indications for this address. Failed
-	// bindings are not retried, so a permanent rejection cannot create a loop.
-	bound.setState(bindingStateFailed)
-	c.log.Warnf("ChannelBind rejected for %s on channel %d; retaining TURN allocation and using Send indications",
-		bound.addr, bound.number)
-}
-
-func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindingState, err error) bool {
-	if !errors.Is(err, errChannelBindBadRequest) {
-		return false
-	}
-	if !bindingStateWasReady(startState) {
-		return false
-	}
-
-	// If this binding was previously confirmed, a refresh transaction failure or
-	// unexpected 400 does not prove that the saved channel mapping is wrong. The
-	// server may still have the old binding, and switching channels would be
-	// worse because it can trigger "same peer with different channel number" (like what we get from Coturn).
-	// This Keep the saved mapping usable and retry refresh later.
-	c.log.Warnf(
-		"ChannelBind returned 400 for saved binding %s on channel %d; keeping binding ready",
-		bound.addr,
-		bound.number,
-	)
-	bound.setState(bindingStateReady)
-
-	return true
-}
-
-func bindingStateWasReady(state bindingState) bool {
-	return state == bindingStateReady || state == bindingStateReadyUnknown
+	bound.muBind.Unlock()
+	c.observeBinding(bound, BindingActive, 0)
 }
 
 func (c *UDPConn) bind(bound *binding) error {
@@ -581,10 +549,8 @@ func (c *UDPConn) handleChannelBindErrorResponse(res *stun.Message) error {
 		c.setNonceFromMsg(res)
 
 		return errTryAgain
-	case stun.CodeBadRequest:
-		return fmt.Errorf("%w: %w: received error %d", errCannotBindChannel, errChannelBindBadRequest, code.Code)
 	default:
-		return fmt.Errorf("%w: received error %d", errCannotBindChannel, code.Code) // nolint:err113
+		return channelBindResponseError{code: int(code.Code)}
 	}
 }
 

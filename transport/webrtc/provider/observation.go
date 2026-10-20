@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"net"
 	"net/netip"
+	"strconv"
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
@@ -63,6 +65,10 @@ func (c *Connection) OnICECandidate(callback func(*pion.ICECandidate)) {
 	})
 }
 func (c *Connection) observeSelectedPair(pair *pion.ICECandidatePair) {
+	if pair != nil && c.turnGathering != nil {
+		c.turnGathering.selectPath(net.JoinHostPort(pair.Local.Address, strconv.Itoa(int(pair.Local.Port))))
+		c.selectTURNPair(pair)
+	}
 	if c.request.Observe == nil || pair == nil {
 		return
 	}

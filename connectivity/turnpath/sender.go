@@ -25,14 +25,15 @@ const (
 )
 
 type SenderConfig struct {
-	Accounts  Accounts
-	SessionID [16]byte
-	Send      func(context.Context, []byte) error
-	Retire    func([16]byte)
-	Now       func() time.Time
-	Random    io.Reader
-	Tick      <-chan time.Time
-	Observe   func(Event)
+	Accounts          Accounts
+	SessionID         [16]byte
+	Send              func(context.Context, []byte) error
+	Retire            func([16]byte)
+	Now               func() time.Time
+	Random            io.Reader
+	Tick              <-chan time.Time
+	Observe           func(Event)
+	NetworkGeneration func() uint64
 }
 type Event struct {
 	At          time.Time
@@ -49,14 +50,17 @@ type service struct {
 	current, pending *delegation
 	cancel           context.CancelFunc
 	retryAt          time.Time
+	recoveryAttempts int
 }
 type delegation struct {
-	lease    *Lease
-	grant    turncontrol.Grant
-	created  time.Time
-	admitted bool
-	ready    bool
-	useful   uint64
+	lease         *Lease
+	grant         turncontrol.Grant
+	created       time.Time
+	admitted      bool
+	ready         bool
+	useful        uint64
+	recovery      turncontrol.RecoveryReason
+	recoveryUntil time.Time
 }
 type issued struct {
 	service             *service
@@ -84,6 +88,8 @@ type Sender struct {
 	advertisedAt       time.Time
 	advertisedRevision uint64
 	inventory          Inventory
+	recoveryWake       chan struct{}
+	networkGeneration  uint64
 }
 
 func NewSender(config SenderConfig) *Sender {
@@ -94,7 +100,7 @@ func NewSender(config SenderConfig) *Sender {
 		config.Random = rand.Reader
 	}
 	s := &Sender{config: config, paths: make(map[[16]byte]*delegation), retired: make(map[[16]byte]time.Time),
-		controls: make(chan turncontrol.Message, 32), completed: make(chan issued, 16)}
+		controls: make(chan turncontrol.Message, 32), completed: make(chan issued, 16), recoveryWake: make(chan struct{}, 1)}
 	if config.Accounts != nil {
 		s.inventory = config.Accounts.Inventory()
 		for _, profile := range s.inventory.Profiles {
@@ -115,6 +121,11 @@ func (s *Sender) Handle(body []byte) error {
 		return turncontrol.ErrMessage
 	}
 	switch value := message.(type) {
+	case turncontrol.Recover:
+		// The bounded control mailbox may drop redundant demand/report updates.
+		// A selected-path fault must survive congestion until maintenance sees it.
+		s.applyRecovery(value)
+		return nil
 	case turncontrol.Demand, turncontrol.Ready, turncontrol.Report:
 	case turncontrol.Retire:
 		if value.Reason != turncontrol.Unhelpful && value.Reason != turncontrol.Idle && value.Reason != turncontrol.Expired {
@@ -147,6 +158,11 @@ func (s *Sender) Lookup(path [16]byte) (*AuthorizedPath, bool, error) {
 	value := s.paths[path]
 	if value == nil {
 		return nil, false, nil
+	}
+	if value.recovery != 0 {
+		// Recovery owns the next allocation. Reusing this grant could admit a
+		// new connection just before the damaged predecessor is retired.
+		return nil, true, errors.New("TURN path recovery pending")
 	}
 	now := s.config.Now()
 	if !value.lease.Relay().Credentials().ValidAt(now) ||
@@ -190,6 +206,8 @@ func (s *Sender) Run(ctx context.Context) {
 			s.maintain(ctx)
 		case <-tick:
 			s.maintain(ctx)
+		case <-s.recoveryWake:
+			s.maintain(ctx)
 		}
 	}
 }
@@ -201,16 +219,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 	}
 	switch value := message.(type) {
 	case turncontrol.Demand:
-		if header.Sequence <= s.sequence {
-			return
-		}
-		s.owner = header.OwnerPathID
-		s.sequence = header.Sequence
-		if value.HoldFor == 0 || !s.config.Now().Before(s.demandUntil) {
-			s.generation++
-		}
-		s.demandUntil = s.config.Now().Add(value.HoldFor)
-		s.maintain(ctx)
+		s.applyDemand(ctx, value)
 	case turncontrol.Ready:
 		for _, service := range s.services {
 			pending := service.pending
@@ -220,6 +229,8 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 			pending.ready = true
 			s.promote(ctx, service)
 		}
+	case turncontrol.Recover:
+		s.applyRecovery(value)
 	case turncontrol.Report:
 		s.mu.Lock()
 		path := s.paths[value.PathID]
@@ -227,6 +238,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 		if path != nil && path.grant.Authority == header && value.UsefulBytes > path.useful {
 			path.lease.Charge(Usage{Useful: value.UsefulBytes - path.useful})
 			path.useful = value.UsefulBytes
+			s.recoverBudgetAfterProgress(path)
 			s.observe(path, "useful_content", "")
 		}
 	case turncontrol.Retire:
@@ -241,6 +253,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 				service.retryAt = retryAt
 			}
 			if pending := service.pending; pending != nil && pending.grant.PathID == value.PathID && pending.grant.Authority == header {
+				s.countInitialRecoveryFailure(service, pending)
 				s.retire(ctx, pending, value.Reason)
 				service.pending = nil
 				service.retryAt = retryAt
@@ -251,6 +264,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 
 func (s *Sender) maintain(ctx context.Context) {
 	s.refreshConfiguration(ctx)
+	s.refreshRecoveryNetwork()
 	now := s.config.Now()
 	if s.advertisedRevision != s.inventory.Revision || s.sequence == 0 && now.Sub(s.advertisedAt) >= AdvertisementInterval {
 		s.advertise(ctx)
@@ -276,18 +290,12 @@ func (s *Sender) maintain(ctx context.Context) {
 		}
 	}
 	for _, service := range s.services {
-		if service.pending != nil || service.cancel != nil || now.Before(service.retryAt) {
+		if !s.canAcquire(service, now, active, overlap) {
 			continue
 		}
 		if service.current == nil {
-			if active >= MaximumActiveServices {
-				continue
-			}
 			active++
 		} else {
-			if !service.current.renewalDue(now) || overlap >= MaximumReplacementPaths {
-				continue
-			}
 			overlap++
 		}
 		s.acquire(ctx, service)
@@ -332,9 +340,15 @@ func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.
 			continue
 		}
 		reason := value.retirementReason(now, demand, value == service.pending)
+		s.mu.Lock()
+		if !value.recoveryUntil.IsZero() && !now.Before(value.recoveryUntil) {
+			reason = turncontrol.Unhelpful
+		}
+		s.mu.Unlock()
 		if reason == 0 {
 			continue
 		}
+		s.countInitialRecoveryFailure(service, value)
 		s.retire(ctx, value, reason)
 		if service.current == value {
 			service.current = nil
@@ -359,13 +373,17 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	generation := s.generation
 	revision := s.inventory.Revision
 	current := service.current
+	recovery := s.needsRecovery(current) && !current.renewalDue(s.config.Now())
+	if recovery {
+		service.recoveryAttempts++
+	}
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
 		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_started", "")
 	s.work.Go(func() {
 		subject := Subject{SessionID: s.config.SessionID, PathID: path}
 		var lease *Lease
 		var err error
-		if current != nil {
+		if current != nil && !recovery {
 			lease, err = current.lease.Renew(child, subject)
 		} else {
 			lease, err = s.config.Accounts.Acquire(child, service.profile.Identity.Profile, subject)
@@ -448,7 +466,7 @@ func (s *Sender) promote(ctx context.Context, service *service) {
 	default:
 	}
 	s.mu.Lock()
-	admitted := pending.admitted
+	admitted := pending.admitted && pending.recovery == 0
 	s.mu.Unlock()
 	if !admitted {
 		return

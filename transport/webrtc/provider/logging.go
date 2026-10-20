@@ -31,13 +31,13 @@ func (l providerLogger) Warn(message string) {
 	l.observe(l.scope+"_warning", message)
 	l.LeveledLogger.Warn(message)
 }
-func (l providerLogger) Warnf(format string, args ...interface{}) {
+func (l providerLogger) Warnf(format string, args ...any) {
 	l.Warn(fmt.Sprintf(format, args...))
 }
 func (l providerLogger) Error(message string) {
 	l.observe(l.scope+"_error", message)
 	l.LeveledLogger.Error(message)
 }
-func (l providerLogger) Errorf(format string, args ...interface{}) {
+func (l providerLogger) Errorf(format string, args ...any) {
 	l.Error(fmt.Sprintf(format, args...))
 }
