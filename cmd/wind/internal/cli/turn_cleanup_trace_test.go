@@ -58,7 +58,7 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 		t.Fatal(err)
 	}
 	found := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(body)), "\n") {
 		var wire struct {
 			Event       string `json:"event"`
 			Correlation struct {

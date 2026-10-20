@@ -361,9 +361,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	current := service.current
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
 		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_started", "")
-	s.work.Add(1)
-	go func() {
-		defer s.work.Done()
+	s.work.Go(func() {
 		subject := Subject{SessionID: s.config.SessionID, PathID: path}
 		var lease *Lease
 		var err error
@@ -380,7 +378,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 				lease.Close()
 			}
 		}
-	}()
+	})
 }
 
 func (s *Sender) install(ctx context.Context, result issued) {
