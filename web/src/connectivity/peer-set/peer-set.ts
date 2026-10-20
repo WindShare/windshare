@@ -7,6 +7,7 @@ const MAXIMUM_PEER_PATHS = 4
 /** One session owner indexes independent paths; a path never cancels another path's wave. */
 export class V2PeerSet {
   readonly #paths = new Map<string, V2PeerRecoverySupervisor>()
+  readonly #retiring = new Set<Promise<void>>()
 
   path(identity: V2PeerPathIdentity): V2PeerRecoverySupervisor | undefined {
     return this.#paths.get(encodeBase64Url(identity.copyBytes()))
@@ -25,5 +26,16 @@ export class V2PeerSet {
   async close(): Promise<void> {
     await Promise.allSettled([...this.#paths.values()].map((path) => path.close()))
     this.#paths.clear()
+    await Promise.allSettled([...this.#retiring])
+  }
+
+  async remove(identity: V2PeerPathIdentity): Promise<void> {
+    const key = encodeBase64Url(identity.copyBytes())
+    const path = this.#paths.get(key)
+    if (path === undefined) return
+    this.#paths.delete(key)
+    const task = path.close()
+    this.#retiring.add(task)
+    try { await task } finally { this.#retiring.delete(task) }
   }
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -25,6 +26,7 @@ type PreparedAttempt struct {
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
 	permit                *attemptPermit
+	turn                  *provider.TURNReservation
 	transferred, released bool
 	stop                  func()
 	done                  chan struct{}
@@ -38,6 +40,11 @@ func (p *PreparedAttempt) Matches(session [16]byte, binding v2signal.Binding) bo
 func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request AttemptRequest) (*PreparedAttempt, error) {
 	if ctx == nil || request.ProtocolSessionID == ([16]byte{}) || request.Binding.Validate() != nil {
 		return nil, errors.New("invalid native peer attempt")
+	}
+	if request.ReplacesPeerPathID != ([16]byte{}) {
+		if _, relayed := request.ICE.Relay(); !relayed || request.ReplacesPeerPathID == [16]byte(request.Binding.PeerPathID) {
+			return nil, provider.ErrTURNReservation
+		}
 	}
 	n.mu.Lock()
 	if n.closed {
@@ -84,7 +91,16 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	stop := context.AfterFunc(lifetime, cancelWait)
 	defer func() { stop(); cancelWait() }()
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(request.Binding.AttemptID), AttemptSequence: request.Binding.AttemptSequence, NetworkGenerationID: snapshot.GenerationID(), ICEProfileID: profile.ID(), Side: n.config.Side}
-	permit, err := n.config.Admission.acquire(wait, n, len(profile.URLs()), sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) })
+	if err := prepared.reserveTURN(wait); err != nil {
+		prepared.Close()
+		return nil, err
+	}
+	_, relayed := request.ICE.Relay()
+	endpointCost := len(profile.URLs())
+	if relayed {
+		endpointCost = 0
+	}
+	permit, err := n.config.Admission.acquireRoute(wait, n, endpointCost, sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) }, relayed)
 	if err != nil {
 		prepared.Close()
 		return nil, err
@@ -104,6 +120,38 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	}
 	return prepared, nil
 }
+func (p *PreparedAttempt) reserveTURN(ctx context.Context) error {
+	relay, relayed := p.request.ICE.Relay()
+	if !relayed {
+		return nil
+	}
+	addressCount := 0
+	for _, address := range selectAddresses(p.snapshot.Addresses()) {
+		if address.Is4() {
+			addressCount++
+		}
+	}
+	// The pinned gatherer opens one TURN control socket per URL/local IPv4
+	// address. Reserve that bounded envelope before any offer or dial.
+	cost := min(provider.MaximumTURNPathSockets, len(relay.URLs())*max(1, addressCount))
+	reservation, err := p.native.turnResources.Acquire(ctx, provider.TURNRequest{
+		ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path),
+		ReplacesPeerPathID: p.request.ReplacesPeerPathID, Service: relay.Identity(), Sockets: cost,
+	})
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.turn = reservation
+	released := p.released
+	p.mu.Unlock()
+	if released {
+		reservation.Close()
+		return context.Canceled
+	}
+	return nil
+}
+
 func (p *PreparedAttempt) release() {
 	p.mu.Lock()
 	p.released = true
@@ -134,6 +182,10 @@ func (p *PreparedAttempt) finish() {
 	p.finishOnce.Do(func() {
 		p.release()
 		p.cancel()
+		p.mu.Lock()
+		turn := p.turn
+		p.mu.Unlock()
+		turn.Close()
 		p.native.mu.Lock()
 		delete(p.path.attempts, p)
 		p.native.mu.Unlock()
@@ -199,8 +251,21 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 	if capability.IPv4 || capability.IPv6 {
 		_ = path.lease.PrepareTCP(capability.IPv6)
 	}
+	var relay *iceconfig.Relay
+	if configured, ok := p.request.ICE.Relay(); ok {
+		relay = &configured
+	}
+	discovery := p.profile.URLs()
+	if relay != nil {
+		discovery = nil
+	}
+	iceConfiguration, err := iceconfig.New(discovery, relay, p.request.ICE.Policy())
+	if err != nil {
+		n.mu.Unlock()
+		return nil, err
+	}
 	config := provider.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
-		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), STUNURLs: p.profile.URLs(), SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
+		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, TURNReservation: p.turn, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
 		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding, now)
 	config.Observe = func(event provider.Event) {

@@ -61,7 +61,7 @@ func TestNativeIPv6PinholeRetainedByExactSelectedHostPair(t *testing.T) {
 	}
 	local := h.requests[0].SocketLease.Endpoints()[0]
 	h.requests[0].Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: local.Addr().String(), LocalPort: local.Port(), Protocol: "udp"}})
-	h.native.SetDirect(req.ProtocolSessionID, req.Binding.PeerPathID)
+	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	h.now = h.now.Add(4 * time.Second)
 	h.native.Maintain(context.Background())
 	if gateway.deletes.Load() != 0 || path.mappedLocal != local || path.mappedProtocol != reachability.UDP {
@@ -99,7 +99,7 @@ func TestProvenTCPAllocatesMappingBeforeFreshAttemptAndRetainsOnlyExactProtocol(
 		t.Fatal("production TCP mapping not supplied", h.requests[1].MappedEndpoints)
 	}
 	h.requests[1].Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "tcp"}})
-	h.native.SetDirect(req.ProtocolSessionID, req.Binding.PeerPathID)
+	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	h.now = h.now.Add(4 * time.Second)
 	h.native.Maintain(context.Background())
 	var retained int

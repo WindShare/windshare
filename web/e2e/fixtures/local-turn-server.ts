@@ -26,6 +26,7 @@ export interface LocalTurnReadyRecord {
   readonly relayAddress: string
   readonly username: string
   readonly credential: string
+  readonly sharedSecret?: string
 }
 
 export class LocalTurnServer {
@@ -33,10 +34,16 @@ export class LocalTurnServer {
   #process: DirectProcess | undefined
   #configuration: RTCConfiguration | undefined
   #relayAddress: string | undefined
+  #ownerConfiguration: object | undefined
 
   get rtcConfiguration(): RTCConfiguration {
     if (this.#configuration === undefined) throw new Error('Local TURN server is not ready')
     return structuredClone(this.#configuration)
+  }
+
+  get ownerConfiguration(): object {
+    if (this.#ownerConfiguration === undefined) throw new Error('TURN issuer is not ready')
+    return structuredClone(this.#ownerConfiguration)
   }
 
   async start(): Promise<void> {
@@ -73,6 +80,11 @@ export class LocalTurnServer {
       // any diagnostic or cleanup path can observe it.
       child.consumeReadiness('stdout')
       this.#relayAddress = ready.relayAddress
+      if (ready.sharedSecret !== undefined) this.#ownerConfiguration = {
+        accounts: [{ id: 'local', provider: 'coturn', issuer: 'coturn', local_budget_bytes: 0,
+          credentials: { shared_secret: ready.sharedSecret, lifetime_seconds: 60 } }],
+        profiles: [{ id: 'local-turn', account: 'local', urls: [ready.url] }],
+      }
       this.#configuration = Object.freeze({
         iceServers: [Object.freeze({
           urls: [ready.url],
@@ -102,6 +114,7 @@ export class LocalTurnServer {
       this.#process = undefined
     }
     this.#configuration = undefined
+    this.#ownerConfiguration = undefined
     this.#relayAddress = undefined
     if (this.#rootDirectory !== undefined) {
       await rm(this.#rootDirectory, { recursive: true, force: true })

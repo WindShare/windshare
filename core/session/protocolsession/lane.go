@@ -333,22 +333,12 @@ func (r *LaneRegistry) IssueGrant(requestedLaneID uint32, operationID OperationI
 	if _, exists := r.grants[operationID]; exists {
 		return LaneGrant{}, ErrLaneInput
 	}
-	laneID := requestedLaneID
 	if r.nextEpoch == ^uint32(0) {
 		return LaneGrant{}, ErrLaneEpoch
 	}
-	if laneID == 0 {
-		if len(r.lanes) >= r.maxLogical {
-			return LaneGrant{}, ErrLaneGrantBudget
-		}
-		var err error
-		laneID, err = r.allocateLaneID()
-		if err != nil {
-			return LaneGrant{}, err
-		}
-		r.lanes[laneID] = logicalLaneState{}
-	} else if _, exists := r.lanes[laneID]; !exists {
-		return LaneGrant{}, ErrLaneUnknown
+	laneID, err := r.grantLaneID(requestedLaneID, now)
+	if err != nil {
+		return LaneGrant{}, err
 	}
 	r.nextEpoch++
 	grant := LaneGrant{LaneID: laneID, LaneEpoch: r.nextEpoch, OperationID: operationID, ExpiresAt: now.Add(LaneGrantTTL)}
@@ -385,6 +375,51 @@ func (r *LaneRegistry) reclaimUnclaimedLaneLocked(laneID uint32) {
 		}
 	}
 	delete(r.lanes, laneID)
+}
+
+func (r *LaneRegistry) grantLaneID(requested uint32, now time.Time) (uint32, error) {
+	if requested != 0 {
+		if _, exists := r.lanes[requested]; !exists {
+			return 0, ErrLaneUnknown
+		}
+		return requested, nil
+	}
+	if available := r.availableLaneID(now); available != 0 {
+		return available, nil
+	}
+	if len(r.lanes) >= r.maxLogical {
+		return 0, ErrLaneGrantBudget
+	}
+	laneID, err := r.allocateLaneID()
+	if err != nil {
+		return 0, err
+	}
+	r.lanes[laneID] = logicalLaneState{}
+	return laneID, nil
+}
+
+// Automatic grants reserve a session slot, not a lifetime-new identity. Keep
+// lastEpoch when recycling so delayed proofs and releases cannot affect its new
+// occupant. Outstanding usable grants reserve their slots until expiry/revocation.
+func (r *LaneRegistry) availableLaneID(now time.Time) uint32 {
+	var available uint32
+	for laneID, lane := range r.lanes {
+		if lane.active || available != 0 && laneID >= available {
+			continue
+		}
+		reserved := false
+		for _, state := range r.grants {
+			if state.grant.LaneID == laneID && state.consumedAt.IsZero() &&
+				state.grant.LaneEpoch > lane.lastEpoch && now.Before(state.grant.ExpiresAt) {
+				reserved = true
+				break
+			}
+		}
+		if !reserved {
+			available = laneID
+		}
+	}
+	return available
 }
 
 func (r *LaneRegistry) allocateLaneID() (uint32, error) {

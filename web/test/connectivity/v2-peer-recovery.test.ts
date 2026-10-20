@@ -469,7 +469,6 @@ describe('v2 peer recovery supervisor', () => {
       waveOrdinal: 1,
       waveAttemptOrdinal: 1,
       sessionAttemptOrdinal: 1,
-      requestedLaneId: 0,
       negotiationBudgetMilliseconds: 65_000,
       admissionBudgetMilliseconds: 20_000,
     })
@@ -711,10 +710,10 @@ describe('v2 peer recovery supervisor', () => {
     expect(attempts.contexts).toHaveLength(2)
   })
 
-  it('recovers exact detachment through the same wave and reuses the preferred logical lane', async () => {
+  it('recovers exact detachment through the same wave with a session-selected lane', async () => {
     const { supervisor, attempts, events } = fixture([
       admitted(7, 1),
-      admitted(7, 2),
+      admitted(9, 2),
     ])
     const activation = supervisor.activate()
     await supervisor.join()
@@ -734,10 +733,9 @@ describe('v2 peer recovery supervisor', () => {
     await supervisor.join()
 
     expect(attempts.contexts).toHaveLength(2)
-    expect(attempts.contexts[1]?.requestedLaneId).toBe(7)
     expect(supervisor.state).toEqual({
       kind: 'admitted',
-      lane: { laneId: 7, laneEpoch: 2 },
+      lane: { laneId: 9, laneEpoch: 2 },
     })
     expect(events.filter((event) => event.stage === 'peer-detached')).toHaveLength(1)
 

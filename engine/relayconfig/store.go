@@ -26,6 +26,9 @@ func encode(config Config) ([]byte, error) {
 		return nil, err
 	}
 	disk := document{FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, Pending: config.Pending}
+	if len(config.TURN.Accounts) > 0 || len(config.TURN.Profiles) > 0 {
+		disk.TURN = &config.TURN
+	}
 	for _, candidate := range config.Profiles {
 		disk.Profiles = append(disk.Profiles, savedRelay{
 			URL: candidate.PublicURL, AccessKey: candidate.AccessKey,

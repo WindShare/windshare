@@ -21,7 +21,7 @@ func (n *NativePeerConnectivity) ClaimPrewarm(session [16]byte) bool {
 	return true
 }
 
-func (n *NativePeerConnectivity) SetDirect(session [16]byte, pathID v2signal.PeerPathID) {
+func (n *NativePeerConnectivity) SetAdmitted(session [16]byte, pathID v2signal.PeerPathID, direct bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	key := pathKey{session, pathID}
@@ -29,8 +29,8 @@ func (n *NativePeerConnectivity) SetDirect(session [16]byte, pathID v2signal.Pee
 	if path == nil {
 		return
 	}
-	changed := !path.direct
-	path.direct = true
+	changed := path.direct != direct
+	path.direct = direct
 	for attempt := range path.attempts {
 		attempt.release()
 	}

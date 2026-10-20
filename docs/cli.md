@@ -78,6 +78,9 @@ changing saved defaults. Matching relay addresses retain their credentials; a di
 path or query never inherits them. Without saved defaults, supply both options explicitly.
 Invalid or unreadable configuration fails explicitly.
 
+Optional owner-provided TURN services belong in the same file's `turn` section.
+See [TURN configuration and budgets](turn.md).
+
 ## Download
 
 ```text

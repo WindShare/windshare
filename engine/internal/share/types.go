@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -98,6 +99,7 @@ type Relay interface {
 }
 
 type Dependencies struct {
+	TURN             turnpath.Accounts
 	Control          task.Control
 	Controller       *Controller
 	RevisionCapacity *revisioncapacity.Coordinator

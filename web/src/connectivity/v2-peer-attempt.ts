@@ -59,6 +59,7 @@ export interface V2PeerCandidatePublication {
 export type V2PeerCandidatePublisher = (candidate: V2PeerCandidatePublication) => boolean
 
 export interface V2BrowserPeerAttemptExecutorOptions {
+  readonly transportRoute?: 'direct' | 'turn'
   readonly tabAdmission?: PeerTabAdmission
   readonly admissionReceiver?: object
   readonly session: V2ReceiverSessionRuntime
@@ -128,6 +129,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   readonly #trace: V2ConnectivityTraceSource | undefined
   readonly #tabAdmission: PeerTabAdmission
   readonly #admissionReceiver: object
+  readonly #transportRoute: 'direct' | 'turn'
 
   constructor(options: V2BrowserPeerAttemptExecutorOptions) {
     if (
@@ -143,6 +145,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     this.#trace = options.trace
     this.#tabAdmission = options.tabAdmission ?? browserPeerTabAdmission()
     this.#admissionReceiver = options.admissionReceiver ?? this
+    this.#transportRoute = options.transportRoute ?? 'direct'
   }
 
   createAttempt(context: V2PeerAttemptContext): V2PeerAttemptHandle {
@@ -186,7 +189,8 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       )
       resources.route = route
       permit = await this.#tabAdmission.acquire(this.#admissionReceiver,
-        context.iceProfile?.endpointIDs.length ?? 2, context.admissionWaitBudgetMilliseconds ?? 0, signal)
+        this.#transportRoute === 'turn' ? 0 : context.iceProfile?.endpointIDs.length ?? 2,
+        context.admissionWaitBudgetMilliseconds ?? 0, signal, this.#transportRoute)
       signal.throwIfAborted()
       if (context.iceProfile !== undefined) route.providerFact({ kind: 'profile',
         profileID: context.iceProfile.id, networkGenerationID: context.iceProfile.networkGenerationID,
@@ -254,7 +258,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     signal: AbortSignal,
   ): Promise<PhaseWorkSettlement<{ readonly laneId: number; readonly laneEpoch: number }>> {
     route.throwIfAttemptFailed()
-    const grant = await this.#session.requestLaneGrant(context.requestedLaneId, { signal })
+    const grant = await this.#session.requestLaneGrant(0, { signal })
     const grantOperationId = createV2ProtocolOperationIdentity(grant.grantOperationId)
     const laneIdentity = Object.freeze({ laneId: grant.laneId, laneEpoch: grant.laneEpoch })
     route.grantRequested(grantOperationId, grant.laneId)

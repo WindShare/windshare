@@ -121,7 +121,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
           return urls.length === 0 ? [] : [{ ...server, urls }]
         })
         configuration.iceServers = [...trustedTurn,
-          ...(profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }])]
+          ...(configuration.iceTransportPolicy === 'relay' || profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }])]
       }
       peer = this.#createPeerConnection(configuration)
     } catch (cause) {

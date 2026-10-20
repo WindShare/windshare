@@ -23,6 +23,36 @@ function fixture() {
 }
 
 describe('receiver path activity', () => {
+  it('keeps service health and useful totals through credential replacement', () => {
+    vi.useFakeTimers()
+    const { activity, facts, latest } = fixture()
+    const service = { provider: 'coturn', account: 'owner', profile: 'primary' }
+    const old = { ...TURN, turnService: service }
+    const replacement = { ...old, laneId: 7 }
+    activity.turn(1, { ...service, pathId: 'old', state: 'connecting' })
+    activity.admitted(1, old)
+    activity.turn(1, { ...service, pathId: 'old', state: 'ready' })
+    activity.fetched(1, fetched(old, 1024))
+    const updates = facts.length
+    activity.fetched(1, fetched(old, 1024))
+    expect(facts).toHaveLength(updates)
+    activity.turn(1, { ...service, pathId: 'new', state: 'connecting' })
+    expect(latest().turnServices?.[0]).toMatchObject({ state: 'ready', usefulBytes: 2048 })
+    activity.admitted(1, replacement)
+    activity.detached(1, old)
+    activity.turn(1, { ...service, pathId: 'old', state: 'retired' })
+    activity.fetched(1, fetched(replacement, 512))
+    activity.turn(1, { ...service, pathId: 'new', state: 'ready', usefulBytes: 512 })
+    expect(latest().turnServices?.[0]).toMatchObject({ state: 'ready', usefulBytes: 2560 })
+    activity.detached(1, replacement)
+    expect(latest().turnServices?.[0]?.state).toBe('connecting')
+    activity.turn(1, { ...service, pathId: 'new', state: 'retired' })
+    expect(latest().turnServices?.[0]).toMatchObject({ state: 'retired', usefulBytes: 2560 })
+    activity.generationInstalled(2)
+    expect(latest().turnServices).toBeUndefined()
+    activity.close()
+  })
+
   it('tracks every admitted channel and expires each channel independently without per-block rendering', async () => {
     vi.useFakeTimers()
     const { activity, facts, latest } = fixture()

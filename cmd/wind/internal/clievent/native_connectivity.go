@@ -28,6 +28,31 @@ type NativeConnectivitySpec struct {
 	Lifecycle         *NativeLifecycleFacts
 	Admission         *NativeAdmissionFacts
 	Socket            *NativeSocketFacts
+	TURN              *NativeTURNFacts
+}
+
+type NativeTURNFacts struct {
+	Provider, Account, Profile string
+	Milestone, Reason          string
+	UsefulBytes                uint64
+	Resources                  *NativeTURNResources
+}
+
+type NativeTURNResources struct {
+	ActiveSockets, OpenedSockets     uint64
+	TransportSent, TransportReceived uint64
+}
+
+func (facts *NativeTURNFacts) clone() *NativeTURNFacts {
+	if facts == nil {
+		return nil
+	}
+	copy := *facts
+	if copy.Resources != nil {
+		resources := *copy.Resources
+		copy.Resources = &resources
+	}
+	return &copy
 }
 
 type NativeSocketFacts struct {
@@ -102,6 +127,7 @@ func NewNativeConnectivityObserved(spec NativeConnectivitySpec) (NativeConnectiv
 		copied := *spec.Socket
 		spec.Socket = &copied
 	}
+	spec.TURN = spec.TURN.clone()
 	return NativeConnectivityObserved{spec: spec}, nil
 }
 func (NativeConnectivityObserved) event()                 {}
@@ -133,6 +159,7 @@ func (value NativeConnectivityObserved) Facts() NativeConnectivitySpec {
 		copied := *spec.Socket
 		spec.Socket = &copied
 	}
+	spec.TURN = spec.TURN.clone()
 	return spec
 }
 func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
@@ -143,11 +170,14 @@ func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
 }
 func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	if !spec.Command.Valid() || !slices.Contains([]string{"sender", "receiver", "unknown"}, spec.Side) ||
-		!slices.Contains([]string{"provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind) ||
+		!slices.Contains([]string{"turn_path", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind) ||
 		!slices.Contains([]string{"unknown", "new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, spec.State) {
 		return false
 	}
 	if !validNativeSubject(spec) {
+		return false
+	}
+	if !validNativeTURN(spec) {
 		return false
 	}
 	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
@@ -190,6 +220,29 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	}
 	if r := spec.Reachability; r != nil {
 		if !nativeProtocol(r.Protocol) || !slices.Contains([]string{"none", "unknown", "unavailable", "capacity", "invalid_response", "closed", "lease_lost", "canceled", "deadline"}, r.Reason) {
+			return false
+		}
+	}
+	return true
+}
+
+func validNativeTURN(spec NativeConnectivitySpec) bool {
+	facts := spec.TURN
+	if facts == nil {
+		return spec.Kind != "turn_path"
+	}
+	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable"}, facts.Milestone) ||
+		(spec.Kind == "turn_path") != (facts.Milestone != "") {
+		return false
+	}
+	for _, id := range []string{facts.Provider, facts.Account, facts.Profile} {
+		if len(id) > 64 || (id == "" && facts.Milestone != "unavailable") {
+			return false
+		}
+		for _, char := range id {
+			if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.' {
+				continue
+			}
 			return false
 		}
 	}

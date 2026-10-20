@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 // SenderAttemptStage orders product diagnostics for one sender-side peer attempt.
@@ -119,6 +120,7 @@ type SenderAttemptObservation struct {
 	CandidateCounts      *SenderCandidateCounts
 	GrantOperationID     protocolsession.OperationID
 	Lane                 *sessionruntime.LaneIdentity
+	Route                transfer.LaneRoute
 	AdmissionDisposition SenderAdmissionDisposition
 	ResponseDelivery     SenderResponseDelivery
 	Rejection            *SenderLaneRejection

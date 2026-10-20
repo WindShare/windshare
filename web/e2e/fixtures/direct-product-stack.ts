@@ -23,6 +23,7 @@ export interface DirectShareOptions {
   readonly blockSizeBytes?: number
   readonly relayUrl?: string
   readonly senderTrace?: boolean
+  readonly turn?: object
 }
 
 export interface DirectStackTrace {
@@ -131,7 +132,7 @@ export class DirectProductStack {
     }
     // Keep test relay authority independent of the developer's saved profiles.
     const configPath = join(this.#requireRoot(), `${operationId}-config.json`)
-    await writeFile(configPath, JSON.stringify({ profiles: [], active_relays: [] }), { mode: 0o600 })
+    await writeFile(configPath, JSON.stringify({ profiles: [], active_relays: [], ...(options.turn === undefined ? {} : { turn: options.turn }) }), { mode: 0o600 })
     const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
       environment: { ...localGoEnvironment(), WINDSHARE_CONFIG: configPath },

@@ -5,6 +5,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -36,7 +37,16 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 	}
 	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
 		Stage: v2peer.SenderAttemptAdmitted,
+		Lane:  &sessionruntime.LaneIdentity{ID: 2, Epoch: 1},
+		Route: transfer.LaneRouteTURN,
+	})
+	if sink.event.Milestone != "" {
+		t.Fatal("TURN admission was reported as a direct connection")
+	}
+	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
+		Stage: v2peer.SenderAttemptAdmitted,
 		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
+		Route: transfer.LaneRouteDirect,
 	})
 	if err := trace.close(); err != nil {
 		t.Fatal(err)

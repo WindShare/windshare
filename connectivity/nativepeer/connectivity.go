@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/reachability"
@@ -29,15 +30,18 @@ const (
 )
 
 type AttemptRequest struct {
-	Configuration     pion.Configuration
-	ProtocolSessionID [16]byte
-	Binding           v2signal.Binding
+	Configuration      pion.Configuration
+	ICE                iceconfig.Connection
+	ProtocolSessionID  [16]byte
+	ReplacesPeerPathID [16]byte
+	Binding            v2signal.Binding
 }
 type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
 }
 type Config struct {
 	Admission           *ProcessAdmission
+	TURNCapacity        *provider.TURNCapacity
 	Connect             func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error)
 	Monitor             NetworkMonitor
 	Sockets             *socketauthority.Authority
@@ -91,6 +95,7 @@ type NativePeerConnectivity struct {
 	prewarmed             map[[16]byte]bool
 	poll                  sync.Mutex
 	config                Config
+	turnResources         *provider.TURNResourceOwner
 	paths                 map[pathKey]*pathResources
 	facts                 *icepolicy.FactStore
 	generation            uint64
@@ -99,6 +104,9 @@ type NativePeerConnectivity struct {
 }
 
 func New(config Config) *NativePeerConnectivity {
+	if config.TURNCapacity == nil {
+		config.TURNCapacity = provider.ProcessTURNCapacity()
+	}
 	if config.Admission == nil {
 		config.Admission = processAdmission
 	}
@@ -114,7 +122,7 @@ func New(config Config) *NativePeerConnectivity {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	owner := &NativePeerConnectivity{config: config, paths: make(map[pathKey]*pathResources), prewarmed: make(map[[16]byte]bool), automaticReachability: config.Reachability == nil}
+	owner := &NativePeerConnectivity{config: config, turnResources: config.TURNCapacity.NewOwner(), paths: make(map[pathKey]*pathResources), prewarmed: make(map[[16]byte]bool), automaticReachability: config.Reachability == nil}
 	if config.ObservationCapacity > 0 {
 		capacity := min(config.ObservationCapacity, DefaultObservationCapacity)
 		owner.producer, owner.observations, _ = observationstream.New[Observation](observationstream.Capacity(capacity))

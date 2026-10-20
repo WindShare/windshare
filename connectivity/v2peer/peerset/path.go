@@ -111,7 +111,7 @@ func (p *Path) nextWave(wave *recoveryWave) *Result {
 func (p *Path) awaitMappingOpportunity(wave recoveryWave) bool {
 	now := p.owner.config.Clock.Now()
 	if wave.attempts == 0 && p.deferred == nil && p.config.Native != nil && p.currentDemand() == ContentDemand {
-		p.deferred = p.owner.config.Budget.reserveDeferred(now)
+		p.deferred = p.budget().reserveDeferred(now)
 	}
 	if p.deferred == nil || wave.attempts != AttemptsPerWave-1 || p.mappingReady() {
 		return true
@@ -171,7 +171,7 @@ func (p *Path) reserveAttemptBudget(attempts int) (func(time.Duration), time.Dur
 	if p.deferred != nil && (ready || attempts == AttemptsPerWave-1) {
 		return p.takeDeferred(), 0
 	}
-	refund, delay := p.owner.config.Budget.reserve(p.owner.config.Clock.Now())
+	refund, delay := p.budget().reserve(p.owner.config.Clock.Now())
 	if refund == nil && p.deferred != nil {
 		return p.takeDeferred(), 0
 	}
@@ -216,7 +216,7 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *R
 	// wall-clock wave and process rate limits, but return its negotiation allowance.
 	if result.Scope == protocolsession.PeerFailureResourceDeferred || errors.Is(result.Cause, socketauthority.ErrCapacity) {
 		wave.attempts--
-		p.owner.config.Budget.refundUnstartedAttempt()
+		p.budget().refundUnstartedAttempt()
 		if !p.wait(ResourceRetryDelay) {
 			return &Result{Stopped: true}
 		}

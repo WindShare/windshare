@@ -55,6 +55,9 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		Peers: injected.Peers, PollNetwork: injected.PollNetwork,
 	}
 	current, err := start(engine, ctx, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
+		engine.mu.Lock()
+		dependencies.TURN = engine.turn
+		engine.mu.Unlock()
 		dependencies.Control = control
 		return share.Run(ctx, request, dependencies)
 	})

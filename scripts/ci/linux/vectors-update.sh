@@ -5,6 +5,9 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== vectors-update =="
 
+echo "-- update TURN control vectors"
+go test -count=1 ./core/session/turncontrol -update
+
 echo "-- update diagnostic-correlation vectors"
 go test -count=1 ./cmd/wind/internal/runtrace -run 'TestDiagnosticCorrelationVectors' -update
 echo "-- update protocol-contract vectors"
