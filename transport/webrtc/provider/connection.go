@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pion/ice/v4"
+	"github.com/pion/logging"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
@@ -83,7 +84,10 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	if err != nil {
 		return nil, err
 	}
-	capability := Capabilities(request.TCPProfile)
+	capability := TCPCapability{}
+	if request.ICE.Policy() != iceconfig.RelayCandidates {
+		capability = Capabilities(request.TCPProfile)
+	}
 	var tcpFailure error
 	if capability.IPv4 || capability.IPv6 {
 		if tcpFailure = lease.PrepareTCP(capability.IPv6); tcpFailure != nil {
@@ -127,14 +131,19 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	settings.SetICEUDPMux(mux)
 	settings.SetIncludeLoopbackCandidate(true)
-	settings.SetIPFilter(func(ip net.IP) bool {
-		for _, endpoint := range endpoints {
-			if net.IP(endpoint.Addr().AsSlice()).Equal(ip) {
-				return true
+	if request.ICE.Policy() != iceconfig.RelayCandidates {
+		settings.SetIPFilter(func(ip net.IP) bool {
+			for _, endpoint := range endpoints {
+				if net.IP(endpoint.Addr().AsSlice()).Equal(ip) {
+					return true
+				}
 			}
-		}
-		return false
-	})
+			return false
+		})
+	}
+	// TURN control sockets follow the OS route to each server. Applying the
+	// direct-path IP filter here makes Pion allocate URL x interface sockets;
+	// unreachable VPN/virtual interfaces can then exhaust the path reservation.
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	settings.SetICEProviderConfig(ice.ProviderConfig{
 		SrflxMux: mux, InitialCheckingTimeout: initialTimeout, MappedUDPEndpoints: mapped,
@@ -154,11 +163,13 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	settings.SetNetworkTypes(networks)
 	configureICE(&configuration, request.ICE)
+	connection := &Connection{lease: lease, release: release, request: request, turn: turn}
+	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observe}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
 		return fail(err)
 	}
-	connection := &Connection{PeerConnection: pc, lease: lease, release: release, request: request, turn: turn}
+	connection.PeerConnection = pc
 	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) { connection.observe("ice", state.String()) })
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) { connection.observe("peerconnection", state.String()) })
 	connection.OnICECandidate(nil)

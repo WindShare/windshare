@@ -36,6 +36,12 @@ type manifest struct {
 	Modules []sourceModule `json:"modules"`
 }
 
+var providerModules = map[string]string{
+	"ice":    "github.com/pion/ice/v4",
+	"webrtc": "github.com/pion/webrtc/v4",
+	"turn":   "github.com/pion/turn/v5",
+}
+
 func main() {
 	root := flag.String("root", ".", "repository root")
 	reproduce := flag.Bool("reproduce", false, "replay patches against checksum-verified upstream modules")
@@ -69,8 +75,8 @@ func verify(root string, reproduce bool) error {
 	if err = json.Unmarshal(raw, &sources); err != nil {
 		return err
 	}
-	if len(sources.Modules) != 2 {
-		return errors.New("provider source manifest must contain ice and webrtc")
+	if len(sources.Modules) != len(providerModules) {
+		return errors.New("provider source manifest must contain ice, webrtc and turn")
 	}
 	moduleFile, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -81,7 +87,7 @@ func verify(root string, reproduce bool) error {
 	}
 	names := make(map[string]bool)
 	for _, module := range sources.Modules {
-		if (module.Name != "ice" && module.Name != "webrtc") || names[module.Name] || module.Path != "github.com/pion/"+module.Name+"/v4" {
+		if path, ok := providerModules[module.Name]; !ok || names[module.Name] || module.Path != path {
 			return errors.New("invalid provider module identity")
 		}
 		names[module.Name] = true
