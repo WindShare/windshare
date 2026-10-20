@@ -38,7 +38,7 @@ verified platform capabilities; a firewall rule does not enable an unsupported t
 
 ## Build from source
 
-Clone the release tag or extract the release's `windshare-vX.Y.Z-source.zip`.
+Clone the intended commit or release tag, or extract the release's `windshare-vX.Y.Z-source.zip`.
 Both contain the pinned Pion sources, patches, licenses and provenance required
 by the root module's local replacements. With Go installed, use the same installer
 above; the root `go.mod` selects source installation, which verifies the pinned source
