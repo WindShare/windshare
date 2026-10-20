@@ -24,6 +24,8 @@ stops issuance, and queues outstanding credentials for revocation. Pending,
 provider-confirmed and expired counts are distinct: recipients may reuse a
 credential until provider revocation or expiry. Cloudflare Realtime charges are
 separate from Worker charges; automatic scheduling does not force TURN traffic.
+Lease capacity includes unfinished issuance and unexpired credentials awaiting
+revocation; retained records of completed leases do not consume capacity.
 
 `managed_turn[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
 limits that deployment's usage within one Engine, subject to the budget semantics

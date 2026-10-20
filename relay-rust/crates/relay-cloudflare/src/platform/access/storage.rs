@@ -11,9 +11,11 @@ impl Database {
     pub fn open(state: &State) -> Result<Self> {
         let db = Self(state.storage().sql());
         db.0.exec("CREATE TABLE IF NOT EXISTS access_entries (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER) STRICT", None)?;
+        db.0.exec("CREATE INDEX IF NOT EXISTS access_entry_expiry ON access_entries(expires) WHERE expires IS NOT NULL", None)?;
         db.0.exec("CREATE TABLE IF NOT EXISTS access_credentials (digest TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL) STRICT", None)?;
         db.0.exec("CREATE TABLE IF NOT EXISTS credential_shares (credential TEXT NOT NULL, share TEXT NOT NULL, PRIMARY KEY(credential,share)) STRICT", None)?;
         db.0.exec("CREATE TABLE IF NOT EXISTS termination_queue (credential TEXT NOT NULL, share TEXT NOT NULL, next_attempt INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(credential,share)) STRICT", None)?;
+        db.initialize_turn_queries()?;
         Ok(db)
     }
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
@@ -164,3 +166,4 @@ impl Database {
         Ok(())
     }
 }
+mod leases;
