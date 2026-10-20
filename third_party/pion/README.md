@@ -19,6 +19,8 @@ The narrow patches in `patches/` add:
 - Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
 - Context cancellation preserved through local-endpoint gathering and idle STUN refresh.
 - Complete universal UDP mux initialization before its socket reader starts.
+- Cancellable TURN allocation transactions and allocation deletion before closing
+  their control transport, including rejected candidates.
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses
 independent sockets per peer path; cross-path shared remote-tuple demultiplexing

@@ -8,6 +8,8 @@ import {
   V2ReceiverSessionRuntime,
 } from '../../src/session/v2-runtime'
 import type { V2LaneGrant } from '../../src/session/v2-lane-codec'
+import { encodeCanonicalCbor } from '../../src/protocol/cbor'
+import { encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import type { V2ReceiverSessionOptions } from '../../src/session/v2-runtime-types'
 import type { V2SessionKeys } from '../../src/session/v2-transcript'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
@@ -81,6 +83,33 @@ const lane = named<LaneVector>('sender-granted-lane-attach')
 afterEach(() => vi.useRealTimers())
 
 describe('receiver runtime caller-owned lane admission', () => {
+  it.each([false, true])('accepts a recycled automatic slot only with an advancing epoch (stale=%s)', async (stale) => {
+    const { runtime } = runtimeFixture()
+    const current = grant()
+    await runtime.adoptGrantedLane(new ScriptedChannel(b64ToBytes(lane.laneAckB64)), current)
+    const epoch = current.laneEpoch + (stale ? 0 : 1)
+    vi.spyOn(runtime, 'beginOperation').mockResolvedValue({
+      id: current.grantOperationId,
+      requestKind: V2_MESSAGE_KIND.laneAttach,
+      next: async () => encodeV2Message(
+        V2_MESSAGE_KIND.laneAttach,
+        current.grantOperationId,
+        encodeCanonicalCbor(new Map<number, unknown>([
+          [0, 1], [1, 1], [2, current.laneId], [3, epoch], [4, current.attachNonce],
+        ])),
+      ),
+      cancel: () => undefined,
+    })
+    if (stale) {
+      await expect(runtime.requestLaneGrant()).rejects.toMatchObject({ scope: 'session' })
+      expect(runtime.isClosed).toBe(true)
+    } else {
+      await expect(runtime.requestLaneGrant()).resolves.toMatchObject({ laneId: current.laneId, laneEpoch: epoch })
+      expect(runtime.isClosed).toBe(false)
+    }
+    await runtime.close()
+  })
+
   it('retains the underlying authenticated lane failure before retiring the session', async () => {
     const events: V2ProtocolTraceEvent[] = []
     const { runtime, initialChannel } = runtimeFixture({ current: event => events.push(event) })

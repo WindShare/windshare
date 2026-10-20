@@ -102,6 +102,7 @@ interface PendingLane {
 
 export class V2LaneSet {
   readonly #lanes = new Map<number, LaneState>()
+  readonly #useful = new Map<number, { bytes: number; admittedAt: number; lastAt: number | undefined }>()
   readonly #waiters = new Set<PendingLane>()
   readonly #dispatchSequence: V2BlockDispatchSequenceAuthority
   readonly #onBlockDispatched: (observation: V2BlockDispatchObservation) => void
@@ -134,6 +135,7 @@ export class V2LaneSet {
     }
     const performance = new LanePerformance()
     this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance })
+    this.#useful.set(lane.id, { bytes: 0, admittedAt: this.#now(), lastAt: undefined })
     this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: performance })
     this.#wakeWaiters()
   }
@@ -141,6 +143,7 @@ export class V2LaneSet {
   remove(laneId: number): void {
     this.#lanes.get(laneId)?.lane.close?.()
     this.#lanes.delete(laneId)
+    this.#useful.delete(laneId)
     this.requests.remove(laneId)
     this.#wakeWaiters()
   }
@@ -151,6 +154,22 @@ export class V2LaneSet {
 
   laneIds(): readonly number[] {
     return Object.freeze([...this.#lanes.keys()])
+  }
+
+  measureLane(laneId: number, laneEpoch: number): { usefulBytes: number; unhelpful: boolean } {
+    const state = this.#lanes.get(laneId)
+    const useful = this.#useful.get(laneId)
+    if (state === undefined || state.laneEpoch !== laneEpoch || useful === undefined) return { usefulBytes: 0, unhelpful: false }
+    const quietWindowMs = 30_000
+    const minimumRateRatio = 1.5
+    const sampledIdle = state.performance.hasSuccessfulSample && state.inflight === 0 &&
+      this.#now() - (useful.lastAt ?? useful.admittedAt) >= quietWindowMs
+    const unhelpful = sampledIdle && [...this.#lanes.values()].some((other) => {
+      const recent = this.#useful.get(other.lane.id)?.lastAt
+      return other !== state && !other.failed && recent !== undefined && this.#now() - recent < quietWindowMs &&
+        other.performance.hasSuccessfulSample && other.performance.bytesPerSecond > state.performance.bytesPerSecond * minimumRateRatio
+    })
+    return { usefulBytes: useful.bytes, unhelpful }
   }
 
   eligibleSize(routes: V2BlockRouteEligibility): number {
@@ -309,6 +328,9 @@ export class V2LaneSet {
     // A retired route may finish valid content, but cannot attest which replacement path carried it.
     if (this.#lanes.get(state.lane.id) !== state) return
     deliveredRoutes.set(record, state.route)
+    const useful = this.#useful.get(state.lane.id)!
+    useful.bytes = Math.min(Number.MAX_SAFE_INTEGER, useful.bytes + record.data.byteLength)
+    useful.lastAt = this.#now()
     try {
       this.#onBlockFetched(Object.freeze({ ...observation, usefulBytes: record.data.byteLength }))
     } catch {

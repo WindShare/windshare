@@ -22,10 +22,26 @@ type nativeConnectivityPayloadV4 struct {
 	Lifecycle         *nativeLifecyclePayloadV4    `json:"lifecycle,omitempty"`
 	Admission         *nativeAdmissionPayloadV4    `json:"admission,omitempty"`
 	Socket            *nativeSocketPayloadV4       `json:"socket,omitempty"`
+	TURN              *nativeTURNPayloadV4         `json:"turn,omitempty"`
 }
 
 func (nativeConnectivityPayloadV4) runTracePayloadV4() {}
 
+type nativeTURNPayloadV4 struct {
+	Provider    string                        `json:"provider"`
+	Account     string                        `json:"account"`
+	Profile     string                        `json:"profile"`
+	Milestone   string                        `json:"milestone,omitempty"`
+	Reason      string                        `json:"reason,omitempty"`
+	UsefulBytes string                        `json:"useful_bytes,omitempty"`
+	Resources   *nativeTURNResourcesPayloadV4 `json:"resources,omitempty"`
+}
+type nativeTURNResourcesPayloadV4 struct {
+	ActiveSockets     string `json:"active_sockets"`
+	OpenedSockets     string `json:"opened_sockets"`
+	TransportSent     string `json:"transport_sent_bytes"`
+	TransportReceived string `json:"transport_received_bytes"`
+}
 type nativeSocketPayloadV4 struct {
 	Local    string `json:"local_endpoint"`
 	Server   string `json:"stun_server"`
@@ -126,6 +142,17 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	}
 	if s := facts.Socket; s != nil {
 		payload.Socket = &nativeSocketPayloadV4{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
+	}
+	if turn := facts.TURN; turn != nil {
+		payload.TURN = &nativeTURNPayloadV4{Provider: turn.Provider, Account: turn.Account, Profile: turn.Profile,
+			Milestone: turn.Milestone, Reason: turn.Reason}
+		if turn.Milestone != "" {
+			payload.TURN.UsefulBytes = decimal(turn.UsefulBytes)
+		}
+		if resources := turn.Resources; resources != nil {
+			payload.TURN.Resources = &nativeTURNResourcesPayloadV4{ActiveSockets: decimal(resources.ActiveSockets), OpenedSockets: decimal(resources.OpenedSockets),
+				TransportSent: decimal(resources.TransportSent), TransportReceived: decimal(resources.TransportReceived)}
+		}
 	}
 	if a := facts.Admission; a != nil && a.SocketCapacity.Limit != 0 {
 		c := a.SocketCapacity

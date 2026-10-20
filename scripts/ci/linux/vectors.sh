@@ -5,6 +5,9 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== vectors =="
 
+echo "-- verify TURN control vectors"
+go test -count=1 ./core/session/turncontrol
+
 echo "-- verify protocol-contract vectors"
 go test -count=1 ./core/internal/protocolcontract
 echo "-- verify peer-signaling vectors"

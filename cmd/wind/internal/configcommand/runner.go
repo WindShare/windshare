@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 type Result uint8
@@ -96,6 +97,9 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 	log.Info("committed", "candidate_count", len(config.Profiles), "frontend_configured", config.FrontURL != "")
 	_, _ = fmt.Fprintf(output, "Saved sharing configuration with %d relay candidate(s).\n", len(config.Profiles))
+	if len(config.TURN.Profiles) > 0 {
+		_, _ = fmt.Fprintln(output, turnconfig.DelegationNotice)
+	}
 	if config.FrontURL == "" {
 		_, _ = fmt.Fprintln(output, "No frontend configured. Re-import with --front-url <url>, or pass --front-url when sharing.")
 	} else {

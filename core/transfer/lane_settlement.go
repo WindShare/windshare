@@ -439,6 +439,9 @@ func (s *LaneSet) finish(
 	s.mu.Lock()
 	if selected {
 		state.settlement.addDelivered(uint64(record.DataLength()))
+		var incomplete bool
+		saturatingLaneCounter(&state.usefulBytes, uint64(record.DataLength()), &incomplete)
+		state.lastUsefulAt = s.now()
 		s.recordContentActivityLocked(state.route, uint64(record.DataLength()))
 	}
 	state.inflight--
@@ -450,6 +453,43 @@ func (s *LaneSet) finish(
 	settlement := s.settleLaneLocked(state)
 	s.mu.Unlock()
 	s.publishLaneSettlement(settlement)
+}
+
+const UnhelpfulLaneWindow = 30 * time.Second
+const UnhelpfulLaneRateRatio = 1.5
+
+type LaneMeasurement struct {
+	UsefulBytes uint64
+	Unhelpful   bool
+}
+
+// MeasureLane reuses completed content measurements; it never generates probes.
+// Retire only an idle, sampled route with a demonstrably faster alternative.
+func (s *LaneSet) MeasureLane(identity LaneIdentity) LaneMeasurement {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.lanes[identity.ID]
+	if state == nil || state.identity != identity {
+		return LaneMeasurement{}
+	}
+	result := LaneMeasurement{UsefulBytes: state.usefulBytes}
+	lastUseful := state.lastUsefulAt
+	if lastUseful.IsZero() {
+		lastUseful = state.admittedAt
+	}
+	if state.inflight != 0 || !state.performance.HasSuccessfulSample ||
+		s.now().Sub(lastUseful) < UnhelpfulLaneWindow {
+		return result
+	}
+	for _, other := range s.lanes {
+		if other != state && !other.retired && s.contentSuspensions[other.identity.ID] == nil &&
+			other.performance.HasSuccessfulSample && other.performance.BytesPerSecond > state.performance.BytesPerSecond*UnhelpfulLaneRateRatio &&
+			!other.lastUsefulAt.IsZero() && s.now().Sub(other.lastUsefulAt) < UnhelpfulLaneWindow {
+			result.Unhelpful = true
+			break
+		}
+	}
+	return result
 }
 
 func (state *laneState) recordFailure(canceled bool) {

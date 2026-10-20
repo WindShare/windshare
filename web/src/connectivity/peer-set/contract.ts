@@ -161,7 +161,6 @@ export interface V2PeerAttemptContext {
   readonly waveOrdinal: number
   readonly waveAttemptOrdinal: number
   readonly sessionAttemptOrdinal: number
-  readonly requestedLaneId: number
   readonly negotiationBudgetMilliseconds: number
   readonly admissionBudgetMilliseconds: number
   phaseChanged(phase: V2PeerAttemptPhase): void

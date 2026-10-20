@@ -18,6 +18,9 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== vectors =='
+Invoke-Step 'verify TURN control vectors' {
+    go test -count=1 ./core/session/turncontrol
+}
 Invoke-Step 'verify protocol-contract vectors' {
     go test -count=1 ./core/internal/protocolcontract
 }

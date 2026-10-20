@@ -9,10 +9,38 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/reachability"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
+
+func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
+	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender}
+	identity := iceconfig.Identity{Provider: "cloudflare", Account: "owner", Profile: "tls"}
+	event, err := projectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject, Provider: &provider.Event{
+		Milestone: "provider_closed", TURNService: &identity,
+		TURN: &provider.TURNResourceSnapshot{OpenedSockets: 1, TransportSent: 1200, TransportReceived: 300},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := event.Facts()
+	if facts.TURN.Provider != "cloudflare" || facts.TURN.Resources.ActiveSockets != 0 || facts.TURN.Resources.TransportSent != 1200 {
+		t.Fatalf("TURN resources lost: %+v", facts.TURN)
+	}
+	facts.TURN.Resources.TransportSent = 0
+	if event.Facts().TURN.Resources.TransportSent != 1200 {
+		t.Fatal("mutable resource facts escaped the event")
+	}
+	event, err = projectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject,
+		TURN: &turnpath.Event{Provider: identity.Provider, Account: identity.Account, Profile: identity.Profile,
+			Milestone: "useful_content", UsefulBytes: 1024}})
+	if err != nil || event.Facts().TURN.UsefulBytes != 1024 || event.Facts().TURN.Resources != nil {
+		t.Fatalf("useful content was conflated with socket usage: %+v, %v", event, err)
+	}
+}
 
 func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver}

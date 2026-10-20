@@ -174,6 +174,8 @@ class FakeSession {
   #nextGrantOperationIdentity = 40
   #nextPeerOperationIdentity = 80
   #nextLaneId = 2
+  readonly #releasedLaneIds: number[] = []
+  readonly #laneEpochs = new Map<number, number>()
   closeCalls = 0
 
   laneIds(): readonly number[] {
@@ -191,12 +193,14 @@ class FakeSession {
   ) {
     this.grantCalls += 1
     this.requestedLaneIds.push(requestedLaneId)
-    const laneId = requestedLaneId === 0 ? this.#nextLaneId++ : requestedLaneId
+    const laneId = requestedLaneId === 0 ? this.#releasedLaneIds.shift() ?? this.#nextLaneId++ : requestedLaneId
+    const laneEpoch = (this.#laneEpochs.get(laneId) ?? 0) + 1
+    this.#laneEpochs.set(laneId, laneEpoch)
     const operationIdentity = identity(this.#nextGrantOperationIdentity++)
     await awaitOptionalGate(this.grantGate, options.signal)
     const grant = {
       laneId,
-      laneEpoch: requestedLaneId === 0 ? 1 : 2,
+      laneEpoch,
       grantOperationId: operationIdentity,
       attachNonce: identity(this.#nextGrantOperationIdentity + 40),
     }
@@ -271,8 +275,8 @@ class FakeSession {
   }
 
   detach(laneId: number): void {
-    this.#ids.delete(laneId)
-    const change: V2LaneChange = { type: 'detached', laneId, laneEpoch: 1 }
+    if (this.#ids.delete(laneId)) this.#releasedLaneIds.push(laneId)
+    const change: V2LaneChange = { type: 'detached', laneId, laneEpoch: this.#laneEpochs.get(laneId) ?? 1 }
     for (const listener of this.#listeners) listener(change)
   }
 }
@@ -1058,7 +1062,7 @@ describe('v2 receiver immediate dual-path policy', () => {
     expect(lanes.laneIds()).toEqual([1, 2])
     expect(preview.routes.allows('application-relay')).toBe(true)
     expect(offers.calls).toBe(2)
-    expect(session.requestedLaneIds).toEqual([0, 2])
+    expect(session.requestedLaneIds).toEqual([0, 0])
     preview.close()
     await connectivity.close()
   })

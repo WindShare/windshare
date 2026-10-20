@@ -20,6 +20,7 @@ export class PeerTabCapacityTimeoutError extends DOMException {
   constructor() { super('Tab peer capacity was unavailable within the attempt start window', 'TimeoutError') }
 }
 interface WaitingAttempt {
+  readonly route: 'direct' | 'turn'
   readonly receiver: object
   readonly endpoints: number
   readonly signal: AbortSignal
@@ -55,7 +56,7 @@ export class PeerTabAdmission {
     this.#endpoints = this.#policy.stunEndpointsPerInterval
   }
 
-  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal): Promise<PeerTabAdmissionPermit> {
+  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct'): Promise<PeerTabAdmissionPermit> {
     signal.throwIfAborted()
     if (!Number.isInteger(endpoints) || endpoints < 0 || endpoints > 2 ||
       !Number.isFinite(waitMilliseconds) || waitMilliseconds < 0) {
@@ -64,7 +65,7 @@ export class PeerTabAdmission {
     if (this.#queued >= this.#policy.queuedAttempts) return Promise.reject(capacityTimeout())
     return new Promise((resolve, reject) => {
       const pending: WaitingAttempt = {
-        receiver, endpoints, signal, expiresAt: this.#clock.now() + waitMilliseconds,
+        receiver, endpoints, signal, route, expiresAt: this.#clock.now() + waitMilliseconds,
         resolve, reject, abort: () => {
           this.#remove(pending)
           reject(signal.reason)
@@ -110,15 +111,17 @@ export class PeerTabAdmission {
     // waiting list with paths and indefinitely pass a later independent receiver.
     while (this.#queued > 0) {
       const receiver = this.#nextReceiver()
-      const pending = this.#receivers.get(receiver)![0]!
+      const preferred = this.#receivers.get(receiver)!
+      const pending = [...preferred, ...[...this.#receivers.values()].flat().filter((entry) => entry.receiver !== receiver)]
+        .find((entry) => this.#refillDelay(entry) <= 0)
+      if (pending === undefined) break
       if (pending.expiresAt < now) {
         this.#remove(pending)
         pending.reject(capacityTimeout())
         continue
       }
-      if (this.#active >= this.#policy.concurrentAttempts || this.#starts < 1 || this.#endpoints < pending.endpoints) break
       this.#remove(pending)
-      this.#lastReceiver = new WeakRef(receiver)
+      this.#lastReceiver = new WeakRef(pending.receiver)
       this.#active += 1
       this.#starts -= 1
       this.#endpoints -= pending.endpoints
@@ -141,17 +144,20 @@ export class PeerTabAdmission {
 
   #schedule(now: number): void {
     if (this.#queued === 0) return
-    const pending = this.#receivers.get(this.#nextReceiver())![0]!
-    const deadline = Math.min(...[...this.#receivers.values()].flatMap((queue) => queue.map((entry) => entry.expiresAt)))
-    const refill = this.#active >= this.#policy.concurrentAttempts ? Number.POSITIVE_INFINITY : Math.max(
-      (1 - this.#starts) * this.#policy.intervalMilliseconds / this.#policy.startsPerInterval,
-      (pending.endpoints - this.#endpoints) * this.#policy.intervalMilliseconds / this.#policy.stunEndpointsPerInterval, 0,
-    )
+    const pending = [...this.#receivers.values()].flat()
+    const deadline = Math.min(...pending.map((entry) => entry.expiresAt))
+    const refill = Math.min(...pending.map((entry) => this.#refillDelay(entry)))
     const timer = new AbortController()
     this.#timer = timer
     this.#clock.sleep(Math.max(1, Math.min(deadline - now, refill)), timer.signal).then(() => {
       if (!timer.signal.aborted) this.#drain()
     }).catch(() => undefined)
+  }
+  #refillDelay(pending: WaitingAttempt): number {
+    const reserve = pending.route === 'turn' ? 1 : 0
+    if (this.#active >= this.#policy.concurrentAttempts - reserve) return Number.POSITIVE_INFINITY
+    return Math.max((1 + reserve - this.#starts) * this.#policy.intervalMilliseconds / this.#policy.startsPerInterval,
+      (pending.endpoints - this.#endpoints) * this.#policy.intervalMilliseconds / this.#policy.stunEndpointsPerInterval, 0)
   }
 }
 

@@ -18,6 +18,9 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 Write-Output '== vectors-update =='
+Invoke-Step 'update TURN control vectors' {
+    go test -count=1 ./core/session/turncontrol -update
+}
 Invoke-Step 'update diagnostic-correlation vectors' {
     go test -count=1 ./cmd/wind/internal/runtrace -run 'TestDiagnosticCorrelationVectors' -update
 }

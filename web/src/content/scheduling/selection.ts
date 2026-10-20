@@ -40,8 +40,8 @@ export function orderedContentLanes(
   const bytes = demandBytes(work.demand)
   return lanes.filter(candidate => work.routes.allows(candidate.route)).sort((left, right) =>
     Number(left.failed) - Number(right.failed) ||
-    completionCost(left.performance.estimateCompletionMilliseconds(bytes), left.route !== 'direct') -
-      completionCost(right.performance.estimateCompletionMilliseconds(bytes), right.route !== 'direct') ||
+    completionCost(left.performance.estimateCompletionMilliseconds(bytes), left.route) -
+      completionCost(right.performance.estimateCompletionMilliseconds(bytes), right.route) ||
     left.inflight - right.inflight || left.lane.id - right.lane.id)
 }
 

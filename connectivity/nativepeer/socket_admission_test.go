@@ -25,7 +25,7 @@ func TestSocketAdmissionWaitsWithoutSpendingAttemptsAndWakesOnPhysicalRelease(t 
 	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
 	first := startActual(t, n, 1)
 	defer first.Close()
-	n.SetDirect(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID)
+	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
 	pending := queuedActual(t, n, 2, t.Context())
 	facts := awaitSocketWait(t, n, 2)
 	if facts.SocketCapacity.Used != 1 || facts.SocketCapacity.Requested != 1 || facts.Active != 0 || facts.StartsRemaining != ProcessStartsPerWindow-1 {
@@ -67,7 +67,7 @@ func TestSocketWaitCancellationDeadlineAndRetirementDoNotLeakReservations(t *tes
 			n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
 			first := startActual(t, n, 1)
 			defer first.Close()
-			n.SetDirect(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID)
+			n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
 			ctx, cancel := context.WithCancelCause(t.Context())
 			defer cancel(context.Canceled)
 			pending := queuedActual(t, n, 2, ctx)

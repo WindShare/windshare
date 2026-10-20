@@ -1,6 +1,7 @@
 export const INITIAL_BLOCK_MILLISECONDS = 250
 export const MINIMUM_SAMPLE_MILLISECONDS = 1
 export const RELAY_COST_FACTOR = 1.1
+export const USER_RELAY_COST_FACTOR = 1.05
 const SAMPLE_WEIGHT = 0.25
 const MEASUREMENT_WINDOW_MILLISECONDS = 1000
 const MAXIMUM_ESTIMATE_MILLISECONDS = 60 * 60 * 1000
@@ -73,6 +74,7 @@ export class LanePerformance {
   }
 }
 
-export function completionCost(milliseconds: number, relayed: boolean): number {
-  return milliseconds * (relayed ? RELAY_COST_FACTOR : 1)
+export function completionCost(milliseconds: number, route: 'direct' | 'turn' | 'application-relay'): number {
+  if (route === 'direct') return milliseconds
+  return milliseconds * (route === 'turn' ? USER_RELAY_COST_FACTOR : RELAY_COST_FACTOR)
 }

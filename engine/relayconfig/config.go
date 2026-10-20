@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/turnconfig"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -22,6 +23,7 @@ const (
 var ErrConfig = errors.New("invalid sharing configuration")
 
 type Config struct {
+	TURN         turnconfig.Config
 	FrontURL     string
 	Profiles     []senderrelay.Candidate
 	ActiveRelays []string
@@ -49,10 +51,11 @@ type PendingSetup struct {
 }
 
 type document struct {
-	FrontURL     string        `json:"front_url,omitempty"`
-	Profiles     []savedRelay  `json:"profiles"`
-	ActiveRelays []string      `json:"active_relays,omitempty"`
-	Pending      *PendingSetup `json:"pending_setup,omitempty"`
+	TURN         *turnconfig.Config `json:"turn,omitempty"`
+	FrontURL     string             `json:"front_url,omitempty"`
+	Profiles     []savedRelay       `json:"profiles"`
+	ActiveRelays []string           `json:"active_relays,omitempty"`
+	Pending      *PendingSetup      `json:"pending_setup,omitempty"`
 }
 type savedRelay struct {
 	URL       string `json:"url"`
@@ -101,6 +104,9 @@ func Decode(reader io.Reader) (Config, error) {
 		return Config{}, ErrConfig
 	}
 	result := Config{FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, Pending: disk.Pending}
+	if disk.TURN != nil {
+		result.TURN = *disk.TURN
+	}
 	if disk.Profiles != nil {
 		result.Profiles = make([]senderrelay.Candidate, 0, len(disk.Profiles))
 	}
@@ -118,6 +124,9 @@ func (config Config) Validate() error {
 }
 
 func (config Config) validateFields() error {
+	if err := config.TURN.Validate(); err != nil {
+		return errors.Join(ErrConfig, err)
+	}
 	if config.FrontURL != "" && ValidateFrontURL(config.FrontURL) != nil {
 		return ErrConfig
 	}

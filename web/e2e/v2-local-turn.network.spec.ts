@@ -24,7 +24,7 @@ const SCENARIO_ID = 'chromium-turn-route'
 const FILE_NAME = 'turn-route.bin'
 const TRANSFER_BYTES = HOT_SWITCH_TRANSFER_BLOCKS * DIRECT_TEST_BLOCK_BYTES
 
-test('continues over an authenticated TURN peer lane after relay loss', async ({ page }, testInfo) => {
+test('renews owner-issued native and browser TURN paths after application relay loss', async ({ page }, testInfo) => {
   const stack = new DirectProductStack(SCENARIO_ID)
   const turn = new LocalTurnServer()
   const events = new NetworkEventLog()
@@ -40,7 +40,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     const expectedHash = createHash('sha256').update(payload).digest('hex')
     const proxy = await stack.createRelayCutProxy()
     const path = await stack.createFile(FILE_NAME, payload)
-    const share = await stack.share(path)
+    const share = await stack.share(path, { turn: turn.ownerConfiguration, senderTrace: true })
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
       completeUrl: navigationUrl,
@@ -58,7 +58,9 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       expectedHash,
       key: share.key,
       nativePeerUsable: true,
-      rtcConfiguration: turn.rtcConfiguration,
+      // The direct path has no usable candidates in this fixture. Delegated
+      // paths must obtain their own credentials through the production session.
+      rtcConfiguration: { iceServers: [], iceTransportPolicy: 'relay' },
       transferBytes: TRANSFER_BYTES,
     }), {
       completeUrl: navigationUrl,
@@ -85,6 +87,13 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     await proxy.cut()
     await sealPageRelayCut(page)
     const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
+    await expect.poll(() => events.snapshot().some((event) => event.kind === 'lane-admitted' &&
+      event.observation.route === 'turn' && event.observation.laneId !== lane.observation.laneId),
+    { timeout: 45_000, message: 'fresh TURN credentials must be admitted through the surviving authenticated lane' }).toBe(true)
+    const replacement = events.snapshot().find((event) => event.kind === 'lane-admitted' &&
+      event.observation.route === 'turn' && event.observation.laneId !== lane.observation.laneId)
+    if (replacement?.kind !== 'lane-admitted') throw new Error('TURN replacement was not observed')
+    await events.waitFor('lane-detached', (event) => event.observation.laneId === lane.observation.laneId, 'old TURN allocation retirement')
     await releasePageOutput(page)
 
     const peerDispatch = await events.waitFor(
@@ -134,8 +143,8 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       route: 'turn',
     })
     expect(peerDispatch.observation).toMatchObject({
-      laneId: lane.observation.laneId,
-      laneEpoch: lane.observation.laneEpoch,
+      laneId: replacement.observation.laneId,
+      laneEpoch: replacement.observation.laneEpoch,
       route: 'turn',
     })
     expect(delivery).toMatchObject({

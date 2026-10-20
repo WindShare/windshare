@@ -37,9 +37,12 @@ import {
   V2PeerRecoverySupervisor,
 } from './peer-set/path'
 import { V2PeerSet } from './peer-set/peer-set'
+import { PeerAttemptBudget } from './peer-set/budget'
 import { encodeBase64Url } from '../crypto/bytes'
 import { PeerPathControl } from './peer-set/path-control'
 import { PeerNetworkGeneration } from './peer-set/network-generation'
+import { TurnReceiver, type TurnObservation } from './turn/receiver'
+import { turnRTCConfiguration, type TurnGrant } from './turn/control-codec'
 
 export type V2ConnectivityPolicy = 'auto' | 'relay-only' | 'p2p-only'
 
@@ -47,11 +50,14 @@ export interface V2ContentLaneAdmissionObservation {
   readonly laneId: number
   readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
+  readonly turnService?: { readonly provider: string; readonly account: string; readonly profile: string }
 }
 
 export type V2ContentLaneDetachmentObservation = V2ContentLaneAdmissionObservation
 
 export interface V2ReceiverConnectivityOptions {
+  readonly onTurnObservation?: (observation: TurnObservation) => void
+  readonly turnOffers?: (grant: TurnGrant) => OfferChannelFactory
   readonly policy?: V2ConnectivityPolicy
   readonly session: V2ReceiverSessionRuntime
   readonly lanes: V2LaneSet
@@ -163,6 +169,10 @@ export class V2ReceiverConnectivity {
   readonly #peerCleanupTasks = new Map<V2InstalledPeer, Promise<void>>()
   readonly #unsubscribeLaneChanges: () => void
   readonly #peers = new V2PeerSet()
+  readonly #turn: TurnReceiver
+  readonly #turnOffers: (grant: TurnGrant) => OfferChannelFactory
+  readonly #turnActivations = new Map<string, V2PeerRecoveryActivation>()
+  readonly #turnBudgets = new Map<string, PeerAttemptBudget>()
   readonly #pathControls = new Map<string, PeerPathControl>()
   #peerPathId: V2PeerPathIdentity | undefined
   readonly #installedPeers = new Map<string, V2InstalledPeer>()
@@ -186,6 +196,19 @@ export class V2ReceiverConnectivity {
     this.#peerRecoveryOptions = { ...options.peerRecovery,
       network: options.peerRecovery?.network ?? new PeerNetworkGeneration() }
     this.#protocolSessionId = options.session.protocolSessionIdentity
+    this.#turnOffers = options.turnOffers ?? ((grant) => new BrowserOfferChannelFactory({ configuration: turnRTCConfiguration(grant) }))
+    this.#turn = new TurnReceiver({
+      session: this.#session,
+      clock: this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock,
+      enabled: () => this.#policy === 'auto' && this.#capabilityAllowsAttempt(),
+      open: (grant) => this.#openTurn(grant),
+      retire: (pathId) => this.#retireTurn(pathId),
+      measure: (pathId) => {
+        const peer = this.#installedPeers.get(encodeBase64Url(pathId))
+        return peer === undefined ? { usefulBytes: 0, unhelpful: false } : this.#lanes.measureLane(peer.laneId, peer.laneEpoch)
+      },
+      ...(options.onTurnObservation === undefined ? {} : { observe: options.onTurnObservation }),
+    })
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'attached') {
@@ -234,6 +257,7 @@ export class V2ReceiverConnectivity {
       throw error
     }
     active.peerRecovery = this.#activatePeerRecovery()
+    this.#turn.setDemand(this.#activations.size > 0)
     if (!this.#activations.has(id)) active.peerRecovery?.close()
     let closed = false
     return Object.freeze({
@@ -266,6 +290,7 @@ export class V2ReceiverConnectivity {
     this.#lifetime.abort(reason)
     this.#browse?.close()
     this.#browse = undefined
+    const turnClose = this.#turn.close()
     const recoveryClose = this.#peers.close()
     const controlsClose = [...this.#pathControls.values()].map((control) => control.close())
     this.#pathControls.clear()
@@ -277,6 +302,7 @@ export class V2ReceiverConnectivity {
     this.#installedPeers.clear()
     await Promise.allSettled([
       ...controlsClose,
+      turnClose,
       ...(recoveryClose === undefined ? [] : [recoveryClose]),
       this.#joinPeerCleanup(),
     ])
@@ -299,28 +325,44 @@ export class V2ReceiverConnectivity {
       ? createV2PeerPathIdentity()
       : createV2PeerPathIdentity(this.#randomBytes)
     const peerPathId = createV2PeerPathIdentityValue(peerPathIdentity)
+    this.#peerPathId = peerPathId
+    const recovery = this.#createPeerRecovery(peerPathId, this.#offers, () => this.#peerUnavailable())
     const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
+    this.#pathControls.set(encodeBase64Url(peerPathIdentity), new PeerPathControl(
+      this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice),
+      this.#peerRecoveryOptions.providerProfile))
+    return recovery
+  }
+
+  #createPeerRecovery(peerPathId: V2PeerPathIdentity, offers: OfferChannelFactory, onUnavailable: () => void, grant?: TurnGrant): V2PeerRecoverySupervisor {
+    const peerPathIdentity = peerPathId.copyBytes()
+    const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
+    let budget = this.#peerRecoveryOptions.budget
+    if (grant !== undefined) {
+      budget = this.#turnBudgets.get(grant.profile) ?? new PeerAttemptBudget()
+      this.#turnBudgets.set(grant.profile, budget)
+    }
     const attempts = new V2BrowserPeerAttemptExecutor({
       ...(this.#peerRecoveryOptions.tabAdmission === undefined ? {} : { tabAdmission: this.#peerRecoveryOptions.tabAdmission }),
       admissionReceiver: this.#peerRecoveryOptions.budget ?? this,
+      transportRoute: grant === undefined ? 'direct' : 'turn',
       session: this.#session,
-      offers: this.#offers,
+      offers,
       peerPathIdentity,
       clock,
       publish: (candidate) => this.#publishPeer(candidate),
       ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
-    this.#peerPathId = peerPathId
     const recovery = this.#peers.add({
       protocolSessionId: this.#protocolSessionId,
       peerPathId,
       attempts,
       ...(this.#peerRecoveryOptions.network === undefined ? {} : { network: this.#peerRecoveryOptions.network }),
       ...(this.#peerRecoveryOptions.endpoints === undefined ? {} : { endpoints: this.#peerRecoveryOptions.endpoints }),
-      ...(this.#peerRecoveryOptions.budget === undefined ? {} : { budget: this.#peerRecoveryOptions.budget }),
+      ...(budget === undefined ? {} : { budget }),
       releaseLane: (lane) => this.#releasePeer(lane.laneId, lane.laneEpoch),
-      onUnavailable: () => this.#peerUnavailable(),
+      onUnavailable,
       ...(this.#peerRecoveryOptions.policy === undefined
         ? {}
         : { policy: this.#peerRecoveryOptions.policy }),
@@ -331,10 +373,22 @@ export class V2ReceiverConnectivity {
       rearmSource: this.#peerRecoveryOptions.rearmSource ?? new BrowserV2PeerRecoveryRearmSource(),
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
-    this.#pathControls.set(encodeBase64Url(peerPathIdentity), new PeerPathControl(
-      this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice),
-      this.#peerRecoveryOptions.providerProfile))
     return recovery
+  }
+
+  #openTurn(grant: TurnGrant): void {
+    const identity = createV2PeerPathIdentityValue(grant.pathId)
+    const path = this.#createPeerRecovery(identity, this.#turnOffers(grant), () => this.#turn.unhelpful(grant.pathId), grant)
+    this.#turnActivations.set(encodeBase64Url(grant.pathId), path.activate())
+  }
+
+  async #retireTurn(pathId: Uint8Array<ArrayBuffer>): Promise<void> {
+    const key = encodeBase64Url(pathId)
+    this.#turnActivations.get(key)?.close()
+    this.#turnActivations.delete(key)
+    const installed = this.#installedPeers.get(key)
+    if (installed !== undefined) this.#releasePeer(installed.laneId, installed.laneEpoch)
+    await this.#peers.remove(createV2PeerPathIdentityValue(pathId))
   }
 
   #capabilityAllowsAttempt(): boolean {
@@ -361,14 +415,15 @@ export class V2ReceiverConnectivity {
     if (
       this.#lifetime.signal.aborted || this.#installedPeers.has(encodeBase64Url(candidate.peerPathId.copyBytes())) ||
       !equalV2DiagnosticIdentities(candidate.protocolSessionId, this.#protocolSessionId) ||
-      this.#peerPathId === undefined ||
-      !equalV2DiagnosticIdentities(candidate.peerPathId, this.#peerPathId) ||
+      this.#peers.path(candidate.peerPathId) === undefined ||
       this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
       !this.#session.laneIds().includes(candidate.laneId)
     ) return false
     const pathRoute = candidate.peer.pathRoute
     if (this.#policy === 'p2p-only' && pathRoute !== 'direct') return false
-    if (pathRoute === undefined || !this.#admit(candidate.laneId, candidate.laneEpoch, pathRoute)) return false
+    const turnGrant = this.#turn.grantFor(candidate.peerPathId.copyBytes())
+    if (turnGrant !== undefined && pathRoute !== 'turn') return false
+    if (pathRoute === undefined || !this.#admit(candidate.laneId, candidate.laneEpoch, pathRoute, turnGrant)) return false
     const installed: V2InstalledPeer = { ...candidate }
     this.#installedPeers.set(encodeBase64Url(candidate.peerPathId.copyBytes()), installed)
     const unsubscribe = candidate.peer.subscribePathRoute?.((nextRoute) => {
@@ -379,6 +434,7 @@ export class V2ReceiverConnectivity {
       this.#peerDetached(candidate.laneId, candidate.laneEpoch)
     })
     if (unsubscribe !== undefined) installed.unsubscribePathRoute = unsubscribe
+    this.#turn.admitted(candidate.peerPathId.copyBytes())
     return true
   }
 
@@ -389,6 +445,7 @@ export class V2ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
+    this.#turn.setDemand(this.#activations.size > 0)
     if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.deactivate()
     active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
@@ -400,8 +457,7 @@ export class V2ReceiverConnectivity {
     if (
       installed === undefined ||
       !equalV2DiagnosticIdentities(installed.protocolSessionId, this.#protocolSessionId) ||
-      this.#peerPathId === undefined ||
-      !equalV2DiagnosticIdentities(installed.peerPathId, this.#peerPathId) ||
+      this.#peers.path(installed.peerPathId) === undefined ||
       installed.laneId !== laneId ||
       installed.laneEpoch !== laneEpoch
     ) return
@@ -444,7 +500,7 @@ export class V2ReceiverConnectivity {
     }
   }
 
-  #admit(laneId: number, laneEpoch: number, route: V2BlockTransportRoute): boolean {
+  #admit(laneId: number, laneEpoch: number, route: V2BlockTransportRoute, turnGrant?: TurnGrant): boolean {
     const existing = this.#admitted.get(laneId)
     if (existing !== undefined) {
       return existing.laneEpoch === laneEpoch && existing.route === route
@@ -453,7 +509,11 @@ export class V2ReceiverConnectivity {
     this.#lanes.add(this.#createBlockLane(laneId), route, laneEpoch)
     this.#admitted.set(laneId, { laneEpoch, route })
     try {
-      this.#onContentLaneAdmitted(Object.freeze({ laneId, laneEpoch, route }))
+      this.#onContentLaneAdmitted(Object.freeze({ laneId, laneEpoch, route,
+        ...(turnGrant === undefined ? {} : { turnService: {
+          provider: turnGrant.provider, account: turnGrant.account, profile: turnGrant.profile,
+        } }),
+      }))
     } catch {
       // Admission is already authoritative; diagnostics cannot revoke or corrupt it.
     }

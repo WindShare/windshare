@@ -73,6 +73,9 @@ type laneState struct {
 	retired         bool
 	settled         bool
 	settlement      *laneSettlementCounters
+	usefulBytes     uint64
+	lastUsefulAt    time.Time
+	admittedAt      time.Time
 }
 
 type contentLaneSuspensionPolicy struct {
@@ -160,7 +163,7 @@ func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) er
 	if identity.ID == 0 || !route.valid() || lane == nil {
 		return ErrInvalidLane
 	}
-	state := &laneState{identity: identity, route: route, lane: lane}
+	state := &laneState{identity: identity, route: route, lane: lane, admittedAt: s.now()}
 	if s.settlementObservationsEnabled() {
 		state.settlement = &laneSettlementCounters{}
 	}
@@ -332,7 +335,14 @@ func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int, by
 }
 
 func laneCompletionCost(state *laneState, bytes uint64) float64 {
-	return lanescheduling.Cost(state.performance.Estimate(bytes), state.route != LaneRouteDirect)
+	factor := 1.0
+	if state.route == LaneRouteTURN {
+		factor = lanescheduling.UserRelayCostFactor
+	}
+	if state.route == LaneRouteRelay {
+		factor = lanescheduling.RelayCostFactor
+	}
+	return lanescheduling.Cost(state.performance.Estimate(bytes), factor)
 }
 
 func blockDemandBytes(demand BlockDemand) uint64 {

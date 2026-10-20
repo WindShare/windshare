@@ -13,6 +13,7 @@ import (
 // authenticated-session and network-generation replacement.
 const (
 	ProcessConcurrentAttempts             = 4
+	DirectAttemptReserve                  = 1
 	ProcessStartsPerWindow                = 16
 	ProcessSTUNEndpointsPerWindow         = 32
 	ProcessQueuedAttempts                 = 64
@@ -60,6 +61,7 @@ type ProcessAdmission struct {
 	timer                         func()
 }
 type admissionWaiter struct {
+	relayed   bool
 	owner     *NativePeerConnectivity
 	endpoints int
 	ready     chan struct{}
@@ -90,14 +92,14 @@ func NewProcessAdmission(clock AdmissionClock) *ProcessAdmission {
 
 var processAdmission = NewProcessAdmission(AdmissionClock{})
 
-func (g *ProcessAdmission) acquire(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts)) (*attemptPermit, error) {
+func (g *ProcessAdmission) acquireRoute(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool) (*attemptPermit, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	if endpoints < 0 || endpoints > ProcessMaximumSTUNEndpointsPerAttempt {
 		return nil, ErrProcessAdmission
 	}
-	w := &admissionWaiter{owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe}
+	w := &admissionWaiter{owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe, relayed: relayed}
 	g.mu.Lock()
 	if len(g.queue) >= ProcessQueuedAttempts {
 		g.emitLocked(w, AdmissionRejected)
@@ -164,13 +166,36 @@ func (g *ProcessAdmission) drainLocked() {
 		g.timer = nil
 	}
 	g.refillLocked()
+	var nextRefill time.Duration
+	defer func() {
+		if nextRefill > 0 && len(g.queue) > 0 {
+			g.timer = g.clock.AfterFunc(nextRefill, func() { g.mu.Lock(); g.drainLocked(); g.mu.Unlock() })
+		}
+	}()
 	for index := 0; index < len(g.queue) && g.active < ProcessConcurrentAttempts; {
 		w := g.queue[index]
-		wait := max((1-g.starts)*float64(ProcessAdmissionWindow)/ProcessStartsPerWindow,
+		reserve := 0
+		if w.relayed {
+			// Leave one whole opportunity for ordinary direct recovery, including
+			// its start token and time budget, even during TURN replacement.
+			reserve = DirectAttemptReserve
+			if g.active >= ProcessConcurrentAttempts-reserve {
+				index++
+				continue
+			}
+		}
+		wait := max((float64(1+reserve)-g.starts)*float64(ProcessAdmissionWindow)/ProcessStartsPerWindow,
 			(float64(w.endpoints)-g.endpoints)*float64(ProcessAdmissionWindow)/ProcessSTUNEndpointsPerWindow,
-			(float64(ProcessAttemptBudget)-g.activeTime)*float64(ProcessAdmissionWindow)/float64(ProcessActiveTimePerWindow))
+			(float64(ProcessAttemptBudget)*float64(1+reserve)-g.activeTime)*float64(ProcessAdmissionWindow)/float64(ProcessActiveTimePerWindow))
 		if wait > 0 {
-			g.timer = g.clock.AfterFunc(max(time.Duration(wait), time.Nanosecond), func() { g.mu.Lock(); g.drainLocked(); g.mu.Unlock() })
+			delay := max(time.Duration(wait), time.Nanosecond)
+			if nextRefill == 0 || delay < nextRefill {
+				nextRefill = delay
+			}
+			if w.relayed {
+				index++
+				continue
+			}
 			return
 		}
 		reservation, err := w.sockets.Reserve()
@@ -191,18 +216,7 @@ func (g *ProcessAdmission) drainLocked() {
 			continue
 		}
 		w.capacity = nil
-		// Rotate all remaining requests from this owner behind the other owners.
-		var same []*admissionWaiter
-		var other []*admissionWaiter
-		for _, pending := range g.queue {
-			if pending.owner == w.owner {
-				same = append(same, pending)
-			} else {
-				other = append(other, pending)
-			}
-		}
-		other = append(other, same...)
-		g.queue = other
+		g.rotateOwnerLocked(w.owner)
 		g.active++
 		g.starts--
 		g.endpoints -= float64(w.endpoints)
@@ -212,6 +226,19 @@ func (g *ProcessAdmission) drainLocked() {
 		close(w.ready)
 		index = 0
 	}
+}
+func (g *ProcessAdmission) rotateOwnerLocked(owner *NativePeerConnectivity) {
+	// Rotate all remaining requests from this owner behind the other owners.
+	var same, other []*admissionWaiter
+	for _, pending := range g.queue {
+		if pending.owner == owner {
+			same = append(same, pending)
+		} else {
+			other = append(other, pending)
+		}
+	}
+	other = append(other, same...)
+	g.queue = other
 }
 func (p *attemptPermit) release() {
 	if p == nil {

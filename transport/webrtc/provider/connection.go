@@ -12,6 +12,7 @@ import (
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
 
@@ -32,7 +33,8 @@ type AttemptConfig struct {
 	AttemptID              [16]byte
 	NetworkGenerationID    uint64
 	ICEProfileID           string
-	STUNURLs               []string
+	ICE                    iceconfig.Connection
+	TURNReservation        *TURNReservation
 	InitialCheckingTimeout time.Duration
 	TCPProfile             TCPProfile
 	SocketLease            *socketauthority.Lease
@@ -51,6 +53,8 @@ type Event struct {
 	At                  time.Time
 	Candidate           *CandidateFacts
 	Pair                *PairFacts
+	TURN                *TURNResourceSnapshot
+	TURNService         *iceconfig.Identity
 }
 
 type Connection struct {
@@ -58,6 +62,7 @@ type Connection struct {
 	lease     *socketauthority.Lease
 	release   func()
 	request   AttemptConfig
+	turn      *turnNetwork
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -68,8 +73,10 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	if request.SocketLease == nil || request.ProtocolSessionID != request.SocketLease.SessionID() || request.NetworkGenerationID != request.SocketLease.GenerationID() || request.PeerPathID != request.SocketLease.PathID() {
 		return nil, errors.New("provider socket identity mismatch")
 	}
-	request.STUNURLs = slices.Clone(request.STUNURLs)
 	request.MappedEndpoints = slices.Clone(request.MappedEndpoints)
+	if relay, ok := request.ICE.Relay(); ok && !relay.Credentials().ValidAt(time.Now()) {
+		return nil, errors.New("TURN credentials expired before gathering")
+	}
 	lease, err := request.SocketLease.Retain()
 	if err != nil {
 		return nil, err
@@ -87,7 +94,15 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	fail := func(err error) (*Connection, error) { release(); _ = lease.Close(); return nil, err }
+	var turn *turnNetwork
+	fail := func(err error) (*Connection, error) {
+		if turn != nil {
+			turn.close()
+		}
+		release()
+		_ = lease.Close()
+		return nil, err
+	}
 	endpoints := lease.Endpoints()
 	mapped, mappedTCP, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, lease.TCPEndpoints(), capability)
 	if err != nil {
@@ -101,6 +116,13 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		return fail(errors.New("initial ICE checking budget is below PAC minimum"))
 	}
 	var settings pion.SettingEngine
+	turn, err = claimTURNNetwork(request)
+	if err != nil {
+		return fail(err)
+	}
+	if turn != nil {
+		settings.SetNet(turn)
+	}
 	settings.SetICEUDPMux(mux)
 	settings.SetIncludeLoopbackCandidate(true)
 	settings.SetIPFilter(func(ip net.IP) bool {
@@ -129,15 +151,12 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		settings.DisableActiveTCP(capability.PassiveOnly)
 	}
 	settings.SetNetworkTypes(networks)
-	configuration.ICEServers = nil
-	if len(request.STUNURLs) > 0 {
-		configuration.ICEServers = []pion.ICEServer{{URLs: request.STUNURLs}}
-	}
+	configureICE(&configuration, request.ICE)
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
 		return fail(err)
 	}
-	connection := &Connection{PeerConnection: pc, lease: lease, release: release, request: request}
+	connection := &Connection{PeerConnection: pc, lease: lease, release: release, request: request, turn: turn}
 	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) { connection.observe("ice", state.String()) })
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) { connection.observe("peerconnection", state.String()) })
 	connection.OnICECandidate(nil)
@@ -149,12 +168,39 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	return connection, nil
 }
 
+func configureICE(configuration *pion.Configuration, connection iceconfig.Connection) {
+	configuration.ICEServers = nil
+	if urls := connection.DiscoveryURLs(); len(urls) > 0 {
+		configuration.ICEServers = []pion.ICEServer{{URLs: urls}}
+	}
+	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
+	if relay, ok := connection.Relay(); ok {
+		credential := relay.Credentials()
+		configuration.ICEServers = append(configuration.ICEServers, pion.ICEServer{
+			URLs: relay.URLs(), Username: credential.Username(), Credential: credential.Password(),
+			CredentialType: pion.ICECredentialTypePassword,
+		})
+	}
+	if connection.Policy() == iceconfig.RelayCandidates {
+		configuration.ICETransportPolicy = pion.ICETransportPolicyRelay
+	}
+}
+
 func (c *Connection) event(milestone, state string) Event {
-	return Event{
+	event := Event{
 		ProtocolSessionID: c.request.ProtocolSessionID, PeerPathID: c.request.PeerPathID, AttemptID: c.request.AttemptID,
 		NetworkGenerationID: c.request.NetworkGenerationID, ICEProfileID: c.request.ICEProfileID,
 		Milestone: milestone, State: state, At: time.Now(),
 	}
+	if c.turn != nil {
+		snapshot := c.turn.snapshot()
+		event.TURN = &snapshot
+		if relay, ok := c.request.ICE.Relay(); ok {
+			identity := relay.Identity()
+			event.TURNService = &identity
+		}
+	}
+	return event
 }
 func (c *Connection) observe(milestone, state string) {
 	if c.request.Observe != nil {
@@ -182,7 +228,21 @@ func (c *Connection) OnConnectionStateChange(callback func(pion.PeerConnectionSt
 }
 func (c *Connection) Close() error {
 	c.closeOnce.Do(func() {
-		c.closeErr = c.PeerConnection.Close()
+		if c.turn != nil {
+			var forced bool
+			// SCTP/DTLS shutdown can wait on an unresponsive peer. Retire ICE
+			// allocations first while TURN control sockets can still write.
+			c.closeErr, forced = c.turn.shutdown(c.SCTP().Transport().ICETransport().Stop)
+			c.closeErr = errors.Join(c.closeErr, c.PeerConnection.Close())
+			if forced {
+				c.observe("turn_close_forced", "protocol_cleanup_deadline")
+			} else {
+				// This records local protocol cleanup, not a server acknowledgment.
+				c.observe("turn_close_protocol", "")
+			}
+		} else {
+			c.closeErr = c.PeerConnection.Close()
+		}
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
 		c.observe("provider_closed", "")
