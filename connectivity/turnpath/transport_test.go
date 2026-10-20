@@ -13,10 +13,11 @@ import (
 func TestTransportWatcherIncludesFinalTrafficAfterAccountStops(t *testing.T) {
 	credential, _ := iceconfig.Fixed("user", "password")
 	relay, _ := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}, []string{"turn:localhost"}, credential)
-	lost := make(chan struct{})
+	authority, revoke := context.WithCancelCause(context.Background())
+	defer revoke(nil)
 	var sent atomic.Uint64
 	var charged atomic.Uint64
-	lease := NewLease(LeaseConfig{Relay: relay, Lost: lost, Charge: func(usage Usage) bool {
+	lease := NewLease(LeaseConfig{Relay: relay, Authority: authority, Charge: func(usage Usage) bool {
 		charged.Add(usage.TransportSent)
 		return false
 	}})
@@ -24,7 +25,7 @@ func TestTransportWatcherIncludesFinalTrafficAfterAccountStops(t *testing.T) {
 	join := WatchTransport(context.Background(), lease, func() Usage { return Usage{TransportSent: sent.Load()} },
 		func(err error) { stopped <- err })
 	sent.Store(10)
-	close(lost)
+	revoke(ErrBudget)
 	select {
 	case err := <-stopped:
 		if !errors.Is(err, ErrAccountUnavailable) {

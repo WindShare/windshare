@@ -10,14 +10,18 @@ import (
 )
 
 type leaseState struct {
-	manager  *Manager
-	account  *accountState
-	identity iceconfig.Identity
-	subject  turnpath.Subject
-	issued   turnprovider.Issued
-	usage    turnpath.Usage
-	charged  uint64
-	released bool
+	manager   *Manager
+	account   *accountLedger
+	source    Source
+	identity  iceconfig.Identity
+	subject   turnpath.Subject
+	revision  uint64
+	issued    turnprovider.Issued
+	authority context.Context
+	cancel    context.CancelCauseFunc
+	usage     turnpath.Usage
+	charged   uint64
+	released  bool
 }
 
 func (l *leaseState) charge(delta turnpath.Usage) bool {
@@ -27,26 +31,36 @@ func (l *leaseState) charge(delta turnpath.Usage) bool {
 		m.mu.Unlock()
 		return false
 	}
+	configured, enabled := m.current.accounts[l.identity.Account]
+	wasExhausted := enabled && exhausted(configured, l.account)
 	addUsage(&l.usage, delta)
 	addUsage(&l.account.usage, delta)
-	// Payload measurements account for application writes. Socket
-	// measurements add overhead without charging the same bytes a second time.
+	// Socket measurements include overhead without charging payload twice.
 	charged := max(l.usage.Payload, saturatingAdd(l.usage.TransportSent, l.usage.TransportReceived))
 	l.account.charged = saturatingAdd(l.account.charged, charged-l.charged)
 	l.charged = charged
-	exhausted := !l.account.exhausted && l.account.config.LocalBudgetBytes > 0 && l.account.charged >= l.account.config.LocalBudgetBytes
-	if exhausted {
-		l.account.exhausted = true
-		close(l.account.lost)
+	newlyExhausted := enabled && !wasExhausted && exhausted(configured, l.account)
+	if newlyExhausted {
+		for request := range m.requests {
+			if request.account == l.account {
+				request.cancel(ErrBudget)
+			}
+		}
+		for lease := range m.leases {
+			if lease.account == l.account {
+				lease.cancel(ErrBudget)
+			}
+		}
 	}
 	usage := l.account.usage
-	usable := !m.closed && !l.account.exhausted
+	usable := !m.closed && l.authority.Err() == nil
 	m.mu.Unlock()
-	if exhausted {
-		m.emit(Event{Identity: l.identity, Subject: l.subject, Milestone: "budget_exhausted", Usage: usage})
+	if newlyExhausted {
+		m.emit(Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, Milestone: "budget_exhausted", Usage: usage})
 	}
 	return usable
 }
+
 func (l *leaseState) release() {
 	m := l.manager
 	m.mu.Lock()
@@ -55,22 +69,26 @@ func (l *leaseState) release() {
 		return
 	}
 	l.released = true
+	l.cancel(ErrClosed)
 	l.account.active--
+	delete(m.leases, l)
+	usage := l.usage
 	m.mu.Unlock()
-	m.emit(Event{Identity: l.identity, Subject: l.subject, Milestone: "local_path_stopped", Usage: l.usage})
+	m.emit(Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, Milestone: "local_path_stopped", Usage: usage})
 	go func() {
 		defer m.work.Done()
-		m.revoke(l.account, l.issued, l.identity, l.subject)
+		m.revoke(l.source, l.issued, l.identity, l.subject, l.revision)
 	}()
 }
-func (m *Manager) revoke(account *accountState, issued turnprovider.Issued, identity iceconfig.Identity, subject turnpath.Subject) {
-	provider, ok := account.config.Source.(revocable)
+
+func (m *Manager) revoke(source Source, issued turnprovider.Issued, identity iceconfig.Identity, subject turnpath.Subject, revision uint64) {
+	provider, ok := source.(revocable)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), IssuanceTimeout)
 	defer cancel()
-	event := Event{Identity: identity, Subject: subject, Milestone: "provider_revocation_confirmed"}
+	event := Event{Identity: identity, Subject: subject, Revision: revision, Milestone: "provider_revocation_confirmed"}
 	if err := provider.Revoke(ctx, issued); err != nil {
 		event.Milestone = "provider_revocation_failed"
 		event.Reason = err.Error()
@@ -79,6 +97,7 @@ func (m *Manager) revoke(account *accountState, issued turnprovider.Issued, iden
 	}
 	m.emit(event)
 }
+
 func saturatingAdd(a, b uint64) uint64 {
 	if b > math.MaxUint64-a {
 		return math.MaxUint64

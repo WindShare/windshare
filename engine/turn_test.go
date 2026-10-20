@@ -54,9 +54,24 @@ func TestTURNConfigurationKeepsAccountBudgetAndOwnsItsInputs(t *testing.T) {
 				t.Fatalf("new session bypassed exhausted account: %v", err)
 			}
 			saved.Accounts[0].LocalBudgetBytes++
-			if err = application.ConfigureTURN(saved); err == nil {
-				t.Fatal("reconfiguration reset an existing account")
+			if err = application.ConfigureTURN(saved); err != nil {
+				t.Fatal(err)
 			}
+			status = application.TURNStatus()
+			if status[0].ChargedBytes != 100 || status[0].LocalBudgetBytes != 101 || status[0].Exhausted {
+				t.Fatalf("budget update lost accumulated usage: %+v", status)
+			}
+			if lease.Charge(turnpath.Usage{}) {
+				t.Fatal("raising budget revived a revoked lease")
+			}
+			next, err := application.turn.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{5}, PathID: [16]byte{6}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next.Charge(turnpath.Usage{TransportSent: 1}) {
+				t.Fatal("new lease bypassed retained usage")
+			}
+			next.Close()
 			lease.Close()
 			if err = application.Close(context.Background()); err != nil {
 				t.Fatal(err)

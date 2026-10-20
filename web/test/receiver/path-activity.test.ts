@@ -23,6 +23,23 @@ function fixture() {
 }
 
 describe('receiver path activity', () => {
+  it('forgets withdrawn service state and ignores its late traffic', () => {
+    vi.useFakeTimers()
+    const { activity, latest } = fixture()
+    const service = { provider: 'coturn', account: 'owner', profile: 'primary' }
+    const lane = { ...TURN, turnService: service }
+    activity.turn(1, { ...service, pathId: 'old', state: 'connecting' })
+    activity.admitted(1, lane)
+    activity.fetched(1, fetched(lane, 1024))
+    activity.turn(1, { profile: service.profile, state: 'withdrawn' })
+    expect(latest().turnServices).toBeUndefined()
+    activity.fetched(1, fetched(lane, 1024))
+    activity.detached(1, lane)
+    activity.turn(1, { profile: service.profile, state: 'available' })
+    expect(latest().turnServices).toEqual([{ profile: service.profile, state: 'available', usefulBytes: 0 }])
+    activity.close()
+  })
+
   it('keeps service health and useful totals through credential replacement', () => {
     vi.useFakeTimers()
     const { activity, facts, latest } = fixture()

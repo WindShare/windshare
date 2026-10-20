@@ -101,6 +101,8 @@ type Unavailable struct {
 func (m Unavailable) Header() Header { return m.Authority }
 func (Unavailable) turnMessage()     {}
 
+// Available replaces the bounded profile inventory. Its header sequence is the
+// sender configuration revision, independent of receiver demand sequences.
 type Available struct {
 	Authority Header
 	Profiles  []string

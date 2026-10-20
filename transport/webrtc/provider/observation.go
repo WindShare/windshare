@@ -5,7 +5,17 @@ import (
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/turnpath"
 )
+
+func (c *Connection) observeTURNCleanup(outcome turnpath.CleanupOutcome) {
+	if c.request.Observe == nil {
+		return
+	}
+	event := c.event(outcome.EventKind(), "")
+	event.TURNCleanup = outcome
+	c.request.Observe(event)
+}
 
 type CandidateFacts struct {
 	Priority uint32

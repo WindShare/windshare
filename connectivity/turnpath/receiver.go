@@ -49,6 +49,7 @@ type Receiver struct {
 	owner                [16]byte
 	profiles             map[string]bool
 	sequence, activation uint64
+	inventoryRevision    uint64
 	refresh              time.Time
 }
 
@@ -116,15 +117,21 @@ func (r *Receiver) apply(ctx context.Context, message turncontrol.Message) {
 	}
 	switch value := message.(type) {
 	case turncontrol.Available:
-		// Account configuration is immutable for this protocol generation. A
-		// repeated advertisement cannot grow per-service recovery state.
-		if r.profiles != nil {
+		// Inventory revisions are independent of receiver demand sequences.
+		// Replays cannot restore a removed service or roll back configuration.
+		if h.Sequence <= r.inventoryRevision {
 			return
 		}
+		r.inventoryRevision = h.Sequence
 		r.owner = h.OwnerPathID
 		r.profiles = make(map[string]bool)
 		for _, profile := range value.Profiles {
 			r.profiles[profile] = true
+		}
+		for _, path := range r.paths {
+			if !r.profiles[path.grant.Profile] {
+				r.retire(ctx, path, turncontrol.ProviderRevoked)
+			}
 		}
 		r.maintain(ctx)
 	case turncontrol.Grant:
