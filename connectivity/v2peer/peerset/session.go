@@ -115,8 +115,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 	})
 	s.owner.controlHandlers[sessionID] = s.turn.Handle
 	s.turn.SetDemand(receiver.Demand == ContentDemand)
-	s.work.Add(1)
-	go func() { defer s.work.Done(); s.turn.Run(s.ctx) }()
+	s.work.Go(func() { s.turn.Run(s.ctx) })
 }
 
 func (s *ReceiverSession) startDirectLocked() error {
@@ -125,9 +124,7 @@ func (s *ReceiverSession) startDirectLocked() error {
 		return err
 	}
 	s.direct = path
-	s.work.Add(1)
-	go func() {
-		defer s.work.Done()
+	s.work.Go(func() {
 		ready := path.Ready()
 		for {
 			select {
@@ -145,7 +142,7 @@ func (s *ReceiverSession) startDirectLocked() error {
 				return
 			}
 		}
-	}()
+	})
 	return nil
 }
 func (s *ReceiverSession) admitted(path *Path) {

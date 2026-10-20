@@ -166,8 +166,7 @@ func TestTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T)
 	if capacity.connections != MaximumTURNConnections || capacity.sockets != MaximumTURNSockets || capacity.replacements != 2 {
 		t.Fatal("colocated endpoints cannot complete the same handoff")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	pending := make(chan *TURNReservation, 1)
 	failures := make(chan error, 1)
 	go func() { lease, err := left.Acquire(ctx, turnRequest(41, 2, 4)); pending <- lease; failures <- err }()
