@@ -12,7 +12,7 @@ spending caps. Direct and application-relay paths remain available.
 
 1. Create a Cloudflare **workers.dev** subdomain, or choose two unused hostnames in
    an active Cloudflare zone. Create an account token with **Account / Workers / Admin**
-   and **Account / Calls / Write**.
+   and **Account / Cloudflare Calls / Edit** (API permission: **Calls Write**).
    Custom domains also need **Zone / Workers Routes / Edit** and **Zone / Zone / Read**.
    See the [token setup guide (中文)](cloudflare-api-token.zh-CN.md).
 2. In the fork's **Settings → Secrets and variables → Actions**, set:
@@ -34,7 +34,12 @@ spending caps. Direct and application-relay paths remain available.
    the Cloudflare dashboard under the Worker's **Domains & Routes**. For workers.dev,
    the workflow creates `<name>-console`, bound to the relay's access storage.
    Custom domains route both hostnames to one Worker with managed DNS/TLS.
-4. With [WindShare installed](../installation.md), use your relay address:
+   Check the run's summary for **Managed TURN is available automatically when enabled
+   in the console**, and confirm TURN is enabled in the console. A green check alone
+   does not confirm TURN setup: **TURN setup incomplete** leaves the relay/frontend
+   deployed; resolve the reported error and rerun the workflow.
+4. [Install or rebuild WindShare](../installation.md) from the deployed source revision,
+   then use your relay address:
 
    ```sh
    wind relay onboard https://<relay-address>
@@ -62,6 +67,12 @@ bindings fail explicitly instead of replacing another deployment. Working TURN k
 and the console's enable/disable choice are retained. Interrupted TURN setup resumes
 on rerun; incomplete setup appears in the deployment summary without blocking
 relay/frontend updates. No TURN key needs to be copied into client configuration.
+
+For deployments created before managed TURN, [edit the existing deployment token](cloudflare-api-token.zh-CN.md#2-选择权限)
+to add **Cloudflare Calls / Edit**, then rerun. Editing its permissions preserves the
+token value and GitHub Secret. Rebuild or update local `wind` too: with a valid saved
+credential and this relay selected, `wind share <path>` discovers and saves the managed
+TURN reference in the background. Existing devices do not need to enroll again.
 
 Changing `WINDSHARE_OWNER_PASSWORD` and redeploying signs administrators out while keeping
 client credentials valid. Revoke individual credentials in the console to block new shares.

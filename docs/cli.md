@@ -78,7 +78,9 @@ changing saved defaults. Matching relay addresses retain their credentials; a di
 path or query never inherits them. Without saved defaults, supply both options explicitly.
 Invalid or unreadable configuration fails explicitly.
 
-Optional owner-provided TURN services belong in the same file's `turn` section.
+Cloudflare-managed TURN is saved during onboarding and refreshed in the background
+while sharing with a selected private relay. Existing valid credentials are reused.
+Optional manual TURN services belong in the same file's `turn` section.
 See [TURN configuration and budgets](turn.md).
 
 ## Download
@@ -107,8 +109,8 @@ room for a filename character and the collision suffix.
 
 | Mode | Behavior |
 |---|---|
-| `auto` | Starts on the first available path; direct WebRTC and relay may carry content together. |
-| `relay-only` | Transfers content through the relay. |
+| `auto` | Starts on the first available path; direct WebRTC, TURN and application relays may carry content together, scheduled by measured performance. |
+| `relay-only` | Transfers content through application relays; creates no direct or TURN connections. |
 | `p2p-only` | Uses relays for setup, transfers content only directly, and stops if direct recovery is exhausted. |
 
 Temporary outages reconnect automatically, keeping the same download, output, and verified progress while the shared file revision remains unchanged. After fast retries, recovery continues at a lower rate; healthy direct paths can keep transferring while a relay recovers. Authentication, changed content, and output failures retain their own failure handling.
