@@ -43,16 +43,16 @@ func localTURN(t *testing.T, protocol string) (string, *turn.Server) {
 	t.Cleanup(func() { _ = server.Close() })
 	return fmt.Sprintf("turn:%s?transport=%s", address, protocol), server
 }
-func turnConnection(t *testing.T, lease *socketauthority.Lease, endpoint string) *Connection {
+func turnConnection(t *testing.T, lease *socketauthority.Lease, endpoints ...string) *Connection {
 	t.Helper()
 	credential, _ := iceconfig.Fixed("u", "p")
-	relay, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "account", Profile: "local"}, []string{endpoint}, credential)
+	relay, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "account", Profile: "local"}, endpoints, credential)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config, _ := iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
 	reservation, err := ProcessTURNCapacity().NewOwner().Acquire(context.Background(), TURNRequest{
-		ProtocolSessionID: lease.SessionID(), PeerPathID: lease.PathID(), Service: relay.Identity(), Sockets: 1,
+		ProtocolSessionID: lease.SessionID(), PeerPathID: lease.PathID(), Service: relay.Identity(), Sockets: len(endpoints),
 	})
 	if err != nil {
 		t.Fatal(err)

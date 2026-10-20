@@ -1,0 +1,39 @@
+diff --git a/internal/client/udp_conn.go b/internal/client/udp_conn.go
+index f84c405..f8df29f 100644
+--- a/internal/client/udp_conn.go
++++ b/internal/client/udp_conn.go
+@@ -501,10 +501,12 @@ func (c *UDPConn) handleBindChannelError(bound *binding, startState bindingState
+ 		return
+ 	}
+ 
++	// A rejected binding belongs to one peer address, not the allocation. Keep
++	// other channels alive and use Send indications for this address. Failed
++	// bindings are not retried, so a permanent rejection cannot create a loop.
+ 	bound.setState(bindingStateFailed)
+-	if errors.Is(err, errChannelBindBadRequest) {
+-		c.closeAfterChannelBindBadRequest(bound)
+-	}
++	c.log.Warnf("ChannelBind rejected for %s on channel %d; retaining TURN allocation and using Send indications",
++		bound.addr, bound.number)
+ }
+ 
+ func (c *UDPConn) recoverChannelBindBadRequest(bound *binding, startState bindingState, err error) bool {
+@@ -534,18 +536,6 @@ func bindingStateWasReady(state bindingState) bool {
+ 	return state == bindingStateReady || state == bindingStateReadyUnknown
+ }
+ 
+-func (c *UDPConn) closeAfterChannelBindBadRequest(bound *binding) {
+-	c.log.Warnf(
+-		"ChannelBind rejected with 400 for %s on channel %d; closing TURN allocation",
+-		bound.addr,
+-		bound.number,
+-	)
+-
+-	if err := c.Close(); err != nil && !errors.Is(err, errAlreadyClosed) {
+-		c.log.Warnf("Failed to close TURN allocation after ChannelBind 400: %s", err)
+-	}
+-}
+-
+ func (c *UDPConn) bind(bound *binding) error {
+ 	setters := []stun.Setter{
+ 		stun.TransactionID,

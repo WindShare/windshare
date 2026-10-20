@@ -62,7 +62,7 @@ describe('receiver path activity', () => {
     activity.turn(1, { ...service, pathId: 'new', state: 'ready', usefulBytes: 512 })
     expect(latest().turnServices?.[0]).toMatchObject({ state: 'ready', usefulBytes: 2560 })
     activity.detached(1, replacement)
-    expect(latest().turnServices?.[0]?.state).toBe('connecting')
+    expect(latest().turnServices?.[0]).toMatchObject({ state: 'unavailable', reason: 'transport-loss' })
     activity.turn(1, { ...service, pathId: 'new', state: 'retired' })
     expect(latest().turnServices?.[0]).toMatchObject({ state: 'retired', usefulBytes: 2560 })
     activity.generationInstalled(2)

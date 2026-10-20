@@ -25,6 +25,7 @@ import {
   type V2PeerAttemptCancellationOwner,
   type V2PeerAttemptPhase,
   type V2PeerAttemptResult,
+  type V2PeerAttemptFailure,
   type V2PeerFailureDecision,
   type V2ProtocolSessionTerminalSnapshot,
 } from '../v2-peer-failure'
@@ -47,6 +48,7 @@ import {
   type V2PeerRecoveryPolicy,
   type V2PeerRecoveryRearmSource,
   type V2PeerRecoveryState,
+  type V2PeerRetryReason,
   type V2PeerRecoverySupervisorOptions,
 } from './contract'
 
@@ -67,6 +69,7 @@ export class V2PeerRecoverySupervisor {
   readonly #budget: PeerAttemptBudget
   readonly #profiles: PeerProfilePlanner
   readonly #onUnavailable: () => void
+  readonly #observeState: ((state: V2PeerRecoveryState) => void) | undefined
   #lastNetworkHintAt = Number.NEGATIVE_INFINITY
   readonly #releaseLane: ((lane: V2PeerAdmittedLane) => void) | undefined
   #activeWave: WaveBudget | undefined
@@ -103,6 +106,7 @@ export class V2PeerRecoverySupervisor {
     this.#trace = new PeerRecoveryTrace(this.#protocolSessionId, this.#peerPathId, options.trace)
     this.#profiles = new PeerProfilePlanner(options.endpoints, options.network)
     this.#onUnavailable = options.onUnavailable ?? (() => undefined)
+    this.#observeState = options.observeState
     this.#budget = options.budget ?? new PeerAttemptBudget(this.#policy.sessionMaxAttempts,
       this.#policy.sessionActiveElapsedBudgetMilliseconds, V2_PEER_BUDGET_REFILL_MILLISECONDS)
     this.#releaseLane = options.releaseLane
@@ -111,6 +115,11 @@ export class V2PeerRecoverySupervisor {
 
   get state(): V2PeerRecoveryState {
     return this.#state
+  }
+
+  #setState(state: V2PeerRecoveryState): void {
+    this.#state = Object.freeze(state)
+    try { this.#observeState?.(this.#state) } catch { /* Presentation cannot own recovery. */ }
   }
 
   get sessionAttemptCount(): number {
@@ -204,7 +213,7 @@ export class V2PeerRecoverySupervisor {
       detachment,
     )
     if (this.#activationCount === 0) {
-      this.#state = Object.freeze({ kind: 'idle' })
+      this.#setState({ kind: 'idle' })
     } else {
       this.#scheduleWave('detachment', false)
     }
@@ -266,7 +275,7 @@ export class V2PeerRecoverySupervisor {
       this.#cancelWave('last-activation')
       return
     }
-    if (this.#state.kind === 'quiescent') this.#state = Object.freeze({ kind: 'idle' })
+    if (this.#state.kind === 'quiescent') this.#setState({ kind: 'idle' })
   }
 
   #scheduleWave(trigger: V2PeerRecoveryWaveTrigger, rearmed: boolean): void {
@@ -411,7 +420,7 @@ export class V2PeerRecoverySupervisor {
         phase,
       ),
     })
-    this.#state = Object.freeze({
+    this.#setState({
       kind: 'attempting',
       phase: 'negotiation',
       waveOrdinal: wave.ordinal,
@@ -442,7 +451,7 @@ export class V2PeerRecoverySupervisor {
       this.#state.waveAttemptOrdinal !== waveAttemptOrdinal ||
       this.#state.sessionAttemptOrdinal !== sessionAttemptOrdinal
     ) return
-    this.#state = Object.freeze({ ...this.#state, phase })
+    this.#setState({ ...this.#state, phase })
   }
 
   #raceAttempt(attempt: V2PeerAttemptHandle, wave: WaveBudget, signal: AbortSignal): Promise<AttemptRace> {
@@ -467,13 +476,13 @@ export class V2PeerRecoverySupervisor {
       const detached = this.#detachedAdmission
       if (detached !== undefined && equalV2DiagnosticIdentities(detached.attemptId, attemptId) &&
         detached.laneId === result.lane.laneId && detached.laneEpoch === result.lane.laneEpoch) {
-        this.#state = Object.freeze({ kind: 'idle' })
+        this.#setState({ kind: 'idle' })
         this.#trace.emit(() => Object.freeze({ stage: 'peer-detached' }), attemptId, detached)
         if (this.#activationCount > 0) this.#scheduleWave('detachment', false)
         return false
       }
       this.#currentLane = Object.freeze({ ...result.lane })
-      this.#state = Object.freeze({ kind: 'admitted', lane: this.#currentLane })
+      this.#setState({ kind: 'admitted', lane: this.#currentLane })
       if (this.#activationCount === 0) this.#retainIdleLane()
       return false
     }
@@ -512,14 +521,15 @@ export class V2PeerRecoverySupervisor {
       this.#budget.refundUnstartedAttempt()
     }
     if (this.#activationCount === 0) {
-      this.#state = Object.freeze({ kind: 'idle' })
+      this.#setState({ kind: 'idle' })
       return false
     }
-    return this.#scheduleRetry(decision, attemptId, wave, retryOrdinal, signal)
+    return this.#scheduleRetry(decision, result.failure, attemptId, wave, retryOrdinal, signal)
   }
 
   async #scheduleRetry(
     decision: Extract<V2PeerFailureDecision, { readonly type: 'retry-attempt' }>,
+    failure: V2PeerAttemptFailure,
     attemptId: V2PeerAttemptIdentity,
     wave: WaveBudget,
     retryOrdinal: number,
@@ -562,17 +572,19 @@ export class V2PeerRecoverySupervisor {
       }),
       attemptId,
     )
-    return this.#waitForRetry(delay, wave, retryOrdinal, signal)
+    const reason = failure.kind === 'local-transient' ? failure.reason : decision.reason
+    return this.#waitForRetry(delay, reason, wave, retryOrdinal, signal)
   }
 
   async #waitForRetainedNotBefore(wave: WaveBudget, signal: AbortSignal): Promise<boolean> {
     const delay = Math.max(0, this.#authenticatedNotBefore - this.#now())
     if (delay === 0) return true
-    return this.#waitForRetry(delay, wave, 0, signal)
+    return this.#waitForRetry(delay, 'retained-backoff', wave, 0, signal)
   }
 
   async #waitForRetry(
     delay: number,
+    reason: V2PeerRetryReason,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -587,11 +599,12 @@ export class V2PeerRecoverySupervisor {
       )
       return false
     }
-    this.#state = Object.freeze({
+    this.#setState({
       kind: 'waiting-retry',
       waveOrdinal: wave.ordinal,
       retryOrdinal,
       delayMilliseconds: delay,
+      reason,
     })
     try {
       await this.#clock.sleep(delay, signal)
@@ -633,9 +646,9 @@ export class V2PeerRecoverySupervisor {
     if (this.#terminal !== undefined) {
       this.#stopSession(this.#terminal)
     } else if (this.#currentLane !== undefined) {
-      this.#state = Object.freeze({ kind: 'admitted', lane: this.#currentLane })
+      this.#setState({ kind: 'admitted', lane: this.#currentLane })
     } else if (this.#state.kind !== 'path-stopped' && this.#state.kind !== 'session-exhausted') {
-      this.#state = Object.freeze({ kind: 'idle' })
+      this.#setState({ kind: 'idle' })
     }
   }
 
@@ -673,14 +686,14 @@ export class V2PeerRecoverySupervisor {
   #exhaust(exhaustion: RecoveryExhaustion, waveOrdinal?: number): void {
     if (exhaustion === 'session-attempt-budget' || exhaustion === 'session-elapsed-budget') {
       const reason = exhaustion
-      this.#state = Object.freeze({ kind: 'session-exhausted', reason })
+      this.#setState({ kind: 'session-exhausted', reason })
       this.#trace.emit(() => Object.freeze({ stage: 'session-budget-exhausted', reason }))
       this.#onUnavailable()
       this.#rearmWhenAvailable()
       return
     }
     const reason = exhaustion
-    this.#state = Object.freeze({ kind: 'quiescent', reason })
+    this.#setState({ kind: 'quiescent', reason })
     this.#onUnavailable()
     this.#trace.emit(() => Object.freeze({
       stage: 'wave-quiesced',
@@ -721,7 +734,7 @@ export class V2PeerRecoverySupervisor {
     this.#currentLane = undefined
     if (lane !== undefined) this.#releaseLane?.(lane)
     if (this.#terminal === undefined && this.#state.kind === 'admitted') {
-      this.#state = Object.freeze({ kind: 'idle' })
+      this.#setState({ kind: 'idle' })
     }
   }
 
@@ -731,7 +744,7 @@ export class V2PeerRecoverySupervisor {
   >['reason']): void {
     if (this.#state.kind === 'path-stopped' && this.#state.reason === reason) return
     this.#pendingWave = undefined
-    this.#state = Object.freeze({ kind: 'path-stopped', reason })
+    this.#setState({ kind: 'path-stopped', reason })
     this.#onUnavailable()
     this.#trace.emit(() => Object.freeze({ stage: 'path-stopped', reason }))
     cancelPeerAttempt(this.#currentAttempt, 'runtime-stop')
@@ -743,7 +756,7 @@ export class V2PeerRecoverySupervisor {
     this.#unsubscribeRearm?.()
     this.#unsubscribeRearm = undefined
     this.#pendingWave = undefined
-    this.#state = Object.freeze({ kind: 'session-stopped', reason: terminal.code })
+    this.#setState({ kind: 'session-stopped', reason: terminal.code })
     this.#trace.emit(() => Object.freeze({ stage: 'session-stopped', reason: terminal.code }))
   }
 

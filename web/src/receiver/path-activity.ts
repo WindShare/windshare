@@ -96,7 +96,8 @@ export class ReceiverPathActivity {
       return
     }
     const previous = this.#turnServices.get(event.profile)
-    if (event.state === 'retired' && previous?.pathId !== event.pathId) return
+    if ((event.state === 'retired' || event.state === 'unavailable') &&
+      event.pathId !== undefined && previous?.pathId !== event.pathId) return
     // Content observations survive path replacement; periodic service events
     // publish their totals without rendering once for every downloaded block.
     this.#turnServices.set(event.profile, Object.freeze({ ...event,
@@ -137,10 +138,15 @@ export class ReceiverPathActivity {
       })
     const turnServices = [...this.#turnServices.values()].map(service => {
       const connected = lanes.find(lane => lane.turnService?.profile === service.profile)?.turnService
-      let state = service.state
-      if (connected !== undefined) state = 'ready'
-      else if (state === 'ready') state = 'connecting'
-      return Object.freeze({ ...service, ...connected, state })
+      const current = { ...service, ...connected }
+      if (connected !== undefined) {
+        current.state = 'ready'
+        delete current.reason
+      } else if (current.state === 'ready') {
+        current.state = 'unavailable'
+        current.reason = 'transport-loss'
+      }
+      return Object.freeze(current)
     })
     this.#publish(Object.freeze({ lanes: Object.freeze(lanes),
       ...(turnServices.length === 0 ? {} : { turnServices: Object.freeze(turnServices) }) }))

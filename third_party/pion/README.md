@@ -1,6 +1,6 @@
 # Pinned Pion provider adaptation
 
-WindShare carries source projections of Pion ICE v4.4.2 and WebRTC v4.2.20. Exact
+WindShare carries source projections of Pion ICE v4.4.2, WebRTC v4.2.20 and TURN v5.1.0. Exact
 upstream commits, Go checksums and file hashes are in `manifest.json`; upstream
 MIT licenses and SPDX notices remain beside the sources. These nested dependency
 modules are separate from WindShare's single production Go module and coverage set.
@@ -21,6 +21,8 @@ The narrow patches in `patches/` add:
 - Complete universal UDP mux initialization before its socket reader starts.
 - Cancellable TURN allocation transactions and allocation deletion before closing
   their control transport, including rejected candidates.
+- Peer-scoped ChannelBind rejection: preserve the allocation and confirmed channels,
+  using Send indications for rejected bindings without repeatedly retrying them.
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses
 independent sockets per peer path; cross-path shared remote-tuple demultiplexing

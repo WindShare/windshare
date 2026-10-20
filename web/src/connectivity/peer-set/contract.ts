@@ -20,6 +20,7 @@ import type {
   V2PeerAttemptPhase,
   V2PeerAttemptResult,
   V2PeerFailureDecision,
+  V2PeerLocalTransientReason,
   V2ProtocolSessionTerminalSnapshot,
 } from '../v2-peer-failure'
 
@@ -193,6 +194,9 @@ export interface V2PeerLaneDetachment {
   readonly laneEpoch: number
 }
 
+export type V2PeerRetryReason = V2PeerLocalTransientReason |
+  Extract<V2PeerFailureDecision, { readonly type: 'retry-attempt' }>['reason'] | 'retained-backoff'
+
 export type V2PeerRecoveryState =
   | { readonly kind: 'idle' }
   | {
@@ -207,6 +211,7 @@ export type V2PeerRecoveryState =
       readonly waveOrdinal: number
       readonly retryOrdinal: number
       readonly delayMilliseconds: number
+      readonly reason: V2PeerRetryReason
     }
   | { readonly kind: 'admitted'; readonly lane: V2PeerAdmittedLane }
   | {
@@ -239,6 +244,7 @@ export interface V2PeerRecoveryDependencies {
 export interface V2PeerRecoverySupervisorOptions {
   readonly slot: PeerSlotLease
   readonly onUnavailable?: () => void
+  readonly observeState?: (state: V2PeerRecoveryState) => void
   readonly network?: PeerNetworkGeneration
   readonly endpoints?: ICEEndpointPool
   readonly budget?: PeerAttemptBudget

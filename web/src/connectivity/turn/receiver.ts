@@ -1,6 +1,6 @@
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
-import type { V2PeerRecoveryClock } from '../peer-set/contract'
+import type { V2PeerRecoveryClock, V2PeerRecoveryState } from '../peer-set/contract'
 import { awaitWithAbort } from '../peer-offer-remote'
 import { decodeTurnControl, encodeTurnControl, isTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader } from './control-codec'
 
@@ -26,7 +26,7 @@ export interface TurnObservation {
   readonly provider?: string
   readonly account?: string
   readonly pathId?: string
-  readonly state: 'available' | 'connecting' | 'ready' | 'retired' | 'unavailable' | 'withdrawn'
+  readonly state: 'available' | 'connecting' | 'retrying' | 'ready' | 'retired' | 'unavailable' | 'withdrawn'
   readonly reason?: string
   readonly usefulBytes?: number
 }
@@ -36,6 +36,7 @@ interface Path {
   admitted: boolean
   notified: boolean
   reported: number
+  status: Pick<TurnObservation, 'state' | 'reason'>
 }
 
 type Inventory = Extract<ReturnType<typeof decodeTurnControl>, { kind: 'available' }>
@@ -68,7 +69,9 @@ export class TurnReceiver {
       }
       if (this.#available === undefined || !equalBytes(message.ownerPathId, this.#available.ownerPathId)) return
       if (message.kind === 'grant') this.#grant(message)
-      if (message.kind === 'retire' && this.grantFor(message.pathId)?.sequence === message.sequence) this.#retire(message.pathId)
+      if (message.kind === 'retire' && this.grantFor(message.pathId)?.sequence === message.sequence) {
+        this.#retire(message.pathId, Object.entries(TURN_RETIRE).find(([, code]) => code === message.reason)![0])
+      }
       if (message.kind === 'unavailable' && this.#available.profiles.includes(message.profile)) {
         this.#emit({ profile: message.profile, state: 'unavailable', reason: message.reason })
       }
@@ -100,10 +103,32 @@ export class TurnReceiver {
     this.#track(this.#measure(path))
   }
 
-  unhelpful(pathId: Uint8Array): void {
+  recoveryChanged(pathId: Uint8Array, state: V2PeerRecoveryState): void {
     const path = this.#paths.get(encodeBase64Url(pathId))
     if (path === undefined) return
-    this.#retire(path.grant.pathId)
+    switch (state.kind) {
+      case 'attempting':
+        this.#observe(path.grant, 'connecting')
+        break
+      case 'waiting-retry':
+        this.#observe(path.grant, 'retrying', state.reason)
+        break
+      case 'admitted':
+        this.#observe(path.grant, 'ready')
+        break
+      case 'quiescent':
+      case 'session-exhausted':
+      case 'path-stopped':
+      case 'session-stopped':
+        this.#observe(path.grant, 'unavailable', state.reason)
+        break
+    }
+  }
+
+  unhelpful(pathId: Uint8Array, reason?: string): void {
+    const path = this.#paths.get(encodeBase64Url(pathId))
+    if (path === undefined) return
+    this.#retire(path.grant.pathId, reason ?? path.status.reason ?? 'unhelpful')
     this.#track(this.#send({ ...this.#header(path.grant), kind: 'retire', pathId: path.grant.pathId, reason: TURN_RETIRE.unhelpful }))
   }
 
@@ -124,7 +149,7 @@ export class TurnReceiver {
       message.sequence <= previous.sequence)) return
     this.#available = message
     for (const path of this.#paths.values()) {
-      if (!message.profiles.includes(path.grant.profile)) this.#retire(path.grant.pathId)
+      if (!message.profiles.includes(path.grant.profile)) this.#retire(path.grant.pathId, 'revoked')
     }
     this.#options.profilesChanged?.(message.profiles)
     for (const profile of previous?.profiles ?? []) {
@@ -163,22 +188,25 @@ export class TurnReceiver {
       (replaces !== undefined && (replaces.grant.profile !== grant.profile || replaces.grant.account !== grant.account || replaces.grant.provider !== grant.provider)) ||
       (grant.replaces.some((value) => value !== 0) && replaces === undefined)) return
     const lifetime = new AbortController()
-    this.#paths.set(key, { grant, lifetime, admitted: false, notified: false, reported: 0 })
+    this.#paths.set(key, { grant, lifetime, admitted: false, notified: false, reported: 0,
+      status: { state: 'connecting' } })
+    // Activation can synchronously admit or retire a path when its service
+    // budget is exhausted. Never overwrite that result with "connecting".
+    this.#observe(grant, 'connecting')
     try {
       this.#options.open(grant)
-      this.#observe(grant, 'connecting')
     } catch (error) {
-      this.#observe(grant, 'unavailable', String(error))
-      this.unhelpful(grant.pathId)
+      this.unhelpful(grant.pathId, String(error))
       return
     }
+    if (lifetime.signal.aborted) return
     if (grant.credentials.kind === 'expiring') {
       this.#track(this.#options.clock.sleep(grant.credentials.validForMs, lifetime.signal)
-        .then(() => this.#retire(grant.pathId)))
+        .then(() => this.#retire(grant.pathId, 'expired')))
     }
   }
 
-  #retire(pathId: Uint8Array<ArrayBuffer>): void {
+  #retire(pathId: Uint8Array<ArrayBuffer>, reason = 'idle'): void {
     const key = encodeBase64Url(pathId)
     const path = this.#paths.get(key)
     if (path === undefined) return
@@ -191,7 +219,7 @@ export class TurnReceiver {
     this.#retired.add(key)
     if (this.#retired.size > MAX_TOMBSTONES) this.#retired.delete(this.#retired.values().next().value!)
     path.lifetime.abort()
-    this.#observe(path.grant, 'retired')
+    this.#observe(path.grant, 'retired', reason)
     this.#track(this.#options.retire(path.grant.pathId))
   }
 
@@ -218,8 +246,11 @@ export class TurnReceiver {
     this.#tasks.add(settled)
   }
   #observe(grant: TurnGrant, state: TurnObservation['state'], reason?: string): void {
+    const path = this.#paths.get(encodeBase64Url(grant.pathId))
+    const status = { state, ...(reason === undefined ? {} : { reason }) }
+    if (path !== undefined) path.status = status
     this.#emit({ profile: grant.profile, provider: grant.provider, account: grant.account,
-      pathId: encodeBase64Url(grant.pathId), state, ...(reason === undefined ? {} : { reason }) })
+      pathId: encodeBase64Url(grant.pathId), ...status })
   }
   #emit(event: TurnObservation): void {
     try { this.#options.observe?.(event) } catch { /* Observations cannot own the path lifetime. */ }
@@ -241,7 +272,7 @@ export class TurnReceiver {
         if (path.lifetime.signal.aborted) return
         if (sent) path.reported = measurement.usefulBytes
         this.#emit({ profile: path.grant.profile, provider: path.grant.provider, account: path.grant.account,
-          pathId: encodeBase64Url(path.grant.pathId), state: 'ready', usefulBytes: measurement.usefulBytes })
+          pathId: encodeBase64Url(path.grant.pathId), ...path.status, usefulBytes: measurement.usefulBytes })
       }
       if (measurement.unhelpful) this.unhelpful(path.grant.pathId)
     }

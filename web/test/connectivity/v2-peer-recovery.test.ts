@@ -42,6 +42,21 @@ const SESSION_ID = createV2ProtocolSessionIdentity(identity(1))
 const PEER_PATH_ID = createV2PeerPathIdentityValue(identity(2))
 
 describe('demand-driven peer set', () => {
+  it('publishes failure and retry transitions even when the state observer throws', async () => {
+    const states: { kind: string; reason?: string }[] = []
+    const { supervisor, clock } = fixture([TRANSIENT, admitted()], {
+      observeState: state => { states.push(state); throw new Error('presentation failure') },
+    })
+    const activation = supervisor.activate()
+    await turn()
+    expect(states.at(-1)).toMatchObject({ kind: 'waiting-retry', reason: 'transport-loss' })
+    await clock.advance(5_000)
+    await supervisor.join()
+    expect(states.map(state => state.kind)).toEqual(['attempting', 'waiting-retry', 'attempting', 'admitted'])
+    activation.close()
+    await supervisor.close()
+  })
+
   it('waits through more than three busy replies without spending negotiation allowance', async () => {
     const busy: V2PeerAttemptResult = { type: 'failed', failure: {
       kind: 'authenticated-peer-operation', code: V2_PEER_OPERATION_CODE.capacity,

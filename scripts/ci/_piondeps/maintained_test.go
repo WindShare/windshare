@@ -88,8 +88,9 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	projection := manifest{Modules: []sourceModule{
 		{Name: "ice", Files: []sourceFile{{Path: "source.go"}}},
 		{Name: "webrtc", Files: []sourceFile{{Path: "source.go"}}},
+		{Name: "turn", Files: []sourceFile{{Path: "source.go"}}},
 	}}
-	candidates := append([]string{"third_party/pion/ice/source.go", "third_party/pion/webrtc/source.go"}, owned...)
+	candidates := append([]string{"third_party/pion/ice/source.go", "third_party/pion/webrtc/source.go", "third_party/pion/turn/source.go"}, owned...)
 	candidates = append(candidates, "deleted.go", "")
 	got, err := maintainedGoFiles(root, candidates, projection)
 	if err != nil {
@@ -188,6 +189,7 @@ func TestMaintainedOutputRejectsUnverifiedProjection(t *testing.T) {
 				{Name: "ice", Path: "github.com/pion/ice/v4", Version: "v4.2.7", Revision: "0123456789012345678901234567890123456789",
 					Files: []sourceFile{{Path: "source.go", SHA256: digest([]byte("package expected\n"))}}},
 				{Name: "webrtc", Path: "github.com/pion/webrtc/v4", Version: "v4.2.16"},
+				{Name: "turn", Path: "github.com/pion/turn/v5", Version: "v5.1.0"},
 			}}
 			raw, err := json.Marshal(sources)
 			if err != nil {
@@ -202,7 +204,7 @@ func TestMaintainedOutputRejectsUnverifiedProjection(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(boundary, "ice", "source.go"), []byte("package changed\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			module := "module example.com/product\nrequire (\ngithub.com/pion/ice/v4 v4.2.7\ngithub.com/pion/webrtc/v4 v4.2.16\n)\nreplace github.com/pion/ice/v4 => ./third_party/pion/ice\nreplace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc\n"
+			module := "module example.com/product\nrequire (\ngithub.com/pion/ice/v4 v4.2.7\ngithub.com/pion/webrtc/v4 v4.2.16\ngithub.com/pion/turn/v5 v5.1.0\n)\nreplace github.com/pion/ice/v4 => ./third_party/pion/ice\nreplace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc\nreplace github.com/pion/turn/v5 => ./third_party/pion/turn\n"
 			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0600); err != nil {
 				t.Fatal(err)
 			}

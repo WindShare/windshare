@@ -1033,6 +1033,300 @@
           "sha256": "949f449d96d48e2f4d54690eaa23c75a5e977dee5b6b11480bddc99056ee3049"
         }
       ]
+    },
+    {
+      "name": "turn",
+      "path": "github.com/pion/turn/v5",
+      "version": "v5.1.0",
+      "revision": "824c60e25d977e2c43b3882ebc4395d190bf6855",
+      "sum": "h1:OSzLub7q4GssG1P4BEVrz39MnnJlxLy1LOvEkP9f46o=",
+      "files": [
+        {
+          "path": "addr_family.go",
+          "upstream_sha256": "6457f6f5afbd6c22e19073a969d983a62300d66118a4465346a6606dd42f386b",
+          "sha256": "6457f6f5afbd6c22e19073a969d983a62300d66118a4465346a6606dd42f386b"
+        },
+        {
+          "path": "client.go",
+          "upstream_sha256": "595b29d2be6f7cf1a30c3a44c14fe9ce898842d11c5be8942cb98a9c19aa2383",
+          "sha256": "595b29d2be6f7cf1a30c3a44c14fe9ce898842d11c5be8942cb98a9c19aa2383"
+        },
+        {
+          "path": "e2e/e2e.go",
+          "upstream_sha256": "2da27e32b87dac6e5ec1fc65788b9bed4eac7e034eb92e1d475d154d72bffee1",
+          "sha256": "2da27e32b87dac6e5ec1fc65788b9bed4eac7e034eb92e1d475d154d72bffee1"
+        },
+        {
+          "path": "errors.go",
+          "upstream_sha256": "a76483c991764edbf94fa523f2b780c32edb86eea18b621a8bfccbd97dbd94e4",
+          "sha256": "a76483c991764edbf94fa523f2b780c32edb86eea18b621a8bfccbd97dbd94e4"
+        },
+        {
+          "path": "go.mod",
+          "upstream_sha256": "df5be38982094c1dc3ab984d3d69f2ec96b97085fdd9ed06f23a43a0b37da3f0",
+          "sha256": "df5be38982094c1dc3ab984d3d69f2ec96b97085fdd9ed06f23a43a0b37da3f0"
+        },
+        {
+          "path": "go.sum",
+          "upstream_sha256": "eb3009cf05710323025a507f6c9aac07f4e205e9129c479d5fce608bcc5622a4",
+          "sha256": "eb3009cf05710323025a507f6c9aac07f4e205e9129c479d5fce608bcc5622a4"
+        },
+        {
+          "path": "internal/allocation/allocation_manager.go",
+          "upstream_sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407",
+          "sha256": "7cc4d4f8ba1dc8c308cb01f7af2b6d451f5086eafc858913c9192d51a0af4407"
+        },
+        {
+          "path": "internal/allocation/allocation.go",
+          "upstream_sha256": "a75f2cbb3feafc8c58a227251081829e38d985ff8a609a8b84b20bf0754bd302",
+          "sha256": "a75f2cbb3feafc8c58a227251081829e38d985ff8a609a8b84b20bf0754bd302"
+        },
+        {
+          "path": "internal/allocation/channel_bind.go",
+          "upstream_sha256": "22e826abdfca41844304e7e78722c7b9bedcec700c40910e1fa522ef767b55c1",
+          "sha256": "22e826abdfca41844304e7e78722c7b9bedcec700c40910e1fa522ef767b55c1"
+        },
+        {
+          "path": "internal/allocation/errors.go",
+          "upstream_sha256": "30f5ce2fbec4636dfd3b045486d7d98e1c506670143c3f15ba67e76121c77316",
+          "sha256": "30f5ce2fbec4636dfd3b045486d7d98e1c506670143c3f15ba67e76121c77316"
+        },
+        {
+          "path": "internal/allocation/event_handler.go",
+          "upstream_sha256": "beab45a3d7ae102c2d640b10df5f8c1b37cd96ede6317e2a48015ab9867fa072",
+          "sha256": "beab45a3d7ae102c2d640b10df5f8c1b37cd96ede6317e2a48015ab9867fa072"
+        },
+        {
+          "path": "internal/allocation/five_tuple.go",
+          "upstream_sha256": "c75f321bc24aadafa888027ba303e33bbc83d1344b8e0546c539a3c8379755cb",
+          "sha256": "c75f321bc24aadafa888027ba303e33bbc83d1344b8e0546c539a3c8379755cb"
+        },
+        {
+          "path": "internal/allocation/permission.go",
+          "upstream_sha256": "192ad171f2449a4f38ee4f8cba363b76f7e6b45bd1d05ce5ad06066ea47b5d62",
+          "sha256": "192ad171f2449a4f38ee4f8cba363b76f7e6b45bd1d05ce5ad06066ea47b5d62"
+        },
+        {
+          "path": "internal/auth/auth.go",
+          "upstream_sha256": "7d8a46d0eb77517b7d042ba83a7232d66bffff0af05c14107bb6aecc669793eb",
+          "sha256": "7d8a46d0eb77517b7d042ba83a7232d66bffff0af05c14107bb6aecc669793eb"
+        },
+        {
+          "path": "internal/client/allocation.go",
+          "upstream_sha256": "2d9f6c5843ddf8a59b66d5c832480a03f2c2e9fab7c30f01b1c795dedc09b697",
+          "sha256": "2d9f6c5843ddf8a59b66d5c832480a03f2c2e9fab7c30f01b1c795dedc09b697"
+        },
+        {
+          "path": "internal/client/binding.go",
+          "upstream_sha256": "71b1aa9aa886bc3b1c361c6654e47f119517d6801a7fb47abdb1440d4a1def52",
+          "sha256": "71b1aa9aa886bc3b1c361c6654e47f119517d6801a7fb47abdb1440d4a1def52"
+        },
+        {
+          "path": "internal/client/client.go",
+          "upstream_sha256": "972ac04aa532e223154162dc17837d79c4dc537c663cf1b9873b3049ab9fdf4c",
+          "sha256": "972ac04aa532e223154162dc17837d79c4dc537c663cf1b9873b3049ab9fdf4c"
+        },
+        {
+          "path": "internal/client/errors.go",
+          "upstream_sha256": "62930c72beda2df4eb888991985e745c9854cee9b1f36f7fcc8537ead752b357",
+          "sha256": "62930c72beda2df4eb888991985e745c9854cee9b1f36f7fcc8537ead752b357"
+        },
+        {
+          "path": "internal/client/periodic_timer.go",
+          "upstream_sha256": "ef9a3bfe5f41334099393bd314adc11291f1910094868f6c65efc551f5d6e224",
+          "sha256": "ef9a3bfe5f41334099393bd314adc11291f1910094868f6c65efc551f5d6e224"
+        },
+        {
+          "path": "internal/client/permission.go",
+          "upstream_sha256": "3b01f998decdd975e82697beddeefceb52842b448db08aa5fa6be9844b6b9c93",
+          "sha256": "3b01f998decdd975e82697beddeefceb52842b448db08aa5fa6be9844b6b9c93"
+        },
+        {
+          "path": "internal/client/tcp_alloc.go",
+          "upstream_sha256": "900c7153d739ff23f18d2901516ddbf4cfbdf69e3de54feb933d8fee6cb6e4b5",
+          "sha256": "900c7153d739ff23f18d2901516ddbf4cfbdf69e3de54feb933d8fee6cb6e4b5"
+        },
+        {
+          "path": "internal/client/tcp_conn.go",
+          "upstream_sha256": "3c5e8eb3ba7563a05097f25abfa2ebbe932d74aa89bd2bfc9464fc4023dfb6f3",
+          "sha256": "3c5e8eb3ba7563a05097f25abfa2ebbe932d74aa89bd2bfc9464fc4023dfb6f3"
+        },
+        {
+          "path": "internal/client/transaction.go",
+          "upstream_sha256": "cbdfaadfe3d20b92068a8ca6f602383760720ed017c300a8aa3331aeb8eeae81",
+          "sha256": "cbdfaadfe3d20b92068a8ca6f602383760720ed017c300a8aa3331aeb8eeae81"
+        },
+        {
+          "path": "internal/client/trylock.go",
+          "upstream_sha256": "0498fee8168626c6834c5a0fb60c57f51e156dd75fd07feff0615971dd41502b",
+          "sha256": "0498fee8168626c6834c5a0fb60c57f51e156dd75fd07feff0615971dd41502b"
+        },
+        {
+          "path": "internal/client/udp_conn.go",
+          "upstream_sha256": "ab694a042ab440ef3354bb19984eda1ef7715c9c3ad84be0fe4b930a36c3f9cf",
+          "sha256": "d495c052850dcc2c62dba0691339f47b1c01216d79e43e94fa3e350e520729e5"
+        },
+        {
+          "path": "internal/ipnet/util.go",
+          "upstream_sha256": "98a2fb1163b18ecec7e668b2158015fc031b7e73a667bee079158e5f6fc329b8",
+          "sha256": "98a2fb1163b18ecec7e668b2158015fc031b7e73a667bee079158e5f6fc329b8"
+        },
+        {
+          "path": "internal/proto/addr.go",
+          "upstream_sha256": "654149f1664babfc098dfe8755296fc76119ec1f6ce8b6d8c8a3ee8d23488fb3",
+          "sha256": "654149f1664babfc098dfe8755296fc76119ec1f6ce8b6d8c8a3ee8d23488fb3"
+        },
+        {
+          "path": "internal/proto/chandata.go",
+          "upstream_sha256": "6c3e6e8e5ceb562ea650c42da9d06cd682c5540984094fce75a3c8c41e0e488b",
+          "sha256": "6c3e6e8e5ceb562ea650c42da9d06cd682c5540984094fce75a3c8c41e0e488b"
+        },
+        {
+          "path": "internal/proto/chann.go",
+          "upstream_sha256": "bd93e3c6580b95d82fd1497bdd20aae0f37de9f1bd879b0fb79cf7a10438d1c1",
+          "sha256": "bd93e3c6580b95d82fd1497bdd20aae0f37de9f1bd879b0fb79cf7a10438d1c1"
+        },
+        {
+          "path": "internal/proto/connection_id.go",
+          "upstream_sha256": "35d6057d8bfcc3dd89216348f361f2aa70ce99fed31a9b5d7b67227d716d68e8",
+          "sha256": "35d6057d8bfcc3dd89216348f361f2aa70ce99fed31a9b5d7b67227d716d68e8"
+        },
+        {
+          "path": "internal/proto/data.go",
+          "upstream_sha256": "05d6e7c806704fb0f64fa014b16b8b4b88b9440c33412cef2b55e438da78725f",
+          "sha256": "05d6e7c806704fb0f64fa014b16b8b4b88b9440c33412cef2b55e438da78725f"
+        },
+        {
+          "path": "internal/proto/dontfrag.go",
+          "upstream_sha256": "f067bb5d27040479b7228ee1aa6e4bc8b650fc8f2518991745163c9c2fc38f16",
+          "sha256": "f067bb5d27040479b7228ee1aa6e4bc8b650fc8f2518991745163c9c2fc38f16"
+        },
+        {
+          "path": "internal/proto/evenport.go",
+          "upstream_sha256": "33bc4fc304489a7253ae09cd7235268eee91b3d3bff727ee106b41c7213058c1",
+          "sha256": "33bc4fc304489a7253ae09cd7235268eee91b3d3bff727ee106b41c7213058c1"
+        },
+        {
+          "path": "internal/proto/lifetime.go",
+          "upstream_sha256": "f2dc91c1542d262dbacd4c6c05f4a61f16b21f51250e70d01bb59d13380af862",
+          "sha256": "f2dc91c1542d262dbacd4c6c05f4a61f16b21f51250e70d01bb59d13380af862"
+        },
+        {
+          "path": "internal/proto/peeraddr.go",
+          "upstream_sha256": "40387d044185f2ece1e4c39166a369b26eb0e5df4d0a4777f5273a4a74786dd7",
+          "sha256": "40387d044185f2ece1e4c39166a369b26eb0e5df4d0a4777f5273a4a74786dd7"
+        },
+        {
+          "path": "internal/proto/proto.go",
+          "upstream_sha256": "103db6f6a1cd92a3cd08e0ed9f50434e967c2f187257ac958c1c422e34779f50",
+          "sha256": "103db6f6a1cd92a3cd08e0ed9f50434e967c2f187257ac958c1c422e34779f50"
+        },
+        {
+          "path": "internal/proto/relayedaddr.go",
+          "upstream_sha256": "14a3bf4f5e5414f7045b29a2d7db1ce833e07e9b86c90071cab3c04c3e03b891",
+          "sha256": "14a3bf4f5e5414f7045b29a2d7db1ce833e07e9b86c90071cab3c04c3e03b891"
+        },
+        {
+          "path": "internal/proto/reqfamily.go",
+          "upstream_sha256": "d9da0283f4ebe1cad81ff956401472cbf0f6f4a74cadad044ae1dfad554ac9f2",
+          "sha256": "d9da0283f4ebe1cad81ff956401472cbf0f6f4a74cadad044ae1dfad554ac9f2"
+        },
+        {
+          "path": "internal/proto/reqtrans.go",
+          "upstream_sha256": "74322c1f7be2e5057fff2321d6b6f6ff19c75acc1681a701601509871577466e",
+          "sha256": "74322c1f7be2e5057fff2321d6b6f6ff19c75acc1681a701601509871577466e"
+        },
+        {
+          "path": "internal/proto/rsrvtoken.go",
+          "upstream_sha256": "64646d2fd5724f445a7cf87965c7ce92e2561834b129c70788b45590ab9f8431",
+          "sha256": "64646d2fd5724f445a7cf87965c7ce92e2561834b129c70788b45590ab9f8431"
+        },
+        {
+          "path": "internal/proto/stun_conn.go",
+          "upstream_sha256": "4bd75cb728c3c3ee5117bb903438c2302232942d2466e48c4568a292cd5af3d5",
+          "sha256": "4bd75cb728c3c3ee5117bb903438c2302232942d2466e48c4568a292cd5af3d5"
+        },
+        {
+          "path": "internal/server/base36.go",
+          "upstream_sha256": "0efd950a2b577be3694dca39a77d7430e3cc930450a116632503dbbbdd48bf7e",
+          "sha256": "0efd950a2b577be3694dca39a77d7430e3cc930450a116632503dbbbdd48bf7e"
+        },
+        {
+          "path": "internal/server/errors.go",
+          "upstream_sha256": "59fa84822c609a2a779b295b7ce1f4a2d117807b889d65da91d69e9c936807ee",
+          "sha256": "59fa84822c609a2a779b295b7ce1f4a2d117807b889d65da91d69e9c936807ee"
+        },
+        {
+          "path": "internal/server/nonce.go",
+          "upstream_sha256": "59483f6597573e74a861043bfcc59d8c9f6c76cd5bd316d1e4a78c2b2251cc41",
+          "sha256": "59483f6597573e74a861043bfcc59d8c9f6c76cd5bd316d1e4a78c2b2251cc41"
+        },
+        {
+          "path": "internal/server/server.go",
+          "upstream_sha256": "047b1e534d937166a7f49c08cb3fd76d46e4a4bc380196fa187641036f777056",
+          "sha256": "047b1e534d937166a7f49c08cb3fd76d46e4a4bc380196fa187641036f777056"
+        },
+        {
+          "path": "internal/server/short_nonce.go",
+          "upstream_sha256": "2088959bd6704dbcc2fb7acf9d50b77b2c8b34592f036886d9235a7c6665a462",
+          "sha256": "2088959bd6704dbcc2fb7acf9d50b77b2c8b34592f036886d9235a7c6665a462"
+        },
+        {
+          "path": "internal/server/stun.go",
+          "upstream_sha256": "ee54c653399f952905e213556601379cb5dc8935a8b6bf9c8ed743a867451dfd",
+          "sha256": "ee54c653399f952905e213556601379cb5dc8935a8b6bf9c8ed743a867451dfd"
+        },
+        {
+          "path": "internal/server/turn.go",
+          "upstream_sha256": "7241a4b933f12a7526df6325e44d9ed3a42db45375392cb866ec1fecc52b1c24",
+          "sha256": "7241a4b933f12a7526df6325e44d9ed3a42db45375392cb866ec1fecc52b1c24"
+        },
+        {
+          "path": "internal/server/util.go",
+          "upstream_sha256": "5838ad2d7df757ac9670c230244550b8d2a2f1664ec76e8e42e55d89189e2a8d",
+          "sha256": "5838ad2d7df757ac9670c230244550b8d2a2f1664ec76e8e42e55d89189e2a8d"
+        },
+        {
+          "path": "LICENSE",
+          "upstream_sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f",
+          "sha256": "6483daf6c8aa2c8192528e60be098aa82dd18f6d7b96dc8246f4f7c3333fbf3f"
+        },
+        {
+          "path": "lt_cred.go",
+          "upstream_sha256": "51d0601931466d9d95b2c059826162eb0665f066750211d1ec13118168201b44",
+          "sha256": "51d0601931466d9d95b2c059826162eb0665f066750211d1ec13118168201b44"
+        },
+        {
+          "path": "relay_address_generator_none.go",
+          "upstream_sha256": "542b4ab71d9191ab16ff91d1a3a0cc761d82cfd272f84bf6da460f445d11e91f",
+          "sha256": "542b4ab71d9191ab16ff91d1a3a0cc761d82cfd272f84bf6da460f445d11e91f"
+        },
+        {
+          "path": "relay_address_generator_range.go",
+          "upstream_sha256": "decd47b1a349be2c1f6c0d28545223cbe1e75fb4cf35e6061fc1da1cc8a7cffe",
+          "sha256": "decd47b1a349be2c1f6c0d28545223cbe1e75fb4cf35e6061fc1da1cc8a7cffe"
+        },
+        {
+          "path": "relay_address_generator_static.go",
+          "upstream_sha256": "b4611515752e41c3d25baf83a1af83df57a781eca52ed75a94bce8042fc4045d",
+          "sha256": "b4611515752e41c3d25baf83a1af83df57a781eca52ed75a94bce8042fc4045d"
+        },
+        {
+          "path": "server_config.go",
+          "upstream_sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8",
+          "sha256": "f222231799ab78498cc9cc1ce79d1f81ebd51b4d5fb94c978fd748ce7dc051e8"
+        },
+        {
+          "path": "server.go",
+          "upstream_sha256": "2bf7dc7a9d09df58245e63e96dccfd005eb6f403e189d6f335e6467478ef92df",
+          "sha256": "2bf7dc7a9d09df58245e63e96dccfd005eb6f403e189d6f335e6467478ef92df"
+        },
+        {
+          "path": "stun_conn.go",
+          "upstream_sha256": "d9386a1d1a08c608a975726b1ac453d9c7076c81fdeae467f6beab4109873da6",
+          "sha256": "d9386a1d1a08c608a975726b1ac453d9c7076c81fdeae467f6beab4109873da6"
+        }
+      ]
     }
   ]
 }

@@ -202,6 +202,8 @@ func TestValidateModuleLayoutAllowsOnlyReviewedModuleBoundaries(t *testing.T) {
 		"third_party/pion/ice/go.sum",
 		"third_party/pion/webrtc/go.mod",
 		"third_party/pion/webrtc/go.sum",
+		"third_party/pion/turn/go.mod",
+		"third_party/pion/turn/go.sum",
 		"README.md",
 	}
 	if err := validateModuleLayout(metadataPaths, validRootGoMod()); err != nil {
