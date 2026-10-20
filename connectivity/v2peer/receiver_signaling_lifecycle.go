@@ -6,6 +6,7 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	"sync"
 	"sync/atomic"
 
@@ -265,6 +266,7 @@ func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes Rec
 type ConnectionPath struct {
 	ICE                iceconfig.Connection
 	ReplacesPeerPathID [16]byte
+	OnTURNRecovery     func(turncontrol.RecoveryReason)
 }
 
 func (factory *ReceiverFactory) PrepareConnection(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding, path ConnectionPath) (*nativepeer.PreparedAttempt, error) {
@@ -280,7 +282,7 @@ func (factory *ReceiverFactory) PrepareConnection(parent context.Context, lanes 
 	}); ok {
 		sessionID = session.ProtocolSessionID()
 	}
-	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ICE: path.ICE, ReplacesPeerPathID: path.ReplacesPeerPathID, ProtocolSessionID: [16]byte(sessionID), Binding: binding})
+	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ICE: path.ICE, ReplacesPeerPathID: path.ReplacesPeerPathID, ProtocolSessionID: [16]byte(sessionID), Binding: binding, OnTURNRecovery: path.OnTURNRecovery})
 }
 
 func (factory *ReceiverFactory) StartPreparedConnection(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt, ice iceconfig.Connection) (*ReceiverAttempt, error) {

@@ -35,6 +35,20 @@ type nativeTURNPayloadV4 struct {
 	Reason      string                        `json:"reason,omitempty"`
 	UsefulBytes string                        `json:"useful_bytes,omitempty"`
 	Resources   *nativeTURNResourcesPayloadV4 `json:"resources,omitempty"`
+	Binding     *nativeTURNBindingPayloadV4   `json:"binding,omitempty"`
+	Route       *nativeTURNRoutePayloadV4     `json:"route,omitempty"`
+}
+type nativeTURNBindingPayloadV4 struct {
+	Status     string `json:"status"`
+	Code       uint16 `json:"code"`
+	Channel    uint16 `json:"channel"`
+	Peer       string `json:"peer"`
+	Allocation string `json:"allocation"`
+}
+type nativeTURNRoutePayloadV4 struct {
+	Server  string `json:"server"`
+	Local   string `json:"local"`
+	Outcome string `json:"outcome"`
 }
 type nativeTURNResourcesPayloadV4 struct {
 	ActiveSockets     string `json:"active_sockets"`
@@ -143,23 +157,40 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	if s := facts.Socket; s != nil {
 		payload.Socket = &nativeSocketPayloadV4{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
 	}
-	if turn := facts.TURN; turn != nil {
-		payload.TURN = &nativeTURNPayloadV4{Provider: turn.Provider, Account: turn.Account, Profile: turn.Profile,
-			Milestone: turn.Milestone, Reason: turn.Reason}
-		if turn.Milestone != "" {
-			payload.TURN.UsefulBytes = decimal(turn.UsefulBytes)
-		}
-		if resources := turn.Resources; resources != nil {
-			payload.TURN.Resources = &nativeTURNResourcesPayloadV4{ActiveSockets: decimal(resources.ActiveSockets), OpenedSockets: decimal(resources.OpenedSockets),
-				TransportSent: decimal(resources.TransportSent), TransportReceived: decimal(resources.TransportReceived)}
-		}
-	}
+	payload.TURN = encodeNativeTURN(facts.TURN)
 	if a := facts.Admission; a != nil && a.SocketCapacity.Limit != 0 {
 		c := a.SocketCapacity
 		payload.Admission.SocketCapacity = &nativeSocketCapacityPayloadV4{Used: decimal(c.Used), Reserved: decimal(c.Reserved), Requested: decimal(c.Requested), Limit: decimal(c.Limit)}
 	}
 	visitor.set("native_connectivity", correlation, payload)
 	return nil
+}
+
+func encodeNativeTURN(turn *clievent.NativeTURNFacts) *nativeTURNPayloadV4 {
+	if turn == nil {
+		return nil
+	}
+	payload := &nativeTURNPayloadV4{Provider: turn.Provider, Account: turn.Account, Profile: turn.Profile,
+		Milestone: turn.Milestone, Reason: turn.Reason}
+	if turn.Milestone != "" {
+		payload.UsefulBytes = decimal(turn.UsefulBytes)
+	}
+	if resources := turn.Resources; resources != nil {
+		payload.Resources = &nativeTURNResourcesPayloadV4{ActiveSockets: decimal(resources.ActiveSockets), OpenedSockets: decimal(resources.OpenedSockets),
+			TransportSent: decimal(resources.TransportSent), TransportReceived: decimal(resources.TransportReceived)}
+	}
+	if binding := turn.Binding; binding != nil {
+		payload.Binding = &nativeTURNBindingPayloadV4{Status: binding.Status, Code: uint16(binding.Code),
+			Channel: binding.Channel, Peer: binding.Peer.String(), Allocation: binding.Allocation.String()}
+	}
+	if route := turn.Route; route != nil {
+		local := "system"
+		if route.Local.IsValid() {
+			local = route.Local.String()
+		}
+		payload.Route = &nativeTURNRoutePayloadV4{Server: route.Server, Local: local, Outcome: route.Outcome}
+	}
+	return payload
 }
 func nativeKnownUint(value uint64) string {
 	if value == 0 {

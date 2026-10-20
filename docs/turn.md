@@ -94,8 +94,18 @@ then application relays. `p2p-only` admits direct traffic only; `relay-only`
 creates no ICE connections. Process admission permits 16 ordinary TURN connections
 and one shared temporary handoff. The handoff admits both endpoints when sender
 and receiver share a process: at most two extra connections and 16 extra socket
-reservations beyond the ordinary 64. Gathering reserves its configured socket
-cost; queued renewals retain the old path while waiting for capacity.
+reservations beyond the ordinary 64. One route plan drives both gathering and
+admission: one initial OS-routed socket per URL, with at most two staggered
+source-bound backups on failure or stalled allocation. Backups acquire capacity
+only when started; failed and unselected routes release it. Proven exits are
+preferred within the current network generation.
+
+Transient channel failures retry the same binding with bounded backoff. Only
+selected paths with active demand can trigger allocation replacement, including
+fixed credentials. Both ends must authenticate a healthy replacement before
+retirement. Efficiency recovery leaves usable indication traffic running;
+suspected allocation-state mismatch has a bounded recovery lifetime. Repeated
+recovery is capped until fresh demand, network change or stable useful progress.
 
 `local_budget_bytes: 0` disables the local limit. Nonzero limits share socket
 usage across all profiles, shares and recipients using that account in one
@@ -112,7 +122,7 @@ credential reuse and other applications mean this is **not an account-wide
 zero-overage guarantee**.
 
 Connection details show the TURN service, health and useful received bytes.
-CLI traces associate issuance, replacement, retirement, selected pairs and
+CLI traces associate route decisions, binding failures, issuance, replacement, retirement, selected pairs and
 socket counters with their service, session, path and available attempt IDs.
 Cleanup distinguishes local protocol completion from a forced deadline; neither
 claims remote deallocation acknowledgment.

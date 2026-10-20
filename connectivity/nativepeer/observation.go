@@ -101,6 +101,14 @@ func (n *NativePeerConnectivity) observeProvider(subject Subject, event provider
 		copy := *event.TURNService
 		event.TURNService = &copy
 	}
+	if event.TURNBinding != nil {
+		copy := *event.TURNBinding
+		event.TURNBinding = &copy
+	}
+	if event.TURNRoute != nil {
+		copy := *event.TURNRoute
+		event.TURNRoute = &copy
+	}
 	n.producer.TryPublish(Observation{Subject: subject, Provider: &event})
 }
 func (n *NativePeerConnectivity) observeSocket(event socketauthority.Event) {

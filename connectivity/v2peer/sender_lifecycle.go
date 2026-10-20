@@ -3,13 +3,14 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/socketauthority"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
@@ -333,6 +334,9 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
 	if attempt.config.turnLease != nil {
 		request.ReplacesPeerPathID = attempt.config.turnLease.ReplacesPeerPathID
+		request.OnTURNRecovery = func(reason turncontrol.RecoveryReason) {
+			attempt.config.turn.Recover([16]byte(attempt.binding().PeerPathID), reason)
+		}
 		relay := attempt.config.turnLease.Relay()
 		request.ICE, err = iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
 		if err != nil {
