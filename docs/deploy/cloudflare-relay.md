@@ -18,18 +18,18 @@ A separate console origin handles owner sign-in, device approval and credentials
    | Secret | `CLOUDFLARE_API_TOKEN` | Deployment token |
    | Secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
    | Secret | `WINDSHARE_OWNER_PASSWORD` | Console password, at least 16 characters |
-   | Variable | `CLOUDFLARE_WORKER_NAME` | Stable lowercase name, at most 55 characters |
+   | Secret | `CLOUDFLARE_WORKER_NAME` | Stable lowercase name, at most 55 characters |
    | Variable | `CLOUDFLARE_RELAY_ENABLED` | `true` |
    | Variable, optional | `CLOUDFLARE_DEPLOYMENT_MODE` | `full` (default) or `relay-only` |
-   | Variable, optional pair | `CLOUDFLARE_RELAY_DOMAIN` | Relay hostname, e.g. `share.example.com` |
+   | Secret, optional pair | `CLOUDFLARE_RELAY_DOMAIN` | Relay hostname, e.g. `share.example.com` |
    | Secret, optional pair | `CLOUDFLARE_ZONE_ID` | That hostname's zone ID |
-   | Variable, optional | `CLOUDFLARE_CONSOLE_DOMAIN` | Console hostname in the same zone; defaults to `console.<relay-hostname>` |
+   | Secret, optional | `CLOUDFLARE_CONSOLE_DOMAIN` | Console hostname in the same zone; defaults to `console.<relay-hostname>` |
 
-3. Enable Actions and run the deployment workflow on `main`. Its summary prints the
-   relay URL, console URL and onboarding command. For workers.dev, the workflow creates
-   `<name>-console` automatically, bound to the relay's access storage. Custom domains
-   route both hostnames to one Worker with managed DNS/TLS.
-4. With [WindShare installed](../installation.md), run the printed command:
+3. Enable Actions and run the deployment workflow on `main`. Find the addresses in
+   the Cloudflare dashboard under the Worker's **Domains & Routes**. For workers.dev,
+   the workflow creates `<name>-console`, bound to the relay's access storage.
+   Custom domains route both hostnames to one Worker with managed DNS/TLS.
+4. With [WindShare installed](../installation.md), use your relay address:
 
    ```sh
    wind relay onboard https://<relay-address>
@@ -43,8 +43,9 @@ A separate console origin handles owner sign-in, device approval and credentials
    `--front-url` when sharing unless a frontend is already saved.
 
 The console supports named manual credentials and a JSON configuration for automation.
-See [sharing defaults](../cli.md#sharing-defaults). Deployment artifacts contain addresses
-and identifiers only. Receiver links never contain access keys; receivers need no account.
+See [sharing defaults](../cli.md#sharing-defaults). Actions masks deployment addresses,
+omits them from summaries, and uploads no address artifact. Local deployments retain
+their onboarding output. Receiver links never contain access keys; receivers need no account.
 
 ## Updates and access management
 

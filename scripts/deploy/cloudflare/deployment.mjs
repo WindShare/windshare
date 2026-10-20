@@ -55,7 +55,7 @@ export function readDeployment(settings, inputs, endpoint) {
 }
 export function validateHostConfig(config) {
   requireValue(config.workers_dev === true && config.preview_urls === false && !config.route && !(config.routes?.length),
-    'Source routing must remain generic; repository Variables select the deployment route.');
+    'Source routing must remain generic; repository Secrets select the deployment route.');
   for (const [name, className] of [[SHARE_BINDING, SHARE_CLASS], [ACCESS_BINDING, ACCESS_CLASS]]) {
     const items = config.durable_objects?.bindings?.filter(item => item.name === name) ?? [];
     requireValue(items.length === 1 && items[0].class_name === className && !items[0].script_name && !items[0].environment,
