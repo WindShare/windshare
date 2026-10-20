@@ -1,4 +1,5 @@
 import { concatBytes, encodeBase64Url, equalBytes } from '../crypto/bytes'
+import { requirePeerSlot } from './peer-slots/slots'
 import { sha256 } from '../crypto/digest'
 import {
   decodeCanonicalCbor,
@@ -16,11 +17,10 @@ import { v2OperationErrorScopeAllowed } from './v2-operation-error-contract'
 import { V2SessionRuntimeError } from './v2-runtime-types'
 
 export const V2_MAXIMUM_PEER_CANDIDATES = 64
-export const V2_MAXIMUM_PEER_CONTINUATION_PATHS = 4
 
 type ContinuationState = 'active' | 'closed' | 'local-cancel' | 'remote-final'
 
-const V2_CONTINUATION_SCHEMA_VERSION = 2n
+const V2_CONTINUATION_SCHEMA_VERSION = 3n
 const V2_OPERATION_ID_BYTES = 16
 const V2_PEER_IDENTITY_BYTES = 16
 const V2_MAXIMUM_OPERATION_BODY_BYTES = 65_536 - 44
@@ -35,6 +35,7 @@ export type V2OperationMessageReservation =
     }
 
 interface PeerBinding {
+  readonly peerSlot: number
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
   readonly attemptSequence: bigint
@@ -42,7 +43,7 @@ interface PeerBinding {
 
 /** Retains only local offer authority when per-operation replay detail is collected. */
 export class V2RetiredPeerContinuations {
-  readonly #paths = new Map<string, {
+  readonly #slots = new Map<number, {
     issuedThrough: bigint
     retiredThrough: bigint
     active: Set<bigint>
@@ -50,27 +51,24 @@ export class V2RetiredPeerContinuations {
 
   admit(binding: Readonly<PeerBinding> | undefined): void {
     if (binding === undefined) return
-    const key = encodeBase64Url(binding.peerPathId)
-    let path = this.#paths.get(key)
-    if (path === undefined) {
-      if (this.#paths.size >= V2_MAXIMUM_PEER_CONTINUATION_PATHS) {
-        throw sessionViolation('Peer continuation path budget is exhausted')
-      }
-      path = { issuedThrough: 0n, retiredThrough: 0n, active: new Set() }
-      this.#paths.set(key, path)
+    const key = requirePeerSlot(BigInt(binding.peerSlot))
+    let slot = this.#slots.get(key)
+    if (slot === undefined) {
+      slot = { issuedThrough: 0n, retiredThrough: 0n, active: new Set() }
+      this.#slots.set(key, slot)
     }
-    if (binding.attemptSequence <= path.issuedThrough) {
+    if (binding.attemptSequence <= slot.issuedThrough) {
       throw new V2SessionRuntimeError('operation', 'Peer attempt sequence was reused or regressed')
     }
-    path.issuedThrough = binding.attemptSequence
-    path.active.add(binding.attemptSequence)
+    slot.issuedThrough = binding.attemptSequence
+    slot.active.add(binding.attemptSequence)
   }
 
   retire(binding: Readonly<PeerBinding> | undefined): void {
     if (binding === undefined) return
-    const path = this.#paths.get(encodeBase64Url(binding.peerPathId))
-    if (path === undefined || !path.active.delete(binding.attemptSequence)) return
-    if (binding.attemptSequence > path.retiredThrough) path.retiredThrough = binding.attemptSequence
+    const slot = this.#slots.get(binding.peerSlot)
+    if (slot === undefined || !slot.active.delete(binding.attemptSequence)) return
+    if (binding.attemptSequence > slot.retiredThrough) slot.retiredThrough = binding.attemptSequence
   }
 
   drops(message: V2SessionMessage): boolean {
@@ -79,22 +77,22 @@ export class V2RetiredPeerContinuations {
       return false
     }
     try {
-      const length = message.kind === V2_MESSAGE_KIND.peerAnswer ? 5 : 8
+      const length = message.kind === V2_MESSAGE_KIND.peerAnswer ? 6 : 9
       const binding = message.kind === V2_MESSAGE_KIND.operationError
         ? decodeV2OperationErrorControl(message.body).peerAttempt
         : decodePeerBinding(message.body, length, 'retired peer continuation')
       if (binding === undefined) return false
-      const path = this.#paths.get(encodeBase64Url(binding.peerPathId))
+      const slot = this.#slots.get(binding.peerSlot)
       // An incoming body can consult a locally established boundary, never create
       // one. A live sequence still requires its exact operation and attempt binding.
-      return path !== undefined && binding.attemptSequence <= path.retiredThrough &&
-        !path.active.has(binding.attemptSequence)
+      return slot !== undefined && binding.attemptSequence <= slot.retiredThrough &&
+        !slot.active.has(binding.attemptSequence)
     } catch {
       return false
     }
   }
 
-  clear(): void { this.#paths.clear() }
+  clear(): void { this.#slots.clear() }
 }
 
 const DROP_RESERVATION = Object.freeze({ disposition: 'drop' as const })
@@ -117,7 +115,7 @@ export class V2OperationContinuationAuthority {
     this.requestKind = requestKind
     if (requestKind === V2_MESSAGE_KIND.peerOffer) {
       try {
-        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 5, 'peer offer')
+        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 6, 'peer offer')
       } catch (cause) {
         throw new V2SessionRuntimeError(
           'operation',
@@ -136,6 +134,7 @@ export class V2OperationContinuationAuthority {
           peerPathId: binding.peerPathId.slice(),
           attemptId: binding.attemptId.slice(),
           attemptSequence: binding.attemptSequence,
+          peerSlot: binding.peerSlot,
         })
   }
 
@@ -276,6 +275,7 @@ export class V2OperationContinuationAuthority {
       if (message.kind === V2_MESSAGE_KIND.operationError) {
         const failure = decodeV2OperationErrorControl(message.body)
         if (expected !== undefined && (failure.peerAttempt === undefined ||
+          failure.peerAttempt.peerSlot !== expected.peerSlot ||
           failure.peerAttempt.attemptSequence !== expected.attemptSequence ||
           !equalBytes(failure.peerAttempt.peerPathId, expected.peerPathId) ||
           !equalBytes(failure.peerAttempt.attemptId, expected.attemptId))) {
@@ -286,10 +286,11 @@ export class V2OperationContinuationAuthority {
       if (expected === undefined) return
       const actual = decodePeerBinding(
         message.body,
-        message.kind === V2_MESSAGE_KIND.peerAnswer ? 5 : 8,
+        message.kind === V2_MESSAGE_KIND.peerAnswer ? 6 : 9,
         message.kind === V2_MESSAGE_KIND.peerAnswer ? 'peer answer' : 'peer candidate',
       )
       if (
+        actual.peerSlot !== expected.peerSlot ||
         actual.attemptSequence !== expected.attemptSequence ||
         !equalBytes(actual.peerPathId, expected.peerPathId) ||
         !equalBytes(actual.attemptId, expected.attemptId)
@@ -348,6 +349,7 @@ function decodePeerBinding(body: Uint8Array, length: number, label: string): Pee
   if (sequence === 0n || sequence > 0xffffffffffffffffn) throw new Error('invalid attempt sequence')
   return Object.freeze({
     attemptSequence: sequence,
+    peerSlot: requirePeerSlot(requireUnsigned(fields[4], 'peer slot')),
     peerPathId: requireBytes(fields[1], V2_PEER_IDENTITY_BYTES, `${label} peer path ID`, true),
     attemptId: requireBytes(fields[2], V2_PEER_IDENTITY_BYTES, `${label} attempt ID`, true),
   })

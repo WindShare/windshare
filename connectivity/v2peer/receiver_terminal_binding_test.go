@@ -321,7 +321,7 @@ func startReceiverPreOperationAttempt(
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := factory.Start(parent, signaling, newReceiverTestLanes())
+	attempt, err := factory.Start(parent, signaling, newReceiverTestLanes(), testPeerSlot(t))
 	if err != nil {
 		t.Fatal(err)
 	}

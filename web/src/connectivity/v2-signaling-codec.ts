@@ -1,5 +1,6 @@
 import { equalBytes } from '../crypto/bytes'
 import { isWellFormedUnicode } from '../protocol/text'
+import { requirePeerSlot, type PeerAttemptOrdinal } from '../session/peer-slots/slots'
 import {
   decodeCanonicalCbor,
   encodeCanonicalCbor,
@@ -9,7 +10,7 @@ import {
   requireUnsigned,
 } from '../protocol/cbor'
 
-export const V2_SIGNALING_SCHEMA_VERSION = 2
+export const V2_SIGNALING_SCHEMA_VERSION = 3
 export const V2_SIGNALING_IDENTITY_BYTES = 16
 export const V2_SIGNALING_MAXIMUM_SDP_BYTES = 60 * 1024
 export const V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES = 4 * 1024
@@ -20,10 +21,9 @@ const MAXIMUM_SIGNALING_BODY_BYTES = 65_536 - 44
 const MAXIMUM_UINT16 = 0xffff
 const TEXT_ENCODER = new TextEncoder()
 
-export interface V2PeerBinding {
+export interface V2PeerBinding extends PeerAttemptOrdinal {
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
-  readonly attemptSequence: bigint
 }
 
 export interface V2PeerDescription extends V2PeerBinding {
@@ -67,6 +67,7 @@ export function encodeV2PeerCandidate(value: V2PeerCandidate): Uint8Array<ArrayB
     binding.peerPathId,
     binding.attemptId,
     binding.attemptSequence,
+    binding.peerSlot,
     requireBoundedText(
       value.candidate,
       V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES,
@@ -84,20 +85,20 @@ export function encodeV2PeerCandidate(value: V2PeerCandidate): Uint8Array<ArrayB
 }
 
 export function decodeV2PeerCandidate(encoded: Uint8Array): V2PeerCandidate {
-  const fields = exactArray(encoded, 8, 'peer candidate')
+  const fields = exactArray(encoded, 9, 'peer candidate')
   const binding = decodePrefix(fields, 'peer candidate')
   return Object.freeze({
     ...binding,
     candidate: requireBoundedText(
-      requireText(fields[4], 'ICE candidate'),
+      requireText(fields[5], 'ICE candidate'),
       V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES,
       false,
       'ICE candidate',
     ),
-    sdpMid: decodeOptionalText(fields[5], V2_SIGNALING_MAXIMUM_MID_BYTES, 'SDP mid'),
-    sdpMLineIndex: decodeOptionalLineIndex(fields[6]),
+    sdpMid: decodeOptionalText(fields[6], V2_SIGNALING_MAXIMUM_MID_BYTES, 'SDP mid'),
+    sdpMLineIndex: decodeOptionalLineIndex(fields[7]),
     usernameFragment: decodeOptionalText(
-      fields[7],
+      fields[8],
       V2_SIGNALING_MAXIMUM_USERNAME_BYTES,
       'ICE username fragment',
     ),
@@ -105,7 +106,7 @@ export function decodeV2PeerCandidate(encoded: Uint8Array): V2PeerCandidate {
 }
 
 export function sameV2PeerBinding(left: V2PeerBinding, right: V2PeerBinding): boolean {
-  return left.attemptSequence === right.attemptSequence && equalBytes(left.peerPathId, right.peerPathId) && equalBytes(left.attemptId, right.attemptId)
+  return left.peerSlot === right.peerSlot && left.attemptSequence === right.attemptSequence && equalBytes(left.peerPathId, right.peerPathId) && equalBytes(left.attemptId, right.attemptId)
 }
 
 function encodeDescription(value: V2PeerDescription): Uint8Array<ArrayBuffer> {
@@ -115,17 +116,18 @@ function encodeDescription(value: V2PeerDescription): Uint8Array<ArrayBuffer> {
     binding.peerPathId,
     binding.attemptId,
     binding.attemptSequence,
+    binding.peerSlot,
     requireBoundedText(value.sdp, V2_SIGNALING_MAXIMUM_SDP_BYTES, false, 'SDP'),
   ])
 }
 
 function decodeDescription(encoded: Uint8Array, label: string): V2PeerDescription {
-  const fields = exactArray(encoded, 5, label)
+  const fields = exactArray(encoded, 6, label)
   const binding = decodePrefix(fields, label)
   return Object.freeze({
     ...binding,
     sdp: requireBoundedText(
-      requireText(fields[4], `${label} SDP`),
+      requireText(fields[5], `${label} SDP`),
       V2_SIGNALING_MAXIMUM_SDP_BYTES,
       false,
       `${label} SDP`,
@@ -151,6 +153,7 @@ function decodePrefix(fields: readonly unknown[], label: string): V2PeerBinding 
     peerPathId: requireBytes(fields[1], V2_SIGNALING_IDENTITY_BYTES, 'peer path ID', true),
     attemptId: requireBytes(fields[2], V2_SIGNALING_IDENTITY_BYTES, 'peer attempt ID', true),
     attemptSequence: requireAttemptSequence(fields[3]),
+    peerSlot: requirePeerSlot(requireUnsigned(fields[4], 'peer slot')),
   })
 }
 
@@ -159,6 +162,7 @@ function snapshotBinding(binding: V2PeerBinding): V2PeerBinding {
     peerPathId: requireBytes(binding.peerPathId, V2_SIGNALING_IDENTITY_BYTES, 'peer path ID', true),
     attemptId: requireBytes(binding.attemptId, V2_SIGNALING_IDENTITY_BYTES, 'peer attempt ID', true),
     attemptSequence: requireAttemptSequence(binding.attemptSequence),
+    peerSlot: requirePeerSlot(requireUnsigned(binding.peerSlot, 'peer slot')),
   })
 }
 

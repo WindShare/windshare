@@ -9,12 +9,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/windshare/windshare/core/session/peerslot"
 	"golang.org/x/text/unicode/norm"
 )
 
 const (
 	IdentityBytes          = 16
-	SignalingSchemaVersion = 2
+	SignalingSchemaVersion = 3
 	MaximumSDPBytes        = 60 << 10
 	MaximumCandidateBytes  = 4 << 10
 	MaximumSDPMidBytes     = 256
@@ -43,13 +44,14 @@ type PeerPathID [IdentityBytes]byte
 type AttemptID [IdentityBytes]byte
 
 type Binding struct {
+	PeerSlot        uint8
 	PeerPathID      PeerPathID
 	AttemptID       AttemptID
 	AttemptSequence uint64
 }
 
 func (binding Binding) Validate() error {
-	if binding.AttemptSequence == 0 || zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
+	if binding.PeerSlot >= peerslot.Count || binding.AttemptSequence == 0 || zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
 		return ErrInvalidSignal
 	}
 	return nil
@@ -152,32 +154,32 @@ func EncodeCandidate(candidate Candidate) ([]byte, error) {
 		return nil, err
 	}
 	return signalEncMode.Marshal([]any{
-		uint64(SignalingSchemaVersion), candidate.Binding.PeerPathID[:], candidate.Binding.AttemptID[:], candidate.Binding.AttemptSequence,
+		uint64(SignalingSchemaVersion), candidate.Binding.PeerPathID[:], candidate.Binding.AttemptID[:], candidate.Binding.AttemptSequence, uint64(candidate.Binding.PeerSlot),
 		candidate.Candidate, candidate.SDPMid, candidate.SDPMLineIndex, candidate.UsernameFragment,
 	})
 }
 
 func DecodeCandidate(encoded []byte) (Candidate, error) {
 	var fields []cbor.RawMessage
-	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 8 {
+	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 9 {
 		return Candidate{}, ErrInvalidSignal
 	}
-	binding, err := decodePrefix(fields[:4])
+	binding, err := decodePrefix(fields[:5])
 	if err != nil {
 		return Candidate{}, err
 	}
 	var candidate Candidate
 	candidate.Binding = binding
-	if err := signalDecMode.Unmarshal(fields[4], &candidate.Candidate); err != nil {
+	if err := signalDecMode.Unmarshal(fields[5], &candidate.Candidate); err != nil {
 		return Candidate{}, ErrInvalidSignal
 	}
-	if candidate.SDPMid, err = decodeOptionalString(fields[5]); err != nil {
+	if candidate.SDPMid, err = decodeOptionalString(fields[6]); err != nil {
 		return Candidate{}, err
 	}
-	if candidate.SDPMLineIndex, err = decodeOptionalUint16(fields[6]); err != nil {
+	if candidate.SDPMLineIndex, err = decodeOptionalUint16(fields[7]); err != nil {
 		return Candidate{}, err
 	}
-	if candidate.UsernameFragment, err = decodeOptionalString(fields[7]); err != nil {
+	if candidate.UsernameFragment, err = decodeOptionalString(fields[8]); err != nil {
 		return Candidate{}, err
 	}
 	if err := validateCandidate(candidate); err != nil {
@@ -192,28 +194,28 @@ func DecodeCandidate(encoded []byte) (Candidate, error) {
 
 func encodeDescription(binding Binding, sdp string) ([]byte, error) {
 	return signalEncMode.Marshal([]any{
-		uint64(SignalingSchemaVersion), binding.PeerPathID[:], binding.AttemptID[:], binding.AttemptSequence, sdp,
+		uint64(SignalingSchemaVersion), binding.PeerPathID[:], binding.AttemptID[:], binding.AttemptSequence, uint64(binding.PeerSlot), sdp,
 	})
 }
 
 func decodeDescription(encoded []byte) (Binding, string, error) {
 	var fields []cbor.RawMessage
-	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 5 {
+	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 6 {
 		return Binding{}, "", ErrInvalidSignal
 	}
-	binding, err := decodePrefix(fields[:4])
+	binding, err := decodePrefix(fields[:5])
 	if err != nil {
 		return Binding{}, "", err
 	}
 	var sdp string
-	if err := signalDecMode.Unmarshal(fields[4], &sdp); err != nil || validateDescription(binding, sdp) != nil {
+	if err := signalDecMode.Unmarshal(fields[5], &sdp); err != nil || validateDescription(binding, sdp) != nil {
 		return Binding{}, "", ErrInvalidSignal
 	}
 	return binding, sdp, nil
 }
 
 func decodePrefix(fields []cbor.RawMessage) (Binding, error) {
-	if len(fields) != 4 {
+	if len(fields) != 5 {
 		return Binding{}, ErrInvalidSignal
 	}
 	var version uint64
@@ -232,7 +234,11 @@ func decodePrefix(fields []cbor.RawMessage) (Binding, error) {
 	if err := signalDecMode.Unmarshal(fields[3], &sequence); err != nil {
 		return Binding{}, ErrInvalidSignal
 	}
-	binding := Binding{PeerPathID: path, AttemptID: attempt, AttemptSequence: sequence}
+	var slot uint8
+	if err := signalDecMode.Unmarshal(fields[4], &slot); err != nil {
+		return Binding{}, ErrInvalidSignal
+	}
+	binding := Binding{PeerSlot: slot, PeerPathID: path, AttemptID: attempt, AttemptSequence: sequence}
 	return binding, binding.Validate()
 }
 
@@ -303,5 +309,5 @@ func zero(value []byte) bool {
 }
 
 func (binding Binding) String() string {
-	return fmt.Sprintf("peer-path=%x attempt=%x sequence=%d", binding.PeerPathID, binding.AttemptID, binding.AttemptSequence)
+	return fmt.Sprintf("peer-slot=%d peer-path=%x attempt=%x sequence=%d", binding.PeerSlot, binding.PeerPathID, binding.AttemptID, binding.AttemptSequence)
 }

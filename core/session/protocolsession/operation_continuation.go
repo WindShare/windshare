@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"sync"
+
+	"github.com/windshare/windshare/core/session/peerslot"
 )
 
 const MaximumOperationContinuations = 1_024
@@ -359,30 +361,32 @@ func clearContinuationReplayLocked(authority *operationAuthority) {
 	clear(authority.continuations.directions)
 }
 
-// PeerAttemptBinding identifies one negotiation within a stable logical path.
-// It contains no signaling or transport capabilities.
+// PeerAttemptBinding identifies one negotiation. PeerSlot is session-scoped;
+// its sequence survives replacement of the physical PeerPathID.
 type PeerAttemptBinding struct {
+	PeerSlot        uint8
 	PeerPathID      [16]byte
 	AttemptID       [16]byte
 	AttemptSequence uint64
 }
 
 func (binding PeerAttemptBinding) valid() bool {
-	return binding.PeerPathID != [16]byte{} && binding.AttemptID != [16]byte{} && binding.AttemptSequence != 0
+	return binding.PeerSlot < peerslot.Count && binding.PeerPathID != [16]byte{} && binding.AttemptID != [16]byte{} && binding.AttemptSequence != 0
 }
 
 func decodePeerAttemptBinding(value any) (PeerAttemptBinding, error) {
 	fields, ok := value.([]any)
-	if !ok || len(fields) != 3 {
+	if !ok || len(fields) != 4 {
 		return PeerAttemptBinding{}, ErrInvalidOperationFailure
 	}
 	path, pathOK := fields[0].([]byte)
 	attempt, attemptOK := fields[1].([]byte)
 	sequence, sequenceOK := fields[2].(uint64)
-	if !pathOK || len(path) != 16 || !attemptOK || len(attempt) != 16 || !sequenceOK {
+	slot, slotOK := fields[3].(uint64)
+	if !pathOK || len(path) != 16 || !attemptOK || len(attempt) != 16 || !sequenceOK || !slotOK || slot >= peerslot.Count {
 		return PeerAttemptBinding{}, ErrInvalidOperationFailure
 	}
-	binding := PeerAttemptBinding{PeerPathID: [16]byte(path), AttemptID: [16]byte(attempt), AttemptSequence: sequence}
+	binding := PeerAttemptBinding{PeerSlot: uint8(slot), PeerPathID: [16]byte(path), AttemptID: [16]byte(attempt), AttemptSequence: sequence}
 	if !binding.valid() {
 		return PeerAttemptBinding{}, ErrInvalidOperationFailure
 	}
@@ -399,9 +403,7 @@ type peerAttemptAuthority interface {
 	PeerAttemptBinding() PeerAttemptBinding
 }
 
-const MaximumPeerContinuationPaths = 4
-
-type retiredPeerPath struct {
+type retiredPeerSlot struct {
 	issuedThrough  uint64
 	retiredThrough uint64
 	active         map[uint64]struct{}
@@ -437,19 +439,16 @@ func (table *OperationTable) admitPeerAttemptLocked(authority *operationAuthorit
 	if !binding.valid() {
 		return ErrContinuationAuthority
 	}
-	path := table.peerPaths[binding.PeerPathID]
-	if path == nil {
-		if len(table.peerPaths) >= MaximumPeerContinuationPaths {
-			return ErrContinuationAuthority
-		}
-		path = &retiredPeerPath{active: make(map[uint64]struct{})}
-		table.peerPaths[binding.PeerPathID] = path
+	slot := table.peerSlots[binding.PeerSlot]
+	if slot == nil {
+		slot = &retiredPeerSlot{active: make(map[uint64]struct{})}
+		table.peerSlots[binding.PeerSlot] = slot
 	}
-	if binding.AttemptSequence <= path.issuedThrough {
+	if binding.AttemptSequence <= slot.issuedThrough {
 		return ErrOperationIDReused
 	}
-	path.issuedThrough = binding.AttemptSequence
-	path.active[binding.AttemptSequence] = struct{}{}
+	slot.issuedThrough = binding.AttemptSequence
+	slot.active[binding.AttemptSequence] = struct{}{}
 	return nil
 }
 
@@ -458,13 +457,13 @@ func (table *OperationTable) retirePeerAttemptLocked(authority *operationAuthori
 	if !ok {
 		return
 	}
-	path := table.peerPaths[binding.PeerPathID]
-	if path == nil {
+	slot := table.peerSlots[binding.PeerSlot]
+	if slot == nil {
 		return
 	}
-	delete(path.active, binding.AttemptSequence)
-	if binding.AttemptSequence > path.retiredThrough {
-		path.retiredThrough = binding.AttemptSequence
+	delete(slot.active, binding.AttemptSequence)
+	if binding.AttemptSequence > slot.retiredThrough {
+		slot.retiredThrough = binding.AttemptSequence
 	}
 }
 
@@ -513,15 +512,15 @@ func (table *OperationTable) dropsRetiredPeerLocked(direction Direction, message
 	if err != nil || !tracked {
 		return false
 	}
-	path := table.peerPaths[binding.PeerPathID]
-	if path == nil {
+	slot := table.peerSlots[binding.PeerSlot]
+	if slot == nil {
 		return false
 	}
-	_, active := path.active[binding.AttemptSequence]
+	_, active := slot.active[binding.AttemptSequence]
 	// A request overtaken on another lane cannot resurrect an older negotiation.
 	// A current sequence still requires its exact operation authority.
-	if message.kind == MessagePeerOffer && binding.AttemptSequence < path.issuedThrough {
+	if message.kind == MessagePeerOffer && binding.AttemptSequence < slot.issuedThrough {
 		return !active
 	}
-	return binding.AttemptSequence <= path.retiredThrough && !active
+	return binding.AttemptSequence <= slot.retiredThrough && !active
 }

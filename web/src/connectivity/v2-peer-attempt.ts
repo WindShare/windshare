@@ -149,8 +149,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   }
 
   createAttempt(context: V2PeerAttemptContext): V2PeerAttemptHandle {
-    const binding = createV2PeerBindingForPath(this.#peerPathIdentity, this.#randomBytes,
-      BigInt(context.sessionAttemptOrdinal))
+    const binding = createV2PeerBindingForPath(this.#peerPathIdentity, context, this.#randomBytes)
     const attemptId = createV2PeerAttemptIdentity(binding.attemptId)
     const controller = new AbortController()
     let cancellationOwner: Parameters<V2PeerAttemptHandle['cancel']>[0] | undefined

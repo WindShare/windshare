@@ -123,8 +123,8 @@ describe('v2 authenticated sender control schemas', () => {
   it('freezes permanent peer failure scope and code bounds', () => {
     const peerError = (code: number, retryable = false) => encodeV2Body(
       new Map<number, unknown>([
-        [0, 2], [1, 5], [2, code], [3, retryable], [4, retryable ? 1 : null],
-        [5, 'Peer negotiation failed'], [6, [identity(8), identity(9), 1n]],
+        [0, 3], [1, 5], [2, code], [3, retryable], [4, retryable ? 1 : null],
+        [5, 'Peer negotiation failed'], [6, [identity(8), identity(9), 1n, 0]],
       ]),
     )
     expect(decodeV2OperationErrorControl(
@@ -143,19 +143,19 @@ describe('v2 authenticated sender control schemas', () => {
   it('validates authenticated peer answer and candidate bounds', () => {
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerAnswer,
-      encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp']),
+      encodeV2Body([3, identity(8), identity(9), 1n, 0, 'answer-sdp']),
     )).not.toThrow()
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerCandidate,
-      encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 0, null]),
+      encodeV2Body([3, identity(8), identity(9), 1n, 0, 'candidate', null, 0, null]),
     )).not.toThrow()
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerAnswer,
-      encodeV2Body([2, identity(8), identity(9), 1n, '']),
+      encodeV2Body([3, identity(8), identity(9), 1n, 0, '']),
     )).toThrow(/empty/i)
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerCandidate,
-      encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 65_536, null]),
+      encodeV2Body([3, identity(8), identity(9), 1n, 0, 'candidate', null, 65_536, null]),
     )).toThrow(/unsigned 16-bit/i)
   })
 
@@ -163,9 +163,9 @@ describe('v2 authenticated sender control schemas', () => {
     const keys = await senderControlKeyPair()
     const operationId = identity(10)
     const binding = controlBinding(0n)
-    const answerBody = encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp'])
+    const answerBody = encodeV2Body([3, identity(8), identity(9), 1n, 0, 'answer-sdp'])
     const candidateBody = encodeV2Body([
-      2, identity(8), identity(9), 1n, 'candidate', 'data', 0, 'windshare',
+      3, identity(8), identity(9), 1n, 0, 'candidate', 'data', 0, 'windshare',
     ])
     const catalogBody = encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(11)]]))
     const answer = await signSenderOperationControl({
@@ -217,7 +217,7 @@ describe('v2 authenticated sender control schemas', () => {
     const keys = await senderControlKeyPair()
     const operationId = identity(12)
     const binding = controlBinding(7n)
-    const answerBody = encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp'])
+    const answerBody = encodeV2Body([3, identity(8), identity(9), 1n, 0, 'answer-sdp'])
     const signed = await signSenderOperationControl({
       kind: V2_MESSAGE_KIND.peerAnswer,
       operationId,
@@ -232,7 +232,7 @@ describe('v2 authenticated sender control schemas', () => {
     const bodyChanged = replaceSignedField(
       signed.message,
       1,
-      [2, identity(8), identity(9), 1n, 'other-answer'],
+      [3, identity(8), identity(9), 1n, 0, 'other-answer'],
     )
     await expect(verifyV2SenderControl(bodyChanged, binding, createEd25519Verifier(keys.publicKey))).rejects
       .toThrow(/signature/i)
@@ -240,7 +240,7 @@ describe('v2 authenticated sender control schemas', () => {
     const wrongSemanticType = await signSenderOperationControl({
       kind: V2_MESSAGE_KIND.peerAnswer,
       operationId,
-      semanticBody: encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 0, null]),
+      semanticBody: encodeV2Body([3, identity(8), identity(9), 1n, 0, 'candidate', null, 0, null]),
       binding,
       privateKey: keys.privateKey,
     })

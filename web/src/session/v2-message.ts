@@ -1,4 +1,5 @@
 import { validateV2PeerPathControlBody } from '../connectivity/v2-path-control-codec'
+import { requirePeerSlot } from './peer-slots/slots'
 import { concatBytes, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
@@ -206,6 +207,7 @@ export interface V2ScanProgress {
 }
 
 export interface V2PeerAttemptBinding {
+  readonly peerSlot: number
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
   readonly attemptSequence: bigint
@@ -225,7 +227,7 @@ export function decodeV2OperationErrorControl(body: Uint8Array): V2OperationErro
   const peer = decoded instanceof Map && requireUnsigned(decoded.get(1), 'operation error scope') === 5n
   const fields = requireNumericMap(decoded, peer ? [0, 1, 2, 3, 4, 5, 6] : [0, 1, 2, 3, 4, 5], 'operation error')
   if (peer) {
-    if (requireUnsigned(fields.get(0), 'peer operation error schema') !== 2n) throw new V2MessageError('Invalid peer operation error schema')
+    if (requireUnsigned(fields.get(0), 'peer operation error schema') !== 3n) throw new V2MessageError('Invalid peer operation error schema')
   } else {
     requireSchema(fields.get(0), 'operation error')
   }
@@ -246,14 +248,15 @@ export function decodeV2OperationErrorControl(body: Uint8Array): V2OperationErro
 }
 
 function decodeErrorPeerAttempt(value: unknown): V2PeerAttemptBinding {
-  const fields = requireArray(value, 3, 'peer operation error binding')
-  if (fields.length !== 3) throw new V2MessageError('Invalid peer operation error binding')
+  const fields = requireArray(value, 4, 'peer operation error binding')
+  if (fields.length !== 4) throw new V2MessageError('Invalid peer operation error binding')
   const attemptSequence = requireUnsigned(fields[2], 'peer attempt sequence')
   if (attemptSequence === 0n || attemptSequence > 0xffffffffffffffffn) throw new V2MessageError('Invalid peer attempt sequence')
   return Object.freeze({
     peerPathId: requireBytes(fields[0], 16, 'peer path ID', true),
     attemptId: requireBytes(fields[1], 16, 'peer attempt ID', true),
     attemptSequence,
+    peerSlot: requirePeerSlot(requireUnsigned(fields[3], 'peer slot')),
   })
 }
 
@@ -541,18 +544,18 @@ function validateLeaseTiming(ttlValue: unknown, renewValue: unknown, label: stri
 }
 
 function validatePeerAnswer(body: Uint8Array): void {
-  const fields = requireExactArray(body, 5, 'peer answer')
+  const fields = requireExactArray(body, 6, 'peer answer')
   validatePeerBinding(fields, 'peer answer')
-  requireNormalizedText(fields[4], MAXIMUM_SIGNALING_SDP_BYTES, false, 'peer answer SDP')
+  requireNormalizedText(fields[5], MAXIMUM_SIGNALING_SDP_BYTES, false, 'peer answer SDP')
 }
 
 function validatePeerCandidate(body: Uint8Array): void {
-  const fields = requireExactArray(body, 8, 'peer candidate')
+  const fields = requireExactArray(body, 9, 'peer candidate')
   validatePeerBinding(fields, 'peer candidate')
-  requireNormalizedText(fields[4], MAXIMUM_SIGNALING_CANDIDATE_BYTES, false, 'ICE candidate')
-  requireOptionalNormalizedText(fields[5], MAXIMUM_SIGNALING_TEXT_BYTES, 'SDP mid')
-  if (fields[6] !== null) requireUint16(fields[6], 'SDP m-line index')
-  requireOptionalNormalizedText(fields[7], MAXIMUM_SIGNALING_TEXT_BYTES, 'ICE username fragment')
+  requireNormalizedText(fields[5], MAXIMUM_SIGNALING_CANDIDATE_BYTES, false, 'ICE candidate')
+  requireOptionalNormalizedText(fields[6], MAXIMUM_SIGNALING_TEXT_BYTES, 'SDP mid')
+  if (fields[7] !== null) requireUint16(fields[7], 'SDP m-line index')
+  requireOptionalNormalizedText(fields[8], MAXIMUM_SIGNALING_TEXT_BYTES, 'ICE username fragment')
 }
 
 function requireExactArray(body: Uint8Array, length: number, label: string): readonly unknown[] {
@@ -562,7 +565,7 @@ function requireExactArray(body: Uint8Array, length: number, label: string): rea
 }
 
 function validatePeerBinding(fields: readonly unknown[], label: string): void {
-  if (requireUnsigned(fields[0], label) !== 2n) {
+  if (requireUnsigned(fields[0], label) !== 3n) {
     throw new V2MessageError('invalid peer schema')
   }
   const sequence = requireUnsigned(fields[3], 'attempt sequence')
@@ -571,6 +574,7 @@ function validatePeerBinding(fields: readonly unknown[], label: string): void {
   }
   requireBytes(fields[1], 16, `${label} peer path ID`, true)
   requireBytes(fields[2], 16, `${label} attempt ID`, true)
+  requirePeerSlot(requireUnsigned(fields[4], 'peer slot'))
 }
 
 function requireOptionalNormalizedText(value: unknown, maximumBytes: number, label: string): void {

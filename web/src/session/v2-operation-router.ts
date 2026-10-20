@@ -104,6 +104,7 @@ export class V2OperationQueue implements V2SessionOperation {
   }
 
   peerBinding(): Readonly<{
+    peerSlot: number
     peerPathId: Uint8Array<ArrayBuffer>
     attemptId: Uint8Array<ArrayBuffer>
     attemptSequence: bigint
