@@ -25,7 +25,7 @@ func encode(config Config) ([]byte, error) {
 	if err := config.validateFields(); err != nil {
 		return nil, err
 	}
-	disk := document{FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, Pending: config.Pending}
+	disk := document{ManagedTURN: config.ManagedTURN, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, Pending: config.Pending}
 	if len(config.TURN.Accounts) > 0 || len(config.TURN.Profiles) > 0 {
 		disk.TURN = &config.TURN
 	}

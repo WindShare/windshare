@@ -1,0 +1,56 @@
+{
+  "scenario": "cloudflare-managed-turn",
+  "date": "2026-10-20",
+  "deploymentId": "f266b0cb-117e-4032-9675-80780367af32",
+  "serviceId": "cf-eiTQ63bDgX3BUiQS0Qf2KQ",
+  "provisioning": {
+    "intentBeforeCreation": true,
+    "secretBeforePublication": true,
+    "rerunReusedKey": true
+  },
+  "onboarding": {
+    "command": "wind relay onboard",
+    "managedReferenceSaved": true
+  },
+  "transfers": [
+    {
+      "transport": "udp",
+      "replacement": false,
+      "verifiedBytes": 524288,
+      "nativeCandidate": "relay",
+      "browserCandidate": "relay"
+    },
+    {
+      "transport": "udp",
+      "replacement": true,
+      "verifiedBytes": 524288,
+      "nativeCandidate": "relay",
+      "browserCandidate": "relay"
+    },
+    {
+      "transport": "tls",
+      "replacement": false,
+      "verifiedBytes": 524288,
+      "nativeCandidate": "relay",
+      "browserCandidate": "relay"
+    },
+    {
+      "transport": "tls",
+      "replacement": true,
+      "verifiedBytes": 524288,
+      "nativeCandidate": "relay",
+      "browserCandidate": "relay"
+    }
+  ],
+  "disabledAfterRedeploy": true,
+  "leases": {
+    "revoked": 4,
+    "active": 0,
+    "revocationPending": 0
+  },
+  "cleanup": {
+    "turnKeyAbsent": true,
+    "relayWorkerAbsent": true,
+    "consoleWorkerAbsent": true
+  }
+}

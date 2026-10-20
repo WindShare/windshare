@@ -1439,6 +1439,7 @@ dependencies = [
  "sha2",
  "url",
  "wasm-bindgen",
+ "web-sys",
  "windshare-relay-access",
  "windshare-relay-core",
  "worker",

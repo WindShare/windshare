@@ -1,6 +1,6 @@
 import { FULL_DEPLOYMENT } from './configuration.mjs';
 
-const PUBLIC_FIELDS = new Set(['kind', 'deploymentId', 'namespaceId', 'accessNamespaceId', 'revision']);
+const PUBLIC_FIELDS = new Set(['kind', 'deploymentId', 'namespaceId', 'accessNamespaceId', 'revision', 'serviceId', 'attempt', 'keyId', 'reason']);
 const ADDRESS_FIELDS = ['endpoint', 'consoleEndpoint', 'consoleUrl', 'frontendUrl'];
 
 export function deploymentReporter({ githubActions, operationId, mode, write = console.log }) {
@@ -36,7 +36,10 @@ export function deploymentReporter({ githubActions, operationId, mode, write = c
 }
 
 export function deploymentReport(result, { githubActions, mode, revision, outputDirectory }) {
-  const heading = ['### WindShare Cloudflare deployment', '', 'Mode: ' + mode, ''];
+  const heading = ['### WindShare Cloudflare deployment', '', 'Mode: ' + mode, '',
+    result.turn?.status === 'incomplete' ? 'TURN setup incomplete: ' + result.turn.reason + ' Rerun deployment to retry.' :
+      'Managed TURN is available automatically when enabled in the console. Cloudflare Realtime usage is billed separately.',
+    'Local TURN budgets default to unlimited and apply per Engine; they are not account-wide spending caps.', ''];
   const frontendUrl = mode === FULL_DEPLOYMENT ? result.state.endpoint : null;
   const onboarding = 'wind relay onboard ' + result.state.endpoint;
   // A caller-owned destination is private output, independent of public CI logs.
@@ -46,7 +49,7 @@ export function deploymentReport(result, { githubActions, mode, revision, output
     data: {
       endpoint: result.state.endpoint, consoleUrl: result.state.consoleEndpoint, onboarding,
       deploymentId: result.state.deploymentId, namespaceId: result.namespaceId, accessNamespaceId: result.accessNamespaceId,
-      revision, mode, frontendUrl,
+      revision, mode, frontendUrl, turn: result.turn,
     },
   } : null;
   if (githubActions) return {

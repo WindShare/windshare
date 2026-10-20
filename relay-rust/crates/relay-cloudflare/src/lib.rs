@@ -5,6 +5,8 @@ mod config;
 mod persistence;
 #[cfg(any(target_arch = "wasm32", test))]
 mod runtime;
+#[cfg(any(target_arch = "wasm32", test))]
+mod turn;
 
 #[cfg(target_arch = "wasm32")]
 mod platform;

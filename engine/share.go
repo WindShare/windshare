@@ -56,8 +56,14 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	}
 	current, err := start(engine, ctx, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		engine.mu.Lock()
-		dependencies.TURN = engine.turn
+		addresses := make([]string, 0, len(request.Relays))
+		for _, relay := range request.Relays {
+			addresses = append(addresses, relay.PublicURL)
+		}
+		dependencies.TURN = engine.turn.Select(addresses)
 		engine.mu.Unlock()
+		stopDiscovery := engine.turnServices.Watch(ctx, request.Relays)
+		defer stopDiscovery()
 		dependencies.Control = control
 		return share.Run(ctx, request, dependencies)
 	})

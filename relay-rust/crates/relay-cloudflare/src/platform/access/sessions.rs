@@ -30,13 +30,22 @@ impl AccessObject {
         Ok(Digest::of(password.as_bytes()))
     }
     pub(super) fn rate_limit(db: &Database, scope: &str, limit: u32, now: u64) -> Result<bool> {
+        Self::rate_limit_window(db, scope, limit, now, ATTEMPT_WINDOW_MS)
+    }
+    pub(super) fn rate_limit_window(
+        db: &Database,
+        scope: &str,
+        limit: u32,
+        now: u64,
+        window_ms: u64,
+    ) -> Result<bool> {
         let name = format!("attempt:{scope}");
         let mut attempts = db
             .get::<Attempts>(&name)?
             .filter(|a| a.expires_at > now)
             .unwrap_or_else(|| Attempts {
                 count: 0,
-                expires_at: now.saturating_add(ATTEMPT_WINDOW_MS),
+                expires_at: now.saturating_add(window_ms),
             });
         if attempts.count >= limit {
             return Ok(false);
