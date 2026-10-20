@@ -82,10 +82,6 @@ impl AccessObject {
         {
             configuration["front_url"] = json!(frontend.to_string());
         }
-        let managed = self.turn_reference(db)?;
-        if !managed.is_null() {
-            configuration["managed_turn"] = json!([managed]);
-        }
         reply(
             &json!({"credential":credential_view(&credential),"access_key":access_key,"configuration":configuration}),
             201,

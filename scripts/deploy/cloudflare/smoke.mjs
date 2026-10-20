@@ -82,7 +82,7 @@ try {
   command('go', ['run', './cmd/wind', 'config', 'import', '-', '--front-url', before.frontendUrl], JSON.stringify(credential.configuration));
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
   assert.equal(imported.profiles[0].url, before.endpoint);
-  assert.equal(imported.managed_turn[0].service_id, before.turn.serviceId);
+  assert.equal(imported.managed_turn, undefined);
   env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
   env.WINDSHARE_TURN_TRIAL_CONFIGURATION = savedConfig;
   command(process.execPath, ['web/scripts/browser-network-matrix/run-turn-trial.mjs']);

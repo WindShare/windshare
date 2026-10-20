@@ -1,6 +1,6 @@
 //go:build darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris
 
-package relayconfig
+package statefile
 
 import (
 	"errors"

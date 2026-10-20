@@ -1,11 +1,10 @@
-// Package turnservice discovers deployment-owned TURN authority independently
-// of application-relay connectivity. It never issues credentials during discovery.
+// Package turnservice shares demand-driven TURN discovery within one Engine.
 package turnservice
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -20,21 +19,41 @@ import (
 
 const RefreshInterval = time.Minute
 
-type Store interface {
-	Update(context.Context, func(*relayconfig.Config) error) (relayconfig.Config, error)
+type Cache interface {
+	Load(senderrelay.Candidate) (*turnprovider.Capability, error)
+	Save(context.Context, senderrelay.Candidate, turnprovider.Capability, time.Time) error
+}
+type service struct {
+	refresh    sync.Mutex
+	candidate  senderrelay.Candidate
+	capability *turnprovider.Capability
+	dirty      bool
+	generation uint64
+	cancel     context.CancelFunc
+	done       chan struct{}
+}
+type publishedAuthority struct {
+	address, accessKey, serviceID string
+	budget                        uint64
 }
 type Registry struct {
 	mu           sync.Mutex
 	accounts     *turnaccount.Manager
 	dependencies turnconfig.Dependencies
-	store        Store
-	references   []turnconfig.ManagedService
-	persisted    []turnconfig.ManagedService
-	profiles     map[string]senderrelay.Candidate
+	cache        Cache
+	entries      map[string]*service
+	budgets      map[string]uint64
+	demand       map[string]int
+	workers      sync.WaitGroup
+	closed       bool
+	published    []publishedAuthority
 }
 
-func New(accounts *turnaccount.Manager, dependencies turnconfig.Dependencies, store Store) *Registry {
-	return &Registry{accounts: accounts, dependencies: dependencies, store: store, profiles: make(map[string]senderrelay.Candidate)}
+func New(accounts *turnaccount.Manager, dependencies turnconfig.Dependencies, cache Cache) *Registry {
+	if dependencies.Now == nil {
+		dependencies.Now = time.Now
+	}
+	return &Registry{accounts: accounts, dependencies: dependencies, cache: cache, entries: make(map[string]*service), budgets: make(map[string]uint64), demand: make(map[string]int)}
 }
 func addressKey(address string) string {
 	endpoint, err := v2.NormalizeRelayEndpoint(address)
@@ -43,104 +62,130 @@ func addressKey(address string) string {
 	}
 	return endpoint.DialURL
 }
+func eligible(candidate senderrelay.Candidate) bool {
+	if candidate.AccessKey == "" || candidate.Validate() != nil {
+		return false
+	}
+	_, err := turnprovider.ManagedEndpoint(candidate.PublicURL)
+	return err == nil
+}
+func (registry *Registry) newService(candidate senderrelay.Candidate) *service {
+	current := &service{candidate: candidate}
+	if registry.cache != nil {
+		capability, err := registry.cache.Load(candidate)
+		if err != nil {
+			registry.trace(candidate, "", "cache_unavailable", err)
+		}
+		if capability != nil && turnprovider.ValidServiceID(capability.ServiceID) {
+			current.capability = capability
+		}
+	}
+	return current
+}
 func (registry *Registry) Configure(config relayconfig.Config) error {
-	if len(config.ManagedTURN) > relayconfig.MaximumProfiles {
-		return relayconfig.ErrConfig
+	if config.Profiles == nil {
+		config.Profiles = []senderrelay.Candidate{}
 	}
-	profiles := make(map[string]senderrelay.Candidate, len(config.Profiles))
-	for _, profile := range config.Profiles {
-		if profile.Validate() != nil {
-			return relayconfig.ErrConfig
-		}
-		profiles[addressKey(profile.PublicURL)] = profile
-	}
-	seen, addresses := map[string]bool{}, map[string]bool{}
-	for _, reference := range config.ManagedTURN {
-		if reference.Validate() != nil || seen[reference.ServiceID] || addresses[addressKey(reference.RelayURL)] ||
-			profiles[addressKey(reference.RelayURL)].AccessKey == "" {
-			return relayconfig.ErrConfig
-		}
-		seen[reference.ServiceID] = true
-		addresses[addressKey(reference.RelayURL)] = true
+	if err := config.Validate(); err != nil {
+		return err
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if err := registry.publish(config.ManagedTURN, profiles); err != nil {
+	if registry.closed {
+		return errors.New("TURN discovery is closed")
+	}
+	entries := make(map[string]*service)
+	budgets := make(map[string]uint64)
+	for _, policy := range config.ManagedTURNPolicies {
+		budgets[addressKey(policy.RelayURL)] = policy.LocalBudgetBytes
+	}
+	seen := make(map[string]bool)
+	for _, candidate := range config.Profiles {
+		if !eligible(candidate) {
+			continue
+		}
+		address := addressKey(candidate.PublicURL)
+		current := registry.entries[address]
+		if current == nil || current.candidate.AccessKey != candidate.AccessKey {
+			next := registry.newService(candidate)
+			if current != nil {
+				registry.stopLocked(current)
+				// Retain the request serializer while changing authority generations.
+				current.candidate, current.capability, current.dirty = next.candidate, next.capability, false
+			} else {
+				current = next
+			}
+		}
+		if current.capability != nil {
+			if seen[current.capability.ServiceID] {
+				current.capability = nil
+			} else {
+				seen[current.capability.ServiceID] = true
+			}
+		}
+		entries[address] = current
+	}
+	for address, current := range registry.entries {
+		if entries[address] != current {
+			registry.stopLocked(current)
+		}
+	}
+	registry.entries, registry.budgets = entries, budgets
+	if err := registry.publish(); err != nil {
 		return err
 	}
-	registry.references = slices.Clone(config.ManagedTURN)
-	registry.persisted = slices.Clone(config.ManagedTURN)
-	registry.profiles = profiles
+	for address, current := range registry.entries {
+		if registry.demand[address] > 0 && current.cancel == nil {
+			registry.startLocked(current)
+		}
+	}
 	return nil
 }
-func (registry *Registry) publish(references []turnconfig.ManagedService, profiles map[string]senderrelay.Candidate) error {
+
+func (registry *Registry) publish() error {
+	addresses := make([]string, 0, len(registry.entries))
+	for address := range registry.entries {
+		addresses = append(addresses, address)
+	}
+	slices.Sort(addresses)
 	var services []turnaccount.ManagedService
-	for _, reference := range references {
-		if !reference.Enabled {
+	var published []publishedAuthority
+	for _, address := range addresses {
+		current := registry.entries[address]
+		if current.capability == nil || !current.capability.Enabled {
 			continue
 		}
-		profile := profiles[addressKey(reference.RelayURL)]
-		if profile.AccessKey == "" {
-			continue
-		}
-		source, err := turnprovider.NewRemote(turnprovider.RemoteConfig{RelayURL: reference.RelayURL,
-			AccessKey: profile.AccessKey, ServiceID: reference.ServiceID,
-			Client: registry.dependencies.Client, Now: registry.dependencies.Now})
+		published = append(published, publishedAuthority{address: address, accessKey: current.candidate.AccessKey, serviceID: current.capability.ServiceID, budget: registry.budgets[address]})
+		source, err := turnprovider.NewRemote(turnprovider.RemoteConfig{
+			RelayURL: current.candidate.PublicURL, AccessKey: current.candidate.AccessKey,
+			ServiceID: current.capability.ServiceID, Client: registry.dependencies.Client, Now: registry.dependencies.Now,
+		})
 		if err != nil {
 			return err
 		}
-		services = append(services, turnaccount.ManagedService{ID: reference.ServiceID, RelayURL: reference.RelayURL,
-			LocalBudgetBytes: reference.LocalBudgetBytes, Source: source})
+		services = append(services, turnaccount.ManagedService{ID: current.capability.ServiceID, RelayURL: current.candidate.PublicURL,
+			LocalBudgetBytes: registry.budgets[address], Source: source})
 	}
-	return registry.accounts.SetManagedServices(services)
+	if slices.Equal(registry.published, published) {
+		return nil
+	}
+	if err := registry.accounts.SetManagedServices(services); err != nil {
+		return err
+	}
+	registry.published = published
+	return nil
 }
 
-// Watch follows the configured candidates, including disconnected relays. Its
-// lifetime belongs to the share task; neither link publication nor content waits.
-func (registry *Registry) Watch(ctx context.Context, candidates []senderrelay.Candidate) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	var work sync.WaitGroup
+func (registry *Registry) Close() {
 	registry.mu.Lock()
-	profiles := maps.Clone(registry.profiles)
-	changed := false
-	for _, candidate := range candidates {
-		if candidate.AccessKey != "" {
-			address := addressKey(candidate.PublicURL)
-			changed = changed || profiles[address].AccessKey != candidate.AccessKey
-			profiles[address] = candidate
-		}
-	}
-	if changed {
-		if err := registry.publish(registry.references, profiles); err != nil {
-			slog.Debug("managed TURN authority update failed", "reason", err)
-		} else {
-			registry.profiles = profiles
-		}
+	registry.closed = true
+	for _, current := range registry.entries {
+		registry.stopLocked(current)
 	}
 	registry.mu.Unlock()
-	for _, candidate := range candidates {
-		if candidate.AccessKey == "" {
-			continue
-		}
-		if _, err := turnprovider.ManagedEndpoint(candidate.PublicURL); err != nil {
-			continue
-		}
-		work.Go(func() {
-			ticker := time.NewTicker(RefreshInterval)
-			defer ticker.Stop()
-			for {
-				registry.Refresh(ctx, candidate)
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-				}
-			}
-		})
-	}
-	return func() { cancel(); work.Wait() }
+	registry.workers.Wait()
 }
 func (registry *Registry) trace(candidate senderrelay.Candidate, serviceID, milestone string, err error) {
-	slog.Debug("managed TURN discovery", "relay_url", candidate.PublicURL, "service_id", serviceID,
+	slog.Debug("managed TURN discovery", "relay_url", addressKey(candidate.PublicURL), "service_id", serviceID,
 		"milestone", milestone, "reason", err)
 }

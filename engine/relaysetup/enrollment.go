@@ -5,11 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/turnprovider"
 	"net/http"
 	"net/url"
-
-	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 type enrollmentResponse struct {
@@ -25,11 +25,11 @@ type credentialResponse struct {
 }
 
 func encode(bytes []byte) string { return base64.RawURLEncoding.EncodeToString(bytes) }
-func claimant(pending *relayconfig.PendingSetup) map[string]string {
-	return map[string]string{"enrollment_id": pending.EnrollmentID, "claim_secret": pending.ClaimSecret}
+func claimant(pending *PendingSetup) map[string]string {
+	return map[string]string{"enrollment_id": pending.enrollment().ID, "claim_secret": pending.ClaimSecret}
 }
-func (service *Service) continueEnrollment(ctx context.Context, saved relayconfig.Config, progress func(Progress), noBrowser bool) (Result, error) {
-	if saved.Pending.State == relayconfig.SetupCancelling {
+func (service *Service) continueEnrollment(ctx context.Context, saved Snapshot, progress func(Progress), noBrowser bool) (Result, error) {
+	if saved.Pending.phase.stage() == (cancelling{}).stage() {
 		if err := service.finishCancellation(ctx, saved.Pending); err != nil {
 			return Result{}, err
 		}
@@ -38,15 +38,15 @@ func (service *Service) continueEnrollment(ctx context.Context, saved relayconfi
 	return service.enroll(ctx, saved, progress, noBrowser)
 }
 
-func (service *Service) enroll(ctx context.Context, saved relayconfig.Config, progress func(Progress), noBrowser bool) (result Result, resultErr error) {
+func (service *Service) enroll(ctx context.Context, saved Snapshot, progress func(Progress), noBrowser bool) (result Result, resultErr error) {
 	pending := saved.Pending
 	defer func() {
 		if errors.Is(resultErr, ErrExpired) {
-			service.emit(progress, Progress{Stage: "expired", OperationID: pending.OperationID, EnrollmentID: pending.EnrollmentID})
+			service.emit(progress, Progress{Stage: "expired", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 			resultErr = errors.Join(resultErr, service.clearPending(ctx, pending))
 		}
 	}()
-	if pending.EnrollmentID == "" {
+	if pending.enrollment().ID == "" {
 		var err error
 		saved, err = service.requestEnrollment(ctx, saved)
 		if err != nil {
@@ -54,17 +54,17 @@ func (service *Service) enroll(ctx context.Context, saved relayconfig.Config, pr
 		}
 		pending = saved.Pending
 	}
-	if pending.State == relayconfig.SetupInstalling {
+	if pending.phase.stage() == (installing{}).stage() {
 		return service.confirm(ctx, saved, progress)
 	}
-	if service.dependencies.Now().UnixMilli() >= pending.ExpiresAt {
+	if service.dependencies.Now().UnixMilli() >= pending.enrollment().ExpiresAt {
 		return Result{}, ErrExpired
 	}
-	event := Progress{Stage: "approval_required", OperationID: pending.OperationID, EnrollmentID: pending.EnrollmentID,
-		VerificationURL: pending.VerificationURL, UserCode: pending.UserCode}
+	event := Progress{Stage: "approval_required", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID,
+		VerificationURL: pending.enrollment().VerificationURL, UserCode: pending.enrollment().UserCode}
 	service.emit(progress, event)
 	if !noBrowser && service.dependencies.OpenBrowser != nil {
-		if err := service.dependencies.OpenBrowser(ctx, pending.VerificationURL); err != nil {
+		if err := service.dependencies.OpenBrowser(ctx, pending.enrollment().VerificationURL); err != nil {
 			event.Stage = "browser_unavailable"
 			service.emit(progress, event)
 		}
@@ -76,11 +76,15 @@ func (service *Service) enroll(ctx context.Context, saved relayconfig.Config, pr
 	pending = claimed.Pending
 	return service.confirm(ctx, claimed, progress)
 }
-func (service *Service) confirm(ctx context.Context, saved relayconfig.Config, progress func(Progress)) (Result, error) {
+func (service *Service) confirm(ctx context.Context, saved Snapshot, progress func(Progress)) (Result, error) {
 	pending := saved.Pending
 	var response struct {
-		ManagedTURN []turnconfig.ManagedService `json:"managed_turn"`
+		Services []struct {
+			turnprovider.Capability
+			RelayURL string `json:"relay_url"`
+		} `json:"managed_turn"`
 	}
+	requestedAt := service.dependencies.Now()
 	for {
 		current, err := service.dependencies.Store.Load()
 		if err != nil {
@@ -88,7 +92,7 @@ func (service *Service) confirm(ctx context.Context, saved relayconfig.Config, p
 		}
 		if _, err := pendingInstallation(current, pending); err != nil {
 			service.dependencies.Log.Info("relay_installation_preflight_failed", "operation_id", pending.OperationID,
-				"enrollment_id", pending.EnrollmentID, "reason", err)
+				"enrollment_id", pending.enrollment().ID, "reason", err)
 			return Result{}, err
 		}
 		err = service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments/installed"), claimant(pending), &response)
@@ -99,51 +103,62 @@ func (service *Service) confirm(ctx context.Context, saved relayconfig.Config, p
 		if !errors.As(err, &failure) || !failure.temporary() {
 			return Result{}, err
 		}
-		service.emit(progress, Progress{Stage: failure.ErrorCode, OperationID: pending.OperationID, EnrollmentID: pending.EnrollmentID, RetryAfter: failure.delay()})
+		service.emit(progress, Progress{Stage: failure.ErrorCode, OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID, RetryAfter: failure.delay()})
 		if err := service.dependencies.Wait(ctx, failure.delay()); err != nil {
 			return Result{}, err
 		}
 	}
-	committed, err := service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
+	committed, err := service.dependencies.Store.Update(ctx, func(current *Snapshot) error {
 		next, err := pendingInstallation(*current, pending)
 		if err == nil {
-			installManagedService(&next, pending.RelayURL, response.ManagedTURN)
-			*current = next
+			current.Config, current.Pending = next, nil
 		}
 		return err
 	})
 	if err != nil {
 		service.dependencies.Log.Info("relay_installation_commit_failed", "operation_id", pending.OperationID,
-			"enrollment_id", pending.EnrollmentID, "credential_id", pending.CredentialID, "reason", err)
+			"enrollment_id", pending.enrollment().ID, "credential_id", pending.credential().ID, "reason", err)
 		return Result{}, err
 	}
-	service.emit(progress, Progress{Stage: "installed", OperationID: pending.OperationID, EnrollmentID: pending.EnrollmentID})
+	if service.dependencies.Cache != nil && len(response.Services) == 1 {
+		discovered := response.Services[0]
+		if sameRelay(discovered.RelayURL, pending.RelayURL) && turnprovider.ValidServiceID(discovered.ServiceID) {
+			candidate := senderrelay.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
+			if err := service.dependencies.Cache.Save(ctx, candidate, discovered.Capability, requestedAt); err != nil {
+				service.dependencies.Log.Debug("relay_setup_cache_failed", "operation_id", pending.OperationID, "reason", err)
+			}
+		}
+	}
+	service.emit(progress, Progress{Stage: "installed", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 	service.dependencies.Log.Info("relay_configuration_installed", "operation_id", pending.OperationID,
-		"enrollment_id", pending.EnrollmentID, "credential_id", pending.CredentialID, "relay_url", pending.RelayURL)
-	return installationResult(committed, pending.RelayURL, pending.CredentialID), nil
+		"enrollment_id", pending.enrollment().ID, "credential_id", pending.credential().ID, "relay_url", pending.RelayURL)
+	return installationResult(committed.Config, pending.RelayURL, pending.credential().ID), nil
 }
 
-func (service *Service) requestEnrollment(ctx context.Context, saved relayconfig.Config) (relayconfig.Config, error) {
+func (service *Service) requestEnrollment(ctx context.Context, saved Snapshot) (Snapshot, error) {
 	pending := saved.Pending
 	secret, err := base64.RawURLEncoding.DecodeString(pending.ClaimSecret)
-	if err != nil || len(secret) != 32 {
-		return relayconfig.Config{}, relayconfig.ErrConfig
+	if err != nil || len(secret) != claimSecretBytes {
+		return Snapshot{}, relayconfig.ErrConfig
 	}
 	digest := sha256.Sum256(secret)
 	var response enrollmentResponse
 	if err := service.call(ctx, http.MethodPost, endpoint(pending.ConsoleURL, "enrollments"),
 		map[string]string{"device_name": pending.DeviceName, "claim_digest": encode(digest[:])}, &response); err != nil {
-		return relayconfig.Config{}, err
+		return Snapshot{}, err
 	}
 	parsed, parseErr := url.Parse(response.VerificationURL)
 	console, _ := url.Parse(pending.ConsoleURL)
 	if parseErr != nil || parsed.User != nil || parsed.Scheme != console.Scheme || parsed.Host != console.Host ||
-		response.ID == "" || response.UserCode == "" || response.IntervalMS < 1_000 || response.IntervalMS > 30_000 ||
+		response.ID == "" || response.UserCode == "" || response.IntervalMS < minimumPollIntervalMS || response.IntervalMS > maximumPollIntervalMS ||
 		response.ExpiresAt <= service.dependencies.Now().UnixMilli() {
-		return relayconfig.Config{}, errors.New("invalid enrollment response")
+		return Snapshot{}, errors.New("invalid enrollment response")
 	}
-	return service.checkpoint(ctx, pending, func(current *relayconfig.PendingSetup) {
-		current.EnrollmentID, current.UserCode = response.ID, response.UserCode
-		current.VerificationURL, current.ExpiresAt, current.IntervalMS = response.VerificationURL, response.ExpiresAt, response.IntervalMS
+	return service.checkpoint(ctx, pending, func(*PendingSetup) setupPhase {
+		return awaiting{Enrollment: enrollment(response)}
 	})
+}
+
+func credentialValue(value credentialResponse) credential {
+	return credential(value)
 }

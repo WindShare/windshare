@@ -2,17 +2,11 @@ package relayconfig
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 )
 
 const (
-	privateDirectoryMode = 0o700
-	privateFileMode      = 0o600
-	stagingFilePrefix    = ".config-import-"
+	privateFileMode = 0o600
 )
 
 // Save replaces the entire allowed set. Merging would silently retain providers
@@ -25,7 +19,7 @@ func encode(config Config) ([]byte, error) {
 	if err := config.validateFields(); err != nil {
 		return nil, err
 	}
-	disk := document{ManagedTURN: config.ManagedTURN, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays, Pending: config.Pending}
+	disk := document{ManagedTURNPolicies: config.ManagedTURNPolicies, FrontURL: config.FrontURL, Profiles: make([]savedRelay, 0, len(config.Profiles)), ActiveRelays: config.ActiveRelays}
 	if len(config.TURN.Accounts) > 0 || len(config.TURN.Profiles) > 0 {
 		disk.TURN = &config.TURN
 	}
@@ -50,42 +44,5 @@ func encode(config Config) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func replaceConfiguration(path string, data []byte) (err error) {
-	if path == "" {
-		return os.ErrInvalid
-	}
-	info, err := os.Lstat(path)
-	if err == nil && !info.Mode().IsRegular() {
-		return errors.New("sharing configuration destination must be a regular file")
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, privateDirectoryMode); err != nil {
-		return err
-	}
-	// A sibling staging file permits one filesystem rename to publish a complete
-	// selection. The existing file is never truncated or removed before commit.
-	staging := filepath.Join(directory, stagingFilePrefix+rand.Text())
-	file, err := createPrivateFile(staging)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cleanupErr := os.Remove(staging); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-			err = errors.Join(err, cleanupErr)
-		}
-	}()
-	defer file.Close()
-	if _, err := file.Write(data); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return replaceFile(staging, path)
-}
+// Encode serializes only portable user settings.
+func Encode(config Config) ([]byte, error) { return encode(config) }

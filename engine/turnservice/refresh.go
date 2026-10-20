@@ -3,120 +3,98 @@ package turnservice
 import (
 	"context"
 	"errors"
-	"slices"
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnconfig"
 	"github.com/windshare/windshare/engine/turnprovider"
 )
-
-var errSuperseded = errors.New("managed TURN discovery superseded by settings")
-
-func referenceAt(values []turnconfig.ManagedService, address string) (turnconfig.ManagedService, bool) {
-	for _, value := range values {
-		if addressKey(value.RelayURL) == address {
-			return value, true
-		}
-	}
-	return turnconfig.ManagedService{}, false
-}
-func replaceReference(values []turnconfig.ManagedService, next turnconfig.ManagedService) []turnconfig.ManagedService {
-	values = slices.Clone(values)
-	for i, value := range values {
-		if addressKey(value.RelayURL) == addressKey(next.RelayURL) {
-			values[i] = next
-			return values
-		}
-	}
-	return append(values, next)
-}
 
 func (registry *Registry) Refresh(ctx context.Context, candidate senderrelay.Candidate) {
 	address := addressKey(candidate.PublicURL)
 	registry.mu.Lock()
-	before, existed := referenceAt(registry.references, address)
-	persisted, wasSaved := referenceAt(registry.persisted, address)
-	configured := registry.profiles[address]
-	registry.mu.Unlock()
-	if configured.AccessKey != candidate.AccessKey {
+	current := registry.entries[address]
+	if registry.closed || current == nil || current.candidate.AccessKey != candidate.AccessKey {
+		registry.mu.Unlock()
 		return
 	}
-	registry.trace(candidate, before.ServiceID, "started", nil)
+	generation := current.generation
+	registry.mu.Unlock()
+	// Manual refresh and the shared worker cannot race requests for one relay.
+	current.refresh.Lock()
+	defer current.refresh.Unlock()
+	registry.mu.Lock()
+	valid := registry.current(current, address, generation)
+	registry.mu.Unlock()
+	if !valid || ctx.Err() != nil {
+		return
+	}
+	requestedAt := registry.dependencies.Now()
+	registry.trace(candidate, "", "started", nil)
 	capability, err := turnprovider.Discover(ctx, registry.dependencies.Client, candidate.PublicURL, candidate.AccessKey)
-	next := before
+	registry.mu.Lock()
+	if !registry.current(current, address, generation) || ctx.Err() != nil {
+		registry.mu.Unlock()
+		registry.trace(candidate, "", "superseded", ctx.Err())
+		return
+	}
 	switch {
 	case errors.Is(err, turnprovider.ErrAuthorityWithdrawn):
-		if !existed {
+		if current.capability == nil {
+			registry.mu.Unlock()
 			return
 		}
-		next.Enabled = false
+		withdrawn := *current.capability
+		withdrawn.Enabled = false
+		capability = &withdrawn
 	case err != nil:
-		registry.trace(candidate, before.ServiceID, "retained", err)
+		registry.mu.Unlock()
+		registry.trace(candidate, "", "retained", err)
 		return
 	case capability == nil:
-		// Missing provisioning is not an explicit withdrawal of existing leases.
-		registry.trace(candidate, before.ServiceID, "unavailable", nil)
-		return
-	default:
-		next.ServiceID, next.Enabled, next.RelayURL = capability.ServiceID, capability.Enabled, candidate.PublicURL
-	}
-	if next.Validate() != nil {
-		registry.trace(candidate, before.ServiceID, "invalid", turnconfig.ErrConfiguration)
+		registry.mu.Unlock()
+		registry.trace(candidate, "", "unavailable", nil)
 		return
 	}
-	if existed && before == next && (registry.store == nil || wasSaved && persisted == next) {
-		registry.trace(candidate, next.ServiceID, "unchanged", nil)
-		return
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	savedNext := false
-	if registry.store != nil {
-		_, saveErr := registry.store.Update(ctx, func(current *relayconfig.Config) error {
-			matches := slices.ContainsFunc(current.Profiles, func(profile senderrelay.Candidate) bool {
-				return addressKey(profile.PublicURL) == address && profile.AccessKey == candidate.AccessKey
-			})
-			saved, present := referenceAt(current.ManagedTURN, address)
-			// A local budget edit must not obstruct an authority withdrawal or be
-			// overwritten by a discovery request that started before that edit.
-			baseline := persisted
-			baseline.LocalBudgetBytes = saved.LocalBudgetBytes
-			next.LocalBudgetBytes = saved.LocalBudgetBytes
-			if !matches || (saved != next && (present != wasSaved || saved != baseline)) {
-				return errSuperseded
-			}
-			current.ManagedTURN = replaceReference(current.ManagedTURN, next)
-			return nil
-		})
-		if errors.Is(saveErr, errSuperseded) {
-			registry.trace(candidate, next.ServiceID, "superseded", saveErr)
+	for _, other := range registry.entries {
+		if other != current && other.capability != nil && other.capability.ServiceID == capability.ServiceID {
+			registry.mu.Unlock()
+			registry.trace(candidate, capability.ServiceID, "duplicate_service", turnprovider.ErrConfiguration)
 			return
 		}
-		if saveErr != nil {
-			registry.trace(candidate, next.ServiceID, "persistence_failed", saveErr)
-		} else {
-			savedNext = true
+	}
+	changed := current.capability == nil || *current.capability != *capability
+	if changed {
+		before := current.capability
+		current.capability = capability
+		if err := registry.publish(); err != nil {
+			current.capability = before
+			registry.mu.Unlock()
+			registry.trace(candidate, capability.ServiceID, "publication_failed", err)
+			return
+		}
+		current.dirty = true
+	}
+	persist := current.dirty && registry.cache != nil
+	registry.mu.Unlock()
+	// Runtime withdrawal precedes optional persistence. A failed cache write cannot
+	// keep revoked authority alive or interrupt healthy paths when retried.
+	if persist {
+		err := registry.cache.Save(ctx, candidate, *capability, requestedAt)
+		registry.mu.Lock()
+		if err == nil && registry.current(current, address, generation) {
+			current.dirty = false
+		}
+		registry.mu.Unlock()
+		if err != nil {
+			registry.trace(candidate, capability.ServiceID, "persistence_failed", err)
 		}
 	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	current, present := referenceAt(registry.references, address)
-	if registry.profiles[address].AccessKey != candidate.AccessKey || present != existed || current != before {
-		return
+	milestone := "unchanged"
+	if changed {
+		milestone = "published"
 	}
-	if savedNext {
-		registry.persisted = replaceReference(registry.persisted, next)
-	}
-	if existed && before == next {
-		return
-	}
-	references := replaceReference(registry.references, next)
-	if err := registry.publish(references, registry.profiles); err != nil {
-		registry.trace(candidate, next.ServiceID, "publication_failed", err)
-		return
-	}
-	registry.references = references
-	registry.trace(candidate, next.ServiceID, "published", nil)
+	registry.trace(candidate, capability.ServiceID, milestone, nil)
+}
+
+func (registry *Registry) current(value *service, address string, generation uint64) bool {
+	return !registry.closed && registry.entries[address] == value && value.generation == generation
 }

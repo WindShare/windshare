@@ -26,7 +26,7 @@ test('deployment provisioning, device authority and lease ownership survive rest
     const other = await f.admin('credentials', { name: 'other sender' });
     const capability = (await f.device(credential.access_key, 'capability')).body.turn;
     assert.equal(capability.service_id, ready.serviceId);
-    assert.equal(credential.configuration.managed_turn[0].service_id, ready.serviceId);
+    assert.equal(credential.configuration.managed_turn, undefined);
     assert.ok(!JSON.stringify(credential).includes('local-provider-secret'));
     assert.equal((await f.device(undefined, 'capability')).status, 403);
     const forged = createHash('sha256').update(credential.access_key).digest('base64url');

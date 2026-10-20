@@ -1,41 +1,60 @@
 package relaysetup
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/turnaccount"
 	"github.com/windshare/windshare/engine/turnconfig"
+	"github.com/windshare/windshare/engine/turnprovider"
 )
 
-func TestOnboardingManagedServicePreservesFullManualConfiguration(t *testing.T) {
-	saved := relayconfig.Config{Profiles: []senderrelay.Candidate{{PublicURL: "https://relay.example", AccessKey: "device-key"}},
-		ActiveRelays: []string{"https://relay.example"}}
-	for i := range turnaccount.MaximumAccounts {
-		id := fmt.Sprintf("manual%d", i)
-		saved.TURN.Accounts = append(saved.TURN.Accounts, turnconfig.Account{ID: id, Provider: "coturn", Issuer: "static",
-			Credentials: json.RawMessage("{\"username\":\"user\",\"password\":\"password\"}")})
-		saved.TURN.Profiles = append(saved.TURN.Profiles, turnconfig.Profile{ID: id, Account: id, URLs: []string{"turn:localhost:3478"}})
-	}
-	revision := saved.SettingsRevision()
-	reference := turnconfig.ManagedService{ServiceID: "cf-service", RelayURL: "https://relay.example", Enabled: true}
-	installManagedService(&saved, reference.RelayURL, []turnconfig.ManagedService{reference})
-	if len(saved.ManagedTURN) != 1 || len(saved.TURN.Accounts) != turnaccount.MaximumAccounts {
-		t.Fatal("discovery consumed manual capacity")
-	}
-	if err := saved.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if saved.SettingsRevision() != revision {
-		t.Fatal("inventory invalidated concurrent enrollment")
-	}
-	saved.ManagedTURN[0].LocalBudgetBytes = 99
-	reference.Enabled = false
-	installManagedService(&saved, reference.RelayURL, []turnconfig.ManagedService{reference})
-	if saved.ManagedTURN[0].Enabled || saved.ManagedTURN[0].LocalBudgetBytes != 99 {
-		t.Fatal("refresh lost local preferences")
+type cacheFunc func(context.Context, senderrelay.Candidate, turnprovider.Capability, time.Time) error
+
+func (save cacheFunc) Save(ctx context.Context, candidate senderrelay.Candidate, capability turnprovider.Capability, at time.Time) error {
+	return save(ctx, candidate, capability, at)
+}
+
+func TestOnboardingDiscoveryIsOptionalAndPreservesManualAccountsAndBudget(t *testing.T) {
+	for _, cacheFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(cacheFailure), func(t *testing.T) {
+			saved := pendingCredential(time.Now())
+			saved.Profiles = append(saved.Profiles, senderrelay.Candidate{PublicURL: saved.Pending.RelayURL})
+			saved.ManagedTURNPolicies = []turnconfig.ManagedPolicy{{RelayURL: saved.Pending.RelayURL, LocalBudgetBytes: 99}}
+			for i := range turnaccount.MaximumAccounts {
+				id := fmt.Sprintf("manual%d", i)
+				saved.TURN.Accounts = append(saved.TURN.Accounts, turnconfig.Account{ID: id, Provider: "coturn", Issuer: "static",
+					Credentials: json.RawMessage(`{"username":"user","password":"password"}`)})
+				saved.TURN.Profiles = append(saved.TURN.Profiles, turnconfig.Profile{ID: id, Account: id, URLs: []string{"turn:localhost:3478"}})
+			}
+			saved.Pending.SettingsRevision = saved.SettingsRevision()
+			store := &memoryStore{saved: saved}
+			cached := false
+			service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
+				return response(200, map[string]any{"managed_turn": []any{map[string]any{
+					"service_id": "cf-service", "relay_url": saved.Pending.RelayURL, "enabled": true, "local_budget_bytes": 0}}})
+			}), Cache: cacheFunc(func(_ context.Context, candidate senderrelay.Candidate, capability turnprovider.Capability, at time.Time) error {
+				if store.saved.Pending != nil || candidate.AccessKey != "claimed-key" || capability.ServiceID != "cf-service" || at.IsZero() {
+					t.Fatal("cache preceded committed enrollment or used unrelated authority")
+				}
+				cached = true
+				if cacheFailure {
+					return errors.New("cache unavailable")
+				}
+				return nil
+			})})
+			if _, err := service.Run(t.Context(), Request{URL: saved.Pending.RelayURL, Operation: AddProfile}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if !cached || len(store.saved.TURN.Accounts) != turnaccount.MaximumAccounts || store.saved.ManagedTURNPolicies[0].LocalBudgetBytes != 99 {
+				t.Fatal("discovery changed user settings")
+			}
+		})
 	}
 }

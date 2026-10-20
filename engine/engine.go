@@ -126,9 +126,12 @@ func New(config Config) (*Engine, error) {
 		_ = revisions.Close()
 		return nil, err
 	}
+	if config.RelaySetup.Cache == nil {
+		config.RelaySetup.Cache = config.TURNCache
+	}
 	return &Engine{
 		turn:         turn,
-		turnServices: turnservice.New(turn, turnDependencies, config.RelaySetup.Store),
+		turnServices: turnservice.New(turn, turnDependencies, config.TURNCache),
 		relaySetup:   relaysetup.New(config.RelaySetup),
 		config:       config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
@@ -203,6 +206,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 		<-current.Done()
 	}
 	capacityErr := engine.revisions.Close()
+	engine.turnServices.Close()
 	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()

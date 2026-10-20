@@ -47,7 +47,7 @@ func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
 	return nil
 }
 
-// ConfigureManagedTURN installs deployment inventory without contacting issuers.
+// ConfigureManagedTURN applies relay authority and user budgets; discovery remains asynchronous.
 func (engine *Engine) ConfigureManagedTURN(config relayconfig.Config) error {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()

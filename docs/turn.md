@@ -16,7 +16,8 @@ temporary credentials through encrypted session control.
 Managed services follow the configured active relay selection even while an
 application relay is disconnected. Discovery refreshes in the background; timeout
 retains cached authority. Disable or device revocation withdraws it. Discovery
-does not acquire TURN credentials or delay link publication. Managed inventory
+does not acquire TURN credentials or delay link publication. Shares using the same
+relay share one discovery loop per Engine; the loop stops when its last share ends. Managed inventory
 uses no manual account slots; sessions admit a bounded mix of both sources.
 
 The console enables or disables the service. Disable persists across deployments,
@@ -27,8 +28,8 @@ separate from Worker charges; automatic scheduling does not force TURN traffic.
 Lease capacity includes unfinished issuance and unexpired credentials awaiting
 revocation; retained records of completed leases do not consume capacity.
 
-`managed_turn[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
-limits that deployment's usage within one Engine, subject to the budget semantics
+`managed_turn_policies[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
+limits the deployment identified by that entry's `relay_url` within one Engine, subject to the budget semantics
 below. It is not an account-wide spending cap. Optional console usage queries use
 the separate read-only `CLOUDFLARE_ANALYTICS_API_TOKEN` deployment secret and run
 only when requested; estimates cover the previous seven complete UTC days.

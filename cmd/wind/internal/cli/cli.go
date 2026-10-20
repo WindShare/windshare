@@ -20,6 +20,8 @@ import (
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turncache"
 	"github.com/windshare/windshare/internal/platformsetup"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -117,7 +119,8 @@ func Main() int {
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	app.engineConfig.RelaySetup.Store = relayconfig.FileStore{}
+	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
+	app.engineConfig.TURNCache = turncache.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
 	app.processTrace = trace
 	code := runCLIWithInterruptEscalation(
