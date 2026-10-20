@@ -1,7 +1,4 @@
-use super::{
-    AccessObject, Credential, Database, LEASE_PREFIX, Lease, LeaseState, credentials, io,
-    lease_key, provider, reply, save, trace,
-};
+use super::{AccessObject, Credential, Database, credentials, io, provider, reply, trace};
 use serde_json::json;
 use worker::{Response, Result};
 
@@ -14,14 +11,20 @@ impl AccessObject {
         request: &credentials::LeaseRequest,
         now: u64,
     ) -> Result<Response> {
-        let Some(mut lease) = db.get::<Lease>(&lease_key(&request.lease_id))? else {
+        let subject = request.subject(credential);
+        let Some((lease, owned)) = db.update_turn_lease(&request.lease_id, |lease| {
+            let owned = lease.owned_by(&subject);
+            if owned {
+                lease.withdraw(now);
+            }
+            Ok(owned)
+        })?
+        else {
             return reply(&json!({"state":"expired"}), 200);
         };
-        if !lease.owned_by(&request.subject(credential)) {
+        if !owned {
             return reply(&json!({"error":"access_denied"}), 403);
         }
-        lease.withdraw(now);
-        save(db, &lease)?;
         trace("turn_revocation_requested", &credentials::context(&lease));
         reply(
             &json!({"state":lease.status()}),
@@ -33,77 +36,73 @@ impl AccessObject {
         device: Option<&str>,
         now: u64,
     ) -> Result<()> {
-        for mut lease in db.list::<Lease>(LEASE_PREFIX)? {
-            if device.is_none_or(|id| id == lease.subject.device) {
+        for id in db.open_turn_leases(device)? {
+            if let Some((lease, ())) = db.update_turn_lease(&id, |lease| {
                 lease.withdraw(now);
-                save(db, &lease)?;
+                Ok(())
+            })? {
                 trace("turn_authority_withdrawn", &credentials::context(&lease));
             }
         }
         Ok(())
     }
-    pub(in crate::platform::access) fn next_turn_deadline(db: &Database) -> Result<Option<u64>> {
-        Ok(db
-            .list::<Lease>(LEASE_PREFIX)?
-            .iter()
-            .filter_map(|lease| match lease.state {
-                LeaseState::Issuing { deadline } | LeaseState::Withdrawing { deadline } => {
-                    Some(deadline)
+    fn reconcile_turn_leases(&self, db: &Database, now: u64) -> Result<()> {
+        for id in db.open_turn_leases(None)? {
+            let Some((lease, authorized)) = db.update_turn_lease(&id, |lease| {
+                lease.settle_expiry(now);
+                // Missing credentials include interrupted enrollment cleanup.
+                let authorized = self.turn_authorized(db, &lease.subject.device)?;
+                if !authorized {
+                    lease.withdraw(now);
                 }
-                LeaseState::Active { .. } => Some(lease.expires_at),
-                LeaseState::RevocationPending { next_attempt, .. } => {
-                    Some(next_attempt.min(lease.expires_at))
-                }
-                LeaseState::Revoked | LeaseState::IssuanceFailed | LeaseState::Expired => None,
-            })
-            .min())
-    }
-    pub(in crate::platform::access) fn has_turn_work(db: &Database) -> Result<bool> {
-        Ok(db.list::<Lease>(LEASE_PREFIX)?.iter().any(Lease::live))
+                Ok(authorized)
+            })?
+            else {
+                continue;
+            };
+            if !authorized {
+                trace("turn_authority_withdrawn", &credentials::context(&lease));
+            }
+        }
+        Ok(())
     }
     pub(in crate::platform::access) async fn revoke_turn_leases(
         &self,
         db: &Database,
     ) -> Result<()> {
-        let mut remaining = REVOCATION_BATCH;
-        for mut lease in db.list::<Lease>(LEASE_PREFIX)? {
-            let now = io::now().0;
-            lease.settle_expiry(now);
-            // Missing credentials include interrupted enrollment cleanup.
-            if !self.turn_authorized(db, &lease.subject.device)? {
-                lease.withdraw(now);
-            }
-            let due = matches!(lease.state, LeaseState::RevocationPending { next_attempt, .. } if next_attempt <= now);
-            if !due || remaining == 0 {
-                save(db, &lease)?;
-                continue;
-            }
-            remaining -= 1;
-            let LeaseState::RevocationPending {
-                grant,
-                next_attempt,
-            } = &mut lease.state
+        self.reconcile_turn_leases(db, io::now().0)?;
+        // A candidate list contains only identities. Each attempt reserves its retry
+        // against current state, so another request cannot be undone after a yield.
+        for id in db.due_turn_revocations(io::now().0, REVOCATION_BATCH)? {
+            let Some((lease, Some(revocation))) = db.update_turn_lease(&id, |lease| {
+                Ok(lease.begin_revocation(io::now().0, REVOCATION_RETRY_MS))
+            })?
             else {
                 continue;
             };
-            *next_attempt = now.saturating_add(REVOCATION_RETRY_MS);
-            let username = grant.username.clone();
-            save(db, &lease)?;
             // Rearm before external I/O, including on a failed alarm invocation.
             self.schedule().await?;
             let outcome = async {
                 let secret = provider::secret(&self.env)?;
-                if secret.key_id != lease.key_id {
+                if secret.key_id != revocation.key_id {
                     return Err(super::failure("TURN key changed before revocation"));
                 }
-                provider::revoke(&secret, &username).await
+                provider::revoke(&secret, &revocation.username).await
             }
             .await;
             match outcome {
                 Ok(()) => {
-                    lease.state = LeaseState::Revoked;
-                    save(db, &lease)?;
-                    trace("turn_revocation_confirmed", &credentials::context(&lease));
+                    if let Some((current, true)) = db
+                        .update_turn_lease(&id, |lease| Ok(lease.confirm_revocation(&revocation)))?
+                    {
+                        trace("turn_revocation_confirmed", &credentials::context(&current));
+                    } else {
+                        trace(
+                            "turn_revocation_result_obsolete",
+                            &json!({"lease_id":id,"service_id":lease.service_id,
+                                "key_id":revocation.key_id,"username":revocation.username}),
+                        );
+                    }
                 }
                 Err(error) => trace(
                     "turn_revocation_pending",

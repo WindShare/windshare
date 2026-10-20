@@ -3,6 +3,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { AccessObject as RustAccess, ShareRelayObject as RustShare } from '../build/index.js';
 export { default } from '../entry.mjs';
 
+const TURN_HISTORY_RETENTION_MS = 3_600_000;
+
 export class AccessObject extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); }
   async fetch(request) {
@@ -24,6 +26,21 @@ export class AccessObject extends DurableObject {
         }
       }
       return new Response('ok');
+    }
+    if (path === '/__test/turn-leases') {
+      if (request.method === 'POST') {
+        const leases = await request.json();
+        this.ctx.storage.transactionSync(() => {
+          for (const lease of leases) {
+            this.ctx.storage.sql.exec(
+              'INSERT INTO access_entries(key,value,expires) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires=excluded.expires',
+              'turn_lease:' + lease.id, JSON.stringify(lease), lease.expires_at + TURN_HISTORY_RETENTION_MS);
+          }
+        });
+      }
+      return Response.json([...this.ctx.storage.sql.exec(
+        "SELECT value FROM access_entries WHERE key GLOB 'turn_lease:*' ORDER BY key")]
+        .map(row => JSON.parse(row.value)));
     }
     const response = await this.rust.fetch(request);
     if (this.env.TURN_TEST_LIFETIME_MS && response.status === 201 &&

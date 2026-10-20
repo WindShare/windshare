@@ -27,7 +27,7 @@ pub enum LeaseState {
     IssuanceFailed,
     Expired,
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Lease {
     pub id: String,
     pub service_id: String,
@@ -36,6 +36,12 @@ pub struct Lease {
     pub usable_until: u64,
     pub expires_at: u64,
     pub state: LeaseState,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revocation {
+    pub lease_id: String,
+    pub key_id: String,
+    pub username: String,
 }
 impl Lease {
     pub const fn new(
@@ -86,9 +92,8 @@ impl Lease {
         publish
     }
     pub fn withdraw(&mut self, now: u64) {
-        if self.expires_at <= now {
-            self.state = LeaseState::Expired;
-        } else if let LeaseState::Active { grant } = &self.state {
+        self.settle_expiry(now);
+        if let LeaseState::Active { grant } = &self.state {
             self.state = LeaseState::RevocationPending {
                 grant: grant.clone(),
                 next_attempt: now,
@@ -97,6 +102,46 @@ impl Lease {
             // Provider completion remains outstanding; do not report confirmed revocation.
             self.state = LeaseState::Withdrawing { deadline };
         }
+    }
+    pub fn issuance_failed(&mut self, now: u64) {
+        self.settle_expiry(now);
+        if matches!(
+            self.state,
+            LeaseState::Issuing { .. } | LeaseState::Withdrawing { .. }
+        ) {
+            self.state = LeaseState::IssuanceFailed;
+        }
+    }
+    pub fn begin_revocation(&mut self, now: u64, retry_ms: u64) -> Option<Revocation> {
+        self.settle_expiry(now);
+        let LeaseState::RevocationPending {
+            grant,
+            next_attempt,
+        } = &mut self.state
+        else {
+            return None;
+        };
+        if *next_attempt > now {
+            return None;
+        }
+        *next_attempt = now.saturating_add(retry_ms);
+        Some(Revocation {
+            lease_id: self.id.clone(),
+            key_id: self.key_id.clone(),
+            username: grant.username.clone(),
+        })
+    }
+    pub fn confirm_revocation(&mut self, revocation: &Revocation) -> bool {
+        if self.id != revocation.lease_id {
+            return false;
+        }
+        if self.key_id != revocation.key_id
+            || !matches!(&self.state, LeaseState::RevocationPending { grant, .. } if grant.username == revocation.username)
+        {
+            return false;
+        }
+        self.state = LeaseState::Revoked;
+        true
     }
     pub fn settle_expiry(&mut self, now: u64) {
         if self.expires_at <= now && !matches!(self.state, LeaseState::Revoked) {
@@ -110,15 +155,6 @@ impl Lease {
         matches!(
             self.state,
             LeaseState::RevocationPending { .. } | LeaseState::Withdrawing { .. }
-        )
-    }
-    pub const fn live(&self) -> bool {
-        matches!(
-            self.state,
-            LeaseState::Issuing { .. }
-                | LeaseState::Withdrawing { .. }
-                | LeaseState::Active { .. }
-                | LeaseState::RevocationPending { .. }
         )
     }
     pub const fn status(&self) -> &'static str {
