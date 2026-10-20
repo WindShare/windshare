@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -25,7 +24,7 @@ const (
 
 var (
 	ErrConfiguration = errors.New("invalid TURN account configuration")
-	ErrBudget        = errors.New("TURN account local usage budget exhausted")
+	ErrBudget        = turnpath.ErrBudget
 	ErrCapacity      = errors.New("TURN account lease capacity exhausted")
 	ErrClosed        = errors.New("TURN account owner closed")
 )
@@ -50,23 +49,6 @@ type Account struct {
 	Source           Source
 	Usage            UsageReporter
 }
-
-// QueryUsage is an explicit operator operation. Transfer and budget decisions
-// never depend on provider analytics availability, sampling or rate limits.
-func (m *Manager) QueryUsage(ctx context.Context, accountID string, first, last time.Time) (turnprovider.Usage, error) {
-	m.mu.Lock()
-	account := m.accounts[accountID]
-	if m.closed || account == nil || account.config.Usage == nil {
-		m.mu.Unlock()
-		return turnprovider.Usage{}, ErrConfiguration
-	}
-	reporter := account.config.Usage
-	m.work.Add(1)
-	m.mu.Unlock()
-	defer m.work.Done()
-	return reporter.Query(ctx, first, last)
-}
-
 type Profile struct {
 	ID, AccountID string
 	URLs          []string
@@ -81,6 +63,7 @@ type Event struct {
 	At                          time.Time
 	Identity                    iceconfig.Identity
 	Subject                     turnpath.Subject
+	Revision                    uint64
 	Milestone                   string
 	Reason                      string
 	Usage                       turnpath.Usage
@@ -95,202 +78,124 @@ type Snapshot struct {
 	Exhausted           bool
 	LastFailure         string
 }
-type accountState struct {
-	config      Account
+
+// A ledger outlives configuration removal/re-import. A lease owns its issuer and
+// revocation signal separately, so re-enabling an account never revives old grants.
+type accountLedger struct {
 	usage       turnpath.Usage
 	charged     uint64
 	active      int
-	exhausted   bool
 	lastFailure string
-	lost        chan struct{}
 }
 type Manager struct {
 	mu       sync.Mutex
-	config   Config
-	accounts map[string]*accountState
-	profiles map[string]Profile
+	now      func() time.Time
+	observe  func(Event)
+	current  configuration
+	changed  chan struct{}
+	ledgers  map[string]*accountLedger
+	leases   map[*leaseState]struct{}
+	requests map[*issuance]struct{}
 	closed   bool
 	work     sync.WaitGroup
 }
 
 func New(config Config) (*Manager, error) {
-	if len(config.Accounts) > MaximumAccounts || len(config.Profiles) > MaximumProfiles {
-		return nil, ErrConfiguration
+	prepared, err := prepare(config)
+	if err != nil {
+		return nil, err
 	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	config.Accounts = slices.Clone(config.Accounts)
-	config.Profiles = slices.Clone(config.Profiles)
-	manager := &Manager{config: config, accounts: make(map[string]*accountState), profiles: make(map[string]Profile)}
-	for _, account := range config.Accounts {
-		id := iceconfig.Identity{Provider: account.Provider, Account: account.ID, Profile: "validation"}
-		if id.Validate() != nil || account.Source == nil || manager.accounts[account.ID] != nil {
-			return nil, ErrConfiguration
-		}
-		manager.accounts[account.ID] = &accountState{config: account, lost: make(chan struct{})}
+	m := &Manager{now: config.Now, observe: config.Observe, current: prepared,
+		changed: make(chan struct{}), ledgers: make(map[string]*accountLedger),
+		leases: make(map[*leaseState]struct{}), requests: make(map[*issuance]struct{})}
+	m.current.revision = 1
+	for id := range prepared.accounts {
+		m.ledgers[id] = &accountLedger{}
 	}
-	for _, profile := range config.Profiles {
-		account := manager.accounts[profile.AccountID]
-		if account == nil {
-			return nil, ErrConfiguration
-		}
-		if _, exists := manager.profiles[profile.ID]; exists {
-			return nil, ErrConfiguration
-		}
-		id := iceconfig.Identity{Provider: account.config.Provider, Account: profile.AccountID, Profile: profile.ID}
-		if id.Validate() != nil || len(profile.URLs) > iceconfig.MaximumURLs {
-			return nil, ErrConfiguration
-		}
-		seen := map[string]bool{}
-		for _, raw := range profile.URLs {
-			if iceconfig.ValidateRelayURL(raw) != nil || seen[raw] {
-				return nil, ErrConfiguration
-			}
-			seen[raw] = true
-		}
-		profile.URLs = slices.Clone(profile.URLs)
-		manager.profiles[profile.ID] = profile
-	}
-	return manager, nil
+	return m, nil
 }
 
-func (m *Manager) Profiles() []turnpath.Profile {
+// QueryUsage is an explicit operator operation. Transfer and budget decisions
+// never depend on provider analytics availability, sampling or rate limits.
+func (m *Manager) QueryUsage(ctx context.Context, accountID string, first, last time.Time) (turnprovider.Usage, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]turnpath.Profile, 0, len(m.profiles))
-	for _, configured := range m.config.Profiles {
-		account := m.accounts[configured.AccountID]
-		result = append(result, turnpath.Profile{Identity: iceconfig.Identity{
-			Provider: account.config.Provider, Account: configured.AccountID, Profile: configured.ID}})
-	}
-	return result
-}
-
-func (m *Manager) Acquire(ctx context.Context, profileID string, subject turnpath.Subject) (*turnpath.Lease, error) {
-	return m.acquire(ctx, profileID, subject, nil)
-}
-func (m *Manager) acquire(ctx context.Context, profileID string, subject turnpath.Subject, previous *turnprovider.Issued) (*turnpath.Lease, error) {
-	m.mu.Lock()
-	profile, ok := m.profiles[profileID]
-	account := m.accounts[profile.AccountID]
-	if m.closed || !ok || account.exhausted || account.active >= MaximumActiveLeases {
-		err := ErrConfiguration
-		switch {
-		case m.closed:
-			err = ErrClosed
-		case ok && account.exhausted:
-			err = ErrBudget
-		case ok && account.active >= MaximumActiveLeases:
-			err = ErrCapacity
-		}
+	account, ok := m.current.accounts[accountID]
+	if m.closed || !ok || account.Usage == nil {
 		m.mu.Unlock()
-		return nil, err
+		return turnprovider.Usage{}, ErrConfiguration
 	}
-	account.active++
+	reporter := account.Usage
 	m.work.Add(1)
-	identity := iceconfig.Identity{Provider: account.config.Provider, Account: profile.AccountID, Profile: profile.ID}
 	m.mu.Unlock()
 	defer m.work.Done()
-	m.emit(Event{Identity: identity, Subject: subject, Milestone: "issuance_started"})
-	request, cancel := context.WithTimeout(ctx, IssuanceTimeout)
-	defer cancel()
-	providerSubject := turnprovider.Subject{SessionID: subject.SessionID, PathID: subject.PathID}
-	var issued turnprovider.Issued
-	var err error
-	if previous != nil {
-		source, ok := account.config.Source.(renewable)
-		if !ok {
-			err = ErrConfiguration
-		} else {
-			issued, err = source.Renew(request, providerSubject, *previous)
-		}
-	} else {
-		issued, err = account.config.Source.Issue(request, providerSubject)
-	}
-	if err == nil && !issued.Credentials.ValidAt(m.config.Now()) {
-		err = turnprovider.ErrExpired
-	}
-	urls := profile.URLs
-	if len(urls) == 0 {
-		urls = issued.URLs
-	}
-	var relay iceconfig.Relay
-	if err == nil {
-		relay, err = iceconfig.NewRelay(identity, urls, issued.Credentials)
-	}
+	return reporter.Query(ctx, first, last)
+}
+
+func (m *Manager) Inventory() turnpath.Inventory {
 	m.mu.Lock()
-	if err == nil && (m.closed || account.exhausted || ctx.Err() != nil) {
-		err = errors.Join(ErrClosed, ctx.Err())
+	defer m.mu.Unlock()
+	result := turnpath.Inventory{Revision: m.current.revision, Changed: m.changed}
+	for _, id := range m.current.profileOrder {
+		profile := m.current.profiles[id]
+		account := m.current.accounts[profile.AccountID]
+		result.Profiles = append(result.Profiles, turnpath.Profile{Identity: iceconfig.Identity{
+			Provider: account.Provider, Account: profile.AccountID, Profile: profile.ID}})
 	}
-	if err != nil {
-		account.active--
-		account.lastFailure = err.Error()
-		m.mu.Unlock()
-		m.emit(Event{Identity: identity, Subject: subject, Milestone: "issuance_failed", Reason: err.Error()})
-		if issued.Credentials.Kind() != 0 {
-			m.revoke(account, issued, identity, subject)
-		}
-		return nil, err
-	}
-	account.lastFailure = ""
-	// Keep a work reference throughout the lease lifetime. Close can then join
-	// revocation without racing a worker added after its wait has begun.
-	m.work.Add(1)
-	m.mu.Unlock()
-	state := &leaseState{manager: m, account: account, identity: identity, subject: subject, issued: issued}
-	leaseConfig := turnpath.LeaseConfig{Relay: relay, Lost: account.lost, Charge: state.charge, Release: state.release}
-	if _, ok := account.config.Source.(renewable); ok {
-		leaseConfig.Renew = func(ctx context.Context, next turnpath.Subject) (*turnpath.Lease, error) {
-			return m.acquire(ctx, profileID, next, &issued)
-		}
-	}
-	lease := turnpath.NewLease(leaseConfig)
-	m.emit(Event{Identity: identity, Subject: subject, Milestone: "credentials_issued"})
-	return lease, nil
+	return result
 }
 
 func (m *Manager) Snapshot() []Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	result := make([]Snapshot, 0, len(m.config.Accounts))
-	for _, configured := range m.config.Accounts {
-		state := m.accounts[configured.ID]
-		result = append(result, Snapshot{AccountID: configured.ID, Provider: configured.Provider,
+	result := make([]Snapshot, 0, len(m.current.accountOrder))
+	for _, id := range m.current.accountOrder {
+		configured := m.current.accounts[id]
+		state := m.ledgers[id]
+		result = append(result, Snapshot{AccountID: id, Provider: configured.Provider,
 			LocalBudgetBytes: configured.LocalBudgetBytes, Usage: state.usage, ChargedBytes: state.charged,
-			ActiveLeases: state.active, Exhausted: state.exhausted, LastFailure: state.lastFailure})
+			ActiveLeases: state.active, Exhausted: exhausted(configured, state), LastFailure: state.lastFailure})
 	}
 	return result
 }
+
+func exhausted(account Account, ledger *accountLedger) bool {
+	return account.LocalBudgetBytes > 0 && ledger.charged >= account.LocalBudgetBytes
+}
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if !m.closed {
 		m.closed = true
-		for _, account := range m.accounts {
-			if !account.exhausted {
-				close(account.lost)
-			}
+		for request := range m.requests {
+			request.cancel(ErrClosed)
+		}
+		for lease := range m.leases {
+			lease.cancel(ErrClosed)
 		}
 	}
 	m.mu.Unlock()
 	m.work.Wait()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, account := range m.accounts {
-		if account.active != 0 {
-			return fmt.Errorf("TURN account %s retained %d leases", account.config.ID, account.active)
+	for id, ledger := range m.ledgers {
+		if ledger.active != 0 {
+			return fmt.Errorf("TURN account %s retained %d leases", id, ledger.active)
 		}
 	}
 	return nil
 }
+
 func (m *Manager) emit(event Event) {
 	slog.Debug("TURN account", "provider", event.Identity.Provider, "account", event.Identity.Account, "profile", event.Identity.Profile,
 		"session_id", fmt.Sprintf("%x", event.Subject.SessionID), "path_id", fmt.Sprintf("%x", event.Subject.PathID),
-		"milestone", event.Milestone, "reason", event.Reason, "useful_bytes", event.Usage.Useful,
+		"config_revision", event.Revision, "milestone", event.Milestone, "reason", event.Reason, "useful_bytes", event.Usage.Useful,
 		"transport_sent", event.Usage.TransportSent, "transport_received", event.Usage.TransportReceived,
 		"provider_revocation_confirmed", event.ProviderRevocationConfirmed)
-	if m.config.Observe != nil {
-		event.At = m.config.Now()
-		m.config.Observe(event)
+	if m.observe != nil {
+		event.At = m.now()
+		m.observe(event)
 	}
 }

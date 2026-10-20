@@ -59,27 +59,31 @@ type delegation struct {
 	useful   uint64
 }
 type issued struct {
-	service    *service
-	path       [16]byte
-	sequence   uint64
-	generation uint64
-	lease      *Lease
-	err        error
+	service             *service
+	path                [16]byte
+	sequence            uint64
+	generation          uint64
+	revision            uint64
+	requestCancellation error
+	lease               *Lease
+	err                 error
 }
 type Sender struct {
-	config       SenderConfig
-	mu           sync.Mutex
-	paths        map[[16]byte]*delegation
-	retired      map[[16]byte]time.Time
-	controls     chan turncontrol.Message
-	completed    chan issued
-	work         sync.WaitGroup
-	services     []*service
-	owner        [16]byte
-	sequence     uint64
-	generation   uint64
-	demandUntil  time.Time
-	advertisedAt time.Time
+	config             SenderConfig
+	mu                 sync.Mutex
+	paths              map[[16]byte]*delegation
+	retired            map[[16]byte]time.Time
+	controls           chan turncontrol.Message
+	completed          chan issued
+	work               sync.WaitGroup
+	services           []*service
+	owner              [16]byte
+	sequence           uint64
+	generation         uint64
+	demandUntil        time.Time
+	advertisedAt       time.Time
+	advertisedRevision uint64
+	inventory          Inventory
 }
 
 func NewSender(config SenderConfig) *Sender {
@@ -92,13 +96,14 @@ func NewSender(config SenderConfig) *Sender {
 	s := &Sender{config: config, paths: make(map[[16]byte]*delegation), retired: make(map[[16]byte]time.Time),
 		controls: make(chan turncontrol.Message, 32), completed: make(chan issued, 16)}
 	if config.Accounts != nil {
-		for _, profile := range config.Accounts.Profiles() {
+		s.inventory = config.Accounts.Inventory()
+		for _, profile := range s.inventory.Profiles {
 			s.services = append(s.services, &service{profile: profile})
 		}
-	}
-	if len(s.services) > 0 {
 		if _, err := io.ReadFull(config.Random, s.owner[:]); err != nil {
 			s.services = nil
+			s.config.Accounts = nil
+			s.inventory = Inventory{}
 		}
 	}
 	return s
@@ -181,6 +186,8 @@ func (s *Sender) Run(ctx context.Context) {
 			s.apply(ctx, message)
 		case result := <-s.completed:
 			s.install(ctx, result)
+		case <-s.inventory.Changed:
+			s.maintain(ctx)
 		case <-tick:
 			s.maintain(ctx)
 		}
@@ -243,8 +250,9 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 }
 
 func (s *Sender) maintain(ctx context.Context) {
+	s.refreshConfiguration(ctx)
 	now := s.config.Now()
-	if s.sequence == 0 && now.Sub(s.advertisedAt) >= AdvertisementInterval {
+	if s.advertisedRevision != s.inventory.Revision || s.sequence == 0 && now.Sub(s.advertisedAt) >= AdvertisementInterval {
 		s.advertise(ctx)
 	}
 	demand := now.Before(s.demandUntil)
@@ -308,7 +316,10 @@ func (value *delegation) retirementReason(now time.Time, demand, pending bool) t
 	default:
 		select {
 		case <-value.lease.Lost():
-			return turncontrol.BudgetExhausted
+			if errors.Is(value.lease.Loss(), ErrBudget) {
+				return turncontrol.BudgetExhausted
+			}
+			return turncontrol.ProviderRevoked
 		default:
 			return 0
 		}
@@ -330,7 +341,7 @@ func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.
 		} else {
 			service.pending = nil
 		}
-		if reason != turncontrol.Idle {
+		if reason == turncontrol.Unhelpful || reason == turncontrol.Expired {
 			service.retryAt = now.Add(ServiceCooldown)
 		}
 	}
@@ -346,6 +357,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	service.cancel = cancel
 	sequence := s.sequence
 	generation := s.generation
+	revision := s.inventory.Revision
 	current := service.current
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
 		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_started", "")
@@ -360,7 +372,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 		} else {
 			lease, err = s.config.Accounts.Acquire(child, service.profile.Identity.Profile, subject)
 		}
-		result := issued{service: service, path: path, sequence: sequence, generation: generation, lease: lease, err: err}
+		result := issued{service: service, path: path, sequence: sequence, generation: generation, revision: revision, requestCancellation: context.Cause(child), lease: lease, err: err}
 		select {
 		case s.completed <- result:
 		case <-ctx.Done():
@@ -372,20 +384,28 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 }
 
 func (s *Sender) install(ctx context.Context, result issued) {
+	s.refreshConfiguration(ctx)
 	service := result.service
 	service.cancel()
 	service.cancel = nil
-	if result.err != nil || result.generation != s.generation || !s.config.Now().Before(s.demandUntil) {
+	if reason := s.discardReason(result); reason != "" {
+		if result.lease != nil {
+			result.lease.Close()
+		}
+		s.observeIssuance(result, "issuance_discarded", reason)
+		// Completion releases the single in-flight slot. Reconcile fresh demand
+		// now rather than imposing either a failure cooldown or a maintenance tick.
+		s.maintain(ctx)
+		return
+	}
+	if result.err != nil {
 		if result.lease != nil {
 			result.lease.Close()
 		}
 		service.retryAt = s.config.Now().Add(ServiceCooldown)
-		if result.err != nil {
-			s.observe(&delegation{grant: turncontrol.Grant{PathID: result.path, Provider: service.profile.Identity.Provider,
-				Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_failed", result.err.Error())
-			s.send(ctx, turncontrol.Unavailable{Authority: s.header(), Profile: service.profile.Identity.Profile,
-				RetryAfter: ServiceCooldown, Reason: result.err.Error()})
-		}
+		s.observeIssuance(result, "issuance_failed", result.err.Error())
+		s.send(ctx, turncontrol.Unavailable{Authority: s.header(), Profile: service.profile.Identity.Profile,
+			RetryAfter: ServiceCooldown, Reason: result.err.Error()})
 		return
 	}
 	relay := result.lease.Relay()
@@ -509,16 +529,18 @@ func (s *Sender) send(ctx context.Context, message turncontrol.Message) bool {
 }
 
 func (s *Sender) advertise(ctx context.Context) {
-	if len(s.services) == 0 {
+	if s.owner == ([16]byte{}) || len(s.services) == 0 && s.advertisedRevision == 0 {
 		return
 	}
 	profiles := make([]string, 0, len(s.services))
 	for _, service := range s.services {
 		profiles = append(profiles, service.profile.Identity.Profile)
 	}
-	s.send(ctx, turncontrol.Available{Authority: turncontrol.Header{
-		SessionID: s.config.SessionID, OwnerPathID: s.owner, Sequence: 1,
-	}, Profiles: profiles})
+	if s.send(ctx, turncontrol.Available{Authority: turncontrol.Header{
+		SessionID: s.config.SessionID, OwnerPathID: s.owner, Sequence: s.inventory.Revision,
+	}, Profiles: profiles}) {
+		s.advertisedRevision = s.inventory.Revision
+	}
 	s.advertisedAt = s.config.Now()
 }
 func (s *Sender) observe(value *delegation, milestone, reason string) {

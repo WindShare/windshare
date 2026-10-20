@@ -14,7 +14,7 @@ func TestDelegationCanonicalAuthorityAndLifetime(t *testing.T) {
 		CredentialKind: Expiring, Username: "123:user", Password: "password", ValidFor: time.Hour, URLs: []string{"turn:127.0.0.1:3478?transport=udp", "turns:example.org:443?transport=tcp"}}
 	messages := []Message{Demand{header, MaximumDemandLifetime}, grant, Ready{header, grant.PathID},
 		Retire{header, grant.PathID, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"},
-		Available{header, []string{"primary", "secondary"}}, Report{header, grant.PathID, 1 << 40}}
+		Available{header, []string{"primary", "secondary"}}, Available{header, []string{}}, Report{header, grant.PathID, 1 << 40}}
 	for _, message := range messages {
 		body, err := Encode(message)
 		if err != nil {

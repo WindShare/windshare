@@ -17,8 +17,22 @@ type Subject struct {
 	SessionID [16]byte
 	PathID    [16]byte
 }
+
+// Inventory is one atomic configuration view. Changed closes when a newer view
+// is available, so a sender cannot miss an update between reading and waiting.
+type Inventory struct {
+	Revision uint64
+	Profiles []Profile
+	Changed  <-chan struct{}
+}
+
+var (
+	ErrSuperseded = errors.New("TURN configuration superseded")
+	ErrBudget     = errors.New("TURN account local usage budget exhausted")
+)
+
 type Accounts interface {
-	Profiles() []Profile
+	Inventory() Inventory
 	Acquire(context.Context, string, Subject) (*Lease, error)
 }
 
@@ -29,11 +43,11 @@ type Usage struct {
 }
 
 type LeaseConfig struct {
-	Relay   iceconfig.Relay
-	Renew   func(context.Context, Subject) (*Lease, error)
-	Lost    <-chan struct{}
-	Charge  func(Usage) bool
-	Release func()
+	Relay     iceconfig.Relay
+	Renew     func(context.Context, Subject) (*Lease, error)
+	Authority context.Context
+	Charge    func(Usage) bool
+	Release   func()
 }
 
 // Lease binds delegated credentials to local account capacity. Releasing it
@@ -52,7 +66,18 @@ func (l *Lease) Renew(ctx context.Context, subject Subject) (*Lease, error) {
 	}
 	return l.config.Renew(ctx, subject)
 }
-func (l *Lease) Lost() <-chan struct{} { return l.config.Lost }
+func (l *Lease) Lost() <-chan struct{} {
+	if l.config.Authority == nil {
+		return nil
+	}
+	return l.config.Authority.Done()
+}
+func (l *Lease) Loss() error {
+	if l.config.Authority == nil {
+		return nil
+	}
+	return context.Cause(l.config.Authority)
+}
 func (l *Lease) Charge(usage Usage) bool {
 	return l.config.Charge == nil || l.config.Charge(usage)
 }

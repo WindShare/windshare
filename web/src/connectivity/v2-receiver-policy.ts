@@ -203,6 +203,11 @@ export class V2ReceiverConnectivity {
       enabled: () => this.#policy === 'auto' && this.#capabilityAllowsAttempt(),
       open: (grant) => this.#openTurn(grant),
       retire: (pathId) => this.#retireTurn(pathId),
+      profilesChanged: (profiles) => {
+        for (const profile of this.#turnBudgets.keys()) {
+          if (!profiles.includes(profile)) this.#turnBudgets.delete(profile)
+        }
+      },
       measure: (pathId) => {
         const peer = this.#installedPeers.get(encodeBase64Url(pathId))
         return peer === undefined ? { usefulBytes: 0, unhelpful: false } : this.#lanes.measureLane(peer.laneId, peer.laneEpoch)

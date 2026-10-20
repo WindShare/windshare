@@ -100,6 +100,7 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		}
 		if p.TURNService != nil && p.TURN != nil && p.TURN.ActiveSockets >= 0 {
 			spec.TURN = &clievent.NativeTURNFacts{Provider: p.TURNService.Provider, Account: p.TURNService.Account, Profile: p.TURNService.Profile,
+				Cleanup: p.TURNCleanup, Reason: p.TURNCleanup.Reason(),
 				Resources: &clievent.NativeTURNResources{ActiveSockets: uint64(p.TURN.ActiveSockets), OpenedSockets: p.TURN.OpenedSockets,
 					TransportSent: p.TURN.TransportSent, TransportReceived: p.TURN.TransportReceived}}
 		}
