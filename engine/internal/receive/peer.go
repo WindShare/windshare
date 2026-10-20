@@ -508,7 +508,7 @@ func notifyReceiverPeer(observe func(receiverPeerSignal), signal receiverPeerSig
 	}
 }
 
-type receiverPeerSetAdapter struct{ path *peerset.Path }
+type receiverPeerSetAdapter struct{ path *peerset.ReceiverSession }
 
 func (adapter receiverPeerSetAdapter) SetDemand(demand peerset.Demand) error {
 	return adapter.path.SetDemand(demand)
@@ -534,7 +534,11 @@ func (adapter receiverPeerFactoryAdapter) startPeerSet(ctx context.Context, sign
 	if demand == peerset.NoDemand {
 		demand = peerset.ContentDemand
 	}
-	path, err := peerset.OpenReceiver(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
+	routes := peerset.UserRelayRoutes
+	if adapter.stopAfterWave {
+		routes = peerset.DirectRoutes
+	}
+	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave, Routes: routes})
 	if err != nil {
 		return nil, err
 	}

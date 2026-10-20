@@ -71,24 +71,24 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 				_, _ = h.native.NewPeerConnection(context.Background(), request(i))
 			}
 			a, b, c := h.requests[0], h.requests[1], h.requests[2]
-			if len(a.STUNURLs) == 0 || len(b.STUNURLs) == 0 || !slices.Equal(b.STUNURLs, c.STUNURLs) || b.ICEProfileID != c.ICEProfileID {
-				t.Fatal(a.STUNURLs, b.STUNURLs, c.STUNURLs)
+			if len(a.ICE.DiscoveryURLs()) == 0 || len(b.ICE.DiscoveryURLs()) == 0 || !slices.Equal(b.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs()) || b.ICEProfileID != c.ICEProfileID {
+				t.Fatal(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs())
 			}
-			if count == 1 && !slices.Equal(a.STUNURLs, b.STUNURLs) {
+			if count == 1 && !slices.Equal(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs()) {
 				t.Fatal("singleton was consumed")
 			}
-			if count == 4 && (len(a.STUNURLs) != 2 || len(b.STUNURLs) != 2 || slices.Contains(a.STUNURLs, b.STUNURLs[0])) {
+			if count == 4 && (len(a.ICE.DiscoveryURLs()) != 2 || len(b.ICE.DiscoveryURLs()) != 2 || slices.Contains(a.ICE.DiscoveryURLs(), b.ICE.DiscoveryURLs()[0])) {
 				t.Fatal("backup did not explore unused domains")
 			}
 			h.monitor.state.ResumeSequence++
 			_, _ = h.native.NewPeerConnection(context.Background(), request(4))
 			replacement := h.requests[3]
-			if replacement.NetworkGenerationID == c.NetworkGenerationID || replacement.ICEProfileID == c.ICEProfileID || !slices.Equal(replacement.STUNURLs, c.STUNURLs) {
-				t.Fatal("network replacement reset wave footprint", replacement.STUNURLs, c.STUNURLs)
+			if replacement.NetworkGenerationID == c.NetworkGenerationID || replacement.ICEProfileID == c.ICEProfileID || !slices.Equal(replacement.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs()) {
+				t.Fatal("network replacement reset wave footprint", replacement.ICE.DiscoveryURLs(), c.ICE.DiscoveryURLs())
 			}
 			h.native.BeginWave(a.ProtocolSessionID, request(1).Binding.PeerPathID)
 			_, _ = h.native.NewPeerConnection(context.Background(), request(5))
-			if len(h.requests[4].STUNURLs) == 0 {
+			if len(h.requests[4].ICE.DiscoveryURLs()) == 0 {
 				t.Fatal("new wave could not select")
 			}
 		})

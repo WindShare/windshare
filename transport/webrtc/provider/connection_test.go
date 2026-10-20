@@ -13,6 +13,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/stun/v4"
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
 
@@ -32,8 +33,12 @@ func testSessionLease(t *testing.T, authority *socketauthority.Authority, sessio
 }
 func testConnection(t *testing.T, lease *socketauthority.Lease, urls []string, mapped []MappedEndpoint) *Connection {
 	t.Helper()
+	configuration, err := iceconfig.New(urls, nil, iceconfig.AllCandidates)
+	if err != nil {
+		t.Fatal(err)
+	}
 	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
-		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, STUNURLs: urls, MappedEndpoints: mapped,
+		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: configuration, MappedEndpoints: mapped,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -323,8 +328,7 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 	if err = connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request.STUNURLs = []string{"invalid:url"}
-	if _, err = NewPeerConnection(pion.Configuration{}, request); err == nil {
+	if _, err = iceconfig.New([]string{"invalid:url"}, nil, iceconfig.AllCandidates); err == nil {
 		t.Fatal("invalid URL accepted")
 	}
 }

@@ -127,3 +127,38 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 		t.Fatal("negative allowance duration accepted")
 	}
 }
+
+func TestNativeTURNTraceSeparatesSocketCountersFromUsefulBytes(t *testing.T) {
+	event, err := clievent.NewNativeConnectivityObserved(clievent.NativeConnectivitySpec{
+		Command: clievent.CommandShare, Side: "sender", Kind: "provider_closed", State: "unknown",
+		TURN: &clievent.NativeTURNFacts{Provider: "cloudflare", Account: "owner", Profile: "primary",
+			Resources: &clievent.NativeTURNResources{OpenedSockets: 2, TransportSent: 9007199254740993, TransportReceived: 300}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(record.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		TURN struct {
+			Provider  string `json:"provider"`
+			Resources struct {
+				Sent   string `json:"transport_sent_bytes"`
+				Active string `json:"active_sockets"`
+			} `json:"resources"`
+		} `json:"turn"`
+	}
+	if err = json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.TURN.Provider != "cloudflare" || wire.TURN.Resources.Sent != "9007199254740993" || wire.TURN.Resources.Active != "0" ||
+		strings.Contains(string(raw), "useful_bytes") || strings.Contains(string(raw), "billed") {
+		t.Fatalf("invented usage or lost integer precision: %s", raw)
+	}
+}

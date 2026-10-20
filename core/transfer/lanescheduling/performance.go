@@ -5,11 +5,12 @@ package lanescheduling
 import "time"
 
 const (
-	InitialBlockTime  = 250 * time.Millisecond
-	MinimumSampleTime = time.Millisecond
-	MeasurementWindow = time.Second
-	RelayCostFactor   = 1.1
-	sampleWeight      = 0.25
+	InitialBlockTime    = 250 * time.Millisecond
+	MinimumSampleTime   = time.Millisecond
+	MeasurementWindow   = time.Second
+	UserRelayCostFactor = 1.05
+	RelayCostFactor     = 1.1
+	sampleWeight        = 0.25
 )
 
 // Performance measures authenticated payload over a lane's busy interval, so
@@ -91,9 +92,6 @@ func (p *Performance) Estimate(bytes uint64) time.Duration {
 	return time.Duration(min(max(seconds, MinimumSampleTime.Seconds()), time.Hour.Seconds()) * float64(time.Second))
 }
 
-func Cost(estimate time.Duration, relayed bool) float64 {
-	if relayed {
-		return float64(estimate) * RelayCostFactor
-	}
-	return float64(estimate)
+func Cost(estimate time.Duration, factor float64) float64 {
+	return float64(estimate) * factor
 }

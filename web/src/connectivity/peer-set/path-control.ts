@@ -5,6 +5,7 @@ import type { V2PeerRecoveryClock } from './contract'
 import type { PeerPathNotice } from './wave'
 import type { PeerNetworkGeneration } from './network-generation'
 import { awaitWithAbort } from '../peer-offer-remote'
+import { isTurnControl } from '../turn/control-codec'
 
 const DEMAND_LIFETIME_MILLISECONDS = 120_000
 const DEMAND_RENEWAL_MILLISECONDS = 60_000
@@ -35,6 +36,7 @@ export class PeerPathControl {
     if (!/^[a-z0-9.-]{0,64}$/.test(providerProfile)) throw new TypeError('Invalid trusted provider profile')
     this.#providerProfile = providerProfile
     this.#unsubscribe = session.subscribePeerPathControls((body) => {
+      if (isTurnControl(body)) return
       const control = decodeV2PeerPathControl(body)
       if (this.#closed || !equalBytes(control.peerPathId, this.#path) ||
         control.controlSequence <= this.#remoteSequence) return

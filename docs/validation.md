@@ -27,7 +27,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make short-go` | Non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
-| `make vectors` | Vector checks in `core/internal/protocolcontract`, `connectivity/v2signal`, and `cmd/wind/internal/runtrace`. |
+| `make vectors` | Shared protocol, TURN control, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make web` | ESLint, TypeScript/Vite build, Vitest. |

@@ -6,6 +6,7 @@ package ice
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -1221,7 +1222,7 @@ func (a *Agent) gatherCandidatesRelay(ctx context.Context, urls []*stun.URI) {
 						return
 					}
 
-					relayConn, err := client.Allocate()
+					relayConn, err := allocateRelay(ctx, client, locConn)
 					if err != nil {
 						client.Close()
 						closeConnAndLog(locConn, a.log, "failed to allocate on TURN client %s %s", turnServerAddr, err)
@@ -1248,25 +1249,64 @@ func (a *Agent) gatherCandidatesRelay(ctx context.Context, urls []*stun.URI) {
 					// Relay allocations currently produce UDP relay endpoints regardless of
 					// whether the TURN control connection uses UDP/TCP/TLS/DTLS.
 					a.addRelayCandidates(ctx, relayEndpoint{
-						network:  udp,
-						address:  rAddr.IP,
-						port:     rAddr.Port,
-						relAddr:  relAddr,
-						relPort:  relPort,
-						iface:    findIfaceForIP(ifaces, net.ParseIP(relAddr)),
-						protocol: relayProtocol,
-						conn:     relayConn,
-						onClose: func() error {
-							client.Close()
-
-							return locConn.Close()
-						},
+						network:   udp,
+						address:   rAddr.IP,
+						port:      rAddr.Port,
+						relAddr:   relAddr,
+						relPort:   relPort,
+						iface:     findIfaceForIP(ifaces, net.ParseIP(relAddr)),
+						protocol:  relayProtocol,
+						conn:      relayConn,
+						onClose:   relayConn.Close,
 						closeConn: closeRelayConn,
 					})
 				}(*url, network, urlProto, localBindAddr)
 			}
 		}
 	}
+}
+
+// A gathering cancellation must wake a pending allocation transaction without
+// destroying an allocation that won the race. Expiring writes before cancelling
+// transactions also covers Allocate starting after the cancellation callback.
+func allocateRelay(ctx context.Context, client turnClient, control net.PacketConn) (net.PacketConn, error) {
+	cancelled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = control.SetWriteDeadline(time.Now())
+		client.Close()
+		close(cancelled)
+	})
+	conn, err := client.Allocate()
+	if !stop() {
+		<-cancelled
+	}
+	_ = control.SetWriteDeadline(time.Time{})
+	if err != nil {
+		return nil, err
+	}
+
+	return &turnAllocationConn{PacketConn: conn, control: control, client: client}, nil
+}
+
+// Candidate rejection and candidate I/O teardown share the same release owner.
+// Even an allocation never installed in a candidate sends deletion before its
+// control transport closes.
+type turnAllocationConn struct {
+	net.PacketConn
+	control   net.PacketConn
+	client    turnClient
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (c *turnAllocationConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.PacketConn.Close()
+		c.client.Close()
+		c.closeErr = errors.Join(c.closeErr, c.control.Close())
+	})
+
+	return c.closeErr
 }
 
 type relayEndpoint struct {
@@ -1401,6 +1441,9 @@ func (a *Agent) addRelayCandidates(ctx context.Context, ep relayEndpoint) {
 
 	addresses, ok := a.resolveRelayAddresses(ep)
 	if !ok {
+		if ep.closeConn != nil {
+			ep.closeConn()
+		}
 		return
 	}
 

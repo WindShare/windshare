@@ -1,6 +1,6 @@
 import { cancellationTraceReason } from './v2-operation-diagnostics'
 import { V2OperationCancellationError } from './v2-runtime-types'
-import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
+import { validateV2PeerPathControlBody } from '../connectivity/v2-path-control-codec'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
 import type { FailureCorrelation, ReceivedProtocolError } from '../diagnostics/incident/fact'
@@ -223,7 +223,7 @@ export class V2ReceiverSessionRuntime {
   async sendPeerPathControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
     this.#requireOpen()
     options.signal?.throwIfAborted()
-    decodeV2PeerPathControl(body)
+    validateV2PeerPathControlBody(body)
     await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, body), options)
   }
 
@@ -254,8 +254,11 @@ export class V2ReceiverSessionRuntime {
       if (requestedLaneId !== 0 && grant.laneId !== requestedLaneId) {
         throw new V2SessionRuntimeError('session', 'Lane grant changed the requested lane identity')
       }
-      if (requestedLaneId === 0 && this.#laneEpochs.has(grant.laneId)) {
-        throw new V2SessionRuntimeError('session', 'Automatic lane grant reused a logical lane identity')
+      const previousEpoch = this.#laneEpochs.get(grant.laneId)
+      // The sender owns reusable session slots; path replacement must advance
+      // their epoch rather than consume a new identity for the session's lifetime.
+      if (previousEpoch !== undefined && grant.laneEpoch <= previousEpoch) {
+        throw new V2SessionRuntimeError('session', 'Lane grant did not advance its logical lane epoch')
       }
     } catch (error) {
       await this.close()

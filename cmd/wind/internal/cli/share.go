@@ -20,6 +20,10 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	if parse != requestParseReady {
 		return parse.exitCode()
 	}
+	if err := a.application.ConfigureTURN(request.turn); err != nil {
+		_, _ = fmt.Fprintf(a.stderrWriter(), "share: TURN configuration: %v\n", err)
+		return ExitUsage
+	}
 	runtime, err := a.newCommandRuntime(clievent.CommandShare, request.observation)
 	if err != nil {
 		if !errors.Is(err, errUserTraceOpen) {

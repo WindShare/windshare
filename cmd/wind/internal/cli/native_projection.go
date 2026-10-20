@@ -10,11 +10,12 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
 func (a *App) observeSenderPeerAttempt(observation v2peer.SenderAttemptObservation) {
-	if observation.Stage != v2peer.SenderAttemptAdmitted || observation.Lane == nil {
+	if observation.Stage != v2peer.SenderAttemptAdmitted || observation.Lane == nil || observation.Route != transfer.LaneRouteDirect {
 		return
 	}
 	// SenderAttemptAdmitted is emitted only after authenticated runtime ownership,
@@ -51,8 +52,16 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 	if value.Socket != nil {
 		count++
 	}
+	if value.TURN != nil {
+		count++
+	}
 	if count != 1 {
 		return clievent.NativeConnectivityObserved{}, clievent.ErrInvalidEvent
+	}
+	if event := value.TURN; event != nil {
+		spec.Kind, spec.At = "turn_path", event.At
+		spec.TURN = &clievent.NativeTURNFacts{Provider: event.Provider, Account: event.Account, Profile: event.Profile,
+			Milestone: event.Milestone, Reason: event.Reason, UsefulBytes: event.UsefulBytes}
 	}
 	if socket := value.Socket; socket != nil {
 		spec.Kind = string(socket.Kind)
@@ -88,6 +97,11 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		}
 		if pair := p.Pair; pair != nil {
 			spec.Pair = &clievent.NativePairFacts{LocalType: pair.LocalType, RemoteType: pair.RemoteType, Protocol: pair.Protocol, LocalAddress: nativeObservedAddress(pair.LocalAddress), RemoteAddress: nativeObservedAddress(pair.RemoteAddress), LocalPort: pair.LocalPort, RemotePort: pair.RemotePort, PairRTT: pair.RoundTripTime}
+		}
+		if p.TURNService != nil && p.TURN != nil && p.TURN.ActiveSockets >= 0 {
+			spec.TURN = &clievent.NativeTURNFacts{Provider: p.TURNService.Provider, Account: p.TURNService.Account, Profile: p.TURNService.Profile,
+				Resources: &clievent.NativeTURNResources{ActiveSockets: uint64(p.TURN.ActiveSockets), OpenedSockets: p.TURN.OpenedSockets,
+					TransportSent: p.TURN.TransportSent, TransportReceived: p.TURN.TransportReceived}}
 		}
 	}
 	if r := value.Reachability; r != nil {

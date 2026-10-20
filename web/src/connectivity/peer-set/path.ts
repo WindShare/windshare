@@ -86,7 +86,6 @@ export class V2PeerRecoverySupervisor {
   #lastNow: number | undefined
   #waveOrdinal = 0
   #authenticatedNotBefore = 0
-  #preferredLaneId = 0
   #terminal: V2ProtocolSessionTerminalSnapshot | undefined
   #pendingWave: PendingWave | undefined
 
@@ -195,7 +194,6 @@ export class V2PeerRecoverySupervisor {
       return true
     }
     if (this.#state.kind !== 'admitted' || !this.#matchesCurrentLane(detachment)) return false
-    this.#preferredLaneId = detachment.laneId
     this.#currentLane = undefined
     this.#trace.emit(
       () => Object.freeze({ stage: 'peer-detached' }),
@@ -400,7 +398,6 @@ export class V2PeerRecoverySupervisor {
       waveOrdinal: wave.ordinal,
       waveAttemptOrdinal,
       sessionAttemptOrdinal,
-      requestedLaneId: this.#preferredLaneId,
       negotiationBudgetMilliseconds: this.#policy.negotiationBudgetMilliseconds,
       admissionBudgetMilliseconds: this.#policy.admissionBudgetMilliseconds,
       phaseChanged: (phase: V2PeerAttemptPhase) => this.#attemptPhaseChanged(
@@ -466,14 +463,12 @@ export class V2PeerRecoverySupervisor {
       const detached = this.#detachedAdmission
       if (detached !== undefined && equalV2DiagnosticIdentities(detached.attemptId, attemptId) &&
         detached.laneId === result.lane.laneId && detached.laneEpoch === result.lane.laneEpoch) {
-        this.#preferredLaneId = detached.laneId
         this.#state = Object.freeze({ kind: 'idle' })
         this.#trace.emit(() => Object.freeze({ stage: 'peer-detached' }), attemptId, detached)
         if (this.#activationCount > 0) this.#scheduleWave('detachment', false)
         return false
       }
       this.#currentLane = Object.freeze({ ...result.lane })
-      this.#preferredLaneId = result.lane.laneId
       this.#state = Object.freeze({ kind: 'admitted', lane: this.#currentLane })
       if (this.#activationCount === 0) this.#retainIdleLane()
       return false

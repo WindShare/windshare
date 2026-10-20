@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -64,6 +65,8 @@ type Config struct {
 	Random   io.Reader
 }
 type PathConfig struct {
+	Budget        *Budget
+	ICE           iceconfig.Connection
 	Native        *nativepeer.NativePeerConnectivity
 	Controls      sessionruntime.PeerPathControlSession
 	SessionID     protocolsession.ProtocolSessionID
@@ -73,15 +76,24 @@ type PathConfig struct {
 	Demand        Demand
 	StopAfterWave bool
 }
+
+func (p *Path) budget() *Budget {
+	if p.config.Budget != nil {
+		return p.config.Budget
+	}
+	return p.owner.config.Budget
+}
+
 type pathKey struct {
 	session protocolsession.ProtocolSessionID
 	path    v2signal.PeerPathID
 }
 type PeerSet struct {
-	mu        sync.Mutex
-	config    Config
-	paths     map[pathKey]*Path
-	prewarmed map[protocolsession.ProtocolSessionID]bool
+	mu              sync.Mutex
+	config          Config
+	paths           map[pathKey]*Path
+	prewarmed       map[protocolsession.ProtocolSessionID]bool
+	controlHandlers map[protocolsession.ProtocolSessionID]func([]byte) error
 }
 
 func New(config Config) (*PeerSet, error) {
@@ -97,7 +109,7 @@ func New(config Config) (*PeerSet, error) {
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool)}, nil
+	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), controlHandlers: make(map[protocolsession.ProtocolSessionID]func([]byte) error)}, nil
 }
 func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if ctx == nil || (config.Start == nil && config.Prepare == nil) || config.Demand > ContentDemand {

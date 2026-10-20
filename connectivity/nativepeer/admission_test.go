@@ -174,8 +174,8 @@ func TestProcessProviderAdmissionFairAcrossManagersAndIndependentCancellation(t 
 	if fourth.err != nil {
 		t.Fatal(fourth.err)
 	}
-	a.SetDirect(attemptFor(6).ProtocolSessionID, attemptFor(6).Binding.PeerPathID)
-	a.SetDirect(attemptFor(6).ProtocolSessionID, attemptFor(6).Binding.PeerPathID)
+	a.SetAdmitted(attemptFor(6).ProtocolSessionID, attemptFor(6).Binding.PeerPathID, true)
+	a.SetAdmitted(attemptFor(6).ProtocolSessionID, attemptFor(6).Binding.PeerPathID, true)
 	gate.mu.Lock()
 	count := gate.active
 	queued := len(gate.queue)

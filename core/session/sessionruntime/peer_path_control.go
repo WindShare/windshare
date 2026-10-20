@@ -31,7 +31,7 @@ func (handler peerPathControlHandler) HandleMessage(ctx context.Context, message
 			return err
 		}
 	}
-	if _, err := protocolsession.DecodePeerPathControl(body); err != nil {
+	if err := protocolsession.ValidatePeerPathControlBody(body); err != nil {
 		return err
 	}
 	handler.runtime.peerPathMu.RLock()
@@ -47,7 +47,7 @@ func (runtime *ReceiverRuntime) SendPeerPathControl(ctx context.Context, body []
 	if runtime == nil || ctx == nil {
 		return ErrRuntimeConfig
 	}
-	if _, err := protocolsession.DecodePeerPathControl(body); err != nil {
+	if err := protocolsession.ValidatePeerPathControlBody(body); err != nil {
 		return err
 	}
 	message, err := protocolsession.NewMessage(protocolsession.MessagePeerPathControl, nil, body)
@@ -73,7 +73,7 @@ func (session senderPeerSession) SendPeerPathControl(ctx context.Context, body [
 	if session.runtime == nil || ctx == nil {
 		return ErrRuntimeConfig
 	}
-	if _, err := protocolsession.DecodePeerPathControl(body); err != nil {
+	if err := protocolsession.ValidatePeerPathControlBody(body); err != nil {
 		return err
 	}
 	lane, err := session.runtime.lanes.selectLane(nil)

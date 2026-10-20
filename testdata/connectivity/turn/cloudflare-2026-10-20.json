@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-20",
+  "runner": "web/scripts/browser-network-matrix/run-turn-trial.mjs",
+  "scope": "Native provider to Chromium; overlapping fresh credentials before retiring each old connection",
+  "usefulBytesPerTrial": 524288,
+  "trials": [
+    {
+      "transport": "udp",
+      "generation": "initial",
+      "elapsedMilliseconds": 16678.6,
+      "usefulMbps": 0.251478,
+      "nativePair": { "localType": "relay", "remoteType": "relay", "protocol": "udp", "local": "104.30.145.183:15318", "remote": "104.30.145.8:37240", "rttNanoseconds": 344336700 },
+      "native": { "activeSockets": 1, "openedSockets": 1, "transportSent": 580396, "transportReceived": 30432 },
+      "browser": { "relayProtocol": "udp", "bytesReceived": 573043, "bytesSent": 24169 }
+    },
+    {
+      "transport": "udp",
+      "generation": "replacement",
+      "elapsedMilliseconds": 15345.8,
+      "usefulMbps": 0.273319,
+      "nativePair": { "localType": "relay", "remoteType": "relay", "protocol": "udp", "local": "104.30.144.166:54408", "remote": "104.30.145.184:55394", "rttNanoseconds": 352895700 },
+      "native": { "activeSockets": 1, "openedSockets": 1, "transportSent": 582612, "transportReceived": 32684 },
+      "browser": { "relayProtocol": "udp", "bytesReceived": 575568, "bytesSent": 26157 }
+    },
+    {
+      "transport": "tls-443",
+      "generation": "initial",
+      "elapsedMilliseconds": 2999.9,
+      "usefulMbps": 1.398148,
+      "nativePair": { "localType": "relay", "remoteType": "relay", "protocol": "udp", "local": "104.30.136.12:41672", "remote": "104.30.136.3:45295", "rttNanoseconds": 360749900 },
+      "native": { "activeSockets": 1, "openedSockets": 1, "transportSent": 576167, "transportReceived": 30124 },
+      "browser": { "relayProtocol": "tls", "bytesReceived": 556871, "bytesSent": 19647 }
+    },
+    {
+      "transport": "tls-443",
+      "generation": "replacement",
+      "elapsedMilliseconds": 2909.1,
+      "usefulMbps": 1.441787,
+      "nativePair": { "localType": "relay", "remoteType": "relay", "protocol": "udp", "local": "104.30.144.57:43865", "remote": "104.30.136.4:21478", "rttNanoseconds": 386222300 },
+      "native": { "activeSockets": 1, "openedSockets": 1, "transportSent": 576037, "transportReceived": 27090 },
+      "browser": { "relayProtocol": "tls", "bytesReceived": 556871, "bytesSent": 19646 }
+    }
+  ],
+  "cleanup": { "allNativeSocketsAfterClose": 0, "temporaryProviderKeyDeleted": true, "localIssuerSecretDeleted": true },
+  "providerUsage": {
+    "dataset": "callsTurnUsageAdaptiveGroups",
+    "egressBytes": 2398752,
+    "ingressBytes": 2360945,
+    "sampled": true,
+    "status": "queried",
+    "scope": "Aggregate for the isolated temporary TURN key on 2026-10-20 UTC, covering all four trials",
+    "priorRateLimitedQueries": 2,
+    "note": "Provider sampled usage is not an invoice. Local socket and browser counters remain separate."
+  },
+  "limits": [
+    "Small connectivity samples, not representative capacity benchmarks.",
+    "This runner tests transport replacement. Full authenticated replacement after application-relay loss is covered by v2-local-turn.network.spec.ts."
+  ]
+}

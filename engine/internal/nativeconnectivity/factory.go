@@ -9,11 +9,13 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 type SenderConfig struct {
+	TURN           turnpath.Accounts
 	Now            func() time.Time
 	Diagnostics    bool
 	TraceLifecycle bool
@@ -30,6 +32,7 @@ func senderConfig(config SenderConfig) v2peer.Config {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
 	}
 	result := v2peer.Config{
+		TURN:          config.TURN,
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        nativepeer.New(nativeConfig),
 		Now:           config.Now,

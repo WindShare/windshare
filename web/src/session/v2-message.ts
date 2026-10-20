@@ -1,4 +1,4 @@
-import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
+import { validateV2PeerPathControlBody } from '../connectivity/v2-path-control-codec'
 import { concatBytes, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
@@ -413,7 +413,7 @@ export function validateV2SenderControlBody(kind: V2MessageKind, body: Uint8Arra
       decodeV2OperationErrorControl(body)
       return
     case V2_MESSAGE_KIND.peerPathControl:
-      decodeV2PeerPathControl(body)
+      validateV2PeerPathControlBody(body)
       return
     case V2_MESSAGE_KIND.sessionTerminal:
       validateSessionTerminal(body)

@@ -30,3 +30,10 @@ Let share owners configure standard TURN services, including Cloudflare Realtime
 Unconfigured users incur no TURN network activity. Configured users gain another path without waiting for it before sharing or starting available transfers. Demand-driven acquisition can delay TURN readiness; extra active paths consume sockets, CPU, memory, and shared uplink capacity, so more connections do not inherently improve speed.
 
 The maintenance cost is credential and connection lifecycle complexity. Keep provider behavior in adapters, account policy in Engine, and path coordination in the session-level PeerSet; reuse existing transfer progress and scheduling. Provider accounting capabilities remain optional, allowing ordinary TURN services to work without a billing integration.
+
+## Implementation evidence
+
+- [Configuration and operating model](../turn.md): static, coturn and Cloudflare accounts, delegated credentials, demand-driven replacement, shared budgets and diagnostics.
+- [Cloudflare trial record](../../testdata/connectivity/turn/cloudflare-2026-10-20.json): native/Chromium UDP and TLS 443, overlapping replacements, socket cleanup and independently queried provider usage.
+- `web/e2e/v2-local-turn.network.spec.ts` exercises owner-issued credentials and authenticated replacement after application-relay loss, preserving the download and verifying its hash.
+- Shared wire fixtures live in `core/testvectors/turn-control-v3.json`; local lifecycle, provider, budget and cancellation tests require no external account.

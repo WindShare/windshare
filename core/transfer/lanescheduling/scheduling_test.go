@@ -30,8 +30,9 @@ func TestBusyThroughputAndCompletionEstimate(t *testing.T) {
 	if p.BytesPerSecond != 1024 {
 		t.Fatal("idle time poisoned throughput", p)
 	}
-	if Cost(time.Second, false) >= Cost(time.Second, true) ||
-		Cost(time.Second, true) >= Cost(2*time.Second, false) {
+	if Cost(time.Second, 1) >= Cost(time.Second, UserRelayCostFactor) ||
+		Cost(time.Second, UserRelayCostFactor) >= Cost(time.Second, RelayCostFactor) ||
+		Cost(time.Second, RelayCostFactor) >= Cost(2*time.Second, 1) {
 		t.Fatal("relay cost overrides useful acceleration")
 	}
 }

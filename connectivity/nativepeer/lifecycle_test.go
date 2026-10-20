@@ -56,7 +56,7 @@ func TestMappingFactsAreFrozenOnlyIntoFreshAttemptAndRetainedOnlyForSelectedLane
 		t.Fatal(second.MappedEndpoints)
 	}
 	second.Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "udp"}})
-	h.native.SetDirect(req.ProtocolSessionID, req.Binding.PeerPathID)
+	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	if len(h.native.config.Reachability.Facts()) != 1 {
 		t.Fatal("admitted mapping lost its lease")
 	}
@@ -110,7 +110,7 @@ func TestSenderMaintenancePublishesOnlyNewLocalFacts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	h.native.RunSession(ctx, session, send)
-	h.native.SetDirect(session, v2signal.PeerPathID{255})
+	h.native.SetAdmitted(session, v2signal.PeerPathID{255}, true)
 	if h.native.Retired(session, pathID) {
 		t.Fatal("live path retired")
 	}

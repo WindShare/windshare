@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/share"
 	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turnconfig"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -43,6 +44,8 @@ type ReceiveDependencies struct {
 }
 
 type Config struct {
+	TURN                turnconfig.Config
+	TURNDependencies    turnconfig.Dependencies
 	RelaySetup          relaysetup.Dependencies
 	Now                 func() time.Time
 	Random              io.Reader

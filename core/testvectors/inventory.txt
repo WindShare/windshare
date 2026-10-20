@@ -8,6 +8,7 @@ name-collision-v1.json
 path-policy.json
 portable-path-vectors.json
 receive-intent-v4.json
+turn-control-v3.json
 v2-fragment.json
 v2-identity.json
 v2-peer-signaling.json

@@ -1,13 +1,19 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/pion/turn/v5"
 )
@@ -19,6 +25,7 @@ const (
 	realm                    = "windshare.test"
 	username                 = "windshare-browser"
 	credential               = "windshare-local-turn"
+	sharedSecret             = "windshare-local-turn-issuer"
 )
 
 type readyRecord struct {
@@ -30,6 +37,7 @@ type readyRecord struct {
 	RelayAddress string `json:"relayAddress"`
 	Username     string `json:"username"`
 	Credential   string `json:"credential"`
+	SharedSecret string `json:"sharedSecret"`
 }
 
 func main() {
@@ -52,7 +60,15 @@ func run() (runErr error) {
 		Realm: realm,
 		AuthHandler: func(attributes *turn.RequestAttributes) (string, []byte, bool) {
 			if attributes.Username != username {
-				return "", nil, false
+				expiry, _, found := strings.Cut(attributes.Username, ":")
+				seconds, err := strconv.ParseInt(expiry, 10, 64)
+				if !found || err != nil || time.Now().Unix() >= seconds {
+					return "", nil, false
+				}
+				mac := hmac.New(sha1.New, []byte(sharedSecret))
+				_, _ = mac.Write([]byte(attributes.Username))
+				password := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+				return attributes.Username, turn.GenerateAuthKey(attributes.Username, realm, password), true
 			}
 			return username, turn.GenerateAuthKey(username, realm, credential), true
 		},
@@ -103,6 +119,7 @@ func newReadyRecord(address net.Addr, relayIP net.IP) (readyRecord, error) {
 		RelayAddress: relayIPv4.String(),
 		Username:     username,
 		Credential:   credential,
+		SharedSecret: sharedSecret,
 	}, nil
 }
 

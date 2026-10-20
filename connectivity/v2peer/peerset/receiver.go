@@ -10,12 +10,20 @@ import (
 )
 
 type ReceiverConfig struct {
+	Routes        ReceiverRoutes
 	Factory       *v2peer.ReceiverFactory
 	Signaling     v2peer.ReceiverSignaling
 	Lanes         v2peer.ReceiverLaneSession
 	Demand        Demand
 	StopAfterWave bool
 }
+
+type ReceiverRoutes uint8
+
+const (
+	DirectRoutes ReceiverRoutes = iota
+	UserRelayRoutes
+)
 
 func OpenReceiver(ctx context.Context, config Config, receiver ReceiverConfig) (*Path, error) {
 	if receiver.Factory == nil {
@@ -25,6 +33,10 @@ func OpenReceiver(ctx context.Context, config Config, receiver ReceiverConfig) (
 	if err != nil {
 		return nil, err
 	}
+	return owner.openDirect(ctx, receiver)
+}
+
+func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (*Path, error) {
 	var sessionID protocolsession.ProtocolSessionID
 	if session, ok := receiver.Lanes.(interface {
 		ProtocolSessionID() protocolsession.ProtocolSessionID

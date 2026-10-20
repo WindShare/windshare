@@ -9,6 +9,8 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type attemptAdmissionPhase uint8
@@ -298,12 +300,28 @@ func (execution *attemptExecution) acceptAdmission(
 		)
 	}
 	execution.attempt.attached.Store(true)
-	execution.attempt.config.factory.native.SetDirect([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID)
+	if execution.attempt.config.turnLease != nil {
+		execution.attempt.config.turn.Admitted([16]byte(execution.attempt.binding().PeerPathID))
+	}
+	direct := execution.attempt.config.turnLease == nil
+	if source, ok := execution.peer.(interface {
+		SelectedPair() (provider.PairFacts, bool)
+	}); ok {
+		if pair, selected := source.SelectedPair(); selected {
+			direct = pair.LocalType != "relay" && pair.RemoteType != "relay"
+		}
+	}
+	execution.attempt.config.factory.native.SetAdmitted([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID, direct)
+	route := transfer.LaneRouteTURN
+	if direct {
+		route = transfer.LaneRouteDirect
+	}
 	execution.attempt.recorder.complete(
 		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{
 			Phase:                SenderAttemptPhaseAdmission,
 			GrantOperationID:     result.GrantOperationID,
 			Lane:                 &result.Lane,
+			Route:                route,
 			AdmissionDisposition: SenderAdmissionAccepted,
 			ResponseDelivery:     SenderResponseDelivered,
 		},

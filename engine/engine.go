@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turnaccount"
 )
 
 const (
@@ -46,6 +47,7 @@ type managedTask interface {
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
 	relaySetup    *relaysetup.Service
+	turn          *turnaccount.Manager
 	mu            sync.Mutex
 	config        Config
 	random        *lockedReader
@@ -62,6 +64,7 @@ type Engine struct {
 }
 
 func New(config Config) (*Engine, error) {
+	config.TURN = config.TURN.Clone()
 	if config.Now == nil {
 		config.Now = time.Now
 	}
@@ -107,7 +110,22 @@ func New(config Config) (*Engine, error) {
 		_ = revisions.Close()
 		return nil, fmt.Errorf("create engine identity: %w", err)
 	}
+	turnDependencies := config.TURNDependencies
+	if turnDependencies.Now == nil {
+		turnDependencies.Now = config.Now
+	}
+	turnConfig, err := config.TURN.Build(turnDependencies)
+	if err != nil {
+		_ = revisions.Close()
+		return nil, err
+	}
+	turn, err := turnaccount.New(turnConfig)
+	if err != nil {
+		_ = revisions.Close()
+		return nil, err
+	}
 	return &Engine{
+		turn:       turn,
 		relaySetup: relaysetup.New(config.RelaySetup),
 		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
@@ -182,13 +200,14 @@ func (engine *Engine) shutdown(active []managedTask) {
 		<-current.Done()
 	}
 	capacityErr := engine.revisions.Close()
+	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()
 	if catalogUsage != (catalog.ResourceUsage{}) || cacheBytes != 0 {
 		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes}
 	}
 	engine.mu.Lock()
-	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, retainedErr)...)
+	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, turnErr, retainedErr)...)
 	engine.cleanupErrors = nil
 	engine.mu.Unlock()
 	close(engine.closed)

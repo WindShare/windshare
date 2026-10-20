@@ -10,9 +10,11 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -99,6 +101,7 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
+	TURN               turnpath.Accounts
 	Native             *nativepeer.NativePeerConnectivity
 	Configuration      pion.Configuration
 	PeerConnections    PeerConnectionFactory
@@ -117,6 +120,7 @@ type Config struct {
 }
 
 type Factory struct {
+	turn                  turnpath.Accounts
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       PeerConnectionFactory
@@ -202,6 +206,7 @@ func NewFactory(config Config) (*Factory, error) {
 		return nil, errors.Join(ErrConfig, err)
 	}
 	factory := &Factory{
+		turn:          config.TURN,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -349,6 +354,7 @@ type senderHandler struct {
 	inboxMu sync.Mutex
 	closed  bool
 	ingress sync.WaitGroup
+	turn    *turnpath.Sender
 
 	mu       sync.Mutex
 	attempts map[peerOperation]*peerAttempt
@@ -525,17 +531,50 @@ func (handler *senderHandler) Run(ctx context.Context) error {
 	handler.mu.Unlock()
 	defer handler.stopAll()
 	if controls, ok := handler.session.(sessionruntime.PeerPathControlSession); ok {
+		handler.turn = turnpath.NewSender(turnpath.SenderConfig{
+			Accounts: handler.factory.turn, SessionID: [16]byte(handler.session.ProtocolSessionID()),
+			Send: controls.SendPeerPathControl, Now: handler.factory.now,
+			Observe: handler.factory.native.ObserveTURN,
+			Retire: func(path [16]byte) {
+				handler.mu.Lock()
+				var attempts []*peerAttempt
+				for binding, operation := range handler.bindings {
+					if [16]byte(binding.PeerPathID) == path {
+						if attempt := handler.attempts[operation]; attempt != nil {
+							attempts = append(attempts, attempt)
+						}
+					}
+				}
+				handler.mu.Unlock()
+				for _, attempt := range attempts {
+					attempt.stop(ErrPeerPathRetired)
+					<-attempt.done
+				}
+				handler.factory.native.ClosePath([16]byte(handler.session.ProtocolSessionID()), v2signal.PeerPathID(path))
+				handler.mu.Lock()
+				handler.evidenceAuthority.retirePath(v2signal.PeerPathID(path))
+				handler.mu.Unlock()
+			},
+		})
 		controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
+			if turncontrol.IsMessage(body) {
+				return handler.turn.Handle(body)
+			}
 			handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
 			return nil
 		})
 		child, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
+		turnDone := make(chan struct{})
+		go func() {
+			defer close(turnDone)
+			handler.turn.Run(child)
+		}()
 		go func() {
 			defer close(done)
 			handler.factory.native.RunSession(child, [16]byte(handler.session.ProtocolSessionID()), controls.SendPeerPathControl)
 		}()
-		defer func() { cancel(); <-done; controls.SetPeerPathControlHandler(nil) }()
+		defer func() { cancel(); <-done; <-turnDone; controls.SetPeerPathControlHandler(nil) }()
 	}
 	for {
 		select {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
@@ -35,6 +36,19 @@ type Observation struct {
 	Lifecycle    *LifecycleFacts
 	Admission    *AdmissionFacts
 	Socket       *socketauthority.Event
+	TURN         *turnpath.Event
+}
+
+// ObserveTURN shares the bounded native diagnostic stream while preserving the
+// path's identity even before an ICE attempt exists.
+func (n *NativePeerConnectivity) ObserveTURN(event turnpath.Event) {
+	if n == nil {
+		return
+	}
+	n.producer.TryPublish(Observation{
+		Subject: Subject{ProtocolSessionID: event.Subject.SessionID, PeerPathID: event.Subject.PathID, Side: n.config.Side},
+		TURN:    &event,
+	})
 }
 
 type LifecycleKind string
@@ -78,6 +92,14 @@ func (n *NativePeerConnectivity) observeProvider(subject Subject, event provider
 	if event.Pair != nil {
 		copy := *event.Pair
 		event.Pair = &copy
+	}
+	if event.TURN != nil {
+		copy := *event.TURN
+		event.TURN = &copy
+	}
+	if event.TURNService != nil {
+		copy := *event.TURNService
+		event.TURNService = &copy
 	}
 	n.producer.TryPublish(Observation{Subject: subject, Provider: &event})
 }

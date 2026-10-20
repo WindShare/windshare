@@ -24,7 +24,7 @@ func TestSenderResourceWaitExpiresBeforeRemotePreparation(t *testing.T) {
 				// Admitted lanes release attempt permits while retaining physical
 				// sockets, isolating socket pressure from the process-start limit.
 				for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
-					h.native.SetDirect([16]byte{i}, testBinding(i).PeerPathID)
+					h.native.SetAdmitted([16]byte{i}, testBinding(i).PeerPathID, true)
 				}
 				for {
 					event := receiveTest(t, h.native.Observations())

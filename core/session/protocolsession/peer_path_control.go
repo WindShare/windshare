@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 const (
@@ -40,6 +41,17 @@ type PeerPathControl struct {
 }
 
 var ErrPeerPathControl = errors.New("invalid peer path control")
+
+// The session envelope carries distinct reachability and TURN delegation
+// variants. Neither variant borrows the lifetime of a negotiation operation.
+func ValidatePeerPathControlBody(body []byte) error {
+	if turncontrol.IsMessage(body) {
+		_, err := turncontrol.Decode(body)
+		return err
+	}
+	_, err := DecodePeerPathControl(body)
+	return err
+}
 
 func validPeerProviderProfile(profile string) bool {
 	if len(profile) > MaxPeerProviderProfileBytes {

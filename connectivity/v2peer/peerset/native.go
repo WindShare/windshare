@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
@@ -44,7 +45,7 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 	}
 }
 func (p *Path) sendControl(ctx context.Context, kind protocolsession.PeerPathControlKind) {
-	if p.config.Controls == nil || p.config.Native == nil {
+	if _, relayed := p.config.ICE.Relay(); relayed || p.config.Controls == nil || p.config.Native == nil {
 		return
 	}
 	body, err := p.config.Native.Control([16]byte(p.key.session), p.key.path, kind, p.mappingDemand())
@@ -57,8 +58,13 @@ func (p *Path) resourceDemand(direct bool) {
 		return
 	}
 	p.mu.Lock()
-	direct = direct || p.lane.ID != 0
+	admitted := direct || p.lane.ID != 0
+	_, relayed := p.config.ICE.Relay()
+	direct = admitted && !relayed
 	p.mu.Unlock()
+	if admitted {
+		p.config.Native.SetAdmitted([16]byte(p.key.session), p.key.path, direct)
+	}
 	_, _ = p.config.Native.SetDemand([16]byte(p.key.session), p.key.path, p.mappingDemand(), direct)
 	p.mu.Lock()
 	p.networkGeneration = p.config.Native.Generation([16]byte(p.key.session), p.key.path)
@@ -83,7 +89,8 @@ func (p *Path) mappingReady() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.
 func (p *Path) mappingDemand() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.demand == ContentDemand && p.resourceActive
+	_, relayed := p.config.ICE.Relay()
+	return !relayed && p.demand == ContentDemand && p.resourceActive
 }
 func (p *Path) setResourceActive(active bool) {
 	p.mu.Lock()
@@ -97,21 +104,31 @@ func (p *Path) setResourceActive(active bool) {
 }
 
 func (p *Path) bindControls() {
-	if p.config.Controls != nil {
-		p.config.Controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
-			control, err := protocolsession.DecodePeerPathControl(body)
-			if err != nil {
-				return nil
-			}
+	if p.config.Controls == nil {
+		return
+	}
+	p.config.Controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
+		if turncontrol.IsMessage(body) {
 			p.owner.mu.Lock()
-			path := p.owner.paths[pathKey{p.key.session, v2signal.PeerPathID(control.PeerPathID)}]
+			handler := p.owner.controlHandlers[p.key.session]
 			p.owner.mu.Unlock()
-			if path != nil && path.config.Native != nil {
-				path.config.Native.ApplyControl([16]byte(path.key.session), body)
+			if handler != nil {
+				return handler(body)
 			}
 			return nil
-		})
-	}
+		}
+		control, err := protocolsession.DecodePeerPathControl(body)
+		if err != nil {
+			return nil
+		}
+		p.owner.mu.Lock()
+		path := p.owner.paths[pathKey{p.key.session, v2signal.PeerPathID(control.PeerPathID)}]
+		p.owner.mu.Unlock()
+		if path != nil && path.config.Native != nil {
+			path.config.Native.ApplyControl([16]byte(path.key.session), body)
+		}
+		return nil
+	})
 }
 func (p *Path) handleNativeChange(ctx context.Context, change nativepeer.Change) {
 

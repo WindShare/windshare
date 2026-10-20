@@ -238,7 +238,6 @@ function attemptContext(phases: string[] = []): V2PeerAttemptContext {
     waveOrdinal: 1,
     waveAttemptOrdinal: 1,
     sessionAttemptOrdinal: 1,
-    requestedLaneId: 0,
     negotiationBudgetMilliseconds: 10,
     admissionBudgetMilliseconds: 20,
     phaseChanged: (phase: string) => phases.push(phase),
