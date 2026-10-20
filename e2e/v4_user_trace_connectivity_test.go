@@ -13,6 +13,10 @@ func v4DownloadConnectivitySchema() *v4TraceObjectSchema {
 }
 
 func v4NativeConnectivitySchema() *v4TraceObjectSchema {
+	diagnostic := v4TraceSchema(
+		v4TraceFields(v4TraceString, "scope", "severity"),
+		v4TraceFields(v4TraceRawString, "message"),
+	)
 	candidate := v4TraceSchema(
 		v4TraceFields(v4TraceString, "type", "protocol", "address", "family", "origin",
 			"interface_class", "stun_endpoint", "stun_rtt_ms", "policy_decision"),
@@ -51,5 +55,6 @@ func v4NativeConnectivitySchema() *v4TraceObjectSchema {
 		v4TraceObjectField("lifecycle", lifecycle, true),
 		v4TraceObjectField("admission", admission, true),
 		v4TraceObjectField("socket", socket, true),
+		v4TraceObjectField("diagnostic", diagnostic, true),
 	)
 }

@@ -56,6 +56,7 @@ type Event struct {
 	ICEProfileID        string
 	Milestone           string
 	State               string
+	Diagnostic          *Diagnostic
 	At                  time.Time
 	Candidate           *CandidateFacts
 	Pair                *PairFacts
@@ -169,7 +170,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		return fail(err)
 	}
 	settings.SetICEProviderConfig(providerConfig)
-	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observe}
+	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
 		return fail(err)

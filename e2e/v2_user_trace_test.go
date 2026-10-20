@@ -669,7 +669,9 @@ func assertV2UserTraceTransportDiagnostics(
 		case "fallback":
 			t.Fatalf("transfer using %s emitted an unexpected fallback record", wantRoute)
 		case "observer_loss":
-			t.Fatalf("transfer using %s lost diagnostic observations", wantRoute)
+			t.Fatalf("transfer using %s lost diagnostic observations: category=%s reason=%s count=%d",
+				wantRoute, v4TraceStringField(t, record.Payload, "category"),
+				v4TraceStringField(t, record.Payload, "reason"), v4TraceDecimalField(t, record.Payload, "count"))
 		}
 	}
 	if !delivered {

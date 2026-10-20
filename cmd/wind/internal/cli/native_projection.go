@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -88,6 +90,11 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 	if p := value.Provider; p != nil {
 		spec.Kind = p.Milestone
 		spec.At = p.At
+		if d := p.Diagnostic; d != nil {
+			spec.Diagnostic = &clievent.NativeProviderDiagnosticFacts{
+				Scope: d.Scope, Severity: d.Severity, Message: nativeDiagnosticMessage(d.Message),
+			}
+		}
 		// Raw provider state may be an error message for setup failures. Only
 		// finite transport states are facts suitable for the shared event schema.
 		if slices.Contains([]string{"new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, p.State) {
@@ -119,6 +126,20 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		spec.Reachability = &clievent.NativeReachabilityFacts{Local: r.Endpoint.Local, Remote: r.Scope.Remote, Protocol: protocol, Reason: nativeReachabilityReason(r.Error), ServerEpoch: r.ServerEpoch, ServerRestarted: r.ServerRestarted}
 	}
 	return clievent.NewNativeConnectivityObserved(spec)
+}
+
+func nativeDiagnosticMessage(message string) string {
+	message = strings.ToValidUTF8(message, "\uFFFD")
+	if len(message) <= clievent.NativeProviderDiagnosticMessageLimit {
+		return strings.Clone(message)
+	}
+	const suffix = "…"
+	end := clievent.NativeProviderDiagnosticMessageLimit - len(suffix)
+	for !utf8.RuneStart(message[end]) {
+		end--
+	}
+	// Keep a visible truncation marker without retaining the source log buffer.
+	return message[:end] + suffix
 }
 
 func projectTURNRecoveryFacts(facts *clievent.NativeTURNFacts, event *provider.Event) {

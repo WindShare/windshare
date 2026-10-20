@@ -1,9 +1,44 @@
 package clievent
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestNativeProviderDiagnosticContract(t *testing.T) {
+	spec := NativeConnectivitySpec{
+		Command: CommandGet, Side: "receiver", Kind: "provider_diagnostic", State: "unknown",
+		Diagnostic: &NativeProviderDiagnosticFacts{Scope: "ice", Severity: "warning", Message: "candidate unavailable"},
+	}
+	event, err := NewNativeConnectivityObserved(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Diagnostic.Message = "mutated"
+	if event.Facts().Diagnostic.Message != "candidate unavailable" {
+		t.Fatal("provider diagnostic retained mutable producer storage")
+	}
+	for name, mutate := range map[string]func(*NativeConnectivitySpec){
+		"missing diagnostic": func(s *NativeConnectivitySpec) { s.Diagnostic = nil },
+		"unrelated kind":     func(s *NativeConnectivitySpec) { s.Kind = "provider_closed" },
+		"transport state":    func(s *NativeConnectivitySpec) { s.State = "connected" },
+		"unknown scope":      func(s *NativeConnectivitySpec) { s.Diagnostic.Scope = "dtls" },
+		"unknown severity":   func(s *NativeConnectivitySpec) { s.Diagnostic.Severity = "debug" },
+		"oversized message": func(s *NativeConnectivitySpec) {
+			s.Diagnostic.Message = strings.Repeat("x", NativeProviderDiagnosticMessageLimit+1)
+		},
+		"invalid text": func(s *NativeConnectivitySpec) { s.Diagnostic.Message = "\xff" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := event.Facts()
+			mutate(&invalid)
+			if _, err := NewNativeConnectivityObserved(invalid); err == nil {
+				t.Fatal("invalid provider diagnostic accepted")
+			}
+		})
+	}
+}
 
 func TestNativeConnectivitySealsFactsAndRejectsUnboundedInput(t *testing.T) {
 	session, _ := NewProtocolSessionID(append([]byte{1}, make([]byte, 15)...))
