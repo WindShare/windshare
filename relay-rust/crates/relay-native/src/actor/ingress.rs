@@ -6,6 +6,8 @@ use windshare_relay_core::{
     share::{Control, Input, Output, Turn},
 };
 
+const REGISTRATION_GRANT_LIFETIME_MS: u64 = 30_000;
+
 impl<S: Persistence, E: Environment> Actor<S, E> {
     pub(super) fn event(&mut self, event: Event) -> Result<()> {
         let now = self.environment.now();
@@ -21,13 +23,26 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 if matches!(frame.get(..4), Some(b"WS2B" | b"WS2S")) {
                     self.windows.wake(connection);
                 }
-                let mut turn = self.relay.handle(
-                    Input::Control {
+                let input = match windshare_relay_core::registration::RegisterInit::decode(&frame) {
+                    Ok(init)
+                        if init.mode()
+                            == windshare_relay_core::registration::RegistrationMode::Fresh =>
+                    {
+                        Input::Register(windshare_relay_core::access::RegistrationGrant::new(
+                            connection,
+                            init,
+                            windshare_relay_core::access::Attribution::Anonymous,
+                            windshare_relay_core::clock::UnixMillis(
+                                now.0.saturating_add(REGISTRATION_GRANT_LIFETIME_MS),
+                            ),
+                        ))
+                    }
+                    _ => Input::Control {
                         connection,
                         frame: &frame,
                     },
-                    now,
-                );
+                };
+                let mut turn = self.relay.handle(input, now);
                 self.disconnect_refused(connection, &mut turn);
                 turn
             }

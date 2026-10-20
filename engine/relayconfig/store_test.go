@@ -1,4 +1,4 @@
-package shareconfig
+package relayconfig
 
 import (
 	"errors"
@@ -18,37 +18,37 @@ func TestSaveReplacesEntireSelectionAndRetainsAddressBoundCredentials(t *testing
 	t.Setenv(PathEnvironment, path)
 	initial := []senderrelay.Candidate{
 		{PublicURL: "https://public.example"},
-		{PublicURL: "https://old-private.example", RegistrationToken: "old-token"},
+		{PublicURL: "https://old-private.example", AccessKey: "old-token"},
 	}
-	if err := Save(Config{FrontURL: "https://old-front.example", Relays: initial}); err != nil {
+	if err := Save(Config{FrontURL: "https://old-front.example", Profiles: initial}); err != nil {
 		t.Fatal(err)
 	}
 	private := []senderrelay.Candidate{{
-		PublicURL:         "https://private.example/base?route=one&region=two",
-		RegistrationToken: strings.Repeat("<>&", senderrelay.MaxRegistrationTokenBytes/3),
+		PublicURL: "https://private.example/base?route=one&region=two",
+		AccessKey: strings.Repeat("<>&", senderrelay.MaxAccessKeyBytes/3),
 	}}
 	for range 2 {
-		if err := Save(Config{FrontURL: "https://front.example/app", Relays: private}); err != nil {
+		if err := Save(Config{FrontURL: "https://front.example/app", Profiles: private, ActiveRelays: []string{private[0].PublicURL}}); err != nil {
 			t.Fatal(err)
 		}
 		loaded, err := Load()
-		if err != nil || !reflect.DeepEqual(loaded.Relays, private) || loaded.FrontURL != "https://front.example/app" {
+		if err != nil || !reflect.DeepEqual(loaded.Profiles, private) || loaded.FrontURL != "https://front.example/app" {
 			t.Fatal("saved selection or credential changed on import/re-import:", err)
 		}
-		selected, err := SelectRelays(loaded.Relays, nil)
+		selected, err := SelectRelays(loaded, nil)
 		if err != nil || !reflect.DeepEqual(selected, private) {
 			t.Fatal("import retained or added an unselected provider:", err)
 		}
 	}
-	if err := Save(Config{Relays: private}); err != nil {
+	if err := Save(Config{Profiles: private}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := Load()
-	if err != nil || loaded.FrontURL != "" || !reflect.DeepEqual(loaded.Relays, private) {
+	if err != nil || loaded.FrontURL != "" || !reflect.DeepEqual(loaded.Profiles, private) {
 		t.Fatal("relay-only replacement retained an unrelated frontend:", err)
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
-	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+	if err != nil || len(entries) != 2 || entries[0].Name() != filepath.Base(path) || entries[1].Name() != filepath.Base(path)+".lock" {
 		t.Fatal("import left a staged credential file:", err)
 	}
 	if runtime.GOOS != "windows" {
@@ -72,10 +72,10 @@ func TestSaveRejectsInvalidSelectionBeforeTouchingDisk(t *testing.T) {
 		tooMany,
 		{{PublicURL: "invalid"}},
 		{{PublicURL: "https://relay.example"}, {PublicURL: "wss://RELAY.example:443/"}},
-		{{PublicURL: "https://relay.example", RegistrationToken: "invalid\nheader"}},
+		{{PublicURL: "https://relay.example", AccessKey: "invalid\nheader"}},
 		{{PublicURL: "https://relay.example/" + strings.Repeat("a", maxConfigBytes)}},
 	} {
-		if err := Save(Config{Relays: candidates}); !errors.Is(err, ErrConfig) {
+		if err := Save(Config{Profiles: candidates}); !errors.Is(err, ErrConfig) {
 			t.Fatal("invalid selection was not rejected:", err)
 		}
 		after, err := os.ReadFile(path)
@@ -86,7 +86,7 @@ func TestSaveRejectsInvalidSelectionBeforeTouchingDisk(t *testing.T) {
 }
 
 func TestImportAtByteLimitCanBeSavedAndLoaded(t *testing.T) {
-	prefix, suffix := `{"relays":[{"url":"https://relay.example/`, `"}]}`
+	prefix, suffix := `{"profiles":[{"url":"https://relay.example/`, `"}]}`
 	input := prefix + strings.Repeat("a", maxConfigBytes-len(prefix)-len(suffix)) + suffix
 	candidates, err := Decode(strings.NewReader(input))
 	if err != nil {
@@ -110,7 +110,7 @@ func TestSaveDestinationFailuresDoNotCreateStagedCredentials(t *testing.T) {
 	}
 	for _, path := range []string{"", root, filepath.Join(parentFile, "config.json")} {
 		t.Setenv(PathEnvironment, path)
-		if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}); err == nil {
+		if err := Save(Config{Profiles: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}); err == nil {
 			t.Fatal("invalid destination was accepted")
 		}
 	}
@@ -137,7 +137,7 @@ func TestSaveRefusesSymlinkDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(PathEnvironment, link)
-	if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}); err == nil {
+	if err := Save(Config{Profiles: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}); err == nil {
 		t.Fatal("import replaced a symbolic destination")
 	}
 	if after, err := os.ReadFile(target); err != nil || string(after) != "keep" {

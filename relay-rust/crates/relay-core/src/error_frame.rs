@@ -55,6 +55,10 @@ pub enum ErrorFrame {
     Stopped,
     /// The resume refers to a superseded registration.
     ResumeStale,
+    /// Service credentials need user action; retries cannot repair them.
+    AccessDenied,
+    /// Access authority is temporarily unavailable; share progress is retained.
+    AccessUnavailable(RetryAfter),
 }
 
 impl ErrorFrame {
@@ -75,12 +79,16 @@ impl ErrorFrame {
             Self::Admission(_) => 10,
             Self::Stopped => 11,
             Self::ResumeStale => 12,
+            Self::AccessDenied => 13,
+            Self::AccessUnavailable(_) => 14,
         }
     }
 
     const fn retry_after(self) -> RetryAfter {
         match self {
-            Self::Starting(retry) | Self::Admission(retry) => retry,
+            Self::Starting(retry) | Self::Admission(retry) | Self::AccessUnavailable(retry) => {
+                retry
+            }
             _ => RetryAfter::IMMEDIATE,
         }
     }

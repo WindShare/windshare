@@ -44,14 +44,26 @@ fn forward(
     size: u32,
 ) {
     runtime
-        .message(host, connection(source), opaque(session, size), false)
+        .message(
+            host,
+            connection(source),
+            opaque(session, size),
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
 }
 
 fn admit(host: &mut Memory, runtime: &mut Runtime<()>, f: &Fixture, session: RelaySessionId) {
     let mut bytes = f.frame("sessionAdmittedB64");
     bytes[8..16].copy_from_slice(session.as_bytes());
-    runtime.control(host, connection(1), &bytes, false).unwrap();
+    runtime
+        .control(
+            host,
+            connection(1),
+            &bytes,
+            crate::runtime::RegistrationAccess::Denied,
+        )
+        .unwrap();
 }
 
 fn consume(
@@ -63,7 +75,12 @@ fn consume(
 ) {
     let bytes = DeliveryConsumed::new(session, total).unwrap().encode();
     runtime
-        .control(host, connection(destination), &bytes, false)
+        .control(
+            host,
+            connection(destination),
+            &bytes,
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
 }
 
@@ -209,10 +226,20 @@ fn cancellation_settles_without_closing_the_shared_sender() {
         .unwrap()
         .encode();
     runtime
-        .control(&mut host, connection(1), &ack, false)
+        .control(
+            &mut host,
+            connection(1),
+            &ack,
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     runtime
-        .control(&mut host, connection(1), &ack, false)
+        .control(
+            &mut host,
+            connection(1),
+            &ack,
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(host.live.contains(&connection(1)));
     let next = join(&mut host, &mut runtime, &f, 3);
@@ -239,7 +266,12 @@ fn receiver_loss_and_hibernation_discard_late_ingress_without_closing_siblings()
     for boot in 1..=3 {
         if boot == 2 {
             runtime
-                .control(&mut host, connection(1), &ack, false)
+                .control(
+                    &mut host,
+                    connection(1),
+                    &ack,
+                    crate::runtime::RegistrationAccess::Denied,
+                )
                 .unwrap();
         }
         if boot == 3 {

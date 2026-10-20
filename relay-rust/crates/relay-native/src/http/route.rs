@@ -7,6 +7,7 @@ use tokio_tungstenite::tungstenite::handshake::server::create_response_with_body
 use windshare_relay_core::identifiers::ShareId;
 
 pub(super) const HEALTH_PATH: &str = "/healthz";
+const DISCOVERY_PATH: &str = "/.well-known/windshare";
 
 pub(super) enum Route {
     Reply(Response<ResponseBody>),
@@ -19,7 +20,7 @@ pub(super) enum Route {
 impl Ingress {
     pub(super) fn route<B>(&self, request: &Request<B>) -> Route {
         let path = request.uri().path();
-        if path != HEALTH_PATH && path != self.endpoint.path {
+        if path != HEALTH_PATH && path != DISCOVERY_PATH && path != self.endpoint.path {
             return Route::Reply(reply(StatusCode::NOT_FOUND, "not found\n"));
         }
         if request.method() != Method::GET
@@ -51,6 +52,22 @@ impl Ingress {
         }
         if path == HEALTH_PATH {
             return Route::Reply(reply(StatusCode::OK, "ok\n"));
+        }
+        if path == DISCOVERY_PATH {
+            let base = self.endpoint.as_str().trim_end_matches("/v2/ws");
+            let base = base
+                .replacen("wss://", "https://", 1)
+                .replacen("ws://", "http://", 1);
+            let body = serde_json::json!({"version":1,"access":"open","relay_url":base});
+            return Route::Reply(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CACHE_CONTROL, "no-store")
+                    .header(header::CONNECTION, "close")
+                    .body(Full::new(Bytes::from(body.to_string())))
+                    .expect("static discovery headers"),
+            );
         }
         if !self.origins.allows(request.headers()) {
             return Route::Reply(reply(StatusCode::FORBIDDEN, "origin is not allowed\n"));

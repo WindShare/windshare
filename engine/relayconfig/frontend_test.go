@@ -1,4 +1,4 @@
-package shareconfig
+package relayconfig
 
 import (
 	"encoding/json"
@@ -27,7 +27,7 @@ func TestFrontendValidationPreservesWebsiteAddress(t *testing.T) {
 		// must be rejected at import, before it can replace usable defaults.
 		if raw != "" {
 			encoded, _ := json.Marshal(raw)
-			input := `{"front_url":` + string(encoded) + `,"relays":[{"url":"https://relay.example"}]}`
+			input := `{"front_url":` + string(encoded) + `,"profiles":[{"url":"https://relay.example"}]}`
 			if _, err := Decode(strings.NewReader(input)); !errors.Is(err, ErrConfig) {
 				t.Fatalf("import accepted invalid frontend: %q", raw)
 			}

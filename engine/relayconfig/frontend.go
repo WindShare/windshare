@@ -1,4 +1,4 @@
-package shareconfig
+package relayconfig
 
 import (
 	"errors"

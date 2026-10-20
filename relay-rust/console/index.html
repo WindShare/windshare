@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WindShare · Relay console</title><link rel="stylesheet" href="/console.css"><script type="module" src="/console.js"></script></head>
+<body><main>
+<header><a class="brand" href="/">WindShare <span>Relay console</span></a><button id="logout" hidden>Sign out</button></header>
+<div id="status" role="status" aria-live="polite"></div>
+<section id="login-panel" class="panel"><p class="eyebrow">PRIVATE RELAY</p><h1>Your relay. Your access.</h1><p>Sign in to approve devices and manage their access.</p>
+<form id="login"><label for="password">Owner password</label><input id="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form></section>
+<div id="console" hidden>
+<section class="panel"><div class="section-title"><div><p class="eyebrow">DEVICE SETUP</p><h1>Approve a device</h1></div><button id="refresh" class="secondary">Refresh</button></div>
+<p>Match the device name and code shown by your WindShare client.</p><label for="code">Device code</label><input id="code" autocomplete="off" placeholder="ABCD-EFGH" maxlength="9"><div id="enrollments"></div></section>
+<section class="panel"><p class="eyebrow">RELAY ACCESS</p><h2>Credentials</h2><p>Revoking access prevents new shares. You can also stop that device’s existing shares on this relay. Established direct transfers continue independently.</p><div id="credentials"></div></section>
+<details class="panel"><summary>Automation and manual setup</summary><p>Create a named access key for a script or an unattended client.</p><form id="create"><label for="name">Credential name</label><input id="name" maxlength="128" required placeholder="Build server"><button type="submit">Create credential</button></form><div id="created" hidden><p>Save this configuration now. The access key is shown only here.</p><pre id="configuration"></pre><button id="copy" class="secondary">Copy configuration</button></div></details>
+</div><footer>Administrator access stays in this browser. Devices receive only their own access key.</footer>
+</main></body></html>

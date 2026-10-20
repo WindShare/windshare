@@ -18,6 +18,7 @@ fn fresh_admission_is_bound_to_relay_connection_registration_and_deadline() {
         let Action::Reserved(reservation) = engine
             .handle(
                 Event::Reserve {
+                    attribution: crate::access::Attribution::Anonymous,
                     connection: owner,
                     init: RegisterInit::decode(&init_bytes).unwrap(),
                     deadline,
@@ -150,6 +151,7 @@ fn wrong_route_resume_and_expired_requests_do_not_reserve_capacity() {
         engine
             .handle(
                 Event::Reserve {
+                    attribution: crate::access::Attribution::Anonymous,
                     connection: connection(1, 1),
                     init: resume,
                     deadline

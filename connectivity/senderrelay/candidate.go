@@ -10,15 +10,15 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-const MaxRegistrationTokenBytes = 4096
+const MaxAccessKeyBytes = 4096
 
 var ErrCandidate = errors.New("invalid sender relay candidate")
 
 // Candidate binds deployment registration authority to one public relay address.
 // Only PublicURL may enter a capability; the token is not session/STOP authority.
 type Candidate struct {
-	PublicURL         string
-	RegistrationToken string `json:"-"`
+	PublicURL string
+	AccessKey string `json:"-"`
 }
 
 func (candidate Candidate) Validate() error {
@@ -37,10 +37,10 @@ func (candidate Candidate) Validate() error {
 			return ErrCandidate
 		}
 	}
-	if len(candidate.RegistrationToken) > MaxRegistrationTokenBytes {
+	if len(candidate.AccessKey) > MaxAccessKeyBytes {
 		return ErrCandidate
 	}
-	for _, character := range candidate.RegistrationToken {
+	for _, character := range candidate.AccessKey {
 		if character < '!' || character > '~' {
 			return ErrCandidate
 		}
@@ -69,8 +69,8 @@ func PublicURLs(candidates []Candidate) ([]string, error) {
 
 func (candidate Candidate) registrationDialOptions(capacity int, resume bool) relayv2.DialOptions {
 	options := relayv2.DialOptions{LifecycleObservationCapacity: capacity}
-	if !resume && candidate.RegistrationToken != "" {
-		options.Header = http.Header{"Authorization": {"Bearer " + candidate.RegistrationToken}}
+	if !resume && candidate.AccessKey != "" {
+		options.Header = http.Header{"Authorization": {"Bearer " + candidate.AccessKey}}
 		// Even same-host redirects can target another relay deployment. Credentials
 		// authorize the configured candidate, never a redirect-selected endpoint.
 		options.HTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {

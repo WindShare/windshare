@@ -126,6 +126,8 @@
     },
     {
       "codes": {
+        "access-denied": 13,
+        "access-unavailable": 14,
         "admission": 10,
         "already-registered": 4,
         "challenge-expired": 5,

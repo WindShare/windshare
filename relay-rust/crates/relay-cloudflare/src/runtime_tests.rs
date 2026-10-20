@@ -21,6 +21,9 @@ use windshare_relay_core::{
     },
 };
 
+#[path = "access_tests.rs"]
+mod access;
+
 #[path = "recovery_tests.rs"]
 mod recovery;
 
@@ -165,7 +168,14 @@ impl Memory {
     }
     fn frame(&mut self, runtime: &mut Runtime<()>, f: &Fixture, id: u64, key: &str) {
         runtime
-            .control(self, connection(id), &f.frame(key), true)
+            .control(
+                self,
+                connection(id),
+                &f.frame(key),
+                crate::runtime::RegistrationAccess::Granted(
+                    windshare_relay_core::access::Attribution::Anonymous,
+                ),
+            )
             .unwrap();
     }
     fn registered(&mut self, runtime: &mut Runtime<()>, f: &Fixture) {
@@ -276,14 +286,24 @@ fn hibernation_retains_nonce_and_absolute_deadline_without_sql_heartbeat_writes(
         windshare_relay_core::heartbeat::ConnectionProbe::new(NonZeroU64::new(nonce).unwrap())
             .encode();
     runtime
-        .control(&mut host, connection(1), &frame, false)
+        .control(
+            &mut host,
+            connection(1),
+            &frame,
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert_eq!(host.manifest_writes, writes);
     assert_eq!(&host.sent.last().unwrap().1[..4], b"WS2A");
     drop(runtime);
     let mut runtime = host.restore(3).unwrap();
     runtime
-        .control(&mut host, connection(1), &frame, false)
+        .control(
+            &mut host,
+            connection(1),
+            &frame,
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(
         !host.live.contains(&connection(1)),
@@ -331,7 +351,7 @@ fn expiry_is_processed_before_a_late_heartbeat_and_grace_survives_reconstruction
             &mut host,
             connection(1),
             &f.frame("connectionProbeB64"),
-            false,
+            crate::runtime::RegistrationAccess::Denied,
         )
         .unwrap();
     assert_eq!(runtime.deadline(), grace);
@@ -356,7 +376,9 @@ fn uncertain_publication_never_acknowledges_and_recovers_from_authoritative_sql(
                     &mut host,
                     connection(1),
                     &f.frame("descriptorUploadB64"),
-                    true
+                    crate::runtime::RegistrationAccess::Granted(
+                        windshare_relay_core::access::Attribution::Anonymous
+                    )
                 )
                 .is_err()
         );
@@ -392,7 +414,12 @@ fn stop_persists_before_ack_and_survives_empty_socket_reconstruction() {
     host.seed = Some(f.seed(""));
     host.registered(&mut runtime, &f);
     runtime
-        .control(&mut host, connection(2), &f.frame("stopProofB64"), false)
+        .control(
+            &mut host,
+            connection(2),
+            &f.frame("stopProofB64"),
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(matches!(
         host.stored.as_ref().unwrap().record(),
@@ -422,7 +449,12 @@ fn deployment_permission_and_delivery_boundary_precede_admission() {
     let mut runtime = host.restore(1).unwrap();
     host.open(&mut runtime, 1);
     runtime
-        .control(&mut host, connection(1), &f.frame("registerInitB64"), false)
+        .control(
+            &mut host,
+            connection(1),
+            &f.frame("registerInitB64"),
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(host.stored.is_none());
     assert!(!host.live.contains(&connection(1)));
@@ -453,7 +485,12 @@ fn business_saturation_keeps_signed_stop_available_through_hibernation() {
     host.seed = Some(f.seed("stop"));
     host.open(&mut runtime, stop);
     runtime
-        .control(&mut host, connection(stop), &f.frame("stopInitB64"), false)
+        .control(
+            &mut host,
+            connection(stop),
+            &f.frame("stopInitB64"),
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(host.live.contains(&connection(stop)));
     let deadline = runtime.deadline();
@@ -461,7 +498,12 @@ fn business_saturation_keeps_signed_stop_available_through_hibernation() {
     let mut runtime = host.restore(2).unwrap();
     assert_eq!(runtime.deadline(), deadline);
     runtime
-        .control(&mut host, connection(stop), &f.frame("stopProofB64"), false)
+        .control(
+            &mut host,
+            connection(stop),
+            &f.frame("stopProofB64"),
+            crate::runtime::RegistrationAccess::Denied,
+        )
         .unwrap();
     assert!(matches!(
         host.stored.as_ref().unwrap().record(),
@@ -485,7 +527,12 @@ fn empty_socket_reconstruction_preserves_attempt_rate_history() {
         host.open(&mut runtime, id);
         assert!(host.live.contains(&connection(id)));
         runtime
-            .control(&mut host, connection(id), b"invalid", false)
+            .control(
+                &mut host,
+                connection(id),
+                b"invalid",
+                crate::runtime::RegistrationAccess::Denied,
+            )
             .unwrap();
     }
     assert!(host.live.is_empty());

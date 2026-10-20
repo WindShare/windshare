@@ -1419,6 +1419,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "windshare-relay-access"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "windshare-relay-cloudflare"
 version = "0.1.0"
 dependencies = [
@@ -1431,6 +1439,7 @@ dependencies = [
  "sha2",
  "url",
  "wasm-bindgen",
+ "windshare-relay-access",
  "windshare-relay-core",
  "worker",
 ]
@@ -1445,6 +1454,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "windshare-relay-access",
 ]
 
 [[package]]

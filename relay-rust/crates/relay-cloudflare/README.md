@@ -1,133 +1,54 @@
 # Cloudflare relay host
 
-This Worker routes `/v2/ws?share_id=...` to one SQLite Durable Object per share.
-The object binds its stored endpoint and share to that route, rejects mismatched
-upgrades without evicting healthy connections, and passes real
-REGISTER, RESUME, JOIN, session admission, cumulative consumption, settlement, STOP
-and heartbeat controls to `ShareRelay`. Opaque envelopes remain event-owned and pass
-through the kernel's synchronous `submit` before WebSocket delivery in either direction.
-Descriptors come only from confirmed authority rows. The Go sender accepts saved
-[sharing defaults](../../../docs/cli.md#sharing-defaults), including registration credentials.
+`entry.mjs` serves the receiver frontend and routes `/v2/ws?share_id=...` to a SQLite
+`ShareRelayObject`. A separate console origin reaches the SQLite `AccessObject` authority.
+The shared `relay-access` crate owns credential and enrollment transitions; `relay-core`
+consumes one-operation registration grants without knowing about HTTP or accounts.
 
-Fresh REGISTER requires `Authorization: Bearer <REGISTRATION_SECRET>` on the
-upgrade. The edge overwrites its internal permission header and stores permission
-as a socket tag. Missing credentials never grant registration. Signed STOP and
-token-bound RESUME do not require this deployment credential. Each share has 8 business
-slots and a separate 8-socket control reserve. STOP needs no business slot; authentication,
-control concurrency, attempt-rate and absolute deadlines still apply.
+Fresh REGISTER supplies `Authorization: Bearer <access_key>`. The edge stores only its
+digest on the socket; admission checks current credential status for every fresh registration.
+Committed registrations retain principal and credential attribution. RESUME and signed STOP
+keep independent authority, and frame forwarding performs no account lookup. Revocation can
+also queue durable termination of the credential's existing shares, preventing later RESUME.
 
-SQLite stores endpoint identity, a never-reused connection allocator, authority
-and the checkpoint manifest. Binary WebSocket attachments retain handshake state,
-capacity, delivery ledgers, heartbeat nonce and original deadlines. Payloads and feedback
-update attachments, not SQL counters. Window replenishment reads kernel occupancy,
-so duplicate feedback and hibernation cannot refund submitted debt. Each flow targets
-two maximum-sized envelopes within the destination's declared capacity and the host's
-16-frame connection budget. Alarms are read once per wake and only move earlier;
-each event expires overdue state before processing new input. REGISTER atomically writes ownership and
-descriptor in one SQL operation; exact completion and the Cloudflare output gate
-keep acknowledgements behind that commit and permanent STOP. Uncertain events require
-authoritative recovery before more controls. Recovery retains committed ownership even
-when its receipt was lost, entering grace if the owner is gone. Storage schema version 3
-rejects older storage.
+Share storage retains endpoint identity, connection allocation, authority and checkpoint
+manifests. Attachments retain protocol state and delivery ledgers through hibernation; opaque
+payloads never enter SQLite. Alarms enforce original deadlines and durable STOP barriers.
+Each share has eight business slots and a separate eight-socket control reserve.
+Do not delete storage to update code.
 
-A close callback reports communication loss, never physical buffer release.
-Risk reservations and their absolute expiry survive in the manifest even when all
-sockets/attachments disappear. The host selects immediate expiry after revocation
-and both application queues are discarded, preserving the reconnect-rate budget.
-The experiments establish no safer physical-buffer TTL; their 30-second interval
-is not a release guarantee. A positive host retention interval also expires through
-the shared Alarm schedule, without renewing on recovery or retry. Unreadable
-authority or inventory refuses recovery; individual attachment loss is isolated.
-Only a newly created identity with empty storage and no sockets permits an empty
-responsibility baseline. Existing identities require a manifest even without authority
-or surviving sockets. Cleanup-generated settlement notices run before subsequent
-close commands. No descriptor or payload appears in traces.
+## Deployment and local validation
 
-For personal deployment, follow [Fork ? GitHub Actions](../../../docs/deploy/cloudflare-relay.md).
-It generates registration authority once, delivers an encrypted import configuration,
-and retains the address, secret and SQLite namespace through upstream updates.
+Use the [GitHub Actions deployment guide](../../../docs/deploy/cloudflare-relay.md).
+It provisions separate console/receiver origins, installs `OWNER_PASSWORD`, and prints
+`wind relay onboard <url>`. Password rotation invalidates administrator sessions, preserving
+client credentials. Discovery is at `/.well-known/windshare`.
 
-For local development, from this directory with the Rust Wasm target and `worker-build` installed:
+With Go, the Rust Wasm target and `worker-build` installed, run from this directory:
 
 ```sh
 npm ci
-npm run build
-npx wrangler secret put REGISTRATION_SECRET
-npx wrangler deploy
+npm run test:access
 ```
 
-For `wind share`, import [sharing defaults](../../../docs/cli.md#sharing-defaults)
-with `wind config import relay.json --front-url https://your-frontend.example`, using the stable relay base URL without
-`/v2/ws` and the registration secret. Subsequent shares reuse both settings. Protocol probes
-that take an endpoint use the full URL ending in `/v2/ws`. Endpoint identity is retained in
-storage; an alternate hostname is a different relay identity, even for the same
-Worker. Do not delete storage to update code: that would erase permanent STOP.
+This builds the actual Wasm host and uses local workerd/SQLite to test approval, cancellation,
+request isolation, credential revocation, password rotation, automatic client installation,
+and administrative termination through production Go protocol clients. `make rust` covers
+kernel/native tests, coverage, Clippy and Wasm builds; `make hygiene` covers deployment contracts.
+The opt-in [live deployment smoke](../../../docs/validation.md#ordinary-github-ci) checks both
+hosting modes and retained credentials/storage across updates.
 
-## Validation
-
-`make rust` includes native fault-injected host tests and Wasm compilation/Clippy.
-`make hygiene` covers deployment lifecycle contracts; the opt-in
-[deployment smoke](../../../docs/validation.md#ordinary-github-ci) verifies encrypted
-CLI import, stable credentials/namespace and retained STOP on a real Worker.
-The shared Go codec client is at `relay-rust/tests/_goclient`.
-[Recorded Preview evidence](tests/preview-evidence.md) covers live signatures,
-bidirectional delivery, hibernation with unconsumed debt, fault recovery, ordered STOP
-and Alarm expiry.
-
-For CLI/browser recovery, log in with the package's pinned Wrangler, then run from `web/`:
+Browser recovery scenarios remain opt-in:
 
 ```sh
+cd ../../../web
 pnpm exec playwright test --config playwright.cloudflare.config.ts
-# Only the real deployment scenario:
-pnpm exec playwright test --config playwright.cloudflare.config.ts --grep redeploy
 ```
 
-Each scenario creates and deletes its own randomly named Worker with isolated SQLite
-and generated test credentials. It builds Rust and `wind`, disables browser P2P,
-then exercises receiver isolation, object reset or redeployment. The isolation
-scenario downloads the same 49 MiB file in two browsers, disconnects one receiver
-four times, and checks that the sender and healthy sibling retain their connections
-and both files match. Recovery scenarios reset the object or run
-`wrangler deploy --durable-objects-code-update-mode immediate` after 4 MiB is written.
-Immediate switching is requested only by the test.
-[Global propagation](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates)
-can still take minutes, so reset uses 17 MiB and redeployment uses 97 MiB with real
-browser origin storage. Redeployment retains the address, secrets and namespace;
-runtime version/code identity and a persisted marker verify the switch while content
-is still outstanding. Both scenarios check one browser task, monotonic progress,
-completed-block retention and the final hash. Lost connections must recover automatically.
-Evidence, command logs and sender/browser traces go to `web/test-results/cloudflare/`;
-temporary credentials are removed during cleanup. If cleanup fails, the recorded
-Worker name identifies the owned resource to delete. These cloud scenarios are opt-in
-and absent from ordinary browser gates.
-
-[Production capacity evidence](tests/capacity-evidence.md) records Free-plan policy,
-CPU/memory observations, heartbeat/Alarm accounting, throughput and measurement gaps.
-Run `node web/scripts/cloudflare-capacity/run.mjs` from the repository root to repeat
-its isolated production workloads.
-
-For protocol-level probes, follow the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
-Create a temporary JSON secrets file containing `REGISTRATION_SECRET` and a separate
-`PREVIEW_TEST_SECRET`, then run:
-
-```sh
-npx wrangler preview tests/entry.mjs --name <run-name> --secrets-file <temporary-json> --json
-```
-
-The entry override wraps the production Rust host with authenticated status and
-object-abort controls. It does not implement protocol behavior and is absent from
-the normal deployment entry. From the repository root, set
-`WINDSHARE_RELAY_REGISTRATION_SECRET` and `WINDSHARE_RELAY_PREVIEW_SECRET` in the
-environment, then run:
-
-```sh
-go run ./relay-rust/tests/_goclient -preview -endpoint wss://<stable-preview-host>/v2/ws
-```
-
-The client checks signatures, endpoint isolation and Alarm expiry, then transfers
-mixed-size frames in both directions beyond asymmetric windows with duplicate feedback.
-It observes constructor re-entry with unchanged sockets/attachments and unconsumed
-delivery debt, resumes transfer after consumption, aborts the object and transfers again
-after signed RESUME. STOP must deliver exact settlement prefixes before closure and
-remain permanent across another abort. Hibernation stays within the original silence
-deadline. Delete only the run's Preview after retaining evidence.
+They own isolated Workers, temporary credentials and SQLite, exercise receiver isolation,
+reset/redeployment during downloads, and remove their resources afterward. Evidence is stored
+under `web/test-results/cloudflare/`. See [Preview evidence](tests/preview-evidence.md),
+[capacity evidence](tests/capacity-evidence.md) and the [Preview runbook](../../../docs/skills/cloudflare-worker-previews-skill.md).
+The test-only `tests/entry.mjs` adds authenticated observation/reset endpoints; production
+entrypoints never expose them. Preview probes use a console-created access key in
+`WINDSHARE_RELAY_ACCESS_KEY` and the separate test secret in `WINDSHARE_RELAY_PREVIEW_SECRET`.

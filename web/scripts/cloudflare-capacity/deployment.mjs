@@ -58,14 +58,18 @@ export async function build(output) {
 /** A production entry and a fresh namespace keep other scenarios out of its metrics. */
 export class ProductionDeployment {
   workerName = 'windshare-capacity-' + randomUUID().replaceAll('-', '').slice(0, 12)
-  registrationToken = randomBytes(32).toString('base64url')
+  accessKey = ''
+  #ownerPassword = randomBytes(32).toString('base64url')
   #output
   #config
   #secrets
   #attempted = false
+  #consoleAttempted = false
+  #consoleConfig
   constructor(output) {
     this.#output = output
     this.#config = join(output, 'wrangler.json')
+    this.#consoleConfig = join(output, 'console.wrangler.json')
     this.#secrets = join(output, 'secrets.json')
     this.relayConfig = join(output, 'relays.json')
   }
@@ -76,13 +80,14 @@ export class ProductionDeployment {
     if (host.durable_objects.bindings.some(binding => binding.script_name)) {
       throw new Error('Capacity evidence cannot share another Worker namespace')
     }
-    await save(this.#config, {
-      name: this.workerName, main: join(PACKAGE, 'build/index.js'),
+    const configuration = {
+      name: this.workerName, main: join(PACKAGE, 'entry.mjs'),
       compatibility_date: host.compatibility_date, compatibility_flags: host.compatibility_flags,
       migrations: host.migrations, durable_objects: host.durable_objects,
       observability: host.observability, workers_dev: true, preview_urls: false,
-    })
-    await writeFile(this.#secrets, JSON.stringify({ REGISTRATION_SECRET: this.registrationToken }), { mode: 0o600 })
+    }
+    await save(this.#config, configuration)
+    await writeFile(this.#secrets, JSON.stringify({ OWNER_PASSWORD: this.#ownerPassword }), { mode: 0o600 })
     this.#attempted = true
     try {
       await this.#wrangler('deploy', ['deploy', '--secrets-file', this.#secrets])
@@ -95,11 +100,35 @@ export class ProductionDeployment {
     const url = record.targets.find(target => target.startsWith('https://'))
     if (!url || new URL(url).hostname.split('.')[0] !== this.workerName) throw new Error('Unexpected deployment URL')
     this.url = new URL(url).origin
+    const consoleUrl = this.url.replace(this.workerName + '.', this.workerName + '-console.')
+    await save(this.#config, { ...configuration, vars: { RELAY_URL: this.url, CONSOLE_ORIGIN: consoleUrl } })
+    await this.#wrangler('access-config', ['deploy', '--keep-vars'])
+    await save(this.#consoleConfig, {
+      name: this.workerName + '-console', main: join(PACKAGE, 'console-entry.mjs'),
+      compatibility_date: host.compatibility_date, workers_dev: true, preview_urls: false,
+      vars: { CONSOLE_ORIGIN: consoleUrl },
+      durable_objects: { bindings: [{ name: 'ACCESS', class_name: 'AccessObject', script_name: this.workerName }] },
+    })
+    this.#consoleAttempted = true
+    await this.#wrangler('console', ['deploy'], this.#consoleConfig)
+    const post = (path, body, cookie = '') => fetch(consoleUrl + '/api/' + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: consoleUrl, Cookie: cookie },
+      body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
+    })
+    const login = await post('login', { password: this.#ownerPassword })
+    if (login.status !== 200) throw new Error('Console login failed: ' + login.status)
+    const created = await post('credentials', { name: 'Capacity evidence' }, login.headers.get('Set-Cookie').split(';')[0])
+    if (created.status !== 201) throw new Error('Credential creation failed: ' + created.status)
+    this.accessKey = (await created.json()).access_key
+    const finalRecord = (await readFile(join(this.#output, 'access-config.jsonl'), 'utf8'))
+      .trim().split('\n').map(JSON.parse).find(item => item.type === 'deploy')
+    if (!finalRecord || finalRecord.worker_name !== this.workerName) throw new Error('Missing configured deployment')
+    record.version_id = finalRecord.version_id
     const version = JSON.parse(await this.#wrangler('version', ['versions', 'view', record.version_id, '--json']))
     this.identity = { workerName: this.workerName, url: this.url, versionId: record.version_id, version }
     await save(join(this.#output, 'deployment.json'), this.identity)
     await writeFile(this.relayConfig, JSON.stringify({
-      relays: [{ url: this.url, registration_token: this.registrationToken }],
+      profiles: [{ url: this.url, access_key: this.accessKey }], active_relays: [this.url],
     }), { mode: 0o600 })
     event('capacity-deployed', { workerName: this.workerName, url: this.url, versionId: record.version_id })
     return this
@@ -108,10 +137,16 @@ export class ProductionDeployment {
   async dispose() {
     let deleted = false
     try {
-      if (this.#attempted) {
-        await this.#wrangler('cleanup', ['delete', this.workerName])
-        deleted = true
+      const errors = []
+      if (this.#consoleAttempted) {
+        try { await this.#wrangler('console-cleanup', ['delete', this.workerName + '-console'], this.#consoleConfig) }
+        catch (error) { errors.push(error) }
       }
+      if (this.#attempted) {
+        try { await this.#wrangler('cleanup', ['delete', this.workerName]); deleted = true }
+        catch (error) { errors.push(error) }
+      }
+      if (errors.length) throw new AggregateError(errors, 'Owned capacity Worker cleanup failed')
     } finally {
       await rm(this.#secrets, { force: true })
       await rm(this.relayConfig, { force: true })
@@ -119,8 +154,8 @@ export class ProductionDeployment {
     }
   }
 
-  async #wrangler(stage, args) {
-    const result = await command(process.execPath, [WRANGLER, ...args, '--config', this.#config], PACKAGE, {
+  async #wrangler(stage, args, config = this.#config) {
+    const result = await command(process.execPath, [WRANGLER, ...args, '--config', config], PACKAGE, {
       CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'log',
       WRANGLER_OUTPUT_FILE_PATH: join(this.#output, stage + '.jsonl'),
     })

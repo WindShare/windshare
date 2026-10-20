@@ -37,6 +37,8 @@ pub enum Event<'f> {
         connection: ConnectionRef,
         /// Parsed but not yet authenticated registration.
         init: RegisterInit,
+        /// Service attribution resolved for this fresh admission.
+        attribution: crate::access::Attribution,
         /// Original handshake deadline, never a new timeout.
         deadline: UnixMillis,
     },
@@ -76,6 +78,11 @@ pub enum Event<'f> {
     },
     /// Reports evidence for the exact requested STOP step. Out-of-order and
     /// stale completions cannot advance the transaction.
+    /// Service administration can terminate only this credential's attributed share.
+    Terminate {
+        credential: [u8; 16],
+        stop_id: crate::identifiers::StopId,
+    },
     StopFinished {
         /// Copy the work from `Action::Stop`, never look it up after an await.
         work: StopWork,

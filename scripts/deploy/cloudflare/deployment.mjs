@@ -1,118 +1,118 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { prepareRoute, readRoute, sameRoute, verifyRoute } from './routing.mjs';
 
 export const STATE_BINDING = 'WINDSHARE_DEPLOYMENT';
-export const SECRET_BINDING = 'REGISTRATION_SECRET';
+export const SECRET_BINDING = 'OWNER_PASSWORD';
 export const SHARE_BINDING = 'SHARES';
 export const SHARE_CLASS = 'ShareRelayObject';
-const STATE_FORMAT = 'windshare-cloudflare-deployment-v1';
-const TOKEN_BYTES = 32;
+export const ACCESS_BINDING = 'ACCESS';
+export const ACCESS_CLASS = 'AccessObject';
+const STATE_FORMAT = 'windshare-cloudflare-deployment-v2';
 const MAX_STATE_BYTES = 5 * 1024;
-const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const WORKER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,53}[a-z0-9])?$/;
 const ACCOUNT_ID = /^[a-f0-9]{32}$/;
-const RECIPIENT = /^age1[a-z0-9]{58}$/;
 
 export function readInputs(env) {
   const inputs = {
-    accountId: env.CLOUDFLARE_ACCOUNT_ID,
-    workerName: env.CLOUDFLARE_WORKER_NAME,
-    recipient: env.WINDSHARE_CONFIG_RECIPIENT,
-    route: readRoute(env),
+    accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: env.CLOUDFLARE_WORKER_NAME,
+    ownerPassword: env.WINDSHARE_OWNER_PASSWORD, route: readRoute(env),
   };
   requireValue(ACCOUNT_ID.test(inputs.accountId ?? ''), 'Set CLOUDFLARE_ACCOUNT_ID to your 32-character account ID.');
-  requireValue(DNS_LABEL.test(inputs.workerName ?? ''), 'Set CLOUDFLARE_WORKER_NAME to a DNS label (1–63 lowercase characters).');
-  requireValue(RECIPIENT.test(inputs.recipient ?? ''), 'Set WINDSHARE_CONFIG_RECIPIENT to the public age1 key from age-keygen.');
+  requireValue(WORKER_NAME.test(inputs.workerName ?? ''), 'Set CLOUDFLARE_WORKER_NAME to a DNS label of at most 55 characters.');
+  requireValue(typeof inputs.ownerPassword === 'string' && inputs.ownerPassword.length >= 16,
+    'Set WINDSHARE_OWNER_PASSWORD in GitHub Secrets to a password of at least 16 characters.');
   return inputs;
 }
-
-function requireValue(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
+function requireValue(condition, message) { if (!condition) throw new Error(message); }
 function binding(settings, name, type) {
-  const matches = Array.isArray(settings?.bindings) ? settings.bindings.filter(item => item.name === name) : [];
-  requireValue(matches.length === 1 && matches[0].type === type, `Existing Worker is missing its ${name} ${type} binding; refusing to replace deployment state.`);
+  const matches = settings?.bindings?.filter(item => item.name === name) ?? [];
+  requireValue(matches.length === 1 && matches[0].type === type, `Existing Worker is missing its ${name} ${type} binding.`);
   return matches[0];
 }
-
-export function readDeployment(settings, inputs, endpoint) {
+function stateFrom(settings) {
   const text = binding(settings, STATE_BINDING, 'plain_text').text;
   requireValue(typeof text === 'string' && Buffer.byteLength(text) <= MAX_STATE_BYTES, 'Invalid deployment record.');
   let state;
   try { state = JSON.parse(text); } catch { throw new Error('Invalid deployment record.'); }
   requireValue(state?.format === STATE_FORMAT && typeof state.deploymentId === 'string' && state.deploymentId.length > 0,
     'Unsupported deployment record; refusing to replace the existing Worker.');
+  return state;
+}
+export function readDeployment(settings, inputs, endpoint) {
+  const state = stateFrom(settings);
   requireValue(state.accountId === inputs.accountId && state.workerName === inputs.workerName &&
     state.endpoint === endpoint && sameRoute(state.route, inputs.route),
   'Deployment address changed; restore the original account, Worker name and route configuration.');
-  requireValue(state.recipient === inputs.recipient,
-    'Configuration recipient changed; restore the original WINDSHARE_CONFIG_RECIPIENT. Updates never rotate credentials.');
-  requireValue(typeof state.encryptedConfig === 'string' &&
-    state.encryptedConfig.startsWith('-----BEGIN AGE ENCRYPTED FILE-----\n') &&
-    state.encryptedConfig.trimEnd().endsWith('-----END AGE ENCRYPTED FILE-----'),
-  'Missing encrypted configuration; refusing to regenerate credentials.');
   binding(settings, SECRET_BINDING, 'secret_text');
-  const shares = binding(settings, SHARE_BINDING, 'durable_object_namespace');
-  requireValue(shares.class_name === SHARE_CLASS && /^[a-f0-9]{32}$/.test(shares.namespace_id ?? '') &&
-    (!shares.script_name || shares.script_name === inputs.workerName) && !shares.environment,
-  'Existing share storage does not belong to this Worker; refusing to replace it.');
-  return { state, namespaceId: shares.namespace_id };
+  const namespace = (name, className) => {
+    const item = binding(settings, name, 'durable_object_namespace');
+    requireValue(item.class_name === className && /^[a-f0-9]{32}$/.test(item.namespace_id ?? '') &&
+      (!item.script_name || item.script_name === inputs.workerName) && !item.environment,
+    `Existing ${name} storage does not belong to this Worker.`);
+    return item.namespace_id;
+  };
+  return { state, namespaceId: namespace(SHARE_BINDING, SHARE_CLASS), accessNamespaceId: namespace(ACCESS_BINDING, ACCESS_CLASS) };
 }
-
-// Refuse destructive source configuration before Wrangler can apply migrations.
-// Post-upload namespace comparison diagnoses drift but cannot undo deleted SQLite.
 export function validateHostConfig(config) {
-  requireValue(config.workers_dev === true && config.preview_urls === false &&
-    !config.route && !(config.routes?.length),
-  'Source routing must remain generic; repository Variables select the deployment route.');
-  const shares = config.durable_objects?.bindings?.filter(item => item.name === SHARE_BINDING) ?? [];
-  requireValue(shares.length === 1 && shares[0].class_name === SHARE_CLASS &&
-    !shares[0].script_name && !shares[0].environment,
-  'Source configuration must retain the local SHARES / ShareRelayObject binding.');
+  requireValue(config.workers_dev === true && config.preview_urls === false && !config.route && !(config.routes?.length),
+    'Source routing must remain generic; repository Variables select the deployment route.');
+  for (const [name, className] of [[SHARE_BINDING, SHARE_CLASS], [ACCESS_BINDING, ACCESS_CLASS]]) {
+    const items = config.durable_objects?.bindings?.filter(item => item.name === name) ?? [];
+    requireValue(items.length === 1 && items[0].class_name === className && !items[0].script_name && !items[0].environment,
+      `Source configuration must retain the local ${name} / ${className} binding.`);
+    let creations = 0;
+    for (const migration of config.migrations ?? []) {
+      if (migration.new_sqlite_classes?.includes(className)) creations++;
+      requireValue(!migration.deleted_classes?.includes(className) && !migration.new_classes?.includes(className) &&
+        !migration.renamed_classes?.some(item => item.from === className || item.to === className) &&
+        !migration.transferred_classes?.some(item => item.from === className || item.to === className),
+      'Automatic updates cannot delete, rename or transfer access or share storage.');
+    }
+    requireValue(creations === 1, `Keep the original SQLite ${className} creation migration.`);
+  }
   for (const name of [STATE_BINDING, SECRET_BINDING]) {
     requireValue(!Object.hasOwn(config.vars ?? {}, name), `Source configuration cannot supply ${name}.`);
   }
-  let creations = 0;
-  for (const migration of config.migrations ?? []) {
-    if (migration.new_sqlite_classes?.includes(SHARE_CLASS)) creations++;
-    requireValue(!migration.deleted_classes?.includes(SHARE_CLASS) &&
-      !migration.new_classes?.includes(SHARE_CLASS) &&
-      !migration.renamed_classes?.some(item => item.from === SHARE_CLASS || item.to === SHARE_CLASS) &&
-      !migration.transferred_classes?.some(item => item.from === SHARE_CLASS || item.to === SHARE_CLASS),
-    'Automatic updates cannot delete, rename or transfer share storage.');
-  }
-  requireValue(creations === 1, 'Keep the original SQLite share-class creation migration.');
 }
-
-// Secrets and the recoverable encrypted copy enter the same Worker version.
-// A lost deployment response can then be retried without losing or rotating the key.
-export async function deployRelay({
-  inputs, cloudflare, encrypt, deploy, log = () => {},
-  newToken = () => randomBytes(TOKEN_BYTES).toString('base64url'), newId = randomUUID,
-}) {
+function verifyConsole(settings, state, accessNamespaceId) {
+  requireValue(JSON.stringify(stateFrom(settings)) === JSON.stringify(state), 'Companion console belongs to another deployment.');
+  const access = binding(settings, ACCESS_BINDING, 'durable_object_namespace');
+  requireValue(access.class_name === ACCESS_CLASS && access.script_name === state.workerName &&
+    (!accessNamespaceId || access.namespace_id === accessNamespaceId), 'Companion console must use the authoritative access namespace.');
+}
+export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deploy, deployConsole, log = () => {}, newId = randomUUID }) {
   const endpoint = await prepareRoute(inputs, cloudflare);
+  const consoleEndpoint = inputs.route.kind === 'custom-domain'
+    ? `https://${inputs.route.consoleHostname}`
+    : endpoint.replace(`https://${inputs.workerName}.`, `https://${inputs.workerName}-console.`);
   const existing = await cloudflare.settings();
-  let plan;
-  if (existing === null) {
-    const credential = newToken();
-    const encryptedConfig = await encrypt(JSON.stringify({
-      relays: [{ url: endpoint, registration_token: credential }],
-    }) + '\n', inputs.recipient);
-    const state = { format: STATE_FORMAT, deploymentId: newId(), ...inputs, endpoint, encryptedConfig };
-    requireValue(Buffer.byteLength(JSON.stringify(state)) <= MAX_STATE_BYTES, 'Encrypted deployment record exceeds the Worker variable limit.');
-    plan = { kind: 'create', state, credential };
-  } else {
-    plan = { kind: 'update', ...readDeployment(existing, inputs, endpoint) };
+  const retained = existing === null ? null : readDeployment(existing, inputs, endpoint);
+  const state = retained?.state ?? { format: STATE_FORMAT, deploymentId: newId(), accountId: inputs.accountId,
+    workerName: inputs.workerName, route: inputs.route, endpoint, consoleEndpoint };
+  requireValue(state.consoleEndpoint === consoleEndpoint, 'Console address changed; restore its original route.');
+  const plan = retained ? { kind: 'update', ...retained } : { kind: 'create', state };
+  if (inputs.route.kind === 'workers-dev') {
+    requireValue(consoleCloudflare && deployConsole, 'A workers.dev deployment requires its companion console.');
+    const existingConsole = await consoleCloudflare.settings();
+    if (existingConsole !== null) {
+      requireValue(retained !== null, 'Companion console name is already in use.');
+      verifyConsole(existingConsole, state, retained.accessNamespaceId);
+    }
   }
-  log('deployment_prepared', { kind: plan.kind, deploymentId: plan.state.deploymentId, endpoint, namespaceId: plan.namespaceId });
+  log('deployment_prepared', { kind: plan.kind, deploymentId: state.deploymentId, endpoint, consoleEndpoint });
   await deploy(plan);
   const confirmed = readDeployment(await cloudflare.settings(), inputs, endpoint);
-  requireValue(JSON.stringify(confirmed.state) === JSON.stringify(plan.state),
-    'Deployment record did not match after upload; rerun the workflow to inspect the retained state.');
-  if (plan.kind === 'update') {
-    requireValue(confirmed.namespaceId === plan.namespaceId, 'Share namespace changed during deployment.');
-  }
+  requireValue(JSON.stringify(confirmed.state) === JSON.stringify(state), 'Deployment record changed during upload.');
+  if (retained) requireValue(confirmed.namespaceId === retained.namespaceId && confirmed.accessNamespaceId === retained.accessNamespaceId,
+    'Access or share namespace changed during deployment.');
   await verifyRoute(inputs, cloudflare);
-  log('deployment_verified', { kind: plan.kind, deploymentId: confirmed.state.deploymentId, endpoint, namespaceId: confirmed.namespaceId });
+  if (inputs.route.kind === 'workers-dev') {
+    await deployConsole(plan);
+    verifyConsole(await consoleCloudflare.settings(), state, confirmed.accessNamespaceId);
+    const route = await consoleCloudflare.route();
+    requireValue(route.enabled === true && route.previews_enabled === false, 'Companion console route did not match.');
+  }
+  log('deployment_verified', { deploymentId: state.deploymentId, endpoint, consoleEndpoint,
+    namespaceId: confirmed.namespaceId, accessNamespaceId: confirmed.accessNamespaceId });
   return { ...confirmed, kind: plan.kind };
 }

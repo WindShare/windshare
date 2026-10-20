@@ -1,5 +1,5 @@
 name = "windshare-relay-cloudflare"
-main = "build/index.js"
+main = "entry.mjs"
 workers_dev = true
 preview_urls = false
 compatibility_date = "2026-10-17"
@@ -11,6 +11,18 @@ command = "worker-build --release --locked"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ShareRelayObject"]
+
+[[migrations]]
+tag = "v2-access"
+new_sqlite_classes = ["AccessObject"]
+
+[[durable_objects.bindings]]
+name = "ACCESS"
+class_name = "AccessObject"
+
+[[previews.durable_objects.bindings]]
+name = "ACCESS"
+class_name = "AccessObject"
 
 [[durable_objects.bindings]]
 name = "SHARES"

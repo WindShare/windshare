@@ -32,7 +32,15 @@ Windows sources are admitted by file identity and write-excluding handle capabil
 
 For a personal Cloudflare deployment, follow the [deployment guide](deploy/cloudflare-relay.md).
 
-Import a JSON configuration once:
+Add a relay with `wind relay add <url>`. Open relays are saved directly; restricted relays
+open browser approval. `wind relay onboard <url>` selects only that private relay while
+keeping existing profiles and P2P. Ordinary addition preserves active selections and frontend
+choices. Use `--name <device>` to label the credential and `--no-browser` for headless approval.
+Interrupted setup resumes with the same command; `wind relay cancel <url>` abandons an
+incomplete installation and revokes its issued credential, even after remote confirmation.
+Expired requests are cleared so the next run can start again.
+
+For automation, create a named credential in the console and import its JSON configuration:
 
 ```text
 wind config import config.json
@@ -40,13 +48,15 @@ wind share <path...>
 ```
 
 ```json
-{"front_url":"https://your-site.example","relays":[{"url":"https://your-site.example","registration_token":"your-registration-secret"}]}
+{"front_url":"https://your-site.example","profiles":[{"url":"https://your-site.example","access_key":"your-device-key"}],"active_relays":["https://your-site.example"]}
 ```
 
 `wind config import <file|-> --front-url <url>` sets or overrides the document's frontend
 before saving; `-` reads stdin and `-v` adds structured diagnostics. Import replaces the
-**entire configuration**, without merging old relays or frontend choices. Invalid input
-or a failed write preserves the saved file. Import does not contact the deployment.
+**sharing settings**, without merging old relays or frontend choices. Changed settings
+supersede an unfinished setup: cancel it before starting again. Its cancellation record
+is retained. Invalid input or a failed write preserves the saved file. Import does not
+contact the deployment.
 
 The file is stored as `windshare/config.json` in your user configuration directory:
 `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or
@@ -56,11 +66,11 @@ for both import and sharing. Manual editing remains supported.
 Ordinary `wind share <path...>` reuses these defaults. A single relay at the frontend's
 origin produces a link without `r=`; separate origins and multiple relays retain their hints.
 `front_url` must be an HTTP(S) base URL without credentials, query or fragment; subpaths are allowed.
-Relay-only exports may omit it, but sharing then requires `--front-url`. There is no implicit
-localhost or public-service fallback. Up to eight candidates are supported;
-omit `registration_token` for a relay that allows public registration. Use a base URL
-without `/v2/ws`. Protect this local file like a password; only public URLs enter links.
-The token is sent as a Bearer credential for REGISTER, including re-registration after recovery;
+Relay-only configurations may omit it, but sharing then requires `--front-url`. There is no implicit
+localhost or public-service fallback. Save up to 64 profiles and select up to eight of their
+URLs in `active_relays`; an empty selection selects no relay. Omit `access_key` for open relays.
+Use base URLs without `/v2/ws`. Protect this local file like a password; only public URLs enter links.
+The key is sent as a Bearer credential for REGISTER, including re-registration after recovery;
 RESUME and STOP retain their independent authentication.
 
 `--front-url <url>` and repeated `--relay <url>` independently override one share without

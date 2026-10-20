@@ -1,22 +1,22 @@
 //go:build windows
 
-package shareconfig
+package relayconfig
 
 import (
+	"golang.org/x/sys/windows"
 	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
-	"golang.org/x/sys/windows"
 )
 
 func TestWindowsReplacementKeepsOwnerOnlyAccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv(PathEnvironment, path)
 	for range 2 {
-		if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example", RegistrationToken: "private-token"}}}); err != nil {
+		if err := Save(Config{Profiles: []senderrelay.Candidate{{PublicURL: "https://relay.example", AccessKey: "private-token"}}}); err != nil {
 			t.Fatal(err)
 		}
 		descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
@@ -67,14 +67,14 @@ func TestWindowsFailedReplacementPreservesPreviousConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(handle)
-	if err := Save(Config{Relays: []senderrelay.Candidate{{PublicURL: "https://replacement.example"}}}); err == nil {
+	if err := Save(Config{Profiles: []senderrelay.Candidate{{PublicURL: "https://replacement.example"}}}); err == nil {
 		t.Fatal("replacement of a locked destination succeeded")
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
 		t.Fatal("failed commit changed the prior configuration:", err)
 	}
 	entries, err := os.ReadDir(directory)
-	if err != nil || len(entries) != 1 {
+	if err != nil || len(entries) != 2 || entries[1].Name() != "config.json.lock" {
 		t.Fatal("failed commit left staged credentials:", err)
 	}
 }

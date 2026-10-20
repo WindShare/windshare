@@ -30,9 +30,11 @@ activation makes relay content eligible immediately and starts one bounded P2P
 recovery supervisor in the background; direct-path delay or exhaustion never gates
 the healthy relay.
 
-The protocol overview is [`docs/协议规范.md`](../docs/协议规范.md); product
-semantics are in [`docs/重构功能变化.md`](../docs/重构功能变化.md), and the historical
-closure record is archived in
+The protocol overview is [`docs/protocol.md`](../docs/protocol.md). Product semantics are a
+frozen snapshot in
+[`docs/.archive/2026.10.18/重构功能变化.md`](../docs/.archive/2026.10.18/重构功能变化.md); it is no
+longer maintained, so current behavior is defined by the code and test vectors. The
+historical closure record is archived in
 [`docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md`](../docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md).
 The browser artifact and recovery decisions are recorded in
 [`docs/browser-output-ux-refactor-plan.md`](../docs/.archive/2026.08.07/browser-output-ux-refactor-plan.md).

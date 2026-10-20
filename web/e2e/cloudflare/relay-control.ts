@@ -10,7 +10,7 @@ export interface RelayStatus {
   readonly now: number
   readonly revision: string | null
   readonly storageMarker: string
-  readonly registrationCredentialMatches: boolean
+  readonly accessCredentialAccepted: boolean
   readonly sockets: readonly { readonly state: number }[]
 }
 
@@ -19,16 +19,16 @@ export class RelayTestControl {
   readonly #request: APIRequestContext
   readonly #base: string
   readonly #secret: string
-  readonly #registrationToken: string
+  readonly #accessKey: string
   readonly #shareId: string
   #resetSent = false
   lastStatus: RelayStatus | undefined
 
-  constructor(request: APIRequestContext, base: string, secret: string, registrationToken: string, shareId: string) {
+  constructor(request: APIRequestContext, base: string, secret: string, accessKey: string, shareId: string) {
     this.#request = request
     this.#base = base
     this.#secret = secret
-    this.#registrationToken = registrationToken
+    this.#accessKey = accessKey
     this.#shareId = shareId
   }
 
@@ -41,7 +41,7 @@ export class RelayTestControl {
     expect(status.boot.length).toBeGreaterThan(0)
     expect(status.storageMarker).toEqual(expect.any(String))
     expect(status.storageMarker.length).toBeGreaterThan(0)
-    expect(status.registrationCredentialMatches, 'Updates must retain the registration credential').toBe(true)
+    expect(status.accessCredentialAccepted, 'Updates must retain the registration credential').toBe(true)
     return status
   }
 
@@ -89,7 +89,7 @@ export class RelayTestControl {
     return {
       headers: {
         Authorization: 'Bearer ' + this.#secret,
-        'X-Test-Registration-Credential': this.#registrationToken,
+        'X-Test-Access-Key': this.#accessKey,
       },
       timeout: CONTROL_TIMEOUT_MILLISECONDS,
       maxRetries: 0,

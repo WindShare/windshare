@@ -129,9 +129,12 @@ export class DirectProductStack {
       senderTracePath = join(traceDirectory, `${operationId}.ndjson`)
       commandArguments.push('--trace', senderTracePath)
     }
+    // Keep test relay authority independent of the developer's saved profiles.
+    const configPath = join(this.#requireRoot(), `${operationId}-config.json`)
+    await writeFile(configPath, JSON.stringify({ profiles: [], active_relays: [] }), { mode: 0o600 })
     const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
-      environment: localGoEnvironment(),
+      environment: { ...localGoEnvironment(), WINDSHARE_CONFIG: configPath },
       operationId,
       disclosure: { stdout: 'capability', stderr: 'private' },
     }))

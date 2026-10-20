@@ -204,7 +204,7 @@ impl<O: Observer> ShareLifecycle<O> {
         // STOP must retain the exact cleanup obligation even at an expired
         // reservation/grace boundary. A refused STOP still runs normal expiry.
         let owner_before = self.session_owner();
-        let is_stop = matches!(event, Event::Stop { .. });
+        let is_stop = matches!(event, Event::Stop { .. } | Event::Terminate { .. });
         let mut expiration = if is_stop { None } else { self.expire(now) };
         let before = self.phase();
         let (observed, operation, connection) = event_context(&event);
@@ -213,7 +213,8 @@ impl<O: Observer> ShareLifecycle<O> {
                 connection,
                 init,
                 deadline,
-            } => self.reserve(connection, init, deadline, now),
+                attribution,
+            } => self.reserve(connection, init, attribution, deadline, now),
             Event::Publish(publication) => self.publish(publication),
             Event::OwnershipCommitted(id) => self.ownership_committed(id),
             Event::Cancel { id, .. } => self.cancel(id, now),
@@ -228,6 +229,10 @@ impl<O: Observer> ShareLifecycle<O> {
                 connection,
                 authority,
             } => self.stop(connection, authority),
+            Event::Terminate {
+                credential,
+                stop_id,
+            } => self.terminate(credential, stop_id),
             Event::StopFinished { work, result } => self.finish_stop(work, result),
             Event::CheckJoin(share) => self.join(share),
             Event::Join { request, session } => self.join_session(request, session, now),
@@ -264,6 +269,7 @@ impl<O: Observer> ShareLifecycle<O> {
         &mut self,
         connection: ConnectionRef,
         init: RegisterInit,
+        attribution: crate::access::Attribution,
         deadline: UnixMillis,
         now: UnixMillis,
     ) -> Action<'static> {
@@ -294,6 +300,7 @@ impl<O: Observer> ShareLifecycle<O> {
         let pending = Pending {
             id: self.operation(connection, sequence),
             init,
+            attribution,
             deadline,
         };
         self.state = State::Reserved(pending);
@@ -317,6 +324,7 @@ impl<O: Observer> ShareLifecycle<O> {
         let route = PublishedRoute {
             relay: self.relay,
             registration: *pending.init.registration(),
+            attribution: pending.attribution,
         };
         let registration = PublishedRegistration {
             owner: route.ownership(OwnershipEpoch::FIRST, pending.id.connection),

@@ -41,6 +41,13 @@ pub enum Recovery<'a> {
     },
 }
 
+#[derive(Clone, Copy)]
+pub enum RegistrationAccess {
+    Granted(windshare_relay_core::access::Attribution),
+    Denied,
+    Unavailable,
+}
+
 pub struct Runtime<O> {
     relay: ShareRelay<O>,
     authority: Option<StoredAuthority>,
@@ -89,6 +96,7 @@ impl<O: Observer> Runtime<O> {
     pub fn event(&mut self, host: &mut impl Host, input: Input<'_>) -> Result<()> {
         let connection = match &input {
             Input::Control { connection, .. } => Some(*connection),
+            Input::Register(grant) => Some(grant.connection()),
             _ => None,
         };
         let turn = self.relay.handle(input, host.now());
@@ -107,12 +115,12 @@ impl<O: Observer> Runtime<O> {
         host: &mut impl Host,
         connection: ConnectionRef,
         bytes: Vec<u8>,
-        may_register: bool,
+        access: RegistrationAccess,
     ) -> Result<()> {
         if bytes.get(..4) == Some(b"WS2O") {
             return self.forward(host, connection, bytes);
         }
-        self.control(host, connection, &bytes, may_register)
+        self.control(host, connection, &bytes, access)
     }
 
     /// # Errors
@@ -122,7 +130,7 @@ impl<O: Observer> Runtime<O> {
         host: &mut impl Host,
         connection: ConnectionRef,
         bytes: &[u8],
-        may_register: bool,
+        access: RegistrationAccess,
     ) -> Result<()> {
         let supported = bytes.len() <= config::MAX_CONTROL_BYTES
             && matches!(
@@ -141,16 +149,34 @@ impl<O: Observer> Runtime<O> {
                         | b"WS2S"
                 )
             );
-        let unauthorized = !may_register
-            && RegisterInit::decode(bytes).is_ok_and(|init| init.mode() == RegistrationMode::Fresh);
-        if !supported || unauthorized {
-            // Deployment permission is independent of signed share ownership.
-            // RESUME and STOP remain available when credentials rotate or disappear.
-            let refusal = if unauthorized {
-                ErrorFrame::InvalidProof
-            } else {
-                ErrorFrame::UnsupportedMode
+        if supported
+            && let Ok(init) = RegisterInit::decode(bytes)
+            && init.mode() == RegistrationMode::Fresh
+        {
+            let refusal = match access {
+                RegistrationAccess::Granted(attribution) => {
+                    let expires =
+                        UnixMillis(host.now().0.saturating_add(config::CONTROL_LIFETIME_MS));
+                    let grant = windshare_relay_core::access::RegistrationGrant::new(
+                        connection,
+                        init,
+                        attribution,
+                        expires,
+                    );
+                    return self.event(host, Input::Register(grant));
+                }
+                RegistrationAccess::Denied => ErrorFrame::AccessDenied,
+                RegistrationAccess::Unavailable => ErrorFrame::AccessUnavailable(
+                    windshare_relay_core::error_frame::RetryAfter::from_millis(1_000)
+                        .expect("bounded retry"),
+                ),
             };
+            let _ = host.send(connection, &refusal.encode());
+            self.disconnect(host, connection)?;
+            return self.flush(host);
+        }
+        if !supported {
+            let refusal = ErrorFrame::UnsupportedMode;
             let _ = host.send(connection, &refusal.encode());
             self.disconnect(host, connection)?;
             return self.flush(host);

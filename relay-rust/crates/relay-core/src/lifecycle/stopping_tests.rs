@@ -238,6 +238,7 @@ fn a_reservation_cannot_claim_another_instance_to_block_authenticated_stop() {
     let Action::Reserved(reservation) = engine
         .handle(
             Event::Reserve {
+                attribution: crate::access::Attribution::Anonymous,
                 connection: connection(1, 1),
                 init: RegisterInit::decode(&init).unwrap(),
                 deadline: fixture.at.saturating_add(Duration::from_secs(5)),

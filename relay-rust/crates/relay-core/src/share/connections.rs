@@ -56,6 +56,40 @@ impl<O: Observer> ShareRelay<O> {
         Ok(())
     }
 
+    pub(super) fn register(
+        &mut self,
+        grant: crate::access::RegistrationGrant,
+        now: UnixMillis,
+        turn: &mut Turn,
+    ) -> Result<(), Error> {
+        let connection = grant.connection();
+        let Some((_, init, attribution)) = grant.consume(now) else {
+            Self::send(
+                turn,
+                connection,
+                Control::Error(crate::error_frame::ErrorFrame::AccessDenied),
+            );
+            self.disconnect(connection, now, turn);
+            return Err(Error::Unavailable);
+        };
+        let entry = self
+            .generations
+            .connection_mut(&connection)
+            .ok_or(Error::UnknownConnection)?;
+        let Role::Handshake {
+            handshake,
+            transcript,
+        } = &mut entry.role
+        else {
+            return Err(Error::Unavailable);
+        };
+        if handshake.phase() != crate::handshake::Phase::AwaitingFirstFrame {
+            return Err(Error::Unavailable);
+        }
+        transcript.binding = Binding::Fresh(attribution);
+        self.control(connection, &init.encode(), now, turn)
+    }
+
     pub(super) fn control(
         &mut self,
         connection: ConnectionRef,
@@ -290,11 +324,35 @@ impl<O: Observer> ShareRelay<O> {
                     return;
                 }
                 let event = match init.mode() {
-                    RegistrationMode::Fresh => Event::Reserve {
-                        connection,
-                        init,
-                        deadline,
-                    },
+                    RegistrationMode::Fresh => {
+                        let attribution =
+                            self.generations
+                                .connection(&connection)
+                                .and_then(|entry| match &entry.role {
+                                    Role::Handshake { transcript, .. } => {
+                                        match transcript.binding {
+                                            Binding::Fresh(attribution) => Some(attribution),
+                                            _ => None,
+                                        }
+                                    }
+                                    _ => None,
+                                });
+                        let Some(attribution) = attribution else {
+                            Self::send(
+                                turn,
+                                connection,
+                                Control::Error(crate::error_frame::ErrorFrame::AccessDenied),
+                            );
+                            self.disconnect(connection, now, turn);
+                            return;
+                        };
+                        Event::Reserve {
+                            connection,
+                            init,
+                            deadline,
+                            attribution,
+                        }
+                    }
                     RegistrationMode::Resume => Event::BeginResume {
                         connection,
                         init,

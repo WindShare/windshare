@@ -1,6 +1,6 @@
 //go:build windows
 
-package shareconfig
+package relayconfig
 
 import (
 	"os"

@@ -73,7 +73,7 @@ func dialWithCredential(endpoint string, share v2.ShareID, credential bool) (*we
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
 	headers := http.Header{}
-	if secret := os.Getenv("WINDSHARE_RELAY_REGISTRATION_SECRET"); credential && secret != "" {
+	if secret := os.Getenv("WINDSHARE_RELAY_ACCESS_KEY"); credential && secret != "" {
 		headers.Set("Authorization", "Bearer "+secret)
 	}
 	connection, _, err := websocket.Dial(ctx, route.DialURL, &websocket.DialOptions{HTTPHeader: headers})

@@ -179,6 +179,7 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
     );
     let published = fixture.register(&mut fixture.engine());
     let route = PublishedRoute {
+        attribution: crate::access::Attribution::Anonymous,
         relay: fixture.relay(),
         registration: other,
     };

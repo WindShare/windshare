@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
@@ -33,7 +33,7 @@ export interface DeploymentIdentity {
 
 export interface RelayTarget {
   readonly url: string
-  readonly registrationToken: string
+  readonly accessKey: string
   readonly testSecret: string
   readonly configPath: string
 }
@@ -45,7 +45,8 @@ export class IsolatedDeployment {
   readonly #configPath: string
   readonly #secretsPath: string
   readonly #relayConfigPath: string
-  readonly #registrationToken = randomBytes(SECRET_BYTES).toString('base64url')
+  #accessKey = ''
+  readonly #ownerPassword = randomBytes(SECRET_BYTES).toString('base64url')
   readonly #testSecret = randomBytes(SECRET_BYTES).toString('base64url')
   #configuration: Record<string, unknown> = {}
   #deploymentAttempted = false
@@ -79,24 +80,50 @@ export class IsolatedDeployment {
       workers_dev: true,
       preview_urls: false,
       version_metadata: { binding: 'TEST_VERSION' },
+      vars: { CONSOLE_ORIGIN: 'https://console.invalid' },
     }
     // Build before downloading so compilation time cannot consume the interruption window.
     await this.#command('build', 'worker-build', ['--release'])
     await writeFile(this.#secretsPath, JSON.stringify({
-      REGISTRATION_SECRET: this.#registrationToken, PREVIEW_TEST_SECRET: this.#testSecret,
+      OWNER_PASSWORD: this.#ownerPassword, PREVIEW_TEST_SECRET: this.#testSecret,
     }), { mode: 0o600 })
     this.#before = await this.#deploy('before', ['--secrets-file', this.#secretsPath])
     await rm(this.#secretsPath)
+    this.#accessKey = await this.#enrollCredential(this.#before.url)
     await writeFile(this.#relayConfigPath, JSON.stringify({
-      relays: [{ url: this.#before.url, registration_token: this.#registrationToken }],
+      profiles: [{ url: this.#before.url, access_key: this.#accessKey }], active_relays: [this.#before.url],
     }), { mode: 0o600 })
     return {
       deployment: this.#before,
       target: {
-        url: this.#before.url, registrationToken: this.#registrationToken,
+        url: this.#before.url, accessKey: this.#accessKey,
         testSecret: this.#testSecret, configPath: this.#relayConfigPath,
       },
     }
+  }
+
+  async #enrollCredential(base: string): Promise<string> {
+    let cookie = ''
+    const call = async (action: string, body: unknown) => {
+      const response = await fetch(base + '/__test/access', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + this.#testSecret,
+          'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ action, body }), signal: AbortSignal.timeout(COMMAND_TIMEOUT_MILLISECONDS),
+        redirect: 'error',
+      })
+      if (!response.ok) throw new Error('Test enrollment failed: ' + response.status)
+      cookie = response.headers.get('Set-Cookie')?.split(';')[0] ?? cookie
+      return await response.json() as { enrollment_id: string; user_code: string; access_key: string }
+    }
+    await call('login', { password: this.#ownerPassword })
+    const secret = randomBytes(SECRET_BYTES)
+    const pending = await call('enrollments', { device_name: 'Browser recovery scenario',
+      claim_digest: createHash('sha256').update(secret).digest('base64url') })
+    await call('enrollments/approve', { enrollment_id: pending.enrollment_id, user_code: pending.user_code })
+    const claimant = { enrollment_id: pending.enrollment_id, claim_secret: secret.toString('base64url') }
+    const credential = await call('enrollments/claim', claimant)
+    await call('enrollments/installed', claimant)
+    return credential.access_key
   }
 
   async redeploy() {

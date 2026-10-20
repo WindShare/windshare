@@ -9,7 +9,7 @@ mod runtime;
 #[cfg(target_arch = "wasm32")]
 mod platform;
 #[cfg(target_arch = "wasm32")]
-pub use platform::ShareRelayObject;
+pub use platform::{AccessObject, ShareRelayObject};
 
 #[cfg(test)]
 #[path = "runtime_tests.rs"]

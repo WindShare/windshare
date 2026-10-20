@@ -1,13 +1,30 @@
+use super::access;
 use crate::config::Route;
+use serde_json::json;
+use windshare_relay_access::Digest;
 use worker::{Context, Env, Method, Request, Response, Result, event};
 
 pub const NAMESPACE: &str = "SHARES";
-pub const REGISTER_HEADER: &str = "x-windshare-register";
-pub const REGISTER_TAG: &str = "registration-permitted";
-pub const REGISTRATION_SECRET: &str = "REGISTRATION_SECRET";
 
 #[event(fetch)]
 pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+    let origin = req.url()?.origin().ascii_serialization();
+    let console = env
+        .var("CONSOLE_ORIGIN")
+        .ok()
+        .map(|value| value.to_string());
+    if console.as_deref() == Some(origin.as_str()) && !req.path().starts_with("/internal/") {
+        return access::fetch(&env, req).await;
+    }
+    if req.method() == Method::Get && req.path() == "/.well-known/windshare" {
+        let mut response = Response::from_json(&json!({
+            "version":1,"access":"restricted",
+            "relay_url":env.var("RELAY_URL").map_or(origin,|value| value.to_string()),
+            "console_url":console,"frontend_url":env.var("FRONTEND_URL").ok().map(|value| value.to_string()),
+        }))?;
+        response.headers_mut().set("Cache-Control", "no-store")?;
+        return Ok(response);
+    }
     if req.method() != Method::Get {
         return Response::error("GET required", 405);
     }
@@ -21,31 +38,23 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     {
         return Response::error("WebSocket upgrade required", 426);
     }
-    let permission = registration_permission(&req, &env)?;
+    let digest = req.headers().get("Authorization")?.and_then(|header| {
+        header
+            .strip_prefix("Bearer ")
+            .map(|key| access::text_id(&Digest::of(key.as_bytes()).0))
+    });
     let mut forwarded = req.clone_mut()?;
-    // Overwrite caller-controlled headers; only the edge can grant this capability.
-    forwarded
-        .headers_mut()?
-        .set(REGISTER_HEADER, if permission { "1" } else { "0" })?;
+    // Only a digest crosses the edge. It identifies a credential; it never caches permission.
+    forwarded.headers_mut()?.delete(access::CREDENTIAL_HEADER)?;
+    if let Some(digest) = digest {
+        forwarded
+            .headers_mut()?
+            .set(access::CREDENTIAL_HEADER, &digest)?;
+    }
     forwarded.headers_mut()?.delete("Authorization")?;
-    let namespace = env.durable_object(NAMESPACE)?;
-    namespace
+    env.durable_object(NAMESPACE)?
         .id_from_name(&route.object_name())?
         .get_stub()?
         .fetch_with_request(forwarded)
         .await
-}
-
-fn registration_permission(req: &Request, env: &Env) -> Result<bool> {
-    let supplied = req.headers().get("Authorization")?;
-    let configured = env
-        .secret(REGISTRATION_SECRET)
-        .ok()
-        .map(|secret| secret.to_string());
-    // Absence is fail-closed for REGISTER. Signed STOP and token-bound RESUME
-    // still reach the object, independently of registration-credential rotation.
-    Ok(match (supplied, configured) {
-        (Some(header), Some(secret)) if !secret.is_empty() => header == format!("Bearer {secret}"),
-        _ => false,
-    })
 }

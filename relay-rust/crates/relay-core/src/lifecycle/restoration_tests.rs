@@ -184,6 +184,7 @@ fn a_stop_record_retires_its_instance_and_keeps_the_share_occupied() {
         engine
             .handle(
                 Event::Reserve {
+                    attribution: crate::access::Attribution::Anonymous,
                     connection: connection(1, 1),
                     init: other_instance,
                     deadline: fixture

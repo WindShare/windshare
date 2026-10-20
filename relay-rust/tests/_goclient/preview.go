@@ -29,13 +29,13 @@ type previewStatus struct {
 
 func cloudflare(endpoint string, idle time.Duration) {
 	require(idle >= 12*time.Second && idle <= 30*time.Second, "idle must leave room within the 45-second silence deadline")
-	require(os.Getenv("WINDSHARE_RELAY_REGISTRATION_SECRET") != "", "registration secret required")
+	require(os.Getenv("WINDSHARE_RELAY_ACCESS_KEY") != "", "access key required")
 	require(os.Getenv("WINDSHARE_RELAY_PREVIEW_SECRET") != "", "Preview test secret required")
 	expireIdleHandshake(endpoint)
 	f := newDeliveryFixture()
 	unauthorized, _ := dialWithCredential(endpoint, f.init.Registration.ShareID, false)
 	send(unauthorized, f.init)
-	refusal(unauthorized, v2.ErrorInvalidProof)
+	refusal(unauthorized, v2.ErrorAccessDenied)
 	_ = unauthorized.CloseNow()
 	rejectInvalidProofs(endpoint, f)
 	rejectJoin(endpoint, f, v2.ErrorNotFound)

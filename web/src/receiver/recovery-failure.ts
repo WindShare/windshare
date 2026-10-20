@@ -17,7 +17,7 @@ export function isTerminalRecoveryFailure(error: unknown): boolean {
   }
   return isShareRecoveryFailure(error) || isRejectedRelayData(error) ||
     (error instanceof V2RelayReceiverError && error.relayError !== undefined &&
-      ![V2_RELAY_ERROR.notFound, V2_RELAY_ERROR.starting, V2_RELAY_ERROR.admission,
+      ![V2_RELAY_ERROR.notFound, V2_RELAY_ERROR.starting, V2_RELAY_ERROR.admission, V2_RELAY_ERROR.accessUnavailable,
         V2_RELAY_ERROR.challengeExpired].some(code => code === error.relayError?.code))
 }
 

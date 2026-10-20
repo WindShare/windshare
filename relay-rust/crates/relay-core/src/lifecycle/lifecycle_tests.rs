@@ -189,6 +189,7 @@ impl Fixture {
         let handshake = self.handshake(connection, at);
         let effects = engine.handle(
             Event::Reserve {
+                attribution: crate::access::Attribution::Anonymous,
                 connection,
                 init: self.init(),
                 deadline: handshake.deadline().unwrap(),
@@ -246,6 +247,7 @@ impl Fixture {
 
     fn reserve_event(&self, at: UnixMillis) -> Event<'static> {
         Event::Reserve {
+            attribution: crate::access::Attribution::Anonymous,
             connection: connection(1, 1),
             init: self.init(),
             deadline: at.saturating_add(Duration::from_millis(VECTOR_REGISTRATION_MILLIS)),
@@ -411,6 +413,7 @@ fn competing_registration_never_changes_the_incumbent() {
     let reservation = fixture.reserve(&mut engine, connection(1, 1), fixture.at);
     let deadline = reservation.deadline();
     let other = Event::Reserve {
+        attribution: crate::access::Attribution::Anonymous,
         connection: connection(2, 1),
         init: fixture.init(),
         deadline,
