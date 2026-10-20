@@ -427,6 +427,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 		s.retire(ctx, value, turncontrol.Unhelpful)
 		service.pending = nil
 		service.retryAt = s.config.Now().Add(ServiceCooldown)
+		return
 	}
 	s.observe(value, "credentials_delegated", "")
 }

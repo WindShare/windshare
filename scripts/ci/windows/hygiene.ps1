@@ -23,7 +23,7 @@ Write-Output '== hygiene =='
 
 $goFiles = @(
     git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.go' |
-        Where-Object { $_ -notmatch '^third_party/pion/(ice|webrtc)/' -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+        Where-Object { $_ -notmatch '^third_party/pion/(ice|webrtc|turn)/' -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 )
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"

@@ -34,6 +34,7 @@ import {
   BrowserV2PeerRecoveryRearmSource,
   type V2PeerRecoveryActivation,
   type V2PeerRecoveryDependencies,
+  type V2PeerRecoveryState,
   V2PeerRecoverySupervisor,
 } from './peer-set/path'
 import { V2PeerSet } from './peer-set/peer-set'
@@ -368,6 +369,9 @@ export class V2ReceiverConnectivity {
       ...(budget === undefined ? {} : { budget }),
       releaseLane: (lane) => this.#releasePeer(lane.laneId, lane.laneEpoch),
       onUnavailable,
+      ...(grant === undefined ? {} : {
+        observeState: (state: V2PeerRecoveryState) => this.#turn.recoveryChanged(grant.pathId, state),
+      }),
       ...(this.#peerRecoveryOptions.policy === undefined
         ? {}
         : { policy: this.#peerRecoveryOptions.policy }),
@@ -384,7 +388,12 @@ export class V2ReceiverConnectivity {
   #openTurn(grant: TurnGrant): void {
     const identity = createV2PeerPathIdentityValue(grant.pathId)
     const path = this.#createPeerRecovery(identity, this.#turnOffers(grant), () => this.#turn.unhelpful(grant.pathId), grant)
-    this.#turnActivations.set(encodeBase64Url(grant.pathId), path.activate())
+    const activation = path.activate()
+    if (this.#turn.grantFor(grant.pathId) === undefined) {
+      activation.close()
+      return
+    }
+    this.#turnActivations.set(encodeBase64Url(grant.pathId), activation)
   }
 
   async #retireTurn(pathId: Uint8Array<ArrayBuffer>): Promise<void> {

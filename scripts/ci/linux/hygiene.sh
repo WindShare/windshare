@@ -7,7 +7,7 @@ echo "== hygiene =="
 
 existing_go_files() {
   while IFS= read -r -d '' file; do
-    if [[ -f "$file" && "$file" != third_party/pion/ice/* && "$file" != third_party/pion/webrtc/* ]]; then
+    if [[ -f "$file" && "$file" != third_party/pion/ice/* && "$file" != third_party/pion/webrtc/* && "$file" != third_party/pion/turn/* ]]; then
       printf '%s\0' "$file"
     fi
   done
