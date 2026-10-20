@@ -15,7 +15,24 @@ export class AccessObject extends DurableObject {
       await this.ctx.storage.deleteAlarm();
       return this.rust.alarm();
     }
-    return this.rust.fetch(request);
+    if (path === '/__test/turn-retry') {
+      for (const row of this.ctx.storage.sql.exec("SELECT key,value FROM access_entries WHERE key LIKE 'turn_lease:%'")) {
+        const lease = JSON.parse(row.value);
+        if (lease.state.state === 'revocation_pending') {
+          lease.state.next_attempt = 0;
+          this.ctx.storage.sql.exec('UPDATE access_entries SET value=? WHERE key=?', JSON.stringify(lease), row.key);
+        }
+      }
+      return new Response('ok');
+    }
+    const response = await this.rust.fetch(request);
+    if (this.env.TURN_TEST_LIFETIME_MS && response.status === 201 &&
+        (path === '/api/turn/issue' || path === '/api/turn/renew')) {
+      const grant = await response.json();
+      grant.expires_at = Date.now() + Number(this.env.TURN_TEST_LIFETIME_MS);
+      return Response.json(grant, { status: response.status, headers: response.headers });
+    }
+    return response;
   }
   // The test advances delivery explicitly, without wall-clock sleeps.
   async alarm() {}
@@ -32,7 +49,9 @@ export class ShareRelayObject extends DurableObject {
     if (path === '/internal/terminate' && await this.ctx.storage.get('fail_termination')) {
       return new Response('injected target failure', { status: 503 });
     }
-    return this.rust.fetch(request);
+    const response = await this.rust.fetch(request);
+    if (response.status === 400) console.error(JSON.stringify({ event: 'test_route_refused', endpoint: request.url, reason: await response.clone().text() }));
+    return response;
   }
   alarm(...args) { return this.rust.alarm(...args); }
   webSocketMessage(...args) { return this.rust.webSocketMessage(...args); }

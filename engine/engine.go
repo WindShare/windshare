@@ -17,6 +17,7 @@ import (
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turnaccount"
+	"github.com/windshare/windshare/engine/turnservice"
 )
 
 const (
@@ -48,6 +49,7 @@ type managedTask interface {
 type Engine struct {
 	relaySetup    *relaysetup.Service
 	turn          *turnaccount.Manager
+	turnServices  *turnservice.Registry
 	mu            sync.Mutex
 	config        Config
 	random        *lockedReader
@@ -125,9 +127,10 @@ func New(config Config) (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{
-		turn:       turn,
-		relaySetup: relaysetup.New(config.RelaySetup),
-		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
+		turn:         turn,
+		turnServices: turnservice.New(turn, turnDependencies, config.RelaySetup.Store),
+		relaySetup:   relaysetup.New(config.RelaySetup),
+		config:       config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
 		tasks: make(map[task.ID]managedTask), closed: make(chan struct{}),
 	}, nil

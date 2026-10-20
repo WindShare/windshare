@@ -28,6 +28,9 @@ type Subject struct {
 type Issued struct {
 	Credentials iceconfig.Credentials
 	URLs        []string
+	// Remote leases retain their issuer identity and subject for authenticated cleanup.
+	LeaseID string
+	Subject Subject
 }
 
 // Optional interfaces are discovered at the consumer. Static passwords and

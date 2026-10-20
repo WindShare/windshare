@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareClient } from './cloudflare.mjs';
+import { turnConsoleClient } from './turn.mjs';
 import { FULL_DEPLOYMENT, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -63,8 +64,9 @@ async function createCredential(deployment) {
 }
 
 let attempted = false;
+const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
+let consoleClient, ownedTURN;
 try {
-  const client = name => cloudflareClient({ accountId: env.CLOUDFLARE_ACCOUNT_ID, workerName: name, apiToken: env.CLOUDFLARE_API_TOKEN });
   assert.equal(await client(workerName).settings(), null);
   assert.equal(await client(workerName + '-console').settings(), null);
   await mkdir(outputDirectory);
@@ -73,11 +75,18 @@ try {
   run();
   const before = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
   await verifyHosting(before);
+  assert.equal(before.turn.status, 'ready');
+  consoleClient = turnConsoleClient({ origin: before.consoleUrl, password: env.WINDSHARE_OWNER_PASSWORD });
+  ownedTURN = await consoleClient.call('turn/provision');
   const credential = await createCredential(before);
   command('go', ['run', './cmd/wind', 'config', 'import', '-', '--front-url', before.frontendUrl], JSON.stringify(credential.configuration));
   const imported = JSON.parse(await readFile(savedConfig, 'utf8'));
   assert.equal(imported.profiles[0].url, before.endpoint);
+  assert.equal(imported.managed_turn[0].service_id, before.turn.serviceId);
   env.WINDSHARE_RELAY_ACCESS_KEY = imported.profiles[0].access_key;
+  env.WINDSHARE_TURN_TRIAL_CONFIGURATION = savedConfig;
+  command(process.execPath, ['web/scripts/browser-network-matrix/run-turn-trial.mjs']);
+  await consoleClient.call('turn/settings', { enabled: false });
   const probe = phase => command('go', ['run', './relay-rust/tests/_goclient',
     '-endpoint', before.endpoint + '/v2/ws', '-deployment-phase', phase, '-deployment-state', stateFile]);
   probe('prepare');
@@ -88,6 +97,8 @@ try {
     const after = JSON.parse(await readFile(join(outputDirectory, 'deployment.json'), 'utf8'));
     assert.deepEqual(after, { ...before, mode, frontendUrl: mode === FULL_DEPLOYMENT ? before.endpoint : null });
     await verifyHosting(after);
+    consoleClient = turnConsoleClient({ origin: after.consoleUrl, password: env.WINDSHARE_OWNER_PASSWORD });
+    assert.equal((await consoleClient.call('turn/status')).enabled, false);
     probe('verify');
   }
   console.log(JSON.stringify({ event: 'smoke_passed', workerName, ...before }));
@@ -95,11 +106,28 @@ try {
   try {
     if (attempted) {
       const failures = [];
+      try {
+        // Retain confirmed ownership even if a later password rotation fails.
+        if (!ownedTURN) {
+          const settings = await client(workerName).settings();
+          const binding = settings?.bindings?.find(value => value.name === 'WINDSHARE_DEPLOYMENT');
+          if (binding) {
+            consoleClient = turnConsoleClient({ origin: JSON.parse(binding.text).consoleEndpoint, password: env.WINDSHARE_OWNER_PASSWORD });
+            ownedTURN = await consoleClient.call('turn/provision');
+          }
+        }
+        if (ownedTURN) {
+          const keys = await client(workerName).turnKeys();
+          for (const key of keys.filter(key => key.name === ownedTURN.key_name)) {
+            await client(workerName).deleteTURNKey(key.uid);
+          }
+        }
+      } catch (error) { failures.push(error); }
       for (const name of [workerName + '-console', workerName]) {
         try { command(process.execPath, [wrangler, 'delete', name, '--config', 'relay-rust/crates/relay-cloudflare/wrangler.toml']); }
         catch (error) { failures.push(error); }
       }
-      if (failures.length) throw new AggregateError(failures, 'Owned smoke Worker cleanup failed');
+      if (failures.length) throw new AggregateError(failures, 'Owned smoke resource cleanup failed');
     }
   } finally {
     for (const path of paths) await rm(path, { force: true });

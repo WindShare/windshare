@@ -1,9 +1,37 @@
-# Owner-provided TURN
+# TURN services
 
 TURN adds relayed WebRTC paths alongside direct connections and application
 relays. Recipients still open the link normally. Initial discovery, authentication
 and signaling require an application relay; existing authenticated lanes can
 carry subsequent credential replacement after that relay disconnects.
+
+## Managed Cloudflare service
+
+The Cloudflare deployment workflow provisions TURN in both deployment modes.
+`wind relay onboard` saves the service reference automatically; approved devices
+request temporary credentials from the Worker. The deployment token stays in
+Actions, the TURN key secret stays in the Worker, and recipients receive only
+temporary credentials through encrypted session control.
+
+Managed services follow the configured active relay selection even while an
+application relay is disconnected. Discovery refreshes in the background; timeout
+retains cached authority. Disable or device revocation withdraws it. Discovery
+does not acquire TURN credentials or delay link publication. Managed inventory
+uses no manual account slots; sessions admit a bounded mix of both sources.
+
+The console enables or disables the service. Disable persists across deployments,
+stops issuance, and queues outstanding credentials for revocation. Pending,
+provider-confirmed and expired counts are distinct: recipients may reuse a
+credential until provider revocation or expiry. Cloudflare Realtime charges are
+separate from Worker charges; automatic scheduling does not force TURN traffic.
+
+`managed_turn[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
+limits that deployment's usage within one Engine, subject to the budget semantics
+below. It is not an account-wide spending cap. Optional console usage queries use
+the separate read-only `CLOUDFLARE_ANALYTICS_API_TOKEN` deployment secret and run
+only when requested; estimates cover the previous seven complete UTC days.
+
+## Manual services
 
 Add `turn` to the [sharing configuration](cli.md), then run
 `wind config import config.json`. Import replaces the complete sharing settings.
@@ -48,13 +76,14 @@ Static expiring credentials cannot be renewed automatically.
 
 Recipients receive TURN usernames and passwords through encrypted session
 control. They can reuse those credentials until provider expiry or confirmed
-revocation. **Fixed passwords have no WindShare-enforced expiry.** The issuer
-secret stays on the owner's device and never enters the share link. Import
+revocation. **Fixed passwords have no WindShare-enforced expiry.** For manual
+services, the issuer secret stays on the owner's device and never enters the share link. Import
 explains this delegation once; protect the saved configuration like a password.
 
 Credentials are acquired only for preview/download demand. Sharing and browsing
-do not contact TURN issuers. The session permits two services plus one temporary
-replacement path, reserving direct-attempt capacity. Both ends authenticate a
+do not request credentials; managed capability discovery may run in the background.
+The session permits two services plus one temporary replacement path, reserving
+direct-attempt capacity. Both ends authenticate a
 new lane before retiring the old lane. Failed renewal leaves a still-valid lane
 available. Canceled or superseded requests do not impose a failure cooldown.
 Unhelpful sampled paths cool down before another attempt. Scheduling
@@ -97,11 +126,14 @@ not an invoice or the local budget. Analytics never runs on the transfer path.
 
 Offline coverage uses a local TURN server, injected clocks/HTTP clients and
 shared Go/TypeScript vectors. Run `make vectors web short-go`; the full
-native/browser renewal scenario is
+managed Worker discovery and native/browser renewal scenario (requires `worker-build`
+and the Worker package's `npm ci`) is
 `pnpm -C web exec playwright test v2-local-turn.network.spec.ts --config=playwright.network.config.ts --project=chromium`.
 The opt-in [Cloudflare trial runner](../web/scripts/browser-network-matrix/run-turn-trial.mjs)
-reads `WINDSHARE_TURN_TRIAL_KEY` pointing to a private JSON file with `uid` and
-`secret`. See [recorded trial evidence](../testdata/connectivity/turn/cloudflare-2026-10-20.json).
+accepts `WINDSHARE_TURN_TRIAL_CONFIGURATION` pointing to an enrolled deployment's
+private configuration, or `WINDSHARE_TURN_TRIAL_KEY` pointing to a private JSON file
+with `uid` and `secret`. Recorded evidence covers [managed onboarding, renewal and cleanup](../testdata/connectivity/turn/managed-cloudflare-2026-10-20.json)
+and the [direct provider trial](../testdata/connectivity/turn/cloudflare-2026-10-20.json).
 
 Provider references: [Cloudflare credentials](https://developers.cloudflare.com/realtime/turn/generate-credentials/),
 [Cloudflare analytics](https://developers.cloudflare.com/realtime/turn/analytics/),

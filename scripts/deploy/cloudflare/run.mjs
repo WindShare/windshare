@@ -9,6 +9,7 @@ import { cloudflareClient } from './cloudflare.mjs';
 import { consoleConfig, deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
 import { deployRelay, readInputs, SECRET_BINDING, STATE_BINDING, validateHostConfig } from './deployment.mjs';
 import { deploymentReport, deploymentReporter } from './reporting.mjs';
+import { analyticsSecret, provisionTURN, turnConsoleClient } from './turn.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const hostDirectory = join(repositoryRoot, 'relay-rust/crates/relay-cloudflare');
@@ -34,7 +35,7 @@ async function publish(plan, config, ownerPassword) {
     if (ownerPassword !== undefined) {
       secretDirectory = await mkdtemp(join(tmpdir(), 'windshare-owner-'));
       const secretsFile = join(secretDirectory, 'secrets.json');
-      await writeFile(secretsFile, JSON.stringify({ [SECRET_BINDING]: ownerPassword }), { mode: 0o600, flag: 'wx' });
+      await writeFile(secretsFile, JSON.stringify({ [SECRET_BINDING]: ownerPassword, ...analyticsSecret(process.env) }), { mode: 0o600, flag: 'wx' });
       args.push('--secrets-file', secretsFile);
     }
     command(process.execPath, [join(hostDirectory, 'node_modules/wrangler/bin/wrangler.js'), ...args]);
@@ -70,6 +71,8 @@ async function main() {
     },
     deployConsole: plan => publish(plan, consoleConfig(host, inputs, plan.state)),
   });
+  result.turn = await provisionTURN({ cloudflare: client(inputs.workerName), log,
+    consoleClient: turnConsoleClient({ origin: result.state.consoleEndpoint, password: inputs.ownerPassword }) });
   const destination = process.env.WINDSHARE_DEPLOYMENT_OUTPUT || (githubActions ? undefined : join(tmpdir(), 'windshare-deployment'));
   const { file, summary } = deploymentReport(result, { githubActions, mode, revision: process.env.GITHUB_SHA,
     outputDirectory: destination ? resolve(destination) : undefined });

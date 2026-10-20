@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/turnaccount"
 	"github.com/windshare/windshare/engine/turnconfig"
 	"github.com/windshare/windshare/engine/turnprovider"
@@ -45,6 +46,17 @@ func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
 	engine.config.TURN = config
 	return nil
 }
+
+// ConfigureManagedTURN installs deployment inventory without contacting issuers.
+func (engine *Engine) ConfigureManagedTURN(config relayconfig.Config) error {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.closing {
+		return ErrClosed
+	}
+	return engine.turnServices.Configure(config)
+}
+
 func (engine *Engine) QueryTURNUsage(ctx context.Context, account string, firstDate, lastDate time.Time) (turnprovider.Usage, error) {
 	engine.mu.Lock()
 	owner := engine.turn

@@ -20,6 +20,8 @@ const configurationLockRetry = 10 * time.Millisecond
 func (config Config) SettingsRevision() string {
 	settings := config
 	settings.Pending = nil
+	// Discovery inventory is not an in-progress onboarding decision.
+	settings.ManagedTURN = nil
 	if len(settings.Profiles) == 0 {
 		settings.Profiles = []senderrelay.Candidate{}
 	}

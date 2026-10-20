@@ -82,9 +82,11 @@ jobs:
       - name: Check local access lifecycle
         working-directory: relay-rust/crates/relay-cloudflare
         run: npm run test:access
-      - name: Deploy and verify retained identity
+      - name: Deploy relay and frontend, provision managed TURN
         env:
+          # Deployment token requires Account / Calls / Write in addition to Workers permissions.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ANALYTICS_API_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}

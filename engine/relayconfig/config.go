@@ -23,6 +23,7 @@ const (
 var ErrConfig = errors.New("invalid sharing configuration")
 
 type Config struct {
+	ManagedTURN  []turnconfig.ManagedService
 	TURN         turnconfig.Config
 	FrontURL     string
 	Profiles     []senderrelay.Candidate
@@ -51,11 +52,12 @@ type PendingSetup struct {
 }
 
 type document struct {
-	TURN         *turnconfig.Config `json:"turn,omitempty"`
-	FrontURL     string             `json:"front_url,omitempty"`
-	Profiles     []savedRelay       `json:"profiles"`
-	ActiveRelays []string           `json:"active_relays,omitempty"`
-	Pending      *PendingSetup      `json:"pending_setup,omitempty"`
+	ManagedTURN  []turnconfig.ManagedService `json:"managed_turn,omitempty"`
+	TURN         *turnconfig.Config          `json:"turn,omitempty"`
+	FrontURL     string                      `json:"front_url,omitempty"`
+	Profiles     []savedRelay                `json:"profiles"`
+	ActiveRelays []string                    `json:"active_relays,omitempty"`
+	Pending      *PendingSetup               `json:"pending_setup,omitempty"`
 }
 type savedRelay struct {
 	URL       string `json:"url"`
@@ -103,7 +105,7 @@ func Decode(reader io.Reader) (Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF || limited.N == 0 {
 		return Config{}, ErrConfig
 	}
-	result := Config{FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, Pending: disk.Pending}
+	result := Config{ManagedTURN: disk.ManagedTURN, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, Pending: disk.Pending}
 	if disk.TURN != nil {
 		result.TURN = *disk.TURN
 	}
@@ -141,6 +143,18 @@ func (config Config) validateFields() error {
 	for _, profile := range config.Profiles {
 		endpoint, _ := v2.NormalizeRelayEndpoint(profile.PublicURL)
 		saved[endpoint.DialURL] = true
+	}
+	services := map[string]bool{}
+	deployments := map[string]bool{}
+	if len(config.ManagedTURN) > MaximumProfiles {
+		return ErrConfig
+	}
+	for _, service := range config.ManagedTURN {
+		endpoint, err := v2.NormalizeRelayEndpoint(service.RelayURL)
+		if err != nil || service.Validate() != nil || !saved[endpoint.DialURL] || services[service.ServiceID] || deployments[endpoint.DialURL] {
+			return ErrConfig
+		}
+		services[service.ServiceID], deployments[endpoint.DialURL] = true, true
 	}
 	seen := map[string]bool{}
 	for _, address := range config.ActiveRelays {

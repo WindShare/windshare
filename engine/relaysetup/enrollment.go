@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/turnconfig"
 )
 
 type enrollmentResponse struct {
@@ -77,7 +78,9 @@ func (service *Service) enroll(ctx context.Context, saved relayconfig.Config, pr
 }
 func (service *Service) confirm(ctx context.Context, saved relayconfig.Config, progress func(Progress)) (Result, error) {
 	pending := saved.Pending
-	var response map[string]any
+	var response struct {
+		ManagedTURN []turnconfig.ManagedService `json:"managed_turn"`
+	}
 	for {
 		current, err := service.dependencies.Store.Load()
 		if err != nil {
@@ -104,6 +107,7 @@ func (service *Service) confirm(ctx context.Context, saved relayconfig.Config, p
 	committed, err := service.dependencies.Store.Update(ctx, func(current *relayconfig.Config) error {
 		next, err := pendingInstallation(*current, pending)
 		if err == nil {
+			installManagedService(&next, pending.RelayURL, response.ManagedTURN)
 			*current = next
 		}
 		return err

@@ -54,6 +54,7 @@ type Profile struct {
 	URLs          []string
 }
 type Config struct {
+	Services []ManagedService
 	Accounts []Account
 	Profiles []Profile
 	Now      func() time.Time
@@ -91,6 +92,7 @@ type Manager struct {
 	mu       sync.Mutex
 	now      func() time.Time
 	observe  func(Event)
+	settings Config
 	current  configuration
 	changed  chan struct{}
 	ledgers  map[string]*accountLedger
@@ -108,7 +110,7 @@ func New(config Config) (*Manager, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	m := &Manager{now: config.Now, observe: config.Observe, current: prepared,
+	m := &Manager{now: config.Now, observe: config.Observe, current: prepared, settings: cloneConfig(config),
 		changed: make(chan struct{}), ledgers: make(map[string]*accountLedger),
 		leases: make(map[*leaseState]struct{}), requests: make(map[*issuance]struct{})}
 	m.current.revision = 1

@@ -31,7 +31,8 @@ const (
 
 type probe struct {
 	mu      sync.Mutex
-	source  *turnprovider.Cloudflare
+	source  issuer
+	issued  map[byte]turnprovider.Issued
 	sockets *socketauthority.Authority
 	turn    *provider.TURNResourceOwner
 	address netip.Addr
@@ -47,20 +48,7 @@ func main() {
 }
 
 func run() error {
-	data, err := os.ReadFile(os.Getenv("WINDSHARE_TURN_TRIAL_KEY"))
-	if err != nil {
-		return err
-	}
-	var key struct {
-		ID     string `json:"uid"`
-		Secret string `json:"secret"`
-	}
-	if err = json.Unmarshal(data, &key); err != nil {
-		return err
-	}
-	source, err := turnprovider.NewCloudflare(turnprovider.CloudflareConfig{
-		KeyID: key.ID, APIToken: key.Secret, Lifetime: 5 * time.Minute,
-	})
+	source, err := trialIssuer()
 	if err != nil {
 		return err
 	}
@@ -71,11 +59,14 @@ func run() error {
 	address := route.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 	_ = route.Close()
 	owner := &probe{source: source, sockets: socketauthority.New(socketauthority.Config{}),
-		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection)}
+		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]turnprovider.Issued)}
 	defer owner.sockets.Close()
 	defer func() {
 		for _, connection := range owner.paths {
 			_ = connection.Close()
+		}
+		for _, issued := range owner.issued {
+			_ = owner.source.Revoke(context.Background(), issued)
 		}
 	}()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -122,11 +113,14 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	p.next++
 	id := p.next
 	p.mu.Unlock()
-	issued, err := p.source.Issue(ctx, turnprovider.Subject{SessionID: [16]byte{1}, PathID: [16]byte{id}})
+	issued, err := p.issue(ctx, id, replaces[0])
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	p.mu.Lock()
+	p.issued[id] = issued
+	p.mu.Unlock()
 	raw := "turn:turn.cloudflare.com:3478?transport=udp"
 	if r.URL.Query().Get("transport") == "tls" {
 		raw = "turns:turn.cloudflare.com:443?transport=tcp"

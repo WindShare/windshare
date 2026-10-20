@@ -2,6 +2,7 @@ package turnaccount
 
 import (
 	"context"
+	"errors"
 	"math"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -91,6 +92,9 @@ func (m *Manager) revoke(source Source, issued turnprovider.Issued, identity ice
 	event := Event{Identity: identity, Subject: subject, Revision: revision, Milestone: "provider_revocation_confirmed"}
 	if err := provider.Revoke(ctx, issued); err != nil {
 		event.Milestone = "provider_revocation_failed"
+		if errors.Is(err, turnprovider.ErrRevocationPending) {
+			event.Milestone = "provider_revocation_pending"
+		}
 		event.Reason = err.Error()
 	} else {
 		event.ProviderRevocationConfirmed = true

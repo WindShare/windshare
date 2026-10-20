@@ -12,7 +12,9 @@ let child
 let browser
 let origin
 try {
-  if (!process.env.WINDSHARE_TURN_TRIAL_KEY) throw new Error('Set WINDSHARE_TURN_TRIAL_KEY to the temporary Cloudflare key file')
+  if (!process.env.WINDSHARE_TURN_TRIAL_KEY && !process.env.WINDSHARE_TURN_TRIAL_CONFIGURATION) {
+    throw new Error('Set WINDSHARE_TURN_TRIAL_CONFIGURATION to an enrolled deployment configuration, or WINDSHARE_TURN_TRIAL_KEY to a temporary owner key')
+  }
   const executable = join(temporary, process.platform === 'win32' ? 'turnprobe.exe' : 'turnprobe')
   await promisify(execFile)('go', ['build', '-o', executable, './transport/webrtc/testdata/browser/turnprobe'], {
     cwd: root, windowsHide: true, timeout: 60_000,

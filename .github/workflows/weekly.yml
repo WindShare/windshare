@@ -164,6 +164,11 @@ jobs:
         run: pnpm -C web install --frozen-lockfile
       - name: Install Chromium runtime
         run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Prepare managed TURN Worker
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install worker-build --version 0.8.7 --locked
+          npm ci --prefix relay-rust/crates/relay-cloudflare
       - name: Run direct and TURN relay-cut routes
         run: pnpm -C web test:browser:network
       - name: Preserve network failure diagnostics
