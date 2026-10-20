@@ -16,6 +16,7 @@ type nativeConnectivityPayloadV4 struct {
 	NetworkGeneration string                       `json:"network_generation_id"`
 	Profile           string                       `json:"ice_profile_id"`
 	ObservedAt        string                       `json:"observed_at"`
+	Diagnostic        *nativeProviderDiagnosticV4  `json:"diagnostic,omitempty"`
 	Candidate         *nativeCandidatePayloadV4    `json:"candidate,omitempty"`
 	Pair              *nativePairPayloadV4         `json:"selected_pair,omitempty"`
 	Reachability      *nativeReachabilityPayloadV4 `json:"reachability,omitempty"`
@@ -23,6 +24,12 @@ type nativeConnectivityPayloadV4 struct {
 	Admission         *nativeAdmissionPayloadV4    `json:"admission,omitempty"`
 	Socket            *nativeSocketPayloadV4       `json:"socket,omitempty"`
 	TURN              *nativeTURNPayloadV4         `json:"turn,omitempty"`
+}
+
+type nativeProviderDiagnosticV4 struct {
+	Scope    string `json:"scope"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
 func (nativeConnectivityPayloadV4) runTracePayloadV4() {}
@@ -134,6 +141,9 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	}
 	if !facts.At.IsZero() {
 		payload.ObservedAt = facts.At.UTC().Format(time.RFC3339Nano)
+	}
+	if d := facts.Diagnostic; d != nil {
+		payload.Diagnostic = &nativeProviderDiagnosticV4{Scope: d.Scope, Severity: d.Severity, Message: d.Message}
 	}
 	if c := facts.Candidate; c != nil {
 		payload.Candidate = &nativeCandidatePayloadV4{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: c.Address, Port: c.Port, Family: c.Family, Origin: c.Origin, InterfaceClass: "unknown", STUNEndpoint: "unknown", STUNRTT: "unknown", PolicyDecision: "unknown"}

@@ -85,6 +85,10 @@ func (n *NativePeerConnectivity) CompleteObservations() observationstream.Comple
 	return n.producer.Complete()
 }
 func (n *NativePeerConnectivity) observeProvider(subject Subject, event provider.Event) {
+	if event.Diagnostic != nil {
+		copy := *event.Diagnostic
+		event.Diagnostic = &copy
+	}
 	if event.Candidate != nil {
 		copy := *event.Candidate
 		event.Candidate = &copy

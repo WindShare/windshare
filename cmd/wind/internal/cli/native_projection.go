@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -86,26 +88,7 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		spec.Lifecycle = &clievent.NativeLifecycleFacts{Content: lifecycle.Content, Direct: lifecycle.Direct, PreviousGeneration: lifecycle.PreviousGeneration}
 	}
 	if p := value.Provider; p != nil {
-		spec.Kind = p.Milestone
-		spec.At = p.At
-		// Raw provider state may be an error message for setup failures. Only
-		// finite transport states are facts suitable for the shared event schema.
-		if slices.Contains([]string{"new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, p.State) {
-			spec.State = p.State
-		}
-		if c := p.Candidate; c != nil {
-			spec.Candidate = &clievent.NativeCandidateFacts{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: nativeObservedAddress(c.Address), Port: c.Port, Family: c.Family, Origin: c.Origin}
-		}
-		if pair := p.Pair; pair != nil {
-			spec.Pair = &clievent.NativePairFacts{LocalType: pair.LocalType, RemoteType: pair.RemoteType, Protocol: pair.Protocol, LocalAddress: nativeObservedAddress(pair.LocalAddress), RemoteAddress: nativeObservedAddress(pair.RemoteAddress), LocalPort: pair.LocalPort, RemotePort: pair.RemotePort, PairRTT: pair.RoundTripTime}
-		}
-		if p.TURNService != nil && p.TURN != nil && p.TURN.ActiveSockets >= 0 {
-			spec.TURN = &clievent.NativeTURNFacts{Provider: p.TURNService.Provider, Account: p.TURNService.Account, Profile: p.TURNService.Profile,
-				Cleanup: p.TURNCleanup, Reason: p.TURNCleanup.Reason(),
-				Resources: &clievent.NativeTURNResources{ActiveSockets: uint64(p.TURN.ActiveSockets), OpenedSockets: p.TURN.OpenedSockets,
-					TransportSent: p.TURN.TransportSent, TransportReceived: p.TURN.TransportReceived}}
-			projectTURNRecoveryFacts(spec.TURN, p)
-		}
+		spec = projectNativeProvider(spec, p)
 	}
 	if r := value.Reachability; r != nil {
 		spec.Kind = r.Kind
@@ -119,6 +102,49 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 		spec.Reachability = &clievent.NativeReachabilityFacts{Local: r.Endpoint.Local, Remote: r.Scope.Remote, Protocol: protocol, Reason: nativeReachabilityReason(r.Error), ServerEpoch: r.ServerEpoch, ServerRestarted: r.ServerRestarted}
 	}
 	return clievent.NewNativeConnectivityObserved(spec)
+}
+
+func projectNativeProvider(spec clievent.NativeConnectivitySpec, p *provider.Event) clievent.NativeConnectivitySpec {
+	spec.Kind = p.Milestone
+	spec.At = p.At
+	if d := p.Diagnostic; d != nil {
+		spec.Diagnostic = &clievent.NativeProviderDiagnosticFacts{
+			Scope: d.Scope, Severity: d.Severity, Message: nativeDiagnosticMessage(d.Message),
+		}
+	}
+	// Setup errors do not describe connection transitions. Diagnostic records
+	// carry log text independently of this finite transport-state vocabulary.
+	if slices.Contains([]string{"new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, p.State) {
+		spec.State = p.State
+	}
+	if c := p.Candidate; c != nil {
+		spec.Candidate = &clievent.NativeCandidateFacts{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: nativeObservedAddress(c.Address), Port: c.Port, Family: c.Family, Origin: c.Origin}
+	}
+	if pair := p.Pair; pair != nil {
+		spec.Pair = &clievent.NativePairFacts{LocalType: pair.LocalType, RemoteType: pair.RemoteType, Protocol: pair.Protocol, LocalAddress: nativeObservedAddress(pair.LocalAddress), RemoteAddress: nativeObservedAddress(pair.RemoteAddress), LocalPort: pair.LocalPort, RemotePort: pair.RemotePort, PairRTT: pair.RoundTripTime}
+	}
+	if p.TURNService != nil && p.TURN != nil && p.TURN.ActiveSockets >= 0 {
+		spec.TURN = &clievent.NativeTURNFacts{Provider: p.TURNService.Provider, Account: p.TURNService.Account, Profile: p.TURNService.Profile,
+			Cleanup: p.TURNCleanup, Reason: p.TURNCleanup.Reason(),
+			Resources: &clievent.NativeTURNResources{ActiveSockets: uint64(p.TURN.ActiveSockets), OpenedSockets: p.TURN.OpenedSockets,
+				TransportSent: p.TURN.TransportSent, TransportReceived: p.TURN.TransportReceived}}
+		projectTURNRecoveryFacts(spec.TURN, p)
+	}
+	return spec
+}
+
+func nativeDiagnosticMessage(message string) string {
+	message = strings.ToValidUTF8(message, "\uFFFD")
+	if len(message) <= clievent.NativeProviderDiagnosticMessageLimit {
+		return strings.Clone(message)
+	}
+	const suffix = "…"
+	end := clievent.NativeProviderDiagnosticMessageLimit - len(suffix)
+	for !utf8.RuneStart(message[end]) {
+		end--
+	}
+	// Keep a visible truncation marker without retaining the source log buffer.
+	return message[:end] + suffix
 }
 
 func projectTURNRecoveryFacts(facts *clievent.NativeTURNFacts, event *provider.Event) {
