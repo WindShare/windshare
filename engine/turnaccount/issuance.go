@@ -84,11 +84,9 @@ func (m *Manager) acquire(ctx context.Context, profileID string, subject turnpat
 		m.mu.Unlock()
 		m.emit(Event{Identity: identity, Subject: subject, Revision: revision, Milestone: milestone, Reason: err.Error()})
 		if issued.Credentials.Kind() != 0 {
-			m.work.Add(1)
-			go func() {
-				defer m.work.Done()
+			m.work.Go(func() {
 				m.revoke(account.Source, issued, identity, subject, revision)
-			}()
+			})
 		}
 		return nil, err
 	}
