@@ -16,10 +16,13 @@ export default defineConfig({
   reporter: 'line',
   timeout: INTEROP_TEST_TIMEOUT_MILLISECONDS,
   globalTimeout: INTEROP_HARD_TIMEOUT_MILLISECONDS,
-  projects: [{
-    name: 'chromium',
-    use: { browserName: 'chromium' },
-  }],
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'chrome', use: { browserName: 'chromium', channel: 'chrome' } },
+    { name: 'edge', use: { browserName: 'chromium', channel: 'msedge' } },
+    { name: 'firefox', use: { browserName: 'firefox' } },
+    { name: 'webkit', use: { browserName: 'webkit' } },
+  ],
   use: {
     baseURL: ownedWebBaseURL(),
     locale: 'en-US',

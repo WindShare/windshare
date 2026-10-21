@@ -573,6 +573,19 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
 ]
 
 describe('closed TraceEventObservationV2 boundary', () => {
+  it('retains receive-buffer compatibility decisions with their peer attempt correlation', () => {
+    const candidate = correlated('peer_attempt', { stage: 'provider_fact', fact: {
+      kind: 'receive-buffer', strategy: 'chromium-video', stage: 'disabled',
+      reason: 'set-remote-description-failed', errorName: 'OperationError',
+    } })
+    const snapshot = snapshotTraceEventObservationV2(candidate)
+    expect(snapshot).toEqual(candidate)
+    expect(isDeeplyFrozen(snapshot)).toBe(true)
+    const unknown = clone(candidate)
+    ;(unknown.payload.fact as UnknownRecord).kernelBufferBytes = 1048576
+    expectRejected(unknown)
+  })
+
   it('detaches, freezes, sizes, records, and deterministically exports every union variant', () => {
     for (const candidate of VALID_OBSERVATIONS) {
       const snapshot = snapshotTraceEventObservationV2(candidate)

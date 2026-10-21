@@ -102,6 +102,17 @@ Native `protocol_operation.request_scheduling` records the selected lane's respo
 queued content, pending requests, and expected completion time. Explicit operation routes and
 content route permissions retain their own authority.
 
+## Browser receive buffer
+
+Desktop Chromium on Windows/Linux negotiates one receive-only video transceiver alongside
+the DataChannel, with `max-bundle`, to obtain Chromium's larger shared UDP receive buffer.
+It captures and sends no media. This is an implementation-specific compatibility measure;
+`receive-buffer` provider facts report selection/negotiation, not a measured kernel buffer size.
+Native description failures disable it for subsequent attempts in that receiver session,
+including TURN; ordinary recovery budgets and relay availability still govern progress.
+Other browsers/platforms use data-only negotiation. Recheck browser/Pion interop after browser
+upgrades (`pnpm --dir web run test:browser:interop --project chrome --headed` selects installed Chrome).
+
 ## Browser folder saving
 
 Folder claims use bounded inspection workers that refill as files become ready. Independent claims

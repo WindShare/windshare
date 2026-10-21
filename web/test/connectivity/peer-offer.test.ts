@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { V2CandidateCounts } from '../../src/connectivity/diagnostics'
+import { BrowserPeerConnections } from '../../src/connectivity/browser-peer/connections'
+import type { PeerProviderFact } from '../../src/connectivity/peer-set/provider-facts'
 
 import {
   BrowserOfferChannelFactory,
@@ -91,10 +93,10 @@ describe('browser offer negotiation', () => {
   it('has no PeerConnection, offer, or ICE side effect before explicit offer', () => {
     let creations = 0
     const factory = new BrowserOfferChannelFactory({
-      createPeerConnection: () => {
+      peerConnections: new BrowserPeerConnections({ createPeerConnection: () => {
         creations += 1
         return new FakeNegotiationPeer().asPeer()
-      },
+      } }),
     })
 
     expect(factory).toBeDefined()
@@ -139,6 +141,69 @@ describe('browser offer negotiation', () => {
     await channel.close()
   })
 
+})
+
+describe('browser receive buffer negotiation recovery', () => {
+  it.each(['offer', 'local-description', 'remote-answer'] as const)(
+    'uses ordinary recovery after an assisted %s failure without replaying signaling', async (stage) => {
+      const fixture = assistedRecoveryFixture()
+      const failure = new DOMException('Media description rejected', 'OperationError')
+      if (stage === 'offer') fixture.first.offerOperation = Promise.reject(failure)
+      if (stage === 'local-description') fixture.first.localDescriptionOperation = Promise.reject(failure)
+      if (stage === 'remote-answer') fixture.first.remoteDescriptionOperation = Promise.reject(failure)
+      const opening = fixture.factory.offer(fixture.route, fixture.controller.signal, fixture.observer)
+      const rejected = expect(opening).rejects.toMatchObject({ cause: failure })
+      if (stage === 'remote-answer') {
+        await settle()
+        fixture.route.push(answerSignal())
+      }
+      await rejected
+      await settle()
+      expect(fixture.route.sent.filter((message) => message.kind === SIGNAL_KIND_OFFER).length).toBeLessThanOrEqual(1)
+      expect(fixture.first.closeCalls).toBe(1)
+      expect(fixture.created()).toBe(1)
+      expect(fixture.facts).toContainEqual(expect.objectContaining({ kind: 'receive-buffer', stage: 'disabled' }))
+
+      // TURN creates another offer factory, but must inherit this session's downgrade.
+      const turn = new BrowserOfferChannelFactory({ peerConnections: fixture.connections,
+        configuration: { iceTransportPolicy: 'relay', iceServers: [{ urls: 'turn:example.test' }] } })
+      const route = new ControlledRoute()
+      const retry = turn.offer(route, fixture.controller.signal, fixture.observer)
+      await settle()
+      route.push(answerSignal())
+      await settle()
+      fixture.second.raw.open()
+      const channel = await retry
+      expect(channel.state).toBe('open')
+      expect(fixture.second.transceiverCalls).toBe(0)
+      expect(route.sent.filter((message) => message.kind === SIGNAL_KIND_OFFER)).toHaveLength(1)
+      await channel.close()
+    },
+  )
+
+  it.each(['cancellation', 'network', 'signaling', 'invalid-answer'] as const)(
+    'does not blame %s on receive buffer compatibility', async (failure) => {
+      const fixture = assistedRecoveryFixture()
+      if (failure === 'cancellation') fixture.first.offerOperation = neverSettles()
+      if (failure === 'signaling') fixture.route.failSends(new Error('Relay unavailable'))
+      const opening = fixture.factory.offer(fixture.route, fixture.controller.signal, fixture.observer)
+      const rejected = expect(opening).rejects.toBeInstanceOf(Error)
+      await settle()
+      if (failure === 'cancellation') fixture.controller.abort(new DOMException('Canceled', 'AbortError'))
+      if (failure === 'network') fixture.first.fail()
+      if (failure === 'invalid-answer') fixture.route.push({ kind: SIGNAL_KIND_ANSWER, payload: [] })
+      await rejected
+      await settle()
+      expect(fixture.facts.filter((fact) => fact.kind === 'receive-buffer' && fact.stage === 'disabled')).toEqual([])
+      const next = fixture.connections.create({}, () => undefined)
+      expect(fixture.second.transceiverCalls).toBe(1)
+      next.peer.close()
+    },
+  )
+
+})
+
+describe('browser offer lifecycle', () => {
   it('reports isolated negotiation milestones without collecting network endpoints', async () => {
     const fixture = negotiationFixture()
     const milestones: Array<{ readonly stage: string; readonly counts: V2CandidateCounts }> = []
@@ -440,9 +505,9 @@ describe('browser offer negotiation', () => {
   it('fails typed on invalid browser and signaling boundaries', async () => {
     const constructionFailure = new Error('synthetic PeerConnection construction failure')
     const construction = new BrowserOfferChannelFactory({
-      createPeerConnection: () => {
+      peerConnections: new BrowserPeerConnections({ createPeerConnection: () => {
         throw constructionFailure
-      },
+      } }),
     })
     await expect(construction.offer(
       new ControlledRoute(),
@@ -669,9 +734,27 @@ function negotiationFixture(maxCandidates?: number) {
   const factory = new BrowserOfferChannelFactory({
     configuration: { iceServers: [] },
     ...(maxCandidates === undefined ? {} : { maxCandidates }),
-    createPeerConnection: () => peer.asPeer(),
+    peerConnections: new BrowserPeerConnections({ createPeerConnection: () => peer.asPeer() }),
   })
   return { peer, route, controller, signal: controller.signal, factory }
+}
+
+function assistedRecoveryFixture() {
+  const first = new FakeNegotiationPeer()
+  const second = new FakeNegotiationPeer()
+  let created = 0
+  const connections = new BrowserPeerConnections({
+    browser: { userAgentData: { brands: [{ brand: 'Chromium' }], platform: 'Windows', mobile: false } },
+    createPeerConnection: () => [first, second][created++]!.asPeer(),
+  })
+  const facts: PeerProviderFact[] = []
+  const observer: V2PeerOfferAttemptObserver = {
+    offerCreated() {}, offerSent() {}, answerReceived() {}, dataChannelOpened() {},
+    providerFact: (fact) => { facts.push(fact) },
+  }
+  return { first, second, connections, created: () => created, facts, observer,
+    factory: new BrowserOfferChannelFactory({ peerConnections: connections, configuration: { iceServers: [] } }),
+    route: new ControlledRoute(), controller: new AbortController() }
 }
 
 function answerSignal(): ConnectivitySignal {
@@ -755,7 +838,10 @@ class FakeNegotiationPeer extends EventTarget {
   connectionState: RTCPeerConnectionState = 'new'
   localDescription: RTCSessionDescription | null = null
   offerOperation: Promise<RTCSessionDescriptionInit> | undefined
+  localDescriptionOperation: Promise<void> | undefined
   remoteDescriptionOperation: Promise<void> | undefined
+  transceiverCalls = 0
+  readonly transceiver = { currentDirection: 'recvonly' }
   addCandidateOperation: Promise<void> | undefined
   readonly lifecycle: string[] = []
   closeCalls = 0
@@ -802,6 +888,11 @@ class FakeNegotiationPeer extends EventTarget {
     return this.raw.asDataChannel()
   }
 
+  addTransceiver(): RTCRtpTransceiver {
+    this.transceiverCalls += 1
+    return this.transceiver as RTCRtpTransceiver
+  }
+
   createOffer(): Promise<RTCSessionDescriptionInit> {
     return this.offerOperation ?? Promise.resolve({ type: 'offer', sdp: 'local-offer' })
   }
@@ -809,7 +900,7 @@ class FakeNegotiationPeer extends EventTarget {
   setLocalDescription(description?: RTCLocalSessionDescriptionInit): Promise<void> {
     const value = description ?? { type: 'offer', sdp: 'local-offer' }
     this.localDescription = descriptionObject(value.type ?? 'offer', value.sdp ?? '')
-    return Promise.resolve()
+    return this.localDescriptionOperation ?? Promise.resolve()
   }
 
   setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {

@@ -15,6 +15,7 @@ import {
   type V2ProtocolSessionIdentity,
 } from '../session/v2-identities'
 import type { PeerChannel } from './peer-channel'
+import { BrowserPeerConnections } from './browser-peer/connections'
 import {
   browserPeerConnectionAvailable,
   BrowserOfferChannelFactory,
@@ -183,12 +184,13 @@ export class V2ReceiverConnectivity {
   #nextActivation = 1
 
   constructor(options: V2ReceiverConnectivityOptions) {
+    const peerConnections = new BrowserPeerConnections()
     this.#session = options.session
     this.#lanes = options.lanes
     this.#createBlockLane = options.createBlockLane
     this.#policy = options.policy ?? 'auto'
     this.#relayLaneIds.add(options.relayLaneId ?? options.session.initialLaneId)
-    this.#offers = options.offers ?? new BrowserOfferChannelFactory()
+    this.#offers = options.offers ?? new BrowserOfferChannelFactory({ peerConnections })
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable ?? (() => browserPeerConnectionAvailable())
     this.#connectivityTrace = options.connectivityTrace
@@ -197,7 +199,7 @@ export class V2ReceiverConnectivity {
     this.#peerRecoveryOptions = { ...options.peerRecovery,
       network: options.peerRecovery?.network ?? new PeerNetworkGeneration() }
     this.#protocolSessionId = options.session.protocolSessionIdentity
-    this.#turnOffers = options.turnOffers ?? ((grant) => new BrowserOfferChannelFactory({ configuration: turnRTCConfiguration(grant) }))
+    this.#turnOffers = options.turnOffers ?? ((grant) => new BrowserOfferChannelFactory({ peerConnections, configuration: turnRTCConfiguration(grant) }))
     this.#turn = new TurnReceiver({
       session: this.#session,
       clock: this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock,

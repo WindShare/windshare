@@ -30,6 +30,7 @@ import { BrowserPeerRoute } from './peer-route/route'
 import { CandidateBudget } from './ice-policy/candidates'
 import type { AttemptICEProfile } from './ice-policy/endpoints'
 import { candidateFact, selectedPairFact, type PeerProviderFact } from './peer-set/provider-facts'
+import { BrowserPeerConnections, closeBrowserPeer, type BrowserPeerConnection } from './browser-peer/connections'
 
 export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
@@ -64,7 +65,7 @@ export interface V2PeerOfferAttemptObserver {
 
 export interface BrowserOfferFactoryOptions {
   readonly configuration?: RTCConfiguration
-  readonly createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection
+  readonly peerConnections?: BrowserPeerConnections
   readonly maxCandidates?: number
 }
 
@@ -85,7 +86,7 @@ const DEFAULT_CONFIGURATION: RTCConfiguration = {
 
 export class BrowserOfferChannelFactory implements OfferChannelFactory {
   readonly #configuration: RTCConfiguration
-  readonly #createPeerConnection: (configuration: RTCConfiguration) => RTCPeerConnection
+  readonly #peerConnections: BrowserPeerConnections
   readonly #maxCandidates: number
 
   constructor(options: BrowserOfferFactoryOptions = {}) {
@@ -99,8 +100,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
       )
     }
     this.#configuration = cloneConfiguration(options.configuration ?? DEFAULT_CONFIGURATION)
-    this.#createPeerConnection = options.createPeerConnection ??
-      ((configuration) => new RTCPeerConnection(configuration))
+    this.#peerConnections = options.peerConnections ?? new BrowserPeerConnections()
     this.#maxCandidates = maximum
   }
 
@@ -111,7 +111,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
     profile?: AttemptICEProfile,
   ): Promise<PeerChannel> {
     signal.throwIfAborted()
-    let peer: RTCPeerConnection
+    let connection: BrowserPeerConnection
     try {
       const configuration = cloneConfiguration(this.#configuration)
       if (profile !== undefined) {
@@ -123,19 +123,19 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
         configuration.iceServers = [...trustedTurn,
           ...(configuration.iceTransportPolicy === 'relay' || profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }])]
       }
-      peer = this.#createPeerConnection(configuration)
+      connection = this.#peerConnections.create(configuration, (fact) => observer?.providerFact?.(fact))
     } catch (cause) {
       throw new PeerNegotiationError('could not create the PeerConnection', { cause })
     }
     let channel: WebRTCFrameChannel
     try {
-      channel = createWindShareFrameChannel(peer)
+      channel = createWindShareFrameChannel(connection.peer)
     } catch (error) {
-      closePeer(peer)
+      closeBrowserPeer(connection.peer)
       throw error
     }
     const negotiation = new OfferNegotiation(
-      peer,
+      connection,
       channel,
       route,
       this.#maxCandidates,
@@ -156,6 +156,7 @@ type NegotiationEvent =
   | { readonly type: 'signal'; readonly signal: ConnectivitySignal }
 
 class OfferNegotiation {
+  readonly #connection: BrowserPeerConnection
   readonly #peer: RTCPeerConnection
   readonly #channel: WebRTCFrameChannel
   readonly #route: SignalingRoute
@@ -189,19 +190,20 @@ class OfferNegotiation {
   #parentClosed = false
 
   constructor(
-    peer: RTCPeerConnection,
+    connection: BrowserPeerConnection,
     channel: WebRTCFrameChannel,
     route: SignalingRoute,
     maximumCandidates: number,
     observer: V2PeerOfferAttemptObserver | undefined,
   ) {
-    this.#peer = peer
+    this.#connection = connection
+    this.#peer = connection.peer
     this.#channel = channel
     this.#route = route
     this.#candidateBudget = new CandidateBudget(maximumCandidates)
     this.#observer = observer
-    this.#path = new BrowserPeerRoute(() => peer.sctp?.transport?.iceTransport, (route) => this.#pathChanged(route))
-    this.#remote = new RemoteNegotiationState(peer, maximumCandidates)
+    this.#path = new BrowserPeerRoute(() => this.#peer.sctp?.transport?.iceTransport, (route) => this.#pathChanged(route))
+    this.#remote = new RemoteNegotiationState(connection, maximumCandidates)
     this.#ownedChannel = new OwnedPeerChannel(
       channel,
       this.#settled.promise,
@@ -296,13 +298,16 @@ class OfferNegotiation {
 
   async #createAndSendOffer(signal: AbortSignal): Promise<void> {
     let offer: RTCSessionDescriptionInit
+    let operation: 'create-offer' | 'set-local-description' = 'create-offer'
     try {
       offer = await awaitWithAbort(this.#peer.createOffer(), signal)
+      operation = 'set-local-description'
       await awaitWithAbort(this.#peer.setLocalDescription(offer), signal)
     } catch (cause) {
       if (signal.aborted) {
         throw abortReason(signal)
       }
+      this.#connection.descriptionFailed(operation, cause)
       throw new PeerNegotiationError('could not create the local offer', { cause })
     }
     const local = this.#peer.localDescription
@@ -494,7 +499,7 @@ class OfferNegotiation {
   #closeParent(): void {
     if (!this.#parentClosed) {
       this.#parentClosed = true
-      closePeer(this.#peer)
+      closeBrowserPeer(this.#peer)
     }
   }
 
@@ -629,15 +634,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneConfiguration(configuration: RTCConfiguration): RTCConfiguration {
   return structuredClone(configuration)
-}
-
-function closePeer(peer: RTCPeerConnection): void {
-  try {
-    peer.close()
-  } catch {
-    // Construction/negotiation failure is the actionable cause; cleanup must
-    // remain best-effort and cannot replace it with a second browser exception.
-  }
 }
 
 function closeDataChannel(channel: RTCDataChannel): void {

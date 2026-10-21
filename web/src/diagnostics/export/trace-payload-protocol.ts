@@ -332,6 +332,7 @@ function validateAttemptFailure(input: unknown): void {
 function validateProviderFact(input: unknown): void {
   const fact = recordValue(input, 'peer provider fact')
   const fields: Readonly<Record<string, readonly string[]>> = {
+    'receive-buffer': ['kind', 'strategy', 'stage', 'reason', 'errorName'],
     state: ['kind', 'phase', 'state', 'elapsedMs'],
     candidate: ['kind', 'candidateType', 'protocol', 'family', 'interfaceClass', 'endpoint', 'disposition'],
     'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'clientToTurnProtocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
