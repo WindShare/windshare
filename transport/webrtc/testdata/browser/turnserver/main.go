@@ -34,6 +34,7 @@ type readyRecord struct {
 	OperationID  string `json:"operationId"`
 	Milestone    string `json:"milestone"`
 	URL          string `json:"url"`
+	TCPURL       string `json:"tcpUrl"`
 	RelayAddress string `json:"relayAddress"`
 	Username     string `json:"username"`
 	Credential   string `json:"credential"`
@@ -55,6 +56,12 @@ func run() (runErr error) {
 	listener, err := net.ListenPacket("udp4", controlListenAddress)
 	if err != nil {
 		return fmt.Errorf("listen for local TURN: %w", err)
+	}
+	// Both protocols share one service address, so the product must select a
+	// transport rather than accidentally selecting a different relay endpoint.
+	tcp, err := net.Listen("tcp4", listener.LocalAddr().String())
+	if err != nil {
+		return errors.Join(err, listener.Close())
 	}
 	server, err := turn.NewServer(turn.ServerConfig{
 		Realm: realm,
@@ -79,9 +86,12 @@ func run() (runErr error) {
 				Address:      relayIP.String(),
 			},
 		}},
+		ListenerConfigs: []turn.ListenerConfig{{Listener: tcp, RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
+			RelayAddress: relayIP, Address: relayIP.String(),
+		}}},
 	})
 	if err != nil {
-		return errors.Join(err, listener.Close())
+		return errors.Join(err, listener.Close(), tcp.Close())
 	}
 	defer func() {
 		runErr = errors.Join(runErr, server.Close())
@@ -116,6 +126,7 @@ func newReadyRecord(address net.Addr, relayIP net.IP) (readyRecord, error) {
 		OperationID:  "chromium-turn-route-server",
 		Milestone:    "listener-ready",
 		URL:          fmt.Sprintf("turn:%s?transport=udp", net.JoinHostPort(controlAdvertisedAddress, fmt.Sprint(udp.Port))),
+		TCPURL:       fmt.Sprintf("turn:%s?transport=tcp", net.JoinHostPort(controlAdvertisedAddress, fmt.Sprint(udp.Port))),
 		RelayAddress: relayIPv4.String(),
 		Username:     username,
 		Credential:   credential,

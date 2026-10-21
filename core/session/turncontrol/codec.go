@@ -17,6 +17,7 @@ const (
 	availableKind
 	reportKind
 	recoverKind
+	qualityKind
 )
 
 var encoder, _ = cbor.CoreDetEncOptions().EncMode()
@@ -63,6 +64,12 @@ func Encode(message Message) ([]byte, error) {
 			return nil, ErrMessage
 		}
 		fields = append(base(recoverKind), value.PathID[:], uint64(value.Reason))
+	case Quality:
+		if !validQuality(value) {
+			return nil, ErrMessage
+		}
+		fields = append(base(qualityKind), value.PathID[:], value.Lane.ID, value.Lane.Epoch,
+			value.NetworkGeneration[:], value.SampleSequence, value.ContentBytes, value.BusyMilliseconds, value.PendingBytes)
 	case Retire:
 		if value.PathID == ([IdentityBytes]byte{}) || value.Reason < Idle || value.Reason > Unhelpful {
 			return nil, ErrMessage
@@ -136,18 +143,30 @@ func Decode(body []byte) (Message, error) {
 	if decode(fields[:5], &schema, &kind, &h.SessionID, &h.OwnerPathID, &h.Sequence) != nil || schema != Schema {
 		return nil, ErrMessage
 	}
+	message, err := decodePayload(h, kind, fields[5:])
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := Encode(message)
+	if err != nil || !bytes.Equal(body, canonical) {
+		return nil, ErrMessage
+	}
+	return message, nil
+}
+
+func decodePayload(h Header, kind uint64, fields []cbor.RawMessage) (Message, error) {
 	var message Message
 	switch kind {
 	case demandKind:
 		var hold uint64
-		if decode(fields[5:], &hold) != nil || hold > uint64(MaximumDemandLifetime/time.Millisecond) {
+		if decode(fields, &hold) != nil || hold > uint64(MaximumDemandLifetime/time.Millisecond) {
 			return nil, ErrMessage
 		}
 		message = Demand{h, time.Duration(hold) * time.Millisecond}
 	case grantKind:
 		value := Grant{Authority: h}
 		var lifetime, credentialKind uint64
-		if decode(fields[5:], &value.PathID, &value.Replaces, &value.Provider, &value.Account, &value.Profile,
+		if decode(fields, &value.PathID, &value.Replaces, &value.Provider, &value.Account, &value.Profile,
 			&credentialKind, &value.Username, &value.Password, &lifetime, &value.URLs) != nil ||
 			lifetime > uint64(MaximumCredentialLifetime/time.Millisecond) || credentialKind > uint64(Expiring) {
 			return nil, ErrMessage
@@ -157,20 +176,20 @@ func Decode(body []byte) (Message, error) {
 		message = value
 	case readyKind:
 		value := Ready{Authority: h}
-		if decode(fields[5:], &value.PathID, &value.Lane.ID, &value.Lane.Epoch) != nil {
+		if decode(fields, &value.PathID, &value.Lane.ID, &value.Lane.Epoch) != nil {
 			return nil, ErrMessage
 		}
 		message = value
 	case reportKind:
 		value := Report{Authority: h}
-		if decode(fields[5:], &value.PathID, &value.UsefulBytes) != nil {
+		if decode(fields, &value.PathID, &value.UsefulBytes) != nil {
 			return nil, ErrMessage
 		}
 		message = value
 	case recoverKind:
 		value := Recover{Authority: h}
 		var reason uint64
-		if decode(fields[5:], &value.PathID, &reason) != nil || reason > uint64(ChannelUnavailable) {
+		if decode(fields, &value.PathID, &reason) != nil || reason > uint64(ChannelUnavailable) {
 			return nil, ErrMessage
 		}
 		value.Reason = RecoveryReason(reason)
@@ -178,15 +197,22 @@ func Decode(body []byte) (Message, error) {
 	case retireKind:
 		value := Retire{Authority: h}
 		var reason uint64
-		if decode(fields[5:], &value.PathID, &reason) != nil || reason > uint64(Unhelpful) {
+		if decode(fields, &value.PathID, &reason) != nil || reason > uint64(Unhelpful) {
 			return nil, ErrMessage
 		}
 		value.Reason = RetireReason(reason)
 		message = value
+	case qualityKind:
+		value := Quality{Authority: h}
+		if decode(fields, &value.PathID, &value.Lane.ID, &value.Lane.Epoch, &value.NetworkGeneration,
+			&value.SampleSequence, &value.ContentBytes, &value.BusyMilliseconds, &value.PendingBytes) != nil {
+			return nil, ErrMessage
+		}
+		message = value
 	case unavailableKind:
 		value := Unavailable{Authority: h}
 		var retry uint64
-		if decode(fields[5:], &value.Profile, &retry, &value.Reason) != nil ||
+		if decode(fields, &value.Profile, &retry, &value.Reason) != nil ||
 			retry > uint64(MaximumDemandLifetime/time.Millisecond) {
 			return nil, ErrMessage
 		}
@@ -194,15 +220,11 @@ func Decode(body []byte) (Message, error) {
 		message = value
 	case availableKind:
 		value := Available{Authority: h}
-		if decode(fields[5:], &value.Profiles) != nil {
+		if decode(fields, &value.Profiles) != nil {
 			return nil, ErrMessage
 		}
 		message = value
 	default:
-		return nil, ErrMessage
-	}
-	canonical, err := Encode(message)
-	if err != nil || !bytes.Equal(body, canonical) {
 		return nil, ErrMessage
 	}
 	return message, nil

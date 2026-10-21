@@ -37,6 +37,7 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
   })
   let managed: Awaited<ReturnType<typeof turnFixture>> | undefined
   let primaryFailure: unknown
+  let readSenderTrace: (() => Promise<readonly unknown[]>) | undefined
   let redactor: ReturnType<typeof createCapabilityRedactor> | undefined
   try {
     const starts = await Promise.allSettled([stack.start(), turn.start()])
@@ -56,6 +57,7 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
     const proxy = await stack.createRelayCutProxy(managed.origin.replace(/^http:/u, 'ws:'))
     const path = await stack.createFile(FILE_NAME, payload)
     const share = await stack.share(path, { relayUrl: managed.origin, configuration, senderTrace: true })
+    readSenderTrace = () => stack.senderTraceRecords(share)
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
       completeUrl: navigationUrl,
@@ -98,6 +100,9 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
       (event) => event.observation.route === 'turn',
       'TURN peer lane admission',
     )
+    await events.waitFor('attempt', (event) => event.evidence.stage === 'provider-fact' &&
+      event.evidence.fact.kind === 'selected-pair' && event.evidence.fact.route === 'turn' &&
+      event.evidence.fact.clientToTurnProtocol === 'tcp', 'TCP-first TURN selection')
 
     await proxy.cut()
     await sealPageRelayCut(page)
@@ -182,6 +187,7 @@ test('discovers deployment TURN and renews native/browser paths after applicatio
       milestone: 'failed',
       events: events.snapshot(),
       browserDiagnostics,
+      senderTrace: await readSenderTrace?.(),
       turn: turn.diagnostic(),
       processes: stack.diagnostic(),
     } as const

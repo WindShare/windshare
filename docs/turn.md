@@ -79,7 +79,9 @@ as `["turns:turn.cloudflare.com:443?transport=tcp"]`.
 
 Use `turn:host:3478?transport=udp`, `turn:host:3478?transport=tcp`, or
 `turns:host:443?transport=tcp`. Native TURN allocations currently support IPv4.
-Several URLs in one profile are alternatives within one ICE connection.
+Several URLs in one profile are alternatives for the same service. Initial
+connections try TCP, then TLS, then UDP; each attempt delegates the same transport
+to both peers. Failed connections advance to the next configured transport.
 Issuers default to one hour; supported lifetimes are one minute through 48 hours.
 Static expiring credentials cannot be renewed automatically.
 
@@ -107,6 +109,14 @@ admission: one initial OS-routed socket per URL, with at most two staggered
 source-bound backups on failure or stalled allocation. Backups acquire capacity
 only when started; failed and unselected routes release it. Proven exits are
 preferred within the current network generation.
+
+Sustained content demand can evaluate one alternate transport using real queued
+content. Readiness alone never replaces a working path: a contender must show a
+sustained throughput improvement, scoped to the exact authenticated lanes and
+both network generations. Trials have time and sampled-content budgets, share
+the existing handoff capacity, yield to renewal/recovery, and cool down after completion. Idle or nearly
+drained queues skip exploration. Learned transport preferences remain within
+the session and network; transport selection does not change the configured exit.
 
 Transient channel failures retry the same binding with bounded backoff. Only
 selected paths with active demand can trigger allocation replacement, including

@@ -79,7 +79,7 @@ func TestProviderCancellationWithoutCallerCancellationStillBacksOff(t *testing.T
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: time.Minute})
 	issueNext(t, s)
-	if s.services[0].retryAt.Sub(now) != ServiceCooldown || s.services[0].cancel != nil {
+	if s.services[0].retryAt.Sub(now) != ServiceCooldown || s.services[0].issuance != nil {
 		t.Fatal("provider-local cancellation caused an immediate retry loop")
 	}
 }

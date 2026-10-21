@@ -459,8 +459,10 @@ const UnhelpfulLaneWindow = 30 * time.Second
 const UnhelpfulLaneRateRatio = 1.5
 
 type LaneMeasurement struct {
-	UsefulBytes uint64
-	Unhelpful   bool
+	UsefulBytes  uint64
+	Unhelpful    bool
+	BusyTime     time.Duration
+	PendingBytes uint64
 }
 
 // MeasureLane reuses completed content measurements; it never generates probes.
@@ -472,7 +474,7 @@ func (s *LaneSet) MeasureLane(identity LaneIdentity) LaneMeasurement {
 	if state == nil || state.identity != identity {
 		return LaneMeasurement{}
 	}
-	result := LaneMeasurement{UsefulBytes: state.usefulBytes}
+	result := LaneMeasurement{UsefulBytes: state.usefulBytes, BusyTime: state.performance.BusyTime(s.now()), PendingBytes: state.performance.PendingBytes}
 	lastUseful := state.lastUsefulAt
 	if lastUseful.IsZero() {
 		lastUseful = state.admittedAt

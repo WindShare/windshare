@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -48,9 +49,10 @@ type Event struct {
 type service struct {
 	profile          Profile
 	current, pending *delegation
-	cancel           context.CancelFunc
+	issuance         *credentialRequest
 	retryAt          time.Time
 	recoveryAttempts int
+	selection        transportSelection
 }
 type delegation struct {
 	lease          *Lease
@@ -63,16 +65,25 @@ type delegation struct {
 	useful         uint64
 	recovery       turncontrol.RecoveryReason
 	recoveryUntil  time.Time
+	relay          iceconfig.Relay
+	transport      iceconfig.RelayTransport
+	intent         pathIntent
+	trial          *transportTrial
+	quality        qualityHistory
 }
 type issued struct {
-	service             *service
-	path                [16]byte
-	sequence            uint64
-	generation          uint64
-	profileRevision     uint64
-	requestCancellation error
-	lease               *Lease
-	err                 error
+	service         *service
+	path            [16]byte
+	sequence        uint64
+	generation      uint64
+	profileRevision uint64
+	request         *credentialRequest
+	lease           *Lease
+	err             error
+	intent          pathIntent
+	transport       iceconfig.RelayTransport
+	predecessor     [16]byte
+	trial           *transportTrial
 }
 type Sender struct {
 	config             SenderConfig
@@ -126,6 +137,9 @@ func (s *Sender) Handle(ctx context.Context, body []byte) error {
 		return err
 	}
 	switch value := message.(type) {
+	case turncontrol.Quality:
+		s.retainQuality(value)
+		return nil
 	case turncontrol.Report:
 		s.retainReport(value)
 		return nil
@@ -147,7 +161,10 @@ func (s *Sender) Handle(ctx context.Context, body []byte) error {
 type AuthorizedPath struct {
 	*Lease
 	ReplacesPeerPathID [16]byte
+	relay              iceconfig.Relay
 }
+
+func (p *AuthorizedPath) Relay() iceconfig.Relay { return p.relay }
 
 // Lookup is the sender's authority check before constructing a native attempt.
 // A retired grant cannot fall through to ordinary direct-path preparation.
@@ -179,7 +196,7 @@ func (s *Sender) Lookup(path [16]byte) (*AuthorizedPath, bool, error) {
 		return nil, true, errors.New("TURN account unavailable")
 	default:
 	}
-	return &AuthorizedPath{Lease: value.lease, ReplacesPeerPathID: value.grant.Replaces}, true, nil
+	return &AuthorizedPath{Lease: value.lease, ReplacesPeerPathID: value.grant.Replaces, relay: value.relay}, true, nil
 }
 func (s *Sender) Run(ctx context.Context) {
 	var ticker *time.Ticker
@@ -235,6 +252,8 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 	case turncontrol.Report:
 		s.retainReport(value)
 		s.applyReports()
+	case turncontrol.Quality:
+		s.retainQuality(value)
 	case turncontrol.Retire:
 		retryAt := s.config.Now()
 		if value.Reason != turncontrol.Idle {
@@ -250,7 +269,10 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 				s.countInitialRecoveryFailure(service, pending)
 				s.retire(ctx, pending, value.Reason)
 				service.pending = nil
-				service.retryAt = retryAt
+				if pending.trial == nil {
+					service.retryAt = retryAt
+				}
+				s.selectionFailed(service, pending, s.config.Now())
 			}
 		}
 	}
@@ -266,10 +288,11 @@ func (s *Sender) maintain(ctx context.Context) {
 	}
 	demand := now.Before(s.demandUntil)
 	for _, service := range s.services {
+		s.maintainSelection(ctx, service, now)
 		s.promote(ctx, service)
 		s.retireUnusable(ctx, service, now, demand)
-		if !demand && service.cancel != nil {
-			service.cancel()
+		if !demand && service.issuance != nil {
+			service.issuance.cancel()
 		}
 	}
 	if !demand {
@@ -277,10 +300,10 @@ func (s *Sender) maintain(ctx context.Context) {
 	}
 	active, overlap := 0, 0
 	for _, service := range s.services {
-		if service.current != nil || service.pending != nil || service.cancel != nil {
+		if service.current != nil || service.pending != nil || service.issuance != nil {
 			active++
 		}
-		if service.current != nil && (service.pending != nil || service.cancel != nil) {
+		if service.current != nil && (service.pending != nil || service.issuance != nil) {
 			overlap++
 		}
 	}
@@ -335,6 +358,9 @@ func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.
 			continue
 		}
 		reason := value.retirementReason(now, demand, value == service.pending)
+		if reason == 0 && value == service.pending && !value.readyLane.Valid() && len(service.selection.available) > 1 && now.Sub(value.created) >= TransportConnectBudget {
+			reason = turncontrol.Unhelpful
+		}
 		s.mu.Lock()
 		if !value.recoveryUntil.IsZero() && !now.Before(value.recoveryUntil) {
 			reason = turncontrol.Unhelpful
@@ -350,131 +376,13 @@ func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.
 		} else {
 			service.pending = nil
 		}
-		if reason == turncontrol.Unhelpful || reason == turncontrol.Expired {
+		if value.trial == nil && (reason == turncontrol.Unhelpful || reason == turncontrol.Expired) {
 			service.retryAt = now.Add(ServiceCooldown)
 		}
-	}
-}
-
-func (s *Sender) acquire(ctx context.Context, service *service) {
-	var path [16]byte
-	if _, err := io.ReadFull(s.config.Random, path[:]); err != nil || path == ([16]byte{}) {
-		service.retryAt = s.config.Now().Add(ServiceCooldown)
-		return
-	}
-	child, cancel := context.WithCancel(ctx)
-	service.cancel = cancel
-	sequence := s.sequence
-	generation := s.generation
-	profile := service.profile
-	current := service.current
-	recovery := s.needsRecovery(current) && !current.renewalDue(s.config.Now())
-	if recovery {
-		service.recoveryAttempts++
-	}
-	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
-		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_started", "")
-	s.work.Go(func() {
-		subject := Subject{SessionID: s.config.SessionID, PathID: path}
-		var lease *Lease
-		var err error
-		if current != nil && !recovery {
-			lease, err = current.lease.Renew(child, subject)
-		} else {
-			lease, err = s.config.Accounts.Acquire(child, profile.Identity.Profile, subject)
+		if reason == turncontrol.Unhelpful {
+			s.selectionFailed(service, value, now)
 		}
-		result := issued{service: service, path: path, sequence: sequence, generation: generation, profileRevision: profile.Revision, requestCancellation: context.Cause(child), lease: lease, err: err}
-		select {
-		case s.completed <- result:
-		case <-ctx.Done():
-			if lease != nil {
-				lease.Close()
-			}
-		}
-	})
-}
-
-func (s *Sender) install(ctx context.Context, result issued) {
-	s.refreshConfiguration(ctx)
-	service := result.service
-	service.cancel()
-	service.cancel = nil
-	if reason := s.discardReason(result); reason != "" {
-		if result.lease != nil {
-			result.lease.Close()
-		}
-		s.observeIssuance(result, "issuance_discarded", reason)
-		// Completion releases the single in-flight slot. Reconcile fresh demand
-		// now rather than imposing either a failure cooldown or a maintenance tick.
-		s.maintain(ctx)
-		return
 	}
-	if result.err != nil {
-		if result.lease != nil {
-			result.lease.Close()
-		}
-		service.retryAt = s.config.Now().Add(ServiceCooldown)
-		s.observeIssuance(result, "issuance_failed", result.err.Error())
-		s.send(ctx, turncontrol.Unavailable{Authority: s.header(), Profile: service.profile.Identity.Profile,
-			RetryAfter: ServiceCooldown, Reason: result.err.Error()})
-		return
-	}
-	relay := result.lease.Relay()
-	credential := relay.Credentials()
-	grant := turncontrol.Grant{Authority: turncontrol.Header{SessionID: s.config.SessionID, OwnerPathID: s.owner, Sequence: result.sequence},
-		PathID: result.path, Provider: relay.Identity().Provider, Account: relay.Identity().Account, Profile: relay.Identity().Profile,
-		Username: credential.Username(), Password: credential.Password(), URLs: relay.URLs(), CredentialKind: turncontrol.Fixed}
-	if !credential.ExpiresAt().IsZero() {
-		grant.CredentialKind = turncontrol.Expiring
-		grant.ValidFor = min(credential.ExpiresAt().Sub(s.config.Now()).Truncate(time.Millisecond), turncontrol.MaximumCredentialLifetime)
-	}
-	if service.current != nil {
-		grant.Replaces = service.current.grant.PathID
-	}
-	value := &delegation{lease: result.lease, grant: grant, created: s.config.Now()}
-	s.mu.Lock()
-	s.paths[grant.PathID] = value
-	s.mu.Unlock()
-	service.pending = value
-	if !s.send(ctx, grant) {
-		s.retire(ctx, value, turncontrol.Unhelpful)
-		service.pending = nil
-		service.retryAt = s.config.Now().Add(ServiceCooldown)
-		return
-	}
-	s.observe(value, "credentials_delegated", "")
-}
-
-func (s *Sender) promote(ctx context.Context, service *service) {
-	pending := service.pending
-	if pending == nil || !pending.readyLane.Valid() {
-		return
-	}
-	now := s.config.Now()
-	if !now.Before(s.demandUntil) || !pending.lease.Relay().Credentials().ValidAt(now) ||
-		now.Sub(pending.created) >= ReplacementBudget {
-		return
-	}
-	select {
-	case <-pending.lease.Lost():
-		return
-	default:
-	}
-	// Admission revocation and promotion share one commit boundary. Checking the
-	// channel's terminal signal also covers delayed attempt cleanup callbacks.
-	s.mu.Lock()
-	admission := pending.admission
-	if admission == nil || admission.lane != pending.readyLane || !admission.live() || pending.recovery != 0 {
-		s.mu.Unlock()
-		return
-	}
-	old := service.current
-	service.current, service.pending = pending, nil
-	s.mu.Unlock()
-	if old != nil {
-		s.retire(ctx, old, turncontrol.Replaced)
-	}
-	s.observe(pending, "replacement_admitted", "")
 }
 
 func (s *Sender) retire(ctx context.Context, value *delegation, reason turncontrol.RetireReason) {
@@ -506,8 +414,8 @@ func (s *Sender) close() {
 	clear(s.paths)
 	s.mu.Unlock()
 	for _, service := range s.services {
-		if service.cancel != nil {
-			service.cancel()
+		if service.issuance != nil {
+			service.issuance.cancel()
 		}
 	}
 	s.work.Wait()

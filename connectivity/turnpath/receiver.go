@@ -17,26 +17,31 @@ type ReceiverPath interface {
 	Close() error
 }
 type ReceiverConfig struct {
-	SessionID [16]byte
-	Send      func(context.Context, []byte) error
-	Open      func(context.Context, turncontrol.Grant, iceconfig.Connection) (ReceiverPath, error)
-	Admitted  func(turncontrol.Grant, ReceiverPath)
-	Observe   func(Event)
-	Now       func() time.Time
-	Tick      <-chan time.Time
-	Measure   func(ReceiverPath) Measurement
+	SessionID         [16]byte
+	Send              func(context.Context, []byte) error
+	Open              func(context.Context, turncontrol.Grant, iceconfig.Connection) (ReceiverPath, error)
+	Admitted          func(turncontrol.Grant, ReceiverPath)
+	Observe           func(Event)
+	Now               func() time.Time
+	Tick              <-chan time.Time
+	Measure           func(turncontrol.Lane) Measurement
+	NetworkGeneration func() [16]byte
 }
 type Measurement struct {
-	UsefulBytes uint64
-	Unhelpful   bool
+	UsefulBytes  uint64
+	Unhelpful    bool
+	BusyTime     time.Duration
+	PendingBytes uint64
 }
 type receiverPath struct {
-	grant         turncontrol.Grant
-	path          ReceiverPath
-	expires       time.Time
-	observedLane  turncontrol.Lane
-	sentReadyLane turncontrol.Lane
-	reported      uint64
+	grant              turncontrol.Grant
+	path               ReceiverPath
+	expires            time.Time
+	observedLane       turncontrol.Lane
+	sentReadyLane      turncontrol.Lane
+	reported           uint64
+	accountedLaneBytes uint64
+	sampleSequence     uint64
 }
 type Receiver struct {
 	config               ReceiverConfig
@@ -270,6 +275,7 @@ func (r *Receiver) notifyReady(ctx context.Context, path *receiverPath) {
 	}
 	if path.observedLane != lane {
 		path.observedLane = lane
+		path.accountedLaneBytes = 0
 		if r.config.Admitted != nil {
 			r.config.Admitted(path.grant, path.path)
 		}
@@ -284,10 +290,22 @@ func (r *Receiver) measure(ctx context.Context, path *receiverPath) Measurement 
 	if !path.observedLane.Valid() || r.config.Measure == nil {
 		return Measurement{}
 	}
-	measurement := r.config.Measure(path.path)
-	if measurement.UsefulBytes > path.reported &&
-		r.send(ctx, turncontrol.Report{Authority: path.grant.Authority, PathID: path.grant.PathID, UsefulBytes: measurement.UsefulBytes}) {
-		path.reported = measurement.UsefulBytes
+	measurement := r.config.Measure(path.observedLane)
+	if measurement.UsefulBytes > path.accountedLaneBytes {
+		total := path.reported + measurement.UsefulBytes - path.accountedLaneBytes
+		if r.send(ctx, turncontrol.Report{Authority: path.grant.Authority, PathID: path.grant.PathID, UsefulBytes: total}) {
+			path.reported, path.accountedLaneBytes = total, measurement.UsefulBytes
+		}
+	}
+	if measurement.BusyTime > 0 {
+		var network [16]byte
+		if r.config.NetworkGeneration != nil {
+			network = r.config.NetworkGeneration()
+		}
+		path.sampleSequence++
+		r.send(ctx, turncontrol.Quality{Authority: path.grant.Authority, PathID: path.grant.PathID,
+			Lane: path.observedLane, NetworkGeneration: network, SampleSequence: path.sampleSequence,
+			ContentBytes: measurement.UsefulBytes, BusyMilliseconds: uint64(measurement.BusyTime / time.Millisecond), PendingBytes: measurement.PendingBytes})
 	}
 	return measurement
 }
