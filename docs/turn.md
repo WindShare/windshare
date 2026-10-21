@@ -90,9 +90,10 @@ explains this delegation once; protect the saved configuration like a password.
 Credentials are acquired only for preview/download demand. Sharing and browsing
 do not request credentials; managed capability discovery may run in the background.
 The session permits two services plus one temporary replacement path, reserving
-direct-attempt capacity. Both ends authenticate a
-new lane before retiring the old lane. Failed renewal leaves a still-valid lane
-available. Canceled or superseded requests do not impose a failure cooldown.
+direct-attempt capacity. Readiness names an exact authenticated lane generation;
+the sender retires its predecessor only while that same local admission remains
+live. Failed renewal preserves a still-valid lane. Canceled or superseded requests
+do not impose a failure cooldown.
 Unhelpful sampled paths cool down before another attempt. Scheduling
 uses real content measurements; comparable paths prefer direct, then owner TURN,
 then application relays. `p2p-only` admits direct traffic only; `relay-only`
@@ -111,6 +112,11 @@ fixed credentials. Both ends must authenticate a healthy replacement before
 retirement. Efficiency recovery leaves usable indication traffic running;
 suspected allocation-state mismatch has a bounded recovery lifetime. Repeated
 recovery is capped until fresh demand, network change or stable useful progress.
+
+Cumulative reports coalesce per grant; lifecycle commands retain their order and
+apply cancellable backpressure when full. Local acceptance means retained ownership,
+not remote execution. Readiness retries after send failure and is idempotent for
+its lane generation; an ended attempt cannot authorize a later one.
 
 `local_budget_bytes: 0` disables the local limit. Nonzero limits share socket
 usage across all profiles, shares and recipients using that account in one

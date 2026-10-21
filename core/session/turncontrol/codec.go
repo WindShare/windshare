@@ -49,10 +49,10 @@ func Encode(message Message) ([]byte, error) {
 		fields = append(base(grantKind), value.PathID[:], value.Replaces[:], value.Provider, value.Account, value.Profile,
 			uint64(value.CredentialKind), value.Username, value.Password, uint64(value.ValidFor/time.Millisecond), value.URLs)
 	case Ready:
-		if value.PathID == ([IdentityBytes]byte{}) {
+		if value.PathID == ([IdentityBytes]byte{}) || !value.Lane.Valid() {
 			return nil, ErrMessage
 		}
-		fields = append(base(readyKind), value.PathID[:])
+		fields = append(base(readyKind), value.PathID[:], value.Lane.ID, value.Lane.Epoch)
 	case Report:
 		if value.PathID == ([IdentityBytes]byte{}) {
 			return nil, ErrMessage
@@ -157,7 +157,7 @@ func Decode(body []byte) (Message, error) {
 		message = value
 	case readyKind:
 		value := Ready{Authority: h}
-		if decode(fields[5:], &value.PathID) != nil {
+		if decode(fields[5:], &value.PathID, &value.Lane.ID, &value.Lane.Epoch) != nil {
 			return nil, ErrMessage
 		}
 		message = value

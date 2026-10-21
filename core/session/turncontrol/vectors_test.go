@@ -22,7 +22,7 @@ func TestTURNControlVectors(t *testing.T) {
 		Grant{Authority: header, PathID: path, Replaces: [16]byte{5}, Provider: "coturn", Account: "home", Profile: "primary",
 			CredentialKind: Expiring, Username: "123:user", Password: "delegated-password", ValidFor: time.Hour, URLs: []string{"turn:127.0.0.1:3478?transport=udp", "turns:example.org:443?transport=tcp"}},
 		Grant{Authority: header, PathID: path, Provider: "standard", Account: "home", Profile: "primary", CredentialKind: Fixed, Username: "fixed-user", Password: "fixed-password", URLs: []string{"turn:example.org"}},
-		Ready{header, path}, Retire{header, path, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"}, Report{header, path, 1 << 40},
+		Ready{header, path, Lane{ID: 7, Epoch: 2}}, Retire{header, path, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"}, Report{header, path, 1 << 40},
 		Recover{header, path, AllocationStateMismatch}, Recover{header, path, ChannelUnavailable},
 	}
 	type vector struct {
@@ -41,7 +41,7 @@ func TestTURNControlVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded = append(encoded, '\n')
-	destination := filepath.Join("..", "..", "testvectors", "turn-control-v3.json")
+	destination := filepath.Join("..", "..", "testvectors", "turn-control-v4.json")
 	if *updateVectors {
 		if err := os.WriteFile(destination, encoded, 0644); err != nil {
 			t.Fatal(err)

@@ -27,7 +27,7 @@ func (s *Sender) Recover(path [16]byte, reason turncontrol.RecoveryReason) {
 	}
 	s.mu.Unlock()
 	select {
-	case s.recoveryWake <- struct{}{}:
+	case s.reconcileWake <- struct{}{}:
 	default:
 	}
 }
@@ -122,7 +122,7 @@ func (s *Sender) countInitialRecoveryFailure(service *service, value *delegation
 func (s *Sender) needsRecovery(value *delegation) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return value != nil && value.recovery != 0 && value.admitted
+	return value != nil && value.recovery != 0
 }
 
 func (r *Receiver) Recover(path [16]byte, reason turncontrol.RecoveryReason) {

@@ -2,7 +2,7 @@ import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
 import type { V2PeerRecoveryClock, V2PeerRecoveryState } from '../peer-set/contract'
 import { awaitWithAbort } from '../peer-offer-remote'
-import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader } from './control-codec'
+import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader, type TurnLane } from './control-codec'
 
 const RENEW_DEMAND_MS = 60_000
 const MAX_PATHS = 3
@@ -33,10 +33,15 @@ export interface TurnObservation {
 interface Path {
   readonly grant: TurnGrant
   readonly lifetime: AbortController
-  admitted: boolean
-  notified: boolean
+  admission?: Admission
   reported: number
   status: Pick<TurnObservation, 'state' | 'reason'>
+}
+
+interface Admission {
+  readonly lane: TurnLane
+  readonly lifetime: AbortController
+  readySent: boolean
 }
 
 type Inventory = Extract<ReturnType<typeof decodeTurnControl>, { kind: 'available' }>
@@ -92,15 +97,24 @@ export class TurnReceiver {
 
   grantFor(pathId: Uint8Array): TurnGrant | undefined { return this.#paths.get(encodeBase64Url(pathId))?.grant }
 
-  admitted(pathId: Uint8Array): void {
+  admitted(pathId: Uint8Array, lane: TurnLane): void {
     const path = this.#paths.get(encodeBase64Url(pathId))
-    if (path === undefined || path.admitted) return
-    path.admitted = true
+    if (path === undefined || lane.laneEpoch <= (path.admission?.lane.laneEpoch ?? 0)) return
+    path.admission?.lifetime.abort()
+    const admission: Admission = { lane: { ...lane }, lifetime: new AbortController(), readySent: false }
+    path.admission = admission
     this.#observe(path.grant, 'ready')
-    // Keep the old connection until the sender acknowledges retirement over
-    // session control. The new lane is already authenticated and scheduled here.
-    this.#track(this.#notifyReady(path))
-    this.#track(this.#measure(path))
+    // Readiness identifies this exact lane incarnation. The sender retains the
+    // predecessor until matching local admission is still live at promotion.
+    this.#track(this.#notifyReady(path, admission))
+    this.#track(this.#measure(path, admission))
+  }
+
+  detached(pathId: Uint8Array, lane: TurnLane): void {
+    const admission = this.#paths.get(encodeBase64Url(pathId))?.admission
+    if (admission?.lane.laneId === lane.laneId && admission.lane.laneEpoch === lane.laneEpoch) {
+      admission.lifetime.abort()
+    }
   }
 
   recoveryChanged(pathId: Uint8Array, state: V2PeerRecoveryState): void {
@@ -188,7 +202,7 @@ export class TurnReceiver {
       (replaces !== undefined && (replaces.grant.profile !== grant.profile || replaces.grant.account !== grant.account || replaces.grant.provider !== grant.provider)) ||
       (grant.replaces.some((value) => value !== 0) && replaces === undefined)) return
     const lifetime = new AbortController()
-    this.#paths.set(key, { grant, lifetime, admitted: false, notified: false, reported: 0,
+    this.#paths.set(key, { grant, lifetime, reported: 0,
       status: { state: 'connecting' } })
     // Activation can synchronously admit or retire a path when its service
     // budget is exhausted. Never overwrite that result with "connecting".
@@ -255,21 +269,24 @@ export class TurnReceiver {
   #emit(event: TurnObservation): void {
     try { this.#options.observe?.(event) } catch { /* Observations cannot own the path lifetime. */ }
   }
-  async #notifyReady(path: Path): Promise<void> {
-    if (path.notified) return
-    await this.#send({ ...this.#header(path.grant), kind: 'ready', pathId: path.grant.pathId }, path.lifetime.signal)
-    path.notified = true
+  async #notifyReady(path: Path, admission: Admission): Promise<void> {
+    if (admission.readySent || admission.lifetime.signal.aborted || path.admission !== admission) return
+    const signal = AbortSignal.any([path.lifetime.signal, admission.lifetime.signal])
+    await this.#send({ ...this.#header(path.grant), ...admission.lane, kind: 'ready', pathId: path.grant.pathId }, signal)
+    if (!signal.aborted) admission.readySent = true
   }
-  async #measure(path: Path): Promise<void> {
-    while (!path.lifetime.signal.aborted) {
-      await this.#options.clock.sleep(MEASUREMENT_INTERVAL_MS, path.lifetime.signal)
-      await this.#notifyReady(path).catch(() => undefined)
+  async #measure(path: Path, admission: Admission): Promise<void> {
+    const signal = AbortSignal.any([path.lifetime.signal, admission.lifetime.signal])
+    while (!signal.aborted) {
+      await this.#options.clock.sleep(MEASUREMENT_INTERVAL_MS, signal)
+      await this.#notifyReady(path, admission).catch(() => undefined)
+      if (signal.aborted) return
       const measurement = this.#options.measure?.(path.grant.pathId)
       if (measurement === undefined) continue
       if (measurement.usefulBytes > path.reported) {
         const sent = await this.#send({ ...this.#header(path.grant), kind: 'report', pathId: path.grant.pathId,
-          usefulBytes: BigInt(measurement.usefulBytes) }, path.lifetime.signal).then(() => true, () => false)
-        if (path.lifetime.signal.aborted) return
+          usefulBytes: BigInt(measurement.usefulBytes) }, signal).then(() => true, () => false)
+        if (signal.aborted) return
         if (sent) path.reported = measurement.usefulBytes
         this.#emit({ profile: path.grant.profile, provider: path.grant.provider, account: path.grant.account,
           pathId: encodeBase64Url(path.grant.pathId), ...path.status, usefulBytes: measurement.usefulBytes })

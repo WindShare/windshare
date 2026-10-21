@@ -63,7 +63,7 @@ func TestRunningSenderDiscoversConfigurationAndRetainsExistingLane(t *testing.T)
 	demand := available.Authority
 	demand.Sequence = 1
 	body, _ := turncontrol.Encode(turncontrol.Demand{Authority: demand, HoldFor: time.Minute})
-	if err := sender.Handle(body); err != nil {
+	if err := sender.Handle(t.Context(), body); err != nil {
 		t.Fatal(err)
 	}
 	grant := nextControl[turncontrol.Grant](t, messages)
@@ -76,9 +76,9 @@ func TestRunningSenderDiscoversConfigurationAndRetainsExistingLane(t *testing.T)
 	if authorized, _, err := sender.Lookup(grant.PathID); err != nil || authorized == nil {
 		t.Fatal("ordinary settings update retired an already delegated pending path")
 	}
-	sender.Admitted(grant.PathID)
-	body, _ = turncontrol.Encode(turncontrol.Ready{Authority: grant.Authority, PathID: grant.PathID})
-	if err := sender.Handle(body); err != nil {
+	sender.Admit(t.Context(), grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
+	body, _ = turncontrol.Encode(turncontrol.Ready{Authority: grant.Authority, PathID: grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
+	if err := sender.Handle(t.Context(), body); err != nil {
 		t.Fatal(err)
 	}
 	<-promoted

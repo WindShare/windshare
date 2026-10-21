@@ -32,7 +32,7 @@ function fixture(open: (receiver: TurnReceiver) => void = () => undefined) {
 }
 
 it('does not overwrite synchronous admission with connecting', async () => {
-  const { receiver, observations } = fixture(receiver => receiver.admitted(grant.pathId))
+  const { receiver, observations } = fixture(receiver => receiver.admitted(grant.pathId, { laneId: 7, laneEpoch: 2 }))
   expect(observations.map(event => event.state)).toEqual(['available', 'connecting', 'ready'])
   await receiver.close()
   expect(vi.getTimerCount()).toBe(0)
@@ -71,7 +71,7 @@ it('publishes retry failures, clears them for a fresh attempt, and ignores retir
   expect(observations.at(-1)).toMatchObject({ state: 'retired', reason: 'expired' })
   const count = observations.length
   receiver.recoveryChanged(grant.pathId, { kind: 'admitted', lane: { laneId: 7, laneEpoch: 1 } })
-  receiver.admitted(grant.pathId)
+  receiver.admitted(grant.pathId, { laneId: 7, laneEpoch: 2 })
   expect(observations).toHaveLength(count)
   await receiver.close()
 })

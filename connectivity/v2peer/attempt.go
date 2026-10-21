@@ -273,6 +273,7 @@ type attemptExecution struct {
 	children          sync.WaitGroup
 	phaseContext      context.Context
 	transport         *ownedPeerDataChannel
+	turnAdmission     *turnpath.Admission
 	transportFailure  peerChannelFailure
 	openTransition    <-chan struct{}
 	localCandidates   int
@@ -367,6 +368,7 @@ func (execution *attemptExecution) negotiate() error {
 }
 
 func (execution *attemptExecution) close(result error) error {
+	execution.turnAdmission.Close()
 	execution.attempt.stop(result)
 	execution.attempt.phases.terminate(result)
 	var teardown peerTransportTeardown
