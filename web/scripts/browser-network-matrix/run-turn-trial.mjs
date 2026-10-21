@@ -7,6 +7,10 @@ import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const transports = process.argv.length > 2 ? process.argv.slice(2) : ['udp', 'tls', 'profile']
+if (transports.some(transport => !['udp', 'tls', 'profile'].includes(transport))) {
+  throw new Error('TURN trial transports must be udp, tls, or profile')
+}
 const temporary = await mkdtemp(join(tmpdir(), 'windshare-turn-trial-'))
 let child
 let browser
@@ -37,7 +41,7 @@ try {
   browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
   await page.goto(origin)
-  const evidence = await page.evaluate(async () => {
+  const evidence = await page.evaluate(async (transports) => {
     const timeout = (promise) => {
       let timer
       return Promise.race([promise, new Promise((_, reject) => {
@@ -52,12 +56,13 @@ try {
       const start = await response.json()
       const pc = new RTCPeerConnection({ iceServers: start.iceServers, iceTransportPolicy: 'relay' })
       active.set(start.id, pc)
+      let connectedAt
       const delivered = new Promise((resolveDelivery, rejectDelivery) => {
         pc.ondatachannel = ({ channel }) => {
           channel.binaryType = 'arraybuffer'
           let received = 0
           let started
-          channel.onopen = () => { started = performance.now(); channel.send('start') }
+          channel.onopen = () => { connectedAt = started = performance.now(); channel.send('start') }
           channel.onerror = () => rejectDelivery(new Error('TURN data channel failed'))
           channel.onmessage = ({ data }) => {
             const bytes = new Uint8Array(data)
@@ -77,6 +82,7 @@ try {
           pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') resolveGather() }
         }))
       }
+      const negotiationStarted = performance.now()
       const answer = await fetch(`/answer?id=${start.id}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pc.localDescription),
       })
@@ -91,7 +97,8 @@ try {
       if (!native.selected || native.pair.LocalType !== 'relay' || local?.candidateType !== 'relay') {
         throw new Error('TURN trial did not select relay candidates on both endpoints')
       }
-      evidence.push({ transport, replacement: replaces !== 0, ...delivery, usefulMbps: delivery.received * 8 / delivery.elapsedMs / 1000,
+      evidence.push({ transport, replacement: replaces !== 0, negotiationMs: connectedAt - negotiationStarted,
+        endpointCount: start.iceServers[0].urls.length, ...delivery, usefulMbps: delivery.received * 8 / delivery.elapsedMs / 1000,
         native, browser: { localType: local.candidateType, remoteType: remote?.candidateType,
           relayProtocol: local.relayProtocol, bytesReceived: pair?.bytesReceived, bytesSent: pair?.bytesSent } })
       return start.id
@@ -103,7 +110,7 @@ try {
       if (resources.ActiveSockets !== 0) throw new Error('TURN probe retained sockets')
     }
     try {
-      for (const transport of ['udp', 'tls']) {
+      for (const transport of transports) {
         const first = await run(transport)
         // This overlaps two credential generations. Policy tests separately own
         // expiry, signaling loss, and publication of the replacement lane.
@@ -115,7 +122,7 @@ try {
     } finally {
       for (const id of [...active.keys()]) await close(id).catch(() => undefined)
     }
-  })
+  }, transports)
   console.log(JSON.stringify({ scenario: 'cloudflare-native-browser-turn', evidence }, null, 2))
 } finally {
   await browser?.close()

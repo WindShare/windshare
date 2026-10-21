@@ -122,12 +122,19 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.issued[id] = issued
 	p.mu.Unlock()
-	raw := "turn:turn.cloudflare.com:3478?transport=udp"
-	if r.URL.Query().Get("transport") == "tls" {
-		raw = "turns:turn.cloudflare.com:443?transport=tcp"
+	urls := issued.Relay().URLs()
+	switch r.URL.Query().Get("transport") {
+	case "udp":
+		urls = []string{"turn:turn.cloudflare.com:3478?transport=udp"}
+	case "tls":
+		urls = []string{"turns:turn.cloudflare.com:443?transport=tcp"}
+	case "profile":
+	default:
+		http.Error(w, "unknown TURN transport", http.StatusBadRequest)
+		return
 	}
 	relay, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "cloudflare", Account: "trial", Profile: r.URL.Query().Get("transport")},
-		[]string{raw}, issued.Relay().Credentials())
+		urls, issued.Relay().Credentials())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -201,7 +208,7 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id": id, "offer": connection.LocalDescription(), "bytes": probePayloadBytes,
-		"iceServers": []map[string]any{{"urls": []string{raw}, "username": issued.Relay().Credentials().Username(), "credential": issued.Relay().Credentials().Password()}},
+		"iceServers": []map[string]any{{"urls": urls, "username": issued.Relay().Credentials().Username(), "credential": issued.Relay().Credentials().Password()}},
 	})
 }
 

@@ -34,8 +34,8 @@ $coreProfile = Join-Path $profileDirectory 'core.cover.out'
 
 Write-Output '== short-go =='
 try {
-    Invoke-Step 'pinned TURN protocol state tests' {
-        go test -short -race github.com/pion/turn/v5/internal/client
+    Invoke-Step 'pinned ICE and TURN protocol state tests' {
+        go test -short -race github.com/pion/ice/v4 github.com/pion/turn/v5/internal/client
     }
     # Hosted CI owns forced reruns; local validation keeps Go's content-aware
     # cache so unchanged race/coverage packages do not dominate feedback time.

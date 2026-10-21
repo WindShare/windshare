@@ -45,12 +45,12 @@
         {
           "path": "candidate.go",
           "upstream_sha256": "dad59b912ebf62d781f89fa4c42464be4c3f6622ff2f454dda9a38fc8e858e55",
-          "sha256": "f388e887e9b22db50178fb99a087a9431111591184f1018996f2d338106d8cb7"
+          "sha256": "024f15f1051b29f67c530ac992d081e5634f45b01ad38da5b96c524a002c191b"
         },
         {
           "path": "candidate_base.go",
           "upstream_sha256": "d48a95150ab03534943f83d7622abac0c9a409aee9cdaa8fcd97058ffadc2ba4",
-          "sha256": "5cda6c26dffe52c924bbd76a6eaeb735e43f9fda4d4967d5d890ea3069ba3814"
+          "sha256": "085dac329a8a30b92b083f05c356a62eba160e4e3f7cf60603d8aa4f01d0383f"
         },
         {
           "path": "candidate_host.go",
@@ -73,9 +73,17 @@
           "sha256": "e974547dd5091894af70954f55e5dc23b0dbd343e5a049c4b4f45788c76de895"
         },
         {
+          "path": "candidate_stun.go",
+          "sha256": "3c36c950d21c759302ae65c205d1fef139ed84bdaaf181c6a3b49701c56b00bd"
+        },
+        {
+          "path": "candidate_stun_test.go",
+          "sha256": "9e6fd7463b6666eadd12ef2cebbab070c19eb024d781e1c4321a175e69e72d99"
+        },
+        {
           "path": "candidatepair.go",
           "upstream_sha256": "f4bbec292e32c9d478303a4441024d8e962f3b3e4b831580cf5eac2b945743b3",
-          "sha256": "f4bbec292e32c9d478303a4441024d8e962f3b3e4b831580cf5eac2b945743b3"
+          "sha256": "2883113a9b5c84f242f9249161e2fed902fb4b62d33caa64db77587016fe854d"
         },
         {
           "path": "candidatepair_state.go",

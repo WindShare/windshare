@@ -21,6 +21,8 @@ The narrow patches in `patches/` add:
 - Complete universal UDP mux initialization before its socket reader starts.
 - Cancellable TURN allocation transactions and allocation deletion before closing
   their control transport, including rejected candidates.
+- Bounded per-candidate STUN writers keep TURN permission round trips outside the
+  ICE task loop; obsolete checks are discarded and shutdown joins the writers.
 - Channel binding expiry, bounded transient retries with stable channel numbers,
   peer-scoped indication fallback, and structured recovery evidence.
 - An injected TURN route plan with cancellable UDP/TCP/TLS egress attempts and
