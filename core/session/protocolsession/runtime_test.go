@@ -22,12 +22,13 @@ func TestMessageCanonicalRoundTripAndOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	operationID := testOperationID(1)
-	for kind := MessageListChildren; kind <= MessagePeerCandidate; kind++ {
+	for kind := MessageListChildren; kind <= MessageTURNControl; kind++ {
 		if kind == MessageBlockFragment {
 			continue
 		}
 		var id *OperationID
-		if kind != MessageSessionTerminal {
+		sessionControl := kind == MessageSessionTerminal || kind == MessagePeerPathControl || kind == MessageTURNControl
+		if !sessionControl {
 			id = &operationID
 		}
 		message, err := NewMessage(kind, id, body)
@@ -46,7 +47,7 @@ func TestMessageCanonicalRoundTripAndOwnership(t *testing.T) {
 			t.Fatalf("kind %d round trip changed message", kind)
 		}
 		gotID, hasID := decoded.OperationID()
-		if (kind != MessageSessionTerminal) != hasID || (hasID && gotID != operationID) {
+		if !sessionControl != hasID || (hasID && gotID != operationID) {
 			t.Fatalf("kind %d operation identity = %x, %v", kind, gotID, hasID)
 		}
 		plaintext[0] ^= 1

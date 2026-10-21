@@ -1,4 +1,5 @@
-import { validateV2PeerPathControlBody } from '../connectivity/v2-path-control-codec'
+import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
+import { decodeTurnControl } from '../connectivity/turn/control-codec'
 import { requirePeerSlot } from './peer-slots/slots'
 import { concatBytes, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'
@@ -37,6 +38,7 @@ export const V2_MESSAGE_KIND = Object.freeze({
   peerAnswer: 17,
   peerCandidate: 18,
   peerPathControl: 19,
+  turnControl: 20,
 } as const)
 
 export const V2_PEER_OPERATION_CODE = Object.freeze({
@@ -81,6 +83,7 @@ const CONTROL_DOMAIN = Object.freeze({
   terminal: 'windshare/v2 control/session-terminal',
   lane: 'windshare/v2 control/lane-attach',
   peerPath: 'windshare/v2 control/peer-path',
+  turn: 'windshare/v2 control/turn',
 })
 
 export interface V2SessionMessage {
@@ -386,6 +389,8 @@ function controlDomain(kind: V2MessageKind): string {
   switch (kind) {
     case V2_MESSAGE_KIND.peerPathControl:
       return CONTROL_DOMAIN.peerPath
+    case V2_MESSAGE_KIND.turnControl:
+      return CONTROL_DOMAIN.turn
     case V2_MESSAGE_KIND.sessionTerminal:
       return CONTROL_DOMAIN.terminal
     case V2_MESSAGE_KIND.laneAttach:
@@ -416,7 +421,10 @@ export function validateV2SenderControlBody(kind: V2MessageKind, body: Uint8Arra
       decodeV2OperationErrorControl(body)
       return
     case V2_MESSAGE_KIND.peerPathControl:
-      validateV2PeerPathControlBody(body)
+      decodeV2PeerPathControl(body)
+      return
+    case V2_MESSAGE_KIND.turnControl:
+      decodeTurnControl(body)
       return
     case V2_MESSAGE_KIND.sessionTerminal:
       validateSessionTerminal(body)
@@ -648,8 +656,8 @@ function requireSchema(value: unknown, label: string): void {
 
 function requireMessageIdentity(kind: V2MessageKind, operationId: Uint8Array | undefined): void {
   if (!MESSAGE_KINDS.has(kind)) throw new V2MessageError('Message kind is outside the wire registry')
-  if (kind === V2_MESSAGE_KIND.sessionTerminal || kind === V2_MESSAGE_KIND.peerPathControl) {
-    if (operationId !== undefined) throw new V2MessageError('Session terminal has an operation ID')
+  if (kind === V2_MESSAGE_KIND.sessionTerminal || kind === V2_MESSAGE_KIND.peerPathControl || kind === V2_MESSAGE_KIND.turnControl) {
+    if (operationId !== undefined) throw new V2MessageError('Session control has an operation ID')
     return
   }
   if (operationId === undefined) throw new V2MessageError('Operation message has no operation ID')

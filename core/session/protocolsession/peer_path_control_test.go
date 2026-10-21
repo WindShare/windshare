@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
@@ -53,7 +55,14 @@ func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
 	}
 }
 
-func TestPeerPathControlIsSessionBoundWithoutOperationAuthority(t *testing.T) {
+func TestSessionControlsAreSessionBoundWithoutOperationAuthority(t *testing.T) {
+	for name, kind := range map[string]MessageKind{"reachability": MessagePeerPathControl, "turn": MessageTURNControl} {
+		t.Run(name, func(t *testing.T) { testSessionControlAuthority(t, kind) })
+	}
+}
+
+func testSessionControlAuthority(t *testing.T, kind MessageKind) {
+	t.Helper()
 	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 2}, time.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -62,12 +71,18 @@ func TestPeerPathControlIsSessionBoundWithoutOperationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := NewMessage(MessagePeerPathControl, nil, body)
+	if kind == MessageTURNControl {
+		body, err = turncontrol.Encode(turncontrol.Demand{Authority: turncontrol.Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	message, err := NewMessage(kind, nil, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := OperationID{1}
-	if _, err := NewMessage(MessagePeerPathControl, &id, body); err == nil {
+	if _, err := NewMessage(kind, &id, body); err == nil {
 		t.Fatal("path control acquired operation identity")
 	}
 	for _, direction := range []Direction{DirectionReceiverToSender, DirectionSenderToReceiver} {

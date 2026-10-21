@@ -71,7 +71,14 @@ After the handshake, lane frames are `OperationEnvelope`s: AES-256-GCM bound to 
 | Operation end | `OPERATION_COMPLETE`, `OPERATION_ERROR`, `CANCEL` |
 | Lanes | `LANE_ATTACH` |
 | Peer paths | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
+| TURN delegation | `TURN_CONTROL` |
 | Session | `SESSION_TERMINAL` |
+
+`PEER_PATH_CONTROL` (kind 19) carries reachability demand, revocation, mapping-ready
+and network-change notices. `TURN_CONTROL` (kind 20) carries availability, demand,
+credential grants, readiness, retirement, usage reports and recovery. Both are
+session-scoped with no `OperationID`; the outer kind selects the decoder and
+sender-signature domain. Body schema versions evolve independently.
 
 ## Identities
 

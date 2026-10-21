@@ -46,8 +46,8 @@ type runtimeCore struct {
 	responseSequence        atomic.Uint64
 	receiptObservations     observationstream.Producer[protocolsession.SendAttemptSettlement]
 	receiptObservationsDone chan struct{}
-	peerPathMu              sync.RWMutex
-	peerPathHandler         func(context.Context, []byte) error
+	peerPathControls        sessionControlHandler
+	turnControls            sessionControlHandler
 	share                   catalog.ShareInstance
 	role                    protocolsession.Role
 	sessionID               protocolsession.ProtocolSessionID
@@ -137,9 +137,15 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 		cancelLifecycle:         cancelLifecycle,
 		done:                    make(chan struct{}),
 	}
-	if err := router.RegisterHandler(protocolsession.MessagePeerPathControl, peerPathControlHandler{runtime}); err != nil {
-		cancelLifecycle()
-		return nil, err
+	for kind, handler := range map[protocolsession.MessageKind]*sessionControlHandler{
+		protocolsession.MessagePeerPathControl: &runtime.peerPathControls,
+		protocolsession.MessageTURNControl:     &runtime.turnControls,
+	} {
+		handler.runtime = runtime
+		if err := router.RegisterHandler(kind, handler); err != nil {
+			cancelLifecycle()
+			return nil, err
+		}
 	}
 	// Legacy package-local cancellation sites fail closed through the arbiter.
 	// Causal owners use the explicit trigger methods below.

@@ -7,7 +7,6 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
@@ -108,15 +107,6 @@ func (p *Path) bindControls() {
 		return
 	}
 	p.config.Controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
-		if turncontrol.IsMessage(body) {
-			p.owner.mu.Lock()
-			handler := p.owner.controlHandlers[p.key.session]
-			p.owner.mu.Unlock()
-			if handler != nil {
-				return handler(body)
-			}
-			return nil
-		}
 		control, err := protocolsession.DecodePeerPathControl(body)
 		if err != nil {
 			return nil

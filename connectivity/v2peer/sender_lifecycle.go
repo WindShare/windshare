@@ -3,6 +3,7 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -13,6 +14,74 @@ import (
 	"github.com/windshare/windshare/core/session/turncontrol"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
+
+type peerPathControlSession interface {
+	SetPeerPathControlHandler(func(context.Context, []byte) error)
+	SendPeerPathControl(context.Context, []byte) error
+}
+
+type turnControlSession interface {
+	SetTURNControlHandler(func(context.Context, []byte) error)
+	SendTURNControl(context.Context, []byte) error
+}
+
+func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
+	child, cancel := context.WithCancel(ctx)
+	var work sync.WaitGroup
+	pathControls, hasPathControls := handler.session.(peerPathControlSession)
+	turnControls, hasTURNControls := handler.session.(turnControlSession)
+	if hasPathControls {
+		pathControls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
+			handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
+			return nil
+		})
+		work.Go(func() {
+			handler.factory.native.RunSession(child, [16]byte(handler.session.ProtocolSessionID()), pathControls.SendPeerPathControl)
+		})
+	}
+	if hasTURNControls {
+		handler.turn = turnpath.NewSender(turnpath.SenderConfig{
+			Accounts: handler.factory.turn, SessionID: [16]byte(handler.session.ProtocolSessionID()),
+			Send: turnControls.SendTURNControl, Now: handler.factory.now,
+			Observe:           handler.factory.native.ObserveTURN,
+			NetworkGeneration: handler.factory.native.NetworkGeneration,
+			Retire: func(path [16]byte) {
+				handler.mu.Lock()
+				var attempts []*peerAttempt
+				for binding, operation := range handler.bindings {
+					if [16]byte(binding.PeerPathID) == path {
+						if attempt := handler.attempts[operation]; attempt != nil {
+							attempts = append(attempts, attempt)
+						}
+					}
+				}
+				handler.mu.Unlock()
+				for _, attempt := range attempts {
+					attempt.stop(ErrPeerPathRetired)
+					<-attempt.done
+				}
+				handler.factory.native.ClosePath([16]byte(handler.session.ProtocolSessionID()), v2signal.PeerPathID(path))
+				handler.mu.Lock()
+				handler.evidenceAuthority.retirePath(v2signal.PeerPathID(path))
+				handler.mu.Unlock()
+			},
+		})
+		turnControls.SetTURNControlHandler(func(_ context.Context, body []byte) error { return handler.turn.Handle(body) })
+		work.Go(func() {
+			handler.turn.Run(child)
+		})
+	}
+	return func() {
+		cancel()
+		work.Wait()
+		if hasPathControls {
+			pathControls.SetPeerPathControlHandler(nil)
+		}
+		if hasTURNControls {
+			turnControls.SetTURNControlHandler(nil)
+		}
+	}
+}
 
 func (handler *senderHandler) claimRejectedOffer(
 	operation peerOperation,

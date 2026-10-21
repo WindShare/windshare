@@ -65,11 +65,17 @@ type Config struct {
 	Clock    Clock
 	Random   io.Reader
 }
+
+type PeerPathControlSession interface {
+	SetPeerPathControlHandler(func(context.Context, []byte) error)
+	SendPeerPathControl(context.Context, []byte) error
+}
+
 type PathConfig struct {
 	Budget        *Budget
 	ICE           iceconfig.Connection
 	Native        *nativepeer.NativePeerConnectivity
-	Controls      sessionruntime.PeerPathControlSession
+	Controls      PeerPathControlSession
 	SessionID     protocolsession.ProtocolSessionID
 	PeerPathID    v2signal.PeerPathID
 	Start         Starter
@@ -90,12 +96,11 @@ type pathKey struct {
 	path    v2signal.PeerPathID
 }
 type PeerSet struct {
-	mu              sync.Mutex
-	config          Config
-	paths           map[pathKey]*Path
-	prewarmed       map[protocolsession.ProtocolSessionID]bool
-	controlHandlers map[protocolsession.ProtocolSessionID]func([]byte) error
-	slots           map[protocolsession.ProtocolSessionID]*peerslot.Pool
+	mu        sync.Mutex
+	config    Config
+	paths     map[pathKey]*Path
+	prewarmed map[protocolsession.ProtocolSessionID]bool
+	slots     map[protocolsession.ProtocolSessionID]*peerslot.Pool
 }
 
 func New(config Config) (*PeerSet, error) {
@@ -111,7 +116,7 @@ func New(config Config) (*PeerSet, error) {
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), controlHandlers: make(map[protocolsession.ProtocolSessionID]func([]byte) error), slots: make(map[protocolsession.ProtocolSessionID]*peerslot.Pool)}, nil
+	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), slots: make(map[protocolsession.ProtocolSessionID]*peerslot.Pool)}, nil
 }
 func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	if ctx == nil || (config.Start == nil && config.Prepare == nil) || config.Demand > ContentDemand {

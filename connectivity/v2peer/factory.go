@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/session/turncontrol"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -530,53 +529,7 @@ func (handler *senderHandler) Run(ctx context.Context) error {
 	handler.runtimeContext = ctx
 	handler.mu.Unlock()
 	defer handler.stopAll()
-	if controls, ok := handler.session.(sessionruntime.PeerPathControlSession); ok {
-		handler.turn = turnpath.NewSender(turnpath.SenderConfig{
-			Accounts: handler.factory.turn, SessionID: [16]byte(handler.session.ProtocolSessionID()),
-			Send: controls.SendPeerPathControl, Now: handler.factory.now,
-			Observe:           handler.factory.native.ObserveTURN,
-			NetworkGeneration: handler.factory.native.NetworkGeneration,
-			Retire: func(path [16]byte) {
-				handler.mu.Lock()
-				var attempts []*peerAttempt
-				for binding, operation := range handler.bindings {
-					if [16]byte(binding.PeerPathID) == path {
-						if attempt := handler.attempts[operation]; attempt != nil {
-							attempts = append(attempts, attempt)
-						}
-					}
-				}
-				handler.mu.Unlock()
-				for _, attempt := range attempts {
-					attempt.stop(ErrPeerPathRetired)
-					<-attempt.done
-				}
-				handler.factory.native.ClosePath([16]byte(handler.session.ProtocolSessionID()), v2signal.PeerPathID(path))
-				handler.mu.Lock()
-				handler.evidenceAuthority.retirePath(v2signal.PeerPathID(path))
-				handler.mu.Unlock()
-			},
-		})
-		controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
-			if turncontrol.IsMessage(body) {
-				return handler.turn.Handle(body)
-			}
-			handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
-			return nil
-		})
-		child, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		turnDone := make(chan struct{})
-		go func() {
-			defer close(turnDone)
-			handler.turn.Run(child)
-		}()
-		go func() {
-			defer close(done)
-			handler.factory.native.RunSession(child, [16]byte(handler.session.ProtocolSessionID()), controls.SendPeerPathControl)
-		}()
-		defer func() { cancel(); <-done; <-turnDone; controls.SetPeerPathControlHandler(nil) }()
-	}
+	defer handler.runSessionControls(ctx)()
 	for {
 		select {
 		case <-ctx.Done():

@@ -280,6 +280,9 @@ export class V2OperationQueue implements V2SessionOperation {
 
 }
 
+type SessionControlKind = typeof V2_MESSAGE_KIND.peerPathControl | typeof V2_MESSAGE_KIND.turnControl
+type SessionControlListener = (body: Uint8Array<ArrayBuffer>) => void
+
 export class V2OperationRouter {
   readonly #operations = new Map<string, V2OperationQueue>()
   readonly #draining = new Set<V2OperationQueue>()
@@ -291,7 +294,10 @@ export class V2OperationRouter {
   readonly #compactedResponseTraced = new Set<V2MessageKind>()
   readonly #admission = new V2SessionQueueAdmission()
   readonly #diagnostics: V2ProtocolTraceContext | undefined
-  readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
+  readonly #sessionControls: ReadonlyMap<V2MessageKind, Set<SessionControlListener>> = new Map([
+    [V2_MESSAGE_KIND.peerPathControl, new Set<SessionControlListener>()],
+    [V2_MESSAGE_KIND.turnControl, new Set<SessionControlListener>()],
+  ])
   readonly #authenticatedResponses = new WeakMap<V2SessionMessage,
     ReceivedProtocolError | Readonly<{ correlation: ReceivedProtocolError['correlation'] }>>()
   readonly #capacityWaiters = new Set<() => void>()
@@ -421,9 +427,18 @@ export class V2OperationRouter {
     return this.#authenticatedResponses.get(message)?.correlation
   }
 
-  subscribePeerPathControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
-    this.#pathControls.add(listener)
-    return () => this.#pathControls.delete(listener)
+  subscribePeerPathControls(listener: SessionControlListener): () => void {
+    return this.#subscribeSessionControl(V2_MESSAGE_KIND.peerPathControl, listener)
+  }
+
+  subscribeTurnControls(listener: SessionControlListener): () => void {
+    return this.#subscribeSessionControl(V2_MESSAGE_KIND.turnControl, listener)
+  }
+
+  #subscribeSessionControl(kind: SessionControlKind, listener: SessionControlListener): () => void {
+    const listeners = this.#sessionControls.get(kind)!
+    listeners.add(listener)
+    return () => listeners.delete(listener)
   }
 
   async route(
@@ -438,8 +453,9 @@ export class V2OperationRouter {
       this.#onTerminal(reason)
       return
     }
-    if (message.kind === V2_MESSAGE_KIND.peerPathControl) {
-      for (const listener of this.#pathControls) listener(message.body.slice())
+    const listeners = this.#sessionControls.get(message.kind)
+    if (listeners !== undefined) {
+      for (const listener of listeners) listener(message.body.slice())
       return
     }
     const operationId = message.operationId

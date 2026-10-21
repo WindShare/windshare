@@ -14,6 +14,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 const IdentityBytes = catalog.IdentityBytes
@@ -151,8 +152,8 @@ func validateSenderControlSemantic(
 		_, err = DecodeOperationFailure(semantic)
 	case MessageScanProgress:
 		_, err = DecodeScanProgress(semantic)
-	case MessagePeerPathControl:
-		err = ValidatePeerPathControlBody(semantic)
+	case MessagePeerPathControl, MessageTURNControl:
+		err = ValidateSessionControlBody(kind, semantic)
 	case MessageSessionTerminal:
 		_, err = DecodeSessionTerminal(semantic)
 	default:
@@ -165,6 +166,21 @@ func validateSenderControlSemantic(
 		return fmt.Errorf("%w: %w", ErrControlSemantic, err)
 	}
 	return nil
+}
+
+// The authenticated outer kind selects the schema. Body versions remain local
+// to each protocol, so a schema revision cannot redirect another control family.
+func ValidateSessionControlBody(kind MessageKind, body []byte) error {
+	switch kind {
+	case MessagePeerPathControl:
+		_, err := DecodePeerPathControl(body)
+		return err
+	case MessageTURNControl:
+		_, err := turncontrol.Decode(body)
+		return err
+	default:
+		return ErrUnknownMessageKind
+	}
 }
 
 const (
