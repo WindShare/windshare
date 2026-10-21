@@ -210,7 +210,7 @@ func (table *OperationTable) observeAdmissionLocked(
 	if err := validateKindDirection(direction, message.kind); err != nil {
 		return OperationDrop, nil, err
 	}
-	if message.kind == MessagePeerPathControl {
+	if message.kind.isSessionControl() {
 		return OperationDeliver, nil, nil
 	}
 	if message.kind == MessageSessionTerminal {
@@ -281,7 +281,7 @@ func (table *OperationTable) AdmitOutbound(
 	defer table.mu.Unlock()
 	requiresPermit := direction == DirectionSenderToReceiver ||
 		(direction == DirectionReceiverToSender && !message.kind.isRequest() && message.kind != MessageLaneAttach)
-	if requiresPermit && message.kind != MessagePeerPathControl {
+	if requiresPermit && !message.kind.isSessionControl() {
 		table.pruneExpired()
 		operationID, ok := message.OperationID()
 		if !ok || permit.table != table || permit.authority == nil ||
@@ -565,7 +565,7 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 	switch direction {
 	case DirectionReceiverToSender:
 		if kind.isRequest() || kind == MessageCancel || kind == MessageOperationError || kind == MessageLaneAttach ||
-			kind == MessagePeerCandidate || kind == MessagePeerPathControl {
+			kind == MessagePeerCandidate || kind.isSessionControl() {
 			return nil
 		}
 	case DirectionSenderToReceiver:
@@ -573,7 +573,7 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 		case MessageCatalogResult, MessageOpenResults, MessageBlockFragment,
 			MessageOperationError, MessageSessionTerminal, MessageLaneAttach,
 			MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl:
+			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl, MessageTURNControl:
 			return nil
 		}
 	}

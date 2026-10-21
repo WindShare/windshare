@@ -23,6 +23,7 @@ const (
 	controlOperationDomain = "windshare/v2 control/operation"
 	controlTerminalDomain  = "windshare/v2 control/session-terminal"
 	controlPeerPathDomain  = "windshare/v2 control/peer-path"
+	controlTURNDomain      = "windshare/v2 control/turn"
 	controlLaneDomain      = "windshare/v2 control/lane-attach"
 )
 
@@ -41,6 +42,7 @@ const (
 	ControlDomainSessionTerminal
 	ControlDomainLaneAttach
 	ControlDomainPeerPath
+	ControlDomainTURN
 )
 
 type ControlBinding struct {
@@ -341,6 +343,10 @@ func (b ControlBinding) validate(domain ControlDomain) error {
 		if b.HasOperationID || b.MessageKind != MessagePeerPathControl {
 			return ErrControlBinding
 		}
+	case ControlDomainTURN:
+		if b.HasOperationID || b.MessageKind != MessageTURNControl {
+			return ErrControlBinding
+		}
 	case ControlDomainSessionTerminal:
 		if b.HasOperationID || b.MessageKind != MessageSessionTerminal {
 			return ErrControlBinding
@@ -370,6 +376,8 @@ func senderControlDomain(kind MessageKind) (ControlDomain, error) {
 	switch {
 	case kind == MessagePeerPathControl:
 		return ControlDomainPeerPath, nil
+	case kind == MessageTURNControl:
+		return ControlDomainTURN, nil
 	case kind == MessageSessionTerminal:
 		return ControlDomainSessionTerminal, nil
 	case kind == MessageLaneAttach:
@@ -410,6 +418,8 @@ func (d ControlDomain) value() (string, error) {
 	switch d {
 	case ControlDomainPeerPath:
 		return controlPeerPathDomain, nil
+	case ControlDomainTURN:
+		return controlTURNDomain, nil
 	case ControlDomainOperation:
 		return controlOperationDomain, nil
 	case ControlDomainSessionTerminal:

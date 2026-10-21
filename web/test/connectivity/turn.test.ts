@@ -48,8 +48,8 @@ it('starts only for demand and replaces over surviving session control without r
   const retired: Uint8Array[] = []
   const session = {
     protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
-    subscribePeerPathControls: (listener: typeof receive) => { receive = listener; return () => undefined },
-    sendPeerPathControl: async (body: Uint8Array) => { sent.push(decodeTurnControl(body)) },
+    subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
+    sendTurnControl: async (body: Uint8Array) => { sent.push(decodeTurnControl(body)) },
   } as unknown as V2ReceiverSessionRuntime
   const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
     open: (value) => opened.push(value), retire: async (path) => { retired.push(path) } })
@@ -100,8 +100,8 @@ it('retries readiness and useful reports across a temporary control-lane failure
   let usefulBytes = 1024
   const session = {
     protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
-    subscribePeerPathControls: (listener: typeof receive) => { receive = listener; return () => undefined },
-    sendPeerPathControl: async (body: Uint8Array) => {
+    subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
+    sendTurnControl: async (body: Uint8Array) => {
       const message = decodeTurnControl(body)
       if (message.kind === 'ready' && ++readyAttempts === 1) throw new Error('old lane closed')
       if (message.kind === 'report' && ++reportAttempts === 1) throw new Error('control lane changed')

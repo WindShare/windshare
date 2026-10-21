@@ -25,6 +25,7 @@ export const PROTOCOL_MESSAGE_KINDS_V1 = Object.freeze([
   'peer_answer',
   'peer_candidate',
   'peer_path_control',
+  'turn_control',
 ] as const)
 
 export type ProtocolMessageKindV1 = (typeof PROTOCOL_MESSAGE_KINDS_V1)[number]

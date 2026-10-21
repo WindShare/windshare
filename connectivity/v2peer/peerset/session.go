@@ -14,6 +14,12 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 )
 
+type turnControlSession interface {
+	ProtocolSessionID() protocolsession.ProtocolSessionID
+	SetTURNControlHandler(func(context.Context, []byte) error)
+	SendTURNControl(context.Context, []byte) error
+}
+
 // ReceiverSession owns controls once for every direct and delegated path in a
 // protocol generation. Closing an ICE attempt never closes the download job.
 type ReceiverSession struct {
@@ -45,6 +51,7 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 	if err != nil {
 		cancel()
 		s.work.Wait()
+		s.detachControls()
 		return nil, err
 	}
 	go func() {
@@ -56,29 +63,30 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		}
 		s.mu.Unlock()
 		s.work.Wait()
-		if controls, ok := receiver.Lanes.(sessionruntime.PeerPathControlSession); ok {
-			controls.SetPeerPathControlHandler(nil)
-		}
+		s.detachControls()
 		close(s.done)
 	}()
 	return s, nil
 }
 
+func (s *ReceiverSession) detachControls() {
+	if controls, ok := s.config.Lanes.(PeerPathControlSession); ok {
+		controls.SetPeerPathControlHandler(nil)
+	}
+	if controls, ok := s.config.Lanes.(turnControlSession); ok && s.turn != nil {
+		controls.SetTURNControlHandler(nil)
+	}
+}
+
 func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
-	controls, ok := receiver.Lanes.(sessionruntime.PeerPathControlSession)
+	controls, ok := receiver.Lanes.(turnControlSession)
 	if !ok || receiver.Routes != UserRelayRoutes {
 		return
 	}
-	session, ok := receiver.Lanes.(interface {
-		ProtocolSessionID() protocolsession.ProtocolSessionID
-	})
-	if !ok {
-		return
-	}
-	sessionID := session.ProtocolSessionID()
+	sessionID := controls.ProtocolSessionID()
 	serviceBudgets := make(map[string]*Budget)
 	s.turn = turnpath.NewReceiver(turnpath.ReceiverConfig{SessionID: [16]byte(sessionID), Now: s.owner.config.Clock.Now,
-		Send:    controls.SendPeerPathControl,
+		Send:    controls.SendTURNControl,
 		Observe: receiver.Factory.NativeConnectivity().ObserveTURN,
 		Open: func(ctx context.Context, grant turncontrol.Grant, ice iceconfig.Connection) (turnpath.ReceiverPath, error) {
 			budget := serviceBudgets[grant.Profile]
@@ -87,7 +95,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 				serviceBudgets[grant.Profile] = budget
 			}
 			return s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
-				Budget: budget, Native: receiver.Factory.NativeConnectivity(), Controls: controls, ICE: ice, Demand: ContentDemand,
+				Budget: budget, Native: receiver.Factory.NativeConnectivity(), ICE: ice, Demand: ContentDemand,
 				Prepare: func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {
 					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
 						OnTURNRecovery: func(reason turncontrol.RecoveryReason) { s.turn.Recover(grant.PathID, reason) }})
@@ -114,7 +122,8 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 			return turnpath.Measurement{UsefulBytes: measurement.UsefulBytes, Unhelpful: measurement.Unhelpful}
 		},
 	})
-	s.owner.controlHandlers[sessionID] = s.turn.Handle
+	// Delegation belongs to the session, even while no direct path is running.
+	controls.SetTURNControlHandler(func(_ context.Context, body []byte) error { return s.turn.Handle(body) })
 	s.turn.SetDemand(receiver.Demand == ContentDemand)
 	s.work.Go(func() { s.turn.Run(s.ctx) })
 }

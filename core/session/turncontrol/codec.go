@@ -208,11 +208,6 @@ func Decode(body []byte) (Message, error) {
 	return message, nil
 }
 
-// IsMessage inspects only the canonical envelope discriminator. Full validation
-// is still required before delivery to an authenticated control consumer.
-func IsMessage(body []byte) bool {
-	return len(body) > 2 && body[0] >= 0x86 && body[0] <= 0x8f && body[1] == byte(Schema)
-}
 func decode(fields []cbor.RawMessage, targets ...any) error {
 	if len(fields) != len(targets) {
 		return ErrMessage

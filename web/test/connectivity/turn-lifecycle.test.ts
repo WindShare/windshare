@@ -20,8 +20,8 @@ function fixture(open: (receiver: TurnReceiver) => void = () => undefined) {
   const retire = vi.fn(async () => undefined)
   const session = {
     protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
-    subscribePeerPathControls: (listener: typeof receive) => { receive = listener; return () => undefined },
-    sendPeerPathControl: async () => undefined,
+    subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
+    sendTurnControl: async () => undefined,
   } as unknown as V2ReceiverSessionRuntime
   const receiver: TurnReceiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
     open: () => open(receiver), retire, observe: event => observations.push(event) })

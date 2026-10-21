@@ -255,5 +255,6 @@ export function protocolMessageKindV1(kind: V2MessageKind): ProtocolMessageKindV
     case V2_MESSAGE_KIND.peerAnswer: return 'peer_answer'
     case V2_MESSAGE_KIND.peerCandidate: return 'peer_candidate'
     case V2_MESSAGE_KIND.peerPathControl: return 'peer_path_control'
+    case V2_MESSAGE_KIND.turnControl: return 'turn_control'
   }
 }

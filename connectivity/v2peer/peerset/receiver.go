@@ -6,7 +6,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
 type ReceiverConfig struct {
@@ -43,8 +42,8 @@ func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (
 	}); ok {
 		sessionID = session.ProtocolSessionID()
 	}
-	var controls sessionruntime.PeerPathControlSession
-	if session, ok := receiver.Lanes.(sessionruntime.PeerPathControlSession); ok {
+	var controls PeerPathControlSession
+	if session, ok := receiver.Lanes.(PeerPathControlSession); ok {
 		controls = session
 	}
 	pathConfig := PathConfig{SessionID: sessionID, Demand: receiver.Demand, StopAfterWave: receiver.StopAfterWave,

@@ -39,10 +39,6 @@ export type TurnControl =
   | (TurnHeader & { readonly kind: 'report'; readonly pathId: Uint8Array<ArrayBuffer>; readonly usefulBytes: bigint })
   | (TurnHeader & { readonly kind: 'recover'; readonly pathId: Uint8Array<ArrayBuffer>; readonly reason: number })
 
-export function isTurnControl(body: Uint8Array): boolean {
-  return body.length > 2 && body[0]! >= 0x86 && body[0]! <= 0x8f && body[1] === SCHEMA
-}
-
 export function encodeTurnControl(message: TurnControl): Uint8Array<ArrayBuffer> {
   const fields: unknown[] = [SCHEMA, TURN_CONTROL[message.kind], message.sessionId, message.ownerPathId, message.sequence]
   switch (message.kind) {

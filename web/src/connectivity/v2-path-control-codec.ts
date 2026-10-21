@@ -6,13 +6,6 @@ import {
   requireUnsigned,
   requireText,
 } from '../protocol/cbor'
-import { decodeTurnControl, isTurnControl } from './turn/control-codec'
-
-export function validateV2PeerPathControlBody(body: Uint8Array): void {
-  if (isTurnControl(body)) decodeTurnControl(body)
-  else decodeV2PeerPathControl(body)
-}
-
 export const V2_PEER_PATH_CONTROL_KIND = Object.freeze({
   demand: 1,
   revoke: 2,

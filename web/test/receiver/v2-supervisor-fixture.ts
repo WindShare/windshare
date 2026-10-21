@@ -12,6 +12,8 @@ import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-rec
 export class FakeSession {
   subscribePeerPathControls(): () => void { return () => undefined }
   async sendPeerPathControl(): Promise<void> {}
+  subscribeTurnControls(): () => void { return () => undefined }
+  async sendTurnControl(): Promise<void> {}
   readonly initialLaneId: number
   readonly keys: { readonly protocolSessionId: Uint8Array<ArrayBuffer>; readonly initialLaneEpoch: 0 }
   readonly protocolSessionIdentity: V2ProtocolSessionIdentity

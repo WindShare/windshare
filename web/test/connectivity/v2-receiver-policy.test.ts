@@ -152,6 +152,8 @@ describe('content path policy authority', () => {
 
 class FakeSession {
   subscribePeerPathControls(): () => void { return () => undefined }
+  subscribeTurnControls(): () => void { return () => undefined }
+  async sendTurnControl(): Promise<void> {}
   readonly pathControls: ReturnType<typeof decodeV2PeerPathControl>[] = []
   async sendPeerPathControl(body: Uint8Array): Promise<void> {
     this.pathControls.push(decodeV2PeerPathControl(body))

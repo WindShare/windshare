@@ -2,7 +2,7 @@ import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
 import type { V2PeerRecoveryClock, V2PeerRecoveryState } from '../peer-set/contract'
 import { awaitWithAbort } from '../peer-offer-remote'
-import { decodeTurnControl, encodeTurnControl, isTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader } from './control-codec'
+import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader } from './control-codec'
 
 const RENEW_DEMAND_MS = 60_000
 const MAX_PATHS = 3
@@ -59,8 +59,8 @@ export class TurnReceiver {
   constructor(options: TurnReceiverOptions) {
     this.#options = options
     this.#sessionId = options.session.protocolSessionIdentity.copyBytes()
-    this.#unsubscribe = options.session.subscribePeerPathControls((body) => {
-      if (!isTurnControl(body) || this.#lifetime.signal.aborted) return
+    this.#unsubscribe = options.session.subscribeTurnControls((body) => {
+      if (this.#lifetime.signal.aborted) return
       const message = decodeTurnControl(body)
       if (!equalBytes(message.sessionId, this.#sessionId)) return
       if (message.kind === 'available') {
@@ -235,7 +235,7 @@ export class TurnReceiver {
       .then(() => lifetime.abort(new DOMException('TURN control deadline exceeded', 'TimeoutError')))
       .catch(() => undefined)
     try {
-      await awaitWithAbort(this.#options.session.sendPeerPathControl(encodeTurnControl(message), { signal: bounded }), bounded)
+      await awaitWithAbort(this.#options.session.sendTurnControl(encodeTurnControl(message), { signal: bounded }), bounded)
     } finally { lifetime.abort() }
   }
   #header(value: TurnHeader): TurnHeader {

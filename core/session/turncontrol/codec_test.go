@@ -22,7 +22,7 @@ func TestDelegationCanonicalAuthorityAndLifetime(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := Decode(body)
-		if err != nil || !IsMessage(body) || got.Header() != header {
+		if err != nil || got.Header() != header {
 			t.Fatalf("decode %T: %v", message, err)
 		}
 		reencoded, _ := Encode(got)

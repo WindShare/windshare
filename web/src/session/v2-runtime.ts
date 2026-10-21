@@ -1,6 +1,7 @@
 import { cancellationTraceReason } from './v2-operation-diagnostics'
 import { V2OperationCancellationError } from './v2-runtime-types'
-import { validateV2PeerPathControlBody } from '../connectivity/v2-path-control-codec'
+import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
+import { decodeTurnControl } from '../connectivity/turn/control-codec'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
 import type { FailureCorrelation, ReceivedProtocolError } from '../diagnostics/incident/fact'
@@ -223,8 +224,19 @@ export class V2ReceiverSessionRuntime {
   async sendPeerPathControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
     this.#requireOpen()
     options.signal?.throwIfAborted()
-    validateV2PeerPathControlBody(body)
+    decodeV2PeerPathControl(body)
     await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, body), options)
+  }
+
+  subscribeTurnControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
+    return this.#router.subscribeTurnControls(listener)
+  }
+
+  async sendTurnControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
+    this.#requireOpen()
+    options.signal?.throwIfAborted()
+    decodeTurnControl(body)
+    await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.turnControl, undefined, body), options)
   }
 
   async requestLaneGrant(
