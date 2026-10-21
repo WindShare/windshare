@@ -216,7 +216,7 @@ func TestCommandRuntimeTraceOpenFailureIsSafeAndAuthoritativeAtStartup(t *testin
 
 func TestCommandRuntimeReportsIncompleteOnceWithoutChangingClose(t *testing.T) {
 	var stderr bytes.Buffer
-	health, _ := clievent.NewTraceIncomplete(clievent.CommandGet, clievent.TraceIncompleteWriter, 0, 0)
+	health, _ := clievent.NewTraceIncomplete(clievent.CommandGet, clievent.TraceIncompleteWriter, clievent.TraceLoss{})
 	recorder := newFakeUserTrace(runtrace.Status{WriterFailed: true})
 	recorder.health <- health
 	app := &App{
@@ -856,6 +856,7 @@ type fakeUserTrace struct {
 	mu                 sync.Mutex
 	events             []clievent.Event
 	lifecycle          uint64
+	contractRejected   uint64
 	progress           uint64
 	rejectionEvidence  uint64
 	rejectEvidenceLoss bool
@@ -876,11 +877,12 @@ func (trace *fakeUserTrace) Record(event clievent.Event) bool {
 	return true
 }
 
-func (trace *fakeUserTrace) ReportUpstreamLoss(lifecycle, progress uint64) bool {
+func (trace *fakeUserTrace) ReportUpstreamLoss(loss clievent.TraceLoss) bool {
 	trace.mu.Lock()
 	defer trace.mu.Unlock()
-	trace.lifecycle += lifecycle
-	trace.progress += progress
+	trace.lifecycle += loss.LifecycleDrops
+	trace.progress += loss.ProgressDrops
+	trace.contractRejected += loss.ContractRejections
 	return true
 }
 

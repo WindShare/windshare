@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/transport/webrtc/provider"
@@ -31,7 +32,7 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 	for _, scope := range []string{"ice", "turnc"} {
 		for _, severity := range []string{"warning", "error"} {
 			diagnostic := &provider.Diagnostic{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
-			event, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{
+			event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{
 				Subject: subject, Provider: &provider.Event{Milestone: "provider_diagnostic", Diagnostic: diagnostic},
 			})
 			if err != nil {
@@ -90,7 +91,7 @@ func TestNativeProviderDiagnosticMessageBoundaries(t *testing.T) {
 		"", "ordinary warning", "invalid \xff text",
 		strings.Repeat("界", clievent.NativeProviderDiagnosticMessageLimit),
 	} {
-		event, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{
 			Provider: &provider.Event{Milestone: "provider_diagnostic",
 				Diagnostic: &provider.Diagnostic{Scope: "ice", Severity: "warning", Message: message}},
 		})

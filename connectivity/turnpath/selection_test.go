@@ -30,12 +30,14 @@ type selectionHarness struct {
 	network  uint64
 	sequence map[[16]byte]uint64
 	accounts *selectionAccounts
+	events   []Event
 }
 
 func newSelectionHarness(t *testing.T) *selectionHarness {
 	t.Helper()
 	h := &selectionHarness{now: time.Unix(1700000000, 0), network: 1, sequence: make(map[[16]byte]uint64), accounts: &selectionAccounts{}}
 	h.sender = NewSender(SenderConfig{Accounts: h.accounts, SessionID: [16]byte{1}, Now: func() time.Time { return h.now },
+		Observe:           func(event Event) { h.events = append(h.events, event) },
 		NetworkGeneration: func() uint64 { return h.network }, Send: func(context.Context, []byte) error { return nil }})
 	t.Cleanup(h.sender.close)
 	h.sender.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(h.sender, 1), HoldFor: turncontrol.MaximumDemandLifetime})
@@ -139,6 +141,11 @@ func TestEvaluationFailureDoesNotBackOffWorkingServiceRecovery(t *testing.T) {
 				result := <-h.sender.completed
 				result.err = errors.New("provider temporarily unavailable")
 				h.sender.install(t.Context(), result)
+				event := h.events[len(h.events)-1]
+				if event.Milestone != MilestoneEvaluationUnavailable || event.Reason != result.err.Error() ||
+					event.Subject.PathID != result.path {
+					t.Fatalf("evaluation failure lost its lifecycle evidence: %+v", event)
+				}
 			} else {
 				issueNext(t, h.sender)
 				trial := h.sender.services[0].pending
@@ -158,6 +165,12 @@ func TestEvaluationFailureDoesNotBackOffWorkingServiceRecovery(t *testing.T) {
 
 func TestTCPFirstDelegatesIdenticalTransportToBothPeersAndFallsBack(t *testing.T) {
 	h := newSelectionHarness(t)
+	delegated, selected := h.events[len(h.events)-2], h.events[len(h.events)-1]
+	if delegated.Milestone != MilestoneCredentialsDelegated || selected.Milestone != MilestoneTransportSelection ||
+		selected.Subject != delegated.Subject || selected.Subject.PathID == ([16]byte{}) ||
+		selected.Reason != string(initialPath) {
+		t.Fatalf("credential delegation lost transport-selection evidence: %+v", h.events)
+	}
 	service := h.sender.services[0]
 	for index, transport := range []iceconfig.RelayTransport{iceconfig.RelayTCP, iceconfig.RelayTLS, iceconfig.RelayUDP} {
 		pending := service.pending

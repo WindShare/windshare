@@ -196,6 +196,7 @@ type PeerAttemptSpec struct {
 	Sequence                  uint64
 	ElapsedMillis             uint64
 	Stage                     PeerAttemptStage
+	Route                     LaneRoute
 	Phase                     PeerAttemptPhase
 	DeadlineMillis            uint64
 	Candidates                CandidateCounts
@@ -249,11 +250,20 @@ func peerStageShapeOf(stage PeerAttemptStage) peerStageShape {
 func validPeerAttemptSpec(spec PeerAttemptSpec) bool {
 	_, stageOK := spec.Stage.Name()
 	shape := peerStageShapeOf(spec.Stage)
-	return stageOK && spec.Sequence != 0 &&
+	return stageOK && spec.Sequence != 0 && validPeerAttemptRoute(spec) &&
 		spec.Command.Valid() && spec.Session.Valid() && spec.PeerPath.Valid() && spec.Attempt.Valid() &&
 		spec.HasOfferOperation == spec.OfferOperation.Valid() &&
 		validPeerAttemptFailure(spec, shape) && validPeerAttemptPhase(spec, shape) &&
 		validPeerAttemptGrant(spec, shape) && validPeerAttemptAdmission(spec, shape)
+}
+
+func validPeerAttemptRoute(spec PeerAttemptSpec) bool {
+	// Only admission has selected-pair evidence. Earlier stages must not turn
+	// a transport capability or intended path into a claim of connectivity.
+	if spec.Stage == PeerAttemptAdmitted {
+		return spec.Route == LaneRouteDirect || spec.Route == LaneRouteTURN
+	}
+	return spec.Route == 0
 }
 
 func validPeerAttemptFailure(spec PeerAttemptSpec, shape peerStageShape) bool {
@@ -304,6 +314,9 @@ func (value PeerAttemptObserved) OfferOperationID() (ProtocolOperationID, bool) 
 func (value PeerAttemptObserved) Sequence() uint64        { return value.spec.Sequence }
 func (value PeerAttemptObserved) ElapsedMillis() uint64   { return value.spec.ElapsedMillis }
 func (value PeerAttemptObserved) Stage() PeerAttemptStage { return value.spec.Stage }
+func (value PeerAttemptObserved) Route() (LaneRoute, bool) {
+	return value.spec.Route, value.spec.Stage == PeerAttemptAdmitted
+}
 func (value PeerAttemptObserved) PhaseDeadline() (PeerAttemptPhase, uint64, bool) {
 	_, ok := value.spec.Phase.Name()
 	return value.spec.Phase, value.spec.DeadlineMillis, ok

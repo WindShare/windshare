@@ -180,7 +180,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		t.Fatal(err)
 	}
 	traceIncomplete, err := clievent.NewTraceIncomplete(
-		clievent.CommandGet, clievent.TraceIncompleteWriter, 0, 0,
+		clievent.CommandGet, clievent.TraceIncompleteWriter, clievent.TraceLoss{},
 	)
 	if err != nil {
 		t.Fatal(err)

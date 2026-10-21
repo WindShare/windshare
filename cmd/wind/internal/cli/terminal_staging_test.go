@@ -96,7 +96,7 @@ func TestFinalTraceHealthScheduleCannotMoveWarningAfterTerminal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			health, err := clievent.NewTraceIncomplete(clievent.CommandShare, clievent.TraceIncompleteWriter, 0, 0)
+			health, err := clievent.NewTraceIncomplete(clievent.CommandShare, clievent.TraceIncompleteWriter, clievent.TraceLoss{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,10 +174,10 @@ func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(
 	}
 	close(recorder.releaseClose)
 	<-done
-	wantPrefix := progressBytes +
-		"\r\x1b[2K! Warning: Trace is incomplete.\n" + progressBytes +
-		"\r\x1b[2K\n"
-	if output := stderr.String(); !strings.HasPrefix(output, wantPrefix) {
+	output := stderr.String()
+	warning, cleared := strings.CutPrefix(output, progressBytes+"\r\x1b[2K! Warning: ")
+	_, redrawn, newline := strings.Cut(warning, "\n")
+	if !cleared || !newline || !strings.HasPrefix(redrawn, progressBytes+"\r\x1b[2K\n") {
 		t.Fatalf("ANSI clear/warning/redraw/finish sequence = %q", output)
 	}
 	semantic := stripTerminalControl(stderr.String())
@@ -298,7 +298,7 @@ func (trace *blockingCloseUserTrace) Record(event clievent.Event) bool {
 
 func (*blockingCloseUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
 
-func (*blockingCloseUserTrace) ReportUpstreamLoss(uint64, uint64) bool        { return true }
+func (*blockingCloseUserTrace) ReportUpstreamLoss(clievent.TraceLoss) bool    { return true }
 func (trace *blockingCloseUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
 func (*blockingCloseUserTrace) Path() string                                  { return "trace.ndjson" }
 func (trace *blockingCloseUserTrace) Close() runtrace.Status {

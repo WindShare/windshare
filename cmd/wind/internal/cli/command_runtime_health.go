@@ -151,11 +151,6 @@ func (runtime *commandRuntime) reportRejectionEvidenceLoss() {
 	}
 }
 
-type pendingRuntimeLoss struct {
-	lifecycle uint64
-	progress  uint64
-}
-
 func (runtime *commandRuntime) detailedDiagnosticsEnabled() bool {
 	return runtime != nil && runtime.detailedDiagnostics
 }
@@ -237,28 +232,32 @@ func (runtime *commandRuntime) reportPendingLoss() {
 	runtime.entryMu.Lock()
 	loss := runtime.collectPendingLossLocked(runtime.closed || runtime.observerFinalized)
 	runtime.entryMu.Unlock()
-	loss.lifecycle = saturatingAdd(loss.lifecycle, runtime.pendingTraceLoss.Swap(0))
-	loss.progress = saturatingAdd(loss.progress, runtime.pendingTraceProgress.Swap(0))
+	loss.LifecycleDrops = saturatingAdd(loss.LifecycleDrops, runtime.pendingTraceLoss.Swap(0))
+	loss.ProgressDrops = saturatingAdd(loss.ProgressDrops, runtime.pendingTraceProgress.Swap(0))
+	loss.ContractRejections = saturatingAdd(loss.ContractRejections, runtime.pendingTraceRejections.Swap(0))
 	runtime.reportUpstreamLoss(loss)
 	runtime.reportRejectionEvidenceLoss()
 }
 
-func (runtime *commandRuntime) scheduleUpstreamLossLocked(loss pendingRuntimeLoss) {
-	if loss.lifecycle != 0 {
-		saturatingAtomicAdd(&runtime.pendingTraceLoss, loss.lifecycle)
+func (runtime *commandRuntime) scheduleUpstreamLossLocked(loss clievent.TraceLoss) {
+	if loss.LifecycleDrops != 0 {
+		saturatingAtomicAdd(&runtime.pendingTraceLoss, loss.LifecycleDrops)
 	}
-	if loss.progress != 0 {
-		saturatingAtomicAdd(&runtime.pendingTraceProgress, loss.progress)
+	if loss.ProgressDrops != 0 {
+		saturatingAtomicAdd(&runtime.pendingTraceProgress, loss.ProgressDrops)
 	}
-	if loss.lifecycle != 0 || loss.progress != 0 {
+	if loss.ContractRejections != 0 {
+		saturatingAtomicAdd(&runtime.pendingTraceRejections, loss.ContractRejections)
+	}
+	if loss.Incomplete() || loss.ProgressDrops != 0 {
 		runtime.signalReadyLocked()
 	}
 }
 
-func (runtime *commandRuntime) collectPendingLossLocked(final bool) pendingRuntimeLoss {
-	loss := pendingRuntimeLoss{
-		progress:  runtime.pendingProgressLoss.Swap(0),
-		lifecycle: runtime.collectProjectionRejectionsLocked(final),
+func (runtime *commandRuntime) collectPendingLossLocked(final bool) clievent.TraceLoss {
+	loss := clievent.TraceLoss{
+		ProgressDrops:      runtime.pendingProgressLoss.Swap(0),
+		ContractRejections: runtime.collectProjectionRejectionsLocked(final),
 	}
 	for category := clievent.ObserverLossCategory(1); category < clievent.ObserverLossCategoryLimit; category++ {
 		for reason := clievent.ObserverLossReason(1); reason < clievent.ObserverLossReasonLimit; reason++ {
@@ -266,25 +265,31 @@ func (runtime *commandRuntime) collectPendingLossLocked(final bool) pendingRunti
 			if count == 0 {
 				continue
 			}
-			loss.lifecycle = saturatingAdd(loss.lifecycle, count)
+			if reason.IsContractRejection() {
+				loss.ContractRejections = saturatingAdd(loss.ContractRejections, count)
+			} else {
+				loss.LifecycleDrops = saturatingAdd(loss.LifecycleDrops, count)
+			}
 			runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
 				Command: runtime.command, Category: category, Reason: reason, Count: count,
 			})
 		}
 	}
-	if loss.lifecycle != 0 {
+	if loss.Incomplete() {
 		runtime.signalReadyLocked()
 	}
 	return loss
 }
 
-func (runtime *commandRuntime) reportUpstreamLoss(loss pendingRuntimeLoss) {
-	if runtime.trace == nil || (loss.lifecycle == 0 && loss.progress == 0) {
+func (runtime *commandRuntime) reportUpstreamLoss(loss clievent.TraceLoss) {
+	if runtime.trace == nil || (!loss.Incomplete() && loss.ProgressDrops == 0) {
 		return
 	}
-	_ = runtime.trace.ReportUpstreamLoss(loss.lifecycle, loss.progress)
-	if loss.lifecycle != 0 {
-		runtime.warnTraceIncomplete(traceIncompleteFromStatus(runtime.command, runtrace.Status{LifecycleDropped: loss.lifecycle}))
+	_ = runtime.trace.ReportUpstreamLoss(loss)
+	if loss.Incomplete() {
+		runtime.warnTraceIncomplete(traceIncompleteFromStatus(runtime.command, runtrace.Status{
+			ContractRejected: loss.ContractRejections, LifecycleDropped: loss.LifecycleDrops, ProgressDropped: loss.ProgressDrops,
+		}))
 	}
 }
 
@@ -320,18 +325,22 @@ func traceIncompleteFromStatus(command clievent.Command, status runtrace.Status)
 		cause = clievent.TraceIncompleteSchemaLimit
 	case status.RejectionEvidenceDropped != 0:
 		cause = clievent.TraceIncompleteRejectionEvidence
+	case status.ContractRejected != 0:
+		cause = clievent.TraceIncompleteContractRejection
 	case status.LifecycleDropped == 0:
 		cause = clievent.TraceIncompleteWriter
 	}
 	event, err := clievent.NewTraceIncomplete(
-		command, cause, status.LifecycleDropped, status.ProgressDropped,
+		command, cause, clievent.TraceLoss{
+			ContractRejections: status.ContractRejected, LifecycleDrops: status.LifecycleDropped, ProgressDrops: status.ProgressDropped,
+		},
 	)
 	if err == nil {
 		return event
 	}
 	// The fallback is constructible for every valid command and keeps an
 	// inconsistent recorder status from leaking provider text into stderr.
-	event, _ = clievent.NewTraceIncomplete(command, clievent.TraceIncompleteWriter, 0, 0)
+	event, _ = clievent.NewTraceIncomplete(command, clievent.TraceIncompleteWriter, clievent.TraceLoss{})
 	return event
 }
 

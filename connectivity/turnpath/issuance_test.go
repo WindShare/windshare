@@ -56,10 +56,10 @@ func TestCanceledIssuerImmediatelyServesNextDemandWithoutFailureObservation(t *t
 	}
 	discarded := false
 	for _, event := range events {
-		if event.Milestone == "issuance_failed" {
+		if event.Milestone == MilestoneIssuanceFailed {
 			t.Fatal("cancellation reported as provider failure")
 		}
-		discarded = discarded || event.Milestone == "issuance_discarded" && event.Reason == "demand_superseded"
+		discarded = discarded || event.Milestone == MilestoneIssuanceDiscarded && event.Reason == "demand_superseded"
 	}
 	if !discarded {
 		t.Fatal("missing discarded-request diagnostic")

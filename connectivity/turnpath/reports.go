@@ -37,6 +37,6 @@ func (s *Sender) applyReport(path *delegation) {
 		path.lease.Charge(Usage{Useful: reported - path.useful})
 		path.useful = reported
 		s.recoverBudgetAfterProgress(path)
-		s.observe(path, "useful_content", "")
+		s.observe(path, MilestoneUsefulContent, "")
 	}
 }

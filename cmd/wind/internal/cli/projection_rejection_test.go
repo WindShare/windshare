@@ -32,7 +32,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 		}
 	}
 	report()
-	if loss := runtime.collectPendingLossLocked(false); loss.lifecycle != 1 {
+	if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 1 {
 		t.Fatalf("first loss = %+v", loss)
 	}
 	first, ok := runtime.takeNext().(clievent.ObserverLossObserved)
@@ -51,7 +51,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 		input.ResponseSequence = fmt.Sprintf("%d", i)
 		input = clievent.CaptureObservationRejection(input, clievent.RejectedEnum("request_kind", uint64(i)))
 		report()
-		if loss := runtime.collectPendingLossLocked(false); loss.lifecycle != 1 {
+		if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 1 {
 			t.Fatalf("loss = %+v", loss)
 		}
 	}
@@ -59,7 +59,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 		t.Fatal("repeated failures bypassed the report interval")
 	}
 	clock.now = clock.now.Add(projectionRejectionReportInterval)
-	if loss := runtime.collectPendingLossLocked(false); loss.lifecycle != 0 {
+	if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 0 {
 		t.Fatal("counted the same failures twice")
 	}
 	repeated := runtime.takeNext().(clievent.ObserverLossObserved)
@@ -77,7 +77,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	if final.Count() != 2 || runtime.takeNext() != terminal || runtime.takeNext() != nil {
 		t.Fatalf("final report ordering/count = %#v", final)
 	}
-	if loss := runtime.collectPendingLossLocked(true); loss.lifecycle != 0 {
+	if loss := runtime.collectPendingLossLocked(true); loss.ContractRejections != 0 {
 		t.Fatal("final flush duplicated losses")
 	}
 }
@@ -94,7 +94,7 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 	if len(runtime.projectionRejections) != maxProjectionRejectionSignatures {
 		t.Fatal("signature memory is not bounded")
 	}
-	if loss := runtime.collectPendingLossLocked(true); loss.lifecycle != count {
+	if loss := runtime.collectPendingLossLocked(true); loss.ContractRejections != count {
 		t.Fatalf("loss = %+v", loss)
 	}
 	var total, omitted uint64
@@ -119,7 +119,7 @@ func TestProjectionRejectionDisabledTraceRetainsNoSamples(t *testing.T) {
 	if len(runtime.projectionRejections) != 0 {
 		t.Fatal("disabled trace retained rejection samples")
 	}
-	if loss := runtime.collectPendingLossLocked(true); loss.lifecycle != 100 || runtime.takeNext() != nil {
+	if loss := runtime.collectPendingLossLocked(true); loss.ContractRejections != 100 || runtime.takeNext() != nil {
 		t.Fatalf("loss=%+v", loss)
 	}
 	runtime.closed = true
@@ -150,7 +150,7 @@ func TestObservationRejectionConcurrentAccounting(t *testing.T) {
 		})
 	}
 	workers.Wait()
-	if loss := runtime.collectPendingLossLocked(true); loss.lifecycle != 256 {
+	if loss := runtime.collectPendingLossLocked(true); loss.ContractRejections != 256 {
 		t.Fatalf("loss=%+v", loss)
 	}
 	event := runtime.takeNext().(clievent.ObserverLossObserved)

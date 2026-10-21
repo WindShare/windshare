@@ -9,6 +9,7 @@ import (
 
 	"github.com/pion/turn/v5"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -28,7 +29,7 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 	t.Cleanup(func() { recorder.Close() })
 	identity := iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
 	for _, outcome := range []turnpath.CleanupOutcome{turnpath.CleanupProtocol, turnpath.CleanupDeadline} {
-		event, err := projectNativeObservation(clievent.CommandShare, nativepeer.Observation{
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{
 			Subject: nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender},
 			Provider: &provider.Event{Milestone: outcome.EventKind(), TURNCleanup: outcome, TURNService: &identity,
 				TURN: &provider.TURNResourceSnapshot{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}},
@@ -111,7 +112,7 @@ func TestTURNRecoveryEvidenceReachesTrace(t *testing.T) {
 		{Milestone: "turn_route", TURNRoute: &provider.TURNRouteEvent{Server: "turn:localhost:3478", Outcome: "started"}},
 	} {
 		evidence.TURNService, evidence.TURN = &identity, &provider.TURNResourceSnapshot{ActiveSockets: 1}
-		event, err := projectNativeObservation(clievent.CommandShare, nativepeer.Observation{
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{
 			Subject:  nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender},
 			Provider: &evidence,
 		})

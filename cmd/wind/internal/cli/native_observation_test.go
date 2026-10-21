@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/reachability"
@@ -19,7 +20,7 @@ import (
 func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender}
 	identity := iceconfig.Identity{Provider: "cloudflare", Account: "owner", Profile: "tls"}
-	event, err := projectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject, Provider: &provider.Event{
+	event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject, Provider: &provider.Event{
 		Milestone: "provider_closed", TURNService: &identity,
 		TURN: &provider.TURNResourceSnapshot{OpenedSockets: 1, TransportSent: 1200, TransportReceived: 300},
 	}})
@@ -34,9 +35,9 @@ func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
 	if event.Facts().TURN.Resources.TransportSent != 1200 {
 		t.Fatal("mutable resource facts escaped the event")
 	}
-	event, err = projectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject,
+	event, err = commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{Subject: subject,
 		TURN: &turnpath.Event{Provider: identity.Provider, Account: identity.Account, Profile: identity.Profile,
-			Milestone: "useful_content", UsefulBytes: 1024}})
+			Milestone: turnpath.MilestoneUsefulContent, UsefulBytes: 1024}})
 	if err != nil || event.Facts().TURN.UsefulBytes != 1024 || event.Facts().TURN.Resources != nil {
 		t.Fatalf("useful content was conflated with socket usage: %+v, %v", event, err)
 	}
@@ -45,7 +46,7 @@ func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
 func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver}
 	at := time.Unix(100, 42)
-	event, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{Subject: subject, Provider: &provider.Event{Milestone: "candidate", At: at, Candidate: &provider.CandidateFacts{Priority: 12345, TCPType: "active", Type: "host", Protocol: "tcp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
+	event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{Subject: subject, Provider: &provider.Event{Milestone: "candidate", At: at, Candidate: &provider.CandidateFacts{Priority: 12345, TCPType: "active", Type: "host", Protocol: "tcp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,14 +63,14 @@ func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T
 		{Reachability: &reachability.Event{Kind: "gateway-unavailable"}},
 		{Subject: subject, Lifecycle: &nativepeer.LifecycleFacts{Kind: nativepeer.DemandChanged, At: at, Content: true, Direct: true}},
 	} {
-		if _, err := projectNativeObservation(clievent.CommandGet, value); err != nil {
+		if _, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, value); err != nil {
 			t.Fatalf("value=%+v error=%v", value, err)
 		}
 	}
-	if _, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{}); err == nil {
+	if _, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{}); err == nil {
 		t.Fatal("empty union accepted")
 	}
-	if _, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{Provider: &provider.Event{}, Reachability: &reachability.Event{}}); err == nil {
+	if _, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{Provider: &provider.Event{}, Reachability: &reachability.Event{}}); err == nil {
 		t.Fatal("ambiguous union accepted")
 	}
 	cases := []struct {
@@ -77,7 +78,13 @@ func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T
 		want string
 	}{{nil, "none"}, {context.Canceled, "canceled"}, {context.DeadlineExceeded, "deadline"}, {reachability.ErrUnavailable, "unavailable"}, {reachability.ErrCapacity, "capacity"}, {reachability.ErrInvalidResponse, "invalid_response"}, {reachability.ErrClosed, "closed"}, {reachability.ErrLeaseLost, "lease_lost"}, {errors.New("credential-canary"), "unknown"}}
 	for _, test := range cases {
-		if got := nativeReachabilityReason(test.err); got != test.want {
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{
+			Reachability: &reachability.Event{Kind: "lease-failed", Error: test.err},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := event.Facts().Reachability.Reason; got != test.want {
 			t.Fatalf("reason=%s want=%s", got, test.want)
 		}
 	}
@@ -98,7 +105,7 @@ func TestNativeProcessAdmissionProjectionKeepsQueueAndAllowanceFacts(t *testing.
 	at := time.Unix(100, 0)
 	for _, kind := range []nativepeer.AdmissionKind{nativepeer.AdmissionQueued, nativepeer.AdmissionGranted, nativepeer.AdmissionReleased, nativepeer.AdmissionRejected} {
 		value := nativepeer.Observation{Admission: &nativepeer.AdmissionFacts{Kind: kind, At: at, Wait: time.Second, Active: 2, Queued: 3, StartsRemaining: 1.5, STUNRemaining: 0.25, ActiveTimeRemaining: 85 * time.Second}}
-		event, err := projectNativeObservation(clievent.CommandGet, value)
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, value)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +114,7 @@ func TestNativeProcessAdmissionProjectionKeepsQueueAndAllowanceFacts(t *testing.
 			t.Fatalf("facts=%+v", facts)
 		}
 		value.Admission.Active = -1
-		if _, err := projectNativeObservation(clievent.CommandGet, value); err == nil {
+		if _, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, value); err == nil {
 			t.Fatal("negative active count accepted")
 		}
 	}

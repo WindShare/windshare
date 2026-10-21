@@ -119,10 +119,11 @@ func acceptSharingStopped(visitor Visitor, value SharingStopped) error {
 }
 
 func acceptTraceIncomplete(visitor Visitor, value TraceIncomplete) error {
-	_, causeOK := value.cause.Name()
-	if visitor == nil || !value.command.Valid() || !causeOK ||
-		value.cause == TraceIncompleteLifecycleDrop && value.lifecycleDrops == 0 {
+	if visitor == nil {
 		return ErrInvalidEvent
+	}
+	if _, err := NewTraceIncomplete(value.command, value.cause, value.loss); err != nil {
+		return err
 	}
 	return visitor.VisitTraceIncomplete(value)
 }

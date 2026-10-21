@@ -258,8 +258,23 @@ func (visitor eventVisitor) VisitSharingStopped(event clievent.SharingStopped) e
 	return nil
 }
 
-func (visitor eventVisitor) VisitTraceIncomplete(clievent.TraceIncomplete) error {
-	visitor.renderer.insert(statusLine(visitor.symbols().Warning, "Warning: Trace is incomplete.", terminalcanvas.StyleWarning))
+func (visitor eventVisitor) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
+	var reason string
+	switch event.Cause() {
+	case clievent.TraceIncompleteContractRejection:
+		reason = " Diagnostic events were rejected."
+	case clievent.TraceIncompleteLifecycleDrop:
+		reason = " Diagnostic records were dropped."
+	case clievent.TraceIncompleteWriter:
+		reason = " Writing the trace failed."
+	case clievent.TraceIncompleteFlush:
+		reason = " Flushing the trace failed."
+	case clievent.TraceIncompleteSchemaLimit:
+		reason = " Trace recording encountered an internal error."
+	case clievent.TraceIncompleteRejectionEvidence:
+		reason = " Event rejection details were lost."
+	}
+	visitor.renderer.insert(statusLine(visitor.symbols().Warning, "Warning: Trace is incomplete."+reason, terminalcanvas.StyleWarning))
 	return nil
 }
 

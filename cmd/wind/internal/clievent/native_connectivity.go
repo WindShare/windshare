@@ -45,7 +45,8 @@ type NativeProviderDiagnosticFacts struct {
 
 type NativeTURNFacts struct {
 	Provider, Account, Profile string
-	Milestone, Reason          string
+	Milestone                  turnpath.Milestone
+	Reason                     string
 	UsefulBytes                uint64
 	Resources                  *NativeTURNResources
 	Cleanup                    turnpath.CleanupOutcome
@@ -68,6 +69,8 @@ type NativeTURNRoute struct {
 
 const (
 	maximumTURNTraceURLBytes = 2048
+	maximumTURNReasonBytes   = 1024
+	maximumTURNIdentityBytes = 64
 	maximumSTUNErrorCode     = 699
 	minimumTURNChannel       = 0x4000
 	maximumTURNChannel       = 0x7fff
@@ -143,8 +146,8 @@ type NativeReachabilityFacts struct {
 type NativeConnectivityObserved struct{ spec NativeConnectivitySpec }
 
 func NewNativeConnectivityObserved(spec NativeConnectivitySpec) (NativeConnectivityObserved, error) {
-	if !validNativeConnectivity(spec) {
-		return NativeConnectivityObserved{}, ErrInvalidEvent
+	if err := validateNativeConnectivity(spec); err != nil {
+		return NativeConnectivityObserved{}, err
 	}
 	if spec.Diagnostic != nil {
 		copied := *spec.Diagnostic
@@ -214,70 +217,87 @@ func (value NativeConnectivityObserved) Facts() NativeConnectivitySpec {
 	return spec
 }
 func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
-	if visitor == nil || !validNativeConnectivity(value.spec) {
+	if visitor == nil {
 		return ErrInvalidEvent
+	}
+	if err := validateNativeConnectivity(value.spec); err != nil {
+		return err
 	}
 	return visitor.VisitNativeConnectivityObserved(value)
 }
-func validNativeConnectivity(spec NativeConnectivitySpec) bool {
-	if !spec.Command.Valid() || !slices.Contains([]string{"sender", "receiver", "unknown"}, spec.Side) ||
-		!validNativeConnectivityKind(spec) ||
-		!slices.Contains([]string{"unknown", "new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, spec.State) {
-		return false
+func validateNativeConnectivity(spec NativeConnectivitySpec) error {
+	if !spec.Command.Valid() {
+		return EventContractError{Field: "command", Rule: "known_enum"}
 	}
-	if !validNativeSubject(spec) {
-		return false
+	if !slices.Contains([]string{"sender", "receiver", "unknown"}, spec.Side) {
+		return EventContractError{Field: "side", Rule: "known_enum"}
 	}
-	if !validNativeTURN(spec) {
-		return false
+	if !validNativeConnectivityKind(spec) {
+		return EventContractError{Field: "kind", Rule: "known_enum"}
+	}
+	if !slices.Contains([]string{"unknown", "new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, spec.State) {
+		return EventContractError{Field: "state", Rule: "known_enum"}
+	}
+	if err := validateNativeSubject(spec); err != nil {
+		return err
+	}
+	if err := validateNativeTURN(spec); err != nil {
+		return err
 	}
 	if !validNativeProviderDiagnostic(spec) {
-		return false
+		return EventContractError{Field: "diagnostic", Rule: "bounded_provider_diagnostic"}
 	}
-	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
-		return false
-	}
-	isReachability := slices.Contains([]string{"gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked"}, spec.Kind)
-	isLifecycle := slices.Contains([]string{"demand_changed", "network_changed", "path_closed"}, spec.Kind)
-	if isReachability != (spec.Reachability != nil) || isLifecycle != (spec.Lifecycle != nil) {
-		return false
-	}
-	isAdmission := slices.Contains([]string{"admission_queued", "admission_granted", "admission_released", "admission_rejected"}, spec.Kind)
-	if isAdmission != (spec.Admission != nil) {
-		return false
-	}
-	isSocket := slices.Contains([]string{"stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
-	if isSocket != (spec.Socket != nil) {
-		return false
+	if err := validateNativeFactKinds(spec); err != nil {
+		return err
 	}
 	if s := spec.Socket; s != nil {
 		if s.Duration < 0 || !slices.Contains([]string{"pending", "completed", "canceled", "deadline", "retired", "closed", "failed"}, s.Result) ||
 			(spec.Kind == "socket_handoff_started") != (s.Result == "pending") {
-			return false
+			return EventContractError{Field: "socket", Rule: "valid_result_duration"}
 		}
 	}
 	if a := spec.Admission; a != nil && (a.Wait < 0 || a.ActiveTimeRemaining < 0 || !nativeAllowance(a.StartsRemaining) || !nativeAllowance(a.STUNRemaining)) {
-		return false
+		return EventContractError{Field: "admission", Rule: "nonnegative_finite_allowance"}
 	}
 	if c := spec.Candidate; c != nil {
 		if !nativeType(c.Type) || !nativeProtocol(c.Protocol) || !nativeAddress(c.Address) ||
 			!slices.Contains([]string{"", "active", "passive", "so"}, c.TCPType) ||
 			!slices.Contains([]string{"unknown", "ipv4", "ipv6"}, c.Family) || !slices.Contains([]string{"unknown", "ordinary", "mapped"}, c.Origin) {
-			return false
+			return EventContractError{Field: "candidate", Rule: "valid_candidate"}
 		}
 	}
 	if p := spec.Pair; p != nil {
 		if !nativeType(p.LocalType) || !nativeType(p.RemoteType) || !nativeProtocol(p.Protocol) ||
 			!nativeAddress(p.LocalAddress) || !nativeAddress(p.RemoteAddress) || p.PairRTT < 0 {
-			return false
+			return EventContractError{Field: "pair", Rule: "valid_selected_pair"}
 		}
 	}
 	if r := spec.Reachability; r != nil {
 		if !nativeProtocol(r.Protocol) || !slices.Contains([]string{"none", "unknown", "unavailable", "capacity", "invalid_response", "closed", "lease_lost", "canceled", "deadline"}, r.Reason) {
-			return false
+			return EventContractError{Field: "reachability", Rule: "known_protocol_reason"}
 		}
 	}
-	return true
+	return nil
+}
+
+func validateNativeFactKinds(spec NativeConnectivitySpec) error {
+	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
+		return EventContractError{Field: "candidate_pair", Rule: "kind_matches_facts"}
+	}
+	isReachability := slices.Contains([]string{"gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked"}, spec.Kind)
+	isLifecycle := slices.Contains([]string{"demand_changed", "network_changed", "path_closed"}, spec.Kind)
+	if isReachability != (spec.Reachability != nil) || isLifecycle != (spec.Lifecycle != nil) {
+		return EventContractError{Field: "reachability_lifecycle", Rule: "kind_matches_facts"}
+	}
+	isAdmission := slices.Contains([]string{"admission_queued", "admission_granted", "admission_released", "admission_rejected"}, spec.Kind)
+	if isAdmission != (spec.Admission != nil) {
+		return EventContractError{Field: "admission", Rule: "kind_matches_facts"}
+	}
+	isSocket := slices.Contains([]string{"stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
+	if isSocket != (spec.Socket != nil) {
+		return EventContractError{Field: "socket", Rule: "kind_matches_facts"}
+	}
+	return nil
 }
 
 func validNativeProviderDiagnostic(spec NativeConnectivitySpec) bool {
@@ -301,34 +321,46 @@ func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
 	return slices.Contains([]string{"turn_path", "turn_binding", "turn_route", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
 }
 
-func validNativeTURN(spec NativeConnectivitySpec) bool {
+func validateNativeTURN(spec NativeConnectivitySpec) error {
 	facts := spec.TURN
 	if facts == nil {
-		return spec.Kind != "turn_path" && spec.Kind != "turn_binding" && spec.Kind != "turn_route"
+		if spec.Kind == "turn_path" || spec.Kind == "turn_binding" || spec.Kind == "turn_route" {
+			return EventContractError{Field: "turn", Rule: "required"}
+		}
+		return nil
 	}
 	if !validTURNRecoveryFacts(spec.Kind, facts) {
-		return false
+		return EventContractError{Field: "turn.recovery", Rule: "valid_binding_route"}
 	}
 	if facts.Cleanup != 0 && (!facts.Cleanup.Valid() || spec.Kind != facts.Cleanup.EventKind() ||
 		facts.Reason != facts.Cleanup.Reason() || facts.Resources == nil) {
-		return false
+		return EventContractError{Field: "turn.cleanup", Rule: "outcome_matches_kind_reason_resources"}
 	}
-	if len(facts.Reason) > 1024 || !slices.Contains([]string{"", "issuance_started", "issuance_failed", "issuance_discarded", "credentials_delegated", "replacement_admitted", "path_retired", "useful_content", "connecting", "ready", "retired", "unavailable", "recovery_requested"}, facts.Milestone) ||
-		(spec.Kind == "turn_path") != (facts.Milestone != "") {
-		return false
+	if len(facts.Reason) > maximumTURNReasonBytes {
+		return EventContractError{Field: "turn.reason", Rule: "bounded_text"}
 	}
-	for _, id := range []string{facts.Provider, facts.Account, facts.Profile} {
-		if len(id) > 64 || (id == "" && facts.Milestone != "unavailable") {
-			return false
+	if spec.Kind == "turn_path" {
+		if _, known := facts.Milestone.Name(); !known {
+			return EventContractError{Field: "turn.milestone", Rule: "known_enum"}
+		}
+	} else if facts.Milestone != 0 {
+		return EventContractError{Field: "turn.milestone", Rule: "only_turn_path"}
+	}
+	for _, identity := range [...]struct{ field, value string }{
+		{"turn.provider", facts.Provider}, {"turn.account", facts.Account}, {"turn.profile", facts.Profile},
+	} {
+		id := identity.value
+		if len(id) > maximumTURNIdentityBytes || (id == "" && facts.Milestone.RequiresServiceIdentity()) {
+			return EventContractError{Field: identity.field, Rule: "bounded_service_identity"}
 		}
 		for _, char := range id {
 			if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.' {
 				continue
 			}
-			return false
+			return EventContractError{Field: identity.field, Rule: "ascii_service_identity"}
 		}
 	}
-	return true
+	return nil
 }
 
 func validTURNRecoveryFacts(kind string, facts *NativeTURNFacts) bool {
@@ -364,21 +396,21 @@ func nativeAddress(value string) bool {
 	return err == nil
 }
 
-func validNativeSubject(spec NativeConnectivitySpec) bool {
+func validateNativeSubject(spec NativeConnectivitySpec) error {
 	if spec.Attempt.Valid() && (!spec.Path.Valid() || !spec.Session.Valid() || spec.AttemptSequence == 0) {
-		return false
+		return EventContractError{Field: "attempt", Rule: "requires_session_path_sequence"}
 	}
 	if spec.Path.Valid() && !spec.Session.Valid() {
-		return false
+		return EventContractError{Field: "path", Rule: "requires_session"}
 	}
 	if spec.Profile != "" {
 		// Profiles are opaque digests, never URLs that could contain TURN credentials.
 		if len(spec.Profile) != 12 || spec.Profile[:4] != "ice-" {
-			return false
+			return EventContractError{Field: "ice_profile", Rule: "ice_digest"}
 		}
 		if _, err := hex.DecodeString(spec.Profile[4:]); err != nil {
-			return false
+			return EventContractError{Field: "ice_profile", Rule: "ice_digest"}
 		}
 	}
-	return true
+	return nil
 }

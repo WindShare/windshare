@@ -15,13 +15,8 @@ func ProjectLaneSettlement(value transfer.LaneSettlementSummary) (clievent.LaneS
 	if err != nil {
 		return clievent.LaneSettlementObserved{}, invalidProjection(ProjectionInvalidIdentity)
 	}
-	var route clievent.LaneRoute
-	switch value.Route {
-	case transfer.LaneRouteRelay:
-		route = clievent.LaneRouteRelay
-	case transfer.LaneRouteDirect:
-		route = clievent.LaneRouteDirect
-	default:
+	route, ok := projectLaneRoute(value.Route)
+	if !ok {
 		return clievent.LaneSettlementObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
 	event, err := clievent.NewLaneSettlementObserved(clievent.LaneSettlementSpec{
@@ -34,6 +29,19 @@ func ProjectLaneSettlement(value transfer.LaneSettlementSummary) (clievent.LaneS
 		return clievent.LaneSettlementObserved{}, invalidProjection(ProjectionEventContract)
 	}
 	return event, nil
+}
+
+func projectLaneRoute(value transfer.LaneRoute) (clievent.LaneRoute, bool) {
+	switch value {
+	case transfer.LaneRouteRelay:
+		return clievent.LaneRouteRelay, true
+	case transfer.LaneRouteDirect:
+		return clievent.LaneRouteDirect, true
+	case transfer.LaneRouteTURN:
+		return clievent.LaneRouteTURN, true
+	default:
+		return 0, false
+	}
 }
 
 func ProjectPeerDiagnostic(value v2peer.PeerDiagnosticObservation) (clievent.ObserverLossCategory, clievent.ObserverLossReason, uint64, error) {

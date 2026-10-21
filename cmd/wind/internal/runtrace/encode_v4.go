@@ -414,8 +414,9 @@ func (visitor *encodeVisitorV4) VisitTraceIncomplete(event clievent.TraceIncompl
 	}
 	visitor.set("trace_incomplete", nil, traceIncompletePayloadV4{
 		Cause:            cause,
-		LifecycleDropped: decimal(event.LifecycleDrops()),
-		ProgressDropped:  decimal(event.ProgressDrops()),
+		ContractRejected: decimal(event.Loss().ContractRejections),
+		LifecycleDropped: decimal(event.Loss().LifecycleDrops),
+		ProgressDropped:  decimal(event.Loss().ProgressDrops),
 	})
 	return nil
 }

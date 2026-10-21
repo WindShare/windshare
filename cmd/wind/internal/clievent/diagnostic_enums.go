@@ -5,10 +5,11 @@ type LaneRoute uint8
 const (
 	LaneRouteRelay LaneRoute = iota + 1
 	LaneRouteDirect
+	LaneRouteTURN
 )
 
 func (value LaneRoute) Name() (string, bool) {
-	names := [...]string{"", "relay", "direct"}
+	names := [...]string{"", "relay", "direct", "turn"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}
@@ -76,6 +77,15 @@ func (value ObserverLossReason) Name() (string, bool) {
 }
 
 type ReceiverTerminalOwner uint8
+
+func (value ObserverLossReason) IsContractRejection() bool {
+	switch value {
+	case ObserverLossUnknownEnum, ObserverLossInvalidIdentity, ObserverLossInvalidStageFields, ObserverLossEventContract:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	ReceiverTerminalUnbound ReceiverTerminalOwner = iota + 1

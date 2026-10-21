@@ -33,14 +33,14 @@ func TestRejectionEvidenceFailureRetainsIndependentNumericLoss(t *testing.T) {
 			loss := runtime.collectPendingLossLocked(true)
 			runtime.reportRejectionEvidenceLoss()
 			recorder := runtime.trace.(*fakeUserTrace)
-			if loss.lifecycle != 5 || runtime.rejectionEvidenceDropped.Load() != 5 ||
+			if loss.ContractRejections != 5 || runtime.rejectionEvidenceDropped.Load() != 5 ||
 				recorder.rejectionEvidence != 5 || runtime.pendingRejectionEvidenceLoss.Load() != 0 {
 				t.Fatalf("loss=%+v evidence=%d recorder=%d", loss, runtime.rejectionEvidenceDropped.Load(), recorder.rejectionEvidence)
 			}
 			if runtime.takeNext() != nil || len(runtime.projectionRejections) != 1 {
 				t.Fatal("anomaly failure recursively created an observation")
 			}
-			if later := runtime.collectPendingLossLocked(true); later.lifecycle != 0 {
+			if later := runtime.collectPendingLossLocked(true); later.ContractRejections != 0 {
 				t.Fatal("original observation loss was counted twice")
 			}
 		})
@@ -54,7 +54,7 @@ func TestMalformedRejectionSampleRetainsLossWithoutRecursiveDiagnostics(t *testi
 	}
 	loss := runtime.collectPendingLossLocked(true)
 	runtime.reportRejectionEvidenceLoss()
-	if loss.lifecycle != 1 || runtime.rejectionEvidenceDropped.Load() != 1 ||
+	if loss.ContractRejections != 1 || runtime.rejectionEvidenceDropped.Load() != 1 ||
 		runtime.trace.(*fakeUserTrace).rejectionEvidence != 1 || len(runtime.projectionRejections) != 0 || runtime.takeNext() != nil {
 		t.Fatalf("malformed rejection loss=%+v evidence=%d", loss, runtime.rejectionEvidenceDropped.Load())
 	}
@@ -102,7 +102,7 @@ func TestRejectionSignaturesIncludeEventAndSourceButExcludeValues(t *testing.T) 
 
 func TestRejectionEvidenceHealthHasDistinctCause(t *testing.T) {
 	event := traceIncompleteFromStatus(clievent.CommandShare, runtrace.Status{RejectionEvidenceDropped: 4})
-	if event.Cause() != clievent.TraceIncompleteRejectionEvidence || event.LifecycleDrops() != 0 {
+	if event.Cause() != clievent.TraceIncompleteRejectionEvidence || event.Loss().LifecycleDrops != 0 {
 		t.Fatal("evidence loss was misrepresented as another original lifecycle loss")
 	}
 }

@@ -181,8 +181,8 @@ func encodeNativeTURN(turn *clievent.NativeTURNFacts) *nativeTURNPayloadV4 {
 		return nil
 	}
 	payload := &nativeTURNPayloadV4{Provider: turn.Provider, Account: turn.Account, Profile: turn.Profile,
-		Milestone: turn.Milestone, Reason: turn.Reason}
-	if turn.Milestone != "" {
+		Milestone: turn.Milestone.String(), Reason: turn.Reason}
+	if turn.Milestone != 0 {
 		payload.UsefulBytes = decimal(turn.UsefulBytes)
 	}
 	if resources := turn.Resources; resources != nil {

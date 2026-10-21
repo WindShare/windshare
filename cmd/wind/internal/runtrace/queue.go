@@ -288,8 +288,11 @@ func (recorder *Recorder) markIncomplete(cause clievent.TraceIncompleteCause) {
 		health, err := clievent.NewTraceIncomplete(
 			recorder.command,
 			cause,
-			recorder.lifecycleDropped.Load(),
-			recorder.progressDropped.Load(),
+			clievent.TraceLoss{
+				ContractRejections: recorder.contractRejected.Load(),
+				LifecycleDrops:     recorder.lifecycleDropped.Load(),
+				ProgressDrops:      recorder.progressDropped.Load(),
+			},
 		)
 		if err == nil {
 			recorder.health <- health

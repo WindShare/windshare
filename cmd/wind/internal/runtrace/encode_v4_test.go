@@ -558,7 +558,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		mustValue(clievent.NewTransferSettled(transferResult)),
 		mustValue(clievent.NewSharingStopped(shareResult)),
 		mustValue(clievent.NewTraceIncomplete(
-			clievent.CommandGet, clievent.TraceIncompleteLifecycleDrop, math.MaxUint64, 4,
+			clievent.CommandGet, clievent.TraceIncompleteLifecycleDrop, clievent.TraceLoss{LifecycleDrops: math.MaxUint64, ProgressDrops: 4},
 		)),
 		mustValue(clievent.NewLaneAdopted(
 			clievent.CommandGet, protocolSession, lane, clievent.TransportWebRTC,

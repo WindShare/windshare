@@ -64,6 +64,7 @@ type Config struct {
 
 type Status struct {
 	RejectionEvidenceDropped uint64
+	ContractRejected         uint64
 	Complete                 bool
 	LifecycleDropped         uint64
 	ProgressDropped          uint64
@@ -112,6 +113,7 @@ type Recorder struct {
 	healthOnce sync.Once
 
 	rejectionEvidenceDropped atomic.Uint64
+	contractRejected         atomic.Uint64
 	disabled                 atomic.Bool
 	lifecycleDropped         atomic.Uint64
 	progressDropped          atomic.Uint64
@@ -291,19 +293,24 @@ func (recorder *Recorder) Record(event clievent.Event) (accepted bool) {
 
 // ReportUpstreamLoss preserves loss that happened before an event reached the
 // recorder. Progress sampling loss alone is expected and does not make a trace incomplete.
-func (recorder *Recorder) ReportUpstreamLoss(lifecycle, progress uint64) bool {
+func (recorder *Recorder) ReportUpstreamLoss(loss clievent.TraceLoss) bool {
 	recorder.entryMu.Lock()
 	defer recorder.entryMu.Unlock()
 	if recorder.closed {
 		return false
 	}
-	if lifecycle != 0 {
-		recorder.addLifecycleDropped(lifecycle)
+	if loss.ContractRejections != 0 {
+		recorder.addCounter(&recorder.contractRejected, loss.ContractRejections)
 	}
-	if progress != 0 {
-		recorder.addProgressDropped(progress)
+	if loss.LifecycleDrops != 0 {
+		recorder.addLifecycleDropped(loss.LifecycleDrops)
 	}
-	if lifecycle != 0 {
+	if loss.ProgressDrops != 0 {
+		recorder.addProgressDropped(loss.ProgressDrops)
+	}
+	if loss.ContractRejections != 0 {
+		recorder.markIncomplete(clievent.TraceIncompleteContractRejection)
+	} else if loss.LifecycleDrops != 0 {
 		recorder.markIncomplete(clievent.TraceIncompleteLifecycleDrop)
 	}
 	return true
@@ -313,7 +320,8 @@ func (recorder *Recorder) Status() Status {
 	lifecycleDropped := recorder.lifecycleDropped.Load()
 	return Status{
 		RejectionEvidenceDropped: recorder.rejectionEvidenceDropped.Load(),
-		Complete: lifecycleDropped == 0 && recorder.rejectionEvidenceDropped.Load() == 0 && !recorder.writerFailed.Load() &&
+		ContractRejected:         recorder.contractRejected.Load(),
+		Complete: lifecycleDropped == 0 && recorder.contractRejected.Load() == 0 && recorder.rejectionEvidenceDropped.Load() == 0 && !recorder.writerFailed.Load() &&
 			!recorder.flushFailed.Load() &&
 			!recorder.schemaLimited.Load(),
 		LifecycleDropped: lifecycleDropped,
