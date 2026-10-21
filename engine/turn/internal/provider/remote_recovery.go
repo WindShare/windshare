@@ -26,8 +26,7 @@ func (failure remoteFailure) Error() string {
 }
 
 func retryRemoteIssue(err error) bool {
-	var failure remoteFailure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[remoteFailure](err); ok {
 		return failure.status >= 500 || (failure.status == 409 && failure.code == "lease_pending")
 	}
 	var network net.Error
