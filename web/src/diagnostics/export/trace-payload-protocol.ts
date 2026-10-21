@@ -334,7 +334,7 @@ function validateProviderFact(input: unknown): void {
   const fields: Readonly<Record<string, readonly string[]>> = {
     state: ['kind', 'phase', 'state', 'elapsedMs'],
     candidate: ['kind', 'candidateType', 'protocol', 'family', 'interfaceClass', 'endpoint', 'disposition'],
-    'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
+    'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'clientToTurnProtocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
     'ice-error': ['kind', 'code', 'endpoint'],
     profile: ['kind', 'networkGenerationID', 'profileID', 'side', 'endpointIDs'],
     'observer-loss': ['kind', 'count'],

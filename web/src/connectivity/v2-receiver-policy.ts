@@ -211,8 +211,9 @@ export class V2ReceiverConnectivity {
       },
       measure: (pathId) => {
         const peer = this.#installedPeers.get(encodeBase64Url(pathId))
-        return peer === undefined ? { usefulBytes: 0, unhelpful: false } : this.#lanes.measureLane(peer.laneId, peer.laneEpoch)
+        return peer === undefined ? { usefulBytes: 0, unhelpful: false, busyMilliseconds: 0, pendingBytes: 0 } : this.#lanes.measureLane(peer.laneId, peer.laneEpoch)
       },
+      networkGeneration: () => this.#peerRecoveryOptions.network!.copyBytes(),
       ...(options.onTurnObservation === undefined ? {} : { observe: options.onTurnObservation }),
     })
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)

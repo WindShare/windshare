@@ -15,10 +15,13 @@ export class LanePerformance {
   #busySince = 0
   #completedBytes = 0
   #pendingBlocks = 0
+  #activeSince = 0
+  #busyMilliseconds = 0
 
   begin(now: number, bytes: number): void {
     if (this.pendingBytes === 0) {
       this.#busySince = now
+      this.#activeSince = now
       this.#completedBytes = 0
     }
     this.#pendingBlocks += 1
@@ -27,6 +30,7 @@ export class LanePerformance {
   }
 
   complete(now: number, bytes: number, successful: boolean): void {
+    const wasBusy = this.pendingBytes > 0
     if (successful && bytes > 0) {
       this.#completedBytes += bytes
       const elapsed = Math.max(now - this.#busySince, MINIMUM_SAMPLE_MILLISECONDS)
@@ -45,6 +49,14 @@ export class LanePerformance {
     }
     this.#pendingBlocks -= 1
     this.pendingBytes -= Math.min(this.pendingBytes, bytes)
+    if (this.pendingBytes === 0 && wasBusy) {
+      this.#busyMilliseconds += Math.max(0, now - this.#activeSince)
+    }
+  }
+
+  /** Overlapping requests share busy time; output pauses do not consume it. */
+  busyMilliseconds(now: number): number {
+    return this.#busyMilliseconds + (this.pendingBytes > 0 ? Math.max(0, now - this.#activeSince) : 0)
   }
 
   /** A lost race bounds speed without misclassifying caller cancellation as failure. */

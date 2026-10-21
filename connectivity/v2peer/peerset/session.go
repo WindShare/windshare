@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -88,6 +89,9 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 	s.turn = turnpath.NewReceiver(turnpath.ReceiverConfig{SessionID: [16]byte(sessionID), Now: s.owner.config.Clock.Now,
 		Send:    controls.SendTURNControl,
 		Observe: receiver.Factory.NativeConnectivity().ObserveTURN,
+		NetworkGeneration: func() [16]byte {
+			return nativepeer.GenerationIdentity(receiver.Factory.NativeConnectivity().NetworkGeneration())
+		},
 		Open: func(ctx context.Context, grant turncontrol.Grant, ice iceconfig.Connection) (turnpath.ReceiverPath, error) {
 			budget := serviceBudgets[grant.Profile]
 			if budget == nil {
@@ -113,17 +117,14 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 			return receiverTURNPath{path}, nil
 		},
 		Admitted: func(_ turncontrol.Grant, path turnpath.ReceiverPath) { s.admitted(path.(receiverTURNPath).Path) },
-		Measure: func(path turnpath.ReceiverPath) turnpath.Measurement {
+		Measure: func(lane turncontrol.Lane) turnpath.Measurement {
 			lanes, ok := receiver.Lanes.(interface{ LaneSet() *transfer.LaneSet })
 			if !ok {
 				return turnpath.Measurement{}
 			}
-			lane, ok := path.Lane()
-			if !ok {
-				return turnpath.Measurement{}
-			}
 			measurement := lanes.LaneSet().MeasureLane(transfer.LaneIdentity{ID: lane.ID, Epoch: lane.Epoch})
-			return turnpath.Measurement{UsefulBytes: measurement.UsefulBytes, Unhelpful: measurement.Unhelpful}
+			return turnpath.Measurement{UsefulBytes: measurement.UsefulBytes, Unhelpful: measurement.Unhelpful,
+				BusyTime: measurement.BusyTime, PendingBytes: measurement.PendingBytes}
 		},
 	})
 	// Delegation belongs to the session, even while no direct path is running.

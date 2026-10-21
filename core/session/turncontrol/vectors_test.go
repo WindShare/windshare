@@ -24,6 +24,8 @@ func TestTURNControlVectors(t *testing.T) {
 		Grant{Authority: header, PathID: path, Provider: "standard", Account: "home", Profile: "primary", CredentialKind: Fixed, Username: "fixed-user", Password: "fixed-password", URLs: []string{"turn:example.org"}},
 		Ready{header, path, Lane{ID: 7, Epoch: 2}}, Retire{header, path, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"}, Report{header, path, 1 << 40},
 		Recover{header, path, AllocationStateMismatch}, Recover{header, path, ChannelUnavailable},
+		Quality{Authority: header, PathID: path, Lane: Lane{ID: 7, Epoch: 2}, NetworkGeneration: [16]byte{9},
+			SampleSequence: 3, ContentBytes: 1 << 40, BusyMilliseconds: 3000, PendingBytes: 1 << 20},
 	}
 	type vector struct {
 		Body []byte `json:"bodyB64"`

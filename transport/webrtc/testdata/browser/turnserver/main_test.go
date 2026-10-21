@@ -18,6 +18,7 @@ func TestReadyRecordPublishesActualOwnedListener(t *testing.T) {
 		record.OperationID != "chromium-turn-route-server" ||
 		record.Milestone != "listener-ready" ||
 		record.URL != "turn:127.0.0.1:34781?transport=udp" || record.RelayAddress != "192.0.2.10" ||
+		record.TCPURL != "turn:127.0.0.1:34781?transport=tcp" ||
 		record.Username != username || record.Credential != credential {
 		t.Fatalf("ready record = %+v", record)
 	}

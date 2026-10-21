@@ -22,11 +22,14 @@ type Performance struct {
 	LastAttempt         time.Time
 	busySince           time.Time
 	completedBytes      uint64
+	activeSince         time.Time
+	busyTime            time.Duration
 }
 
 func (p *Performance) Begin(now time.Time, bytes uint64) {
 	if p.PendingBytes == 0 {
 		p.busySince = now
+		p.activeSince = now
 		p.completedBytes = 0
 	}
 	p.PendingBytes += bytes
@@ -34,10 +37,24 @@ func (p *Performance) Begin(now time.Time, bytes uint64) {
 }
 
 func (p *Performance) Complete(now time.Time, bytes uint64, successful bool) {
+	wasBusy := p.PendingBytes != 0
 	if successful && bytes != 0 {
 		p.recordAuthenticated(now, bytes)
 	}
 	p.PendingBytes -= min(p.PendingBytes, bytes)
+	if p.PendingBytes == 0 && wasBusy {
+		p.busyTime += max(now.Sub(p.activeSince), 0)
+		p.activeSince = time.Time{}
+	}
+}
+
+// BusyTime counts overlapping requests once. Paused jobs and output backpressure
+// must not look like a slow network simply because wall time kept advancing.
+func (p *Performance) BusyTime(now time.Time) time.Duration {
+	if p.PendingBytes != 0 {
+		return p.busyTime + max(now.Sub(p.activeSince), 0)
+	}
+	return p.busyTime
 }
 
 func (p *Performance) recordAuthenticated(now time.Time, bytes uint64) {

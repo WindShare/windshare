@@ -1,6 +1,6 @@
 import { decodeCanonicalCbor, encodeCanonicalCbor, requireArray, requireBytes, requireText, requireUnsigned } from '../../protocol/cbor'
 
-export const TURN_CONTROL = Object.freeze({ demand: 1, grant: 2, ready: 3, retire: 4, unavailable: 5, available: 6, report: 7, recover: 8 } as const)
+export const TURN_CONTROL = Object.freeze({ demand: 1, grant: 2, ready: 3, retire: 4, unavailable: 5, available: 6, report: 7, recover: 8, quality: 9 } as const)
 export const TURN_RECOVERY = Object.freeze({ allocationStateMismatch: 1, channelUnavailable: 2 } as const)
 export const TURN_RETIRE = Object.freeze({ idle: 1, replaced: 2, expired: 3, budget: 4, revoked: 5, unhelpful: 6 } as const)
 export const TURN_DEMAND_LIFETIME_MS = 120_000
@@ -42,6 +42,9 @@ export type TurnControl =
   | (TurnHeader & { readonly kind: 'available'; readonly profiles: readonly string[] })
   | (TurnHeader & { readonly kind: 'report'; readonly pathId: Uint8Array<ArrayBuffer>; readonly usefulBytes: bigint })
   | (TurnHeader & { readonly kind: 'recover'; readonly pathId: Uint8Array<ArrayBuffer>; readonly reason: number })
+  | (TurnHeader & TurnLane & { readonly kind: 'quality'; readonly pathId: Uint8Array<ArrayBuffer>;
+    readonly networkGeneration: Uint8Array<ArrayBuffer>; readonly sampleSequence: bigint;
+    readonly contentBytes: bigint; readonly busyMilliseconds: bigint; readonly pendingBytes: bigint })
 
 export function encodeTurnControl(message: TurnControl): Uint8Array<ArrayBuffer> {
   const fields: unknown[] = [SCHEMA, TURN_CONTROL[message.kind], message.sessionId, message.ownerPathId, message.sequence]
@@ -56,6 +59,8 @@ export function encodeTurnControl(message: TurnControl): Uint8Array<ArrayBuffer>
     case 'available': fields.push([...message.profiles]); break
     case 'report': fields.push(message.pathId, message.usefulBytes); break
     case 'recover': fields.push(message.pathId, message.reason); break
+    case 'quality': fields.push(message.pathId, message.laneId, message.laneEpoch, message.networkGeneration,
+      message.sampleSequence, message.contentBytes, message.busyMilliseconds, message.pendingBytes); break
   }
   const body = encodeCanonicalCbor(fields)
   decodeTurnControl(body)
@@ -77,6 +82,15 @@ export function decodeTurnControl(body: Uint8Array): TurnControl {
       count(fields, 6)
       return { ...header, kind: 'demand', holdForMs: duration(fields[5], TURN_DEMAND_LIFETIME_MS) }
     case TURN_CONTROL.grant: return decodeGrant(fields, header)
+    case TURN_CONTROL.quality: {
+      count(fields, 13)
+      const sampleSequence = unsigned64(fields[9])
+      if (sampleSequence === 0n) throw new RangeError('Invalid TURN sample sequence')
+      return { ...header, kind: 'quality', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN quality path', true),
+        laneId: laneIdentity(fields[6]), laneEpoch: laneIdentity(fields[7]),
+        networkGeneration: requireBytes(fields[8], IDENTITY_BYTES, 'TURN quality network'), sampleSequence,
+        contentBytes: unsigned64(fields[10]), busyMilliseconds: unsigned64(fields[11]), pendingBytes: unsigned64(fields[12]) }
+    }
     case TURN_CONTROL.ready:
       count(fields, 8)
       return { ...header, kind: 'ready', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN ready path', true),
@@ -116,6 +130,12 @@ function laneIdentity(value: unknown): number {
   const identity = requireUnsigned(value, 'TURN lane identity')
   if (identity === 0n || identity > 0xffff_ffffn) throw new RangeError('Invalid TURN lane identity')
   return Number(identity)
+}
+
+function unsigned64(value: unknown): bigint {
+  const number = requireUnsigned(value, 'TURN measurement')
+  if (number > 0xffff_ffff_ffff_ffffn) throw new RangeError('Invalid TURN measurement')
+  return number
 }
 
 function decodeGrant(fields: readonly unknown[], header: TurnHeader): TurnGrant {

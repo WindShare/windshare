@@ -19,7 +19,15 @@ export interface TurnReceiverOptions {
   readonly retire: (pathId: Uint8Array<ArrayBuffer>) => Promise<void>
   readonly observe?: (event: TurnObservation) => void
   readonly profilesChanged?: (profiles: readonly string[]) => void
-  readonly measure?: (pathId: Uint8Array<ArrayBuffer>) => { usefulBytes: number; unhelpful: boolean }
+  readonly measure?: (pathId: Uint8Array<ArrayBuffer>) => TurnMeasurement
+  readonly networkGeneration?: () => Uint8Array<ArrayBuffer>
+}
+
+export interface TurnMeasurement {
+  readonly usefulBytes: number
+  readonly unhelpful: boolean
+  readonly busyMilliseconds: number
+  readonly pendingBytes: number
 }
 export interface TurnObservation {
   readonly profile: string
@@ -35,6 +43,7 @@ interface Path {
   readonly lifetime: AbortController
   admission?: Admission
   reported: number
+  sampleSequence: bigint
   status: Pick<TurnObservation, 'state' | 'reason'>
 }
 
@@ -42,6 +51,7 @@ interface Admission {
   readonly lane: TurnLane
   readonly lifetime: AbortController
   readySent: boolean
+  accountedBytes: number
 }
 
 type Inventory = Extract<ReturnType<typeof decodeTurnControl>, { kind: 'available' }>
@@ -101,7 +111,7 @@ export class TurnReceiver {
     const path = this.#paths.get(encodeBase64Url(pathId))
     if (path === undefined || lane.laneEpoch <= (path.admission?.lane.laneEpoch ?? 0)) return
     path.admission?.lifetime.abort()
-    const admission: Admission = { lane: { ...lane }, lifetime: new AbortController(), readySent: false }
+    const admission: Admission = { lane: { ...lane }, lifetime: new AbortController(), readySent: false, accountedBytes: 0 }
     path.admission = admission
     this.#observe(path.grant, 'ready')
     // Readiness identifies this exact lane incarnation. The sender retains the
@@ -202,7 +212,7 @@ export class TurnReceiver {
       (replaces !== undefined && (replaces.grant.profile !== grant.profile || replaces.grant.account !== grant.account || replaces.grant.provider !== grant.provider)) ||
       (grant.replaces.some((value) => value !== 0) && replaces === undefined)) return
     const lifetime = new AbortController()
-    this.#paths.set(key, { grant, lifetime, reported: 0,
+    this.#paths.set(key, { grant, lifetime, reported: 0, sampleSequence: 0n,
       status: { state: 'connecting' } })
     // Activation can synchronously admit or retire a path when its service
     // budget is exhausted. Never overwrite that result with "connecting".
@@ -225,9 +235,10 @@ export class TurnReceiver {
     const path = this.#paths.get(key)
     if (path === undefined) return
     const final = this.#options.measure?.(path.grant.pathId)
-    if (final !== undefined && final.usefulBytes > path.reported) {
+    const delta = final === undefined ? 0 : Math.max(0, final.usefulBytes - (path.admission?.accountedBytes ?? 0))
+    if (delta > 0) {
       this.#track(this.#send({ ...this.#header(path.grant), kind: 'report', pathId: path.grant.pathId,
-        usefulBytes: BigInt(final.usefulBytes) }))
+        usefulBytes: BigInt(path.reported + delta) }))
     }
     this.#paths.delete(key)
     this.#retired.add(key)
@@ -283,15 +294,30 @@ export class TurnReceiver {
       if (signal.aborted) return
       const measurement = this.#options.measure?.(path.grant.pathId)
       if (measurement === undefined) continue
-      if (measurement.usefulBytes > path.reported) {
-        const sent = await this.#send({ ...this.#header(path.grant), kind: 'report', pathId: path.grant.pathId,
-          usefulBytes: BigInt(measurement.usefulBytes) }, signal).then(() => true, () => false)
-        if (signal.aborted) return
-        if (sent) path.reported = measurement.usefulBytes
-        this.#emit({ profile: path.grant.profile, provider: path.grant.provider, account: path.grant.account,
-          pathId: encodeBase64Url(path.grant.pathId), ...path.status, usefulBytes: measurement.usefulBytes })
-      }
+      await this.#reportContent(path, admission, measurement, signal)
+      if (signal.aborted) return
+      await this.#reportQuality(path, admission, measurement, signal)
+      if (signal.aborted) return
       if (measurement.unhelpful) this.unhelpful(path.grant.pathId)
     }
+  }
+
+  async #reportContent(path: Path, admission: Admission, measurement: TurnMeasurement, signal: AbortSignal): Promise<void> {
+    if (measurement.usefulBytes <= admission.accountedBytes) return
+    const total = path.reported + measurement.usefulBytes - admission.accountedBytes
+    const sent = await this.#send({ ...this.#header(path.grant), kind: 'report', pathId: path.grant.pathId,
+      usefulBytes: BigInt(total) }, signal).then(() => true, () => false)
+    if (signal.aborted) return
+    if (sent) { path.reported = total; admission.accountedBytes = measurement.usefulBytes }
+    this.#emit({ profile: path.grant.profile, provider: path.grant.provider, account: path.grant.account,
+      pathId: encodeBase64Url(path.grant.pathId), ...path.status, usefulBytes: total })
+  }
+
+  async #reportQuality(path: Path, admission: Admission, measurement: TurnMeasurement, signal: AbortSignal): Promise<void> {
+    if (measurement.busyMilliseconds <= 0) return
+    await this.#send({ ...this.#header(path.grant), ...admission.lane, kind: 'quality', pathId: path.grant.pathId,
+      networkGeneration: this.#options.networkGeneration?.() ?? new Uint8Array(16), sampleSequence: ++path.sampleSequence,
+      contentBytes: BigInt(measurement.usefulBytes), busyMilliseconds: BigInt(Math.floor(measurement.busyMilliseconds)),
+      pendingBytes: BigInt(measurement.pendingBytes) }, signal).catch(() => undefined)
   }
 }

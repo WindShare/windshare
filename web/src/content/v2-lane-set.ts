@@ -156,10 +156,10 @@ export class V2LaneSet {
     return Object.freeze([...this.#lanes.keys()])
   }
 
-  measureLane(laneId: number, laneEpoch: number): { usefulBytes: number; unhelpful: boolean } {
+  measureLane(laneId: number, laneEpoch: number): { usefulBytes: number; unhelpful: boolean; busyMilliseconds: number; pendingBytes: number } {
     const state = this.#lanes.get(laneId)
     const useful = this.#useful.get(laneId)
-    if (state === undefined || state.laneEpoch !== laneEpoch || useful === undefined) return { usefulBytes: 0, unhelpful: false }
+    if (state === undefined || state.laneEpoch !== laneEpoch || useful === undefined) return { usefulBytes: 0, unhelpful: false, busyMilliseconds: 0, pendingBytes: 0 }
     const quietWindowMs = 30_000
     const minimumRateRatio = 1.5
     const sampledIdle = state.performance.hasSuccessfulSample && state.inflight === 0 &&
@@ -169,7 +169,8 @@ export class V2LaneSet {
       return other !== state && !other.failed && recent !== undefined && this.#now() - recent < quietWindowMs &&
         other.performance.hasSuccessfulSample && other.performance.bytesPerSecond > state.performance.bytesPerSecond * minimumRateRatio
     })
-    return { usefulBytes: useful.bytes, unhelpful }
+    return { usefulBytes: useful.bytes, unhelpful,
+      busyMilliseconds: state.performance.busyMilliseconds(this.#now()), pendingBytes: state.performance.pendingBytes }
   }
 
   eligibleSize(routes: V2BlockRouteEligibility): number {

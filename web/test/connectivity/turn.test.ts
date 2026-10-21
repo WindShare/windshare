@@ -109,7 +109,7 @@ it('retries readiness and useful reports across a temporary control-lane failure
     },
   } as unknown as V2ReceiverSessionRuntime
   const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
-    open: () => undefined, retire: async () => undefined, measure: () => ({ usefulBytes, unhelpful: false }) })
+    open: () => undefined, retire: async () => undefined, measure: () => ({ usefulBytes, unhelpful: false, busyMilliseconds: 0, pendingBytes: 0 }) })
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receiver.setDemand(true)
   receive(encodeTurnControl(grant))

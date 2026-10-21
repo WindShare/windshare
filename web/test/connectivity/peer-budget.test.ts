@@ -25,11 +25,11 @@ describe('selected pair classification', () => {
     const stats = new Map([
       ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
       ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote', currentRoundTripTime: 0.025 }],
-      ['local', { id: 'local', candidateType: 'relay', protocol: 'udp', address: '2001:db8::1', usernameFragment: 'private-credential' }],
+      ['local', { id: 'local', candidateType: 'relay', protocol: 'udp', relayProtocol: 'tls', address: '2001:db8::1', usernameFragment: 'private-credential' }],
       ['remote', { id: 'remote', candidateType: 'srflx' }],
     ]) as unknown as RTCStatsReport
     const selected = selectedPairFact(stats, undefined, 0, 100)
-    expect(selected?.fact).toMatchObject({ route: 'turn', rttMs: 25, family: 'ipv6', ageMs: 0 })
+    expect(selected?.fact).toMatchObject({ route: 'turn', protocol: 'udp', clientToTurnProtocol: 'tls', rttMs: 25, family: 'ipv6', ageMs: 0 })
     expect(JSON.stringify(selected)).not.toContain('private-credential')
     expect(selectedPairFact(stats, 'pair', 100, 150)?.fact.ageMs).toBe(50)
     expect(selectedPairFact(new Map() as unknown as RTCStatsReport, undefined, 0, 0)).toBeUndefined()

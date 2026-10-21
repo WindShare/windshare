@@ -224,6 +224,7 @@ describe('direct weekly network fixtures', () => {
       operationId: 'chromium-turn-route-server',
       milestone: 'listener-ready',
       url: 'turn:127.0.0.1:34781?transport=udp',
+      tcpUrl: 'turn:127.0.0.1:34781?transport=tcp',
       relayAddress: '192.0.2.10',
       username: 'windshare-browser',
       credential: 'windshare-local-turn',
@@ -237,6 +238,7 @@ describe('direct weekly network fixtures', () => {
       operationId: 'chromium-turn-route-server',
       milestone: 'listener-ready',
       url: 'turn:192.0.2.1:34781?transport=udp',
+      tcpUrl: 'turn:192.0.2.1:34781?transport=tcp',
       relayAddress: '192.0.2.10',
       username: 'windshare-browser',
       credential: 'windshare-local-turn',
@@ -248,6 +250,7 @@ describe('direct weekly network fixtures', () => {
       milestone: 'listener-ready',
       url: 'turn:127.0.0.1:34781?transport=udp',
       relayAddress: '127.0.0.1',
+      tcpUrl: 'turn:127.0.0.1:34781?transport=tcp',
       username: 'windshare-browser',
       credential: 'windshare-local-turn',
     }))).toThrow(/usable owned IPv4 route/u)

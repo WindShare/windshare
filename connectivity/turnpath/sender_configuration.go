@@ -32,17 +32,18 @@ func (s *Sender) refreshConfiguration(ctx context.Context) {
 		}
 		delete(previous, profile.Identity)
 		if current.profile.Revision != profile.Revision {
-			if current.cancel != nil {
-				current.cancel()
+			if current.issuance != nil {
+				current.issuance.cancel()
 			}
 			current.retryAt = time.Time{}
+			current.selection = transportSelection{}
 		}
 		current.profile = profile
 		services = append(services, current)
 	}
 	for _, removed := range previous {
-		if removed.cancel != nil {
-			removed.cancel()
+		if removed.issuance != nil {
+			removed.issuance.cancel()
 		}
 		for _, path := range []*delegation{removed.current, removed.pending} {
 			if path != nil {
@@ -64,8 +65,12 @@ func (s *Sender) discardReason(result issued) string {
 		return "demand_superseded"
 	case !s.config.Now().Before(s.demandUntil):
 		return "demand_ended"
-	case result.requestCancellation != nil:
+	case errors.Is(context.Cause(result.request.ctx), context.Canceled):
 		return "request_canceled"
+	case result.predecessor != ([16]byte{}) && (result.service.current == nil || result.service.current.grant.PathID != result.predecessor):
+		return "predecessor_retired"
+	case result.trial != nil && (result.trial.localNetwork != s.networkGeneration || result.trial.remoteNetwork != result.service.selection.remoteNetwork):
+		return "evaluation_scope_changed"
 	default:
 		return ""
 	}

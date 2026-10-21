@@ -24,6 +24,7 @@ export interface LocalTurnReadyRecord {
   readonly operationId: 'chromium-turn-route-server'
   readonly milestone: 'listener-ready'
   readonly url: string
+  readonly tcpUrl: string
   readonly relayAddress: string
   readonly username: string
   readonly credential: string
@@ -93,11 +94,11 @@ export class LocalTurnServer {
       if (ready.sharedSecret !== undefined) this.#ownerConfiguration = {
         accounts: [{ id: 'local', provider: 'coturn', issuer: 'coturn', local_budget_bytes: 0,
           credentials: { shared_secret: ready.sharedSecret, lifetime_seconds: 60 } }],
-        profiles: [{ id: 'local-turn', account: 'local', urls: [ready.url] }],
+        profiles: [{ id: 'local-turn', account: 'local', urls: [ready.url, ready.tcpUrl] }],
       }
       this.#configuration = Object.freeze({
         iceServers: [Object.freeze({
-          urls: [ready.url],
+          urls: [ready.url, ready.tcpUrl],
           username: ready.username,
           credential: ready.credential,
         })],
@@ -156,6 +157,9 @@ export function parseLocalTurnReadyRecord(encoded: string): LocalTurnReadyRecord
   const port = Number(match?.[1])
   if (match === null || !Number.isSafeInteger(port) || port > 65_535) {
     throw new TypeError('Local TURN readiness URL is not an owned UDP loopback listener')
+  }
+  if (record.tcpUrl !== record.url.replace('transport=udp', 'transport=tcp')) {
+    throw new TypeError('Local TURN readiness TCP URL must belong to the same service')
   }
   if (!isUsableNonLoopbackIPv4(record.relayAddress)) {
     throw new TypeError('Local TURN readiness relay address is not a usable owned IPv4 route')

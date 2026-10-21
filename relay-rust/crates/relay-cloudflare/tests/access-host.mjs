@@ -47,7 +47,11 @@ export class AccessObject extends DurableObject {
         (path === '/api/turn/issue' || path === '/api/turn/renew')) {
       const grant = await response.json();
       grant.expires_at = Date.now() + Number(this.env.TURN_TEST_LIFETIME_MS);
-      return Response.json(grant, { status: response.status, headers: response.headers });
+      // The local edge must expose the same server clock used to shorten the
+      // credential lifetime; native clients never trust their own wall clock.
+      const headers = new Headers(response.headers);
+      headers.set('Date', new Date().toUTCString());
+      return Response.json(grant, { status: response.status, headers });
     }
     return response;
   }
