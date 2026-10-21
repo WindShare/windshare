@@ -12,9 +12,9 @@ import (
 
 type managedSource struct{}
 
-func (managedSource) Issue(context.Context, provider.Subject) (provider.Issued, error) {
+func (managedSource) Issue(context.Context, provider.Subject) (provider.Acquisition, error) {
 	credential, _ := iceconfig.Fixed("user", "password")
-	return provider.Issued{Credentials: credential, URLs: []string{"turn:localhost:3478"}}, nil
+	return provider.Acquisition{Credentials: credential, URLs: []string{"turn:localhost:3478"}}, nil
 }
 func TestManagedInventoryDoesNotConsumeManualQuotaAndFollowsSelection(t *testing.T) {
 	var config accountConfig

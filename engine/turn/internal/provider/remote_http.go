@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -83,15 +82,19 @@ func remoteCall(ctx context.Context, client HTTPClient, address, key string, bod
 	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusUnauthorized {
 		return ErrAuthorityWithdrawn
 	}
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("managed TURN request returned HTTP %d", response.StatusCode)
-	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaximumResponseBytes+1))
 	if err != nil {
 		return err
 	}
 	if len(data) > MaximumResponseBytes {
 		return ErrConfiguration
+	}
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusAccepted {
+		var failure struct {
+			Code string `json:"error"`
+		}
+		_ = json.Unmarshal(data, &failure)
+		return remoteFailure{status: response.StatusCode, code: failure.Code}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return ErrConfiguration

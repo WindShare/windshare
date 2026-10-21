@@ -17,8 +17,11 @@ func TestWatchUsesCurrentDeviceAuthorityWhileDiscoveryIsPending(t *testing.T) {
 			<-request.Context().Done()
 			return nil, request.Context().Err()
 		}
+		if request.URL.Path == "/api/turn/revoke" {
+			return reply(http.StatusOK, `{"state":"canceled"}`), nil
+		}
 		issuedWith <- request.Header.Get("Authorization")
-		return reply(http.StatusServiceUnavailable, "{}"), nil
+		return reply(http.StatusForbidden, "{}"), nil
 	})
 	config.Managed.Relays[0].AccessKey = "replacement-device"
 	if err := registry.discovery.cache.Save(t.Context(), config.Managed.Relays[0], Capability{ServiceID: "cf-service", Enabled: true}, time.Now()); err != nil {

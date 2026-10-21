@@ -46,7 +46,12 @@ impl LeaseRequest {
 }
 fn grant_response(lease: &Lease, status: u16) -> Result<Response> {
     let LeaseState::Active { grant } = &lease.state else {
-        return reply(&json!({"error":"lease_unavailable"}), 409);
+        let code = if matches!(lease.state, LeaseState::Issuing { .. }) {
+            "lease_pending"
+        } else {
+            "lease_unavailable"
+        };
+        return reply(&json!({"error":code}), 409);
     };
     if lease.usable_until <= io::now().0 {
         return reply(&json!({"error":"lease_unavailable"}), 409);
@@ -116,6 +121,12 @@ impl AccessObject {
         }
         if renewal != request.previous_lease_id.is_some() {
             return reply(&json!({"error":"invalid_request"}), 400);
+        }
+        if let Some(cancellation) = db.turn_cancellation(&request.lease_id)? {
+            if cancellation.subject != subject || cancellation.service_id != request.service_id {
+                return reply(&json!({"error":"access_denied"}), 403);
+            }
+            return reply(&json!({"error":"lease_canceled"}), 409);
         }
         if let Some(mut lease) = db.turn_lease(&request.lease_id)? {
             if !lease.owned_by(&subject) {

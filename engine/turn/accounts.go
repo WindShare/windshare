@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	MaximumProfiles     = 8
-	MaximumAccounts     = 8
-	MaximumActiveLeases = 32
-	IssuanceTimeout     = 15 * time.Second
+	MaximumProfiles          = 8
+	MaximumAccounts          = 8
+	MaximumOutstandingLeases = 32
+	IssuanceTimeout          = 15 * time.Second
 )
 
 var (
@@ -28,13 +28,10 @@ var (
 )
 
 type credentialSource interface {
-	Issue(context.Context, provider.Subject) (provider.Issued, error)
+	Issue(context.Context, provider.Subject) (provider.Acquisition, error)
 }
 type renewable interface {
-	Renew(context.Context, provider.Subject, provider.Issued) (provider.Issued, error)
-}
-type revocable interface {
-	Revoke(context.Context, provider.Issued) error
+	Renew(context.Context, provider.Subject, provider.Acquisition) (provider.Acquisition, error)
 }
 type usageReporter interface {
 	Query(context.Context, time.Time, time.Time) (provider.Usage, error)
@@ -64,6 +61,8 @@ type Event struct {
 	Subject                     turnpath.Subject
 	Revision                    uint64
 	Milestone                   string
+	ResourceID                  string
+	Attempt                     int
 	Reason                      string
 	Usage                       turnpath.Usage
 	ProviderRevocationConfirmed bool
@@ -74,6 +73,7 @@ type Status struct {
 	Usage               turnpath.Usage
 	ChargedBytes        uint64
 	ActiveLeases        int
+	PendingCleanup      int
 	Exhausted           bool
 	LastFailure         string
 }
@@ -81,23 +81,28 @@ type Status struct {
 // A ledger outlives configuration removal/re-import. A lease owns its issuer and
 // revocation signal separately, so re-enabling an account never revives old grants.
 type accountLedger struct {
-	usage       turnpath.Usage
-	charged     uint64
-	active      int
-	lastFailure string
+	usage          turnpath.Usage
+	charged        uint64
+	active         int
+	pendingCleanup int
+	lastFailure    string
 }
 type accountManager struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	observe  func(Event)
-	settings accountConfig
-	current  configuration
-	changed  chan struct{}
-	ledgers  map[string]*accountLedger
-	leases   map[*leaseState]struct{}
-	requests map[*issuance]struct{}
-	closed   bool
-	work     sync.WaitGroup
+	mu              sync.Mutex
+	now             func() time.Time
+	observe         func(Event)
+	settings        accountConfig
+	current         configuration
+	changed         chan struct{}
+	ledgers         map[string]*accountLedger
+	leases          map[*leaseState]struct{}
+	requests        map[*issuance]struct{}
+	cleanups        map[*cleanupState]struct{}
+	closed          bool
+	work            sync.WaitGroup
+	cleanupContext  context.Context
+	stopCleanup     context.CancelFunc
+	cleanupShutdown *time.Timer
 }
 
 func newAccountManager(config accountConfig) (*accountManager, error) {
@@ -110,7 +115,8 @@ func newAccountManager(config accountConfig) (*accountManager, error) {
 	}
 	m := &accountManager{now: config.Now, observe: config.Observe, current: prepared, settings: cloneConfig(config),
 		changed: make(chan struct{}), ledgers: make(map[string]*accountLedger),
-		leases: make(map[*leaseState]struct{}), requests: make(map[*issuance]struct{})}
+		leases: make(map[*leaseState]struct{}), requests: make(map[*issuance]struct{}), cleanups: make(map[*cleanupState]struct{})}
+	m.cleanupContext, m.stopCleanup = context.WithCancel(context.Background())
 	m.current.revision = 1
 	for id := range prepared.accounts {
 		m.ledgers[id] = &accountLedger{}
@@ -157,7 +163,8 @@ func (m *accountManager) Snapshot() []Status {
 		state := m.ledgers[id]
 		result = append(result, Status{AccountID: id, Provider: configured.Provider,
 			LocalBudgetBytes: configured.LocalBudgetBytes, Usage: state.usage, ChargedBytes: state.charged,
-			ActiveLeases: state.active, Exhausted: exhausted(configured, state), LastFailure: state.lastFailure})
+			ActiveLeases: state.active, PendingCleanup: state.pendingCleanup,
+			Exhausted: exhausted(configured, state), LastFailure: state.lastFailure})
 	}
 	return result
 }
@@ -170,6 +177,7 @@ func (m *accountManager) Close() error {
 	m.mu.Lock()
 	if !m.closed {
 		m.closed = true
+		m.cleanupShutdown = time.AfterFunc(IssuanceTimeout, m.stopCleanup)
 		for request := range m.requests {
 			request.cancel(ErrClosed)
 		}
@@ -181,18 +189,22 @@ func (m *accountManager) Close() error {
 	m.work.Wait()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupShutdown.Stop()
+	m.stopCleanup()
+	var failures []error
 	for id, ledger := range m.ledgers {
-		if ledger.active != 0 {
-			return fmt.Errorf("TURN account %s retained %d leases", id, ledger.active)
+		if ledger.active != 0 || ledger.pendingCleanup != 0 {
+			failures = append(failures, fmt.Errorf("TURN account %s retained %d leases and %d unresolved cleanups", id, ledger.active, ledger.pendingCleanup))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (m *accountManager) emit(event Event) {
 	slog.Debug("TURN account", "provider", event.Identity.Provider, "account", event.Identity.Account, "profile", event.Identity.Profile,
 		"session_id", fmt.Sprintf("%x", event.Subject.SessionID), "path_id", fmt.Sprintf("%x", event.Subject.PathID),
-		"config_revision", event.Revision, "milestone", event.Milestone, "reason", event.Reason, "useful_bytes", event.Usage.Useful,
+		"config_revision", event.Revision, "milestone", event.Milestone, "resource_id", event.ResourceID,
+		"attempt", event.Attempt, "reason", event.Reason, "useful_bytes", event.Usage.Useful,
 		"transport_sent", event.Usage.TransportSent, "transport_received", event.Usage.TransportReceived,
 		"provider_revocation_confirmed", event.ProviderRevocationConfirmed)
 	if m.observe != nil {

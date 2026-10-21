@@ -98,8 +98,11 @@ func TestConfigureRecognizesAccessKeyOnlyChangesAndOwnsManagedInputs(t *testing.
 			<-request.Context().Done()
 			return nil, request.Context().Err()
 		}
+		if request.URL.Path == "/api/turn/revoke" {
+			return reply(http.StatusOK, `{"state":"canceled"}`), nil
+		}
 		issuedWith <- request.Header.Get("Authorization")
-		return reply(http.StatusServiceUnavailable, "{}"), nil
+		return reply(http.StatusForbidden, "{}"), nil
 	})
 	settings.Managed.Relays[0].AccessKey = "replacement-device"
 	if err := cache.Save(t.Context(), settings.Managed.Relays[0], Capability{ServiceID: "cf-service", Enabled: true}, runtime.dependencies.Now()); err != nil {
