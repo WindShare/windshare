@@ -19,7 +19,7 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
     let intent = work(&fixture.stop(&mut relay));
     let record = next_record(&intent);
     for surviving in [&[key.sender(), key.receiver()][..], &[]] {
-        let (mut restored, turn) = Relay::restore(
+        let (mut restored, step) = Relay::restore(
             fixture.identity(2),
             Fixture::limits(),
             &Restore {
@@ -32,14 +32,14 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
         )
         .unwrap();
         assert!(
-            !turn
+            !step
                 .outputs
                 .iter()
                 .any(|output| matches!(output, Output::Work(_)))
         );
         if !surviving.is_empty() {
             assert!(
-                turn.outputs.iter().any(
+                step.outputs.iter().any(
                     |output| matches!(output, Output::Close(value) if *value == key.receiver())
                 )
             );
@@ -53,7 +53,7 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
                     .any(|output| matches!(output, Output::Work(_)))
             );
         }
-        let discards: Vec<_> = turn
+        let discards: Vec<_> = step
             .outputs
             .iter()
             .filter_map(|output| match output {

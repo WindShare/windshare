@@ -7,12 +7,12 @@ use windshare_relay_core::{
     flow::Counts,
     lifecycle::ConnectionRef,
     sessions::encode_descriptor,
-    share::{Control, Input, Output, Turn, Work},
+    share::{Control, Input, Output, RelayStep, Work},
 };
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
-    pub(super) fn outputs(&mut self, turn: Turn) -> Result<()> {
-        let mut outputs: VecDeque<_> = turn.outputs.into();
+    pub(super) fn outputs(&mut self, step: RelayStep) -> Result<()> {
+        let mut outputs: VecDeque<_> = step.outputs.into();
         loop {
             while let Some(output) = outputs.pop_front() {
                 if let Some(follow) = self.output(output)? {
@@ -31,9 +31,9 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 return Ok(());
             };
             let now = self.environment.now();
-            let turn = self.relay.handle(Input::Grant { flow, credit }, now);
-            outputs.extend(turn.outputs);
-            if let Some(error) = turn.refusal {
+            let step = self.relay.handle(Input::Grant { flow, credit }, now);
+            outputs.extend(step.outputs);
+            if let Some(error) = step.refusal {
                 // An offer is advisory. Expiry or counter exhaustion retires only
                 // this admission; its shared sender and siblings must stay live.
                 self.windows.remove(flow);
@@ -53,7 +53,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
-    fn output(&mut self, output: Output) -> Result<Option<Turn>> {
+    fn output(&mut self, output: Output) -> Result<Option<RelayStep>> {
         Ok(match output {
             Output::ChallengeNeeded(request) => Some(self.relay.handle(
                 Input::Challenge {
@@ -94,12 +94,17 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                         .handle(Input::Discarded(flow), self.environment.now()),
                 )
             }
+            Output::DeliveryReady(connection) => {
+                tracing::trace!(event = "delivery_schedule_ready", share = ?self.identity.share, ?connection);
+                self.windows.wake(connection);
+                None
+            }
             Output::Received(_) => bail!("received receipt without its ingress payload"),
             Output::Reload => bail!("kernel requires authoritative reload"),
         })
     }
 
-    fn send(&mut self, connection: ConnectionRef, control: Control) -> Result<Option<Turn>> {
+    fn send(&mut self, connection: ConnectionRef, control: Control) -> Result<Option<RelayStep>> {
         let probe = matches!(control, Control::ProbeAck(_));
         let flow = if let Control::Grant(grant) = &control {
             if self

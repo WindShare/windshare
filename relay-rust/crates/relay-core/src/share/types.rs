@@ -56,7 +56,9 @@ pub enum Input<'a> {
     /// Hibernating hosts must persist their generation allocator independently.
     Connected(ConnectionRef),
     /// Current host authorization bound to this exact fresh registration.
-    Register(crate::access::RegistrationGrant),
+    Register(crate::access::RegistrationAuthorization),
+    /// A wire header outside the supported inbound protocol vocabulary.
+    Unsupported(ConnectionRef),
     /// Host-authenticated administration is independent of sender signatures.
     Terminate {
         credential: [u8; 16],
@@ -176,6 +178,9 @@ pub enum Output {
     },
     /// Metadata receipt only. Payload ownership never moves into the engine.
     Received(ReceivedFrame),
+    /// Revisit this destination's windows after validated feedback releases capacity.
+    /// This is a scheduling notification, never permission to send without a grant.
+    DeliveryReady(ConnectionRef),
     /// Drop unsubmitted payloads, then report Discarded even if the socket is gone.
     Discard(FlowKey),
     /// Request transport closure. Report Disconnected when communication ends;
@@ -204,10 +209,10 @@ pub enum Control {
     Stopped(Stopped),
 }
 
-/// Outputs are ordered within a turn. Independent connections may execute in parallel.
+/// Outputs are ordered within a step. Independent connections may execute in parallel.
 #[derive(Debug, Default)]
 #[must_use]
-pub struct Turn {
+pub struct RelayStep {
     pub outputs: Vec<Output>,
     pub deadline: Option<UnixMillis>,
     /// Invalid input or failed host work. Retired/collected session ingress is

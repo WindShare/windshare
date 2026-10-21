@@ -1,4 +1,3 @@
-pub const CONTROL_LIFETIME_MS: u64 = 30_000;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};

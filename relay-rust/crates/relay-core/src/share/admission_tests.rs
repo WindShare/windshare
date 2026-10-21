@@ -22,7 +22,7 @@ fn bounded(fixture: &Fixture, business: usize, controls: usize) -> Relay {
     .0
 }
 
-fn finish_stop(relay: &mut Relay, initial: Turn, now: UnixMillis) -> bool {
+fn finish_stop(relay: &mut Relay, initial: RelayStep, now: UnixMillis) -> bool {
     let mut pending: VecDeque<_> = initial.outputs.into();
     let mut acknowledged = false;
     while let Some(output) = pending.pop_front() {
@@ -35,9 +35,9 @@ fn finish_stop(relay: &mut Relay, initial: Turn, now: UnixMillis) -> bool {
             } => {
                 assert_eq!(relay.lifecycle.phase(), Phase::Stopped);
                 acknowledged = true;
-                Turn::default()
+                RelayStep::default()
             }
-            _ => Turn::default(),
+            _ => RelayStep::default(),
         };
         pending.extend(next.outputs);
     }
@@ -311,7 +311,7 @@ fn lost_control_records_never_create_payload_debt_and_terminal_sockets_are_reclo
     let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
     let manifest = relay.checkpoint_manifest().unwrap();
     let missing = Checkpoint::from_connections(&manifest, Vec::new(), relay.limits).unwrap();
-    let (restored, turn) = Relay::restore(
+    let (restored, step) = Relay::restore(
         fixture.identity(2),
         relay.limits,
         &Restore {
@@ -324,14 +324,14 @@ fn lost_control_records_never_create_payload_debt_and_terminal_sockets_are_reclo
     )
     .unwrap();
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
     );
     assert_eq!(restored.connection_usage(), ConnectionUsage::default());
-    relay.close(connection(1), &mut Turn::default());
+    relay.close(connection(1), &mut RelayStep::default());
     let checkpoint = relay.checkpoint().unwrap();
-    let (_, turn) = Relay::restore(
+    let (_, step) = Relay::restore(
         fixture.identity(2),
         relay.limits,
         &Restore {
@@ -344,7 +344,7 @@ fn lost_control_records_never_create_payload_debt_and_terminal_sockets_are_reclo
     )
     .unwrap();
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
     );

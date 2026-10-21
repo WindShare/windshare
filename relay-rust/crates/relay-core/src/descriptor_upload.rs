@@ -8,7 +8,7 @@ use crate::{
     wire::{FrameError, Magic, open_reserved},
 };
 
-const MAGIC: Magic = *b"WS2U";
+pub(crate) const MAGIC: Magic = *b"WS2U";
 
 /// Largest sealed descriptor a relay stores, shared with every client.
 pub const MAX_DESCRIPTOR_BYTES: usize = 16 * 1024;

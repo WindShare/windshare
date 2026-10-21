@@ -1,8 +1,8 @@
 use super::*;
 use crate::error_frame::ErrorFrame;
 
-fn registered(turn: &Turn) -> bool {
-    turn.outputs.iter().any(|output| {
+fn registered(step: &RelayStep) -> bool {
+    step.outputs.iter().any(|output| {
         matches!(
             output,
             Output::Send {
@@ -18,15 +18,15 @@ fn join_error(fixture: &Fixture, relay: &mut Relay, slot: u64, at: UnixMillis) -
         relay.handle(Input::Connected(connection(slot)), at).refusal,
         None
     );
-    let turn = fixture.control(relay, connection(slot), "joinB64", at);
-    assert!(!turn.outputs.iter().any(|output| matches!(
+    let step = fixture.control(relay, connection(slot), "joinB64", at);
+    assert!(!step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::Descriptor { .. },
             ..
         }
     )));
-    turn.outputs
+    step.outputs
         .iter()
         .find_map(|output| match output {
             Output::Send {
@@ -49,8 +49,8 @@ fn join_preserves_absent_and_permanently_stopped_outcomes() {
     fixture.prepare_stop(&mut relay);
     let intent = work(&fixture.stop(&mut relay));
     let commit = work(&complete(&mut relay, &intent, fixture.at));
-    let turn = complete(&mut relay, &commit, fixture.at);
-    assert!(turn.outputs.iter().any(|output| matches!(
+    let step = complete(&mut relay, &commit, fixture.at);
+    assert!(step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::Stopped(_),

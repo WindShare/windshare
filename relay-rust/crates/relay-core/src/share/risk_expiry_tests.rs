@@ -30,22 +30,22 @@ fn lost_feedback_saturates_each_limit_then_one_tick_restores_admission() {
         // The blocked generation has the smaller ID: expiry must not depend on map order.
         let (first, first_flows) = fixture.join(&mut relay, 4);
         deliver(&fixture, &mut relay, first);
-        let turn = relay.handle(Input::Disconnected(first.receiver()), fixture.at);
-        discard_outputs(&mut relay, turn, fixture.at);
+        let step = relay.handle(Input::Disconnected(first.receiver()), fixture.at);
+        discard_outputs(&mut relay, step, fixture.at);
         let expires_at = fixture.at.saturating_add(RETENTION);
         fixture.at = fixture.at.saturating_add(LOSS_SPACING);
         let (blocked, _) = fixture.join(&mut relay, 3);
         deliver(&fixture, &mut relay, blocked);
-        let turn = relay.handle(Input::Disconnected(blocked.receiver()), fixture.at);
-        discard_outputs(&mut relay, turn, fixture.at);
+        let step = relay.handle(Input::Disconnected(blocked.receiver()), fixture.at);
+        discard_outputs(&mut relay, step, fixture.at);
         assert_eq!(relay.connection_usage().business, 3);
         assert_business_capacity_refused(&fixture, &mut relay, connection(5), fixture.at);
         download(&mut relay, healthy, healthy_flows[1], 2, fixture.at);
         let _ = relay.handle(Input::Tick, UnixMillis(expires_at.0 - 1));
         assert_eq!(relay.connection_usage().business, 3);
 
-        let turn = relay.handle(Input::Tick, expires_at);
-        assert!(turn.outputs.is_empty());
+        let step = relay.handle(Input::Tick, expires_at);
+        assert!(step.outputs.is_empty());
         assert_eq!(relay.connection_usage().business, 2);
         assert_eq!(relay.connection_usage().retired_generations, 1);
         assert_eq!(relay.connection_usage().residual, ONE_FRAME);
@@ -188,8 +188,8 @@ fn manifest_deadlines_survive_hibernation_and_lost_records_in_both_retirement_ph
             consume(&mut relay, healthy, 1, fixture.at);
             let (lost, _) = fixture.join(&mut relay, 3);
             deliver(&fixture, &mut relay, lost);
-            let turn = relay.handle(Input::Disconnected(lost.receiver()), fixture.at);
-            discard_outputs(&mut relay, turn, fixture.at);
+            let step = relay.handle(Input::Disconnected(lost.receiver()), fixture.at);
+            discard_outputs(&mut relay, step, fixture.at);
             let grace_end = fixture.at.saturating_add(LOSS_SPACING);
             let expiry = fixture.at.saturating_add(RETENTION);
             let start = if retired { grace_end } else { fixture.at };
@@ -214,7 +214,7 @@ fn manifest_deadlines_survive_hibernation_and_lost_records_in_both_retirement_ph
                     .collect();
                 let checkpoint =
                     Checkpoint::from_connections(&manifest, records, relay.limits).unwrap();
-                let (mut restored, turn) = Relay::restore(
+                let (mut restored, step) = Relay::restore(
                     fixture.identity(boot),
                     relay.limits,
                     &Restore {
@@ -226,7 +226,7 @@ fn manifest_deadlines_survive_hibernation_and_lost_records_in_both_retirement_ph
                     now,
                 )
                 .unwrap();
-                discard_outputs(&mut restored, turn, now);
+                discard_outputs(&mut restored, step, now);
                 let _ = restored.handle(Input::Disconnected(lost.receiver()), now);
                 assert_eq!(
                     restored.generations.retirement_state(&lost.receiver()),
@@ -239,7 +239,7 @@ fn manifest_deadlines_survive_hibernation_and_lost_records_in_both_retirement_ph
                 relay = restored;
             }
             let checkpoint = relay.checkpoint().unwrap();
-            let (mut restored, turn) = Relay::restore(
+            let (mut restored, step) = Relay::restore(
                 fixture.identity(5),
                 relay.limits,
                 &Restore {
@@ -251,7 +251,7 @@ fn manifest_deadlines_survive_hibernation_and_lost_records_in_both_retirement_ph
                 expiry,
             )
             .unwrap();
-            discard_outputs(&mut restored, turn, expiry);
+            discard_outputs(&mut restored, step, expiry);
             assert!(!restored.generations.contains(&lost.receiver()));
             assert_eq!(restored.connection_usage().business, 2);
             assert_eq!(restored.connection_usage().uncertain, Counts::ZERO);
@@ -281,8 +281,8 @@ fn expiry_does_not_refund_delivery_to_a_communicating_destination() {
             .refusal,
         None
     );
-    let turn = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
-    discard_outputs(&mut relay, turn, fixture.at);
+    let step = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
+    discard_outputs(&mut relay, step, fixture.at);
     let sender_ledger = ledger_of(&relay, key.sender()).checkpoint().unwrap();
     relay
         .enable_checkpoints(CHECKPOINT_BUDGET, fixture.at)

@@ -17,7 +17,7 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     activate(&mut relay, key, fixture.at);
     let encoded = relay.checkpoint().unwrap().encode();
     let checkpoint = Checkpoint::decode(&encoded, Fixture::limits()).unwrap();
-    let (mut restored, turn) = Relay::restore(
+    let (mut restored, step) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
@@ -29,9 +29,9 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
         fixture.at,
     )
     .unwrap();
-    assert!(turn.outputs.is_empty());
+    assert!(step.outputs.is_empty());
     assert_eq!(
-        turn.deadline,
+        step.deadline,
         Some(
             fixture
                 .at
@@ -164,13 +164,13 @@ fn publication_deadline_includes_final_durable_confirmation() {
     let mut relay = fixture.relay();
     let durable = fixture.begin_registration(&mut relay);
     let expired = UnixMillis(fixture.at.0 + REGISTRATION_BUDGET);
-    let turn = complete(&mut relay, &durable, expired);
+    let step = complete(&mut relay, &durable, expired);
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == connection(1)))
     );
-    assert!(!turn.outputs.iter().any(|output| matches!(
+    assert!(!step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::Registered(_),

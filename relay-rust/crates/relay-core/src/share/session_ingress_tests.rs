@@ -40,9 +40,9 @@ fn late_inputs(relay: &mut Relay, key: SessionKey, at: UnixMillis) {
             session: key.wire_id(),
         },
     ] {
-        let turn = relay.handle(input, at);
-        assert_eq!(turn.refusal, None);
-        assert!(turn.outputs.is_empty(), "{turn:?}");
+        let step = relay.handle(input, at);
+        assert_eq!(step.refusal, None);
+        assert!(step.outputs.is_empty(), "{step:?}");
         assert_eq!(relay.delivery_usage(key.sender()), usage);
         assert_eq!(
             sender_liveness(relay, key.sender()),
@@ -71,8 +71,8 @@ fn receiver_loss_discards_late_ingress_before_and_after_session_collection() {
             .is_some()
     );
     for flow in flows {
-        let turn = relay.handle(Input::Discarded(flow), later);
-        assert_eq!(turn.refusal, None);
+        let step = relay.handle(Input::Discarded(flow), later);
+        assert_eq!(step.refusal, None);
     }
     let _ = relay.handle(Input::Closed(retired.receiver()), later);
     assert!(!relay.sessions.entries().contains_key(&retired.wire_id()));
@@ -88,8 +88,8 @@ fn receiver_loss_discards_late_ingress_before_and_after_session_collection() {
     )));
     for source in [healthy.sender(), healthy.receiver()] {
         let received = receive_from(&mut relay, healthy, source, later);
-        let turn = relay.submit(&received, later, |_| Submission::Complete);
-        assert_eq!(turn.refusal, None);
+        let step = relay.submit(&received, later, |_| Submission::Complete);
+        assert_eq!(step.refusal, None);
     }
 }
 
@@ -106,21 +106,21 @@ fn expired_admission_discards_late_sender_confirmation_and_preserves_healthy_ses
         .session
         .deadline()
         .unwrap();
-    let turn = relay.handle(
+    let step = relay.handle(
         Input::Frame {
             source: expired.sender(),
             header: header(expired.wire_id()),
         },
         expiry,
     );
-    assert_eq!(turn.refusal, None);
+    assert_eq!(step.refusal, None);
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Discard(_)))
     );
     assert!(
-        !turn
+        !step
             .outputs
             .iter()
             .any(|output| matches!(output, Output::Received(_) | Output::Close(_)))
@@ -156,12 +156,12 @@ fn foreign_participants_and_unissued_session_ids_remain_refused() {
                 session: key.wire_id(),
             },
         ] {
-            let turn = relay.handle(input, fixture.at);
+            let step = relay.handle(input, fixture.at);
             assert_eq!(
-                turn.refusal,
+                step.refusal,
                 Some(Error::Session(crate::sessions::Refusal::WrongParticipant))
             );
-            assert!(turn.outputs.is_empty());
+            assert!(step.outputs.is_empty());
         }
     }
     let unissued = RelaySessionId::new(u64::MAX.to_be_bytes()).unwrap();
@@ -180,8 +180,8 @@ fn foreign_participants_and_unissued_session_ids_remain_refused() {
             session: unissued,
         },
     ] {
-        let turn = relay.handle(input, fixture.at);
-        assert_eq!(turn.refusal, Some(Error::UnknownSession));
-        assert!(turn.outputs.is_empty());
+        let step = relay.handle(input, fixture.at);
+        assert_eq!(step.refusal, Some(Error::UnknownSession));
+        assert!(step.outputs.is_empty());
     }
 }

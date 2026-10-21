@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub(crate) const STOP_INIT_MAGIC: Magic = *b"WS2X";
-const STOP_PROOF_MAGIC: Magic = *b"WS2V";
+pub(crate) const STOP_PROOF_MAGIC: Magic = *b"WS2V";
 const STOPPED_MAGIC: Magic = *b"WS2Y";
 
 const STOP_DOMAIN: &[u8] = b"windshare/v2 relay-stop\0";

@@ -3,11 +3,11 @@ use super::RuntimeStatus;
 use super::generations::Connection;
 use super::{
     Admission, ConnectionPhase, ConnectionRef, Control, Error, Observer, Output, RelayDecision,
-    ShareRelay, Turn,
+    RelayStep, ShareRelay,
 };
 use crate::{
     clock::UnixMillis,
-    handshake::{AdmissionRequest, Outcome, Step},
+    handshake::{AdmissionRequest, Outcome, Step as HandshakeStep},
     lifecycle::{Cancellation, Event},
     registration::RegistrationMode,
     sessions::{EndReason, Event as SessionEvent},
@@ -42,23 +42,32 @@ impl<O: Observer> ShareRelay<O> {
 
     pub(super) fn register(
         &mut self,
-        grant: crate::access::RegistrationGrant,
+        authorization: crate::access::RegistrationAuthorization,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
-        let connection = grant.connection();
-        let Some((_, init, attribution)) = grant.consume(now) else {
-            Self::send(
-                turn,
-                connection,
-                Control::Error(crate::error_frame::ErrorFrame::AccessDenied),
-            );
-            self.disconnect(connection, now, turn);
-            return Err(Error::Unavailable);
+        let connection = authorization.connection();
+        let (init, attribution) = match authorization.consume(now) {
+            Ok(authorized) => authorized,
+            Err(refusal) => {
+                self.trace(
+                    Some(connection),
+                    RelayDecision::RegistrationRefused(refusal),
+                    now,
+                );
+                Self::send(step, connection, Control::Error(refusal));
+                self.disconnect(connection, now, step);
+                return Err(Error::Unavailable);
+            }
         };
         self.generations
             .bind_registration(connection, attribution)?;
-        self.control(connection, &init.encode(), now, turn)
+        self.trace(
+            Some(connection),
+            RelayDecision::RegistrationAuthorized(attribution),
+            now,
+        );
+        self.control(connection, &init.encode(), now, step)
     }
 
     pub(super) fn control(
@@ -66,7 +75,7 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         frame: &[u8],
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
@@ -82,13 +91,13 @@ impl<O: Observer> ShareRelay<O> {
             && let Err(error) = self.admit_business(connection, now)
         {
             Self::send(
-                turn,
+                step,
                 connection,
                 Control::Error(crate::error_frame::ErrorFrame::Admission(
                     crate::error_frame::RetryAfter::IMMEDIATE,
                 )),
             );
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
             return Err(error);
         }
         if matches!(
@@ -97,16 +106,16 @@ impl<O: Observer> ShareRelay<O> {
                 ConnectionPhase::Established | ConnectionPhase::Stopping | ConnectionPhase::Closing
             )
         ) {
-            return self.connection_control(connection, frame, now, turn);
+            return self.connection_control(connection, frame, now, step);
         }
-        let step = match self.generations.receive_handshake(connection, frame, now) {
+        let handshake = match self.generations.receive_handshake(connection, frame, now) {
             Ok(step) => step,
             Err(error) => {
-                self.disconnect(connection, now, turn);
+                self.disconnect(connection, now, step);
                 return Err(error);
             }
         };
-        self.handshake_step(connection, step, now, turn);
+        self.handshake_step(connection, handshake, now, step);
         Ok(())
     }
 
@@ -115,17 +124,17 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         seed: crate::challenge::ChallengeSeed,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
-        let step = self
+        let handshake = self
             .generations
             .challenge(connection, seed, now)
             .inspect_err(|error| {
                 if *error == Error::InvalidCheckpoint {
-                    self.disconnect(connection, now, turn);
+                    self.disconnect(connection, now, step);
                 }
             })?;
-        self.handshake_step(connection, step, now, turn);
+        self.handshake_step(connection, handshake, now, step);
         Ok(())
     }
 
@@ -133,7 +142,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         connection: ConnectionRef,
         admission: Admission,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         if !self.generations.offer_admission(
             connection,
@@ -142,7 +151,7 @@ impl<O: Observer> ShareRelay<O> {
         ) {
             return;
         }
-        turn.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
+        step.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
             connection,
             incarnation: self.identity.incarnation,
         }));
@@ -151,24 +160,24 @@ impl<O: Observer> ShareRelay<O> {
     fn handshake_step(
         &mut self,
         connection: ConnectionRef,
-        step: Step<'_>,
+        handshake: HandshakeStep<'_>,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
-        match step {
-            Step::AwaitFrame => {}
-            Step::SendChallenge(bytes) => {
-                Self::send(turn, connection, Control::Challenge(bytes.to_vec()));
+        match handshake {
+            HandshakeStep::AwaitFrame => {}
+            HandshakeStep::SendChallenge(bytes) => {
+                Self::send(step, connection, Control::Challenge(bytes.to_vec()));
             }
-            Step::RequestAdmission(request) => {
-                self.request_admission(connection, request, now, turn);
+            HandshakeStep::RequestAdmission(request) => {
+                self.request_admission(connection, request, now, step);
             }
-            Step::Complete(outcome) => match outcome {
+            HandshakeStep::Complete(outcome) => match outcome {
                 Outcome::Publish(publication) => {
-                    self.lifecycle_event(Event::Publish(publication), Some(connection), now, turn);
+                    self.lifecycle_event(Event::Publish(publication), Some(connection), now, step);
                 }
                 Outcome::Resume(resumption) => {
-                    self.lifecycle_event(Event::Resume(resumption), Some(connection), now, turn);
+                    self.lifecycle_event(Event::Resume(resumption), Some(connection), now, step);
                 }
                 Outcome::Stop(authority) => self.lifecycle_event(
                     Event::Stop {
@@ -177,21 +186,21 @@ impl<O: Observer> ShareRelay<O> {
                     },
                     Some(connection),
                     now,
-                    turn,
+                    step,
                 ),
-                Outcome::Join(request) => self.join(request, now, turn),
+                Outcome::Join(request) => self.join(request, now, step),
             },
-            Step::Refuse(error) => {
-                Self::send(turn, connection, Control::Error(error));
-                self.disconnect(connection, now, turn);
+            HandshakeStep::Refuse(error) => {
+                Self::send(step, connection, Control::Error(error));
+                self.disconnect(connection, now, step);
             }
-            Step::Close(reason) => {
+            HandshakeStep::Close(reason) => {
                 self.trace(
                     Some(connection),
                     RelayDecision::HandshakeClosed(reason),
                     now,
                 );
-                self.disconnect(connection, now, turn);
+                self.disconnect(connection, now, step);
             }
         }
     }
@@ -201,19 +210,19 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         request: AdmissionRequest,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         let deadline = self
             .generations
             .connection(&connection)
             .and_then(Connection::handshake_deadline);
         let Some(deadline) = deadline else {
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
             return;
         };
         match request {
             AdmissionRequest::Registration(init) => {
-                if !self.declare_capacity(connection, init.receive_capacity(), now, turn) {
+                if !self.declare_capacity(connection, init.receive_capacity(), now, step) {
                     return;
                 }
                 let event = match init.mode() {
@@ -224,11 +233,11 @@ impl<O: Observer> ShareRelay<O> {
                             .and_then(Connection::fresh_attribution);
                         let Some(attribution) = attribution else {
                             Self::send(
-                                turn,
+                                step,
                                 connection,
                                 Control::Error(crate::error_frame::ErrorFrame::AccessDenied),
                             );
-                            self.disconnect(connection, now, turn);
+                            self.disconnect(connection, now, step);
                             return;
                         };
                         Event::Reserve {
@@ -244,13 +253,13 @@ impl<O: Observer> ShareRelay<O> {
                         deadline,
                     },
                 };
-                self.lifecycle_event(event, Some(connection), now, turn);
+                self.lifecycle_event(event, Some(connection), now, step);
             }
             AdmissionRequest::Stop(init) => {
                 if init.route().share_id() == self.identity.share {
-                    self.offer_admission(connection, Admission::Stop, turn);
+                    self.offer_admission(connection, Admission::Stop, step);
                 } else {
-                    self.disconnect(connection, now, turn);
+                    self.disconnect(connection, now, step);
                 }
             }
         }
@@ -261,7 +270,7 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         capacity: crate::flow::ReceiveCapacity,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> bool {
         let result = self
             .generations
@@ -272,18 +281,18 @@ impl<O: Observer> ShareRelay<O> {
             )
             .ok_or(Error::UnknownConnection)
             .and_then(|result| result.map_err(Error::Flow));
-        self.apply_delivery_close(connection, now, turn);
+        self.apply_delivery_close(connection, now, step);
         if let Err(error) = result {
             self.trace(Some(connection), RelayDecision::Rejected(error), now);
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
             return false;
         }
         true
     }
 
-    pub(super) fn close(&mut self, connection: ConnectionRef, turn: &mut Turn) {
+    pub(super) fn close(&mut self, connection: ConnectionRef, step: &mut RelayStep) {
         if self.generations.close(connection) {
-            turn.outputs.push(Output::Close(connection));
+            step.outputs.push(Output::Close(connection));
         }
     }
 
@@ -291,7 +300,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         let Some(entry) = self.generations.connection(&connection) else {
             return;
@@ -300,7 +309,7 @@ impl<O: Observer> ShareRelay<O> {
             return;
         }
         let reservation = entry.reservation();
-        self.close(connection, turn);
+        self.close(connection, step);
         if let Some(id) = reservation {
             self.lifecycle_event(
                 Event::Cancel {
@@ -309,10 +318,10 @@ impl<O: Observer> ShareRelay<O> {
                 },
                 None,
                 now,
-                turn,
+                step,
             );
         }
-        self.lifecycle_event(Event::OwnerDisconnected(connection), None, now, turn);
+        self.lifecycle_event(Event::OwnerDisconnected(connection), None, now, step);
         let receivers: Vec<_> = self
             .sessions
             .entries()
@@ -329,14 +338,19 @@ impl<O: Observer> ShareRelay<O> {
                     reason: EndReason::ReceiverDisconnected,
                 },
                 now,
-                turn,
+                step,
             );
         }
         self.trace(Some(connection), RelayDecision::Closing, now);
     }
 
-    pub(super) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
-        self.disconnect(connection, now, turn);
+    pub(super) fn detach(
+        &mut self,
+        connection: ConnectionRef,
+        now: UnixMillis,
+        step: &mut RelayStep,
+    ) {
+        self.disconnect(connection, now, step);
         self.generations.detach(connection, now);
         self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Disconnected, now);
@@ -348,13 +362,18 @@ impl<O: Observer> ShareRelay<O> {
         }
     }
 
-    pub(super) fn closed(&mut self, connection: ConnectionRef, now: UnixMillis, turn: &mut Turn) {
-        self.detach(connection, now, turn);
+    pub(super) fn closed(
+        &mut self,
+        connection: ConnectionRef,
+        now: UnixMillis,
+        step: &mut RelayStep,
+    ) {
+        self.detach(connection, now, step);
         let affected = self
             .generations
             .release(connection, now, &mut self.observer);
         for key in affected {
-            self.collect_session(key, now, turn);
+            self.collect_session(key, now, step);
         }
         self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Closed, now);

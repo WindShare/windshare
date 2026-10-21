@@ -107,7 +107,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 Ordering::Release,
             );
             let wake = self.wake();
-            let turn = tokio::select! {
+            let step = tokio::select! {
                 event = self.inbox.recv() => {
                     let Some(event) = event else { return Ok(()); };
                     self.event(event)?;
@@ -138,7 +138,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     self.relay.handle(input, self.environment.now())
                 }
             };
-            self.outputs(turn)?;
+            self.outputs(step)?;
         }
     }
 

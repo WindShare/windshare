@@ -170,9 +170,9 @@ fn control_and_session_deadlines_keep_the_global_tie_order() {
         Some((expiry, Key::Handshake(control)))
     );
 
-    let turn = relay.handle(Input::Tick, expiry);
-    assert_eq!(turn.refusal, None);
-    assert!(matches!(turn.outputs.first(), Some(Output::Close(value)) if *value == control));
+    let step = relay.handle(Input::Tick, expiry);
+    assert_eq!(step.refusal, None);
+    assert!(matches!(step.outputs.first(), Some(Output::Close(value)) if *value == control));
     assert_eq!(
         relay.sessions.entries()[&key.wire_id()].session.phase(),
         crate::sessions::Phase::Retired

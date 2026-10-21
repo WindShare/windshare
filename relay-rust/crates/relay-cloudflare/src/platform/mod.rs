@@ -18,7 +18,11 @@ use recovery::Ready;
 use serde_json::json;
 use std::cell::{Cell, RefCell};
 use storage::{IMAGE, api};
-use windshare_relay_core::share::Input;
+use windshare_relay_core::{
+    access::{RegistrationDecision, RegistrationRequest},
+    ingress::{Control, FrameKind},
+    share::Input,
+};
 use worker::{
     DurableObject, Env, Method, Request, Response, Result, State, WebSocket,
     WebSocketIncomingMessage, WebSocketPair, durable_object,
@@ -159,23 +163,12 @@ impl ShareRelayObject {
     async fn registration_access(
         &self,
         ws: &WebSocket,
-        message: &WebSocketIncomingMessage,
-        connection: windshare_relay_core::lifecycle::ConnectionRef,
-    ) -> crate::runtime::RegistrationAccess {
-        use crate::runtime::RegistrationAccess;
-        use windshare_relay_core::registration::{RegisterInit, RegistrationMode};
-        let WebSocketIncomingMessage::Binary(bytes) = message else {
-            return RegistrationAccess::Denied;
-        };
-        let Ok(init) = RegisterInit::decode(bytes) else {
-            return RegistrationAccess::Denied;
-        };
-        if init.mode() != RegistrationMode::Fresh {
-            return RegistrationAccess::Denied;
-        }
+        request: &RegistrationRequest,
+    ) -> RegistrationDecision {
+        let connection = request.connection();
         // Authorization records drive revocation. Bind their target before any
         // remote side effect, using the object's restored identity as authority.
-        let route = init.registration().route();
+        let route = request.registration().route();
         let matches_object = matches!(&*self.loaded.borrow(), Loaded::Ready(ready)
             if route.share_id() == ready.identity.share);
         if !matches_object {
@@ -185,7 +178,7 @@ impl ShareRelayObject {
                 "operation_id":persistence::tag(connection),
                 "share_id":access::text_id(route.share_id().as_bytes())})
             );
-            return RegistrationAccess::Denied;
+            return RegistrationDecision::Denied;
         }
         let digest = self
             .state
@@ -193,9 +186,9 @@ impl ShareRelayObject {
             .iter()
             .find_map(|tag| tag.strip_prefix(access::CREDENTIAL_TAG).map(str::to_string));
         let Some(digest) = digest else {
-            return RegistrationAccess::Denied;
+            return RegistrationDecision::Denied;
         };
-        let body = json!({"digest":digest, "share_id":access::text_id(init.registration().route().share_id().as_bytes()),
+        let body = json!({"digest":digest, "share_id":access::text_id(request.registration().route().share_id().as_bytes()),
             "operation_id":persistence::tag(connection)});
         let resolve = async {
             let request = Request::new_with_init(
@@ -206,15 +199,15 @@ impl ShareRelayObject {
             )?;
             let mut response = access::fetch(&self.env, request).await?;
             if response.status_code() == 403 {
-                return Ok(RegistrationAccess::Denied);
+                return Ok(RegistrationDecision::Denied);
             }
             if response.status_code() != 200 {
-                return Ok(RegistrationAccess::Unavailable);
+                return Ok(RegistrationDecision::Unavailable);
             }
             let value: serde_json::Value = response.json().await?;
             let attribution =
                 serde_json::from_value(value["attribution"].clone()).map_err(failure)?;
-            Ok::<_, worker::Error>(RegistrationAccess::Granted(attribution))
+            Ok::<_, worker::Error>(RegistrationDecision::Granted(attribution))
         };
         match resolve.await {
             Ok(access) => access,
@@ -222,9 +215,9 @@ impl ShareRelayObject {
                 worker::console_log!(
                     "{}",
                     json!({"event":"registration_access_unavailable",
-                    "operation_id":persistence::tag(connection),"share_id":access::text_id(init.registration().route().share_id().as_bytes()),"reason":error.to_string()})
+                    "operation_id":persistence::tag(connection),"share_id":access::text_id(request.registration().route().share_id().as_bytes()),"reason":error.to_string()})
                 );
-                RegistrationAccess::Unavailable
+                RegistrationDecision::Unavailable
             }
         }
     }
@@ -313,30 +306,54 @@ impl DurableObject for ShareRelayObject {
     ) -> Result<()> {
         self.initialize(None).map_err(failure)?;
         let connection = io::connection(&self.state, &ws).map_err(failure)?;
-        let access = self.registration_access(&ws, &message, connection).await;
-        let result = self.with_runtime(|ready, host| match message {
-            WebSocketIncomingMessage::Binary(bytes) => {
-                let access = match access {
-                    crate::runtime::RegistrationAccess::Granted(
-                        windshare_relay_core::access::Attribution::Credential {
-                            credential, ..
-                        },
-                    ) if ready
-                        .database
-                        .get::<bool>(&format!("access-stop:{}", access::text_id(&credential)))?
-                        .unwrap_or(false) =>
-                    {
-                        crate::runtime::RegistrationAccess::Denied
-                    }
-                    access => access,
-                };
-                ready.runtime.message(host, connection, bytes, access)
+        let result = match message {
+            WebSocketIncomingMessage::Binary(bytes)
+                if FrameKind::classify(&bytes) == FrameKind::Opaque =>
+            {
+                self.with_runtime(|ready, host| ready.runtime.forward(host, connection, bytes))
             }
-            WebSocketIncomingMessage::String(_) => {
+            WebSocketIncomingMessage::Binary(bytes) => {
+                let control = if bytes.len() > config::MAX_CONTROL_BYTES {
+                    Control::Ready(Input::Unsupported(connection))
+                } else {
+                    Control::inspect(connection, &bytes)
+                };
+                match control {
+                    Control::Ready(input) => {
+                        self.with_runtime(|ready, host| ready.runtime.event(host, input))
+                    }
+                    Control::Authorize(request) => {
+                        let decision = self.registration_access(&ws, &request).await;
+                        self.with_runtime(|ready, host| {
+                            let decision = match decision {
+                                RegistrationDecision::Granted(
+                                    windshare_relay_core::access::Attribution::Credential {
+                                        credential,
+                                        ..
+                                    },
+                                ) if ready
+                                    .database
+                                    .get::<bool>(&format!(
+                                        "access-stop:{}",
+                                        access::text_id(&credential)
+                                    ))?
+                                    .unwrap_or(false) =>
+                                {
+                                    RegistrationDecision::Denied
+                                }
+                                decision => decision,
+                            };
+                            let authorization = request.resolve(decision, host.now());
+                            ready.runtime.event(host, Input::Register(authorization))
+                        })
+                    }
+                }
+            }
+            WebSocketIncomingMessage::String(_) => self.with_runtime(|ready, host| {
                 host.close(connection)?;
                 ready.runtime.event(host, Input::Disconnected(connection))
-            }
-        });
+            }),
+        };
         self.finish(result).await
     }
 

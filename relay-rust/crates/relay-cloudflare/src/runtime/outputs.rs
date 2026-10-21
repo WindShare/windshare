@@ -6,12 +6,12 @@ use windshare_relay_core::{
     flow::Counts,
     observation::Observer,
     sessions::encode_descriptor,
-    share::{Control, Input, Output, Turn, WorkResult},
+    share::{Control, Input, Output, RelayStep, WorkResult},
 };
 
 impl<O: Observer> Runtime<O> {
-    pub(super) fn outputs(&mut self, host: &mut impl Host, turn: Turn) -> Result<()> {
-        let mut outputs: VecDeque<_> = turn.outputs.into();
+    pub(super) fn outputs(&mut self, host: &mut impl Host, step: RelayStep) -> Result<()> {
+        let mut outputs: VecDeque<_> = step.outputs.into();
         loop {
             while let Some(output) = outputs.pop_front() {
                 if let Some(follow) = self.output(host, output)? {
@@ -33,9 +33,9 @@ impl<O: Observer> Runtime<O> {
             let Some((flow, credit)) = offer else {
                 return Ok(());
             };
-            let turn = self.relay.handle(Input::Grant { flow, credit }, host.now());
-            outputs.extend(turn.outputs);
-            if turn.refusal.is_some() {
+            let step = self.relay.handle(Input::Grant { flow, credit }, host.now());
+            outputs.extend(step.outputs);
+            if step.refusal.is_some() {
                 // Time can advance between the advisory offer and its reservation.
                 // Retire only this session; a shared sender still serves its siblings.
                 outputs.extend(
@@ -53,7 +53,7 @@ impl<O: Observer> Runtime<O> {
         }
     }
 
-    fn output(&mut self, host: &mut impl Host, output: Output) -> Result<Option<Turn>> {
+    fn output(&mut self, host: &mut impl Host, output: Output) -> Result<Option<RelayStep>> {
         Ok(match output {
             Output::ChallengeNeeded(request) => Some(self.relay.handle(
                 Input::Challenge {
@@ -106,10 +106,13 @@ impl<O: Observer> Runtime<O> {
             }
             Output::Discard(flow) => {
                 // Payloads live only in the current message callback. Forwarding
-                // drops that payload before executing a turn that can discard it.
+                // drops that payload before executing a step that can discard it.
                 Some(self.relay.handle(Input::Discarded(flow), host.now()))
             }
             Output::Retry(_) | Output::Reload => bail!("authoritative recovery required"),
+            // This host already revisits its bounded ledgers after every event,
+            // including reconstruction from hibernation.
+            Output::DeliveryReady(_) => None,
             Output::Received(_) => bail!("received receipt without its ingress payload"),
         })
     }

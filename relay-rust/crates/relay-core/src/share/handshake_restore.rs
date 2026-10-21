@@ -1,6 +1,6 @@
 use super::generations::Connection;
 use super::{
-    ChallengeRequest, ConnectionPhase, Error, Output, Restore, ShareRelay, Turn,
+    ChallengeRequest, ConnectionPhase, Error, Output, RelayStep, Restore, ShareRelay,
     checkpoint::ConnectionRole, handshake_checkpoint::Step,
 };
 use crate::{challenge::ChallengeSeed, clock::UnixMillis, observation::Observer};
@@ -10,7 +10,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         restored: &Restore<'_>,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         let Some(checkpoint) = restored.checkpoint() else {
             return Ok(());
@@ -28,7 +28,7 @@ impl<O: Observer> ShareRelay<O> {
             if !transcript.applicable(self.stored) {
                 // A later owner must not become the incumbent of a challenge
                 // that was issued against an earlier owner before hibernation.
-                self.disconnect(snapshot.connection, now, turn);
+                self.disconnect(snapshot.connection, now, step);
                 continue;
             }
             let connection = snapshot.connection;
@@ -37,9 +37,9 @@ impl<O: Observer> ShareRelay<O> {
                 .ledger(&connection)
                 .and_then(crate::flow::ConnectionLedger::receive_capacity);
             self.generations.replay_handshake(connection, transcript)?;
-            let mut replay = Turn::default();
-            for step in &transcript.steps {
-                match step {
+            let mut replay = RelayStep::default();
+            for recorded in &transcript.steps {
+                match recorded {
                     Step::Frame { at, bytes } => {
                         self.control(connection, bytes, *at, &mut replay)?;
                     }
@@ -63,7 +63,7 @@ impl<O: Observer> ShareRelay<O> {
                         | ConnectionPhase::Admitting,
                     ) => {}
                     Some(ConnectionPhase::Closing) => {
-                        turn.outputs.extend(
+                        step.outputs.extend(
                             replay
                                 .outputs
                                 .drain(..)
@@ -88,7 +88,7 @@ impl<O: Observer> ShareRelay<O> {
                     .map(Connection::phase),
                 Some(ConnectionPhase::Admitting)
             ) {
-                turn.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
+                step.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
                     connection,
                     incarnation: self.identity.incarnation,
                 }));

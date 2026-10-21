@@ -38,14 +38,14 @@ impl Scenario {
             },
             at,
         );
-        let turn = relay.handle(
+        let step = relay.handle(
             Input::Control {
                 connection: connection(1),
                 frame: &fixture.bytes("descriptorUploadB64"),
             },
             at,
         );
-        let work = turn
+        let work = step
             .outputs
             .into_iter()
             .find_map(|out| match out {
@@ -68,14 +68,14 @@ impl Scenario {
             }
         )));
         let _ = relay.handle(Input::Connected(connection(3)), at);
-        let turn = relay.handle(
+        let step = relay.handle(
             Input::Control {
                 connection: connection(3),
                 frame: &fixture.bytes("joinB64"),
             },
             at,
         );
-        let session = turn
+        let session = step
             .outputs
             .iter()
             .find_map(|out| match out {
@@ -86,7 +86,7 @@ impl Scenario {
                 _ => None,
             })
             .unwrap();
-        let flow = turn
+        let flow = step
             .outputs
             .iter()
             .find_map(|out| match out {
@@ -106,14 +106,14 @@ impl Scenario {
     }
 
     fn grant(&mut self, frames: u64) {
-        let turn = self.relay.handle(
+        let step = self.relay.handle(
             Input::Grant {
                 flow: self.flow,
                 credit: Counts::new(frames, frames * u64::from(OpaqueHeader::MAX_ENCODED_BYTES)),
             },
             self.fixture.now(false),
         );
-        assert_eq!(turn.refusal, None);
+        assert_eq!(step.refusal, None);
     }
 
     fn receive(&mut self, payload: usize) -> (ReceivedFrame, Vec<u8>) {
@@ -121,15 +121,15 @@ impl Scenario {
         bytes.extend_from_slice(self.session.wire_id().as_bytes());
         bytes.extend_from_slice(&u32::try_from(payload).unwrap().to_be_bytes());
         bytes.resize(20 + payload, 7);
-        let turn = self.relay.handle(
+        let step = self.relay.handle(
             Input::Frame {
                 source: connection(1),
                 header: OpaqueHeader::decode(&bytes).unwrap(),
             },
             self.fixture.now(false),
         );
-        assert_eq!(turn.refusal, None);
-        let receipt = turn
+        assert_eq!(step.refusal, None);
+        let receipt = step
             .outputs
             .into_iter()
             .find_map(|out| match out {
@@ -145,11 +145,11 @@ impl Scenario {
         outbox.queue(receipt, bytes).unwrap();
     }
 
-    fn submit(&mut self, outbox: &mut Outbox) -> Option<Turn> {
+    fn submit(&mut self, outbox: &mut Outbox) -> Option<RelayStep> {
         outbox.submit_next(&mut self.relay, self.fixture.now(false))
     }
 
-    fn stop(&mut self) -> Turn {
+    fn stop(&mut self) -> RelayStep {
         self.relay.handle(
             Input::Control {
                 connection: connection(2),

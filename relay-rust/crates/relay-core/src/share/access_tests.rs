@@ -1,5 +1,5 @@
 use super::*;
-use crate::access::{Attribution, RegistrationGrant};
+use crate::access::{Attribution, RegistrationDecision, RegistrationRequest};
 use crate::{error_frame::ErrorFrame, identifiers::StopId};
 
 const OWNER: Attribution = Attribution::Credential {
@@ -10,19 +10,14 @@ const OWNER: Attribution = Attribution::Credential {
 fn attributed(f: &Fixture, relay: &mut Relay) -> Record {
     let sender = connection(1);
     let _ = relay.handle(Input::Connected(sender), f.at);
-    let init = RegisterInit::decode(&f.frame("registerInitB64")).unwrap();
-    let turn = relay.handle(
-        Input::Register(RegistrationGrant::new(
-            sender,
-            init,
-            OWNER,
-            UnixMillis(f.at.0 + REGISTRATION_BUDGET),
-        )),
+    let request = RegistrationRequest::from_frame(sender, &f.frame("registerInitB64")).unwrap();
+    let step = relay.handle(
+        Input::Register(request.resolve(RegistrationDecision::Granted(OWNER), f.at)),
         f.at,
     );
     let _ = relay.handle(
         Input::Challenge {
-            request: challenge(&turn),
+            request: challenge(&step),
             seed: challenge_seed(f.text("challengeIdB64"), f.text("challengeNonceB64")),
         },
         f.at,
@@ -33,19 +28,46 @@ fn attributed(f: &Fixture, relay: &mut Relay) -> Record {
     next_record(&publication)
 }
 #[test]
+fn unsupported_ingress_replies_and_closes_only_its_source() {
+    let f = Fixture::new();
+    let mut relay = f.relay();
+    for id in [1, 2] {
+        let _ = relay.handle(Input::Connected(connection(id)), f.at);
+    }
+    let step = relay.handle(Input::Unsupported(connection(1)), f.at);
+    assert!(step.outputs.iter().any(|output| matches!(
+        output,
+        Output::Send { connection: target, control: Control::Error(ErrorFrame::UnsupportedMode) }
+            if *target == connection(1)
+    )));
+    assert!(
+        step.outputs
+            .iter()
+            .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
+    );
+    let healthy = f.control(&mut relay, connection(2), "registerInitB64", f.at);
+    assert!(
+        healthy
+            .outputs
+            .iter()
+            .any(|output| matches!(output, Output::ChallengeNeeded(_)))
+    );
+}
+
+#[test]
 fn raw_registration_cannot_bypass_host_authorization() {
     let f = Fixture::new();
     let mut relay = f.relay();
     let sender = connection(1);
     let _ = relay.handle(Input::Connected(sender), f.at);
-    let turn = relay.handle(
+    let step = relay.handle(
         Input::Control {
             connection: sender,
             frame: &f.frame("registerInitB64"),
         },
         f.at,
     );
-    assert!(turn.outputs.iter().any(|output| matches!(
+    assert!(step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::Error(ErrorFrame::AccessDenied),
@@ -53,7 +75,7 @@ fn raw_registration_cannot_bypass_host_authorization() {
         }
     )));
     assert!(
-        !turn
+        !step
             .outputs
             .iter()
             .any(|output| matches!(output, Output::ChallengeNeeded(_) | Output::Work(_)))
@@ -65,19 +87,17 @@ fn grant_expires_and_cannot_authorize_another_connection_lifetime() {
     let mut relay = f.relay();
     let sender = connection(1);
     let _ = relay.handle(Input::Connected(sender), f.at);
-    let init = RegisterInit::decode(&f.frame("registerInitB64")).unwrap();
+    let request =
+        |target| RegistrationRequest::from_frame(target, &f.frame("registerInitB64")).unwrap();
     let expired = relay.handle(
-        Input::Register(RegistrationGrant::new(sender, init, OWNER, f.at)),
+        Input::Register(
+            request(sender).resolve(RegistrationDecision::Granted(OWNER), UnixMillis(0)),
+        ),
         f.at,
     );
     assert!(expired.refusal.is_some());
     let wrong = relay.handle(
-        Input::Register(RegistrationGrant::new(
-            connection(2),
-            init,
-            OWNER,
-            UnixMillis(f.at.0 + 1),
-        )),
+        Input::Register(request(connection(2)).resolve(RegistrationDecision::Granted(OWNER), f.at)),
         f.at,
     );
     assert_eq!(wrong.refusal, Some(Error::UnknownConnection));

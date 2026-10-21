@@ -8,7 +8,7 @@ use windshare_relay_core::{
 };
 
 impl<O: Observer> Runtime<O> {
-    pub(super) fn forward(
+    pub(crate) fn forward(
         &mut self,
         host: &mut impl Host,
         source: ConnectionRef,
@@ -19,15 +19,15 @@ impl<O: Observer> Runtime<O> {
             self.disconnect(host, source)?;
             return self.flush(host);
         };
-        let mut turn = self
+        let mut step = self
             .relay
             .handle(Input::Frame { source, header }, host.now());
-        let refused = turn.refusal.is_some();
-        let receipt = turn
+        let refused = step.refusal.is_some();
+        let receipt = step
             .outputs
             .iter()
             .position(|output| matches!(output, Output::Received(_)))
-            .map(|index| turn.outputs.remove(index));
+            .map(|index| step.outputs.remove(index));
         if let Some(Output::Received(receipt)) = receipt {
             // No await separates receive, permit recheck, accounting and send.
             // Failed sends retain their charge; the kernel retires the destination.
@@ -38,11 +38,11 @@ impl<O: Observer> Runtime<O> {
                     Submission::Uncertain
                 }
             });
-            turn.outputs.extend(submitted.outputs);
+            step.outputs.extend(submitted.outputs);
         }
         // Destroy the event-owned buffer before acknowledging any queue discard.
         drop(bytes);
-        self.outputs(host, turn)?;
+        self.outputs(host, step)?;
         if refused {
             self.disconnect(host, source)?;
         }

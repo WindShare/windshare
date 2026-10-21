@@ -15,7 +15,7 @@ use windshare_relay_core::{
     flow::{Counts, FlowKey, ReceivedFrame},
     lifecycle::ConnectionRef,
     observation::Observer,
-    share::{ShareRelay, Submission, Turn},
+    share::{RelayStep, ShareRelay, Submission},
 };
 
 mod admission;
@@ -112,7 +112,7 @@ impl Outbox {
         &mut self,
         relay: &mut ShareRelay<O>,
         now: UnixMillis,
-    ) -> Option<Turn> {
+    ) -> Option<RelayStep> {
         let next = self.pending.front()?;
         let slot = Arc::clone(&self.data_slots).try_acquire_owned().ok()?;
         let size = u32::try_from(next.bytes.len()).ok()?;

@@ -84,8 +84,8 @@ fn active(
     (key, flows, forward)
 }
 
-fn discard(relay: &mut Relay, turn: Turn, at: UnixMillis) {
-    for output in turn.outputs {
+fn discard(relay: &mut Relay, step: RelayStep, at: UnixMillis) {
+    for output in step.outputs {
         if let Output::Discard(flow) = output {
             assert_eq!(relay.handle(Input::Discarded(flow), at).refusal, None);
         }
@@ -121,7 +121,7 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
         .session
         .deadline();
     let checkpoint = without(&original, lost.receiver());
-    let (mut recovered, turn) = Relay::restore(
+    let (mut recovered, step) = Relay::restore(
         fixture.identity(2),
         original.limits,
         &Restore {
@@ -134,7 +134,7 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
     )
     .unwrap();
     assert_eq!(
-        turn.outputs
+        step.outputs
             .iter()
             .filter_map(|output| match output {
                 Output::Close(connection) => Some(*connection),
@@ -186,7 +186,7 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
             .refusal,
         Some(Error::UnknownConnection)
     );
-    discard(&mut recovered, turn, fixture.at);
+    discard(&mut recovered, step, fixture.at);
 
     let bootstrap = receive(&mut recovered, healthy, fixture.at);
     assert_eq!(
@@ -220,7 +220,7 @@ fn reconnect_after_recovery(
         let checkpoint =
             Checkpoint::decode(&recovered.checkpoint().unwrap().encode(), recovered.limits)
                 .unwrap();
-        let (next, turn) = Relay::restore(
+        let (next, step) = Relay::restore(
             fixture.identity(incarnation),
             recovered.limits,
             &Restore {
@@ -233,7 +233,7 @@ fn reconnect_after_recovery(
         )
         .unwrap();
         recovered = next;
-        discard(&mut recovered, turn, fixture.at);
+        discard(&mut recovered, step, fixture.at);
         assert_eq!(
             recovered
                 .generations
@@ -291,7 +291,7 @@ fn missing_record_risk_exhaustion_blocks_replacement_without_stopping_healthy_fl
     let (lost, _, _) = active(&fixture, &mut original, 2);
     let (healthy, flows, _) = active(&fixture, &mut original, 3);
     let checkpoint = without(&original, lost.receiver());
-    let (mut recovered, turn) = Relay::restore(
+    let (mut recovered, step) = Relay::restore(
         fixture.identity(2),
         original.limits,
         &Restore {
@@ -303,7 +303,7 @@ fn missing_record_risk_exhaustion_blocks_replacement_without_stopping_healthy_fl
         fixture.at,
     )
     .unwrap();
-    discard(&mut recovered, turn, fixture.at);
+    discard(&mut recovered, step, fixture.at);
     assert_eq!(recovered.connection_usage().business, 3);
     assert_business_capacity_refused(&fixture, &mut recovered, connection(4), fixture.at);
     assert_eq!(
@@ -384,7 +384,7 @@ fn losing_sender_delivery_state_retires_all_its_sessions_and_persists_owner_grac
     let (first, _, _) = active(&fixture, &mut original, 2);
     let (second, _, _) = active(&fixture, &mut original, 3);
     let checkpoint = without(&original, first.sender());
-    let (recovered, turn) = Relay::restore(
+    let (recovered, step) = Relay::restore(
         fixture.identity(2),
         original.limits,
         &Restore {
@@ -399,12 +399,12 @@ fn losing_sender_delivery_state_retires_all_its_sessions_and_persists_owner_grac
     assert!(recovered.sessions.entries().is_empty());
     for connection in [first.sender(), first.receiver(), second.receiver()] {
         assert!(
-            turn.outputs
+            step.outputs
                 .iter()
                 .any(|output| matches!(output, Output::Close(value) if *value == connection))
         );
     }
-    assert!(matches!(next_record(&work(&turn)), Record::Grace(_)));
+    assert!(matches!(next_record(&work(&step)), Record::Grace(_)));
     assert_eq!(
         recovered
             .delivery_usage(first.receiver())
@@ -427,11 +427,11 @@ fn losing_a_retired_record_uses_its_persisted_reservation_and_cannot_resurrect_i
     let mut original = relay(&fixture, 0, ONE);
     let stored = fixture.register(&mut original);
     let (lost, _, _) = active(&fixture, &mut original, 2);
-    let turn = original.handle(Input::Disconnected(lost.receiver()), fixture.at);
-    discard(&mut original, turn, fixture.at);
+    let step = original.handle(Input::Disconnected(lost.receiver()), fixture.at);
+    discard(&mut original, step, fixture.at);
     assert_eq!(original.connection_usage().residual, ONE);
     let checkpoint = without(&original, lost.receiver());
-    let (mut recovered, turn) = Relay::restore(
+    let (mut recovered, step) = Relay::restore(
         fixture.identity(2),
         original.limits,
         &Restore {
@@ -443,7 +443,7 @@ fn losing_a_retired_record_uses_its_persisted_reservation_and_cannot_resurrect_i
         fixture.at,
     )
     .unwrap();
-    discard(&mut recovered, turn, fixture.at);
+    discard(&mut recovered, step, fixture.at);
     assert_eq!(
         recovered.unavailable_reservation(lost.receiver()),
         Some(ONE)
@@ -476,7 +476,7 @@ fn duplicate_connection_events_preserve_exact_and_unavailable_responsibility() {
         } else {
             original.checkpoint().unwrap()
         };
-        let (mut recovered, turn) = Relay::restore(
+        let (mut recovered, step) = Relay::restore(
             fixture.identity(2),
             original.limits,
             &Restore {
@@ -488,7 +488,7 @@ fn duplicate_connection_events_preserve_exact_and_unavailable_responsibility() {
             fixture.at,
         )
         .unwrap();
-        discard(&mut recovered, turn, fixture.at);
+        discard(&mut recovered, step, fixture.at);
         let before = recovered.checkpoint().unwrap().encode();
         let usage = recovered.connection_usage();
         assert_eq!(

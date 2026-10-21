@@ -7,7 +7,6 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-const OPAQUE_MAGIC: [u8; 4] = *b"WS2O";
 const OPAQUE_HEADER_BYTES: u32 = 8 + 8 + 4;
 
 pub const DESCRIPTOR_HEADER_BYTES: usize = 8 + 8 + 4;
@@ -43,6 +42,7 @@ pub struct OpaqueHeader {
 }
 
 impl OpaqueHeader {
+    pub(crate) const MAGIC: [u8; 4] = *b"WS2O";
     /// A complete envelope includes its routing header and nonempty ciphertext.
     pub const MIN_ENCODED_BYTES: u32 = OPAQUE_HEADER_BYTES + 1;
     /// Maximum charge of one envelope to a delivery budget.
@@ -54,7 +54,7 @@ impl OpaqueHeader {
     ///
     /// Returns a `FrameError` for malformed or oversized envelopes.
     pub fn decode(encoded: &[u8]) -> Result<Self, FrameError> {
-        let mut body = open_reserved(encoded, OPAQUE_MAGIC)?;
+        let mut body = open_reserved(encoded, Self::MAGIC)?;
         let session = RelaySessionId::new(body.array()?).ok_or(FrameError::Field)?;
         let length = body.u32()?;
         if length == 0 || length > MAX_OPAQUE_CIPHERTEXT_BYTES {
