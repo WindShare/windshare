@@ -1,14 +1,24 @@
 use super::{Database, failure};
-use crate::turn::Lease;
+use crate::turn::{LEASE_LIFETIME_MS, Lease, Subject};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use worker::{Result, SqlStorageValue};
 
 const LEASE_PREFIX: &str = "turn_lease:";
 const RETENTION_MS: u64 = 60 * 60 * 1000;
+const CANCELLATION_PREFIX: &str = "turn_cancellation:";
+const CANCELLATION_RETENTION_MS: u64 = LEASE_LIFETIME_MS + RETENTION_MS;
 const LEASE_ROWS: &str = "key GLOB 'turn_lease:*'";
 const LIVE_ROWS: &str = "key GLOB 'turn_lease:*' AND json_extract(value,'$.state.state') IN ('issuing','withdrawing','active','revocation_pending')";
 const REVOCATION_ROWS: &str =
     "key GLOB 'turn_lease:*' AND json_extract(value,'$.state.state')='revocation_pending'";
+
+// An early cancellation has no provider grant or key and consumes no live lease.
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+pub struct TurnCancellation {
+    pub service_id: String,
+    pub subject: Subject,
+}
 
 pub struct LeaseCapacity {
     pub deployment: u64,
@@ -38,6 +48,29 @@ impl Database {
 
     pub fn turn_lease(&self, id: &str) -> Result<Option<Lease>> {
         self.get(&lease_key(id))
+    }
+
+    pub fn turn_cancellation(&self, id: &str) -> Result<Option<TurnCancellation>> {
+        self.get(&format!("{CANCELLATION_PREFIX}{id}"))
+    }
+
+    pub fn cancel_turn_issuance(
+        &self,
+        id: &str,
+        cancellation: &TurnCancellation,
+        now: u64,
+    ) -> Result<bool> {
+        if let Some(current) = self.turn_cancellation(id)? {
+            return Ok(current == *cancellation);
+        }
+        // Retain the terminal intent across caller cancellation, reordered HTTP
+        // requests and host restarts, without consuming live credential capacity.
+        self.put(
+            &format!("{CANCELLATION_PREFIX}{id}"),
+            cancellation,
+            Some(now.saturating_add(CANCELLATION_RETENTION_MS)),
+        )?;
+        Ok(true)
     }
 
     pub fn insert_turn_lease(&self, lease: &Lease) -> Result<()> {

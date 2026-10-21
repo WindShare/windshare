@@ -35,13 +35,16 @@ func TestCloudflareIssuanceRenewalAndConfirmedRevocation(t *testing.T) {
 				t.Fatal("unbounded provider request")
 			}
 			if strings.HasSuffix(request.URL.Path, "/revoke") {
+				if !strings.HasSuffix(request.URL.Path, "/issued-user/revoke") {
+					t.Fatal("cleanup used unrelated discovery authority")
+				}
 				return response(204, ""), nil
 			}
 			body, _ := io.ReadAll(request.Body)
 			if string(body) != `{"ttl":3600}` {
 				t.Fatalf("request %s", body)
 			}
-			return response(201, `{"iceServers":[{"urls":["stun:discovery.example:3478"]},{"urls":["turn:relay.example:3478?transport=udp","turns:relay.example:443?transport=tcp"],"username":"issued-user","credential":"issued-password"}]}`), nil
+			return response(201, `{"iceServers":[{"urls":["stun:discovery.example:3478"],"username":"unrelated-discovery-user","credential":"discovery-password"},{"urls":["turn:relay.example:3478?transport=udp","turns:relay.example:443?transport=tcp"],"username":"issued-user","credential":"issued-password"}]}`), nil
 		})})
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +61,8 @@ func TestCloudflareIssuanceRenewalAndConfirmedRevocation(t *testing.T) {
 	if err != nil || !fresh.Credentials.ExpiresAt().After(issued.Credentials.ExpiresAt()) {
 		t.Fatal("renewal failed", err)
 	}
-	if err := source.Revoke(context.Background(), issued); err != nil {
-		t.Fatal(err)
+	if outcome, err := issued.Cleanup.Revoke(context.Background()); err != nil || outcome != RevocationConfirmed {
+		t.Fatal(outcome, err)
 	}
 	if calls != 3 {
 		t.Fatal(calls)
@@ -72,7 +75,7 @@ func TestCloudflareFailuresAndCancellation(t *testing.T) {
 		if _, err := source.Issue(context.Background(), Subject{}); err == nil {
 			t.Fatal("accepted invalid provider reply")
 		}
-		if err := source.Revoke(context.Background(), Issued{}); err == nil {
+		if _, err := source.revoke(context.Background(), ""); err == nil {
 			t.Fatal("revoked absent credential")
 		}
 	}
@@ -114,7 +117,7 @@ func TestCoturnAndStaticCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := any(static).(interface {
-		Renew(context.Context, Subject, Issued) (Issued, error)
+		Renew(context.Context, Subject, Acquisition) (Acquisition, error)
 	}); ok {
 		t.Fatal("static falsely claims renewal")
 	}

@@ -25,12 +25,31 @@ type Subject struct {
 	PathID    [16]byte
 }
 
-type Issued struct {
+// Acquisition owns cleanup independently of usable credentials. Callers must retain
+// Cleanup even when issuance returns an error: a lost reply cannot undo remote work.
+type Acquisition struct {
 	Credentials iceconfig.Credentials
 	URLs        []string
-	// Remote leases retain their issuer identity and subject for authenticated cleanup.
-	LeaseID string
-	Subject Subject
+	Cleanup     *Cleanup
+	remote      *remoteRequest
+}
+
+type CleanupResult uint8
+
+const (
+	RevocationConfirmed CleanupResult = iota + 1
+	RevocationQueued
+	IssuanceCanceled
+	AuthorityExpired
+)
+
+// Cleanup pins the issuing authority and resource identity. ExpiresAt bounds
+// responsibility when the issuer remains unreachable; queued cleanup belongs to
+// the issuer and must never be reported as provider-confirmed revocation.
+type Cleanup struct {
+	ID        string
+	ExpiresAt time.Time
+	Revoke    func(context.Context) (CleanupResult, error)
 }
 
 // Optional interfaces are discovered at the consumer. Static passwords and
@@ -50,14 +69,14 @@ func NewStatic(credential iceconfig.Credentials, now func() time.Time) (*Static,
 	return &Static{credential: credential, now: now}, nil
 }
 
-func (source *Static) Issue(ctx context.Context, _ Subject) (Issued, error) {
+func (source *Static) Issue(ctx context.Context, _ Subject) (Acquisition, error) {
 	if err := ctx.Err(); err != nil {
-		return Issued{}, err
+		return Acquisition{}, err
 	}
 	if !source.credential.ValidAt(source.now()) {
-		return Issued{}, ErrExpired
+		return Acquisition{}, ErrExpired
 	}
-	return Issued{Credentials: source.credential}, nil
+	return Acquisition{Credentials: source.credential}, nil
 }
 
 func validLifetime(lifetime time.Duration) bool {

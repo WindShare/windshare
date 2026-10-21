@@ -76,10 +76,10 @@ func TestAccountBudgetSharedAcrossSharesAndIndependentProfiles(t *testing.T) {
 
 type blockingSource struct{ started chan struct{} }
 
-func (s blockingSource) Issue(ctx context.Context, _ provider.Subject) (provider.Issued, error) {
+func (s blockingSource) Issue(ctx context.Context, _ provider.Subject) (provider.Acquisition, error) {
 	close(s.started)
 	<-ctx.Done()
-	return provider.Issued{}, ctx.Err()
+	return provider.Acquisition{}, ctx.Err()
 }
 func TestCanceledIssuanceReturnsCapacity(t *testing.T) {
 	source := blockingSource{make(chan struct{})}
@@ -139,26 +139,28 @@ func TestCloseJoinsLiveLeaseRevocation(t *testing.T) {
 }
 
 type revocationFixture struct {
-	issued           provider.Issued
+	issued           provider.Acquisition
 	started, proceed chan struct{}
 }
 
-func (source *revocationFixture) Issue(context.Context, provider.Subject) (provider.Issued, error) {
-	return source.issued, nil
+func (source *revocationFixture) Issue(context.Context, provider.Subject) (provider.Acquisition, error) {
+	issued := source.issued
+	issued.Cleanup = &provider.Cleanup{ID: "fixture", ExpiresAt: time.Now().Add(time.Hour), Revoke: source.revoke}
+	return issued, nil
 }
-func (source *revocationFixture) Revoke(ctx context.Context, _ provider.Issued) error {
+func (source *revocationFixture) revoke(ctx context.Context) (provider.CleanupResult, error) {
 	close(source.started)
 	select {
 	case <-source.proceed:
-		return nil
+		return provider.RevocationConfirmed, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	}
 }
 
 func TestLocalShutdownDoesNotClaimProviderRevocation(t *testing.T) {
 	credentials, _ := iceconfig.Fixed("user", "password")
-	source := &revocationFixture{issued: provider.Issued{Credentials: credentials}, started: make(chan struct{}), proceed: make(chan struct{})}
+	source := &revocationFixture{issued: provider.Acquisition{Credentials: credentials}, started: make(chan struct{}), proceed: make(chan struct{})}
 	var mu sync.Mutex
 	var events []Event
 	m, err := newAccountManager(accountConfig{

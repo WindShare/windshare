@@ -20,24 +20,26 @@ type versionedSource struct {
 }
 
 func newVersionedSource(name string) *versionedSource {
-	return &versionedSource{name: name, revoked: make(chan string, MaximumActiveLeases)}
+	return &versionedSource{name: name, revoked: make(chan string, MaximumOutstandingLeases)}
 }
-func (s *versionedSource) Issue(context.Context, provider.Subject) (provider.Issued, error) {
+func (s *versionedSource) Issue(context.Context, provider.Subject) (provider.Acquisition, error) {
 	s.mu.Lock()
 	s.issued++
 	s.mu.Unlock()
 	credential, _ := iceconfig.Expiring(s.name, "password", time.Now().Add(time.Hour))
-	return provider.Issued{Credentials: credential}, nil
+	return provider.Acquisition{Credentials: credential, Cleanup: &provider.Cleanup{
+		ID: s.name, ExpiresAt: credential.ExpiresAt(),
+		Revoke: func(context.Context) (provider.CleanupResult, error) {
+			s.revoked <- s.name
+			return provider.RevocationConfirmed, nil
+		},
+	}}, nil
 }
-func (s *versionedSource) Renew(ctx context.Context, subject provider.Subject, _ provider.Issued) (provider.Issued, error) {
+func (s *versionedSource) Renew(ctx context.Context, subject provider.Subject, _ provider.Acquisition) (provider.Acquisition, error) {
 	s.mu.Lock()
 	s.renewed++
 	s.mu.Unlock()
 	return s.Issue(ctx, subject)
-}
-func (s *versionedSource) Revoke(_ context.Context, issued provider.Issued) error {
-	s.revoked <- issued.Credentials.Username()
-	return nil
 }
 func configurationFor(source credentialSource, budget uint64) accountConfig {
 	return accountConfig{Accounts: []account{{ID: "owner", Provider: "test", Source: source, LocalBudgetBytes: budget}},
@@ -152,8 +154,8 @@ func TestBudgetChangeAndAccountReimportNeverResetLedgerOrReviveLeases(t *testing
 
 type canceledProvider struct{}
 
-func (canceledProvider) Issue(context.Context, provider.Subject) (provider.Issued, error) {
-	return provider.Issued{}, context.Canceled
+func (canceledProvider) Issue(context.Context, provider.Subject) (provider.Acquisition, error) {
+	return provider.Acquisition{}, context.Canceled
 }
 
 func TestProviderCancellationDoesNotMasqueradeAsCallerCancellation(t *testing.T) {
@@ -172,7 +174,7 @@ type lateSource struct {
 	proceed chan struct{}
 }
 
-func (s *lateSource) Issue(ctx context.Context, subject provider.Subject) (provider.Issued, error) {
+func (s *lateSource) Issue(ctx context.Context, subject provider.Subject) (provider.Acquisition, error) {
 	s.started <- ctx
 	<-s.proceed
 	return s.versionedSource.Issue(ctx, subject)

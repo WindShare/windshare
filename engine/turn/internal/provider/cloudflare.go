@@ -64,7 +64,7 @@ func NewCloudflare(config CloudflareConfig) (*Cloudflare, error) {
 	return &Cloudflare{config}, nil
 }
 
-func (source *Cloudflare) Issue(ctx context.Context, _ Subject) (Issued, error) {
+func (source *Cloudflare) Issue(ctx context.Context, _ Subject) (Acquisition, error) {
 	ctx, cancel := context.WithTimeout(ctx, HTTPTimeout)
 	defer cancel()
 	started := source.config.Now()
@@ -72,20 +72,24 @@ func (source *Cloudflare) Issue(ctx context.Context, _ Subject) (Issued, error) 
 		TTL int64 `json:"ttl"`
 	}{int64(source.config.Lifetime / time.Second)})
 	if err != nil {
-		return Issued{}, err
+		return Acquisition{}, err
 	}
 	response, err := source.request(ctx, "credentials/generate-ice-servers", body)
 	if err != nil {
-		return Issued{}, err
+		return Acquisition{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
-		return Issued{}, fmt.Errorf("Cloudflare TURN issuance returned HTTP %d", response.StatusCode)
+		return Acquisition{}, fmt.Errorf("Cloudflare TURN issuance returned HTTP %d", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaximumResponseBytes+1))
 	if err != nil || len(data) > MaximumResponseBytes {
-		return Issued{}, errors.Join(errors.New("invalid Cloudflare TURN response size"), err)
+		return Acquisition{}, errors.Join(errors.New("invalid Cloudflare TURN response size"), err)
 	}
+	return source.decodeGrant(data, started)
+}
+
+func (source *Cloudflare) decodeGrant(data []byte, started time.Time) (Acquisition, error) {
 	var result struct {
 		ICEServers []struct {
 			URLs       []string `json:"urls"`
@@ -93,10 +97,10 @@ func (source *Cloudflare) Issue(ctx context.Context, _ Subject) (Issued, error) 
 			Credential string   `json:"credential"`
 		} `json:"iceServers"`
 	}
-	if err = json.Unmarshal(data, &result); err != nil {
-		return Issued{}, fmt.Errorf("decode Cloudflare TURN response: %w", err)
+	if err := json.Unmarshal(data, &result); err != nil {
+		return Acquisition{}, fmt.Errorf("decode Cloudflare TURN response: %w", err)
 	}
-	var issued Issued
+	var issued Acquisition
 	for _, server := range result.ICEServers {
 		for _, raw := range server.URLs {
 			// The response also contains discovery endpoints. An issuer cannot
@@ -104,47 +108,53 @@ func (source *Cloudflare) Issue(ctx context.Context, _ Subject) (Issued, error) 
 			if strings.HasPrefix(raw, "stun:") {
 				continue
 			}
+			if issued.Cleanup == nil && server.Username != "" {
+				username := server.Username
+				issued.Cleanup = &Cleanup{ID: username, ExpiresAt: source.config.Now().Add(source.config.Lifetime),
+					Revoke: func(ctx context.Context) (CleanupResult, error) { return source.revoke(ctx, username) }}
+			}
 			if iceconfig.ValidateRelayURL(raw) != nil || len(issued.URLs) >= iceconfig.MaximumURLs {
-				return Issued{}, errors.New("invalid Cloudflare TURN endpoint")
+				return issued, errors.New("invalid Cloudflare TURN endpoint")
 			}
 			if issued.Credentials.Kind() != 0 &&
 				(issued.Credentials.Username() != server.Username || issued.Credentials.Password() != server.Credential) {
-				return Issued{}, errors.New("Cloudflare returned conflicting TURN credentials")
+				return issued, errors.New("Cloudflare returned conflicting TURN credentials")
 			}
-			issued.Credentials, err = iceconfig.Expiring(server.Username, server.Credential, started.Add(source.config.Lifetime))
+			credential, err := iceconfig.Expiring(server.Username, server.Credential, started.Add(source.config.Lifetime))
 			if err != nil {
-				return Issued{}, err
+				return issued, err
 			}
+			issued.Credentials = credential
 			issued.URLs = append(issued.URLs, raw)
 		}
 	}
 	if len(issued.URLs) == 0 || !issued.Credentials.ValidAt(source.config.Now()) {
-		return Issued{}, errors.New("Cloudflare returned no usable TURN authority")
+		return issued, errors.New("Cloudflare returned no usable TURN authority")
 	}
 	return issued, nil
 }
 
-func (source *Cloudflare) Renew(ctx context.Context, subject Subject, _ Issued) (Issued, error) {
+func (source *Cloudflare) Renew(ctx context.Context, subject Subject, _ Acquisition) (Acquisition, error) {
 	return source.Issue(ctx, subject)
 }
 
-// Revoke returns success only after the provider confirms revocation. Closing a
+// revoke returns success only after the provider confirms revocation. Closing a
 // local connection alone cannot withdraw credentials delegated to a recipient.
-func (source *Cloudflare) Revoke(ctx context.Context, issued Issued) error {
+func (source *Cloudflare) revoke(ctx context.Context, username string) (CleanupResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, HTTPTimeout)
 	defer cancel()
-	if issued.Credentials.Username() == "" {
-		return ErrConfiguration
+	if username == "" {
+		return 0, ErrConfiguration
 	}
-	response, err := source.request(ctx, "credentials/"+url.PathEscape(issued.Credentials.Username())+"/revoke", nil)
+	response, err := source.request(ctx, "credentials/"+url.PathEscape(username)+"/revoke", nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("Cloudflare TURN revocation returned HTTP %d", response.StatusCode)
+		return 0, fmt.Errorf("Cloudflare TURN revocation returned HTTP %d", response.StatusCode)
 	}
-	return nil
+	return RevocationConfirmed, nil
 }
 
 func (source *Cloudflare) request(ctx context.Context, path string, body []byte) (*http.Response, error) {

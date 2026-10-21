@@ -2,7 +2,6 @@ package turn
 
 import (
 	"context"
-	"errors"
 	"math"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -13,11 +12,10 @@ import (
 type leaseState struct {
 	manager   *accountManager
 	account   *accountLedger
-	source    credentialSource
 	identity  iceconfig.Identity
 	subject   turnpath.Subject
 	revision  uint64
-	issued    provider.Issued
+	issued    provider.Acquisition
 	authority context.Context
 	cancel    context.CancelCauseFunc
 	usage     turnpath.Usage
@@ -73,33 +71,15 @@ func (l *leaseState) release() {
 	l.cancel(ErrClosed)
 	l.account.active--
 	delete(m.leases, l)
-	usage := l.usage
+	event := Event{Identity: l.identity, Subject: l.subject, Revision: l.revision,
+		Milestone: "local_path_stopped", Usage: l.usage, ResourceID: cleanupID(l.issued.Cleanup)}
+	cleanup := m.retainCleanupLocked(l.account, l.issued.Cleanup, event)
 	m.mu.Unlock()
-	m.emit(Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, Milestone: "local_path_stopped", Usage: usage})
-	go func() {
-		defer m.work.Done()
-		m.revoke(l.source, l.issued, l.identity, l.subject, l.revision)
-	}()
-}
-
-func (m *accountManager) revoke(source credentialSource, issued provider.Issued, identity iceconfig.Identity, subject turnpath.Subject, revision uint64) {
-	issuer, ok := source.(revocable)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), IssuanceTimeout)
-	defer cancel()
-	event := Event{Identity: identity, Subject: subject, Revision: revision, Milestone: "provider_revocation_confirmed"}
-	if err := issuer.Revoke(ctx, issued); err != nil {
-		event.Milestone = "provider_revocation_failed"
-		if errors.Is(err, provider.ErrRevocationPending) {
-			event.Milestone = "provider_revocation_pending"
-		}
-		event.Reason = err.Error()
-	} else {
-		event.ProviderRevocationConfirmed = true
-	}
 	m.emit(event)
+	if cleanup != nil {
+		go m.clean(cleanup)
+	}
+	m.work.Done()
 }
 
 func saturatingAdd(a, b uint64) uint64 {

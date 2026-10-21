@@ -33,7 +33,7 @@ func (m *accountManager) acquire(ctx context.Context, profileID string, subject 
 		admissionErr = ErrConfiguration
 	case exhausted(account, ledger):
 		admissionErr = ErrBudget
-	case ledger.active >= MaximumActiveLeases:
+	case ledger.active+ledger.pendingCleanup >= MaximumOutstandingLeases:
 		admissionErr = ErrCapacity
 	}
 	if admissionErr != nil {
@@ -81,18 +81,18 @@ func (m *accountManager) acquire(ctx context.Context, profileID string, subject 
 		if milestone == "issuance_failed" {
 			ledger.lastFailure = err.Error()
 		}
+		event := Event{Identity: identity, Subject: subject, Revision: revision, Milestone: milestone, Reason: err.Error(), ResourceID: cleanupID(issued.Cleanup)}
+		cleanup := m.retainCleanupLocked(ledger, issued.Cleanup, event)
 		m.mu.Unlock()
-		m.emit(Event{Identity: identity, Subject: subject, Revision: revision, Milestone: milestone, Reason: err.Error()})
-		if issued.Credentials.Kind() != 0 {
-			m.work.Go(func() {
-				m.revoke(account.Source, issued, identity, subject, revision)
-			})
+		m.emit(event)
+		if cleanup != nil {
+			go m.clean(cleanup)
 		}
 		return nil, err
 	}
 	ledger.lastFailure = ""
 	authority, revoke := context.WithCancelCause(context.Background())
-	state := &leaseState{manager: m, account: ledger, source: account.Source, identity: identity,
+	state := &leaseState{manager: m, account: ledger, identity: identity,
 		subject: subject, revision: revision, issued: issued, authority: authority, cancel: revoke}
 	m.leases[state] = struct{}{}
 	// Retain work until revocation completes; shutdown can safely join leases
@@ -106,11 +106,11 @@ func (m *accountManager) acquire(ctx context.Context, profileID string, subject 
 		}
 	}
 	lease := turnpath.NewLease(leaseConfig)
-	m.emit(Event{Identity: identity, Subject: subject, Revision: revision, Milestone: "credentials_issued"})
+	m.emit(Event{Identity: identity, Subject: subject, Revision: revision, Milestone: "credentials_issued", ResourceID: cleanupID(issued.Cleanup)})
 	return lease, nil
 }
 
-func issueCredentials(ctx context.Context, source credentialSource, subject turnpath.Subject, revision uint64, previous *leaseState) (provider.Issued, error) {
+func issueCredentials(ctx context.Context, source credentialSource, subject turnpath.Subject, revision uint64, previous *leaseState) (provider.Acquisition, error) {
 	providerSubject := provider.Subject{SessionID: subject.SessionID, PathID: subject.PathID}
 	// Renewal tokens belong to the issuer that created them. A new revision
 	// obtains fresh credentials instead of passing old tokens to a new source.
@@ -119,7 +119,7 @@ func issueCredentials(ctx context.Context, source credentialSource, subject turn
 	}
 	issuer, ok := source.(renewable)
 	if !ok {
-		return provider.Issued{}, ErrConfiguration
+		return provider.Acquisition{}, ErrConfiguration
 	}
 	return issuer.Renew(ctx, providerSubject, previous.issued)
 }

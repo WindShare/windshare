@@ -43,12 +43,12 @@ func NewCoturn(config CoturnConfig) (*Coturn, error) {
 	return &Coturn{config}, nil
 }
 
-func (source *Coturn) Issue(ctx context.Context, subject Subject) (Issued, error) {
+func (source *Coturn) Issue(ctx context.Context, subject Subject) (Acquisition, error) {
 	if err := ctx.Err(); err != nil {
-		return Issued{}, err
+		return Acquisition{}, err
 	}
 	if subject.SessionID == ([16]byte{}) || subject.PathID == ([16]byte{}) {
-		return Issued{}, ErrConfiguration
+		return Acquisition{}, ErrConfiguration
 	}
 	expires := source.config.Now().Add(source.config.Lifetime).Truncate(time.Second)
 	username := strconv.FormatInt(expires.Unix(), 10) + ":" +
@@ -56,9 +56,9 @@ func (source *Coturn) Issue(ctx context.Context, subject Subject) (Issued, error
 	mac := hmac.New(sha1.New, []byte(source.config.SharedSecret))
 	_, _ = mac.Write([]byte(username))
 	credential, err := iceconfig.Expiring(username, base64.StdEncoding.EncodeToString(mac.Sum(nil)), expires)
-	return Issued{Credentials: credential}, err
+	return Acquisition{Credentials: credential}, err
 }
 
-func (source *Coturn) Renew(ctx context.Context, subject Subject, _ Issued) (Issued, error) {
+func (source *Coturn) Renew(ctx context.Context, subject Subject, _ Acquisition) (Acquisition, error) {
 	return source.Issue(ctx, subject)
 }

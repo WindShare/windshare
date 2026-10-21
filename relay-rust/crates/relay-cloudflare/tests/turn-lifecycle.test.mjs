@@ -6,6 +6,7 @@ const LIFETIME_MS = 3_600_000;
 const HISTORY_COUNT = 1001;
 const DEPLOYMENT_LIMIT = 1000;
 const DEVICE_LIMIT = 32;
+const DEVICE_CANCELLATION_LIMIT = 30;
 const REVOCATION_BATCH = 16;
 const requestFor = service_id => ({
   service_id, lease_id: identifier(), session_id: identifier(), path_id: identifier(),
@@ -197,4 +198,74 @@ test('deployment admission counts reservations and pending revocations beyond hi
     await records(f, [{ ...live[0], state: { state: 'revoked' } }]);
     assert.equal((await f.device(owner.access_key, 'issue', requestFor(ready.serviceId))).status, 201);
   } finally { await f.dispose(); }
+});
+
+test('cancellation before issuance survives restart and cannot be claimed by another subject', { timeout: 60_000 }, async () => {
+  let issued = 0;
+  const f = await turnFixture({ provider: async request => {
+    if (request.url.endsWith('/revoke')) return new Response(null, { status: 204 });
+    return grant('credential-' + ++issued);
+  } });
+  try {
+    const ready = await f.provision();
+    const owner = await f.admin('credentials', { name: 'canceled issuance' });
+    const other = await f.admin('credentials', { name: 'other subject' });
+    const request = requestFor(ready.serviceId);
+    const cancel = () => f.device(owner.access_key, 'revoke', request);
+    assert.deepEqual(await cancel(), { status: 200, body: { state: 'canceled' } });
+    assert.deepEqual(await cancel(), { status: 200, body: { state: 'canceled' } });
+    assert.equal((await f.device(other.access_key, 'revoke', request)).status, 403);
+    assert.equal((await f.device(owner.access_key, 'revoke', { ...request, path_id: identifier() })).status, 403);
+    await f.restart();
+    assert.deepEqual(await f.device(owner.access_key, 'issue', request), { status: 409, body: { error: 'lease_canceled' } });
+    assert.equal((await f.device(other.access_key, 'issue', request)).status, 403);
+    assert.equal(issued, 0);
+    assert.deepEqual(await records(f), []);
+    const fresh = { ...request, lease_id: identifier() };
+    assert.equal((await f.device(owner.access_key, 'issue', fresh)).status, 201);
+    assert.equal(issued, 1);
+    assert.equal((await f.admin('turn/status')).leases.active, 1);
+    for (let index = 1; index < DEVICE_CANCELLATION_LIMIT; index++) {
+      assert.equal((await f.device(owner.access_key, 'revoke', requestFor(ready.serviceId))).status, 200);
+    }
+    assert.equal((await f.device(owner.access_key, 'revoke', requestFor(ready.serviceId))).status, 429);
+    assert.deepEqual(await cancel(), { status: 200, body: { state: 'canceled' } });
+    assert.equal((await f.device(owner.access_key, 'revoke', fresh)).status, 202);
+  } finally { await f.dispose(); }
+});
+
+test('replayed pending renewal and cancellation retain one reservation and preserve the old grant', { timeout: 60_000 }, async () => {
+  const started = latch(), release = latch();
+  const revoked = [];
+  let issued = 0;
+  const f = await turnFixture({ provider: async request => {
+    if (request.url.endsWith('/revoke')) {
+      revoked.push(decodeURIComponent(new URL(request.url).pathname.split('/').at(-2)));
+      return new Response(null, { status: 204 });
+    }
+    const number = ++issued;
+    if (number === 2) { started.resolve(); await release.promise; }
+    return grant('credential-' + number);
+  } });
+  try {
+    const ready = await f.provision();
+    const owner = await f.admin('credentials', { name: 'uncertain renewal' });
+    const original = requestFor(ready.serviceId);
+    const previous = await f.device(owner.access_key, 'issue', original);
+    assert.equal(previous.status, 201);
+    const renewal = { ...original, lease_id: identifier(), path_id: identifier(), previous_lease_id: original.lease_id };
+    const pending = f.device(owner.access_key, 'renew', renewal);
+    await Promise.race([started.promise, pending.then(result => { throw new Error('renewal ended early: ' + JSON.stringify(result)); })]);
+    assert.deepEqual(await f.device(owner.access_key, 'renew', renewal), { status: 409, body: { error: 'lease_pending' } });
+    assert.equal(issued, 2);
+    assert.equal((await records(f)).length, 2);
+    assert.equal((await f.device(owner.access_key, 'revoke', renewal)).status, 202);
+    release.resolve();
+    assert.equal((await pending).status, 403);
+    await f.advance('alarm');
+    assert.deepEqual(revoked, ['credential-2']);
+    assert.deepEqual((await f.device(owner.access_key, 'issue', original)).body, previous.body);
+    assert.equal((await f.device(owner.access_key, 'renew', renewal)).status, 409);
+    assert.equal(issued, 2);
+  } finally { release.resolve(); await f.dispose(); }
 });

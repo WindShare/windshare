@@ -1,9 +1,13 @@
+use super::super::storage::TurnCancellation;
 use super::{AccessObject, Credential, Database, credentials, io, provider, reply, trace};
 use serde_json::json;
 use worker::{Response, Result};
 
 const REVOCATION_BATCH: usize = 16;
 const REVOCATION_RETRY_MS: u64 = 5_000;
+const CANCELLATION_WINDOW_MS: u64 = 60_000;
+const DEVICE_CANCELLATIONS_PER_MINUTE: u32 = 30;
+const DEPLOYMENT_CANCELLATIONS_PER_MINUTE: u32 = 300;
 impl AccessObject {
     pub(super) fn turn_revoke(
         db: &Database,
@@ -20,7 +24,30 @@ impl AccessObject {
             Ok(owned)
         })?
         else {
-            return reply(&json!({"state":"expired"}), 200);
+            // Only new terminal intents allocate storage. Replays and cleanup
+            // of existing leases must remain available when this budget is full.
+            if db.turn_cancellation(&request.lease_id)?.is_none()
+                && !Self::admit_turn_cancellation(db, &subject.device, now)?
+            {
+                return reply(
+                    &json!({"error":"slow_down","retry_after_ms":CANCELLATION_WINDOW_MS}),
+                    429,
+                );
+            }
+            let cancellation = TurnCancellation {
+                service_id: request.service_id.clone(),
+                subject,
+            };
+            if !db.cancel_turn_issuance(&request.lease_id, &cancellation, now)? {
+                return reply(&json!({"error":"access_denied"}), 403);
+            }
+            trace(
+                "turn_issuance_canceled",
+                &json!({"lease_id":request.lease_id,"service_id":request.service_id,
+                    "device_id":cancellation.subject.device,"session_id":cancellation.subject.session,
+                    "path_id":cancellation.subject.path}),
+            );
+            return reply(&json!({"state":"canceled"}), 200);
         };
         if !owned {
             return reply(&json!({"error":"access_denied"}), 403);
@@ -31,6 +58,22 @@ impl AccessObject {
             if lease.pending() { 202 } else { 200 },
         )
     }
+    fn admit_turn_cancellation(db: &Database, device: &str, now: u64) -> Result<bool> {
+        Ok(Self::rate_limit_window(
+            db,
+            "turn:cancel:global",
+            DEPLOYMENT_CANCELLATIONS_PER_MINUTE,
+            now,
+            CANCELLATION_WINDOW_MS,
+        )? && Self::rate_limit_window(
+            db,
+            &format!("turn:cancel:{device}"),
+            DEVICE_CANCELLATIONS_PER_MINUTE,
+            now,
+            CANCELLATION_WINDOW_MS,
+        )?)
+    }
+
     pub(in crate::platform::access) fn withdraw_turn(
         db: &Database,
         device: Option<&str>,

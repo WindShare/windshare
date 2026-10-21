@@ -10,12 +10,14 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 )
 
-const MaximumServiceIDBytes = 48
-
-var (
-	ErrAuthorityWithdrawn = errors.New("managed TURN authority withdrawn")
-	ErrRevocationPending  = errors.New("TURN revocation durably queued")
+const (
+	MaximumServiceIDBytes = 48
+	// These bounds match the managed issuer's reservation and credential policy.
+	ManagedLeaseLifetime   = time.Hour
+	ManagedIssuanceTimeout = 30 * time.Second
 )
+
+var ErrAuthorityWithdrawn = errors.New("managed TURN authority withdrawn")
 
 // Capability is inventory, never a credential. Absence during a failed discovery
 // cannot invalidate a previously discovered service.
@@ -71,74 +73,86 @@ type remoteGrant struct {
 	ExpiresAt int64    `json:"expires_at"`
 }
 
-func (source *Remote) Issue(ctx context.Context, subject Subject) (Issued, error) {
+func (source *Remote) Issue(ctx context.Context, subject Subject) (Acquisition, error) {
 	return source.issue(ctx, subject, "")
 }
-func (source *Remote) Renew(ctx context.Context, subject Subject, previous Issued) (Issued, error) {
-	if previous.LeaseID == "" || previous.Subject.SessionID != subject.SessionID {
-		return Issued{}, ErrConfiguration
+func (source *Remote) Renew(ctx context.Context, subject Subject, previous Acquisition) (Acquisition, error) {
+	if previous.remote == nil || previous.remote.SessionID != base64.RawURLEncoding.EncodeToString(subject.SessionID[:]) {
+		return Acquisition{}, ErrConfiguration
 	}
-	return source.issue(ctx, subject, previous.LeaseID)
+	return source.issue(ctx, subject, previous.remote.LeaseID)
 }
 func (source *Remote) request(subject Subject, leaseID string) remoteRequest {
 	return remoteRequest{ServiceID: source.config.ServiceID, LeaseID: leaseID,
 		SessionID: base64.RawURLEncoding.EncodeToString(subject.SessionID[:]),
 		PathID:    base64.RawURLEncoding.EncodeToString(subject.PathID[:])}
 }
-func (source *Remote) issue(ctx context.Context, subject Subject, previous string) (Issued, error) {
+func (source *Remote) issue(ctx context.Context, subject Subject, previous string) (Acquisition, error) {
+	if err := ctx.Err(); err != nil {
+		return Acquisition{}, err
+	}
 	if subject.SessionID == ([16]byte{}) || subject.PathID == ([16]byte{}) {
-		return Issued{}, ErrConfiguration
+		return Acquisition{}, ErrConfiguration
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return Issued{}, err
+		return Acquisition{}, err
 	}
 	request := source.request(subject, base64.RawURLEncoding.EncodeToString(id[:]))
 	request.PreviousLeaseID = previous
+	// The owner exists before I/O, including cancellation and invalid replies.
+	// Include both request and issuer windows in the conservative cleanup bound.
+	acquisition := Acquisition{remote: &request, Cleanup: &Cleanup{
+		ID: request.LeaseID, ExpiresAt: source.config.Now().Add(HTTPTimeout + ManagedIssuanceTimeout + ManagedLeaseLifetime),
+		Revoke: func(ctx context.Context) (CleanupResult, error) {
+			return source.revoke(ctx, source.request(subject, request.LeaseID))
+		},
+	}}
 	path := "/issue"
 	if previous != "" {
 		path = "/renew"
 	}
-	var grant remoteGrant
-	if err := remoteCall(ctx, source.config.Client, source.base+path, source.config.AccessKey, request, &grant); err != nil {
-		return Issued{}, err
+	grant, err := source.resolve(ctx, path, request)
+	if err != nil {
+		return acquisition, err
 	}
 	if grant.ServiceID != request.ServiceID || grant.LeaseID != request.LeaseID ||
 		grant.SessionID != request.SessionID || grant.PathID != request.PathID {
-		return Issued{}, ErrConfiguration
+		return acquisition, ErrConfiguration
 	}
 	expires := time.UnixMilli(grant.ExpiresAt)
 	now := source.config.Now()
-	if !expires.After(now) || expires.After(now.Add(MaximumLifetime)) {
-		return Issued{}, ErrExpired
+	if !expires.After(now) || expires.After(now.Add(ManagedLeaseLifetime)) {
+		return acquisition, ErrExpired
 	}
 	credential, err := iceconfig.Expiring(grant.Username, grant.Password, expires)
 	if err != nil {
-		return Issued{}, err
+		return acquisition, err
 	}
 	if _, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "cloudflare", Account: grant.ServiceID,
 		Profile: grant.ServiceID}, grant.URLs, credential); err != nil {
-		return Issued{}, err
+		return acquisition, err
 	}
-	return Issued{Credentials: credential, URLs: grant.URLs, LeaseID: grant.LeaseID, Subject: subject}, nil
+	acquisition.Credentials, acquisition.URLs = credential, grant.URLs
+	return acquisition, nil
 }
-func (source *Remote) Revoke(ctx context.Context, issued Issued) error {
-	if issued.LeaseID == "" {
-		return ErrConfiguration
-	}
+func (source *Remote) revoke(ctx context.Context, request remoteRequest) (CleanupResult, error) {
 	var result struct {
 		State string `json:"state"`
 	}
-	if err := remoteCall(ctx, source.config.Client, source.base+"/revoke", source.config.AccessKey,
-		source.request(issued.Subject, issued.LeaseID), &result); err != nil {
-		return err
+	if err := remoteCall(ctx, source.config.Client, source.base+"/revoke", source.config.AccessKey, request, &result); err != nil {
+		return 0, err
 	}
 	switch result.State {
-	case "revoked", "expired":
-		return nil
+	case "revoked":
+		return RevocationConfirmed, nil
+	case "expired":
+		return AuthorityExpired, nil
+	case "canceled", "issuance_failed":
+		return IssuanceCanceled, nil
 	case "revocation_pending":
-		return ErrRevocationPending
+		return RevocationQueued, nil
 	default:
-		return ErrConfiguration
+		return 0, ErrConfiguration
 	}
 }

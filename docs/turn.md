@@ -26,7 +26,11 @@ provider-confirmed and expired counts are distinct: recipients may reuse a
 credential until provider revocation or expiry. Cloudflare Realtime charges are
 separate from Worker charges; automatic scheduling does not force TURN traffic.
 Lease capacity includes unfinished issuance and unexpired credentials awaiting
-revocation; retained records of completed leases do not consume capacity.
+revocation; retained records of completed leases do not consume capacity. Managed
+requests reuse one lease ID across bounded retries. Uncertain results retain cleanup
+ownership until the issuer accepts cleanup or authority expires. Early cancellation
+blocks late issuance; shutdown reports unresolved cleanup. `TURNStatus()` separates
+active leases from pending cleanup.
 
 `managed_turn_policies[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
 limits the deployment identified by that entry's `relay_url` within one Engine, subject to the budget semantics

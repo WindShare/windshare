@@ -2,7 +2,6 @@ package provider
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,13 +50,13 @@ func TestRemoteLeaseBindsRenewalAndRevocationToSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests[1].PreviousLeaseID != first.LeaseID || second.LeaseID == first.LeaseID {
+	if requests[1].PreviousLeaseID != first.Cleanup.ID || second.Cleanup.ID == first.Cleanup.ID {
 		t.Fatal("renewal lost lease identity")
 	}
-	if err := source.Revoke(t.Context(), first); !errors.Is(err, ErrRevocationPending) {
-		t.Fatal(err)
+	if outcome, err := first.Cleanup.Revoke(t.Context()); err != nil || outcome != RevocationQueued {
+		t.Fatal(outcome, err)
 	}
-	if requests[2] != source.request(first.Subject, first.LeaseID) {
+	if requests[2] != *first.remote {
 		t.Fatal("revocation changed subject")
 	}
 	if _, err := source.Renew(t.Context(), Subject{SessionID: [16]byte{9}}, first); err == nil {
