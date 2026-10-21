@@ -1,0 +1,460 @@
+{
+  "date": "2026-10-21",
+  "scope": "Same-host native provider to Chromium through real Cloudflare TURN; synthetic memory payloads, excluding product file/output pipelines",
+  "sourceRevisionAtStart": "cef8090ffee0b7777a5b01b2394473c7cd5f2a55",
+  "sourceRevisionAtEnd": "9fdada52a972a3cd22a12f606f71c925ce9c313e",
+  "sourceHashes": {
+    "transport/webrtc/provider/turn_network.go": "d3cb37bdb545003a2dad3fadd82f88ef9927f97a7167a8822e1fc5a04dc9302a",
+    "third_party/pion/ice/candidate_relay.go": "021f50f5826efd2d454739234946f6d5601577da063b1df1f7d326a5eb7e7b49",
+    "third_party/pion/ice/candidate_stun.go": "3c36c950d21c759302ae65c205d1fef139ed84bdaaf181c6a3b49701c56b00bd",
+    "transport/webrtc/testdata/browser/turnprobe/main.go": "cc1c41e2a6baf18a0a9acefa5cb4c1f7499ffde95154f11918b78d0398ca00be",
+    "transport/webrtc/testdata/browser/turnprobe/issuer.go": "2832c8a3d2a383baa7a205219762c14126e946046b5eeb33d3017dd6f2199de5",
+    "transport/webrtc/testdata/browser/turnprobe/stats.go": "10690dcf2abd560384edceaaab461d3831b1d6b846e6e6341a56f86fe1d2b8bb",
+    "web/scripts/browser-network-matrix/run-turn-trial.mjs": "40214350f5b5a6db5960406699c0f25a7d623cd72850f5ca2f24781829a99b26",
+    "go.mod": "e0988979a4a21b2bea6a014c0126c932925a243dc444155820e0f0aafa6b8bc4",
+    "go.sum": "2368ceba93cf4484f5f7a33fa9328879a55f9ff6768450f86545217969fff2b8"
+  },
+  "environment": {
+    "os": "Windows",
+    "go": "go1.27.0 windows/amd64",
+    "node": "v24.16.0",
+    "chromium": "151.0.7922.34",
+    "defaultExit": "System TUN proxy using a user-space network stack",
+    "turnDNS": "turn.cloudflare.com resolves to a synthetic address through the system TUN proxy",
+    "nativeWiFiExperiment": "Only native TURN TCP sockets bound to the Wi-Fi interface; process-only Go overlay resolves turn.cloudflare.com to its public IPv4 address; TLS hostname verification retained; browser remains proxied"
+  },
+  "timing": {
+    "negotiation": "After ICE gathering, immediately before submitting the answer, through browser data-channel open",
+    "transfer": "Browser data-channel open/start request through receipt and content verification; includes SCTP slow start"
+  },
+  "trials": {
+    "initial": [
+      {
+        "transport": "udp",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 3949.4,
+        "transferMs": 25838.1,
+        "usefulMbps": 0.162,
+        "browserRelayProtocol": "udp"
+      },
+      {
+        "transport": "udp",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 3960.9,
+        "transferMs": 10296.3,
+        "usefulMbps": 0.407,
+        "browserRelayProtocol": "udp"
+      },
+      {
+        "transport": "tls",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 4078.3,
+        "transferMs": 3367.2,
+        "usefulMbps": 1.246,
+        "browserRelayProtocol": "tls"
+      },
+      {
+        "transport": "tls",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 4546.5,
+        "transferMs": 3374.4,
+        "usefulMbps": 1.243,
+        "browserRelayProtocol": "tls"
+      },
+      {
+        "transport": "profile",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 11571.7,
+        "transferMs": 20331.9,
+        "usefulMbps": 0.206,
+        "browserRelayProtocol": "udp"
+      },
+      {
+        "transport": "profile",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 11766.8,
+        "transferMs": 15426.4,
+        "usefulMbps": 0.272,
+        "browserRelayProtocol": "udp"
+      }
+    ],
+    "instrumented": [
+      {
+        "transport": "udp",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 3968.2,
+        "transferMs": 14894.7,
+        "usefulMbps": 0.282,
+        "browserRelayProtocol": "udp",
+        "finalCongestionWindow": 23667,
+        "finalReceiverWindow": 4702208,
+        "finalSctpRttMs": 367.735,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 3
+        }
+      },
+      {
+        "transport": "udp",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 4054.6,
+        "transferMs": 21208,
+        "usefulMbps": 0.198,
+        "browserRelayProtocol": "udp",
+        "finalCongestionWindow": 12415,
+        "finalReceiverWindow": 4702208,
+        "finalSctpRttMs": 360.564,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 8
+        }
+      },
+      {
+        "transport": "tcp",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 4592.2,
+        "transferMs": 3737.5,
+        "usefulMbps": 1.122,
+        "browserRelayProtocol": "tcp",
+        "finalCongestionWindow": 293348,
+        "finalReceiverWindow": 4669440,
+        "finalSctpRttMs": 499.544,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 0
+        }
+      },
+      {
+        "transport": "tcp",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 3949,
+        "transferMs": 3412.2,
+        "usefulMbps": 1.229,
+        "browserRelayProtocol": "tcp",
+        "finalCongestionWindow": 266380,
+        "finalReceiverWindow": 4505600,
+        "finalSctpRttMs": 388.368,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 0
+        }
+      },
+      {
+        "transport": "tls",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 3924.5,
+        "transferMs": 3342.9,
+        "usefulMbps": 1.255,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 266524,
+        "finalReceiverWindow": 4620288,
+        "finalSctpRttMs": 385.503,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 0
+        }
+      },
+      {
+        "transport": "tls",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 4414,
+        "transferMs": 3655,
+        "usefulMbps": 1.148,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 279284,
+        "finalReceiverWindow": 4636672,
+        "finalSctpRttMs": 410.768,
+        "sctpCounters": {
+          "nT3Timeouts": 0,
+          "nFastRetrans": 0
+        }
+      }
+    ],
+    "proxy-trial": [
+      {
+        "transport": "udp",
+        "replacement": false,
+        "payloadBytes": 524288,
+        "negotiationMs": 3906.8,
+        "transferMs": 22797.1,
+        "usefulMbps": 0.184,
+        "browserRelayProtocol": "udp",
+        "finalCongestionWindow": 11817,
+        "finalReceiverWindow": 4702208,
+        "finalSctpRttMs": 379.546
+      },
+      {
+        "transport": "udp",
+        "replacement": true,
+        "payloadBytes": 524288,
+        "negotiationMs": 4226.2,
+        "transferMs": 28055.7,
+        "usefulMbps": 0.149,
+        "browserRelayProtocol": "udp",
+        "finalCongestionWindow": 7966,
+        "finalReceiverWindow": 4702208,
+        "finalSctpRttMs": 364.086
+      }
+    ],
+    "bulk-stream": [
+      {
+        "transport": "tls",
+        "replacement": false,
+        "payloadBytes": 8388608,
+        "negotiationMs": 3952.6,
+        "transferMs": 21033.2,
+        "usefulMbps": 3.191,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 4563772,
+        "finalReceiverWindow": 4669440,
+        "finalSctpRttMs": 1037.641
+      },
+      {
+        "transport": "tls",
+        "replacement": true,
+        "payloadBytes": 8388608,
+        "negotiationMs": 4478.7,
+        "transferMs": 22547.3,
+        "usefulMbps": 2.976,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 4201004,
+        "finalReceiverWindow": 4571136,
+        "finalSctpRttMs": 1010.433
+      },
+      {
+        "transport": "tcp",
+        "replacement": false,
+        "payloadBytes": 8388608,
+        "negotiationMs": 3934.3,
+        "transferMs": 20757.9,
+        "usefulMbps": 3.233,
+        "browserRelayProtocol": "tcp",
+        "finalCongestionWindow": 5111404,
+        "finalReceiverWindow": 4505600,
+        "finalSctpRttMs": 1076.387
+      },
+      {
+        "transport": "tcp",
+        "replacement": true,
+        "payloadBytes": 8388608,
+        "negotiationMs": 4279.8,
+        "transferMs": 21682.9,
+        "usefulMbps": 3.095,
+        "browserRelayProtocol": "tcp",
+        "finalCongestionWindow": 5243636,
+        "finalReceiverWindow": 4571136,
+        "finalSctpRttMs": 1149.467
+      }
+    ],
+    "bulk-native-wifi": [
+      {
+        "transport": "tls",
+        "replacement": false,
+        "payloadBytes": 8388608,
+        "negotiationMs": 4564.7,
+        "transferMs": 7066.7,
+        "usefulMbps": 9.496,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 4522740,
+        "finalReceiverWindow": 2097152,
+        "finalSctpRttMs": 556.074
+      },
+      {
+        "transport": "tls",
+        "replacement": true,
+        "payloadBytes": 8388608,
+        "negotiationMs": 5092.1,
+        "transferMs": 9265.5,
+        "usefulMbps": 7.243,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 2276594,
+        "finalReceiverWindow": 917504,
+        "finalSctpRttMs": 595.009
+      }
+    ],
+    "final-trial": [
+      {
+        "transport": "tls",
+        "replacement": false,
+        "payloadBytes": 8388731,
+        "negotiationMs": 3935.7,
+        "transferMs": 20484.1,
+        "usefulMbps": 3.276,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 4882028,
+        "finalReceiverWindow": 4603781,
+        "finalSctpRttMs": 1008.912,
+        "nativeRelayProtocol": "tls"
+      },
+      {
+        "transport": "tls",
+        "replacement": true,
+        "payloadBytes": 8388731,
+        "negotiationMs": 3916.4,
+        "transferMs": 21262.8,
+        "usefulMbps": 3.156,
+        "browserRelayProtocol": "tls",
+        "finalCongestionWindow": 4385868,
+        "finalReceiverWindow": 4620165,
+        "finalSctpRttMs": 985.8,
+        "nativeRelayProtocol": "tls"
+      }
+    ]
+  },
+  "datagramControls": {
+    "raw-udp-proxy-100": {
+      "evidence": [
+        {
+          "direction": "A-to-B",
+          "sent": 600,
+          "received": 575,
+          "duplicates": 0,
+          "reordered": 19,
+          "payloadBytes": 1200,
+          "sendMs": 6000.2832,
+          "delayMedianMs": 181.487,
+          "delayP95Ms": 236.3783,
+          "lossPercent": 4.166666666666667,
+          "writeErrors": 0
+        },
+        {
+          "direction": "B-to-A",
+          "sent": 600,
+          "received": 590,
+          "duplicates": 0,
+          "reordered": 23,
+          "payloadBytes": 1200,
+          "sendMs": 6000.5337,
+          "delayMedianMs": 181.8743,
+          "delayP95Ms": 231.359,
+          "lossPercent": 1.6666666666666667,
+          "writeErrors": 0
+        }
+      ],
+      "pps": 100,
+      "transport": "udp"
+    },
+    "raw-udp-wifi-100": {
+      "evidence": [
+        {
+          "direction": "A-to-B",
+          "sent": 600,
+          "received": 543,
+          "duplicates": 0,
+          "reordered": 0,
+          "payloadBytes": 1200,
+          "sendMs": 6000.0484,
+          "delayMedianMs": 173.2083,
+          "delayP95Ms": 223.6446,
+          "lossPercent": 9.5,
+          "writeErrors": 0
+        },
+        {
+          "direction": "B-to-A",
+          "sent": 600,
+          "received": 571,
+          "duplicates": 0,
+          "reordered": 0,
+          "payloadBytes": 1200,
+          "sendMs": 6000.5931,
+          "delayMedianMs": 165.5538,
+          "delayP95Ms": 166.8047,
+          "lossPercent": 4.833333333333333,
+          "writeErrors": 0
+        }
+      ],
+      "pps": 100,
+      "transport": "udp"
+    },
+    "raw-tls-proxy-400-retry": {
+      "evidence": [
+        {
+          "direction": "A-to-B",
+          "sent": 1600,
+          "received": 1600,
+          "duplicates": 0,
+          "reordered": 0,
+          "payloadBytes": 1200,
+          "sendMs": 4000.4365,
+          "delayMedianMs": 199.5084,
+          "delayP95Ms": 329.1022,
+          "lossPercent": 0,
+          "writeErrors": 0
+        },
+        {
+          "direction": "B-to-A",
+          "sent": 1600,
+          "received": 1600,
+          "duplicates": 0,
+          "reordered": 0,
+          "payloadBytes": 1200,
+          "sendMs": 4000.5128,
+          "delayMedianMs": 280.8862,
+          "delayP95Ms": 501.5358,
+          "lossPercent": 0,
+          "writeErrors": 0
+        }
+      ],
+      "pps": 400,
+      "transport": "tls"
+    }
+  },
+  "httpsControls": {
+    "http-upload": {
+      "bytes": 8388608,
+      "elapsedSeconds": 15.476823,
+      "Mbps": 4.336
+    },
+    "http-download": {
+      "bytes": 8388608,
+      "elapsedSeconds": 1.985851,
+      "Mbps": 33.794
+    },
+    "http-wifi-upload": {
+      "bytes": 8388608,
+      "elapsedSeconds": 5.35096,
+      "Mbps": 12.541
+    }
+  },
+  "failedExperiments": [
+    {
+      "name": "raw-tls-proxy-400",
+      "stage": "single-datagram warmup",
+      "reason": "read timeout before any measurement; retained and excluded from throughput/loss statistics",
+      "followup": "Bounded warmup retries; measured packet train completed with no loss in both directions"
+    }
+  ],
+  "validation": {
+    "completedWebRTCTransfers": 22,
+    "allPayloadsVerified": true,
+    "nativeSocketsAfterEachClosedPath": 0,
+    "systemProxyConfigurationChanged": false,
+    "productionTransportPolicyChanged": false,
+    "checks": [
+      "make hygiene",
+      "go test ./transport/webrtc/testdata/browser/turnprobe",
+      "pnpm -C web exec eslint scripts/browser-network-matrix/run-turn-trial.mjs"
+    ]
+  },
+  "interpretation": [
+    "UDP loss/reordering occurs without SCTP; SCTP fast recovery shrinks the sending window despite queued data and ample receiver window.",
+    "TCP/TLS avoids the observed loss amplification. Eight-MiB payloads reach about 3 Mbps through the current proxy; a 512-KiB sample understates bulk capacity.",
+    "The native-only WiFi/TLS experiment reaches 7.2-9.5 Mbps; ordinary HTTPS upload also improves from 4.3 to 12.5 Mbps when source-bound to WiFi.",
+    "Relay candidates use static protocol preference (UDP above TCP above TLS). The selected allocation retires alternatives, so one profile does not compare their sustained throughput.",
+    "Results characterize this network and test setup, not a general preference for TLS, a production speed guarantee, or a proof that the proxy is the only source of loss."
+  ],
+  "providerReference": "https://developers.cloudflare.com/realtime/turn/",
+  "publication": "Sanitized summary: network addresses, proxy identifiers and local paths omitted. Raw logs and credentials are not included."
+}

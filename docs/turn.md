@@ -163,8 +163,15 @@ and the Worker package's `npm ci`) is
 The opt-in [Cloudflare trial runner](../web/scripts/browser-network-matrix/run-turn-trial.mjs)
 accepts `WINDSHARE_TURN_TRIAL_CONFIGURATION` pointing to an enrolled deployment's
 private configuration, or `WINDSHARE_TURN_TRIAL_KEY` pointing to a private JSON file
-with `uid` and `secret`. Recorded evidence covers [managed onboarding, renewal and cleanup](../testdata/connectivity/turn/managed-cloudflare-2026-10-20.json)
-and the [direct provider trial](../testdata/connectivity/turn/cloudflare-2026-10-20.json).
+with `uid` and `secret`. Positional arguments select `udp`, `tcp`, `tls`, or the full
+`profile`; `WINDSHARE_TURN_TRIAL_BYTES` sets payload size (default 512 KiB, maximum
+64 MiB). JSON reports handshake time, actual TURN control protocols, throughput and
+SCTP window samples; stderr streams progress even if a transfer fails. Compare the
+same transport and payload size; short transfers include congestion slow start.
+Raw output includes network addresses; sanitize it before publishing.
+Recorded evidence: [managed lifecycle](../testdata/connectivity/turn/managed-cloudflare-2026-10-20.json),
+[provider connectivity](../testdata/connectivity/turn/cloudflare-2026-10-20.json),
+[network throughput comparison](../testdata/connectivity/turn/network-throughput-2026-10-21.json).
 
 Provider references: [Cloudflare credentials](https://developers.cloudflare.com/realtime/turn/generate-credentials/),
 [Cloudflare analytics](https://developers.cloudflare.com/realtime/turn/analytics/),

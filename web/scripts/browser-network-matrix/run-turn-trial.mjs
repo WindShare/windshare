@@ -8,8 +8,8 @@ import { chromium } from '@playwright/test'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const transports = process.argv.length > 2 ? process.argv.slice(2) : ['udp', 'tls', 'profile']
-if (transports.some(transport => !['udp', 'tls', 'profile'].includes(transport))) {
-  throw new Error('TURN trial transports must be udp, tls, or profile')
+if (transports.some(transport => !['udp', 'tcp', 'tls', 'profile'].includes(transport))) {
+  throw new Error('TURN trial transports must be udp, tcp, tls, or profile')
 }
 const temporary = await mkdtemp(join(tmpdir(), 'windshare-turn-trial-'))
 let child
@@ -23,7 +23,8 @@ try {
   await promisify(execFile)('go', ['build', '-o', executable, './transport/webrtc/testdata/browser/turnprobe'], {
     cwd: root, windowsHide: true, timeout: 60_000,
   })
-  child = spawn(executable, [], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const payloadBytes = process.env.WINDSHARE_TURN_TRIAL_BYTES ?? String(512 * 1024)
+  child = spawn(executable, ['-bytes', payloadBytes], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   child.stderr.pipe(process.stderr)
   origin = await new Promise((resolveReady, reject) => {
     const timer = setTimeout(() => reject(new Error('TURN probe readiness timeout')), 15_000)
@@ -40,8 +41,12 @@ try {
   })
   browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
+  await page.exposeFunction('recordTURNTrial', (record) => console.error(JSON.stringify(record)))
   await page.goto(origin)
   const evidence = await page.evaluate(async (transports) => {
+    const sampleIntervalMs = 1000
+    const sampleTimeoutMs = 2000
+    const maximumSamples = 120
     const timeout = (promise) => {
       let timer
       return Promise.race([promise, new Promise((_, reject) => {
@@ -57,10 +62,11 @@ try {
       const pc = new RTCPeerConnection({ iceServers: start.iceServers, iceTransportPolicy: 'relay' })
       active.set(start.id, pc)
       let connectedAt
+      let received = 0
+      const samples = []
       const delivered = new Promise((resolveDelivery, rejectDelivery) => {
         pc.ondatachannel = ({ channel }) => {
           channel.binaryType = 'arraybuffer'
-          let received = 0
           let started
           channel.onopen = () => { connectedAt = started = performance.now(); channel.send('start') }
           channel.onerror = () => rejectDelivery(new Error('TURN data channel failed'))
@@ -87,7 +93,28 @@ try {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pc.localDescription),
       })
       if (!answer.ok) throw new Error(await answer.text())
-      const delivery = await timeout(delivered)
+      let sampleTimer
+      let sampling
+      const sample = async () => {
+        const response = await fetch(`/stats?id=${start.id}`, { signal: AbortSignal.timeout(sampleTimeoutMs) })
+        if (!response.ok) throw new Error(`TURN stats returned ${response.status}`)
+        const native = await response.json()
+        const record = { elapsedMs: performance.now() - negotiationStarted, received,
+          sctp: native.sctp, bufferedBytes: native.bufferedBytes, resources: native.resources }
+        samples.push(record)
+        // Stream evidence before completion so a stalled transfer retains its last progress.
+        await globalThis.recordTURNTrial({ event: 'sample', id: start.id, transport, ...record })
+      }
+      const delivery = await timeout((async () => {
+        await sample()
+        sampleTimer = setInterval(() => {
+          if (sampling || samples.length >= maximumSamples) return
+          sampling = sample().catch(error => globalThis.recordTURNTrial({
+            event: 'sample_failed', id: start.id, transport, reason: String(error),
+          })).finally(() => { sampling = undefined })
+        }, sampleIntervalMs)
+        return delivered
+      })()).finally(async () => { clearInterval(sampleTimer); await sampling })
       const native = await (await fetch(`/stats?id=${start.id}`)).json()
       const stats = await pc.getStats()
       const selected = [...stats.values()].find((value) => value.type === 'transport' && value.selectedCandidatePairId)
@@ -97,9 +124,10 @@ try {
       if (!native.selected || native.pair.LocalType !== 'relay' || local?.candidateType !== 'relay') {
         throw new Error('TURN trial did not select relay candidates on both endpoints')
       }
+      await globalThis.recordTURNTrial({ event: 'completed', id: start.id, transport, ...delivery })
       evidence.push({ transport, replacement: replaces !== 0, negotiationMs: connectedAt - negotiationStarted,
         endpointCount: start.iceServers[0].urls.length, ...delivery, usefulMbps: delivery.received * 8 / delivery.elapsedMs / 1000,
-        native, browser: { localType: local.candidateType, remoteType: remote?.candidateType,
+        native, samples, browser: { localType: local.candidateType, remoteType: remote?.candidateType,
           relayProtocol: local.relayProtocol, bytesReceived: pair?.bytesReceived, bytesSent: pair?.bytesSent } })
       return start.id
     }
@@ -123,7 +151,7 @@ try {
       for (const id of [...active.keys()]) await close(id).catch(() => undefined)
     }
   }, transports)
-  console.log(JSON.stringify({ scenario: 'cloudflare-native-browser-turn', evidence }, null, 2))
+  console.log(JSON.stringify({ scenario: 'cloudflare-native-browser-turn', browserVersion: browser.version(), evidence }, null, 2))
 } finally {
   await browser?.close()
   if (origin) await fetch(`${origin}/stop`, { method: 'POST' }).catch(() => undefined)

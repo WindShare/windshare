@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -23,21 +24,23 @@ import (
 )
 
 const (
-	probePayloadBytes = 512 * 1024
-	probeChunkBytes   = 16 * 1024
-	probeTimeout      = 45 * time.Second
-	routeProbe        = "192.0.2.1:9"
+	probePayloadBytes        = 512 * 1024
+	maximumProbePayloadBytes = 64 * 1024 * 1024
+	probeChunkBytes          = 16 * 1024
+	probeTimeout             = 45 * time.Second
+	routeProbe               = "192.0.2.1:9"
 )
 
 type probe struct {
-	mu      sync.Mutex
-	source  *trialTURN
-	issued  map[byte]*turnpath.Lease
-	sockets *socketauthority.Authority
-	turn    *provider.TURNResourceOwner
-	address netip.Addr
-	next    byte
-	paths   map[byte]*provider.Connection
+	mu           sync.Mutex
+	source       *trialTURN
+	issued       map[byte]*turnpath.Lease
+	sockets      *socketauthority.Authority
+	turn         *provider.TURNResourceOwner
+	address      netip.Addr
+	next         byte
+	paths        map[byte]*provider.Connection
+	payloadBytes int
 }
 
 func main() {
@@ -48,6 +51,11 @@ func main() {
 }
 
 func run() error {
+	payloadBytes := flag.Int("bytes", probePayloadBytes, "Payload bytes per transfer")
+	flag.Parse()
+	if *payloadBytes < 1 || *payloadBytes > maximumProbePayloadBytes {
+		return errors.New("probe payload must be between 1 byte and 64 MiB")
+	}
 	source, err := trialIssuer()
 	if err != nil {
 		return err
@@ -60,7 +68,7 @@ func run() error {
 	address := route.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 	_ = route.Close()
 	owner := &probe{source: source, sockets: socketauthority.New(socketauthority.Config{}),
-		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease)}
+		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease), payloadBytes: *payloadBytes}
 	defer owner.sockets.Close()
 	defer func() {
 		for _, connection := range owner.paths {
@@ -126,6 +134,8 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("transport") {
 	case "udp":
 		urls = []string{"turn:turn.cloudflare.com:3478?transport=udp"}
+	case "tcp":
+		urls = []string{"turn:turn.cloudflare.com:3478?transport=tcp"}
 	case "tls":
 		urls = []string{"turns:turn.cloudflare.com:443?transport=tcp"}
 	case "profile":
@@ -184,8 +194,8 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 			for i := range payload {
 				payload[i] = byte(i % 251)
 			}
-			for sent := 0; sent < probePayloadBytes; sent += len(payload) {
-				if err := channel.Send(payload); err != nil {
+			for sent := 0; sent < p.payloadBytes; sent += len(payload) {
+				if err := channel.Send(payload[:min(len(payload), p.payloadBytes-sent)]); err != nil {
 					return
 				}
 			}
@@ -207,7 +217,7 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	case <-gathered:
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id": id, "offer": connection.LocalDescription(), "bytes": probePayloadBytes,
+		"id": id, "offer": connection.LocalDescription(), "bytes": p.payloadBytes,
 		"iceServers": []map[string]any{{"urls": urls, "username": issued.Relay().Credentials().Username(), "credential": issued.Relay().Credentials().Password()}},
 	})
 }
@@ -234,16 +244,6 @@ func (p *probe) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-func (p *probe) stats(w http.ResponseWriter, r *http.Request) {
-	connection := p.path(r)
-	if connection == nil {
-		http.NotFound(w, r)
-		return
-	}
-	pair, selected := connection.SelectedPair()
-	resources, _ := connection.TURNResources()
-	_ = json.NewEncoder(w).Encode(map[string]any{"pair": pair, "selected": selected, "resources": resources})
 }
 func (p *probe) closePath(w http.ResponseWriter, r *http.Request) {
 	connection := p.path(r)
