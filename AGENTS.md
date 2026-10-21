@@ -47,12 +47,12 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 
 ```text
 .
-├── .github/workflows/             Ordinary CI, weekly suites, and source/binary releases
+├── .github/workflows/             CI, weekly suites, source/binary releases, and Cloudflare deployment
 ├── core/                         Network-free reusable package subtree
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
 │   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
-│   ├── session/                  Authenticated protocol engine, catalog/content flows, sender/receiver runtime
+│   ├── session/                  Authenticated protocol engine, catalog/content flows, TURN controls, sender/receiver runtime
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
 │   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
@@ -61,6 +61,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
 │   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
+│   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
+│   ├── turn/                     TURN settings, shared budgets, service discovery, and credential issuance
 │   └── internal/                 Share/receive/recovery workflows and native connectivity
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
@@ -72,22 +74,24 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── networkstate/             Network snapshots and generation tracking
 │   ├── socketauthority/          UDP/TCP socket ownership and capability snapshots
 │   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
-│   └── relayset/                 Independent relay lifecycles and coordinated session admission
+│   ├── iceconfig/, turnpath/      ICE configuration and TURN delegation, renewal, recovery, and retirement
+│   └── senderrelay/, relayset/    Relay registration/recovery, independent lifecycles, and coordinated session admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
 │   └── webrtc/                   Pion FrameChannels, terminal lifecycle, and native provider adaptation
 ├── relay/protocol/v2/            Go wire contracts, authenticated proofs, and opaque routes
 ├── relay-rust/                   Production relay Cargo workspace
+│   ├── crates/relay-access/      Service credential and device enrollment policy
 │   ├── crates/relay-core/        No-I/O kernel with strict sender-signature verification
 │   ├── crates/relay-native/      Native wsrelay host, SQLite, HTTP/WebSocket, and STUN
-│   └── crates/relay-cloudflare/  Worker and Durable Object host
+│   └── crates/relay-cloudflare/  Worker/DO host, access console, credential management, and managed TURN
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
 │   ├── src/catalog/, content/    Progressive catalog, revisions/ranges, leases, lane scheduling
 │   ├── src/unicode/              Pinned Unicode 15 path normalization and case folding
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
-│   ├── src/connectivity/         Signaling, path policy, and lane adoption
+│   ├── src/connectivity/         Signaling, path policy, lane adoption, and TURN delegation/renewal
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
 │   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
 │   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
@@ -102,6 +106,8 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
-├── third_party/pion/              Pinned ICE/WebRTC sources, patches, and reproducibility manifest
-└── scripts/ci/                   CI gates, validation tooling, and release certification
+├── third_party/pion/              Pinned ICE/WebRTC/TURN sources, patches, and reproducibility manifest
+└── scripts/
+    ├── ci/                       CI gates, validation tooling, and release certification
+    └── deploy/                   Native relay and Cloudflare deployment, managed TURN provisioning
 ```
