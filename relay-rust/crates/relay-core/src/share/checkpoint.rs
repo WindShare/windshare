@@ -231,6 +231,7 @@ impl<O: Observer> ShareRelay<O> {
         self.checkpoint_ready()?;
         self.generations.checkpoint_connection(connection, |key| {
             self.sessions
+                .entries()
                 .get(&key.wire_id())
                 .and_then(|entry| entry.session.snapshot())
         })

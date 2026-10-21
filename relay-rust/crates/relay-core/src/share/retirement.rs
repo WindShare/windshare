@@ -28,7 +28,7 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn generation_quiescent(&self, connection: ConnectionRef) -> bool {
-        if self.sessions.values().any(|entry| {
+        if self.sessions.entries().values().any(|entry| {
             let key = entry.session.key();
             (key.sender() == connection || key.receiver() == connection)
                 && (entry.deferred || entry.session.phase() != crate::sessions::Phase::Retired)
@@ -36,7 +36,7 @@ impl<O: Observer> ShareRelay<O> {
             return false;
         }
         // The lost peer can also source payloads queued on healthy destinations.
-        self.routes.values().all(|flow| {
+        self.sessions.routes().values().all(|flow| {
             (flow.destination() != connection && flow.permit().source() != connection)
                 || self
                     .generations
@@ -51,17 +51,12 @@ impl<O: Observer> ShareRelay<O> {
         for connection in released {
             self.collect_ledger(connection, now);
         }
-        let pending = self.generations.due_retirements(now, &mut self.deadlines);
+        let pending = self.generations.due_retirements(now);
         for connection in pending {
             if !self.generation_quiescent(connection) {
                 continue;
             }
-            match self.generations.progress_retirement(
-                connection,
-                now,
-                &mut self.checkpointing,
-                &mut self.deadlines,
-            ) {
+            match self.generations.progress_retirement(connection, now) {
                 RetirementProgress::Waiting => {}
                 RetirementProgress::Blocked {
                     usage,
@@ -100,8 +95,7 @@ impl<O: Observer> ShareRelay<O> {
                     residual,
                     expires_at,
                 } => {
-                    self.routes
-                        .retain(|(destination, _), _| *destination != connection);
+                    self.sessions.release_destination(connection);
                     self.trace(
                         Some(connection),
                         RelayDecision::RetirementRiskExpired {

@@ -1,14 +1,13 @@
-use super::{Connection, ConnectionRef, Delivery, Detached, Generation, Generations, Role};
+use super::{Connection, ConnectionRef, Delivery, Detached, Generation, Generations};
 use crate::share::{
     ConnectionCheckpoint, Error,
     checkpoint::{ConnectionResources, ConnectionRole},
-    deadlines::{Deadlines, Key},
+    deadlines::Key,
     responsibility::{GenerationState, Reservation, ReservationKind},
 };
 use crate::{
     clock::UnixMillis,
     flow::{ConnectionLedger, Counts},
-    handshake::ControlHandshake,
     observation::Journal,
     sessions::{SessionKey, SessionSnapshot},
 };
@@ -82,14 +81,7 @@ impl Generations {
         };
         let role = match entry {
             Generation::Control { socket, .. } | Generation::Business { socket, .. } => {
-                match &socket.role {
-                    Role::Closing => ConnectionRole::Closing,
-                    Role::Stopping => ConnectionRole::Stopping,
-                    Role::Established(liveness) => ConnectionRole::Established(*liveness),
-                    Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. } => {
-                        ConnectionRole::Handshake(transcript.clone())
-                    }
-                }
+                socket.checkpoint()
             }
             Generation::Detached { state, .. } => ConnectionRole::Detached(*state),
         };
@@ -107,7 +99,6 @@ impl Generations {
         snapshot: &ConnectionCheckpoint,
         survives: bool,
         now: UnixMillis,
-        deadlines: &mut Deadlines,
     ) -> Result<(), Error> {
         let connection = snapshot.connection;
         if self.contains(&connection) {
@@ -119,9 +110,10 @@ impl Generations {
                     return Ok(());
                 }
                 let socket = self
-                    .restore_socket(connection, &snapshot.role, deadlines)
+                    .restore_socket(connection, &snapshot.role)
                     .ok_or(Error::InvalidCheckpoint)?;
-                deadlines.set(Key::Control(connection), Some(*deadline));
+                self.deadlines
+                    .set(Key::Control(connection), Some(*deadline));
                 Generation::Control {
                     socket,
                     deadline: *deadline,
@@ -146,11 +138,10 @@ impl Generations {
                 {
                     return Err(Error::InvalidCheckpoint);
                 }
-                deadlines.set(Key::Ledger(connection), ledger.deadline());
+                self.deadlines
+                    .set(Key::Ledger(connection), ledger.deadline());
                 let ledger = Box::new(ledger);
-                if survives
-                    && let Some(socket) = self.restore_socket(connection, &snapshot.role, deadlines)
-                {
+                if survives && let Some(socket) = self.restore_socket(connection, &snapshot.role) {
                     Generation::Business { socket, ledger }
                 } else {
                     let state = match snapshot.role {
@@ -165,6 +156,8 @@ impl Generations {
             }
         };
         self.entries.insert(connection, entry);
+        self.schedule_retirement(connection);
+        self.changes.inserted(connection);
         Ok(())
     }
 
@@ -191,35 +184,18 @@ impl Generations {
                 state,
             },
         );
+        self.schedule_retirement(reservation.connection);
+        self.changes.retention_changed();
         true
     }
 
     fn restore_socket(
-        &self,
+        &mut self,
         connection: ConnectionRef,
         role: &ConnectionRole,
-        deadlines: &mut Deadlines,
     ) -> Option<Connection> {
-        let role = match role {
-            ConnectionRole::Established(liveness) => {
-                deadlines.set(Key::Liveness(connection), Some(liveness.deadline()));
-                Role::Established(*liveness)
-            }
-            ConnectionRole::Handshake(transcript) => Role::Handshake {
-                handshake: Box::new(ControlHandshake::open(
-                    self.identity.relay,
-                    connection,
-                    transcript.opened,
-                )),
-                transcript: transcript.clone(),
-            },
-            ConnectionRole::Closing => Role::Closing,
-            ConnectionRole::Stopping => Role::Stopping,
-            ConnectionRole::Detached(_) => return None,
-        };
-        Some(Connection {
-            role,
-            reservation: None,
-        })
+        let socket = Connection::restore(self.identity.relay, connection, role)?;
+        socket.synchronize_deadlines(connection, &mut self.deadlines);
+        Some(socket)
     }
 }

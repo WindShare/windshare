@@ -1,11 +1,12 @@
 //! Shared, no-I/O orchestration of one share. Hosts own sockets, payloads and
 //! scheduling; this module owns cross-domain ordering and exact callback identity.
 //!
+//! Generation and session owners keep their mutation journals and deadline indexes
+//! private. This coordinator merges their projections at one checkpoint boundary.
+//!
 //! `handle` emits storage/send/cleanup commands. Storage completions return as
 //! inputs. `submit` is deliberately synchronous: revalidation, charging and host
 //! handoff occur under the same exclusive borrow, without an await or cached grant.
-
-use alloc::boxed::Box;
 
 mod admission;
 pub use admission::{AttemptLimiter, AttemptRate, HandshakeLimits};
@@ -23,8 +24,9 @@ mod liveness;
 mod responsibility;
 mod restoration;
 mod retirement;
+use generations::{ConnectionPhase, Detached, Generations};
 pub use generations::{ConnectionUsage, RetirementPolicy};
-use generations::{Detached, Generations};
+mod session_workflow;
 mod sessions;
 mod storage;
 mod types;
@@ -40,14 +42,14 @@ pub use restoration::{Authority, Responsibility, Restore};
 pub use types::*;
 
 use crate::{
-    handshake::{Admission, ControlHandshake},
+    handshake::Admission,
     identifiers::RelaySessionId,
     lifecycle::{ConnectionRef, OperationId, Record, ShareLifecycle},
     observation::{Journal, Observation, Observer, RelayDecision},
     sessions::Session,
 };
-use alloc::collections::{BTreeMap, VecDeque};
-use deadlines::{Deadlines, Key};
+use alloc::collections::VecDeque;
+use deadlines::Key;
 use storage::Task;
 
 // Work-ID exhaustion fences this runtime even when its stored ownership is valid.
@@ -57,35 +59,6 @@ enum RuntimeStatus {
     ReloadRequired,
 }
 
-#[derive(Debug)]
-enum Role {
-    Handshake {
-        handshake: Box<ControlHandshake>,
-        transcript: handshake_checkpoint::HandshakeCheckpoint,
-    },
-    Admitting {
-        handshake: Box<ControlHandshake>,
-        admission: Box<Admission>,
-        transcript: handshake_checkpoint::HandshakeCheckpoint,
-    },
-    Established(crate::heartbeat::Liveness),
-    Stopping,
-    Closing,
-}
-
-#[derive(Debug)]
-struct Connection {
-    role: Role,
-    reservation: Option<OperationId>,
-}
-
-#[derive(Debug)]
-struct AdmissionState {
-    session: Session,
-    flows: [crate::flow::FlowKey; 2],
-    deferred: bool,
-}
-
 /// One owner of every control authority. Internal state machines remain independently testable.
 #[derive(Debug)]
 pub struct ShareRelay<O> {
@@ -93,13 +66,9 @@ pub struct ShareRelay<O> {
     limits: Limits,
     lifecycle: ShareLifecycle<Journal>,
     generations: Generations,
-    handshake_rate: AttemptLimiter,
-    sessions: BTreeMap<RelaySessionId, AdmissionState>,
-    routes: BTreeMap<(ConnectionRef, RelaySessionId), crate::flow::FlowKey>,
-    deadlines: Deadlines,
+    sessions: sessions::Sessions,
     stored: Option<Record>,
     runtime: RuntimeStatus,
-    last_session: u64,
     last_work: u64,
     tasks: VecDeque<Task>,
     stop_barrier: Option<crate::lifecycle::StopWork>,
@@ -119,7 +88,7 @@ impl<O: Observer> ShareRelay<O> {
         self.flush_lifecycle();
         self.progress_stop(now, &mut turn);
         self.start_work(now, &mut turn);
-        turn.deadline = self.deadlines.next();
+        turn.deadline = self.deadline();
         // Effects discovered by expiration must never disappear behind a refused input.
         if let Err(error) = result {
             turn.refusal = Some(error);
@@ -205,7 +174,7 @@ impl<O: Observer> ShareRelay<O> {
 
     #[must_use]
     pub fn deadline(&self) -> Option<crate::clock::UnixMillis> {
-        self.deadlines.next()
+        self.next_deadline().map(|(at, _)| at)
     }
 
     #[must_use]
@@ -217,8 +186,6 @@ impl<O: Observer> ShareRelay<O> {
         for item in self.lifecycle.observer_mut().0.drain(..) {
             self.observer.observe(item);
         }
-        self.deadlines
-            .set(Key::Lifecycle, self.lifecycle.deadline());
     }
 
     fn apply_delivery_close(
@@ -260,8 +227,30 @@ impl<O: Observer> ShareRelay<O> {
         });
     }
 
+    // Each owner indexes its own deadlines. Comparing three heads preserves the
+    // original time/key ordering without scanning connections or sessions.
+    fn next_deadline(&self) -> Option<(crate::clock::UnixMillis, Key)> {
+        [
+            self.lifecycle.deadline().map(|at| (at, Key::Lifecycle)),
+            self.generations.next_deadline(),
+            self.sessions.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
     fn expire(&mut self, now: crate::clock::UnixMillis, turn: &mut Turn) {
-        while let Some(key) = self.deadlines.expired(now) {
+        while let Some((_, key)) = self.next_deadline().filter(|(at, _)| *at <= now) {
+            match key {
+                Key::Lifecycle => {}
+                Key::Session(_) => {
+                    let _ = self.sessions.expire(now);
+                }
+                _ => {
+                    let _ = self.generations.expire(now);
+                }
+            }
             match key {
                 Key::Lifecycle => {
                     self.lifecycle_event(crate::lifecycle::Event::Tick, None, now, turn);
@@ -278,8 +267,6 @@ impl<O: Observer> ShareRelay<O> {
                     let _ = self.generations.update_ledger(
                         connection,
                         |ledger| ledger.tick(now),
-                        &mut self.checkpointing,
-                        &mut self.deadlines,
                         &mut self.observer,
                     );
                     self.apply_delivery_close(connection, now, turn);

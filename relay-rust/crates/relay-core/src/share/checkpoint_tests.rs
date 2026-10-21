@@ -1,6 +1,9 @@
 use super::*;
 use std::{collections::BTreeMap, vec};
 
+#[path = "projection_tests.rs"]
+mod projection_tests;
+
 const ATTACHMENT_BYTES: usize = 16_384;
 const HOST_ENVELOPE_BYTES: usize = 512;
 const PERSONAL_SESSION_LIMIT: usize = 32;
@@ -94,6 +97,8 @@ fn native_hosts_do_not_allocate_an_attachment_journal() {
     let mut relay = fixture.relay();
     fixture.register(&mut relay);
     active(&mut relay, &fixture, 2);
+    assert!(relay.generations.checkpoint_changes().is_none());
+    assert!(relay.sessions.checkpoint_changes().is_none());
     assert!(matches!(
         relay.checkpointing,
         checkpoint_tracking::Checkpointing::Disabled
@@ -191,7 +196,9 @@ fn same_instant_data_and_feedback_only_update_accounting_and_replay_writes_nothi
         None
     );
     assert_eq!(
-        restored.sessions[&sibling.wire_id()].session.phase(),
+        restored.sessions.entries()[&sibling.wire_id()]
+            .session
+            .phase(),
         crate::sessions::Phase::Active
     );
 }
@@ -246,7 +253,11 @@ fn later_inbound_data_and_probes_persist_source_liveness_without_rewriting_sibli
         at,
     )
     .unwrap();
-    let Role::Established(live) = restored.generations.connection(&key.sender()).unwrap().role
+    let Some(live) = restored
+        .generations
+        .connection(&key.sender())
+        .unwrap()
+        .liveness()
     else {
         panic!("lost sender");
     };
@@ -335,11 +346,13 @@ fn admission_stage_changes_belong_to_the_receiver_attachment() {
     assert_eq!(host.written, [key.receiver()]);
     let restored = host.restore(&fixture, stored);
     assert_eq!(
-        restored.sessions[&key.wire_id()].session.phase(),
+        restored.sessions.entries()[&key.wire_id()].session.phase(),
         crate::sessions::Phase::Active
     );
     assert_eq!(
-        restored.sessions[&sibling.wire_id()].session.phase(),
+        restored.sessions.entries()[&sibling.wire_id()]
+            .session
+            .phase(),
         crate::sessions::Phase::AwaitingReceiver
     );
 }
@@ -408,7 +421,7 @@ fn closing_the_latest_receiver_does_not_lose_the_share_high_water_mark() {
     )
     .unwrap();
     assert_eq!(partial.connections.len(), 2);
-    assert_eq!(partial.manifest.last_session, relay.last_session);
+    assert_eq!(partial.manifest.last_session, relay.sessions.last_issued());
     let _ = relay.handle(
         Input::Cancel {
             participant: newest.receiver(),

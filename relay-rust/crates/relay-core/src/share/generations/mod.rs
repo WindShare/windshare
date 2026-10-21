@@ -2,8 +2,8 @@
 //! socket disappears. Exact records and conservative reservations are exclusive;
 //! secondary indexes never decide whether a generation still exists.
 use super::{
-    Connection, ConnectionRef, Identity, Limits, Role,
-    checkpoint_tracking::Checkpointing,
+    AttemptLimiter, ConnectionRef, Identity, Limits,
+    checkpoint_tracking::Changes,
     deadlines::{Deadlines, Key},
 };
 use crate::{
@@ -14,6 +14,8 @@ use crate::{
 use alloc::{boxed::Box, collections::BTreeMap};
 
 mod checkpoint;
+mod control;
+pub(in crate::share) use control::{Connection, Phase as ConnectionPhase};
 mod retirement;
 mod transitions;
 
@@ -94,14 +96,20 @@ pub(super) struct Generations {
     identity: Identity,
     limits: Limits,
     entries: BTreeMap<ConnectionRef, Generation>,
+    attempts: AttemptLimiter,
+    changes: Changes,
+    deadlines: Deadlines,
 }
 
 impl Generations {
-    pub const fn new(identity: Identity, limits: Limits) -> Self {
+    pub const fn new(identity: Identity, limits: Limits, attempts: AttemptLimiter) -> Self {
         Self {
             identity,
             limits,
             entries: BTreeMap::new(),
+            attempts,
+            changes: Changes::Disabled,
+            deadlines: Deadlines::new(),
         }
     }
 
@@ -111,12 +119,6 @@ impl Generations {
 
     pub fn connection(&self, connection: &ConnectionRef) -> Option<&Connection> {
         self.entries.get(connection)?.socket()
-    }
-
-    // Handshake and share authority retain their own transition rules. This
-    // borrow cannot change admission class, detach a socket or erase its debt.
-    pub fn connection_mut(&mut self, connection: &ConnectionRef) -> Option<&mut Connection> {
-        self.entries.get_mut(connection)?.socket_mut()
     }
 
     pub fn ledger(&self, connection: &ConnectionRef) -> Option<&ConnectionLedger<Journal>> {
@@ -182,12 +184,52 @@ impl Generations {
             .count()
     }
 
-    pub fn reset_ledger_changes(&mut self) {
+    pub fn enable_checkpoints(&mut self) {
         for entry in self.entries.values_mut() {
             if let Some(ledger) = entry.ledger_mut() {
                 let _ = ledger.take_checkpoint_change();
             }
         }
+        self.changes = Changes::tracking(self.record_ids(), true);
+    }
+
+    pub const fn checkpoint_changes(&self) -> Option<&super::checkpoint_tracking::Pending> {
+        self.changes.pending()
+    }
+
+    pub fn acknowledge_checkpoints(&mut self) {
+        self.changes.acknowledge();
+    }
+
+    pub const fn attempts(&self) -> super::admission::AttemptState {
+        self.attempts.state()
+    }
+
+    pub fn has_record(&self, connection: &ConnectionRef) -> bool {
+        self.entries.get(connection).is_some_and(|entry| {
+            !matches!(
+                entry,
+                Generation::Detached {
+                    delivery: Delivery::Unavailable(_),
+                    ..
+                }
+            )
+        })
+    }
+
+    fn schedule_retirement(&mut self, connection: ConnectionRef) {
+        let deadline = self
+            .retirement_state(&connection)
+            .and_then(Detached::deadline);
+        self.deadlines.set(Key::Retirement(connection), deadline);
+    }
+
+    pub fn next_deadline(&self) -> Option<(UnixMillis, Key)> {
+        self.deadlines.next_entry()
+    }
+
+    pub fn expire(&mut self, now: UnixMillis) -> Option<Key> {
+        self.deadlines.expired(now)
     }
 
     /// Every exact-accounting mutation also updates its recovery projection and
@@ -196,8 +238,6 @@ impl Generations {
         &mut self,
         connection: ConnectionRef,
         change: impl FnOnce(&mut ConnectionLedger<Journal>) -> R,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
         observer: &mut impl Observer,
     ) -> Option<R> {
         let entry = self.entries.get_mut(&connection)?;
@@ -210,16 +250,17 @@ impl Generations {
         );
         let ledger = entry.ledger_mut()?;
         let result = change(ledger);
-        if checkpointing.enabled() && ledger.take_checkpoint_change() {
-            checkpointing.changed(connection);
+        if self.changes.enabled() && ledger.take_checkpoint_change() {
+            self.changes.changed(connection);
             if retired {
-                checkpointing.retention_changed();
+                self.changes.retention_changed();
             }
         }
         for observation in ledger.observer_mut().0.drain(..) {
             observer.observe(observation);
         }
-        deadlines.set(Key::Ledger(connection), ledger.deadline());
+        self.deadlines
+            .set(Key::Ledger(connection), ledger.deadline());
         Some(result)
     }
 }

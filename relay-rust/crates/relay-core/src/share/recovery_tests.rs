@@ -59,10 +59,15 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     let (new_key, _) = fixture.join(&mut restored, 3);
     assert_ne!(new_key.wire_id(), key.wire_id());
     assert_eq!(
-        restored.sessions[&key.wire_id()].session.phase(),
+        restored.sessions.entries()[&key.wire_id()].session.phase(),
         crate::sessions::Phase::Active
     );
-    assert_eq!(restored.sessions[&key.wire_id()].session.deadline(), None);
+    assert_eq!(
+        restored.sessions.entries()[&key.wire_id()]
+            .session
+            .deadline(),
+        None
+    );
 }
 
 #[test]

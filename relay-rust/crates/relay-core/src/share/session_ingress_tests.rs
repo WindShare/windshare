@@ -16,7 +16,7 @@ fn admission(session: RelaySessionId) -> Vec<u8> {
 }
 
 fn sender_liveness(relay: &Relay, sender: ConnectionRef) -> (UnixMillis, UnixMillis) {
-    let Role::Established(liveness) = &relay.generations.connection(&sender).unwrap().role else {
+    let Some(liveness) = relay.generations.connection(&sender).unwrap().liveness() else {
         panic!("the shared sender must remain established");
     };
     (liveness.last_inbound(), liveness.deadline())
@@ -61,7 +61,7 @@ fn receiver_loss_discards_late_ingress_before_and_after_session_collection() {
     let (healthy, _) = fixture.join(&mut relay, 3);
     let pending = receive(&mut relay, retired, fixture.at);
     let _ = relay.handle(Input::Disconnected(retired.receiver()), fixture.at);
-    assert!(relay.sessions.contains_key(&retired.wire_id()));
+    assert!(relay.sessions.entries().contains_key(&retired.wire_id()));
     let later = UnixMillis(fixture.at.0 + 1);
     late_inputs(&mut relay, retired, later);
     assert!(
@@ -75,7 +75,7 @@ fn receiver_loss_discards_late_ingress_before_and_after_session_collection() {
         assert_eq!(turn.refusal, None);
     }
     let _ = relay.handle(Input::Closed(retired.receiver()), later);
-    assert!(!relay.sessions.contains_key(&retired.wire_id()));
+    assert!(!relay.sessions.entries().contains_key(&retired.wire_id()));
     late_inputs(&mut relay, retired, UnixMillis(later.0 + 1));
     assert!(relay.observer().0.iter().any(|observation| matches!(
         observation,
@@ -102,7 +102,7 @@ fn expired_admission_discards_late_sender_confirmation_and_preserves_healthy_ses
     let (healthy, _) = fixture.join(&mut relay, 3);
     let _ = receive(&mut relay, healthy, fixture.at);
     activate(&mut relay, healthy, fixture.at);
-    let expiry = relay.sessions[&expired.wire_id()]
+    let expiry = relay.sessions.entries()[&expired.wire_id()]
         .session
         .deadline()
         .unwrap();

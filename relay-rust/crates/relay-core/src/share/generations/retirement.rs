@@ -1,9 +1,5 @@
 use super::{ConnectionRef, Delivery, Generation, Generations};
-use crate::share::{
-    Error,
-    checkpoint_tracking::Checkpointing,
-    deadlines::{Deadlines, Key},
-};
+use crate::share::{Error, deadlines::Key};
 use crate::{clock::UnixMillis, flow::Counts};
 use alloc::vec::Vec;
 use core::time::Duration;
@@ -76,6 +72,14 @@ impl RetirementPolicy {
 }
 
 impl Detached {
+    pub(super) const fn deadline(self) -> Option<UnixMillis> {
+        match self {
+            Self::Quiescing { retire_at, .. } => Some(retire_at),
+            Self::RiskRetained { expires_at } => Some(expires_at),
+            Self::AwaitingRelease | Self::Released => None,
+        }
+    }
+
     pub(in crate::share) fn validate(self, policy: RetirementPolicy) -> Result<(), Error> {
         match (self, policy) {
             (Self::Released, _)
@@ -210,11 +214,7 @@ impl Generations {
         })
     }
 
-    pub(in crate::share) fn due_retirements(
-        &self,
-        now: UnixMillis,
-        deadlines: &mut Deadlines,
-    ) -> Vec<ConnectionRef> {
+    pub(in crate::share) fn due_retirements(&mut self, now: UnixMillis) -> Vec<ConnectionRef> {
         let mut expiring = Vec::new();
         let mut retiring = Vec::new();
         for (&connection, entry) in &self.entries {
@@ -236,7 +236,7 @@ impl Generations {
             let next = retire_at
                 .filter(|at| now < *at)
                 .or_else(|| (now < expires_at).then_some(expires_at));
-            deadlines.set(Key::Retirement(connection), next);
+            self.deadlines.set(Key::Retirement(connection), next);
             if now >= expires_at {
                 expiring.push(connection);
             } else if retire_at.is_some_and(|at| now >= at) {
@@ -255,8 +255,6 @@ impl Generations {
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
     ) -> RetirementProgress {
         let Some(entry @ Generation::Detached { state, .. }) = self.entries.get(&connection) else {
             return RetirementProgress::Waiting;
@@ -280,7 +278,7 @@ impl Generations {
         if now >= expires_at {
             // Drop only the unreachable destination's accounting. Do not settle
             // its flows or refund debt submitted to a still-communicating peer.
-            self.remove_detached(connection, checkpointing, deadlines);
+            self.remove_detached(connection);
             return RetirementProgress::RiskExpired {
                 residual,
                 expires_at,
@@ -313,12 +311,13 @@ impl Generations {
         }
         if let Some(Generation::Detached { state, delivery }) = self.entries.get_mut(&connection) {
             *state = Detached::RiskRetained { expires_at };
-            checkpointing.retention_changed();
+            self.changes.retention_changed();
             if matches!(delivery, Delivery::Exact(_)) {
-                checkpointing.changed(connection);
+                self.changes.changed(connection);
             }
         }
-        deadlines.set(Key::Retirement(connection), Some(expires_at));
+        self.deadlines
+            .set(Key::Retirement(connection), Some(expires_at));
         RetirementProgress::Retired {
             residual,
             expires_at,

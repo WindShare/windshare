@@ -289,8 +289,12 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
             before
         );
         assert!(matches!(
-            relay.generations.connection(&next_connection).unwrap().role,
-            Role::Established(_)
+            relay
+                .generations
+                .connection(&next_connection)
+                .unwrap()
+                .phase(),
+            ConnectionPhase::Established
         ));
     }
     assert!(relay.generations.ledger(&old.receiver()).is_none());
