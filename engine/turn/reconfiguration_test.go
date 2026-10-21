@@ -42,7 +42,7 @@ func (s *versionedSource) Renew(ctx context.Context, subject provider.Subject, _
 	return s.Issue(ctx, subject)
 }
 func configurationFor(source credentialSource, budget uint64) accountConfig {
-	return accountConfig{Accounts: []account{{ID: "owner", Provider: "test", Source: source, LocalBudgetBytes: budget}},
+	return accountConfig{Accounts: []account{{ID: "owner", Provider: "test", Source: &credentialIssuer{source: source}, LocalBudgetBytes: budget}},
 		Profiles: []profile{{ID: "primary", AccountID: "owner", URLs: []string{"turn:localhost:3478"}}}}
 }
 func reconfigure(t *testing.T, m *accountManager, config accountConfig) {
@@ -120,17 +120,20 @@ func TestConfigurationRetainsUsageAndPinsLeaseIssuer(t *testing.T) {
 
 func TestBudgetChangeAndAccountReimportNeverResetLedgerOrReviveLeases(t *testing.T) {
 	source := newVersionedSource("issuer")
-	m := newConfiguredManager(t, configurationFor(source, 100))
+	config := configurationFor(source, 100)
+	m := newConfiguredManager(t, config)
 	old := acquire(t, m, "primary", 1)
 	old.Charge(turnpath.Usage{TransportSent: 80})
-	reconfigure(t, m, configurationFor(source, 50))
+	config.Accounts[0].LocalBudgetBytes = 50
+	reconfigure(t, m, config)
 	if !errors.Is(old.Loss(), ErrBudget) {
 		t.Fatal("lower hard budget did not revoke active authority")
 	}
 	if _, err := m.Acquire(t.Context(), "primary", turnpath.Subject{}); !errors.Is(err, ErrBudget) {
 		t.Fatal(err)
 	}
-	reconfigure(t, m, configurationFor(source, 200))
+	config.Accounts[0].LocalBudgetBytes = 200
+	reconfigure(t, m, config)
 	if old.Charge(turnpath.Usage{TransportSent: 10}) {
 		t.Fatal("budget increase revived old authority")
 	}
@@ -139,7 +142,8 @@ func TestBudgetChangeAndAccountReimportNeverResetLedgerOrReviveLeases(t *testing
 	if current.Loss() == nil {
 		t.Fatal("removed account retained active authority")
 	}
-	reconfigure(t, m, configurationFor(source, 95))
+	config.Accounts[0].LocalBudgetBytes = 95
+	reconfigure(t, m, config)
 	fresh := acquire(t, m, "primary", 3)
 	if fresh.Charge(turnpath.Usage{TransportSent: 5}) {
 		t.Fatal("re-import bypassed previous usage")

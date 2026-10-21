@@ -69,7 +69,7 @@ type issued struct {
 	path                [16]byte
 	sequence            uint64
 	generation          uint64
-	revision            uint64
+	profileRevision     uint64
 	requestCancellation error
 	lease               *Lease
 	err                 error
@@ -366,7 +366,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	service.cancel = cancel
 	sequence := s.sequence
 	generation := s.generation
-	revision := s.inventory.Revision
+	profile := service.profile
 	current := service.current
 	recovery := s.needsRecovery(current) && !current.renewalDue(s.config.Now())
 	if recovery {
@@ -381,9 +381,9 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 		if current != nil && !recovery {
 			lease, err = current.lease.Renew(child, subject)
 		} else {
-			lease, err = s.config.Accounts.Acquire(child, service.profile.Identity.Profile, subject)
+			lease, err = s.config.Accounts.Acquire(child, profile.Identity.Profile, subject)
 		}
-		result := issued{service: service, path: path, sequence: sequence, generation: generation, revision: revision, requestCancellation: context.Cause(child), lease: lease, err: err}
+		result := issued{service: service, path: path, sequence: sequence, generation: generation, profileRevision: profile.Revision, requestCancellation: context.Cause(child), lease: lease, err: err}
 		select {
 		case s.completed <- result:
 		case <-ctx.Done():

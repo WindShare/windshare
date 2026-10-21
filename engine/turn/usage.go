@@ -10,17 +10,19 @@ import (
 )
 
 type leaseState struct {
-	manager   *accountManager
-	account   *accountLedger
-	identity  iceconfig.Identity
-	subject   turnpath.Subject
-	revision  uint64
-	issued    provider.Acquisition
-	authority context.Context
-	cancel    context.CancelCauseFunc
-	usage     turnpath.Usage
-	charged   uint64
-	released  bool
+	manager         *accountManager
+	account         *accountLedger
+	identity        iceconfig.Identity
+	subject         turnpath.Subject
+	revision        uint64
+	profileRevision uint64
+	issuer          *credentialIssuer
+	issued          provider.Acquisition
+	authority       context.Context
+	cancel          context.CancelCauseFunc
+	usage           turnpath.Usage
+	charged         uint64
+	released        bool
 }
 
 func (l *leaseState) charge(delta turnpath.Usage) bool {
@@ -55,7 +57,7 @@ func (l *leaseState) charge(delta turnpath.Usage) bool {
 	usable := !m.closed && l.authority.Err() == nil
 	m.mu.Unlock()
 	if newlyExhausted {
-		m.emit(Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, Milestone: "budget_exhausted", Usage: usage})
+		m.emit(Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, ProfileRevision: l.profileRevision, Milestone: "budget_exhausted", Usage: usage})
 	}
 	return usable
 }
@@ -71,7 +73,7 @@ func (l *leaseState) release() {
 	l.cancel(ErrClosed)
 	l.account.active--
 	delete(m.leases, l)
-	event := Event{Identity: l.identity, Subject: l.subject, Revision: l.revision,
+	event := Event{Identity: l.identity, Subject: l.subject, Revision: l.revision, ProfileRevision: l.profileRevision,
 		Milestone: "local_path_stopped", Usage: l.usage, ResourceID: cleanupID(l.issued.Cleanup)}
 	cleanup := m.retainCleanupLocked(l.account, l.issued.Cleanup, event)
 	m.mu.Unlock()

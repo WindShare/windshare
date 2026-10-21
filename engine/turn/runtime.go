@@ -63,7 +63,7 @@ func (runtime *Runtime) apply(prepared preparedSettings) error {
 	if reflect.DeepEqual(runtime.settings, prepared.settings) {
 		return nil
 	}
-	manual, err := prepared.manual.bind(runtime.dependencies)
+	manual, err := prepared.manual.bind(runtime.dependencies, runtime.accounts.readConfiguration())
 	if err != nil {
 		return err
 	}

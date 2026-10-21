@@ -41,12 +41,13 @@ type account struct {
 	ID               string
 	Provider         string
 	LocalBudgetBytes uint64
-	Source           credentialSource
+	Source           *credentialIssuer
 	Usage            usageReporter
 }
 type profile struct {
 	ID, AccountID string
 	URLs          []string
+	revision      uint64
 }
 type accountConfig struct {
 	Services []managedService
@@ -60,6 +61,7 @@ type Event struct {
 	Identity                    iceconfig.Identity
 	Subject                     turnpath.Subject
 	Revision                    uint64
+	ProfileRevision             uint64
 	Milestone                   string
 	ResourceID                  string
 	Attempt                     int
@@ -121,6 +123,7 @@ func newAccountManager(config accountConfig) (*accountManager, error) {
 	for id := range prepared.accounts {
 		m.ledgers[id] = &accountLedger{}
 	}
+	m.current.inheritProfileRevisions(configuration{}, m.ledgers)
 	return m, nil
 }
 
@@ -148,7 +151,7 @@ func (m *accountManager) Inventory() turnpath.Inventory {
 	for _, id := range m.current.profileOrder {
 		profile := m.current.profiles[id]
 		account := m.current.accounts[profile.AccountID]
-		result.Profiles = append(result.Profiles, turnpath.Profile{Identity: iceconfig.Identity{
+		result.Profiles = append(result.Profiles, turnpath.Profile{Revision: profile.revision, Identity: iceconfig.Identity{
 			Provider: account.Provider, Account: profile.AccountID, Profile: profile.ID}})
 	}
 	return result
@@ -203,7 +206,7 @@ func (m *accountManager) Close() error {
 func (m *accountManager) emit(event Event) {
 	slog.Debug("TURN account", "provider", event.Identity.Provider, "account", event.Identity.Account, "profile", event.Identity.Profile,
 		"session_id", fmt.Sprintf("%x", event.Subject.SessionID), "path_id", fmt.Sprintf("%x", event.Subject.PathID),
-		"config_revision", event.Revision, "milestone", event.Milestone, "resource_id", event.ResourceID,
+		"config_revision", event.Revision, "profile_revision", event.ProfileRevision, "milestone", event.Milestone, "resource_id", event.ResourceID,
 		"attempt", event.Attempt, "reason", event.Reason, "useful_bytes", event.Usage.Useful,
 		"transport_sent", event.Usage.TransportSent, "transport_received", event.Usage.TransportReceived,
 		"provider_revocation_confirmed", event.ProviderRevocationConfirmed)

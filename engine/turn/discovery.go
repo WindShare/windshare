@@ -23,9 +23,12 @@ type service struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
 }
-type publishedAuthority struct {
+type remoteAuthority struct {
 	address, accessKey, serviceID string
-	budget                        uint64
+}
+type publishedAuthority struct {
+	remoteAuthority
+	budget uint64
 }
 type discovery struct {
 	mu           sync.Mutex
@@ -140,6 +143,7 @@ func (registry *discovery) configure(manual accountConfig, settings ManagedSetti
 }
 
 func (registry *discovery) services(entries map[string]*service, budgets map[string]uint64) ([]managedService, []publishedAuthority, error) {
+	previous := registry.accounts.readConfiguration()
 	addresses := make([]string, 0, len(entries))
 	for address := range entries {
 		addresses = append(addresses, address)
@@ -152,14 +156,18 @@ func (registry *discovery) services(entries map[string]*service, budgets map[str
 		if current.capability == nil || !current.capability.Enabled {
 			continue
 		}
-		source, err := provider.NewRemote(provider.RemoteConfig{
-			RelayURL: current.candidate.PublicURL, AccessKey: current.candidate.AccessKey,
-			ServiceID: current.capability.ServiceID, Client: registry.dependencies.Client, Now: registry.dependencies.Now,
+		identity := remoteAuthority{address: address, accessKey: current.candidate.AccessKey, serviceID: current.capability.ServiceID}
+		factory := planIssuer(identity, func(dependencies Dependencies) (credentialSource, error) {
+			return provider.NewRemote(provider.RemoteConfig{
+				RelayURL: current.candidate.PublicURL, AccessKey: identity.accessKey, ServiceID: identity.serviceID,
+				Client: dependencies.Client, Now: dependencies.Now,
+			})
 		})
+		source, err := factory(registry.dependencies, previous.accounts[managedIdentity(identity.serviceID)].Source)
 		if err != nil {
 			return nil, nil, err
 		}
-		published = append(published, publishedAuthority{address: address, accessKey: current.candidate.AccessKey, serviceID: current.capability.ServiceID, budget: budgets[address]})
+		published = append(published, publishedAuthority{remoteAuthority: identity, budget: budgets[address]})
 		services = append(services, managedService{ID: current.capability.ServiceID, RelayURL: current.candidate.PublicURL,
 			LocalBudgetBytes: budgets[address], Source: source})
 	}
