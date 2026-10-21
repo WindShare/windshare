@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -30,10 +31,13 @@ func (s *Sender) refreshConfiguration(ctx context.Context) {
 			current = &service{profile: profile}
 		}
 		delete(previous, profile.Identity)
-		if current.cancel != nil {
-			current.cancel()
+		if current.profile.Revision != profile.Revision {
+			if current.cancel != nil {
+				current.cancel()
+			}
+			current.retryAt = time.Time{}
 		}
-		current.retryAt = time.Time{}
+		current.profile = profile
 		services = append(services, current)
 	}
 	for _, removed := range previous {
@@ -54,7 +58,7 @@ func (s *Sender) refreshConfiguration(ctx context.Context) {
 
 func (s *Sender) discardReason(result issued) string {
 	switch {
-	case result.revision != s.inventory.Revision, errors.Is(result.err, ErrSuperseded):
+	case !slices.Contains(s.services, result.service), result.profileRevision != result.service.profile.Revision, errors.Is(result.err, ErrSuperseded):
 		return "configuration_superseded"
 	case result.generation != s.generation:
 		return "demand_superseded"

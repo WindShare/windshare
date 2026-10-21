@@ -10,7 +10,8 @@ import (
 )
 
 // Configuration is immutable after publication. Readers retain a value snapshot
-// while calling an issuer; only the ledger is shared across revisions.
+// while calling an issuer. Its revision orders publications, not credential
+// validity; each profile retains its own issuance revision across unrelated edits.
 type configuration struct {
 	revision                   uint64
 	accounts                   map[string]account
@@ -21,7 +22,7 @@ type configuration struct {
 
 func prepare(config accountConfig) (configuration, error) {
 	for _, account := range config.Accounts {
-		if account.Source == nil {
+		if account.Source == nil || account.Source.source == nil {
 			return configuration{}, ErrConfiguration
 		}
 	}
@@ -97,11 +98,14 @@ func (m *accountManager) applyLocked(config accountConfig) error {
 			m.ledgers[id] = &accountLedger{}
 		}
 	}
+	next.inheritProfileRevisions(m.current, m.ledgers)
 	m.current = next
-	// A result issued under an old configuration must never install authority
-	// after a settings change. Its captured source still owns any revocation.
+	canceled := 0
 	for request := range m.requests {
-		request.cancel(turnpath.ErrSuperseded)
+		if cause := m.issuanceUnavailableLocked(request); cause != nil {
+			request.cancel(cause)
+			canceled++
+		}
 	}
 	revoked := 0
 	for lease := range m.leases {
@@ -113,7 +117,38 @@ func (m *accountManager) applyLocked(config accountConfig) error {
 	close(m.changed)
 	m.changed = make(chan struct{})
 	slog.Debug("TURN configuration applied", "config_revision", next.revision,
-		"accounts", len(next.accounts), "profiles", len(next.profiles), "revoked_leases", revoked)
+		"accounts", len(next.accounts), "profiles", len(next.profiles), "canceled_requests", canceled, "revoked_leases", revoked)
+	return nil
+}
+
+func (m *accountManager) readConfiguration() configuration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.current
+}
+
+func (next *configuration) inheritProfileRevisions(previous configuration, ledgers map[string]*accountLedger) {
+	for id, profile := range next.profiles {
+		old, exists := previous.profiles[id]
+		account, prior := next.accounts[profile.AccountID], previous.accounts[old.AccountID]
+		profile.revision = next.revision
+		if exists && old.AccountID == profile.AccountID && prior.Provider == account.Provider &&
+			prior.Source == account.Source && slices.Equal(old.URLs, profile.URLs) &&
+			exhausted(prior, ledgers[profile.AccountID]) == exhausted(account, ledgers[profile.AccountID]) {
+			profile.revision = old.revision
+		}
+		next.profiles[id] = profile
+	}
+}
+
+func (m *accountManager) issuanceUnavailableLocked(request *issuance) error {
+	profile, ok := m.current.profiles[request.profileID]
+	if !ok || profile.revision != request.profileRevision {
+		return turnpath.ErrSuperseded
+	}
+	if exhausted(m.current.accounts[profile.AccountID], request.account) {
+		return ErrBudget
+	}
 	return nil
 }
 

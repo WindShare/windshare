@@ -12,6 +12,9 @@ import (
 
 type Profile struct {
 	Identity iceconfig.Identity
+	// Revision identifies this profile's acquisition authority and endpoints.
+	// An unrelated inventory publication must retain it, including across retries.
+	Revision uint64
 }
 type Subject struct {
 	SessionID [16]byte
@@ -20,6 +23,7 @@ type Subject struct {
 
 // Inventory is one atomic configuration view. Changed closes when a newer view
 // is available, so a sender cannot miss an update between reading and waiting.
+// Its revision orders views; Profile.Revision determines issuance validity.
 type Inventory struct {
 	Revision uint64
 	Profiles []Profile

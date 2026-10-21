@@ -16,7 +16,8 @@ func fixture(t *testing.T, budget uint64) *accountManager {
 	t.Helper()
 	credential, _ := iceconfig.Fixed("user", "password")
 	source, _ := provider.NewStatic(credential, nil)
-	manager, err := newAccountManager(accountConfig{Accounts: []account{{ID: "one", Provider: "standard", Source: source, LocalBudgetBytes: budget}, {ID: "two", Provider: "standard", Source: source, LocalBudgetBytes: budget}},
+	issuer := &credentialIssuer{source: source}
+	manager, err := newAccountManager(accountConfig{Accounts: []account{{ID: "one", Provider: "standard", Source: issuer, LocalBudgetBytes: budget}, {ID: "two", Provider: "standard", Source: issuer, LocalBudgetBytes: budget}},
 		Profiles: []profile{{ID: "a", AccountID: "one", URLs: []string{"turn:localhost:3478"}}, {ID: "b", AccountID: "one", URLs: []string{"turn:localhost:3479"}}, {ID: "c", AccountID: "two", URLs: []string{"turn:localhost:3480"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +84,7 @@ func (s blockingSource) Issue(ctx context.Context, _ provider.Subject) (provider
 }
 func TestCanceledIssuanceReturnsCapacity(t *testing.T) {
 	source := blockingSource{make(chan struct{})}
-	m, err := newAccountManager(accountConfig{Accounts: []account{{ID: "a", Provider: "provider", Source: source}}, Profiles: []profile{{ID: "p", AccountID: "a", URLs: []string{"turn:localhost"}}}})
+	m, err := newAccountManager(accountConfig{Accounts: []account{{ID: "a", Provider: "provider", Source: &credentialIssuer{source: source}}}, Profiles: []profile{{ID: "p", AccountID: "a", URLs: []string{"turn:localhost"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestLocalShutdownDoesNotClaimProviderRevocation(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event
 	m, err := newAccountManager(accountConfig{
-		Accounts: []account{{ID: "owner", Provider: "test", Source: source}},
+		Accounts: []account{{ID: "owner", Provider: "test", Source: &credentialIssuer{source: source}}},
 		Profiles: []profile{{ID: "primary", AccountID: "owner", URLs: []string{"turn:localhost"}}},
 		Observe:  func(event Event) { mu.Lock(); events = append(events, event); mu.Unlock() },
 	})

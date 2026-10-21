@@ -18,7 +18,7 @@ type managedService struct {
 	ID               string
 	RelayURL         string
 	LocalBudgetBytes uint64
-	Source           credentialSource
+	Source           *credentialIssuer
 }
 
 func managedIdentity(id string) string { return managedPrefix + id }
@@ -30,7 +30,7 @@ func prepareServices(result *configuration, services []managedService) error {
 	for _, service := range services {
 		id := managedIdentity(service.ID)
 		identity := iceconfig.Identity{Provider: "cloudflare", Account: id, Profile: id}
-		if identity.Validate() != nil || service.Source == nil {
+		if identity.Validate() != nil || service.Source == nil || service.Source.source == nil {
 			return ErrConfiguration
 		}
 		endpoint, err := v2.NormalizeRelayEndpoint(service.RelayURL)
@@ -92,7 +92,7 @@ func (selection *Selection) Inventory() turnpath.Inventory {
 	for _, id := range m.current.profileOrder {
 		profile := m.current.profiles[id]
 		account := m.current.accounts[profile.AccountID]
-		value := turnpath.Profile{Identity: iceconfig.Identity{Provider: account.Provider, Account: account.ID, Profile: id}}
+		value := turnpath.Profile{Revision: profile.revision, Identity: iceconfig.Identity{Provider: account.Provider, Account: account.ID, Profile: id}}
 		if service, ok := m.current.services[id]; ok {
 			if selection.relays[service.RelayURL] {
 				managed = append(managed, value)

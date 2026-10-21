@@ -20,7 +20,7 @@ func TestManagedInventoryDoesNotConsumeManualQuotaAndFollowsSelection(t *testing
 	var config accountConfig
 	for i := range MaximumAccounts {
 		id := fmt.Sprintf("manual%d", i)
-		config.Accounts = append(config.Accounts, account{ID: id, Provider: "coturn", Source: managedSource{}})
+		config.Accounts = append(config.Accounts, account{ID: id, Provider: "coturn", Source: &credentialIssuer{source: managedSource{}}})
 		config.Profiles = append(config.Profiles, profile{ID: id, AccountID: id, URLs: []string{"turn:localhost:3478"}})
 	}
 	manager, err := newAccountManager(config)
@@ -28,8 +28,8 @@ func TestManagedInventoryDoesNotConsumeManualQuotaAndFollowsSelection(t *testing
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	services := []managedService{{ID: "cf-selected", RelayURL: "https://selected.example", LocalBudgetBytes: 100, Source: managedSource{}},
-		{ID: "cf-inactive", RelayURL: "https://inactive.example", Source: managedSource{}}}
+	services := []managedService{{ID: "cf-selected", RelayURL: "https://selected.example", LocalBudgetBytes: 100, Source: &credentialIssuer{source: managedSource{}}},
+		{ID: "cf-inactive", RelayURL: "https://inactive.example", Source: &credentialIssuer{source: managedSource{}}}}
 	if err := manager.SetManagedServices(services); err != nil {
 		t.Fatal(err)
 	}

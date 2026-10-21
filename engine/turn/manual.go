@@ -75,10 +75,9 @@ func (settings ManualSettings) Clone() ManualSettings {
 	return settings
 }
 
-type sourceFactory func(Dependencies) (credentialSource, error)
 type manualPlan struct {
 	definition accountConfig
-	sources    []sourceFactory
+	sources    []issuerFactory
 	analytics  []*provider.CloudflareUsageConfig
 }
 
@@ -119,10 +118,15 @@ func (settings ManualSettings) prepare() (manualPlan, error) {
 	return result, nil
 }
 
-func (plan manualPlan) bind(dependencies Dependencies) (accountConfig, error) {
+func (plan manualPlan) bind(dependencies Dependencies, previous configuration) (accountConfig, error) {
 	result := cloneConfig(plan.definition)
 	for index := range result.Accounts {
-		source, err := plan.sources[index](dependencies)
+		account := &result.Accounts[index]
+		prior := previous.accounts[account.ID]
+		if prior.Provider != account.Provider {
+			prior.Source = nil
+		}
+		source, err := plan.sources[index](dependencies, prior.Source)
 		if err != nil {
 			return accountConfig{}, errors.Join(ErrConfiguration, err)
 		}
@@ -140,7 +144,7 @@ func (plan manualPlan) bind(dependencies Dependencies) (accountConfig, error) {
 	return result, nil
 }
 
-func (setting AccountSettings) prepareIssuer() (sourceFactory, *provider.CloudflareUsageConfig, error) {
+func (setting AccountSettings) prepareIssuer() (issuerFactory, *provider.CloudflareUsageConfig, error) {
 	if setting.Analytics != nil && setting.Issuer != CloudflareIssuer {
 		return nil, nil, ErrConfiguration
 	}
@@ -152,18 +156,21 @@ func (setting AccountSettings) prepareIssuer() (sourceFactory, *provider.Cloudfl
 		}
 		credential, err := iceconfig.Fixed(value.Username, value.Password)
 		if value.ExpiresAt != nil {
-			credential, err = iceconfig.Expiring(value.Username, value.Password, *value.ExpiresAt)
+			credential, err = iceconfig.Expiring(value.Username, value.Password, value.ExpiresAt.UTC())
 		}
 		if err != nil {
 			return nil, nil, err
 		}
-		return func(dependencies Dependencies) (credentialSource, error) {
+		return planIssuer(credential, func(dependencies Dependencies) (credentialSource, error) {
 			return provider.NewStatic(credential, dependencies.Now)
-		}, nil, nil
+		}), nil, nil
 	case CloudflareIssuer:
 		var value CloudflareCredentials
 		if err := decode(setting.Credentials, &value); err != nil {
 			return nil, nil, err
+		}
+		if value.LifetimeSeconds == 0 {
+			value.LifetimeSeconds = uint32(provider.DefaultLifetime / time.Second)
 		}
 		config := provider.CloudflareConfig{KeyID: value.KeyID, APIToken: value.APIToken, Lifetime: time.Duration(value.LifetimeSeconds) * time.Second}
 		if err := config.Validate(); err != nil {
@@ -176,25 +183,28 @@ func (setting AccountSettings) prepareIssuer() (sourceFactory, *provider.Cloudfl
 				return nil, nil, err
 			}
 		}
-		return func(dependencies Dependencies) (credentialSource, error) {
+		return planIssuer(value, func(dependencies Dependencies) (credentialSource, error) {
 			bound := config
 			bound.Client, bound.Now = dependencies.Client, dependencies.Now
 			return provider.NewCloudflare(bound)
-		}, analytics, nil
+		}), analytics, nil
 	case CoturnIssuer:
 		var value CoturnCredentials
 		if err := decode(setting.Credentials, &value); err != nil {
 			return nil, nil, err
 		}
+		if value.LifetimeSeconds == 0 {
+			value.LifetimeSeconds = uint32(provider.DefaultLifetime / time.Second)
+		}
 		config := provider.CoturnConfig{SharedSecret: value.SharedSecret, Lifetime: time.Duration(value.LifetimeSeconds) * time.Second}
 		if err := config.Validate(); err != nil {
 			return nil, nil, err
 		}
-		return func(dependencies Dependencies) (credentialSource, error) {
+		return planIssuer(value, func(dependencies Dependencies) (credentialSource, error) {
 			bound := config
 			bound.Now = dependencies.Now
 			return provider.NewCoturn(bound)
-		}, nil, nil
+		}), nil, nil
 	default:
 		return nil, nil, ErrConfiguration
 	}

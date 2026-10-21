@@ -125,6 +125,8 @@ validates and publishes manual accounts and managed deployment policies together
 preserving usage by account ID, including removal/re-import. Application settings
 project through `relayconfig.Config.TURNSettings()`; discovery observations remain
 separate. New requests use the latest settings; existing leases retain their issuing source.
+Unrelated settings/discovery preserve pending issuance and renewal ownership;
+changes to a profile's authority or endpoints invalidate only dependent requests.
 Removing an account/profile or lowering its limit below usage retires affected
 paths. Raising a limit permits new leases without reviving revoked ones.
 Exhaustion stops issuance and retires that account's paths, leaving other services
