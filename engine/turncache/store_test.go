@@ -8,14 +8,14 @@ import (
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestCacheIsScopedToAuthorityAndRejectsOlderObservations(t *testing.T) {
 	store := FileStore{Settings: relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}}
 	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", AccessKey: "first-key"}
 	at := time.Unix(100, 0)
-	enabled := turnprovider.Capability{ServiceID: "cf-service", Enabled: true}
+	enabled := turn.Capability{ServiceID: "cf-service", Enabled: true}
 	if cached, err := store.Load(candidate); err != nil || cached != nil {
 		t.Fatal(cached, err)
 	}
@@ -57,7 +57,7 @@ func TestCorruptCacheCanBeRebuiltWithoutChangingSettings(t *testing.T) {
 	}
 	before, _ := os.ReadFile(settings.Path)
 	store := FileStore{Settings: settings}
-	capability := turnprovider.Capability{ServiceID: "cf-service", Enabled: true}
+	capability := turn.Capability{ServiceID: "cf-service", Enabled: true}
 	if err := store.Save(t.Context(), candidate, capability, time.Now()); err != nil {
 		t.Fatal(err)
 	}

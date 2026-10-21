@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnconfig"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestCheckpointDoesNotRewriteSettingsAndCorruptionIsIsolated(t *testing.T) {
@@ -33,7 +33,7 @@ func TestCheckpointDoesNotRewriteSettingsAndCorruptionIsIsolated(t *testing.T) {
 		t.Fatal("operation has no independent record", err)
 	}
 	imported := initial.Config
-	imported.ManagedTURNPolicies = []turnconfig.ManagedPolicy{{RelayURL: initial.Profiles[0].PublicURL, LocalBudgetBytes: 99}}
+	imported.ManagedTURNPolicies = []turn.ManagedPolicy{{RelayURL: initial.Profiles[0].PublicURL, LocalBudgetBytes: 99}}
 	if err := settings.Save(imported); err != nil {
 		t.Fatal(err)
 	}

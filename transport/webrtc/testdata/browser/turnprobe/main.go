@@ -18,7 +18,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
@@ -31,8 +31,8 @@ const (
 
 type probe struct {
 	mu      sync.Mutex
-	source  issuer
-	issued  map[byte]turnprovider.Issued
+	source  *trialTURN
+	issued  map[byte]*turnpath.Lease
 	sockets *socketauthority.Authority
 	turn    *provider.TURNResourceOwner
 	address netip.Addr
@@ -52,6 +52,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer source.Close()
 	route, err := net.Dial("udp4", routeProbe)
 	if err != nil {
 		return err
@@ -59,14 +60,14 @@ func run() error {
 	address := route.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 	_ = route.Close()
 	owner := &probe{source: source, sockets: socketauthority.New(socketauthority.Config{}),
-		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]turnprovider.Issued)}
+		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease)}
 	defer owner.sockets.Close()
 	defer func() {
 		for _, connection := range owner.paths {
 			_ = connection.Close()
 		}
 		for _, issued := range owner.issued {
-			_ = owner.source.Revoke(context.Background(), issued)
+			issued.Close()
 		}
 	}()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -126,7 +127,7 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 		raw = "turns:turn.cloudflare.com:443?transport=tcp"
 	}
 	relay, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "cloudflare", Account: "trial", Profile: r.URL.Query().Get("transport")},
-		[]string{raw}, issued.Credentials)
+		[]string{raw}, issued.Relay().Credentials())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -200,7 +201,7 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id": id, "offer": connection.LocalDescription(), "bytes": probePayloadBytes,
-		"iceServers": []map[string]any{{"urls": []string{raw}, "username": issued.Credentials.Username(), "credential": issued.Credentials.Password()}},
+		"iceServers": []map[string]any{{"urls": []string{raw}, "username": issued.Relay().Credentials().Username(), "credential": issued.Relay().Credentials().Password()}},
 	})
 }
 

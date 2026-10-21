@@ -1,71 +1,25 @@
 package engine
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"time"
 
-	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnaccount"
-	"github.com/windshare/windshare/engine/turnconfig"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/engine/turn"
 )
 
-// ConfigureTURN publishes local settings without contacting issuers. Account IDs
-// retain their Engine-lifetime usage; existing leases keep their issuing source.
-func (engine *Engine) ConfigureTURN(config turnconfig.Config) error {
-	config = config.Clone()
+// ConfigureTURN atomically publishes manual accounts and managed deployment
+// settings without contacting issuers or resetting Engine-lifetime budgets.
+func (engine *Engine) ConfigureTURN(settings turn.Settings) error {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	if engine.closing {
 		return ErrClosed
 	}
-	before, err := json.Marshal(engine.config.TURN)
-	if err != nil {
-		return err
-	}
-	after, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-	if bytes.Equal(before, after) {
-		return nil
-	}
-	dependencies := engine.config.TURNDependencies
-	if dependencies.Now == nil {
-		dependencies.Now = engine.config.Now
-	}
-	prepared, err := config.Build(dependencies)
-	if err != nil {
-		return err
-	}
-	if err = engine.turn.Reconfigure(prepared); err != nil {
-		return err
-	}
-	engine.config.TURN = config
-	return nil
+	return engine.turn.Configure(settings)
 }
 
-// ConfigureManagedTURN applies relay authority and user budgets; discovery remains asynchronous.
-func (engine *Engine) ConfigureManagedTURN(config relayconfig.Config) error {
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	if engine.closing {
-		return ErrClosed
-	}
-	return engine.turnServices.Configure(config)
+func (engine *Engine) QueryTURNUsage(ctx context.Context, account string, firstDate, lastDate time.Time) (turn.Usage, error) {
+	return engine.turn.QueryUsage(ctx, account, firstDate, lastDate)
 }
 
-func (engine *Engine) QueryTURNUsage(ctx context.Context, account string, firstDate, lastDate time.Time) (turnprovider.Usage, error) {
-	engine.mu.Lock()
-	owner := engine.turn
-	engine.mu.Unlock()
-	return owner.QueryUsage(ctx, account, firstDate, lastDate)
-}
-func (engine *Engine) TURNStatus() []turnaccount.Snapshot {
-	engine.mu.Lock()
-	owner := engine.turn
-	engine.mu.Unlock()
-	return owner.Snapshot()
-}
+func (engine *Engine) TURNStatus() []turn.Status { return engine.turn.Status() }

@@ -5,65 +5,93 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"time"
 
+	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/engine/turn"
 )
 
-type issuer interface {
-	Issue(context.Context, turnprovider.Subject) (turnprovider.Issued, error)
-	Revoke(context.Context, turnprovider.Issued) error
+const trialLifetimeSeconds = 300
+
+type trialTURN struct {
+	runtime   *turn.Runtime
+	selection *turn.Selection
+	release   func()
 }
 
-func trialIssuer() (issuer, error) {
+func trialIssuer() (*trialTURN, error) {
+	settings, relays, err := trialSettings()
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := turn.New(settings, turn.Dependencies{})
+	if err != nil {
+		return nil, err
+	}
+	selection, release := runtime.ForShare(context.Background(), relays)
+	return &trialTURN{runtime: runtime, selection: selection, release: release}, nil
+}
+
+func (source *trialTURN) Close() error {
+	source.release()
+	return source.runtime.Close()
+}
+
+func trialSettings() (turn.Settings, []senderrelay.Candidate, error) {
 	if path := os.Getenv("WINDSHARE_TURN_TRIAL_CONFIGURATION"); path != "" {
 		config, err := (relayconfig.FileStore{Path: path}).Load()
 		if err != nil {
-			return nil, err
+			return turn.Settings{}, nil, err
 		}
 		if len(config.Profiles) != 1 {
-			return nil, errors.New("trial requires one enrolled deployment")
+			return turn.Settings{}, nil, errors.New("trial requires one enrolled deployment")
 		}
-		profile := config.Profiles[0]
-		capability, err := turnprovider.Discover(context.Background(), nil, profile.PublicURL, profile.AccessKey)
-		if err != nil {
-			return nil, err
-		}
-		if capability == nil || !capability.Enabled {
-			return nil, errors.New("managed TURN unavailable")
-		}
-		return turnprovider.NewRemote(turnprovider.RemoteConfig{
-			RelayURL: profile.PublicURL, AccessKey: profile.AccessKey, ServiceID: capability.ServiceID,
-		})
+		settings := config.TURNSettings()
+		settings.Manual = turn.ManualSettings{}
+		return settings, config.Profiles, nil
 	}
 	data, err := os.ReadFile(os.Getenv("WINDSHARE_TURN_TRIAL_KEY"))
 	if err != nil {
-		return nil, err
+		return turn.Settings{}, nil, err
 	}
 	var key struct {
 		ID     string `json:"uid"`
 		Secret string `json:"secret"`
 	}
 	if err := json.Unmarshal(data, &key); err != nil {
-		return nil, err
+		return turn.Settings{}, nil, err
 	}
-	return turnprovider.NewCloudflare(turnprovider.CloudflareConfig{
-		KeyID: key.ID, APIToken: key.Secret, Lifetime: 5 * time.Minute,
-	})
+	credentials, err := json.Marshal(turn.CloudflareCredentials{KeyID: key.ID, APIToken: key.Secret, LifetimeSeconds: trialLifetimeSeconds})
+	if err != nil {
+		return turn.Settings{}, nil, err
+	}
+	settings := turn.Settings{Manual: turn.ManualSettings{
+		Accounts: []turn.AccountSettings{{ID: "trial", Provider: "cloudflare", Issuer: turn.CloudflareIssuer, Credentials: credentials}},
+		Profiles: []turn.ProfileSettings{{ID: "trial", Account: "trial"}},
+	}}
+	return settings, nil, nil
 }
 
-func (p *probe) issue(ctx context.Context, id, previous byte) (turnprovider.Issued, error) {
-	subject := turnprovider.Subject{SessionID: [16]byte{1}, PathID: [16]byte{id}}
+func (p *probe) issue(ctx context.Context, id, previous byte) (*turnpath.Lease, error) {
+	subject := turnpath.Subject{SessionID: [16]byte{1}, PathID: [16]byte{id}}
 	if previous != 0 {
-		if source, ok := p.source.(interface {
-			Renew(context.Context, turnprovider.Subject, turnprovider.Issued) (turnprovider.Issued, error)
-		}); ok {
-			p.mu.Lock()
-			old := p.issued[previous]
-			p.mu.Unlock()
-			return source.Renew(ctx, subject, old)
+		p.mu.Lock()
+		old := p.issued[previous]
+		p.mu.Unlock()
+		if old != nil && old.Renewable() {
+			return old.Renew(ctx, subject)
 		}
 	}
-	return p.source.Issue(ctx, subject)
+	for {
+		inventory := p.source.selection.Inventory()
+		if len(inventory.Profiles) > 0 {
+			return p.source.selection.Acquire(ctx, inventory.Profiles[0].Identity.Profile, subject)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-inventory.Changed:
+		}
+	}
 }
