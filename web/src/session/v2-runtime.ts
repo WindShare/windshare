@@ -325,6 +325,11 @@ export class V2ReceiverSessionRuntime {
         correlation: this.#laneGrantCorrelation(grant),
       }))
       const response = await readLaneAdmission(reader, signal)
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'lane_transition',
+        transition: 'admission_response_received',
+        correlation: this.#laneGrantCorrelation(grant),
+      }))
       if (response.byteLength === V2_LANE_REJECT_BYTES) {
         const rejection = await verifyV2LaneReject(
           response,

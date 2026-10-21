@@ -472,6 +472,37 @@ describe('browser offer negotiation', () => {
   })
 })
 
+describe('browser candidate signaling isolation', () => {
+  it('publishes the open channel while candidate signaling remains blocked', async () => {
+    const fixture = negotiationFixture()
+    const opening = fixture.factory.offer(fixture.route, fixture.signal)
+    let published: OpenedPeerChannel | undefined
+    opening.then((channel) => { published = channel }).catch(() => undefined)
+    try {
+      await settle()
+      fixture.route.push(answerSignal())
+      await settle()
+      fixture.route.sendOperation = neverSettles()
+      fixture.peer.emitCandidate('candidate:5011 1 UDP 2113937151 192.0.2.1 5011 typ host')
+      await settle()
+      expect(fixture.route.sent.at(-1)?.kind).toBe(SIGNAL_KIND_CANDIDATE)
+      fixture.peer.emitCandidate('candidate:5012 1 UDP 2113937151 192.0.2.1 5012 typ host')
+      await settle()
+      expect(fixture.route.sent).toHaveLength(2)
+
+      fixture.peer.raw.open()
+      await settle()
+      expect(published?.state).toBe('open')
+    } finally {
+      fixture.controller.abort()
+      await opening.catch(() => undefined)
+      await published?.done
+    }
+    expect(fixture.route.sent).toHaveLength(2)
+    expect(fixture.route.sendSignals.at(-1)?.aborted).toBe(true)
+  })
+})
+
 describe('browser peer route readiness', () => {
   it('opens on the live pair while statistics are pending and ignores a later empty snapshot', async () => {
     const fixture = negotiationFixture()

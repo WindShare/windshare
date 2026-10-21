@@ -10,6 +10,7 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/turnpath"
+	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -276,6 +277,7 @@ type attemptExecution struct {
 	turnAdmission     *turnpath.Admission
 	transportFailure  peerChannelFailure
 	openTransition    <-chan struct{}
+	candidateWriter   *candidatewriter.Writer
 	localCandidates   int
 	remoteCandidates  int
 	signaling         bool
@@ -288,7 +290,15 @@ func newAttemptExecution(
 	ctx context.Context,
 	peer PeerConnection,
 ) *attemptExecution {
-	return &attemptExecution{attempt: attempt, ctx: ctx, peer: peer, signaling: true}
+	execution := &attemptExecution{attempt: attempt, ctx: ctx, peer: peer, signaling: true}
+	execution.candidateWriter = candidatewriter.New(ctx, attempt.config.factory.maxCandidates, func(ctx context.Context, body []byte) (bool, error) {
+		disposition, err := attempt.config.session.SendPeerControl(ctx, protocolsession.MessagePeerCandidate, attempt.config.operation, body)
+		if err == nil && disposition == protocolsession.OperationDrop {
+			err = errCandidateDropped
+		}
+		return disposition == protocolsession.OperationDeliver, err
+	})
+	return execution
 }
 
 func (execution *attemptExecution) registerCallbacks() {
@@ -368,6 +378,8 @@ func (execution *attemptExecution) negotiate() error {
 }
 
 func (execution *attemptExecution) close(result error) error {
+	execution.candidateWriter.Stop()
+	defer execution.candidateWriter.Close()
 	execution.turnAdmission.Close()
 	execution.attempt.stop(result)
 	execution.attempt.phases.terminate(result)
@@ -393,6 +405,8 @@ func (execution *attemptExecution) runEvents() error {
 			terminal, result = execution.settleLoopTermination(context.Cause(execution.ctx))
 		case expiration := <-execution.attempt.phases.expirationEvents():
 			terminal, result = execution.handlePhaseExpiration(expiration)
+		case delivery := <-execution.candidateWriter.Results():
+			terminal, result = execution.settleEventTerminal(false, execution.acceptCandidateDelivery(delivery))
 		case event := <-execution.attempt.events:
 			done, err := execution.handleEvent(event)
 			terminal, result = execution.settleEventTerminal(done, err)
@@ -510,27 +524,28 @@ func (execution *attemptExecution) sendLocalCandidate(candidate v2signal.Candida
 	if !execution.signaling {
 		return nil
 	}
-	if execution.localCandidates >= execution.attempt.config.factory.maxCandidates {
-		return errCandidateLimit
-	}
 	body, err := v2signal.EncodeCandidate(candidate)
 	if err != nil {
 		return err
 	}
-	disposition, err := execution.attempt.config.session.SendPeerControl(
-		execution.ctx,
-		protocolsession.MessagePeerCandidate,
-		execution.attempt.config.operation,
-		body,
-	)
-	if err != nil {
+	if err := execution.candidateWriter.Enqueue(body); errors.Is(err, candidatewriter.ErrLimit) {
+		return errCandidateLimit
+	} else {
 		return err
 	}
-	if disposition == protocolsession.OperationDrop {
-		return errCandidateDropped
+}
+
+func (execution *attemptExecution) acceptCandidateDelivery(delivery candidatewriter.Result) error {
+	if !execution.signaling {
+		return nil
 	}
-	execution.localCandidates++
-	execution.attempt.recorder.recordCandidateCounts(execution.candidateCounts())
+	if delivery.Err != nil {
+		return delivery.Err
+	}
+	if delivery.Delivered {
+		execution.localCandidates++
+		execution.attempt.recorder.recordCandidateCounts(execution.candidateCounts())
+	}
 	return nil
 }
 
@@ -557,6 +572,7 @@ func (execution *attemptExecution) candidateCounts() SenderCandidateCounts {
 func (execution *attemptExecution) cancelOperation(event attemptEvent) (bool, error) {
 	execution.operationCanceled = true
 	execution.signaling = false
+	execution.candidateWriter.Stop()
 	if event.completed != nil {
 		close(event.completed)
 	}

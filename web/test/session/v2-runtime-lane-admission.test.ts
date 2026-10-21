@@ -151,6 +151,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     expect(events.map((event) => event.eventName === 'lane_transition' && event.transition)).toEqual([
       'attached',
       'hello_sent',
+      'admission_response_received',
       'admission_accepted',
       'attached',
       'installed',

@@ -7,6 +7,7 @@ export type LaneTransitionPayloadV1 =
         | 'grant_requested'
         | 'grant_received'
         | 'hello_sent'
+        | 'admission_response_received'
         | 'admission_accepted'
         | 'installed'
     }>

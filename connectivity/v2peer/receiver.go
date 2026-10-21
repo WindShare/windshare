@@ -11,6 +11,7 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -399,6 +400,7 @@ type receiverEventKind uint8
 
 const (
 	receiverLocalCandidate receiverEventKind = iota + 1
+	receiverCandidateDelivered
 	receiverControl
 	receiverSignalingTerminated
 	receiverChannelOpened
@@ -409,6 +411,7 @@ const (
 )
 
 type receiverEvent struct {
+	delivery  candidatewriter.Result
 	kind      receiverEventKind
 	candidate v2signal.Candidate
 	control   ReceiverControl

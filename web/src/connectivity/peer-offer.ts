@@ -183,6 +183,8 @@ class OfferNegotiation {
   #openedChannel = false
   #signalingAvailable = true
   readonly #localCandidateFingerprints = new Set<string>()
+  readonly #candidateStop = new AbortController()
+  #candidateTask: Promise<void> = Promise.resolve()
   #localCandidateFailureReported = false
   #parentClosed = false
 
@@ -270,6 +272,8 @@ class OfferNegotiation {
       this.#peer.removeEventListener('icecandidateerror', this.#onIceError)
       globalThis.clearInterval(this.#statsTimer)
       this.#peer.removeEventListener('datachannel', this.#onUnexpectedDataChannel)
+      this.#candidateStop.abort()
+      await this.#candidateTask
       this.#events.close()
       this.#path.close()
       this.#routeListeners.clear()
@@ -355,7 +359,7 @@ class OfferNegotiation {
     }
     if (event.type === 'local-candidate') {
       if (this.#signalingAvailable) {
-        await this.#sendCandidate(event.candidate, signal)
+        this.#queueCandidate(event.candidate, signal)
       }
       return 'continue'
     }
@@ -400,6 +404,18 @@ class OfferNegotiation {
     this.#disableSignaling()
   }
 
+  #queueCandidate(candidate: RTCIceCandidateInit, parent: AbortSignal): void {
+    // The lifetime candidate budget bounds this serial chain. Relay backpressure
+    // must not keep answer, Open, or teardown events behind an outbound send.
+    const signal = AbortSignal.any([parent, this.#candidateStop.signal])
+    this.#candidateTask = this.#candidateTask.then(async () => {
+      if (!this.#signalingAvailable || signal.aborted) return
+      await this.#sendCandidate(candidate, signal)
+    }).catch((reason: unknown) => {
+      if (!this.#candidateStop.signal.aborted) this.#interrupt(reason)
+    })
+  }
+
   async #sendCandidate(candidate: RTCIceCandidateInit, signal: AbortSignal): Promise<void> {
     try {
       await this.#send({ kind: SIGNAL_KIND_CANDIDATE, payload: candidate }, signal)
@@ -429,6 +445,7 @@ class OfferNegotiation {
       return
     }
     this.#signalingAvailable = false
+    this.#candidateStop.abort()
     this.#reader?.cancel().catch(() => undefined)
   }
 
