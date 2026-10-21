@@ -12,6 +12,8 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine"
@@ -61,6 +63,24 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (cl
 		return clievent.Failure{}, false
 	}
 	traversal.remaining--
+	// Preserve source semantics before considering native path errors, which
+	// otherwise describe destination I/O. Selected paths are display facts, not
+	// raw provider error text or filesystem authority.
+	//nolint:errorlint
+	if selected, ok := cause.(*osfs.SelectedPathError); ok {
+		failure, known := classifyErrorAtDepth(selected.Cause, depth+1, traversal)
+		if !known {
+			return clievent.Failure{}, false
+		}
+		if located, err := clievent.NewSourcePathFailure(failure.Code(), clievent.NewDisplayPath(selected.Path)); err == nil {
+			return located, true
+		}
+		return failure, true
+	}
+	//nolint:errorlint
+	if source, ok := cause.(*catalog.SourceError); ok {
+		return projectSourceFailure(source.Failure)
+	}
 	// Inspect this node directly: errors.As would bypass the traversal budget and
 	// allow a diagnostic carrier's As method to replace the workflow's decision.
 	//nolint:errorlint
@@ -175,6 +195,25 @@ func classifyDirectError(cause error) (clievent.Failure, bool) {
 		return mustFailure(clievent.FailurePeerNegotiation), true
 	}
 	return clievent.Failure{}, false
+}
+
+func projectSourceFailure(reason catalog.SourceFailure) (clievent.Failure, bool) {
+	var code clievent.FailureCode
+	switch reason {
+	case catalog.SourceFailureMissing:
+		code = clievent.FailureSourceMissing
+	case catalog.SourceFailureAccessDenied:
+		code = clievent.FailureSourceAccessDenied
+	case catalog.SourceFailureUnsupported:
+		code = clievent.FailureSourceUnsupported
+	case catalog.SourceFailureStale:
+		code = clievent.FailureSourceRevisionChanged
+	case catalog.SourceFailureUnavailable:
+		code = clievent.FailureSourceUnavailable
+	default:
+		return clievent.Failure{}, false
+	}
+	return mustFailure(code), true
 }
 
 func typedNil(value error) bool {

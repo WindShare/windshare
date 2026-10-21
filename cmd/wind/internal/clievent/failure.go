@@ -21,6 +21,9 @@ const (
 	MessageDirectBusy
 	MessageDirectAdmission
 	MessageSourceUnavailable
+	MessageSourceMissing
+	MessageSourceAccessDenied
+	MessageSourceUnsupported
 	MessageSourceChanged
 	MessageCatalogUnavailable
 	MessageSessionFailed
@@ -67,6 +70,12 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "direct_admission", true
 	case MessageSourceUnavailable:
 		return "source_unavailable", true
+	case MessageSourceMissing:
+		return "source_missing", true
+	case MessageSourceAccessDenied:
+		return "source_access_denied", true
+	case MessageSourceUnsupported:
+		return "source_unsupported", true
 	case MessageSourceChanged:
 		return "source_changed", true
 	case MessageCatalogUnavailable:
@@ -150,6 +159,9 @@ const (
 	FailureSourceRevisionChanged
 	FailureSourceRevisionInvalidated
 	FailureSourcePermanent
+	FailureSourceMissing
+	FailureSourceAccessDenied
+	FailureSourceUnsupported
 	FailureCatalogUnavailable
 	FailureCatalogDirectoryStale
 	FailureCatalogInvalidGeneration
@@ -313,6 +325,12 @@ func coreFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"source_revision_invalidated", MessageSourceChanged}, true
 	case FailureSourcePermanent:
 		return failureDefinition{"source_permanent", MessageSourceUnavailable}, true
+	case FailureSourceMissing:
+		return failureDefinition{"source_missing", MessageSourceMissing}, true
+	case FailureSourceAccessDenied:
+		return failureDefinition{"source_access_denied", MessageSourceAccessDenied}, true
+	case FailureSourceUnsupported:
+		return failureDefinition{"source_unsupported", MessageSourceUnsupported}, true
 	case FailureCatalogUnavailable:
 		return failureDefinition{"catalog_unavailable", MessageCatalogUnavailable}, true
 	case FailureCatalogDirectoryStale:
@@ -469,6 +487,7 @@ func (context FaultContext) Valid() bool {
 
 type Failure struct {
 	code             FailureCode
+	sourcePath       DisplayPath
 	fault            FaultContext
 	hasFault         bool
 	retryAfterMillis uint64
@@ -480,6 +499,23 @@ func NewFailure(code FailureCode) (Failure, error) {
 		return Failure{}, ErrInvalidFailure
 	}
 	return Failure{code: code}, nil
+}
+
+func NewSourcePathFailure(code FailureCode, path DisplayPath) (Failure, error) {
+	if !sourcePathFailureCode(code) || path.Empty() {
+		return Failure{}, ErrInvalidFailure
+	}
+	return Failure{code: code, sourcePath: path}, nil
+}
+
+func sourcePathFailureCode(code FailureCode) bool {
+	switch code {
+	case FailureSourceMissing, FailureSourceAccessDenied, FailureSourceUnsupported,
+		FailureSourceUnavailable, FailureSourceRevisionChanged:
+		return true
+	default:
+		return false
+	}
 }
 
 func NewFaultFailure(code FailureCode, context FaultContext) (Failure, error) {
@@ -505,6 +541,10 @@ func NewRetryableFailure(code FailureCode, retryAfterMillis uint64) (Failure, er
 
 func (failure Failure) Code() FailureCode { return failure.code }
 
+func (failure Failure) SourcePath() (DisplayPath, bool) {
+	return failure.sourcePath, !failure.sourcePath.Empty()
+}
+
 func (failure Failure) MessageKey() (SafeMessageKey, bool) {
 	return failure.code.MessageKey()
 }
@@ -519,6 +559,9 @@ func (failure Failure) RetryAfterMillis() (uint64, bool) {
 
 func (failure Failure) Valid() bool {
 	if _, ok := failure.code.definition(); !ok {
+		return false
+	}
+	if !failure.sourcePath.Empty() && (!sourcePathFailureCode(failure.code) || failure.hasFault || failure.hasRetryAfter) {
 		return false
 	}
 	if failure.hasFault {

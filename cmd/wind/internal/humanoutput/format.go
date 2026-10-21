@@ -153,8 +153,17 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The direct channel could not be admitted."
 	case clievent.MessageSourceUnavailable:
 		message = "The source content is unavailable."
+	case clievent.MessageSourceMissing:
+		message = "Source path not found. Check the path and try again."
+	case clievent.MessageSourceAccessDenied:
+		message = "Permission denied while opening the source. Check read access to the source and its parent directory."
+	case clievent.MessageSourceUnsupported:
+		message = "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
 	case clievent.MessageSourceChanged:
 		message = "The source content changed during transfer."
+		if _, selected := failure.SourcePath(); selected {
+			message = "The source changed while it was being opened. Retry the share."
+		}
 	case clievent.MessageCatalogUnavailable:
 		message = "The content catalog is unavailable."
 	case clievent.MessageSessionFailed:
@@ -187,6 +196,9 @@ func failureMessage(failure clievent.Failure) string {
 	if retryMillis, ok := failure.RetryAfterMillis(); ok {
 		seconds := (retryMillis + 999) / 1000
 		message += " Retry after " + formatClockDuration(seconds) + "."
+	}
+	if path, ok := failure.SourcePath(); ok {
+		message += " Path: " + escapedDisplay(path.Text())
 	}
 	return message
 }

@@ -3,12 +3,28 @@ package osfs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 )
+
+// SelectedPathError retains the caller's selection at the point acquisition
+// fails. A native error may name a parent directory instead; consumers need the
+// selected path to identify which item in a multi-root share needs attention.
+type SelectedPathError struct {
+	Path  string
+	Cause error
+}
+
+func (err *SelectedPathError) Error() string {
+	return fmt.Sprintf("select source %s: %v", pathfailure.Quote(err.Path), err.Cause)
+}
+
+func (err *SelectedPathError) Unwrap() error { return err.Cause }
 
 // SelectedFileSource owns all filesystem authority for one selection. In
 // particular, selecting a file borrows its parent directory handle only for
@@ -27,7 +43,7 @@ func NewSelectedFileSource(ctx context.Context, config SelectedCatalogSourceConf
 	}
 	selected, err := newSelectedCatalogSource(ctx, config)
 	if err != nil {
-		return nil, classifySourceError("acquire selected roots", catalog.SourceReference{}, err)
+		return nil, err
 	}
 	source := &SelectedFileSource{selected: selected, roots: selected.SelectedRoots()}
 	revisions, err := selected.RevisionSource()
@@ -97,6 +113,9 @@ func (source *SelectedFileSource) Close() error {
 func classifySourceError(operation string, reference catalog.SourceReference, cause error) error {
 	if cause == nil {
 		return nil
+	}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return cause
 	}
 	failure := catalog.SourceFailureUnavailable
 	switch {

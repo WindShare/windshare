@@ -2,6 +2,25 @@ package clievent
 
 import "testing"
 
+func TestSourcePathFailureRejectsUnrelatedContext(t *testing.T) {
+	for _, code := range []FailureCode{FailureSourceMissing, FailureSourceAccessDenied,
+		FailureSourceUnsupported, FailureSourceUnavailable, FailureSourceRevisionChanged} {
+		failure, err := NewSourcePathFailure(code, NewDisplayPath("selected"))
+		path, located := failure.SourcePath()
+		if err != nil || !failure.Valid() || !located || path.Text() != "selected" {
+			t.Fatalf("source context rejected: %+v, %v", failure, err)
+		}
+	}
+	for _, code := range []FailureCode{FailureUnexpected, FailureOutputStateIO, FailureRelayTransport, 0} {
+		if _, err := NewSourcePathFailure(code, NewDisplayPath("selected")); err == nil {
+			t.Fatalf("accepted source path for unrelated failure %v", code)
+		}
+	}
+	if _, err := NewSourcePathFailure(FailureSourceMissing, DisplayPath{}); err == nil {
+		t.Fatal("accepted an empty source path")
+	}
+}
+
 func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
 	for code := FailureUnexpected; code <= FailureOutputRecoveryUnavailable; code++ {
 		name, nameOK := code.Name()

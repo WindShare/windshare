@@ -80,7 +80,9 @@ func newSelectedCatalogSource(ctx context.Context, config SelectedCatalogSourceC
 		}
 		record, root, err := source.openSelectedRoot(selectedPath, RootSlot(index), config.SyntheticRoot)
 		if err != nil {
-			return fail(err)
+			return fail(&SelectedPathError{
+				Path: selectedPath, Cause: classifySourceError("acquire selected root", catalog.SourceReference{}, err),
+			})
 		}
 		source.roots = append(source.roots, root)
 		source.selected = append(source.selected, record)
@@ -102,7 +104,7 @@ func (source *SelectedCatalogSource) openSelectedRoot(
 		return catalog.NodeRecord{}, nil, pathfailure.Filesystem("inspect selected root", absolute, err)
 	}
 	if isReparsePoint(before) || before.Mode()&os.ModeSymlink != 0 || !before.IsDir() && !before.Mode().IsRegular() {
-		return catalog.NodeRecord{}, nil, fmt.Errorf("osfs: selected root %q is not a stable file or directory", absolute)
+		return catalog.NodeRecord{}, nil, fmt.Errorf("osfs: selected root %q is not a stable file or directory: %w", absolute, content.ErrUnsupportedStability)
 	}
 	rootPath, relative := filepath.Dir(absolute), filepath.Base(absolute)
 	if before.IsDir() {

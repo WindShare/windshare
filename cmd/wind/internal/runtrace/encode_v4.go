@@ -153,6 +153,9 @@ func projectFailure(failure clievent.Failure) (failureV4, error) {
 	if retryAfter, ok := failure.RetryAfterMillis(); ok {
 		projected.RetryAfterMS = decimalPointer(retryAfter)
 	}
+	if path, ok := failure.SourcePath(); ok {
+		projected.SourcePath = path.Text()
+	}
 	return projected, nil
 }
 
