@@ -9,7 +9,7 @@ const HIGH_WATER_BYTES = 1024 * 1024
 const DATA_CHANNEL_LABEL = 'windshare-frame-channel'
 const DATA_CHANNEL_PROTOCOL = 'windshare-v2'
 
-test('production browser adapter interoperates with the accepted Pion adapter', async ({ page }, testInfo) => {
+test('production browser adapter interoperates with the accepted Pion adapter', async ({ page, browserName }, testInfo) => {
   const capability = await classifyNativePeerConnection(page)
   await testInfo.attach('rtc-capability', {
     body: JSON.stringify(capability),
@@ -53,6 +53,16 @@ test('production browser adapter interoperates with the accepted Pion adapter', 
   expect(result.browser.maximumMessageSize).toBeGreaterThanOrEqual(MAX_FRAME_BYTES)
   expect(result.browser.clientBurstMessages).toBeGreaterThan(0)
   expect(result.browser.serverBurstMessages).toBeGreaterThan(0)
+  const assisted = browserName === 'chromium' && ['win32', 'linux'].includes(process.platform)
+  expect(result.browser.receiveBuffer).toMatchObject({
+    bundlePolicy: 'max-bundle', bundledWithData: true, localTracks: 0, mediaBytes: 0,
+    videoDirections: assisted ? ['recvonly'] : [],
+  })
+  if (assisted) {
+    expect(result.browser.receiveBuffer.facts).toContainEqual(expect.objectContaining({
+      kind: 'receive-buffer', strategy: 'chromium-video', stage: 'negotiated',
+    }))
+  }
 
   expect(result.server).toMatchObject({
     errors: [],

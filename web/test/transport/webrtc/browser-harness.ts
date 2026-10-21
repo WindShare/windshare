@@ -6,6 +6,8 @@ import {
   createWindShareDataChannel,
   wrapWindShareDataChannel,
 } from '../../../src/transport/webrtc'
+import { BrowserPeerConnections } from '../../../src/connectivity/browser-peer/connections'
+import type { PeerProviderFact } from '../../../src/connectivity/peer-set/provider-facts'
 
 const MAXIMUM_BURSTS = 256
 const NATIVE_INTEROP_DEADLINE_MS = 30_000
@@ -84,6 +86,14 @@ export interface PionInteropResult {
     readonly channelReason: string
     readonly clientBurstMessages: number
     readonly serverFrames: readonly FrameSummary[]
+    readonly receiveBuffer: {
+      readonly facts: readonly PeerProviderFact[]
+      readonly bundlePolicy: RTCBundlePolicy | undefined
+      readonly videoDirections: readonly (RTCRtpTransceiverDirection | null)[]
+      readonly bundledWithData: boolean
+      readonly localTracks: number
+      readonly mediaBytes: number
+    }
   }
   readonly server: Record<string, unknown>
 }
@@ -135,7 +145,9 @@ export function runBrowserInvalidConfiguration(): BrowserInvalidConfigurationRes
 
 export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropResult> {
   const config = await fetchJSON<PionConfig>(`${apiBase}/config`)
-  const peer = new globalThis.RTCPeerConnection({ iceServers: [] })
+  const facts: PeerProviderFact[] = []
+  const connection = new BrowserPeerConnections().create({ iceServers: [] }, (fact) => { facts.push(fact) })
+  const peer = connection.peer
   const raw = createWindShareDataChannel(peer)
   const channel = wrapWindShareDataChannel(peer, raw)
   const serverFramesPromise = collectFrames(channel.frames)
@@ -150,6 +162,7 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
       'native browser/Pion negotiation',
       NATIVE_INTEROP_DEADLINE_MS,
     )
+    connection.answerApplied()
     await withinNamedDeadline(
       channel.opened,
       'native browser/Pion DataChannel open',
@@ -183,6 +196,19 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
     const serverFrames = await serverFramesPromise
     const server = await fetchJSON<Record<string, unknown>>(`${apiBase}/result`)
     const serverErrors = stringArray(server['errors'])
+    const video = peer.getTransceivers().filter((transceiver) => transceiver.receiver.track.kind === 'video')
+    let mediaBytes = 0
+    ;(await peer.getStats()).forEach((report: Record<string, unknown>) => {
+      if (report.type === 'inbound-rtp') mediaBytes += Number(report.bytesReceived ?? 0)
+      if (report.type === 'outbound-rtp') mediaBytes += Number(report.bytesSent ?? 0)
+    })
+    const receiveBuffer = {
+      facts, bundlePolicy: peer.getConfiguration().bundlePolicy,
+      videoDirections: video.map((transceiver) => transceiver.currentDirection),
+      bundledWithData: video.every((transceiver) => transceiver.receiver.transport === peer.sctp?.transport),
+      localTracks: peer.getSenders().filter((sender) => sender.track !== null).length,
+      mediaBytes,
+    }
     await channel.close()
     return {
       browser: {
@@ -217,6 +243,7 @@ export async function runPionInterop(apiBase = '/d2-pion'): Promise<PionInteropR
         channelReason: errorNameOf(channel.reason),
         clientBurstMessages,
         serverFrames,
+        receiveBuffer,
       },
       server,
     }

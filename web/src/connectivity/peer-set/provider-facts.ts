@@ -1,4 +1,5 @@
 export type PeerProviderFact =
+  | { readonly kind: 'receive-buffer'; readonly strategy: 'data-only' | 'chromium-video'; readonly stage: 'selected' | 'applied' | 'negotiated' | 'disabled'; readonly reason: string; readonly errorName: string }
   | { readonly kind: 'state'; readonly phase: 'signaling' | 'ice-check' | 'dtls-datachannel'; readonly state: string; readonly elapsedMs: number }
   | { readonly kind: 'candidate'; readonly candidateType: string; readonly protocol: string; readonly family: string; readonly interfaceClass: 'unknown'; readonly endpoint: 'unknown'; readonly disposition: string }
   | { readonly kind: 'selected-pair'; readonly route: 'direct' | 'turn'; readonly localType: string; readonly remoteType: string; readonly protocol: string; readonly clientToTurnProtocol: string; readonly family: string; readonly rttMs: number | null; readonly ageMs: number; readonly switchReason: 'initial' | 'pair-changed' | 'sample' }

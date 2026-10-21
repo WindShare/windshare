@@ -17,6 +17,9 @@ const BUILD_TIMEOUT_MILLISECONDS = 60_000
 const READY_TIMEOUT_MILLISECONDS = 20_000
 const STOP_TIMEOUT_MILLISECONDS = 5_000
 const MAXIMUM_CAPTURED_CHARACTERS = 256 * 1024
+const requestedArguments = process.argv.slice(2)
+const browserArguments = requestedArguments.some((argument) => argument === '--project' || argument.startsWith('--project='))
+  ? requestedArguments : ['--project', 'chromium', ...requestedArguments]
 const PLAYWRIGHT_CLI = join(WEB_ROOT, 'node_modules', '@playwright', 'test', 'cli.js')
 const PLAYWRIGHT_CONFIG = join(
   WEB_ROOT,
@@ -58,8 +61,7 @@ async function run() {
       'test',
       '--config',
       PLAYWRIGHT_CONFIG,
-      '--project',
-      'chromium',
+      ...browserArguments,
     ], {
       cwd: WEB_ROOT,
       environment: {

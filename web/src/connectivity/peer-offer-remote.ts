@@ -1,4 +1,5 @@
 import { abortReason } from './clock'
+import type { BrowserPeerConnection } from './browser-peer/connections'
 import {
   CandidateLimitExceededError,
   PeerNegotiationError,
@@ -11,14 +12,16 @@ import {
 
 /** Owns answer-before-candidate ordering and the remote candidate lifetime budget. */
 export class RemoteNegotiationState {
+  readonly #connection: BrowserPeerConnection
   readonly #peer: RTCPeerConnection
   readonly #maximumCandidates: number
   #descriptionReceived = false
   #remoteCandidates = 0
   #pendingCandidates: RTCIceCandidateInit[] = []
 
-  constructor(peer: RTCPeerConnection, maximumCandidates: number) {
-    this.#peer = peer
+  constructor(connection: BrowserPeerConnection, maximumCandidates: number) {
+    this.#connection = connection
+    this.#peer = connection.peer
     this.#maximumCandidates = maximumCandidates
   }
 
@@ -62,8 +65,10 @@ export class RemoteNegotiationState {
       if (signal.aborted) {
         throw abortReason(signal)
       }
+      this.#connection.descriptionFailed('set-remote-description', cause)
       throw new PeerNegotiationError('could not set the remote answer', { cause })
     }
+    this.#connection.answerApplied()
     this.#descriptionReceived = true
     for (const candidate of this.#pendingCandidates) {
       await this.#addCandidate(candidate, signal)
