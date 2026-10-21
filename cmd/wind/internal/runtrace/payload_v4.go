@@ -17,6 +17,7 @@ type failureV4 struct {
 	MessageKey   string   `json:"message_key"`
 	Fault        *faultV4 `json:"fault,omitempty"`
 	RetryAfterMS *string  `json:"retry_after_ms,omitempty"`
+	SourcePath   string   `json:"source_path,omitempty"`
 }
 
 type fileOutcomesV4 struct {

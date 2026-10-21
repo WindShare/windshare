@@ -200,6 +200,13 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 			t.Fatalf("missing engine ownership milestone %v", stage)
 		}
 	}
+	for _, stage := range []clievent.EngineTaskStage{clievent.EngineSourceFailed, clievent.EngineTaskSettled} {
+		failure := stages[stage].Failure
+		path, located := failure.SourcePath()
+		if failure.Code() != clievent.FailureSourceMissing || !located || path.Text() != missing {
+			t.Fatalf("source failure lost its reason or selected path at %v: %+v", stage, failure)
+		}
+	}
 	if stages[clievent.EngineSourceAcquiring].ShareInstance != stages[clievent.EngineSourceFailed].ShareInstance ||
 		!stages[clievent.EngineSourceFailed].Failure.Valid() || !stages[clievent.EngineTaskSettled].Failure.Valid() {
 		t.Fatal("source failure lost its scope or final error")
