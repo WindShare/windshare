@@ -427,6 +427,7 @@ export function validateLane(payload: UnknownRecord): void {
     case 'grant_requested':
     case 'grant_received':
     case 'hello_sent':
+    case 'admission_response_received':
     case 'admission_accepted':
     case 'installed':
       exactKeys(payload, ['transition'], [], 'lane transition payload')

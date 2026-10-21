@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -126,16 +127,22 @@ type receiverExecution struct {
 	answerSeen       bool
 	channelOpened    bool
 	attachStarted    bool
+	candidateWriter  *candidatewriter.Writer
 	localCandidates  int
 	remoteCandidates int
 	queuedCandidates []v2signal.Candidate
 }
 
 func newReceiverExecution(attempt *ReceiverAttempt) *receiverExecution {
-	return &receiverExecution{
+	execution := &receiverExecution{
 		attempt: attempt, binding: newReceiverSignalingOperationBinding(),
 		attachmentDone: make(chan struct{}),
 	}
+	execution.candidateWriter = candidatewriter.New(attempt.ctx, attempt.factory.maxCandidates, func(ctx context.Context, body []byte) (bool, error) {
+		disposition, err := execution.operation.operation.SendCandidate(ctx, body)
+		return disposition == protocolsession.OperationDeliver, err
+	})
+	return execution
 }
 
 func (execution *receiverExecution) openSignaling() receiverWorkflowResult {
@@ -270,6 +277,8 @@ func (execution *receiverExecution) startWorkers() {
 func (execution *receiverExecution) close(
 	result error,
 ) (ReceiverSignalingTermination, peerTransportTeardown) {
+	execution.candidateWriter.Stop()
+	defer execution.candidateWriter.Close()
 	var termination ReceiverSignalingTermination
 	if execution.operation != nil {
 		termination = execution.operation.terminateExact()
@@ -301,6 +310,8 @@ func (execution *receiverExecution) runEvents() receiverWorkflowResult {
 			terminal, result = execution.settleAttemptContext()
 		case expiration := <-execution.attempt.phases.expirationEvents():
 			terminal, result = execution.handlePhaseExpiration(expiration)
+		case delivery := <-execution.candidateWriter.Results():
+			terminal, result = execution.settleAttemptEvent(receiverEvent{kind: receiverCandidateDelivered, delivery: delivery})
 		case event := <-execution.attempt.events:
 			terminal, result = execution.settleAttemptEvent(event)
 		}
@@ -368,6 +379,13 @@ func (execution *receiverExecution) settleAttemptEvent(
 
 func (execution *receiverExecution) handleEvent(event receiverEvent) (bool, receiverWorkflowResult) {
 	switch event.kind {
+	case receiverCandidateDelivered:
+		if delivery := event.delivery; delivery.Err != nil {
+			return false, receiverWorkflowDiagnostic(delivery.Err)
+		} else if delivery.Delivered {
+			execution.localCandidates++
+		}
+		return false, receiverWorkflowResult{}
 	case receiverLocalCandidate:
 		return false, receiverWorkflowResult{cause: execution.sendLocalCandidate(event.candidate)}
 	case receiverControl:
@@ -405,15 +423,11 @@ func (execution *receiverExecution) sendLocalCandidate(candidate v2signal.Candid
 	if err != nil {
 		return err
 	}
-	disposition, err := execution.operation.operation.SendCandidate(execution.attempt.ctx, body)
-	if err != nil || disposition == protocolsession.OperationDrop {
+	if err := execution.candidateWriter.Enqueue(body); errors.Is(err, candidatewriter.ErrLimit) {
+		return errCandidateLimit
+	} else {
 		return err
 	}
-	execution.localCandidates++
-	if execution.localCandidates > execution.attempt.factory.maxCandidates {
-		return errCandidateLimit
-	}
-	return nil
 }
 
 func (execution *receiverExecution) acceptControl(control ReceiverControl) receiverWorkflowResult {

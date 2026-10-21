@@ -34,6 +34,7 @@ export type V2LaneTransition =
   | 'grant_requested'
   | 'grant_received'
   | 'hello_sent'
+  | 'admission_response_received'
   | 'admission_accepted'
   | 'admission_rejected'
   | 'installed'
@@ -113,7 +114,7 @@ export type V2LaneTransitionTraceEvent =
   | Readonly<{
       eventName: 'lane_transition'
       transition: 'attached' | 'grant_requested' | 'grant_received' | 'hello_sent' |
-        'admission_accepted' | 'installed'
+        'admission_response_received' | 'admission_accepted' | 'installed'
       correlation: FailureCorrelation
     }>
   | Readonly<{
