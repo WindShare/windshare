@@ -9,21 +9,13 @@ import (
 	"errors"
 	"os"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/statefile"
 )
 
 func (config Config) SettingsRevision() string {
-	if len(config.Profiles) == 0 {
-		config.Profiles = []senderrelay.Candidate{}
-	}
-	if len(config.ActiveRelays) == 0 {
-		config.ActiveRelays = nil
-	}
-	if len(config.ManagedTURNPolicies) == 0 {
-		config.ManagedTURNPolicies = nil
-	}
-	data, _ := json.Marshal(config)
+	// Revision equality must cover every persisted setting. Runtime relay values
+	// omit access keys from JSON, which would hide credential-only replacements.
+	data, _ := json.Marshal(config.document())
 	digest := sha256.Sum256(data)
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
