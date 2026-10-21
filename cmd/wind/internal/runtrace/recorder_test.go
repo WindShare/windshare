@@ -461,11 +461,11 @@ func TestRecorderFlushAndSummaryFailuresRetainTruthfulContent(t *testing.T) {
 func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 	t.Run("upstream", func(t *testing.T) {
 		recorder := openTestRecorder(t, clievent.CommandGet, Config{}, fixedClock(), &memoryTraceFile{}, newManualTicker())
-		if !recorder.ReportUpstreamLoss(4, 9) {
+		if !recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 4, ProgressDrops: 9}) {
 			t.Fatal("upstream loss report unexpectedly rejected")
 		}
 		health := awaitHealth(t, recorder.Health())
-		if health.Cause() != clievent.TraceIncompleteLifecycleDrop || health.LifecycleDrops() != 4 || health.ProgressDrops() != 9 {
+		if health.Cause() != clievent.TraceIncompleteLifecycleDrop || health.Loss().LifecycleDrops != 4 || health.Loss().ProgressDrops != 9 {
 			t.Fatalf("unexpected upstream health snapshot: %+v", health)
 		}
 		status := recorder.Close()
@@ -477,7 +477,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 	t.Run("progress-only upstream loss", func(t *testing.T) {
 		file := &memoryTraceFile{}
 		recorder := openTestRecorder(t, clievent.CommandGet, Config{}, fixedClock(), file, newManualTicker())
-		if !recorder.ReportUpstreamLoss(0, 3) {
+		if !recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 0, ProgressDrops: 3}) {
 			t.Fatal("progress-only loss report unexpectedly rejected")
 		}
 		status := recorder.Close()
@@ -553,7 +553,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 		if len(file.Bytes()) != 0 {
 			t.Fatalf("unsafe sequence produced output: %s", file.Bytes())
 		}
-		if recorder.Record(clievent.NewReady()) || recorder.ReportUpstreamLoss(1, 0) {
+		if recorder.Record(clievent.NewReady()) || recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 1, ProgressDrops: 0}) {
 			t.Fatal("closed recorder accepted new state")
 		}
 	})

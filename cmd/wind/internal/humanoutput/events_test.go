@@ -49,7 +49,7 @@ func TestFallbackUsesUserFacingPathNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := lineText(formatFallback(event, SelectSymbols(false))); !strings.Contains(got, "Direct path unavailable; using Relay") {
+	if got := lineText(formatFallback(event, SelectSymbols(false))); !strings.Contains(got, "WebRTC path unavailable; using Relay") {
 		t.Fatalf("fallback line = %q", got)
 	}
 }
@@ -105,8 +105,8 @@ func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 		}
 	}
 	output := harness.buffer.String()
-	if strings.Count(output, "Direct connection ["+identity+"]:") != 3 ||
-		!strings.Contains(output, "Direct connection ["+base64.RawURLEncoding.EncodeToString(other.Attempt.Bytes())+"]:") ||
+	if strings.Count(output, "Connection ["+identity+"]:") != 3 ||
+		!strings.Contains(output, "Connection ["+base64.RawURLEncoding.EncodeToString(other.Attempt.Bytes())+"]:") ||
 		strings.Contains(output, "connection attempt 9") || strings.Contains(output, "connection attempt 10") {
 		t.Fatalf("attempt identities changed with event sequence: %s", output)
 	}
@@ -135,6 +135,9 @@ func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *te
 			spec.Lane, _ = clievent.NewLaneIdentity(1, 2)
 			spec.HasLane = true
 			spec.AdmissionDisposition, spec.ResponseDelivery = test.disposition, test.delivery
+			if spec.Stage == clievent.PeerAttemptAdmitted {
+				spec.Route = clievent.LaneRouteDirect
+			}
 			if test.disposition == clievent.PeerAdmissionRejected {
 				spec.RejectionCode = clievent.PeerLaneRejectAdmissionLimited
 				spec.RejectionRetryAfterMillis = 1000
@@ -166,5 +169,30 @@ func peerAttemptSpecForRender(t *testing.T) clievent.PeerAttemptSpec {
 	return clievent.PeerAttemptSpec{
 		Command: clievent.CommandShare, Session: session, PeerPath: path, Attempt: attempt,
 		Sequence: 1, Stage: clievent.PeerAttemptStarted,
+	}
+}
+
+func TestPeerAttemptNamesOnlyAnAdmittedRoute(t *testing.T) {
+	for _, test := range []struct {
+		route clievent.LaneRoute
+		want  string
+	}{{0, "Connection ["}, {clievent.LaneRouteDirect, "Direct connection ["}, {clievent.LaneRouteTURN, "TURN relay connection ["}} {
+		spec := peerAttemptSpecForRender(t)
+		if test.route != 0 {
+			spec.Stage, spec.Phase, spec.Route = clievent.PeerAttemptAdmitted, clievent.PeerPhaseAdmission, test.route
+			spec.GrantOperation, _ = clievent.NewProtocolOperationID(mustID(t, 7))
+			spec.HasGrantOperation = true
+			spec.Lane, _ = clievent.NewLaneIdentity(1, 2)
+			spec.HasLane = true
+			spec.AdmissionDisposition, spec.ResponseDelivery = clievent.PeerAdmissionAccepted, clievent.PeerResponseDelivered
+		}
+		event, err := clievent.NewPeerAttemptObserved(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := lineText(formatPeerAttempt(event, SelectSymbols(false)))
+		if !strings.Contains(line, test.want) || test.route != clievent.LaneRouteDirect && strings.Contains(line, "Direct") {
+			t.Fatalf("route %d misrepresented: %s", test.route, line)
+		}
 	}
 }

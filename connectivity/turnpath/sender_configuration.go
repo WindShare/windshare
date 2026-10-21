@@ -76,7 +76,7 @@ func (s *Sender) discardReason(result issued) string {
 	}
 }
 
-func (s *Sender) observeIssuance(result issued, milestone, reason string) {
+func (s *Sender) observeIssuance(result issued, milestone Milestone, reason string) {
 	identity := result.service.profile.Identity
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: result.path, Provider: identity.Provider,
 		Account: identity.Account, Profile: identity.Profile}}, milestone, reason)

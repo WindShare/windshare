@@ -304,7 +304,7 @@ func (trace *recordingUserTrace) Record(event clievent.Event) bool {
 
 func (*recordingUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
 
-func (*recordingUserTrace) ReportUpstreamLoss(uint64, uint64) bool { return true }
+func (*recordingUserTrace) ReportUpstreamLoss(clievent.TraceLoss) bool { return true }
 
 func (trace *recordingUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
 func (*recordingUserTrace) Path() string                                  { return "trace.ndjson" }

@@ -161,7 +161,7 @@ func (r *Receiver) requestRecoveries(ctx context.Context) {
 			continue
 		}
 		if r.send(ctx, turncontrol.Recover{Authority: path.grant.Authority, PathID: id, Reason: reason}) {
-			r.observe(path.grant, "recovery_requested", "")
+			r.observe(path.grant, MilestoneRecoveryRequested, "")
 		} else {
 			r.mu.Lock()
 			r.recoveries[id] = reason

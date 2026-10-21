@@ -38,7 +38,7 @@ func (a *App) observeEngineShare(o *shareObservations, event engine.ShareObserva
 	case event.PeerDiagnostic != nil:
 		o.ObservePeerDiagnostic(*event.PeerDiagnostic)
 	case event.Native != nil:
-		projected, err := projectNativeObservation(clievent.CommandShare, *event.Native)
+		projected, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, *event.Native)
 		o.emitProjected(clievent.ObserverLossNativeConnectivity, projected, err)
 	case event.WebRTC != nil:
 		o.TraceWebRTCLifecycle(*event.WebRTC)

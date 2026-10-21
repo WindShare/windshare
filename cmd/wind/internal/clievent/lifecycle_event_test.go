@@ -52,6 +52,7 @@ func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 				spec.HasGrantOperation = true
 			}
 			if test.stage == PeerAttemptAdmitted {
+				spec.Route = LaneRouteDirect
 				spec.AdmissionDisposition = PeerAdmissionAccepted
 				spec.ResponseDelivery = PeerResponseDelivered
 			}

@@ -36,7 +36,7 @@ func formatContentPath(path clievent.ContentPath, symbols Symbols) terminalcanva
 }
 
 func formatFallback(event clievent.Fallback, symbols Symbols) terminalcanvas.Line {
-	message := transportPathName(event.From()) + " path unavailable; using " + transportPathName(event.To()) + "."
+	message := transportName(event.From()) + " path unavailable; using " + transportName(event.To()) + "."
 	return statusLine(symbols.Warning, "Warning: "+message, terminalcanvas.StyleWarning)
 }
 
@@ -89,13 +89,6 @@ func formatLaneAdopted(event clievent.LaneAdopted, symbols Symbols) terminalcanv
 	return statusLine(symbols.Path, message, terminalcanvas.StyleMuted)
 }
 
-func transportPathName(transport clievent.Transport) string {
-	if transport == clievent.TransportWebRTC {
-		return "Direct"
-	}
-	return "Relay"
-}
-
 func transportName(transport clievent.Transport) string {
 	if transport == clievent.TransportWebRTC {
 		return "WebRTC"
@@ -108,7 +101,16 @@ func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) term
 	// interleaved attempts distinguishable and matches peer_attempt_id in the trace.
 	identity := base64.RawURLEncoding.EncodeToString(event.PeerAttemptID().Bytes())
 	status, warning := peerAttemptStatus(event)
-	message := "Direct connection [" + identity + "]: " + status
+	name := "Connection"
+	if route, known := event.Route(); known {
+		switch route {
+		case clievent.LaneRouteDirect:
+			name = "Direct connection"
+		case clievent.LaneRouteTURN:
+			name = "TURN relay connection"
+		}
+	}
+	message := name + " [" + identity + "]: " + status
 	style, symbol := terminalcanvas.StyleMuted, symbols.Path
 	if event.Stage() == clievent.PeerAttemptAdmitted {
 		style, symbol = terminalcanvas.StyleSuccess, symbols.Success

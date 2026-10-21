@@ -152,7 +152,7 @@ func (r *Receiver) apply(ctx context.Context, message turncontrol.Message) {
 		}
 	case turncontrol.Unavailable:
 		if r.profiles[value.Profile] {
-			r.observe(turncontrol.Grant{Authority: h, Profile: value.Profile}, "unavailable", value.Reason)
+			r.observe(turncontrol.Grant{Authority: h, Profile: value.Profile}, MilestoneUnavailable, value.Reason)
 		}
 	}
 }
@@ -201,11 +201,11 @@ func (r *Receiver) acceptGrant(ctx context.Context, value turncontrol.Grant) {
 	path, err := r.config.Open(ctx, value, connection)
 	if err != nil {
 		r.send(ctx, turncontrol.Retire{Authority: value.Authority, PathID: value.PathID, Reason: turncontrol.Unhelpful})
-		r.observe(value, "unavailable", err.Error())
+		r.observe(value, MilestoneUnavailable, err.Error())
 		return
 	}
 	r.paths[value.PathID] = &receiverPath{grant: value, path: path, expires: expires}
-	r.observe(value, "connecting", "")
+	r.observe(value, MilestoneConnecting, "")
 }
 
 func (r *Receiver) maintain(ctx context.Context) {
@@ -279,7 +279,7 @@ func (r *Receiver) notifyReady(ctx context.Context, path *receiverPath) {
 		if r.config.Admitted != nil {
 			r.config.Admitted(path.grant, path.path)
 		}
-		r.observe(path.grant, "ready", "")
+		r.observe(path.grant, MilestoneReady, "")
 	}
 	if path.sentReadyLane != lane && r.send(ctx, turncontrol.Ready{Authority: path.grant.Authority, PathID: path.grant.PathID, Lane: lane}) {
 		path.sentReadyLane = lane
@@ -323,7 +323,7 @@ func (r *Receiver) retire(ctx context.Context, path *receiverPath, reason turnco
 		r.retired[path.grant.PathID] = now.Add(turncontrol.MaximumDemandLifetime)
 	}
 	_ = path.path.Close()
-	r.observe(path.grant, "retired", fmt.Sprint(reason))
+	r.observe(path.grant, MilestoneRetired, fmt.Sprint(reason))
 }
 func (r *Receiver) send(ctx context.Context, message turncontrol.Message) bool {
 	body, err := turncontrol.Encode(message)
@@ -334,9 +334,9 @@ func (r *Receiver) send(ctx context.Context, message turncontrol.Message) bool {
 	defer cancel()
 	return r.config.Send(ctx, body) == nil
 }
-func (r *Receiver) observe(grant turncontrol.Grant, milestone, reason string) {
+func (r *Receiver) observe(grant turncontrol.Grant, milestone Milestone, reason string) {
 	slog.Debug("TURN receiver path", "provider", grant.Provider, "account", grant.Account, "profile", grant.Profile,
-		"session", fmt.Sprintf("%x", r.config.SessionID), "path", fmt.Sprintf("%x", grant.PathID), "milestone", milestone, "reason", reason)
+		"session", fmt.Sprintf("%x", r.config.SessionID), "path", fmt.Sprintf("%x", grant.PathID), "milestone", milestone.String(), "reason", reason)
 	if r.config.Observe != nil {
 		r.config.Observe(Event{At: r.config.Now(), Subject: Subject{SessionID: r.config.SessionID, PathID: grant.PathID}, Provider: grant.Provider, Account: grant.Account, Profile: grant.Profile, Milestone: milestone, Reason: reason})
 	}

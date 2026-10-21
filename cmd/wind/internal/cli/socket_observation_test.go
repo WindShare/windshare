@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
@@ -26,7 +27,7 @@ func TestSocketObservationProjectsCancellationAndHandoffResults(t *testing.T) {
 			Subject: nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, NetworkGenerationID: 3, Side: nativepeer.SideSender},
 			Socket:  &socketauthority.Event{Kind: test.kind, Result: test.result, At: at, Local: local, Server: server, Duration: time.Millisecond},
 		}
-		event, err := projectNativeObservation(clievent.CommandShare, value)
+		event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, value)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +38,7 @@ func TestSocketObservationProjectsCancellationAndHandoffResults(t *testing.T) {
 			t.Fatalf("socket facts lost in projection: %+v", facts)
 		}
 		value.Lifecycle = &nativepeer.LifecycleFacts{}
-		if _, err := projectNativeObservation(clievent.CommandShare, value); err == nil {
+		if _, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, value); err == nil {
 			t.Fatal("ambiguous socket observation accepted")
 		}
 	}

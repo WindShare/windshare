@@ -68,6 +68,7 @@ func summaryV4(
 	}
 	record, _ := baseRecordV4(runID, metadata, command, level, "trace_summary")
 	record.Payload = traceSummaryPayloadV4{
+		ContractRejected:         decimal(status.ContractRejected),
 		Incomplete:               !status.Complete,
 		RejectionEvidenceDropped: decimal(status.RejectionEvidenceDropped),
 		LifecycleDropped:         decimal(status.LifecycleDropped),

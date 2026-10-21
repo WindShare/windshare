@@ -60,7 +60,7 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	request := &credentialRequest{ctx: child, cancel: cancel, intent: intent}
 	service.issuance = request
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
-		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, "issuance_started", "")
+		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, MilestoneIssuanceStarted, "")
 	s.work.Go(func() {
 		subject := Subject{SessionID: s.config.SessionID, PathID: path}
 		var lease *Lease
@@ -96,7 +96,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 		if result.lease != nil {
 			result.lease.Close()
 		}
-		s.observeIssuance(result, "issuance_discarded", reason)
+		s.observeIssuance(result, MilestoneIssuanceDiscarded, reason)
 		// Completion releases the single in-flight slot. Reconcile fresh demand
 		// now rather than imposing either a failure cooldown or a maintenance tick.
 		s.maintain(ctx)
@@ -108,11 +108,11 @@ func (s *Sender) install(ctx context.Context, result issued) {
 		}
 		if result.intent == evaluationPath {
 			service.selection.nextEvaluation = s.config.Now().Add(TransportEvaluationCooldown)
-			s.observeIssuance(result, "evaluation_unavailable", result.err.Error())
+			s.observeIssuance(result, MilestoneEvaluationUnavailable, result.err.Error())
 			return
 		}
 		service.retryAt = s.config.Now().Add(ServiceCooldown)
-		s.observeIssuance(result, "issuance_failed", result.err.Error())
+		s.observeIssuance(result, MilestoneIssuanceFailed, result.err.Error())
 		s.send(ctx, turncontrol.Unavailable{Authority: s.header(), Profile: service.profile.Identity.Profile,
 			RetryAfter: ServiceCooldown, Reason: result.err.Error()})
 		return
@@ -127,7 +127,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 	if err != nil {
 		result.lease.Close()
 		service.deferIssuance(result.intent, s.config.Now())
-		s.observeIssuance(result, "issuance_discarded", "transport_unavailable")
+		s.observeIssuance(result, MilestoneIssuanceDiscarded, "transport_unavailable")
 		return
 	}
 	credential := relay.Credentials()
@@ -153,7 +153,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 		service.deferIssuance(result.intent, s.config.Now())
 		return
 	}
-	s.observe(value, "credentials_delegated", "")
+	s.observe(value, MilestoneCredentialsDelegated, "")
 	s.selectionEvent(service, value, string(result.intent), 0, 0)
 }
 
@@ -204,5 +204,5 @@ func (s *Sender) promote(ctx context.Context, service *service) {
 	if old != nil {
 		s.retire(ctx, old, turncontrol.Replaced)
 	}
-	s.observe(pending, "replacement_admitted", "")
+	s.observe(pending, MilestoneReplacementAdmitted, "")
 }

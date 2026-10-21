@@ -20,7 +20,7 @@ var (
 
 type userTraceRecorder interface {
 	Record(clievent.Event) bool
-	ReportUpstreamLoss(lifecycle, progress uint64) bool
+	ReportUpstreamLoss(clievent.TraceLoss) bool
 	ReportRejectionEvidenceLoss(count uint64) bool
 	Health() <-chan clievent.TraceIncomplete
 	Close() runtrace.Status
@@ -75,6 +75,7 @@ type commandRuntime struct {
 	upstreamCumulative                [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
 	pendingProgressLoss               atomic.Uint64
 	pendingTraceLoss                  atomic.Uint64
+	pendingTraceRejections            atomic.Uint64
 	pendingTraceProgress              atomic.Uint64
 	warningOnce                       sync.Once
 	closeOnce                         sync.Once

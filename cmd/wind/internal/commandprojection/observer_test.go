@@ -281,6 +281,7 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
 		OfferOperationID: offerOperation, GrantOperationID: grantOperation,
 		SideSequence: 4, AttemptElapsedMillis: 120, Stage: v2peer.SenderAttemptAdmitted,
+		Route:                transfer.LaneRouteDirect,
 		Phase:                v2peer.SenderAttemptPhaseAdmission,
 		CandidateCounts:      &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
 		Lane:                 &lane,

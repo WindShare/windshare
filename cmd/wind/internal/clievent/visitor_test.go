@@ -128,7 +128,7 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	settled, _ := NewTransferSettled(transferResult)
 	shareResult, _ := NewShareResult(ShareResultSpec{ExitCode: ExitSuccess})
 	stopped, _ := NewSharingStopped(shareResult)
-	incomplete, _ := NewTraceIncomplete(CommandGet, TraceIncompleteWriter, 0, 0)
+	incomplete, _ := NewTraceIncomplete(CommandGet, TraceIncompleteWriter, TraceLoss{})
 	sessionID, _ := NewProtocolSessionID(bytes16(3))
 	lane, _ := NewLaneIdentity(2, 1)
 	adopted, _ := NewLaneAdopted(CommandGet, sessionID, lane, TransportWebRTC)

@@ -38,7 +38,7 @@ func TestRunningSenderDiscoversConfigurationAndRetainsExistingLane(t *testing.T)
 			return err
 		},
 		Observe: func(event turnpath.Event) {
-			if event.Milestone == "replacement_admitted" {
+			if event.Milestone == turnpath.MilestoneReplacementAdmitted {
 				promoted <- struct{}{}
 			}
 		},

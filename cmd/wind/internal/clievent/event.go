@@ -352,6 +352,7 @@ const (
 	TraceIncompleteWriter
 	TraceIncompleteFlush
 	TraceIncompleteSchemaLimit
+	TraceIncompleteContractRejection
 	TraceIncompleteRejectionEvidence
 )
 
@@ -365,6 +366,8 @@ func (cause TraceIncompleteCause) Name() (string, bool) {
 		return "flush", true
 	case TraceIncompleteSchemaLimit:
 		return "schema_limit", true
+	case TraceIncompleteContractRejection:
+		return "contract_rejection", true
 	case TraceIncompleteRejectionEvidence:
 		return "rejection_evidence_drop", true
 	default:
@@ -372,27 +375,40 @@ func (cause TraceIncompleteCause) Name() (string, bool) {
 	}
 }
 
+// TraceLoss keeps contract rejection separate from records lost after
+// production. Progress coalescing is expected and does not imply incompleteness.
+type TraceLoss struct {
+	ContractRejections uint64
+	LifecycleDrops     uint64
+	ProgressDrops      uint64
+}
+
+func (loss TraceLoss) Incomplete() bool {
+	return loss.ContractRejections != 0 || loss.LifecycleDrops != 0
+}
+
 type TraceIncomplete struct {
-	command        Command
-	cause          TraceIncompleteCause
-	lifecycleDrops uint64
-	progressDrops  uint64
+	command Command
+	cause   TraceIncompleteCause
+	loss    TraceLoss
 }
 
 func NewTraceIncomplete(
 	command Command,
 	cause TraceIncompleteCause,
-	lifecycleDrops, progressDrops uint64,
+	loss TraceLoss,
 ) (TraceIncomplete, error) {
 	if !command.Valid() {
 		return TraceIncomplete{}, ErrInvalidEvent
 	}
-	if _, ok := cause.Name(); !ok || cause == TraceIncompleteLifecycleDrop && lifecycleDrops == 0 {
+	if _, ok := cause.Name(); !ok ||
+		cause == TraceIncompleteLifecycleDrop && loss.LifecycleDrops == 0 ||
+		cause == TraceIncompleteContractRejection && loss.ContractRejections == 0 {
 		return TraceIncomplete{}, ErrInvalidEvent
 	}
 	return TraceIncomplete{
 		command: command, cause: cause,
-		lifecycleDrops: lifecycleDrops, progressDrops: progressDrops,
+		loss: loss,
 	}, nil
 }
 
@@ -400,8 +416,7 @@ func (TraceIncomplete) event()                            {}
 func (value TraceIncomplete) Command() Command            { return value.command }
 func (TraceIncomplete) Level() Level                      { return LevelWarning }
 func (value TraceIncomplete) Cause() TraceIncompleteCause { return value.cause }
-func (value TraceIncomplete) LifecycleDrops() uint64      { return value.lifecycleDrops }
-func (value TraceIncomplete) ProgressDrops() uint64       { return value.progressDrops }
+func (value TraceIncomplete) Loss() TraceLoss             { return value.loss }
 func (value TraceIncomplete) Accept(v Visitor) error      { return acceptTraceIncomplete(v, value) }
 
 type LaneAdopted struct {

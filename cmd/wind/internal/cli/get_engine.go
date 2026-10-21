@@ -58,7 +58,7 @@ func (a *App) projectReceiveObservation(o getObservation, event engine.Event) {
 	case engine.ReceiveLaneObserved:
 		o.TraceLaneSettlement(value.Value)
 	case engine.ReceiveNativeObserved:
-		projected, err := projectNativeObservation(clievent.CommandGet, value.Value)
+		projected, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, value.Value)
 		if err != nil {
 			o.lose(clievent.ObserverLossNativeConnectivity, err)
 		} else {

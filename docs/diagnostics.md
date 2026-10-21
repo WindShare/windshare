@@ -32,12 +32,17 @@ Correlate events across the session using:
 - `protocol_operation` & `protocol_response_send_returned`: Operation lifecycle, lane selection, and send attempts.
 - `protocol_error_received`: Authenticated protocol errors (`scope`, `code`, `retryable`, `retry_after_ms`).
 - `sender_session_terminated`: Session shutdown reason, failing component (`source`), error cause chain (`nodes`), and stack trace (`capture_stack`).
-- `peer_attempt`: P2P / ICE connection attempts, progression stages, and disconnect causes.
+- `peer_attempt`: WebRTC / ICE attempts and disconnect causes; admitted attempts carry the actual `route` (`direct` or `turn`). Earlier stages do not claim a route.
 - `relay_availability`: Current ready, configured, and terminal relay counts plus whether any relay was previously ready; separate from active download paths.
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
 - `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, timeout, and elapsed wait (round trip for an acknowledgement, inbound silence for a failure).
 - `filesystem_output`: Output ownership and settlement decisions. Runtime failures are located by `runtime_decision.component` and `runtime_decision.operation`; `failure.stage` is present only when a native filesystem stage is classified.
 - `capabilities.mode`: Filesystem capabilities (`live_only` vs restart-resumable).
+
+`Trace is incomplete` reports diagnostic loss, independently of transfer results.
+`trace_summary` separates `contract_rejected` from `lifecycle_dropped`, write/flush failures,
+and lost rejection evidence. Normal progress sampling does not make a trace incomplete.
+`observer_loss.rejection` identifies rejected events, fields, rules, and bounded source evidence.
 
 Receiver peer and block operations publish their terminal `protocol_operation` after receive and cleanup join.
 Content race losers report `receiver_ended / superseded`; peer stops may retain `canceled` or `operation_closed`.

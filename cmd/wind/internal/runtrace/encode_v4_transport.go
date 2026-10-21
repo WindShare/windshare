@@ -115,6 +115,12 @@ func (visitor *encodeVisitorV4) VisitPeerAttemptObserved(event clievent.PeerAtte
 		AttemptElapsedMS: decimal(event.ElapsedMillis()),
 		Stage:            stage,
 	}
+	if route, known := event.Route(); known {
+		payload.Route, err = nameOf(route)
+		if err != nil {
+			return err
+		}
+	}
 	if operation, ok := event.OfferOperationID(); ok {
 		encoded := encodeTypedIdentity(operation.Bytes())
 		payload.OfferOperationID = &encoded

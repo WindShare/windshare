@@ -168,6 +168,7 @@ type sharingStoppedPayloadV4 struct {
 func (sharingStoppedPayloadV4) runTracePayloadV4() {}
 
 type traceIncompletePayloadV4 struct {
+	ContractRejected string `json:"contract_rejected"`
 	Cause            string `json:"cause"`
 	LifecycleDropped string `json:"lifecycle_dropped"`
 	ProgressDropped  string `json:"progress_dropped"`
@@ -249,6 +250,7 @@ type peerFailureV4 struct {
 }
 
 type peerAttemptPayloadV4 struct {
+	Route            string                 `json:"route,omitempty"`
 	AttemptSequence  string                 `json:"attempt_sequence"`
 	AttemptElapsedMS string                 `json:"attempt_elapsed_ms"`
 	Stage            string                 `json:"stage"`
@@ -604,6 +606,7 @@ type receiverTerminationPayloadV4 struct {
 func (receiverTerminationPayloadV4) runTracePayloadV4() {}
 
 type traceSummaryPayloadV4 struct {
+	ContractRejected         string `json:"contract_rejected"`
 	RejectionEvidenceDropped string `json:"rejection_evidence_dropped"`
 	Incomplete               bool   `json:"incomplete"`
 	LifecycleDropped         string `json:"lifecycle_dropped"`

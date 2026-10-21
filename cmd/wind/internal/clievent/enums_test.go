@@ -59,7 +59,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"protocol message", int(ProtocolMessageListChildren), int(ProtocolMessagePeerCandidate), func(value int) (string, bool) { return ProtocolMessageKind(value).Name() }},
 		{"protocol send outcome", int(ProtocolSendUnknown), int(ProtocolSendDropped), func(value int) (string, bool) { return ProtocolSendOutcome(value).Name() }},
 		{"protocol operation cause", int(ProtocolOperationCauseNone), int(ProtocolOperationCauseSuperseded), func(value int) (string, bool) { return ProtocolOperationCause(value).Name() }},
-		{"lane route", int(LaneRouteRelay), int(LaneRouteDirect), func(value int) (string, bool) { return LaneRoute(value).Name() }},
+		{"lane route", int(LaneRouteRelay), int(LaneRouteTURN), func(value int) (string, bool) { return LaneRoute(value).Name() }},
 		{"observer loss category", int(ObserverLossRelayLifecycle), int(ObserverLossNativeConnectivity), func(value int) (string, bool) { return ObserverLossCategory(value).Name() }},
 		{"observer loss reason", int(ObserverLossUnknownEnum), int(ObserverLossCleanupResidue), func(value int) (string, bool) { return ObserverLossReason(value).Name() }},
 		{"receiver terminal owner", int(ReceiverTerminalUnbound), int(ReceiverTerminalRuntime), func(value int) (string, bool) { return ReceiverTerminalOwner(value).Name() }},

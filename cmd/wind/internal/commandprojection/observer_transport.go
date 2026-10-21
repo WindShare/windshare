@@ -151,6 +151,12 @@ func ProjectSenderAttempt(
 		Command: command, Session: session, PeerPath: path, Attempt: attempt,
 		Sequence: value.SideSequence, ElapsedMillis: value.AttemptElapsedMillis, Stage: stage,
 	}
+	if value.Route != 0 {
+		spec.Route, ok = projectLaneRoute(value.Route)
+		if !ok {
+			return clievent.PeerAttemptObserved{}, rejectedProjection(ProjectionUnknownEnum, "route", "known_enum")
+		}
+	}
 	if err := projectSenderAttemptEvidence(&spec, value); err != nil {
 		return clievent.PeerAttemptObserved{}, err
 	}

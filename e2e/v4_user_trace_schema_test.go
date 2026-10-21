@@ -264,7 +264,7 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 		),
 		"trace_incomplete": v4TraceSchema(
 			v4TraceFields(v4TraceString, "cause"),
-			v4TraceFields(v4TraceDecimal, "lifecycle_dropped", "progress_dropped"),
+			v4TraceFields(v4TraceDecimal, "contract_rejected", "lifecycle_dropped", "progress_dropped"),
 		),
 		"lane_adopted": v4TraceSchema(v4TraceFields(v4TraceString, "transport")),
 		"relay_lifecycle": v4TraceSchema(
@@ -284,6 +284,7 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 		"peer_attempt": v4TraceSchema(
 			v4TraceFields(v4TraceDecimal, "attempt_sequence", "attempt_elapsed_ms"),
 			v4TraceFields(v4TraceString, "stage"),
+			v4TraceOptionalFields(v4TraceString, "route"),
 			v4TraceOptionalFields(v4TraceIdentity, "offer_operation_id", "grant_operation_id"),
 			v4TraceObjectField("phase_deadline", peerPhaseDeadline, true),
 			v4TraceObjectField("candidates", peerCandidates, true),
@@ -380,7 +381,7 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 		),
 		"trace_summary": v4TraceSchema(
 			v4TraceFields(v4TraceBool, "incomplete", "writer_failed", "flush_failed", "schema_limited"),
-			v4TraceFields(v4TraceDecimal, "lifecycle_dropped", "progress_dropped", "events_written", "rejection_evidence_dropped"),
+			v4TraceFields(v4TraceDecimal, "contract_rejected", "lifecycle_dropped", "progress_dropped", "events_written", "rejection_evidence_dropped"),
 		),
 	}
 }
