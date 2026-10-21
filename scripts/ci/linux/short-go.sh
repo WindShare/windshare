@@ -21,8 +21,8 @@ trap cleanup EXIT
 
 # Hosted CI owns forced reruns; local validation keeps Go's content-aware cache
 # so unchanged race/coverage packages do not dominate feedback time.
-echo "-- pinned TURN protocol state tests"
-go test -short -race github.com/pion/turn/v5/internal/client
+echo "-- pinned ICE and TURN protocol state tests"
+go test -short -race github.com/pion/ice/v4 github.com/pion/turn/v5/internal/client
 
 echo "-- non-core short race and atomic coverage"
 go test -short -race -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"

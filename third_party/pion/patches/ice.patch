@@ -79,9 +79,11 @@ diff --git a/agent.go b/agent.go
 diff --git a/candidate.go b/candidate.go
 --- a/candidate.go
 +++ b/candidate.go
-@@ -99,6 +99,7 @@
+@@ -98,7 +98,9 @@
+ 	seen(outbound bool)
  	start(a *Agent, conn net.PacketConn, initializedCh <-chan struct{})
  	writeTo(raw []byte, dst Candidate) (int, error)
++	writeSTUN(raw []byte, dst Candidate) error
  	setPriority(uint32)
 +	priorityForAgent(*Agent) uint32
  
@@ -90,7 +92,33 @@ diff --git a/candidate.go b/candidate.go
 diff --git a/candidate_base.go b/candidate_base.go
 --- a/candidate_base.go
 +++ b/candidate_base.go
-@@ -479,6 +479,10 @@
+@@ -37,6 +37,7 @@
+ 	lastSent     atomic.Int64
+ 	lastReceived atomic.Int64
+ 	conn         net.PacketConn
++	stunWriter   *candidateSTUNWriter
+ 
+ 	// addrPortConn is non-nil when conn opts in to AddrPortReaderWriter.
+ 	addrPortConn AddrPortReaderWriter
+@@ -255,6 +256,7 @@
+ 	c.closeCh = make(chan struct{})
+ 	c.closedCh = make(chan struct{})
+ 	a.registerStartedCandidate(c)
++	c.startSTUNWriter()
+ 
+ 	go c.recvLoop(initializedCh)
+ }
+@@ -417,6 +419,9 @@
+ 
+ 	// Wait until the recvLoop is closed
+ 	<-c.closedCh
++	if c.stunWriter != nil {
++		<-c.stunWriter.done
++	}
+ 
+ 	if c.currAgent != nil {
+ 		c.currAgent.unregisterStartedCandidate(c)
+@@ -479,6 +484,10 @@
  
  // TypePreference returns the type preference for this candidate.
  func (c *candidateBase) TypePreference() uint16 {
@@ -101,7 +129,7 @@ diff --git a/candidate_base.go b/candidate_base.go
  	pref := c.Type().Preference()
  	if pref == 0 {
  		return 0
-@@ -486,8 +490,8 @@
+@@ -486,8 +495,8 @@
  
  	if c.NetworkType().IsTCP() {
  		var tcpPriorityOffset uint16 = defaultTCPPriorityOffset
@@ -112,7 +140,7 @@ diff --git a/candidate_base.go b/candidate_base.go
  		}
  
  		pref -= tcpPriorityOffset
-@@ -499,6 +503,12 @@
+@@ -499,6 +508,12 @@
  // Priority computes the priority for this ICE Candidate
  // See: https://www.rfc-editor.org/rfc/rfc8445#section-5.1.2.1
  func (c *candidateBase) Priority() uint32 {
@@ -125,7 +153,7 @@ diff --git a/candidate_base.go b/candidate_base.go
  	if c.priorityOverride != 0 {
  		return c.priorityOverride
  	}
-@@ -510,7 +520,7 @@
+@@ -510,7 +525,7 @@
  	// that have the same type, the local preference MUST be unique for each
  	// one.
  
@@ -134,7 +162,7 @@ diff --git a/candidate_base.go b/candidate_base.go
  		(1<<8)*uint32(c.LocalPreference()) +
  		(1<<0)*uint32(256-c.Component())
  }
-@@ -951,6 +961,7 @@
+@@ -951,6 +966,7 @@
  			foundation,
  			raddr,
  			rport,
@@ -179,6 +207,346 @@ diff --git a/candidate_server_reflexive.go b/candidate_server_reflexive.go
  
  	return candidate, nil
  }
+diff --git a/candidate_stun.go b/candidate_stun.go
+new file mode 100644
+--- /dev/null
++++ b/candidate_stun.go
+@@ -0,0 +1,95 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++package ice
++
++import (
++	"errors"
++	"io"
++	"time"
++)
++
++const maxQueuedSTUNPackets = 32
++
++var (
++	errSTUNQueueFull      = errors.New("candidate STUN queue full")
++	errSTUNPacketTooLarge = errors.New("candidate STUN packet exceeds receive MTU")
++)
++
++type candidateSTUNPacket struct {
++	raw     []byte
++	remote  Candidate
++	expires time.Time
++}
++
++type candidateSTUNWriter struct {
++	queue chan candidateSTUNPacket
++	done  chan struct{}
++}
++
++func (c *candidateBase) startSTUNWriter() {
++	if c.Type() != CandidateTypeRelay {
++		return
++	}
++	c.stunWriter = &candidateSTUNWriter{
++		queue: make(chan candidateSTUNPacket, maxQueuedSTUNPackets),
++		done:  make(chan struct{}),
++	}
++	go c.runSTUNWriter()
++}
++
++func (c *candidateBase) writeSTUN(raw []byte, remote Candidate) error {
++	if c.stunWriter == nil {
++		_, err := c.writeTo(raw, remote)
++		return err
++	}
++	select {
++	case <-c.closeCh:
++		return io.ErrClosedPipe
++	default:
++	}
++	if len(raw) > receiveMTU {
++		return errSTUNPacketTooLarge
++	}
++	// TURN may synchronously create a peer permission before writing. That
++	// round trip must not stall ICE's event loop or another local candidate.
++	packet := candidateSTUNPacket{
++		raw: append([]byte(nil), raw...), remote: remote,
++		expires: time.Now().Add(maxBindingRequestTimeout),
++	}
++	select {
++	case <-c.closeCh:
++		return io.ErrClosedPipe
++	case c.stunWriter.queue <- packet:
++		return nil
++	default:
++		// ICE retransmits checks; bounded loss is preferable to blocking the
++		// same loop that must process responses and choose a working path.
++		return errSTUNQueueFull
++	}
++}
++
++func (c *candidateBase) runSTUNWriter() {
++	defer close(c.stunWriter.done)
++	for {
++		select {
++		case <-c.closeCh:
++			return
++		default:
++		}
++		select {
++		case <-c.closeCh:
++			return
++		case packet := <-c.stunWriter.queue:
++			// A permission timeout can outlive pending ICE transactions. Do not
++			// flood the server with obsolete checks when that write unblocks.
++			if !time.Now().Before(packet.expires) {
++				c.agent().log.Debugf("Discard expired STUN write from %s to %s", c, packet.remote)
++				continue
++			}
++			if _, err := c.writeTo(packet.raw, packet.remote); err != nil {
++				c.agent().log.Tracef("Failed to send queued STUN message: %s", err)
++			}
++		}
++	}
++}
+diff --git a/candidate_stun_test.go b/candidate_stun_test.go
+new file mode 100644
+--- /dev/null
++++ b/candidate_stun_test.go
+@@ -0,0 +1,220 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++package ice
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"testing/synctest"
++	"time"
++
++	"github.com/pion/stun/v4"
++)
++
++func TestRelayPermissionWaitDoesNotBlockICEControl(t *testing.T) {
++	synctest.Test(t, func(t *testing.T) {
++		agent, err := NewAgent(&AgentConfig{MulticastDNSMode: MulticastDNSModeDisabled})
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer func() { _ = agent.Close() }()
++		slow, slowConn := stunTestCandidate(t, agent, 4001)
++		fast, fastConn := stunTestCandidate(t, agent, 4002)
++		defer func() { _ = slow.close(); _ = fast.close() }()
++		close(fastConn.release)
++		remote := stunTestRemote(t)
++		message := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
++		returned := make(chan struct{})
++		go func() {
++			_ = agent.loop.Run(agent.loop, func(context.Context) { agent.sendSTUN(message, slow, remote) })
++			close(returned)
++		}()
++		<-slowConn.started
++		progress := make(chan struct{})
++		go func() {
++			_ = agent.loop.Run(agent.loop, func(context.Context) {
++				agent.sendSTUN(message, fast, remote)
++				close(progress)
++			})
++		}()
++		synctest.Wait()
++		select {
++		case <-returned:
++		default:
++			t.Error("TURN permission round trip blocked the ICE event loop")
++		}
++		select {
++		case <-progress:
++		default:
++			t.Error("one TURN allocation prevented another candidate from progressing")
++		}
++		if len(fastConn.written) != 1 {
++			t.Error("healthy candidate could not send while another permission was pending")
++		}
++		close(slowConn.release)
++		synctest.Wait()
++	})
++}
++
++func TestRelaySTUNQueueOwnsPacketsAndBoundsPendingWork(t *testing.T) {
++	synctest.Test(t, func(t *testing.T) {
++		agent, err := NewAgent(&AgentConfig{MulticastDNSMode: MulticastDNSModeDisabled})
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer func() { _ = agent.Close() }()
++		local, conn := stunTestCandidate(t, agent, 4001)
++		defer func() { _ = local.close() }()
++		remote := stunTestRemote(t)
++		raw := []byte("original packet")
++		if err := local.writeSTUN(raw, remote); err != nil {
++			t.Fatal(err)
++		}
++		<-conn.started
++		for range maxQueuedSTUNPackets {
++			if err := local.writeSTUN(raw, remote); err != nil {
++				t.Fatal(err)
++			}
++		}
++		if err := local.writeSTUN(raw, remote); !errors.Is(err, errSTUNQueueFull) {
++			t.Fatalf("full queue: %v", err)
++		}
++		if err := local.writeSTUN(make([]byte, receiveMTU+1), remote); !errors.Is(err, errSTUNPacketTooLarge) {
++			t.Fatalf("oversized packet: %v", err)
++		}
++		clear(raw)
++		close(conn.release)
++		synctest.Wait()
++		if len(conn.written) != maxQueuedSTUNPackets+1 {
++			t.Fatalf("accepted packets were lost: %d", len(conn.written))
++		}
++		for len(conn.written) > 0 {
++			if got := <-conn.written; !bytes.Equal(got, []byte("original packet")) {
++				t.Fatalf("queued write retained borrowed payload: %q", got)
++			}
++		}
++		if err := local.close(); err != nil {
++			t.Fatal(err)
++		}
++		if err := local.writeSTUN(raw, remote); !errors.Is(err, io.ErrClosedPipe) {
++			t.Fatalf("closed candidate accepted a write: %v", err)
++		}
++	})
++}
++
++func TestRelaySTUNQueueExpiresChecksAndJoinsOnClose(t *testing.T) {
++	for _, closePending := range []bool{false, true} {
++		t.Run(map[bool]string{false: "expired", true: "closed"}[closePending], func(t *testing.T) {
++			synctest.Test(t, func(t *testing.T) {
++				agent, err := NewAgent(&AgentConfig{MulticastDNSMode: MulticastDNSModeDisabled})
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer func() { _ = agent.Close() }()
++				local, conn := stunTestCandidate(t, agent, 4001)
++				defer func() { _ = local.close() }()
++				remote := stunTestRemote(t)
++				if err := local.writeSTUN([]byte("in flight"), remote); err != nil {
++					t.Fatal(err)
++				}
++				<-conn.started
++				if err := local.writeSTUN([]byte("queued"), remote); err != nil {
++					t.Fatal(err)
++				}
++				if closePending {
++					if err := local.close(); err != nil {
++						t.Fatal(err)
++					}
++					select {
++					case <-local.stunWriter.done:
++					default:
++						t.Fatal("candidate close returned with a live writer")
++					}
++					if len(conn.written) != 0 {
++						t.Fatal("closed candidate sent queued checks")
++					}
++				} else {
++					time.Sleep(maxBindingRequestTimeout)
++					close(conn.release)
++					synctest.Wait()
++					if len(conn.written) != 1 || string(<-conn.written) != "in flight" {
++						t.Fatal("obsolete checks were sent after permission wait")
++					}
++				}
++			})
++		})
++	}
++}
++
++type stunTestPacketConn struct {
++	started chan struct{}
++	release chan struct{}
++	closed  chan struct{}
++	written chan []byte
++	once    sync.Once
++}
++
++func (conn *stunTestPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
++	<-conn.closed
++	return 0, nil, net.ErrClosed
++}
++
++func (conn *stunTestPacketConn) WriteTo(raw []byte, _ net.Addr) (int, error) {
++	select {
++	case conn.started <- struct{}{}:
++	default:
++	}
++	select {
++	case <-conn.closed:
++		return 0, net.ErrClosed
++	case <-conn.release:
++		conn.written <- append([]byte(nil), raw...)
++		return len(raw), nil
++	}
++}
++
++func (conn *stunTestPacketConn) Close() error {
++	conn.once.Do(func() { close(conn.closed) })
++	return nil
++}
++
++func (*stunTestPacketConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
++func (*stunTestPacketConn) SetDeadline(time.Time) error      { return nil }
++func (*stunTestPacketConn) SetReadDeadline(time.Time) error  { return nil }
++func (*stunTestPacketConn) SetWriteDeadline(time.Time) error { return nil }
++
++func stunTestCandidate(t *testing.T, agent *Agent, port int) (*CandidateRelay, *stunTestPacketConn) {
++	t.Helper()
++	candidate, err := NewCandidateRelay(&CandidateRelayConfig{
++		Network: "udp", Address: "192.0.2.1", Port: port, Component: ComponentRTP,
++		RelAddr: "192.0.2.2", RelPort: port,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	conn := &stunTestPacketConn{
++		started: make(chan struct{}, 128), release: make(chan struct{}), closed: make(chan struct{}),
++		written: make(chan []byte, 128),
++	}
++	initialized := make(chan struct{})
++	close(initialized)
++	candidate.start(agent, conn, initialized)
++	return candidate, conn
++}
++
++func stunTestRemote(t *testing.T) Candidate {
++	t.Helper()
++	candidate, err := NewCandidateHost(&CandidateHostConfig{
++		Network: "udp", Address: "198.51.100.1", Port: 5000, Component: ComponentRTP,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return candidate
++}
+diff --git a/candidatepair.go b/candidatepair.go
+--- a/candidatepair.go
++++ b/candidatepair.go
+@@ -144,9 +144,8 @@
+ }
+ 
+ func (a *Agent) sendSTUN(msg *stun.Message, local, remote Candidate) {
+-	_, err := local.writeTo(msg.Raw, remote)
+-	if err != nil {
+-		a.log.Tracef("Failed to send STUN message: %s", err)
++	if err := local.writeSTUN(msg.Raw, remote); err != nil {
++		a.log.Debugf("STUN write rejected from %s to %s: %s", local, remote, err)
+ 	}
+ }
+ 
 diff --git a/gather.go b/gather.go
 --- a/gather.go
 +++ b/gather.go

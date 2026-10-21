@@ -37,6 +37,7 @@ type candidateBase struct {
 	lastSent     atomic.Int64
 	lastReceived atomic.Int64
 	conn         net.PacketConn
+	stunWriter   *candidateSTUNWriter
 
 	// addrPortConn is non-nil when conn opts in to AddrPortReaderWriter.
 	addrPortConn AddrPortReaderWriter
@@ -255,6 +256,7 @@ func (c *candidateBase) start(a *Agent, conn net.PacketConn, initializedCh <-cha
 	c.closeCh = make(chan struct{})
 	c.closedCh = make(chan struct{})
 	a.registerStartedCandidate(c)
+	c.startSTUNWriter()
 
 	go c.recvLoop(initializedCh)
 }
@@ -417,6 +419,9 @@ func (c *candidateBase) close() error {
 
 	// Wait until the recvLoop is closed
 	<-c.closedCh
+	if c.stunWriter != nil {
+		<-c.stunWriter.done
+	}
 
 	if c.currAgent != nil {
 		c.currAgent.unregisterStartedCandidate(c)

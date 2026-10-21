@@ -144,9 +144,8 @@ func (p *CandidatePair) Write(b []byte) (int, error) {
 }
 
 func (a *Agent) sendSTUN(msg *stun.Message, local, remote Candidate) {
-	_, err := local.writeTo(msg.Raw, remote)
-	if err != nil {
-		a.log.Tracef("Failed to send STUN message: %s", err)
+	if err := local.writeSTUN(msg.Raw, remote); err != nil {
+		a.log.Debugf("STUN write rejected from %s to %s: %s", local, remote, err)
 	}
 }
 
