@@ -11,7 +11,9 @@ The Cloudflare deployment workflow provisions TURN in both deployment modes.
 `wind relay onboard` saves the service reference automatically; approved devices
 request temporary credentials from the Worker. The deployment token stays in
 Actions, the TURN key secret stays in the Worker, and recipients receive only
-temporary credentials through encrypted session control.
+temporary credentials through encrypted session control. Managed credentials last
+up to one hour; the client derives their remaining lifetime from the issuer's HTTP
+Date, subtracting request time instead of comparing clocks across devices.
 
 Managed services follow the configured active relay selection even while an
 application relay is disconnected. Discovery refreshes in the background; timeout

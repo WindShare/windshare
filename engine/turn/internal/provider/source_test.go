@@ -19,7 +19,7 @@ type clientFunc func(*http.Request) (*http.Response, error)
 
 func (f clientFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 func response(status int, body string) *http.Response {
-	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}
+	return &http.Response{StatusCode: status, Header: http.Header{"Date": {time.Now().UTC().Format(http.TimeFormat)}}, Body: io.NopCloser(strings.NewReader(body))}
 }
 
 func TestCloudflareIssuanceRenewalAndConfirmedRevocation(t *testing.T) {

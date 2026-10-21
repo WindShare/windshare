@@ -20,6 +20,7 @@ func TestRemoteReplaysLostRepliesWithOneLeaseIdentity(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var requests []remoteRequest
 		var granted []byte
+		started := time.Now()
 		source, _ := NewRemote(RemoteConfig{RelayURL: "https://relay.example", AccessKey: "key", ServiceID: "cf-service",
 			Client: clientFunc(func(request *http.Request) (*http.Response, error) {
 				var body remoteRequest
@@ -33,6 +34,7 @@ func TestRemoteReplaysLostRepliesWithOneLeaseIdentity(t *testing.T) {
 						Username: "u", Password: "p", ExpiresAt: time.Now().Add(time.Hour).UnixMilli()})
 				}
 				if len(requests) <= 2 {
+					time.Sleep(time.Second)
 					return &http.Response{StatusCode: http.StatusCreated, Body: lostResponseBody{}}, nil
 				}
 				return response(http.StatusOK, string(granted)), nil
@@ -40,6 +42,9 @@ func TestRemoteReplaysLostRepliesWithOneLeaseIdentity(t *testing.T) {
 		acquired, err := source.Issue(t.Context(), Subject{SessionID: [16]byte{1}, PathID: [16]byte{2}})
 		if err != nil || !acquired.Credentials.ValidAt(time.Now()) {
 			t.Fatal(acquired, err)
+		}
+		if acquired.Credentials.ExpiresAt().After(started.Add(ManagedLeaseLifetime)) {
+			t.Fatal("replaying the grant extended issuer authority")
 		}
 		if len(requests) != 3 || requests[0] != requests[1] || requests[1] != requests[2] {
 			t.Fatalf("replay changed operation identity: %+v", requests)

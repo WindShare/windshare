@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
@@ -112,18 +113,23 @@ func (source *Remote) issue(ctx context.Context, subject Subject, previous strin
 	if previous != "" {
 		path = "/renew"
 	}
-	grant, err := source.resolve(ctx, path, request)
+	reply, err := source.resolve(ctx, path, request)
 	if err != nil {
 		return acquisition, err
 	}
+	grant := reply.grant
 	if grant.ServiceID != request.ServiceID || grant.LeaseID != request.LeaseID ||
 		grant.SessionID != request.SessionID || grant.PathID != request.PathID {
 		return acquisition, ErrConfiguration
 	}
-	expires := time.UnixMilli(grant.ExpiresAt)
 	now := source.config.Now()
-	if !expires.After(now) || expires.After(now.Add(ManagedLeaseLifetime)) {
-		return acquisition, ErrExpired
+	expires, err := reply.localExpiry(now)
+	slog.Debug("TURN remote grant validity", "service_id", request.ServiceID, "lease_id", request.LeaseID,
+		"session_id", request.SessionID, "path_id", request.PathID, "server_date", reply.headers.Get("Date"),
+		"issuer_expires_at", grant.ExpiresAt, "request_elapsed", now.Sub(reply.requestedAt),
+		"local_expires_at", expires, "reason", err)
+	if err != nil {
+		return acquisition, err
 	}
 	credential, err := iceconfig.Expiring(grant.Username, grant.Password, expires)
 	if err != nil {
@@ -140,7 +146,7 @@ func (source *Remote) revoke(ctx context.Context, request remoteRequest) (Cleanu
 	var result struct {
 		State string `json:"state"`
 	}
-	if err := remoteCall(ctx, source.config.Client, source.base+"/revoke", source.config.AccessKey, request, &result); err != nil {
+	if _, err := remoteCall(ctx, source.config.Client, source.base+"/revoke", source.config.AccessKey, request, &result); err != nil {
 		return 0, err
 	}
 	switch result.State {

@@ -46,7 +46,7 @@ func Discover(ctx context.Context, client HTTPClient, relayURL, accessKey string
 	var result struct {
 		TURN *Capability `json:"turn"`
 	}
-	if err := remoteCall(ctx, client, base+"/capability", accessKey, nil, &result); err != nil {
+	if _, err := remoteCall(ctx, client, base+"/capability", accessKey, nil, &result); err != nil {
 		return nil, err
 	}
 	if result.TURN != nil && !ValidServiceID(result.TURN.ServiceID) {
@@ -54,7 +54,7 @@ func Discover(ctx context.Context, client HTTPClient, relayURL, accessKey string
 	}
 	return result.TURN, nil
 }
-func remoteCall(ctx context.Context, client HTTPClient, address, key string, body, out any) error {
+func remoteCall(ctx context.Context, client HTTPClient, address, key string, body, out any) (http.Header, error) {
 	ctx, cancel := context.WithTimeout(ctx, HTTPTimeout)
 	defer cancel()
 	var reader io.Reader
@@ -62,13 +62,13 @@ func remoteCall(ctx context.Context, client HTTPClient, address, key string, bod
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader, method = bytes.NewReader(data), http.MethodPost
 	}
 	request, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+key)
 	if body != nil {
@@ -76,28 +76,28 @@ func remoteCall(ctx context.Context, client HTTPClient, address, key string, bod
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusUnauthorized {
-		return ErrAuthorityWithdrawn
+		return nil, ErrAuthorityWithdrawn
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaximumResponseBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(data) > MaximumResponseBytes {
-		return ErrConfiguration
+		return nil, ErrConfiguration
 	}
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusAccepted {
 		var failure struct {
 			Code string `json:"error"`
 		}
 		_ = json.Unmarshal(data, &failure)
-		return remoteFailure{status: response.StatusCode, code: failure.Code}
+		return nil, remoteFailure{status: response.StatusCode, code: failure.Code}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return ErrConfiguration
+		return nil, ErrConfiguration
 	}
-	return nil
+	return response.Header, nil
 }
