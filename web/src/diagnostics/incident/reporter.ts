@@ -59,7 +59,7 @@ export interface IncidentConsoleSink {
 
 export interface IncidentTraceSignalPort {
   signal(
-    signal: TraceCaptureSignal<IncidentLink, IncidentScopeIdentity>,
+    signal: TraceCaptureSignal<IncidentLink>,
   ): void
 }
 
@@ -103,7 +103,6 @@ interface ActiveIncidentScope {
   sealRequested: boolean
   sealing: boolean
   scopeClosed: boolean
-  terminalSignaled: boolean
   consoleReports: number
 }
 
@@ -165,7 +164,6 @@ class BrowserIncidentReporter implements IncidentReporter {
       sealRequested: false,
       sealing: false,
       scopeClosed: false,
-      terminalSignaled: false,
       consoleReports: 0,
     })
     return owner
@@ -218,13 +216,11 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
     state.decision = decision
     if (decision.kind === 'excluded') {
-      if (state.scopeClosed) this.#signalScopeTerminal(state)
       this.#active.delete(key)
       return
     }
     this.#trySeal(state)
     if (state.scopeClosed && this.#active.has(key)) {
-      this.#signalScopeTerminal(state)
       this.#active.delete(key)
     }
   }
@@ -255,21 +251,11 @@ class BrowserIncidentReporter implements IncidentReporter {
   #onScopeClosed(identity: IncidentScopeIdentity): void {
     const key = scopeKey(identity)
     const state = this.#active.get(key)
-    if (state === undefined) {
-      this.#signalTrace({
-        kind: 'scope_terminal',
-        scope: identity,
-        elapsedMs: this.#safeElapsedMilliseconds(),
-      })
-      return
-    }
+    if (state === undefined) return
 
     state.scopeClosed = true
-    // Sealing first lets an enabled trace establish its root before the same
-    // close notification terminates that root's post-failure tail.
     this.#requestSeal(identity)
     if (state.decision !== undefined && this.#active.has(key)) {
-      this.#signalScopeTerminal(state)
       this.#active.delete(key)
     }
   }
@@ -291,19 +277,8 @@ class BrowserIncidentReporter implements IncidentReporter {
     } catch {
       // Projection/reporting failure cannot delay or change the owned outcome.
     } finally {
-      if (state.scopeClosed) this.#signalScopeTerminal(state)
       this.#active.delete(key)
     }
-  }
-
-  #signalScopeTerminal(state: ActiveIncidentScope): void {
-    if (state.terminalSignaled) return
-    state.terminalSignaled = true
-    this.#signalTrace({
-      kind: 'scope_terminal',
-      scope: state.owner.identity,
-      elapsedMs: this.#safeElapsedMilliseconds(),
-    })
   }
 
   #emitRootIncident(
@@ -505,7 +480,7 @@ class BrowserIncidentReporter implements IncidentReporter {
   }
 
   #signalTrace(
-    signal: TraceCaptureSignal<IncidentLink, IncidentScopeIdentity>,
+    signal: TraceCaptureSignal<IncidentLink>,
   ): void {
     try {
       this.#traceSignals?.signal(signal)
@@ -527,14 +502,6 @@ class BrowserIncidentReporter implements IncidentReporter {
       time: timestamp.time,
       elapsedMs: timestamp.elapsedMs,
     })
-  }
-
-  #safeElapsedMilliseconds(): bigint {
-    try {
-      return this.#readTimestamp().elapsedMs
-    } catch {
-      return 0n
-    }
   }
 
   #allocateIncidentSequence(): bigint {

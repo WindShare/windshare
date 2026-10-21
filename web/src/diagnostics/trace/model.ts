@@ -34,8 +34,7 @@ export type {
 
 export const TRACE_CAPTURE_STATES = Object.freeze([
   'idle',
-  'recording_pre_failure',
-  'recording_post_failure',
+  'recording',
   'sealed',
 ] as const)
 
@@ -44,9 +43,6 @@ export type TraceCaptureState = (typeof TRACE_CAPTURE_STATES)[number]
 export const TRACE_SEAL_REASONS = Object.freeze([
   'manual_disable',
   'expired',
-  'scope_terminal',
-  'post_failure_silence',
-  'capacity_exhausted',
 ] as const)
 
 export type TraceSealReason = (typeof TRACE_SEAL_REASONS)[number]

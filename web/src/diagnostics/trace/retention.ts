@@ -11,7 +11,7 @@ interface Reservation<Event> {
   bytes: number
 }
 
-/** Each protected class uses at most a quarter of the existing pre-failure window.
+/** Each protected class uses at most a quarter of the capture window.
  * Reserving independently keeps ordinary milestones from erasing exceptional outcomes.
  */
 export class TraceRetentionWindow<Event> {

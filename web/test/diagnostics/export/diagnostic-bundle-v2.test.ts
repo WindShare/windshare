@@ -31,7 +31,7 @@ describe('DiagnosticBundleV2', () => {
       trace_overwritten_count: '8',
     })
     const status = projectDiagnosticsStatusV2(traceStatus({
-      state: 'recording_post_failure',
+      state: 'recording',
       enabled: true,
       captureGeneration: 2n,
       expiresAtMilliseconds: Date.parse('2026-08-19T02:00:00Z'),
@@ -101,13 +101,7 @@ describe('DiagnosticBundleV2', () => {
       'max_trace_event_count',
       'max_trace_event_bytes',
       'max_trace_total_bytes',
-      'max_trace_pre_failure_event_count',
-      'max_trace_pre_failure_bytes',
-      'max_trace_post_failure_event_count',
-      'max_trace_post_failure_bytes',
       'max_trace_incident_markers',
-      'max_trace_post_failure_ms',
-      'trace_post_failure_silence_ms',
       'trace_progress_sample_interval_ms',
       'trace_checkpoint_coalesce_interval_ms',
     ])
@@ -116,13 +110,7 @@ describe('DiagnosticBundleV2', () => {
       max_trace_event_count: 4_096,
       max_trace_event_bytes: 16_384,
       max_trace_total_bytes: 4_194_304,
-      max_trace_pre_failure_event_count: 2_048,
-      max_trace_pre_failure_bytes: 2_097_152,
-      max_trace_post_failure_event_count: 2_048,
-      max_trace_post_failure_bytes: 2_097_152,
       max_trace_incident_markers: 32,
-      max_trace_post_failure_ms: 30_000,
-      trace_post_failure_silence_ms: 5_000,
       trace_progress_sample_interval_ms: 1_000,
       trace_checkpoint_coalesce_interval_ms: 1_000,
     })
@@ -145,7 +133,7 @@ describe('DiagnosticBundleV2', () => {
       trace_overwritten_count: '8',
     })
     const status = projectDiagnosticsStatusV2(traceStatus({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       captureGeneration: 2n,
       expiresAtMilliseconds: Date.parse('2026-08-19T02:00:00Z'),
@@ -191,7 +179,7 @@ describe('DiagnosticBundleV2', () => {
       trace_overwritten_count: '8',
     })
     const status = projectDiagnosticsStatusV2(traceStatus({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       captureGeneration: 2n,
       expiresAtMilliseconds: Date.parse('2026-08-19T02:00:00Z'),
@@ -238,7 +226,7 @@ function capture(
   ],
 ): TraceCaptureSnapshot<TraceEventObservationV2, IncidentLink> {
   return Object.freeze({
-    state: events.length === 1 ? 'recording_pre_failure' : 'recording_post_failure',
+    state: 'recording',
     captureGeneration: 2n,
     startedAtMilliseconds: Date.parse('2026-08-19T01:00:00Z'),
     retainedEventCount: BigInt(events.length),

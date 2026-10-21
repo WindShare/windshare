@@ -2,7 +2,7 @@ import { isAutomaticPhotoCandidate, V2AutomaticPhotoDeferredError, V2_AUTOMATIC_
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import { V2RemoteOperationError } from '../content/v2-session-operations'
 import { V2RemoteRevisionError } from '../content/v2-session-services'
-import { unclassifiedFailureFact } from '../diagnostics/incident/fact'
+import { unclassifiedFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
   incidentPresentationDecision,
@@ -219,7 +219,7 @@ export class V2PreviewController {
           delete active.seekAttempt
           return
         }
-        this.#recordFailure(pending.attempt, 'preview_seek', error)
+        this.#recordFailure(pending.attempt, () => previewFailureFact('preview_seek', error))
         active.incidentAttempt = pending.attempt
         delete active.seekAttempt
         const failure = Object.freeze({
@@ -265,7 +265,10 @@ export class V2PreviewController {
     ) {
       return
     }
-    this.#recordFailure(media.attempt, 'preview_media')
+    this.#recordFailure(media.attempt, () => unclassifiedFailureFact({
+      stage: 'preview_media',
+      recoveryDisposition: 'none',
+    }))
     active.incidentAttempt = media.attempt
     const failure = Object.freeze({
       state: 'error' as const,
@@ -320,7 +323,7 @@ export class V2PreviewController {
         this.cancel()
         return
       }
-      this.#recordFailure(active.openAttempt, 'preview_open', error)
+      this.#recordFailure(active.openAttempt, () => previewFailureFact('preview_open', error))
       active.incidentAttempt = active.openAttempt
       this.#closeActive('stale_replacement')
       this.#publishPreview(Object.freeze({
@@ -406,20 +409,15 @@ export class V2PreviewController {
     for (const attempt of attempts) this.#closeAttempt(attempt)
   }
 
-  #recordCleanupFailure(active: ScopedActiveV2Preview, error?: unknown): void {
+  #recordCleanupFailure(active: ScopedActiveV2Preview, error: unknown): void {
     const attempt =
       active.incidentAttempt ??
       active.seekAttempt?.attempt ??
       active.mediaAttempt?.attempt ??
       active.openAttempt
-    const authenticatedFailure = authenticatedPreviewFailureFact(error)
     try {
       attempt.scope?.facts.record(
-        authenticatedFailure ??
-          unclassifiedFailureFact({
-              stage: 'cleanup',
-              recoveryDisposition: 'none',
-            }),
+        previewFailureFact('cleanup', error),
         'consequence',
       )
     } catch {
@@ -442,21 +440,12 @@ export class V2PreviewController {
 
   #recordFailure(
     attempt: PreviewAttempt,
-    stage: 'preview_open' | 'preview_seek' | 'preview_media',
-    error?: unknown,
+    failure: () => FailureFact,
   ): void {
     const scope = attempt.scope
     if (scope === undefined || attempt.decisionSettled) return
-    const authenticatedFailure = authenticatedPreviewFailureFact(error)
     try {
-      const trigger = scope.facts.record(
-        authenticatedFailure ??
-          unclassifiedFailureFact({
-              stage,
-              recoveryDisposition: 'none',
-            }),
-        'contributor',
-      )
+      const trigger = scope.facts.record(failure(), 'contributor')
       this.#submit(
         attempt,
         incidentPresentationDecision('preview', 'failed', trigger),
@@ -507,8 +496,11 @@ export class V2PreviewController {
   }
 }
 
-function authenticatedPreviewFailureFact(error: unknown) {
+function previewFailureFact(
+  stage: 'preview_open' | 'preview_seek' | 'cleanup',
+  error: unknown,
+): FailureFact {
   return error instanceof V2RemoteOperationError || error instanceof V2RemoteRevisionError
     ? error.failureFact
-    : undefined
+    : unclassifiedFailureFact({ stage, recoveryDisposition: 'none', error })
 }

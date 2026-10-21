@@ -18,6 +18,7 @@ import type {
   TraceHealthReadPort,
   TraceObserver,
   TraceScheduledTask,
+  TraceScheduler,
 } from './ports'
 
 export interface TraceActivationStore {
@@ -30,17 +31,17 @@ export type TraceActivationSnapshot =
   | Readonly<{ kind: 'off' }>
   | Readonly<{ kind: 'active'; expiresAtMilliseconds: number }>
 
-export type TraceSwitchOptions<Event, Incident, Scope> = Omit<
-  BoundedTraceRecorderOptions<Event, Incident, Scope>,
-  'captureGeneration' | 'capacity' | 'health' | 'onSealed'
+export type TraceSwitchOptions<Event, Incident> = Omit<
+  BoundedTraceRecorderOptions<Event, Incident>,
+  'captureGeneration' | 'capacity' | 'health'
 > & Readonly<{
   capacity?: TraceCapacityPolicy
+  scheduler: TraceScheduler
   activationStore?: TraceActivationStore
 }>
 
-interface ActiveTraceCapture<Event, Incident, Scope> {
-  readonly generation: bigint
-  readonly recorder: BoundedTraceRecorder<Event, Incident, Scope>
+interface ActiveTraceCapture<Event, Incident> {
+  readonly recorder: BoundedTraceRecorder<Event, Incident>
   readonly observer: TraceObserver<Event>
 }
 
@@ -50,17 +51,17 @@ interface TraceActivation {
 }
 
 /** Owns revocation and capture replacement; product objects only see `current`. */
-export class TraceSwitch<Event, Incident, Scope>
+export class TraceSwitch<Event, Incident>
 implements DomainTraceSource<Event>, TraceHealthReadPort {
-  readonly #options: TraceSwitchOptions<Event, Incident, Scope>
+  readonly #options: TraceSwitchOptions<Event, Incident>
   readonly #capacity: TraceCapacityPolicy
   readonly #health = new TraceHealthAccumulator()
   readonly #listeners = new Set<() => void>()
   #captureGeneration = 0n
-  #active: ActiveTraceCapture<Event, Incident, Scope> | undefined
+  #active: ActiveTraceCapture<Event, Incident> | undefined
   #activation: TraceActivation | undefined
 
-  constructor(options: TraceSwitchOptions<Event, Incident, Scope>) {
+  constructor(options: TraceSwitchOptions<Event, Incident>) {
     this.#options = options
     this.#capacity = createTraceCapacityPolicy(options.capacity)
     this.#restoreActivation()
@@ -113,9 +114,8 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
       captureGeneration: generation,
       capacity: this.#capacity,
       health: this.#health,
-      onSealed: () => this.#captureSealed(generation),
     })
-    this.#active = { generation, recorder, observer: event => recorder.record(event) }
+    this.#active = { recorder, observer: event => recorder.record(event) }
     const activation: TraceActivation = { expiresAtMilliseconds: expiresAt }
     this.#activation = activation
     try {
@@ -137,7 +137,6 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
       // Revocation of this page's observer is independent of browser storage.
     }
     this.#active?.recorder.seal('manual_disable')
-    // A sealed or cleared recorder still has an independently revocable activation.
     this.#changed()
     return this.status()
   }
@@ -154,10 +153,9 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
     this.#changed()
   }
 
-  signal(signal: TraceCaptureSignal<Incident, Scope>): void {
-    const before = this.#active?.recorder.state
-    this.#active?.recorder.signal(signal)
-    if (before !== this.#active?.recorder.state) this.#changed()
+  signal(signal: TraceCaptureSignal<Incident>): void {
+    // Publish failure evidence promptly without stopping the shared recorder.
+    if (this.#active?.recorder.signal(signal)) this.#changed()
   }
 
   status(): TraceCoreStatus {
@@ -209,8 +207,7 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
         this.#options.activationStore?.clear()
         return
       }
-      // Sealing preserves evidence, while activation permits re-entry until the
-      // original deadline. Neither re-entry nor clearing evidence renews it.
+      // Reload and evidence clearing must not renew the original recording window.
       if (!this.#startCapture(now, expiresAt).enabled) this.#options.activationStore?.clear()
     } catch {
       // A blocked or corrupt preference cannot interrupt receiver startup.
@@ -241,10 +238,6 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
   #endActivation(): void {
     this.#cancelTask(this.#activation?.expiryTask)
     this.#activation = undefined
-  }
-
-  #captureSealed(generation: bigint): void {
-    if (this.#active?.generation === generation) this.#changed()
   }
 
   #cancelTask(task: TraceScheduledTask | undefined): void {

@@ -569,7 +569,7 @@ describe('browser diagnostics production composition', () => {
     emit(source, createEvent)
     expect(createEvent).toHaveBeenCalledOnce()
     expect(composition.runtime.status()).toMatchObject({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       retained_event_count: '1',
     })

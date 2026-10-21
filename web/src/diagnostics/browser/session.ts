@@ -195,7 +195,7 @@ export class BrowserDiagnosticsSession implements DiagnosticsRuntimePort {
       this.#notificationQueued = false
       if (this.#disposed) return
       this.refresh()
-      // Seal can occur inside incident publication; snapshot after that turn finishes.
+      // Incident publication updates several evidence stores; snapshot after that turn finishes.
       this.checkpoint().catch(() => undefined)
     })
   }

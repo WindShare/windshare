@@ -70,7 +70,6 @@ describe('browser incident reporter', () => {
     expect(controllerRead).toHaveBeenCalledTimes(1)
     expect(traceSignal.mock.calls.map(([signal]) => signal.kind)).toEqual([
       'incident_sealed',
-      'scope_terminal',
     ])
     expect(record?.payload.diagnostics_health_at_seal).toEqual({
       fact_overflow_count: '0',
@@ -102,9 +101,7 @@ describe('browser incident reporter', () => {
 
     expect(fixture.reporter.history.snapshot()).toEqual([])
     expect(consoleError).not.toHaveBeenCalled()
-    expect(traceSignal.mock.calls.map(([signal]) => signal.kind)).toEqual([
-      'scope_terminal',
-    ])
+    expect(traceSignal).not.toHaveBeenCalled()
   })
 
   it('seals at the injected deadline and does not duplicate on later close', () => {

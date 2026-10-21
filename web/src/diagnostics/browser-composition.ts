@@ -14,7 +14,6 @@ import {
   createRuntimeRunIdentity,
   type BuildSnapshot,
 } from './export/projector'
-import type { IncidentScopeIdentity } from './incident'
 import { IncidentDiagnosticsHealth } from './incident/health'
 import { BoundedIncidentHistory } from './incident/history'
 import {
@@ -59,8 +58,7 @@ export interface BrowserDiagnosticsCompositionOptions {
 export interface BrowserDiagnosticsComposition {
   readonly trace: TraceSwitch<
     TraceEventObservationV2,
-    IncidentLink,
-    IncidentScopeIdentity
+    IncidentLink
   >
   readonly incidents: IncidentReporter
   readonly runtime: BrowserDiagnosticsRuntime
@@ -84,8 +82,7 @@ export function createBrowserDiagnosticsComposition(
   )
   const trace = new TraceSwitch<
     TraceEventObservationV2,
-    IncidentLink,
-    IncidentScopeIdentity
+    IncidentLink
   >({
     clock,
     scheduler: options.scheduler ?? SYSTEM_TRACE_SCHEDULER,
@@ -96,8 +93,6 @@ export function createBrowserDiagnosticsComposition(
     eventBytes: traceEventObservationBytesV2,
     snapshotIncident: snapshotIncidentLink,
     incidentMarkerBytes: incidentMarkerBytes,
-    incidentScope: (incident) => incident.scope,
-    sameScope,
   })
   const health = new IncidentDiagnosticsHealth(trace)
   const history = new BoundedIncidentHistory()
@@ -118,8 +113,7 @@ export function createBrowserDiagnosticsComposition(
       signal: (
         signal: Parameters<TraceSwitch<
           TraceEventObservationV2,
-          IncidentLink,
-          IncidentScopeIdentity
+          IncidentLink
         >['signal']>[0],
       ) => trace.signal(signal),
     }),
@@ -194,14 +188,6 @@ function incidentMarkerBytes(incident: IncidentLink): number {
       : { root_incident_sequence: incident.rootIncidentSequence.toString(10) }),
   })
   return new TextEncoder().encode(encoded).byteLength
-}
-
-function sameScope(
-  left: IncidentScopeIdentity,
-  right: IncidentScopeIdentity,
-): boolean {
-  return left.scopeKind === right.scopeKind &&
-    left.scopeSequence === right.scopeSequence
 }
 
 function secureRandomBytes(byteLength: number): Uint8Array {

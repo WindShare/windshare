@@ -16,7 +16,6 @@ import {
   traceEventObservationNameV2,
 } from '../../../src/diagnostics/export/trace-event-v2'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
-import type { IncidentScopeIdentity } from '../../../src/diagnostics/incident/scope'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
 import { emitOutputTrace, outputTraceEvent } from '../../../src/output/diagnostics'
 import { createOutputTraceSource } from '../../../src/ui/v2-production-trace'
@@ -586,22 +585,17 @@ describe('closed TraceEventObservationV2 boundary', () => {
     let now = Date.parse('2026-08-19T01:00:00Z')
     const recorder = new BoundedTraceRecorder<
       TraceEventObservationV2,
-      IncidentLink,
-      IncidentScopeIdentity
+      IncidentLink
     >({
       captureGeneration: 1n,
       clock: { nowMilliseconds: () => now++ },
-      scheduler: {
-        schedule: () => Object.freeze({ cancel: () => undefined }),
-      },
+
       eventName: traceEventObservationNameV2,
       snapshotEvent: snapshotTraceEventObservationV2,
       eventBytes: traceEventObservationBytesV2,
       snapshotIncident: (incident) => incident,
       incidentMarkerBytes: () => 1,
-      incidentScope: (incident) => incident.scope,
-      sameScope: (left, right) =>
-        left.scopeKind === right.scopeKind && left.scopeSequence === right.scopeSequence,
+
     })
     for (const candidate of VALID_OBSERVATIONS) recorder.record(candidate)
     recorder.signal({

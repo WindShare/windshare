@@ -6,14 +6,8 @@ import {
   MAX_TRACE_EVENT_BYTES,
   MAX_TRACE_EVENT_COUNT,
   MAX_TRACE_INCIDENT_MARKERS,
-  MAX_TRACE_POST_FAILURE_BYTES,
-  MAX_TRACE_POST_FAILURE_EVENT_COUNT,
-  MAX_TRACE_POST_FAILURE_MS,
-  MAX_TRACE_PRE_FAILURE_BYTES,
-  MAX_TRACE_PRE_FAILURE_EVENT_COUNT,
   MAX_TRACE_TOTAL_BYTES,
   TRACE_CHECKPOINT_COALESCE_INTERVAL_MS,
-  TRACE_POST_FAILURE_SILENCE_MS,
   TRACE_PROGRESS_SAMPLE_INTERVAL_MS,
   createTraceCapacityPolicy,
 } from '../../../src/diagnostics/trace/capacity'
@@ -30,13 +24,7 @@ describe('trace frozen contract', () => {
       maxEventCount: MAX_TRACE_EVENT_COUNT,
       maxEventBytes: MAX_TRACE_EVENT_BYTES,
       maxTotalBytes: MAX_TRACE_TOTAL_BYTES,
-      maxPreFailureEventCount: MAX_TRACE_PRE_FAILURE_EVENT_COUNT,
-      maxPreFailureBytes: MAX_TRACE_PRE_FAILURE_BYTES,
-      maxPostFailureEventCount: MAX_TRACE_POST_FAILURE_EVENT_COUNT,
-      maxPostFailureBytes: MAX_TRACE_POST_FAILURE_BYTES,
       maxIncidentMarkers: MAX_TRACE_INCIDENT_MARKERS,
-      maxPostFailureMs: MAX_TRACE_POST_FAILURE_MS,
-      postFailureSilenceMs: TRACE_POST_FAILURE_SILENCE_MS,
       progressSampleIntervalMs: TRACE_PROGRESS_SAMPLE_INTERVAL_MS,
       checkpointCoalesceIntervalMs: TRACE_CHECKPOINT_COALESCE_INTERVAL_MS,
     })
@@ -45,13 +33,7 @@ describe('trace frozen contract', () => {
       maxEventCount: 4_096,
       maxEventBytes: 16_384,
       maxTotalBytes: 4_194_304,
-      maxPreFailureEventCount: 2_048,
-      maxPreFailureBytes: 2_097_152,
-      maxPostFailureEventCount: 2_048,
-      maxPostFailureBytes: 2_097_152,
       maxIncidentMarkers: 32,
-      maxPostFailureMs: 30_000,
-      postFailureSilenceMs: 5_000,
       progressSampleIntervalMs: 1_000,
       checkpointCoalesceIntervalMs: 1_000,
     })
@@ -61,16 +43,12 @@ describe('trace frozen contract', () => {
   it('keeps state, seal reason, and event names closed and ordered', () => {
     expect(TRACE_CAPTURE_STATES).toEqual([
       'idle',
-      'recording_pre_failure',
-      'recording_post_failure',
+      'recording',
       'sealed',
     ])
     expect(TRACE_SEAL_REASONS).toEqual([
       'manual_disable',
       'expired',
-      'scope_terminal',
-      'post_failure_silence',
-      'capacity_exhausted',
     ])
     expect(TRACE_EVENT_NAMES_V2).toEqual([
       'join_transition',
@@ -121,13 +99,11 @@ describe('trace frozen contract', () => {
   it('rejects policies whose local or relational bounds are invalid', () => {
     expect(() => createTraceCapacityPolicy({ maxEventCount: 0 })).toThrow(RangeError)
     expect(() => createTraceCapacityPolicy({
-      maxEventBytes: DEFAULT_TRACE_CAPACITY_POLICY.maxPreFailureBytes + 1,
-    })).toThrow(/fit every capture byte budget/)
+      maxEventBytes: DEFAULT_TRACE_CAPACITY_POLICY.maxTotalBytes + 1,
+    })).toThrow(/fit the capture byte budget/)
     expect(() => createTraceCapacityPolicy({
-      maxIncidentMarkers: DEFAULT_TRACE_CAPACITY_POLICY.maxPostFailureEventCount + 1,
+      maxIncidentMarkers: DEFAULT_TRACE_CAPACITY_POLICY.maxEventCount + 1,
     })).toThrow(/markers/)
-    expect(() => createTraceCapacityPolicy({
-      postFailureSilenceMs: DEFAULT_TRACE_CAPACITY_POLICY.maxPostFailureMs + 1,
-    })).toThrow(/silence/)
+    expect(() => createTraceCapacityPolicy({ captureExpiryMs: Infinity })).toThrow(RangeError)
   })
 })

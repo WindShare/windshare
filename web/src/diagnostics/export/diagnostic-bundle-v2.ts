@@ -35,13 +35,7 @@ export interface DiagnosticsTraceCapacityV1 {
   readonly max_trace_event_count: number
   readonly max_trace_event_bytes: number
   readonly max_trace_total_bytes: number
-  readonly max_trace_pre_failure_event_count: number
-  readonly max_trace_pre_failure_bytes: number
-  readonly max_trace_post_failure_event_count: number
-  readonly max_trace_post_failure_bytes: number
   readonly max_trace_incident_markers: number
-  readonly max_trace_post_failure_ms: number
-  readonly trace_post_failure_silence_ms: number
   readonly trace_progress_sample_interval_ms: number
   readonly trace_checkpoint_coalesce_interval_ms: number
 }
@@ -553,13 +547,7 @@ function copyStatus(status: DiagnosticsStatusV2): DiagnosticsStatusV2 {
       maxEventCount: status.capacity.max_trace_event_count,
       maxEventBytes: status.capacity.max_trace_event_bytes,
       maxTotalBytes: status.capacity.max_trace_total_bytes,
-      maxPreFailureEventCount: status.capacity.max_trace_pre_failure_event_count,
-      maxPreFailureBytes: status.capacity.max_trace_pre_failure_bytes,
-      maxPostFailureEventCount: status.capacity.max_trace_post_failure_event_count,
-      maxPostFailureBytes: status.capacity.max_trace_post_failure_bytes,
       maxIncidentMarkers: status.capacity.max_trace_incident_markers,
-      maxPostFailureMs: status.capacity.max_trace_post_failure_ms,
-      postFailureSilenceMs: status.capacity.trace_post_failure_silence_ms,
       progressSampleIntervalMs: status.capacity.trace_progress_sample_interval_ms,
       checkpointCoalesceIntervalMs: status.capacity.trace_checkpoint_coalesce_interval_ms,
     }),
@@ -605,33 +593,9 @@ function projectCapacity(capacity: TraceCoreStatus['capacity']): DiagnosticsTrac
     max_trace_event_count: positiveSafeInteger(capacity.maxEventCount, 'trace event count'),
     max_trace_event_bytes: positiveSafeInteger(capacity.maxEventBytes, 'trace event bytes'),
     max_trace_total_bytes: positiveSafeInteger(capacity.maxTotalBytes, 'trace total bytes'),
-    max_trace_pre_failure_event_count: positiveSafeInteger(
-      capacity.maxPreFailureEventCount,
-      'trace pre-failure event count',
-    ),
-    max_trace_pre_failure_bytes: positiveSafeInteger(
-      capacity.maxPreFailureBytes,
-      'trace pre-failure bytes',
-    ),
-    max_trace_post_failure_event_count: positiveSafeInteger(
-      capacity.maxPostFailureEventCount,
-      'trace post-failure event count',
-    ),
-    max_trace_post_failure_bytes: positiveSafeInteger(
-      capacity.maxPostFailureBytes,
-      'trace post-failure bytes',
-    ),
     max_trace_incident_markers: positiveSafeInteger(
       capacity.maxIncidentMarkers,
       'trace incident marker count',
-    ),
-    max_trace_post_failure_ms: positiveSafeInteger(
-      capacity.maxPostFailureMs,
-      'trace post-failure time',
-    ),
-    trace_post_failure_silence_ms: positiveSafeInteger(
-      capacity.postFailureSilenceMs,
-      'trace silence time',
     ),
     trace_progress_sample_interval_ms: positiveSafeInteger(
       capacity.progressSampleIntervalMs,
@@ -741,7 +705,7 @@ function requireUniqueBigIntSequences(
 }
 
 function isRecording(state: TraceCoreStatus['state']): boolean {
-  return state === 'recording_pre_failure' || state === 'recording_post_failure'
+  return state === 'recording'
 }
 
 function sameHealth(left: DiagnosticsHealthV1, right: DiagnosticsHealthV1): boolean {

@@ -18,7 +18,7 @@ describe('diagnostic bundle NDJSON', () => {
   it('emits header, incidents, capture, and trace in fixed order with a final LF', () => {
     const health = diagnosticsHealthV1()
     const status = projectDiagnosticsStatusV2(traceStatus({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       captureGeneration: 1n,
       expiresAtMilliseconds: Date.parse('2026-08-19T02:00:00Z'),
@@ -37,7 +37,7 @@ describe('diagnostic bundle NDJSON', () => {
       status,
       healthAtExport: health,
       traceCapture: Object.freeze({
-        state: 'recording_pre_failure',
+        state: 'recording',
         captureGeneration: 1n,
         startedAtMilliseconds: Date.parse('2026-08-19T01:00:00Z'),
         retainedEventCount: 1n,

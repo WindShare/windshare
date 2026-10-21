@@ -14,6 +14,9 @@ import {
   type IncidentScopeOwner,
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
+import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
+import { FakeTraceTime } from '../diagnostics/trace/test-support'
 import { V2RemoteOperationError } from '../../src/content/v2-session-operations'
 import { V2RevisionCapacityBusyError } from '../../src/content/v2-session-services'
 import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
@@ -23,7 +26,7 @@ import {
   type V2ConnectivityActivation,
   V2ConnectivityRouteAuthority,
 } from '../../src/connectivity/v2-receiver-policy'
-import type { V2FilePreview } from '../../src/preview/v2-preview'
+import { V2PreviewRuntimeError, type V2FilePreview } from '../../src/preview/v2-preview'
 import { V2AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import type {
   AuthenticatedDiscoveryRequest,
@@ -375,6 +378,7 @@ describe('v2 preview incident ownership', () => {
           kind: 'unclassified',
           stage: 'preview_media',
           recoveryDisposition: 'none',
+          payload: { unclassified: { exception: null } },
         },
         relation: 'contributor',
       },
@@ -542,12 +546,18 @@ describe('v2 preview incident ownership', () => {
     expect(incidents.facts).toMatchObject([
       {
         scope: { scopeKind: 'preview_seek' },
-        fact: { kind: 'unclassified', stage: 'preview_seek' },
+        fact: {
+          kind: 'unclassified', stage: 'preview_seek',
+          payload: { unclassified: { exception: { message: 'seek failed', stack: expect.any(String) } } },
+        },
         relation: 'contributor',
       },
       {
         scope: { scopeKind: 'preview_seek' },
-        fact: { kind: 'unclassified', stage: 'cleanup' },
+        fact: {
+          kind: 'unclassified', stage: 'cleanup',
+          payload: { unclassified: { exception: { message: 'close failed', stack: expect.any(String) } } },
+        },
         relation: 'consequence',
       },
     ])
@@ -643,7 +653,10 @@ describe('v2 preview incident ownership', () => {
       },
     ])
     expect(incidents.facts[0]).toMatchObject({
-      fact: { kind: 'unclassified', stage: 'preview_open' },
+      fact: {
+        kind: 'unclassified', stage: 'preview_open',
+        payload: { unclassified: { exception: { message: 'open failed', stack: expect.any(String) } } },
+      },
       relation: 'contributor',
     })
     expect(incidents.owners[0]?.isClosed()).toBe(true)
@@ -675,6 +688,87 @@ describe('v2 preview incident ownership', () => {
     ])
     expect(incidents.owners[0]?.isClosed()).toBe(true)
     expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+  })
+})
+
+describe('preview diagnostics continuity', () => {
+  it('exports a failed preview and subsequent download evidence in the same capture', async () => {
+    const time = new FakeTraceTime()
+    const diagnostics = createBrowserDiagnosticsComposition({
+      build: browserBuildSnapshot(),
+      secureContext: true,
+      clock: {
+        nowMilliseconds: () => time.nowMilliseconds(),
+        captureTime: () => new Date(time.nowMilliseconds()).toISOString(),
+      },
+      scheduler: time,
+      consoleSink: { error: vi.fn() },
+      randomBytes: length => new Uint8Array(length).fill(1),
+    })
+    const enabled = diagnostics.runtime.enable()
+    const failure = new V2PreviewRuntimeError('File is not a supported preview image or MP4 video')
+    const joined = new DiagnosticPreviewJoined({ openFailure: failure })
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: error => String(error),
+      incidents: diagnostics.incidents,
+    })
+    try {
+      previews.open(joined as unknown as V2JoinedBrowserShare, { ...entry, name: 'setup.exe' })
+      await turn()
+      expect(snapshot.preview.state).toBe('error')
+      expect(diagnostics.runtime.inspectLastFailure()?.payload.trigger).toMatchObject({
+        stage: 'preview_open',
+        payload: { unclassified: { exception: {
+          errorName: 'V2PreviewRuntimeError', message: failure.message, stack: failure.stack,
+        } } },
+      })
+      // This pause exceeds both former failure deadlines without delaying the test.
+      time.advance(60_000)
+      diagnostics.trace.current?.({
+        eventName: 'content_scheduling',
+        correlation: { protocol_session_id: identityText(7), lane_id: 2, lane_epoch: 1 },
+        payload: {
+          dispatch_sequence: '1', file_id: entry.idText, block_index: '0',
+          route: 'direct', purpose: 'content', expected_ms: 1,
+          pending_bytes: '100', bytes_per_second: 100,
+        },
+      })
+      diagnostics.trace.current?.({
+        eventName: 'transfer_progress',
+        payload: {
+          operation_id: identityText(5), transfer_job_id: identityText(6),
+          discovered_files: '1', discovered_bytes: '100', received_object_bytes: '100',
+          written_bytes: '100', completed_files: '1', completed_bytes: '100',
+          file_errors: '0', selection_errors: '0', failed_directories: '0',
+          content_lanes: 1, capacity_waiting_files: '0', capacity_accumulated_wait_ms: '0',
+          capacity_wait_attempts: '0', capacity_wait_visible: false, discovery: 'complete', partial: false,
+        },
+      })
+      diagnostics.trace.current?.({
+        eventName: 'receive_transition',
+        payload: {
+          transition: 'materialization_completed', entry_count: '1',
+          file_count: '1', directory_count: '0', raw_bytes: '100',
+        },
+      })
+      const lines = diagnostics.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+      const events = lines.filter(line => line.line_type === 'trace_event').map(line => line.record)
+      expect(events.map(record => record.event)).toEqual([
+        'incident_marker', 'content_scheduling', 'transfer_progress', 'receive_transition',
+      ])
+      expect(events.at(-1).payload.transition).toBe('materialization_completed')
+      expect(diagnostics.runtime.status()).toMatchObject({
+        enabled: true, state: 'recording', capture_generation: enabled.capture_generation,
+        expires_at: enabled.expires_at,
+      })
+      expect(diagnostics.runtime.status().health.trace_dropped_count).toBe('0')
+    } finally {
+      await previews.close()
+      diagnostics.runtime.disable()
+    }
   })
 })
 

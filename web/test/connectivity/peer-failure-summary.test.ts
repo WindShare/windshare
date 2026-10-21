@@ -71,9 +71,10 @@ describe('peer failure summaries', () => {
       correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA' },
       payload: { transition: 'request_sent', request_kind: 'open_revisions' },
     })
-    for (let i = 0; i < 2_060; i++) observer(operation)
+    const eventLimit = diagnostics.trace.status().capacity.maxEventCount
+    for (let i = 0; i <= eventLimit; i++) observer(operation)
     const snapshot = diagnostics.trace.captureSnapshot()!
-    expect(snapshot.retainedEventCount).toBe(2_048n)
+    expect(snapshot.retainedEventCount).toBe(BigInt(eventLimit))
     expect(snapshot.health.overwrittenCount).toBeGreaterThan(0n)
     const exported = diagnostics.runtime.export().split('\n').filter(Boolean).map(line => JSON.parse(line) as { line_type: string; record?: { event: string; payload: unknown } })
     expect(exported.find(line => line.record?.event === 'peer_attempt')?.record?.payload).toMatchObject({

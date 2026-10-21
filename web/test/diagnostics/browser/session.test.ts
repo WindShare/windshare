@@ -116,15 +116,15 @@ describe('browser diagnostic evidence lifetime', () => {
     unrelated.session.dispose()
   })
 
-  it('does not replace a sealed capture when the same diagnostic intent is received again', async () => {
+  it('checkpoints a failure without replacing capture when the same diagnostic intent is received again', async () => {
     const harness = setup()
     harness.session.enableFromLink()
     record(harness)
     const scope = { scopeKind: 'join' as const, scopeSequence: 1n }
     harness.composition.trace.signal({ kind: 'incident_sealed', incident: { scope, incidentSequence: 1n }, elapsedMs: 0n })
-    harness.composition.trace.signal({ kind: 'scope_terminal', scope, elapsedMs: 0n })
     await settle()
-    expect(harness.session.status().state).toBe('sealed')
+    expect(harness.session.status().state).toBe('recording')
+    expect(harness.archive.captures[0]?.file.text).toContain('incident_marker')
     const status = harness.session.status()
     const activation = harness.session.activation()
     harness.session.enableFromLink()

@@ -37,7 +37,7 @@ export function DiagnosticsProvider({ session, delivery, children }: {
           {activation.kind === 'active' && <button type="button" onClick={() => session.disable()}>Stop recording</button>}
           {!capture.enabled && <button type="button" onClick={() => session.enable()}>Start recording</button>}
         </div>
-        {activation.kind === 'active' && <p>{capture.enabled ? 'Recording ends at ' : 'Reload can resume recording until '}
+        {activation.kind === 'active' && <p>Recording ends at{' '}
           {new Date(activation.expiresAtMilliseconds).toLocaleTimeString()}.</p>}
         {snapshot.archiveUnavailable && <p role="status">Local backup is unavailable. Export diagnostics before leaving this page.</p>}
         {hasCurrentEvidence ? <section aria-label="Current diagnostics">

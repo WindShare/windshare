@@ -17,7 +17,6 @@ import type { TraceCoreStatus } from '../../../src/diagnostics/trace/model'
 import type { TraceEventObservationV2 } from '../../../src/diagnostics/trace/model'
 import { TraceSwitch } from '../../../src/diagnostics/trace/switch'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
-import type { IncidentScopeIdentity } from '../../../src/diagnostics/incident/scope'
 import { FakeTraceTime } from '../trace/test-support'
 import {
   TEST_BUNDLE_IDENTITY,
@@ -38,7 +37,7 @@ describe('browser diagnostics runtime', () => {
 
     const enabled = runtime.enable()
     expect(enabled).toMatchObject({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       capture_generation: '1',
       expires_at: '2026-08-19T02:00:00.000Z',
@@ -149,7 +148,7 @@ describe('browser diagnostics runtime', () => {
     expect(cleared.capture_generation).toBe(enabled.capture_generation)
     expect(cleared.expires_at).toBe(enabled.expires_at)
     expect(cleared.retained_event_count).toBe('0')
-    expect(cleared.state).toBe('recording_pre_failure')
+    expect(cleared.state).toBe('recording')
     expect(runtime.inspectLastFailure()).toBeNull()
 
     trace.current?.(deepFreezeJson({
@@ -205,7 +204,7 @@ class FakeTracePort implements DiagnosticsTraceRuntimePort {
   enable(): TraceCoreStatus {
     const generation = this.#status.captureGeneration + 1n
     this.#status = traceStatus({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
       captureGeneration: generation,
       expiresAtMilliseconds: Date.parse('2026-08-19T02:00:00Z'),
@@ -270,11 +269,11 @@ class FakeTracePort implements DiagnosticsTraceRuntimePort {
 function realTraceSwitch(time: FakeTraceTime) {
   return new TraceSwitch<
     TraceEventObservationV2,
-    IncidentLink,
-    IncidentScopeIdentity
+    IncidentLink
   >({
     clock: time,
     scheduler: time,
+
     eventName: traceEventObservationNameV2,
     snapshotEvent: snapshotTraceEventObservationV2,
     eventBytes: traceEventObservationBytesV2,
@@ -286,8 +285,6 @@ function realTraceSwitch(time: FakeTraceTime) {
       scope: Object.freeze({ ...incident.scope }),
     }),
     incidentMarkerBytes: () => 1,
-    incidentScope: (incident) => incident.scope,
-    sameScope: (left, right) =>
-      left.scopeKind === right.scopeKind && left.scopeSequence === right.scopeSequence,
+
   })
 }

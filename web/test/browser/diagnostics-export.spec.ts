@@ -6,10 +6,11 @@ const TEST_LINK = SHARE_PATH + '?trace=1#invalid-key'
 test('mobile diagnostic link captures startup failure and exports retained evidence after reload', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(TEST_LINK)
-  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.status().state)).toBe('sealed')
+  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event)).toBe('failure_incident')
+  expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(true)
   expect(new URL(page.url()).searchParams.has('trace')).toBe(false)
   expect(new URL(page.url()).hash).toBe('')
-  await expect.poll(() => savedEvidence(page)).toContain('"event":"join_transition"')
+  await expect.poll(() => savedEvidence(page)).toContain('"event":"failure_incident"')
 
   const bar = page.getByRole('complementary', { name: 'Diagnostics' })
   await bar.getByRole('button', { name: 'Export diagnostics' }).click()
@@ -43,11 +44,12 @@ test('mobile diagnostic link captures startup failure and exports retained evide
   expect(JSON.parse(restoredText.split('\n')[0]!).runtime_run_id).toBe(originalRun)
 })
 
-test('pasting a diagnostic link captures the first join and can stop a sealed capture', async ({ page }) => {
+test('pasting a diagnostic link captures the first join and keeps recording until manually stopped', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('textbox').fill(new URL(TEST_LINK, page.url()).href)
   await page.getByRole('textbox').press('Enter')
-  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.status().state)).toBe('sealed')
+  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event)).toBe('failure_incident')
+  expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(true)
   const evidence = await page.evaluate(() => window.windshareDiagnostics.export())
   expect(evidence).toContain('"event":"join_transition"')
   expect(evidence).toContain('"transition":"started"')
