@@ -33,15 +33,16 @@ func retryRemoteIssue(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &network)
 }
 
-func (source *Remote) resolve(ctx context.Context, path string, request remoteRequest) (remoteGrant, error) {
+func (source *Remote) resolve(ctx context.Context, path string, request remoteRequest) (remoteGrantResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, HTTPTimeout)
 	defer cancel()
 	var err error
 	for attempt := 1; attempt <= remoteIssueAttempts; attempt++ {
-		var grant remoteGrant
-		err = remoteCall(ctx, source.config.Client, source.base+path, source.config.AccessKey, request, &grant)
+		var reply remoteGrantResponse
+		reply.requestedAt = source.config.Now()
+		reply.headers, err = remoteCall(ctx, source.config.Client, source.base+path, source.config.AccessKey, request, &reply.grant)
 		if err == nil {
-			return grant, nil
+			return reply, nil
 		}
 		slog.Debug("TURN remote acquisition", "service_id", request.ServiceID, "lease_id", request.LeaseID,
 			"session_id", request.SessionID, "path_id", request.PathID, "attempt", attempt, "reason", err)
@@ -52,9 +53,9 @@ func (source *Remote) resolve(ctx context.Context, path string, request remoteRe
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return remoteGrant{}, ctx.Err()
+			return remoteGrantResponse{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return remoteGrant{}, err
+	return remoteGrantResponse{}, err
 }

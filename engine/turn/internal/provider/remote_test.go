@@ -30,7 +30,9 @@ func TestRemoteLeaseBindsRenewalAndRevocationToSubject(t *testing.T) {
 		data, _ := json.Marshal(remoteGrant{ServiceID: body.ServiceID, LeaseID: body.LeaseID,
 			SessionID: body.SessionID, PathID: body.PathID, URLs: []string{"turn:localhost:3478"},
 			Username: "temporary-user", Password: "temporary-password", ExpiresAt: now.Add(time.Hour).UnixMilli()})
-		return response(201, string(data)), nil
+		reply := response(201, string(data))
+		reply.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+		return reply, nil
 	})
 	capability, err := Discover(t.Context(), client, "https://relay.example", "device-key")
 	if err != nil || capability.ServiceID != "cf-service" || !capability.Enabled {
@@ -45,10 +47,14 @@ func TestRemoteLeaseBindsRenewalAndRevocationToSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	now = now.Add(30 * time.Minute)
 	subject.PathID = [16]byte{3}
 	second, err := source.Renew(t.Context(), subject, first)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !second.Credentials.ExpiresAt().After(first.Credentials.ExpiresAt()) {
+		t.Fatal("renewal failed to refresh local credential expiry")
 	}
 	if requests[1].PreviousLeaseID != first.Cleanup.ID || second.Cleanup.ID == first.Cleanup.ID {
 		t.Fatal("renewal lost lease identity")
