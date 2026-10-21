@@ -51,8 +51,8 @@ fn deliver(fixture: &Fixture, relay: &mut Relay, key: SessionKey) {
     );
 }
 
-fn discard_outputs(relay: &mut Relay, turn: Turn, at: UnixMillis) {
-    for output in turn.outputs {
+fn discard_outputs(relay: &mut Relay, step: RelayStep, at: UnixMillis) {
+    for output in step.outputs {
         if let Output::Discard(flow) = output {
             assert_eq!(relay.handle(Input::Discarded(flow), at).refusal, None);
         }
@@ -132,7 +132,7 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
         let now = UnixMillis(fixture.at.0 + u64::from(incarnation));
         let checkpoint =
             Checkpoint::decode(&relay.checkpoint().unwrap().encode(), relay.limits).unwrap();
-        let (mut restored, turn) = Relay::restore(
+        let (mut restored, step) = Relay::restore(
             fixture.identity(incarnation),
             relay.limits,
             &Restore {
@@ -144,14 +144,14 @@ fn physical_release_policy_keeps_unreleased_admission_across_recovery() {
             now,
         )
         .unwrap();
-        assert!(!turn.outputs.iter().any(|output| matches!(
+        assert!(!step.outputs.iter().any(|output| matches!(
             output,
             Output::Send {
                 control: Control::Grant(_) | Control::Descriptor { .. },
                 ..
             }
         )));
-        discard_outputs(&mut restored, turn, now);
+        discard_outputs(&mut restored, step, now);
         assert_eq!(
             ledger_of(&restored, key.receiver()).usage().submitted,
             ONE_FRAME
@@ -191,7 +191,7 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
     let (key, _) = fixture.join(&mut relay, 2);
     deliver(&fixture, &mut relay, key);
     let checkpoint = relay.checkpoint().unwrap();
-    let (mut restored, turn) = Relay::restore(
+    let (mut restored, step) = Relay::restore(
         fixture.identity(2),
         relay.limits,
         &Restore::restarted(Some(stored), Responsibility::Checkpoint(&checkpoint)),
@@ -199,9 +199,9 @@ fn restart_with_no_sockets_still_recovers_transport_debt() {
         fixture.at,
     )
     .unwrap();
-    let detached = work(&turn);
+    let detached = work(&step);
     let _ = complete(&mut restored, &detached, fixture.at);
-    discard_outputs(&mut restored, turn, fixture.at);
+    discard_outputs(&mut restored, step, fixture.at);
     assert_eq!(restored.generations.connected_count(), 0);
     let _ = restored.handle(Input::Closed(key.sender()), fixture.at);
     assert_eq!(
@@ -237,7 +237,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
     let detached = relay.handle(Input::Disconnected(old.receiver()), fixture.at);
     discard_outputs(&mut relay, detached, fixture.at);
     let checkpoint = relay.checkpoint().unwrap();
-    let (mut relay, turn) = Relay::restore(
+    let (mut relay, step) = Relay::restore(
         fixture.identity(2),
         relay.limits,
         &Restore {
@@ -249,7 +249,7 @@ fn old_generation_feedback_cannot_release_or_close_a_replacement_connection() {
         fixture.at,
     )
     .unwrap();
-    discard_outputs(&mut relay, turn, fixture.at);
+    discard_outputs(&mut relay, step, fixture.at);
     let next_connection = ConnectionRef {
         generation: NonZeroU64::new(2).unwrap(),
         ..old.receiver()

@@ -6,7 +6,7 @@ fn wake(
     stored: Option<Record>,
     surviving: &[ConnectionRef],
     at: UnixMillis,
-) -> (Relay, Turn) {
+) -> (Relay, RelayStep) {
     let bytes = relay.checkpoint().unwrap().encode();
     let checkpoint = Checkpoint::decode(&bytes, Fixture::limits()).unwrap();
     Relay::restore(
@@ -31,7 +31,7 @@ fn unissued_challenge_restarts_random_request_without_extending_handshake() {
     let request =
         challenge(&fixture.control(&mut relay, connection(1), "registerInitB64", fixture.at));
     let deadline = relay.deadline();
-    let (mut restored, turn) = wake(
+    let (mut restored, step) = wake(
         &fixture,
         &relay,
         None,
@@ -57,7 +57,7 @@ fn unissued_challenge_restarts_random_request_without_extending_handshake() {
             .refusal
             .is_some()
     );
-    let current = challenge(&turn);
+    let current = challenge(&step);
     assert_ne!(current, request);
     assert_eq!(
         restored
@@ -104,8 +104,8 @@ fn awaiting_descriptor_reauthenticates_proof_after_hibernation() {
         fixture.at,
     );
     let _ = fixture.control(&mut relay, connection(1), "registerProofB64", fixture.at);
-    let (mut restored, turn) = wake(&fixture, &relay, None, &[connection(1)], fixture.at);
-    assert!(turn.outputs.is_empty());
+    let (mut restored, step) = wake(&fixture, &relay, None, &[connection(1)], fixture.at);
+    assert!(step.outputs.is_empty());
     let publish = work(&fixture.control(
         &mut restored,
         connection(1),
@@ -172,7 +172,7 @@ fn pending_resume_never_rebinds_to_a_replacement_owner_on_wake() {
     let stored = next_record(&resume);
     let _ = complete(&mut relay, &resume, at);
     let _ = relay.handle(Input::Closed(connection(1)), at);
-    let (mut restored, turn) = wake(
+    let (mut restored, step) = wake(
         &fixture,
         &relay,
         Some(stored),
@@ -180,7 +180,7 @@ fn pending_resume_never_rebinds_to_a_replacement_owner_on_wake() {
         at,
     );
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == connection(3)))
     );

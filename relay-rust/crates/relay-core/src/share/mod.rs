@@ -81,37 +81,46 @@ impl<O: Observer> ShareRelay<O> {
     ///
     /// # Errors
     /// Refuses unknown participants, invalid capacity, stale routes and accounting violations.
-    pub fn handle(&mut self, input: Input<'_>, now: crate::clock::UnixMillis) -> Turn {
-        let mut turn = Turn::default();
-        self.expire(now, &mut turn);
-        let result = self.apply(input, now, &mut turn);
+    pub fn handle(&mut self, input: Input<'_>, now: crate::clock::UnixMillis) -> RelayStep {
+        let mut step = RelayStep::default();
+        self.expire(now, &mut step);
+        let result = self.apply(input, now, &mut step);
         self.flush_lifecycle();
-        self.progress_stop(now, &mut turn);
-        self.start_work(now, &mut turn);
-        turn.deadline = self.deadline();
+        self.progress_stop(now, &mut step);
+        self.start_work(now, &mut step);
+        step.deadline = self.deadline();
         // Effects discovered by expiration must never disappear behind a refused input.
         if let Err(error) = result {
-            turn.refusal = Some(error);
+            step.refusal = Some(error);
             self.trace(None, RelayDecision::Rejected(error), now);
         }
-        turn
+        step
     }
 
     fn apply(
         &mut self,
         input: Input<'_>,
         now: crate::clock::UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         match input {
             Input::Connected(connection) => {
                 let result = self.connect(connection, now);
                 if result.is_err() && self.generations.connection(&connection).is_none() {
-                    turn.outputs.push(Output::Close(connection));
+                    step.outputs.push(Output::Close(connection));
                 }
                 result
             }
-            Input::Register(grant) => self.register(grant, now, turn),
+            Input::Register(authorization) => self.register(authorization, now, step),
+            Input::Unsupported(connection) => {
+                Self::send(
+                    step,
+                    connection,
+                    Control::Error(crate::error_frame::ErrorFrame::UnsupportedMode),
+                );
+                self.disconnect(connection, now, step);
+                Err(Error::Frame(crate::wire::FrameError::Header))
+            }
             Input::Terminate {
                 credential,
                 stop_id,
@@ -123,49 +132,49 @@ impl<O: Observer> ShareRelay<O> {
                     },
                     None,
                     now,
-                    turn,
+                    step,
                 );
                 Ok(())
             }
-            Input::Control { connection, frame } => self.control(connection, frame, now, turn),
+            Input::Control { connection, frame } => self.control(connection, frame, now, step),
             Input::Challenge { request, seed } => {
                 if request.incarnation != self.identity.incarnation {
                     return Err(Error::Unavailable);
                 }
-                self.challenge(request.connection, seed, now, turn)
+                self.challenge(request.connection, seed, now, step)
             }
-            Input::Frame { source, header } => self.receive(source, header, now, turn),
-            Input::Admitted { sender, frame } => self.admit_session(sender, frame, now, turn),
+            Input::Frame { source, header } => self.receive(source, header, now, step),
+            Input::Admitted { sender, frame } => self.admit_session(sender, frame, now, step),
             Input::Cancel {
                 participant,
                 session,
-            } => self.cancel_session(participant, session, now, turn),
-            Input::Grant { flow, credit } => self.grant(flow, credit, now, turn),
+            } => self.cancel_session(participant, session, now, step),
+            Input::Grant { flow, credit } => self.grant(flow, credit, now, step),
             Input::Consumed {
                 connection,
                 session,
                 total,
-            } => self.feedback(connection, session, total, false, now, turn),
+            } => self.feedback(connection, session, total, false, now, step),
             Input::Settled {
                 connection,
                 session,
                 total,
-            } => self.feedback(connection, session, total, true, now, turn),
-            Input::Discarded(flow) => self.discarded(flow, now, turn),
+            } => self.feedback(connection, session, total, true, now, step),
+            Input::Discarded(flow) => self.discarded(flow, now, step),
             Input::Disconnected(connection) => {
-                self.detach(connection, now, turn);
+                self.detach(connection, now, step);
                 Ok(())
             }
             Input::Closed(connection) => {
-                self.closed(connection, now, turn);
+                self.closed(connection, now, step);
                 Ok(())
             }
             Input::Completed { id, result } => {
-                self.complete(id, result, now, turn);
+                self.complete(id, result, now, step);
                 Ok(())
             }
             Input::Retry(id) => {
-                self.retry(id, now, turn);
+                self.retry(id, now, step);
                 Ok(())
             }
             Input::Tick => Ok(()),
@@ -192,7 +201,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         connection: ConnectionRef,
         now: crate::clock::UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         if self
             .generations
@@ -200,7 +209,7 @@ impl<O: Observer> ShareRelay<O> {
             .is_some_and(|ledger| ledger.close_request().is_some())
             && !self.cleanup_deferred()
         {
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
         }
     }
 
@@ -220,8 +229,8 @@ impl<O: Observer> ShareRelay<O> {
         });
     }
 
-    fn send(turn: &mut Turn, connection: ConnectionRef, control: Control) {
-        turn.outputs.push(Output::Send {
+    fn send(step: &mut RelayStep, connection: ConnectionRef, control: Control) {
+        step.outputs.push(Output::Send {
             connection,
             control,
         });
@@ -240,7 +249,7 @@ impl<O: Observer> ShareRelay<O> {
         .min()
     }
 
-    fn expire(&mut self, now: crate::clock::UnixMillis, turn: &mut Turn) {
+    fn expire(&mut self, now: crate::clock::UnixMillis, step: &mut RelayStep) {
         while let Some((_, key)) = self.next_deadline().filter(|(at, _)| *at <= now) {
             match key {
                 Key::Lifecycle => {}
@@ -253,14 +262,14 @@ impl<O: Observer> ShareRelay<O> {
             }
             match key {
                 Key::Lifecycle => {
-                    self.lifecycle_event(crate::lifecycle::Event::Tick, None, now, turn);
+                    self.lifecycle_event(crate::lifecycle::Event::Tick, None, now, step);
                 }
                 Key::Handshake(connection) | Key::Control(connection) => {
-                    self.disconnect(connection, now, turn);
+                    self.disconnect(connection, now, step);
                 }
-                Key::Liveness(connection) => self.expire_liveness(connection, now, turn),
+                Key::Liveness(connection) => self.expire_liveness(connection, now, step),
                 Key::Session(id) => {
-                    self.session_event(id, crate::sessions::Event::Tick, now, turn);
+                    self.session_event(id, crate::sessions::Event::Tick, now, step);
                 }
                 Key::Retirement(_) => self.progress_retirements(now),
                 Key::Ledger(connection) => {
@@ -269,7 +278,7 @@ impl<O: Observer> ShareRelay<O> {
                         |ledger| ledger.tick(now),
                         &mut self.observer,
                     );
-                    self.apply_delivery_close(connection, now, turn);
+                    self.apply_delivery_close(connection, now, step);
                 }
             }
         }

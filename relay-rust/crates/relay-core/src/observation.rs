@@ -76,6 +76,8 @@ pub enum RelayDecision {
         usage: crate::share::ConnectionUsage,
     },
     HandshakeRateLimited,
+    RegistrationAuthorized(crate::access::Attribution),
+    RegistrationRefused(crate::error_frame::ErrorFrame),
     BusinessCapacity {
         usage: crate::share::ConnectionUsage,
     },

@@ -44,26 +44,21 @@ fn forward(
     size: u32,
 ) {
     runtime
-        .message(
-            host,
-            connection(source),
-            opaque(session, size),
-            crate::runtime::RegistrationAccess::Denied,
-        )
+        .forward(host, connection(source), opaque(session, size))
         .unwrap();
 }
 
 fn admit(host: &mut Memory, runtime: &mut Runtime<()>, f: &Fixture, session: RelaySessionId) {
     let mut bytes = f.frame("sessionAdmittedB64");
     bytes[8..16].copy_from_slice(session.as_bytes());
-    runtime
-        .control(
-            host,
-            connection(1),
-            &bytes,
-            crate::runtime::RegistrationAccess::Denied,
-        )
-        .unwrap();
+    control(
+        runtime,
+        host,
+        connection(1),
+        &bytes,
+        windshare_relay_core::access::RegistrationDecision::Denied,
+    )
+    .unwrap();
 }
 
 fn consume(
@@ -74,14 +69,14 @@ fn consume(
     total: Counts,
 ) {
     let bytes = DeliveryConsumed::new(session, total).unwrap().encode();
-    runtime
-        .control(
-            host,
-            connection(destination),
-            &bytes,
-            crate::runtime::RegistrationAccess::Denied,
-        )
-        .unwrap();
+    control(
+        runtime,
+        host,
+        connection(destination),
+        &bytes,
+        windshare_relay_core::access::RegistrationDecision::Denied,
+    )
+    .unwrap();
 }
 
 fn grants(host: &Memory, source: u64, session: RelaySessionId) -> Counts {
@@ -225,22 +220,22 @@ fn cancellation_settles_without_closing_the_shared_sender() {
     let ack = SettlementAck::new(session, Counts::new(1, 21))
         .unwrap()
         .encode();
-    runtime
-        .control(
-            &mut host,
-            connection(1),
-            &ack,
-            crate::runtime::RegistrationAccess::Denied,
-        )
-        .unwrap();
-    runtime
-        .control(
-            &mut host,
-            connection(1),
-            &ack,
-            crate::runtime::RegistrationAccess::Denied,
-        )
-        .unwrap();
+    control(
+        &mut runtime,
+        &mut host,
+        connection(1),
+        &ack,
+        windshare_relay_core::access::RegistrationDecision::Denied,
+    )
+    .unwrap();
+    control(
+        &mut runtime,
+        &mut host,
+        connection(1),
+        &ack,
+        windshare_relay_core::access::RegistrationDecision::Denied,
+    )
+    .unwrap();
     assert!(host.live.contains(&connection(1)));
     let next = join(&mut host, &mut runtime, &f, 3);
     forward(&mut host, &mut runtime, 3, next, 1);
@@ -265,14 +260,14 @@ fn receiver_loss_and_hibernation_discard_late_ingress_without_closing_siblings()
         .encode();
     for boot in 1..=3 {
         if boot == 2 {
-            runtime
-                .control(
-                    &mut host,
-                    connection(1),
-                    &ack,
-                    crate::runtime::RegistrationAccess::Denied,
-                )
-                .unwrap();
+            control(
+                &mut runtime,
+                &mut host,
+                connection(1),
+                &ack,
+                windshare_relay_core::access::RegistrationDecision::Denied,
+            )
+            .unwrap();
         }
         if boot == 3 {
             drop(runtime);

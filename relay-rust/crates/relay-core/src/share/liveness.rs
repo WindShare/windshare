@@ -1,9 +1,10 @@
 use super::generations::Connection;
-use super::{ConnectionRef, Control, Error, Observer, RelayDecision, ShareRelay, Turn};
+use super::{ConnectionRef, Control, Error, Observer, RelayDecision, RelayStep, ShareRelay};
 use crate::{
     clock::UnixMillis,
     flow::{DeliveryConsumed, SettlementAck},
     heartbeat::ConnectionProbe,
+    ingress::FrameKind,
     sessions::SessionAdmitted,
 };
 
@@ -13,25 +14,25 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         frame: &[u8],
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         // Authority comes from this socket generation, never from payload fields.
-        match frame.first_chunk::<4>() {
-            Some(&SessionAdmitted::MAGIC) => {
+        match FrameKind::classify(frame) {
+            FrameKind::SessionAdmitted => {
                 let admitted = SessionAdmitted::decode(frame).map_err(Error::Frame)?;
-                self.admit_session(connection, admitted, now, turn)
+                self.admit_session(connection, admitted, now, step)
             }
-            Some(&ConnectionProbe::MAGIC) => {
+            FrameKind::ConnectionProbe => {
                 let result = ConnectionProbe::decode(frame)
                     .map_err(Error::Frame)
-                    .and_then(|probe| self.probe(connection, probe, now, turn));
+                    .and_then(|probe| self.probe(connection, probe, now, step));
                 if let Err(error) = result {
                     self.trace(Some(connection), RelayDecision::Rejected(error), now);
-                    self.disconnect(connection, now, turn);
+                    self.disconnect(connection, now, step);
                 }
                 result
             }
-            Some(&DeliveryConsumed::MAGIC) => {
+            FrameKind::DeliveryConsumed => {
                 let feedback = DeliveryConsumed::decode(frame).map_err(Error::Frame)?;
                 self.feedback(
                     connection,
@@ -39,15 +40,15 @@ impl<O: Observer> ShareRelay<O> {
                     feedback.total(),
                     false,
                     now,
-                    turn,
+                    step,
                 )
             }
-            Some(&SettlementAck::MAGIC) => {
+            FrameKind::SettlementAck => {
                 let ack = SettlementAck::decode(frame).map_err(Error::Frame)?;
-                self.feedback(connection, ack.session(), ack.total(), true, now, turn)
+                self.feedback(connection, ack.session(), ack.total(), true, now, step)
             }
             _ => {
-                self.disconnect(connection, now, turn);
+                self.disconnect(connection, now, step);
                 Err(Error::Unavailable)
             }
         }
@@ -58,7 +59,7 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         probe: ConnectionProbe,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         let last_nonce = self
             .generations
@@ -79,7 +80,7 @@ impl<O: Observer> ShareRelay<O> {
             }
             return Err(error);
         }
-        Self::send(turn, connection, Control::ProbeAck(probe.acknowledgement()));
+        Self::send(step, connection, Control::ProbeAck(probe.acknowledgement()));
         self.trace(
             Some(connection),
             RelayDecision::ProbeAccepted {
@@ -98,7 +99,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         if let Some(liveness) = self
             .generations
@@ -115,7 +116,7 @@ impl<O: Observer> ShareRelay<O> {
                 now,
             );
             // Silence revokes routing; it is not evidence that host buffers were freed.
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
         }
     }
 }

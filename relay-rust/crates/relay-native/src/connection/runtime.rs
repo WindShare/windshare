@@ -9,7 +9,7 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
-use windshare_relay_core::lifecycle::ConnectionRef;
+use windshare_relay_core::{ingress::FrameKind, lifecycle::ConnectionRef};
 
 /// The caller must configure the transport so dropping both halves also releases
 /// its send buffers. TCP uses abortive close; a close request alone is not evidence.
@@ -171,12 +171,13 @@ where
     while let Some(message) = source.next().await {
         match message? {
             Message::Binary(bytes) if accepting => {
-                if bytes.get(..4) == Some(b"WS2O") {
+                let kind = FrameKind::classify(&bytes);
+                if kind == FrameKind::Opaque {
                     events
                         .send(Event::Frame(connection, bytes.to_vec()))
                         .await
                         .map_err(|_| anyhow!("share actor unavailable"))?;
-                } else if supported_control(&bytes) {
+                } else if kind != FrameKind::Unsupported {
                     admission.inspect(&bytes)?;
                     events
                         .send(Event::Control(connection, bytes.to_vec()))
@@ -202,26 +203,6 @@ where
         }
     }
     Ok(Closure::Abort)
-}
-
-fn supported_control(bytes: &[u8]) -> bool {
-    // Layout and phase checks belong to the kernel; there is no legacy fallback.
-    matches!(
-        bytes.get(..4),
-        Some(
-            b"WS2R"
-                | b"WS2P"
-                | b"WS2U"
-                | b"WS2T"
-                | b"WS2X"
-                | b"WS2V"
-                | b"WS2H"
-                | b"WS2J"
-                | b"WS2M"
-                | b"WS2B"
-                | b"WS2S"
-        )
-    )
 }
 
 #[cfg(test)]

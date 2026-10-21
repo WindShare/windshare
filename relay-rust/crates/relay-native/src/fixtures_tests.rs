@@ -8,7 +8,7 @@ use windshare_relay_core::{
     lifecycle::{ConnectionRef, Incarnation},
     registration::RegisterInit,
     share::{
-        Identity, Input, Output, Responsibility, Restore, ShareRelay, Storage, Turn, Work,
+        Identity, Input, Output, RelayStep, Responsibility, Restore, ShareRelay, Storage, Work,
         WorkResult,
     },
 };
@@ -121,15 +121,19 @@ impl Fixture {
                 frame: &init,
             }
         } else {
-            Input::Register(windshare_relay_core::access::RegistrationGrant::new(
-                connection,
-                RegisterInit::decode(&init).unwrap(),
-                windshare_relay_core::access::Attribution::Anonymous,
-                UnixMillis(now.0 + 5_000),
-            ))
+            Input::Register(
+                windshare_relay_core::access::RegistrationRequest::from_frame(connection, &init)
+                    .unwrap()
+                    .resolve(
+                        windshare_relay_core::access::RegistrationDecision::Granted(
+                            windshare_relay_core::access::Attribution::Anonymous,
+                        ),
+                        now,
+                    ),
+            )
         };
-        let turn = relay.handle(input, now);
-        let request = turn
+        let outcome = relay.handle(input, now);
+        let request = outcome
             .outputs
             .into_iter()
             .find_map(|output| match output {
@@ -147,9 +151,9 @@ impl Fixture {
     }
 }
 
-fn work(turn: Turn) -> Work {
-    assert!(turn.refusal.is_none(), "{:?}", turn.refusal);
-    turn.outputs
+fn work(step: RelayStep) -> Work {
+    assert!(step.refusal.is_none(), "{:?}", step.refusal);
+    step.outputs
         .into_iter()
         .find_map(|output| match output {
             Output::Work(work) => Some(work),

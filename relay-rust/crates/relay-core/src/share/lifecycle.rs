@@ -1,5 +1,5 @@
 use super::{
-    Admission, ConnectionRef, Control, Observer, RelayDecision, ShareRelay, Turn,
+    Admission, ConnectionRef, Control, Observer, RelayDecision, RelayStep, ShareRelay,
     storage::{AfterWrite, TaskKind},
 };
 use crate::{
@@ -15,33 +15,33 @@ impl<O: Observer> ShareRelay<O> {
         event: Event<'_>,
         requester: Option<ConnectionRef>,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         let effects = self.lifecycle.handle(event, now);
         self.flush_lifecycle();
         if let Some(revocation) = effects.revocation {
             let ids: Vec<_> = self.sessions.entries().keys().copied().collect();
             for id in ids {
-                self.session_event(id, SessionEvent::Revoke(revocation), now, turn);
+                self.session_event(id, SessionEvent::Revoke(revocation), now, step);
             }
         }
         if let Some(expiration) = effects.expiration {
             match expiration {
                 Expiration::Detached(route) => {
-                    self.close(route.lost().connection(), turn);
-                    self.action(Action::Detached(route), None, now, turn);
+                    self.close(route.lost().connection(), step);
+                    self.action(Action::Detached(route), None, now, step);
                 }
-                Expiration::Released(id) => self.close(id.connection(), turn),
+                Expiration::Released(id) => self.close(id.connection(), step),
                 Expiration::Lapsed(_) => self.enqueue(
                     TaskKind::Write {
                         next: None,
                         after: AfterWrite::None,
                     },
-                    turn,
+                    step,
                 ),
             }
         }
-        self.action(effects.action, requester, now, turn);
+        self.action(effects.action, requester, now, step);
     }
 
     pub(super) fn action(
@@ -49,15 +49,15 @@ impl<O: Observer> ShareRelay<O> {
         action: Action<'_>,
         requester: Option<ConnectionRef>,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         match action {
             Action::Reserved(reservation) => {
                 let connection = reservation.id().connection();
-                self.offer_admission(connection, Admission::Fresh(reservation), turn);
+                self.offer_admission(connection, Admission::Fresh(reservation), step);
             }
             Action::ResumeAdmitted(attempt) => {
-                self.offer_admission(attempt.id().connection(), Admission::Resume(attempt), turn);
+                self.offer_admission(attempt.id().connection(), Admission::Resume(attempt), step);
             }
             Action::Register(request) => {
                 self.enqueue(
@@ -65,7 +65,7 @@ impl<O: Observer> ShareRelay<O> {
                         ownership: request.ownership,
                         descriptor: request.descriptor.to_vec(),
                     },
-                    turn,
+                    step,
                 );
             }
             Action::CommitOwnership(commit) => {
@@ -77,14 +77,14 @@ impl<O: Observer> ShareRelay<O> {
                             replaced: commit.replaced(),
                         },
                     },
-                    turn,
+                    step,
                 );
             }
             Action::Registered(registration) => {
                 let connection = registration.owner.connection();
                 if self.generations.registration_committed(connection) {
                     Self::send(
-                        turn,
+                        step,
                         connection,
                         Control::Registered(registration.acknowledgement()),
                     );
@@ -96,14 +96,14 @@ impl<O: Observer> ShareRelay<O> {
                         next: Some(route.record()),
                         after: AfterWrite::None,
                     },
-                    turn,
+                    step,
                 );
             }
-            Action::Stop(work) => self.stop_work(work, now, turn),
+            Action::Stop(work) => self.stop_work(work, now, step),
             Action::Stopped(ack) => {
                 if self.generations.connection(&ack.connection()).is_some() {
                     Self::send(
-                        turn,
+                        step,
                         ack.connection(),
                         Control::Stopped(ack.acknowledgement()),
                     );
@@ -118,38 +118,38 @@ impl<O: Observer> ShareRelay<O> {
                     // STOP has no delivery capacity or continuing control role.
                     // Closing after the response also makes its recovery record
                     // terminal instead of masquerading as a data participant.
-                    self.close(ack.connection(), turn);
+                    self.close(ack.connection(), step);
                 }
             }
-            Action::Joined(joined) => self.install_session(joined, now, turn),
-            Action::Released(id) => self.close(id.connection(), turn),
+            Action::Joined(joined) => self.install_session(joined, now, step),
+            Action::Released(id) => self.close(id.connection(), step),
             Action::Refused(reason) => {
                 if let Some(connection) = requester {
                     if let Some(frame) = reason.frame() {
-                        Self::send(turn, connection, Control::Error(frame));
+                        Self::send(step, connection, Control::Error(frame));
                     }
-                    self.disconnect(connection, now, turn);
+                    self.disconnect(connection, now, step);
                 }
             }
             Action::JoinReady(_) | Action::None => {}
         }
     }
 
-    fn stop_work(&mut self, work: StopWork, now: UnixMillis, turn: &mut Turn) {
+    fn stop_work(&mut self, work: StopWork, now: UnixMillis, step: &mut RelayStep) {
         match work {
             StopWork::Persist(pending) => self.enqueue(
                 TaskKind::Write {
                     next: Some(pending.record()),
                     after: AfterWrite::Stop(Box::new(work)),
                 },
-                turn,
+                step,
             ),
             StopWork::Commit(pending) => self.enqueue(
                 TaskKind::Write {
                     next: Some(pending.stopped().record()),
                     after: AfterWrite::Stop(Box::new(work)),
                 },
-                turn,
+                step,
             ),
             StopWork::Retire(pending) => {
                 let mut connections = Vec::new();
@@ -181,12 +181,12 @@ impl<O: Observer> ShareRelay<O> {
                     if let Some(entry) = self.sessions.entries().get(&id) {
                         connections.push(entry.session.key().receiver());
                     }
-                    self.release_cleanup(id, now, turn);
+                    self.release_cleanup(id, now, step);
                 }
                 connections.sort_unstable();
                 connections.dedup();
                 for &connection in &connections {
-                    self.close(connection, turn);
+                    self.close(connection, step);
                 }
                 // The serialized storage queue confirmed every earlier ownership
                 // write before persisting STOP. Only queue discard remains here.

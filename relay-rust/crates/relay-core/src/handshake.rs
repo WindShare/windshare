@@ -21,13 +21,14 @@ use crate::{
     descriptor_upload::{DescriptorDigestMismatch, DescriptorUpload},
     error_frame::ErrorFrame,
     identifiers::RelayIdentity,
-    join::{JOIN_MAGIC, Join, JoinRequest},
+    ingress::FrameKind,
+    join::{Join, JoinRequest},
     lifecycle::{ConnectionRef, OperationId, Publication, Reservation, ResumeAttempt, Resumption},
     registration::{
-        FreshRegistration, REGISTER_INIT_MAGIC, RegisterInit, RegisterProof, RegistrationAuthority,
-        RegistrationMode, ResumeCredential, authenticate_registration,
+        FreshRegistration, RegisterInit, RegisterProof, RegistrationAuthority, RegistrationMode,
+        ResumeCredential, authenticate_registration,
     },
-    stop::{STOP_INIT_MAGIC, StopAuthority, StopInit, StopProof, authenticate_stop},
+    stop::{StopAuthority, StopInit, StopProof, authenticate_stop},
     wire::FrameError,
 };
 
@@ -57,10 +58,10 @@ impl Initiation {
     /// # Errors
     /// Rejects malformed or non-initial control frames.
     pub fn decode(frame: &[u8]) -> Result<Self, FrameError> {
-        match frame.first_chunk().copied() {
-            Some(REGISTER_INIT_MAGIC) => RegisterInit::decode(frame).map(Self::Register),
-            Some(JOIN_MAGIC) => Join::decode(frame).map(Self::Join),
-            Some(STOP_INIT_MAGIC) => StopInit::decode(frame).map(Self::Stop),
+        match FrameKind::classify(frame) {
+            FrameKind::RegisterInit => RegisterInit::decode(frame).map(Self::Register),
+            FrameKind::Join => Join::decode(frame).map(Self::Join),
+            FrameKind::StopInit => StopInit::decode(frame).map(Self::Stop),
             _ => Err(FrameError::Header),
         }
     }

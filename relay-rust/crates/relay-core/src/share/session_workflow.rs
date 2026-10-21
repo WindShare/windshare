@@ -1,6 +1,6 @@
 use crate::share::{
-    ConnectionRef, Control, Error, Observer, Output, RelayDecision, RelaySessionId, Session,
-    ShareRelay, Turn,
+    ConnectionRef, Control, Error, Observer, Output, RelayDecision, RelaySessionId, RelayStep,
+    Session, ShareRelay,
 };
 use crate::{
     clock::UnixMillis,
@@ -23,36 +23,41 @@ const ADMISSION_RETRY: RetryAfter = match RetryAfter::from_millis(250) {
 };
 
 impl<O: Observer> ShareRelay<O> {
-    pub(super) fn join(&mut self, request: JoinRequest, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn join(&mut self, request: JoinRequest, now: UnixMillis, step: &mut RelayStep) {
         let connection = request.connection();
-        if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {
+        if !self.declare_capacity(connection, request.receive_capacity(), now, step) {
             return;
         }
         let Ok(session) = self.sessions.allocate(self.limits.sessions) else {
             Self::send(
-                turn,
+                step,
                 connection,
                 Control::Error(ErrorFrame::Admission(ADMISSION_RETRY)),
             );
-            self.disconnect(connection, now, turn);
+            self.disconnect(connection, now, step);
             return;
         };
         self.lifecycle_event(
             Event::Join { request, session },
             Some(connection),
             now,
-            turn,
+            step,
         );
     }
 
-    pub(super) fn install_session(&mut self, joined: Joined, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn install_session(
+        &mut self,
+        joined: Joined,
+        now: UnixMillis,
+        step: &mut RelayStep,
+    ) {
         let key = joined.session.key();
-        match self.open_directions(&joined.session, now, turn) {
+        match self.open_directions(&joined.session, now, step) {
             Ok(grants) => {
                 self.sessions
                     .install(joined.session, &grants.map(|grant| grant.flow));
                 Self::send(
-                    turn,
+                    step,
                     key.receiver(),
                     Control::Descriptor {
                         session: key,
@@ -60,17 +65,17 @@ impl<O: Observer> ShareRelay<O> {
                     },
                 );
                 for grant in grants {
-                    Self::send(turn, grant.flow.permit().source(), Control::Grant(grant));
+                    Self::send(step, grant.flow.permit().source(), Control::Grant(grant));
                 }
             }
             Err(error) => {
                 self.trace(Some(key.receiver()), RelayDecision::Rejected(error), now);
                 Self::send(
-                    turn,
+                    step,
                     key.receiver(),
                     Control::Error(ErrorFrame::Admission(ADMISSION_RETRY)),
                 );
-                self.disconnect(key.receiver(), now, turn);
+                self.disconnect(key.receiver(), now, step);
             }
         }
     }
@@ -79,7 +84,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         session: &Session,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<[Grant; 2], Error> {
         let mut grants = Vec::new();
         for direction in [Direction::ToSender, Direction::ToReceiver] {
@@ -96,7 +101,7 @@ impl<O: Observer> ShareRelay<O> {
                 )
                 .ok_or(Error::UnknownConnection)
                 .and_then(|result| result.map_err(Error::Flow));
-            self.apply_delivery_close(destination, now, turn);
+            self.apply_delivery_close(destination, now, step);
             match result {
                 Ok(grant) => grants.push(grant),
                 Err(error) => {
@@ -115,7 +120,7 @@ impl<O: Observer> ShareRelay<O> {
                             },
                             &mut self.observer,
                         );
-                        self.apply_delivery_close(grant.flow.destination(), now, turn);
+                        self.apply_delivery_close(grant.flow.destination(), now, step);
                     }
                     return Err(error);
                 }
@@ -129,7 +134,7 @@ impl<O: Observer> ShareRelay<O> {
         id: RelaySessionId,
         event: SessionEvent,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Option<Action> {
         let deferred = self.cleanup_deferred();
         let effects = self.sessions.handle(
@@ -148,10 +153,10 @@ impl<O: Observer> ShareRelay<O> {
                     |ledger| ledger.retire(retirement, now),
                     &mut self.observer,
                 );
-                self.apply_delivery_close(flow.destination(), now, turn);
+                self.apply_delivery_close(flow.destination(), now, step);
             }
             if !deferred {
-                self.release_cleanup(id, now, turn);
+                self.release_cleanup(id, now, step);
             }
         }
         Some(effects.action)
@@ -161,7 +166,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         id: RelaySessionId,
         _now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         if let Some(flows) = self.sessions.release_cleanup(id) {
             for flow in flows {
@@ -170,7 +175,7 @@ impl<O: Observer> ShareRelay<O> {
                     .ledger(&flow.destination())
                     .is_some_and(|ledger| ledger.snapshot(flow).is_some())
                 {
-                    turn.outputs.push(Output::Discard(flow));
+                    step.outputs.push(Output::Discard(flow));
                 }
             }
         }
@@ -181,7 +186,7 @@ impl<O: Observer> ShareRelay<O> {
         participant: ConnectionRef,
         id: RelaySessionId,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         let Some(entry) = self.sessions.entries().get(&id) else {
             return self.discard_collected_session(
@@ -200,7 +205,7 @@ impl<O: Observer> ShareRelay<O> {
                 reason: EndReason::Cancelled,
             },
             now,
-            turn,
+            step,
         );
         if let Some(Action::Refused(reason)) = action {
             return Err(Error::Session(reason));
@@ -216,13 +221,13 @@ impl<O: Observer> ShareRelay<O> {
         sender: ConnectionRef,
         frame: SessionAdmitted,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         match self.session_event(
             frame.session(),
             SessionEvent::Admit { sender, frame },
             now,
-            turn,
+            step,
         ) {
             Some(Action::Active) => {
                 self.accepted_inbound(sender, now);
@@ -267,7 +272,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         key: crate::sessions::SessionKey,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         let collection = self.sessions.collect(key, |flow| {
             self.generations
@@ -281,7 +286,7 @@ impl<O: Observer> ShareRelay<O> {
                 .connection(&key.receiver())
                 .is_some_and(|entry| entry.phase() != super::ConnectionPhase::Closing)
         {
-            self.close(key.receiver(), turn);
+            self.close(key.receiver(), step);
             self.trace(Some(key.receiver()), RelayDecision::Closing, now);
         }
     }

@@ -157,12 +157,12 @@ fn generation_frame_and_byte_residual_limits_each_block_only_further_admission()
         deliver(&fixture, &mut relay, healthy);
         let (first, _) = fixture.join(&mut relay, 3);
         deliver(&fixture, &mut relay, first);
-        let turn = relay.handle(Input::Disconnected(first.receiver()), fixture.at);
-        discard_outputs(&mut relay, turn, fixture.at);
+        let step = relay.handle(Input::Disconnected(first.receiver()), fixture.at);
+        discard_outputs(&mut relay, step, fixture.at);
         let (pending, _) = fixture.join(&mut relay, 4);
         deliver(&fixture, &mut relay, pending);
-        let turn = relay.handle(Input::Disconnected(pending.receiver()), fixture.at);
-        discard_outputs(&mut relay, turn, fixture.at);
+        let step = relay.handle(Input::Disconnected(pending.receiver()), fixture.at);
+        discard_outputs(&mut relay, step, fixture.at);
         assert_eq!(
             relay.connection_usage(),
             ConnectionUsage {
@@ -307,15 +307,15 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
     let stored = fixture.register(&mut relay);
     let (lost, _) = fixture.join(&mut relay, 2);
     deliver(&fixture, &mut relay, lost);
-    let turn = relay.handle(Input::Disconnected(lost.receiver()), fixture.at);
-    discard_outputs(&mut relay, turn, fixture.at);
+    let step = relay.handle(Input::Disconnected(lost.receiver()), fixture.at);
+    discard_outputs(&mut relay, step, fixture.at);
     let retirement_at = UnixMillis(fixture.at.0 + GRACE_MS);
     let settlement_at = UnixMillis(fixture.at.0 + SETTLEMENT_BUDGET);
     for incarnation in 2..=4 {
         let now = UnixMillis(fixture.at.0 + u64::from(incarnation));
         let checkpoint =
             Checkpoint::decode(&relay.checkpoint().unwrap().encode(), relay.limits).unwrap();
-        let (mut restored, turn) = Relay::restore(
+        let (mut restored, step) = Relay::restore(
             fixture.identity(incarnation),
             relay.limits,
             &Restore {
@@ -327,7 +327,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
             now,
         )
         .unwrap();
-        discard_outputs(&mut restored, turn, now);
+        discard_outputs(&mut restored, step, now);
         let _ = restored.handle(Input::Disconnected(lost.receiver()), now);
         assert_eq!(restored.deadline(), Some(retirement_at));
         assert_business_capacity_refused(&fixture, &mut restored, connection(3), now);
@@ -346,7 +346,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
     );
     let checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), relay.limits).unwrap();
-    let (mut relay, turn) = Relay::restore(
+    let (mut relay, step) = Relay::restore(
         fixture.identity(5),
         relay.limits,
         &Restore {
@@ -358,7 +358,7 @@ fn recovery_preserves_retirement_grace_and_never_treats_expiry_as_release() {
         retirement_at,
     )
     .unwrap();
-    discard_outputs(&mut relay, turn, retirement_at);
+    discard_outputs(&mut relay, step, retirement_at);
     assert_eq!(relay.deadline(), Some(settlement_at));
     fixture.at = retirement_at;
     let (replacement, _) = fixture.join(&mut relay, 3);
@@ -399,8 +399,8 @@ fn retired_session_releases_admission_but_healthy_sender_keeps_its_flow_debt() {
                 .refusal,
             None
         );
-        let turn = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
-        discard_outputs(&mut relay, turn, fixture.at);
+        let step = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
+        discard_outputs(&mut relay, step, fixture.at);
         old.push(key);
     }
     assert_eq!(relay.sessions.entries().len(), 1);
@@ -458,8 +458,8 @@ fn retired_checkpoints_cannot_hide_excess_risk_or_live_authority() {
     let (key, _) = fixture.join(&mut relay, 2);
     deliver(&fixture, &mut relay, key);
     let live = relay.checkpoint().unwrap();
-    let turn = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
-    discard_outputs(&mut relay, turn, fixture.at);
+    let step = relay.handle(Input::Disconnected(key.receiver()), fixture.at);
+    discard_outputs(&mut relay, step, fixture.at);
     let checkpoint = relay.checkpoint().unwrap();
     for retirement in [
         RetirementPolicy::PhysicalRelease,

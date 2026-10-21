@@ -4,17 +4,17 @@ use crate::{error_frame::ErrorFrame, flow::Phase as FlowPhase, lifecycle::Phase}
 const ONE_FRAME: Counts = Counts::new(1, 21);
 const TWO_FRAMES: Counts = Counts::new(2, 42);
 
-fn acknowledged(turn: &Turn, target: ConnectionRef) -> bool {
-    turn.outputs.iter().any(|output| {
+fn acknowledged(step: &RelayStep, target: ConnectionRef) -> bool {
+    step.outputs.iter().any(|output| {
         matches!(output,
             Output::Send { connection, control: Control::Stopped(_) } if *connection == target
         )
     })
 }
 
-fn discard_queues(relay: &mut Relay, turn: &Turn, at: UnixMillis) -> Work {
+fn discard_queues(relay: &mut Relay, step: &RelayStep, at: UnixMillis) -> Work {
     let mut commit = None;
-    for output in &turn.outputs {
+    for output in &step.outputs {
         if let Output::Discard(flow) = output {
             let discarded = relay.handle(Input::Discarded(*flow), at);
             assert_eq!(discarded.refusal, None);
@@ -102,8 +102,8 @@ fn missing_delivery_records_cannot_erase_permanent_stop() {
             .refusal,
         None
     );
-    let turn = fixture.control(&mut recovered, connection(5), "joinB64", fixture.at);
-    assert!(turn.outputs.iter().any(|output| matches!(
+    let step = fixture.control(&mut recovered, connection(5), "joinB64", fixture.at);
+    assert!(step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::Error(ErrorFrame::Stopped),

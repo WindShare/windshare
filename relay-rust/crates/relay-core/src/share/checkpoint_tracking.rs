@@ -208,7 +208,7 @@ impl<O: Observer> ShareRelay<O> {
             .checkpoint_changes()
             .expect("tracking enabled");
         // Session snapshots belong to receiver records. A generation removed in
-        // the same turn must not be resurrected by its session's pending change.
+        // the same step must not be resurrected by its session's pending change.
         let dirty = || {
             generations
                 .connections

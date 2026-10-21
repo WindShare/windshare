@@ -78,7 +78,7 @@ impl Fixture {
         }
     }
     fn relay(&self) -> Relay {
-        let (relay, turn) = Relay::restore(
+        let (relay, step) = Relay::restore(
             self.identity(1),
             Self::limits(),
             &Restore::restarted(None, Responsibility::Released { previous: None }),
@@ -86,7 +86,7 @@ impl Fixture {
             self.at,
         )
         .unwrap();
-        assert!(turn.outputs.is_empty());
+        assert!(step.outputs.is_empty());
         relay
     }
     fn control(
@@ -95,21 +95,14 @@ impl Fixture {
         connection: ConnectionRef,
         field: &str,
         at: UnixMillis,
-    ) -> Turn {
+    ) -> RelayStep {
         let frame = self.frame(field);
-        let input = match RegisterInit::decode(&frame) {
-            Ok(init) if init.mode() == crate::registration::RegistrationMode::Fresh => {
-                Input::Register(crate::access::RegistrationGrant::new(
-                    connection,
-                    init,
-                    crate::access::Attribution::Anonymous,
-                    UnixMillis(at.0 + REGISTRATION_BUDGET),
-                ))
-            }
-            _ => Input::Control {
-                connection,
-                frame: &frame,
-            },
+        let input = match crate::ingress::Control::inspect(connection, &frame) {
+            crate::ingress::Control::Authorize(request) => Input::Register(request.resolve(
+                crate::access::RegistrationDecision::Granted(crate::access::Attribution::Anonymous),
+                at,
+            )),
+            crate::ingress::Control::Ready(input) => input,
         };
         relay.handle(input, at)
     }
@@ -119,16 +112,16 @@ impl Fixture {
             relay.handle(Input::Connected(sender), self.at).refusal,
             None
         );
-        let turn = self.control(relay, sender, "registerInitB64", self.at);
+        let step = self.control(relay, sender, "registerInitB64", self.at);
         assert!(
-            matches!(turn.outputs.as_slice(), [Output::ChallengeNeeded(value)] if value.connection == sender)
+            matches!(step.outputs.as_slice(), [Output::ChallengeNeeded(value)] if value.connection == sender)
         );
         let seed = challenge_seed(self.text("challengeIdB64"), self.text("challengeNonceB64"));
         assert_eq!(
             relay
                 .handle(
                     Input::Challenge {
-                        request: challenge(&turn),
+                        request: challenge(&step),
                         seed
                     },
                     self.at
@@ -146,8 +139,8 @@ impl Fixture {
     fn register(&self, relay: &mut Relay) -> Record {
         let durable = self.begin_registration(relay);
         assert!(matches!(durable.operation, Storage::Register { .. }));
-        let turn = complete(relay, &durable, self.at);
-        assert!(turn.outputs.iter().any(|output| matches!(
+        let step = complete(relay, &durable, self.at);
+        assert!(step.outputs.iter().any(|output| matches!(
             output,
             Output::Send {
                 control: Control::Registered(_),
@@ -168,8 +161,8 @@ impl Fixture {
             relay.handle(Input::Connected(receiver), self.at).refusal,
             None
         );
-        let turn = self.control(relay, receiver, "joinB64", self.at);
-        let key = turn
+        let step = self.control(relay, receiver, "joinB64", self.at);
+        let key = step
             .outputs
             .iter()
             .find_map(|output| match output {
@@ -180,7 +173,7 @@ impl Fixture {
                 _ => None,
             })
             .expect("receiver descriptor");
-        let flows: Vec<_> = turn
+        let flows: Vec<_> = step
             .outputs
             .iter()
             .filter_map(|output| match output {
@@ -200,9 +193,9 @@ impl Fixture {
     fn prepare_stop_on(&self, relay: &mut Relay, target: ConnectionRef) {
         let at = UnixMillis(unix_seconds(self.text("stopExpiresAt")).start().0 - STOP_BUDGET - 1);
         assert_eq!(relay.handle(Input::Connected(target), at).refusal, None);
-        let turn = self.control(relay, target, "stopInitB64", at);
+        let step = self.control(relay, target, "stopInitB64", at);
         assert!(matches!(
-            turn.outputs.as_slice(),
+            step.outputs.as_slice(),
             [Output::ChallengeNeeded(_)]
         ));
         let seed = challenge_seed(
@@ -213,7 +206,7 @@ impl Fixture {
             relay
                 .handle(
                     Input::Challenge {
-                        request: challenge(&turn),
+                        request: challenge(&step),
                         seed
                     },
                     at
@@ -247,7 +240,7 @@ impl Fixture {
         );
         at
     }
-    fn stop(&self, relay: &mut Relay) -> Turn {
+    fn stop(&self, relay: &mut Relay) -> RelayStep {
         self.control(relay, connection(99), "stopProofB64", self.at)
     }
 }
@@ -258,8 +251,8 @@ fn connection(id: u64) -> ConnectionRef {
         generation: NonZeroU64::new(1).unwrap(),
     }
 }
-fn challenge(turn: &Turn) -> ChallengeRequest {
-    turn.outputs
+fn challenge(step: &RelayStep) -> ChallengeRequest {
+    step.outputs
         .iter()
         .find_map(|output| match output {
             Output::ChallengeNeeded(request) => Some(*request),
@@ -267,16 +260,16 @@ fn challenge(turn: &Turn) -> ChallengeRequest {
         })
         .expect("challenge requested")
 }
-fn work(turn: &Turn) -> Work {
-    turn.outputs
+fn work(step: &RelayStep) -> Work {
+    step.outputs
         .iter()
         .find_map(|output| match output {
             Output::Work(work) => Some(work.clone()),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("expected work: {turn:?}"))
+        .unwrap_or_else(|| panic!("expected work: {step:?}"))
 }
-fn complete(relay: &mut Relay, work: &Work, at: UnixMillis) -> Turn {
+fn complete(relay: &mut Relay, work: &Work, at: UnixMillis) -> RelayStep {
     relay.handle(
         Input::Completed {
             id: work.id,
@@ -310,8 +303,8 @@ fn receive_from(
         .put(&1_u32.to_be_bytes())
         .put(&[1]);
     let header = OpaqueHeader::decode(&writer.into_frame()).unwrap();
-    let turn = relay.handle(Input::Frame { source, header }, at);
-    turn.outputs
+    let step = relay.handle(Input::Frame { source, header }, at);
+    step.outputs
         .into_iter()
         .find_map(|output| match output {
             Output::Received(receipt) => Some(receipt),
@@ -539,16 +532,16 @@ fn merged_deadline_expires_before_a_refused_input_without_losing_cleanup() {
     fixture.register(&mut relay);
     let (key, _) = fixture.join(&mut relay, 2);
     let deadline = relay.deadline().unwrap();
-    let turn = relay.handle(
+    let step = relay.handle(
         Input::Cancel {
             participant: connection(7),
             session: key.wire_id(),
         },
         deadline,
     );
-    assert!(turn.refusal.is_some());
+    assert!(step.refusal.is_some());
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Discard(_)))
     );
@@ -656,9 +649,9 @@ fn assert_business_capacity_refused(
     now: UnixMillis,
 ) {
     assert_eq!(relay.handle(Input::Connected(candidate), now).refusal, None);
-    let turn = fixture.control(relay, candidate, "joinB64", now);
-    assert_eq!(turn.refusal, Some(Error::Capacity));
-    assert!(turn.outputs.iter().any(|output| matches!(output,
+    let step = fixture.control(relay, candidate, "joinB64", now);
+    assert_eq!(step.refusal, Some(Error::Capacity));
+    assert!(step.outputs.iter().any(|output| matches!(output,
         Output::Send { connection, control: Control::Error(crate::error_frame::ErrorFrame::Admission(_)) }
             if *connection == candidate)));
     let _ = relay.handle(Input::Closed(candidate), now);

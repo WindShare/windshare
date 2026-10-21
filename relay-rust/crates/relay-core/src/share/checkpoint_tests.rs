@@ -61,7 +61,7 @@ impl Attachments {
 
     fn restore(&self, fixture: &Fixture, stored: Record) -> Relay {
         let checkpoint = self.checkpoint();
-        let (relay, turn) = Relay::restore(
+        let (relay, step) = Relay::restore(
             fixture.identity(2),
             Fixture::limits(),
             &Restore {
@@ -73,7 +73,7 @@ impl Attachments {
             fixture.at,
         )
         .unwrap();
-        assert!(turn.refusal.is_none());
+        assert!(step.refusal.is_none());
         relay
     }
 }
@@ -230,14 +230,14 @@ fn later_inbound_data_and_probes_persist_source_liveness_without_rewriting_sibli
     assert_eq!(host.bytes[&sibling.receiver()], sibling_bytes);
 
     let frame = ConnectionProbe::new(NonZeroU64::new(1).unwrap()).encode();
-    let turn = relay.handle(
+    let step = relay.handle(
         Input::Control {
             connection: key.sender(),
             frame: &frame,
         },
         at,
     );
-    assert_eq!(turn.refusal, None);
+    assert_eq!(step.refusal, None);
     assert_eq!(host.flush(&mut relay, at).connections, 1);
     assert_eq!(host.written, [key.sender()]);
     let checkpoint = host.checkpoint();
@@ -693,7 +693,7 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
         checkpoint.connections[0].role,
         checkpoint::ConnectionRole::Detached(_)
     ));
-    let (detached, turn) = Relay::restore(
+    let (detached, step) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
@@ -707,11 +707,11 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
     .unwrap();
     assert!(detached.generations.connection(&key.sender()).is_none());
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == key.sender()))
     );
-    let (mut restored, turn) = Relay::restore(
+    let (mut restored, step) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
         &Restore::restarted(Some(stored), Responsibility::Checkpoint(&checkpoint)),
@@ -719,7 +719,7 @@ fn detached_generations_keep_receiving_checkpoint_updates_without_socket_attachm
         fixture.at,
     )
     .unwrap();
-    for output in turn.outputs {
+    for output in step.outputs {
         if let Output::Discard(flow) = output {
             let _ = restored.handle(Input::Discarded(flow), fixture.at);
         }

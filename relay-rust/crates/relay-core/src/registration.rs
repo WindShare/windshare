@@ -19,8 +19,8 @@ use crate::{
 };
 
 pub(crate) const REGISTER_INIT_MAGIC: Magic = *b"WS2R";
-const REGISTER_PROOF_MAGIC: Magic = *b"WS2P";
-const RESUME_CREDENTIAL_MAGIC: Magic = *b"WS2T";
+pub(crate) const REGISTER_PROOF_MAGIC: Magic = *b"WS2P";
+pub(crate) const RESUME_CREDENTIAL_MAGIC: Magic = *b"WS2T";
 const REGISTERED_MAGIC: Magic = *b"WS2K";
 
 const REGISTER_DOMAIN: &[u8] = b"windshare/v2 relay-register\0";

@@ -1,7 +1,7 @@
 use super::RuntimeStatus;
 use super::{
-    ConnectionRef, Observer, OperationId, Output, Record, RelayDecision, ShareRelay, Storage, Turn,
-    Work, WorkId, WorkResult,
+    ConnectionRef, Observer, OperationId, Output, Record, RelayDecision, RelayStep, ShareRelay,
+    Storage, Work, WorkId, WorkResult,
 };
 use crate::{
     clock::UnixMillis,
@@ -45,7 +45,7 @@ enum Dispatch {
 }
 
 impl<O: Observer> ShareRelay<O> {
-    pub(super) fn enqueue(&mut self, kind: TaskKind, _turn: &mut Turn) {
+    pub(super) fn enqueue(&mut self, kind: TaskKind, _turn: &mut RelayStep) {
         if !self.tasks.iter().any(|task| task.kind == kind) {
             self.tasks.push_back(Task {
                 kind,
@@ -54,7 +54,7 @@ impl<O: Observer> ShareRelay<O> {
         }
     }
 
-    pub(super) fn start_work(&mut self, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn start_work(&mut self, now: UnixMillis, step: &mut RelayStep) {
         let Some(task) = self.tasks.front_mut() else {
             return;
         };
@@ -63,7 +63,7 @@ impl<O: Observer> ShareRelay<O> {
         }
         let Some(sequence) = self.last_work.checked_add(1) else {
             self.runtime = RuntimeStatus::ReloadRequired;
-            turn.outputs.push(Output::Reload);
+            step.outputs.push(Output::Reload);
             return;
         };
         self.last_work = sequence;
@@ -89,18 +89,18 @@ impl<O: Observer> ShareRelay<O> {
         };
         task.dispatch = Dispatch::Executing(work.clone());
         let id = work.id;
-        turn.outputs.push(Output::Work(work));
+        step.outputs.push(Output::Work(work));
         self.trace(None, RelayDecision::WorkIssued(id), now);
     }
 
-    pub(super) fn retry(&mut self, id: WorkId, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn retry(&mut self, id: WorkId, now: UnixMillis, step: &mut RelayStep) {
         if let Some(task) = self.tasks.front_mut()
             && let Dispatch::Retry(work) = &task.dispatch
             && work.id == id
         {
             let work = work.clone();
             task.dispatch = Dispatch::Executing(work.clone());
-            turn.outputs.push(Output::Work(work));
+            step.outputs.push(Output::Work(work));
             self.trace(None, RelayDecision::WorkIssued(id), now);
             return;
         }
@@ -112,7 +112,7 @@ impl<O: Observer> ShareRelay<O> {
         id: WorkId,
         result: WorkResult,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         let matches = self.tasks.front().is_some_and(
             |task| matches!(&task.dispatch, Dispatch::Executing(work) if work.id == id),
@@ -129,7 +129,7 @@ impl<O: Observer> ShareRelay<O> {
                 unreachable!("matched work");
             };
             task.dispatch = Dispatch::Retry(work);
-            turn.outputs.push(Output::Retry(id));
+            step.outputs.push(Output::Retry(id));
             self.trace(None, RelayDecision::StorageUncertain(id), now);
             return;
         }
@@ -144,24 +144,24 @@ impl<O: Observer> ShareRelay<O> {
                         replaced: ownership.replaced(),
                     },
                     now,
-                    turn,
+                    step,
                 );
             }
             TaskKind::Write { next, after } => {
                 self.stored = next;
-                self.after_write(after, now, turn);
+                self.after_write(after, now, step);
             }
         }
     }
 
-    fn after_write(&mut self, after: AfterWrite, now: UnixMillis, turn: &mut Turn) {
+    fn after_write(&mut self, after: AfterWrite, now: UnixMillis, step: &mut RelayStep) {
         match after {
             AfterWrite::None => {}
             AfterWrite::Ownership { id, replaced } => {
                 if let Some(connection) = replaced {
-                    self.close(connection, turn);
+                    self.close(connection, step);
                 }
-                self.lifecycle_event(Event::OwnershipCommitted(id), None, now, turn);
+                self.lifecycle_event(Event::OwnershipCommitted(id), None, now, step);
             }
             AfterWrite::Stop(work) => self.lifecycle_event(
                 Event::StopFinished {
@@ -170,12 +170,12 @@ impl<O: Observer> ShareRelay<O> {
                 },
                 None,
                 now,
-                turn,
+                step,
             ),
         }
     }
 
-    pub(super) fn progress_stop(&mut self, now: UnixMillis, turn: &mut Turn) {
+    pub(super) fn progress_stop(&mut self, now: UnixMillis, step: &mut RelayStep) {
         // STOP fences the whole share, including queues from older owners and
         // detached generations. Settling ledgers keep their charge independently
         // of this barrier; waiting for their removal would make STOP unfinishable
@@ -194,7 +194,7 @@ impl<O: Observer> ShareRelay<O> {
                 },
                 None,
                 now,
-                turn,
+                step,
             );
         }
     }

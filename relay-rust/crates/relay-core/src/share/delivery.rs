@@ -1,7 +1,7 @@
 use super::RuntimeStatus;
 use super::{
-    ConnectionPhase, ConnectionRef, Control, Error, Observer, Output, RelayDecision, ShareRelay,
-    Submission, Turn,
+    ConnectionPhase, ConnectionRef, Control, Error, Observer, Output, RelayDecision, RelayStep,
+    ShareRelay, Submission,
 };
 use crate::{
     clock::UnixMillis,
@@ -47,13 +47,13 @@ impl<O: Observer> ShareRelay<O> {
         source: ConnectionRef,
         header: OpaqueHeader,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
         }
         let id = header.session();
-        let action = self.session_event(id, SessionEvent::Frame { source, header }, now, turn);
+        let action = self.session_event(id, SessionEvent::Frame { source, header }, now, step);
         let permit = match action {
             Some(Action::Forward(permit)) => permit,
             Some(Action::Discard(_)) => return Ok(()),
@@ -87,8 +87,8 @@ impl<O: Observer> ShareRelay<O> {
             )
             .ok_or(Error::UnknownConnection)?
             .map_err(Error::Flow);
-        self.apply_delivery_close(destination, now, turn);
-        turn.outputs.push(Output::Received(result?));
+        self.apply_delivery_close(destination, now, step);
+        step.outputs.push(Output::Received(result?));
         self.accepted_inbound(source, now);
         Ok(())
     }
@@ -105,26 +105,26 @@ impl<O: Observer> ShareRelay<O> {
         receipt: &ReceivedFrame,
         now: UnixMillis,
         handoff: impl FnOnce(FlowKey) -> Submission,
-    ) -> Turn {
-        let mut turn = Turn::default();
-        self.expire(now, &mut turn);
+    ) -> RelayStep {
+        let mut step = RelayStep::default();
+        self.expire(now, &mut step);
         let result = self.submit_frame(receipt, now, handoff);
         if result == Ok(Submission::Uncertain) {
-            self.disconnect(receipt.flow().destination(), now, &mut turn);
+            self.disconnect(receipt.flow().destination(), now, &mut step);
         }
-        self.apply_delivery_close(receipt.flow().destination(), now, &mut turn);
-        self.progress_stop(now, &mut turn);
-        self.start_work(now, &mut turn);
-        turn.deadline = self.deadline();
+        self.apply_delivery_close(receipt.flow().destination(), now, &mut step);
+        self.progress_stop(now, &mut step);
+        self.start_work(now, &mut step);
+        step.deadline = self.deadline();
         if let Err(error) = result {
-            turn.refusal = Some(error);
+            step.refusal = Some(error);
             self.trace(
                 Some(receipt.flow().destination()),
                 RelayDecision::Rejected(error),
                 now,
             );
         }
-        turn
+        step
     }
 
     fn submit_frame(
@@ -169,7 +169,7 @@ impl<O: Observer> ShareRelay<O> {
         flow: FlowKey,
         credit: Counts,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         if self.runtime == RuntimeStatus::ReloadRequired {
             return Err(Error::Unavailable);
@@ -192,8 +192,8 @@ impl<O: Observer> ShareRelay<O> {
             )
             .ok_or(Error::UnknownConnection)?
             .map_err(Error::Flow);
-        self.apply_delivery_close(flow.destination(), now, turn);
-        Self::send(turn, flow.permit().source(), Control::Grant(result?));
+        self.apply_delivery_close(flow.destination(), now, step);
+        Self::send(step, flow.permit().source(), Control::Grant(result?));
         Ok(())
     }
 
@@ -201,7 +201,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         flow: FlowKey,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         if self
             .sessions
@@ -219,17 +219,17 @@ impl<O: Observer> ShareRelay<O> {
             return Ok(());
         };
         let result = result.map_err(Error::Flow);
-        self.apply_delivery_close(flow.destination(), now, turn);
+        self.apply_delivery_close(flow.destination(), now, step);
         if let Some(notice) = result?
             && self.generations.connection(&flow.destination()).is_some()
         {
             Self::send(
-                turn,
+                step,
                 flow.destination(),
                 Control::Settlement(notice.try_into().map_err(Error::Frame)?),
             );
         }
-        self.collect_session(flow.session(), now, turn);
+        self.collect_session(flow.session(), now, step);
         self.collect_ledger(flow.destination(), now);
         self.progress_retirements(now);
         Ok(())
@@ -242,7 +242,7 @@ impl<O: Observer> ShareRelay<O> {
         total: Counts,
         final_receipt: bool,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) -> Result<(), Error> {
         let Some(&flow) = self.sessions.routes().get(&(connection, session)) else {
             return Ok(());
@@ -260,16 +260,22 @@ impl<O: Observer> ShareRelay<O> {
         ) else {
             return Ok(());
         };
-        self.apply_delivery_close(flow.destination(), now, turn);
-        if result.map_err(Error::Flow)? != Feedback::Stale {
+        self.apply_delivery_close(flow.destination(), now, step);
+        let feedback = result.map_err(Error::Flow)?;
+        if feedback != Feedback::Stale {
             self.accepted_inbound(connection, now);
+        }
+        if matches!(feedback, Feedback::Released(_) | Feedback::Settled(_)) {
+            // Capacity is shared by sibling sessions on this destination. Wake
+            // its scheduler only after the ledger accepted the release evidence.
+            step.outputs.push(Output::DeliveryReady(connection));
         }
         let retirement_affected = self.generations.retirement_state(&connection).is_some()
             || self
                 .generations
                 .retirement_state(&flow.permit().source())
                 .is_some();
-        self.collect_session(flow.session(), now, turn);
+        self.collect_session(flow.session(), now, step);
         self.collect_ledger(flow.destination(), now);
         if retirement_affected {
             self.progress_retirements(now);

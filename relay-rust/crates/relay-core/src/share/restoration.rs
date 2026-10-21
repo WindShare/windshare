@@ -3,7 +3,7 @@ use super::RuntimeStatus;
 use super::checkpoint::ConnectionRole;
 use super::{
     ConnectionPhase, ConnectionRef, Error, Identity, Limits, Observer, Output, Record,
-    RelayDecision, ShareLifecycle, ShareRelay, Turn,
+    RelayDecision, RelayStep, ShareLifecycle, ShareRelay,
 };
 use crate::{
     clock::UnixMillis,
@@ -104,7 +104,7 @@ impl<O: Observer> ShareRelay<O> {
         restored: &Restore<'_>,
         observer: O,
         now: UnixMillis,
-    ) -> Result<(Self, Turn), Error> {
+    ) -> Result<(Self, RelayStep), Error> {
         let Authority::Known(record) = restored.authority else {
             return Err(Error::MissingAuthority);
         };
@@ -169,24 +169,24 @@ impl<O: Observer> ShareRelay<O> {
         };
         relay.flush_lifecycle();
         relay.restore_connections(restored, now)?;
-        let mut turn = Turn::default();
+        let mut step = RelayStep::default();
         for &connection in restored.surviving {
             if relay
                 .generations
                 .connection(&connection)
                 .is_none_or(|entry| entry.phase() == ConnectionPhase::Closing)
             {
-                turn.outputs.push(Output::Close(connection));
+                step.outputs.push(Output::Close(connection));
             }
         }
-        relay.restore_sessions(decisions, now, &mut turn);
-        relay.action(action, None, now, &mut turn);
-        relay.restore_handshakes(restored, now, &mut turn)?;
+        relay.restore_sessions(decisions, now, &mut step);
+        relay.action(action, None, now, &mut step);
+        relay.restore_handshakes(restored, now, &mut step)?;
         relay.progress_retirements(now);
-        relay.expire(now, &mut turn);
-        relay.progress_stop(now, &mut turn);
-        relay.start_work(now, &mut turn);
-        turn.deadline = relay.deadline();
+        relay.expire(now, &mut step);
+        relay.progress_stop(now, &mut step);
+        relay.start_work(now, &mut step);
+        step.deadline = relay.deadline();
         relay.trace(
             None,
             RelayDecision::Restored {
@@ -195,7 +195,7 @@ impl<O: Observer> ShareRelay<O> {
             },
             now,
         );
-        Ok((relay, turn))
+        Ok((relay, step))
     }
 
     fn restore_connections(
@@ -249,7 +249,7 @@ impl<O: Observer> ShareRelay<O> {
         &mut self,
         decisions: Vec<SessionRestore>,
         now: UnixMillis,
-        turn: &mut Turn,
+        step: &mut RelayStep,
     ) {
         for decision in decisions {
             match decision {
@@ -257,7 +257,7 @@ impl<O: Observer> ShareRelay<O> {
                     if let Some(flows) = self.session_flows(session.key()) {
                         self.sessions.install(session, &flows);
                     } else {
-                        self.close(session.key().receiver(), turn);
+                        self.close(session.key().receiver(), step);
                         self.trace(
                             Some(session.key().receiver()),
                             RelayDecision::InvalidSnapshot,
@@ -266,7 +266,7 @@ impl<O: Observer> ShareRelay<O> {
                     }
                 }
                 SessionRestore::Retired(retirement) => {
-                    self.close(retirement.session.receiver(), turn);
+                    self.close(retirement.session.receiver(), step);
                 }
             }
         }
@@ -303,21 +303,21 @@ impl<O: Observer> ShareRelay<O> {
                         },
                         &mut self.observer,
                     );
-                    turn.outputs.push(Output::Discard(flow));
+                    step.outputs.push(Output::Discard(flow));
                 }
             }
-            self.apply_delivery_close(destination, now, turn);
+            self.apply_delivery_close(destination, now, step);
             self.collect_ledger(destination, now);
             if self
                 .generations
                 .connection(&destination)
                 .is_some_and(|entry| entry.phase() == ConnectionPhase::Closing)
-                && !turn
+                && !step
                     .outputs
                     .iter()
                     .any(|output| matches!(output, Output::Close(value) if *value == destination))
             {
-                turn.outputs.push(Output::Close(destination));
+                step.outputs.push(Output::Close(destination));
             }
         }
     }

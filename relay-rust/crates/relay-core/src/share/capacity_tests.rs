@@ -3,7 +3,12 @@ use crate::flow::{ReceiveCapacity, Refusal, Usage};
 
 const MAX_FRAME: u64 = OpaqueHeader::MAX_ENCODED_BYTES as u64;
 
-fn join_capacity(fixture: &Fixture, relay: &mut Relay, receiver: u64, capacity: Counts) -> Turn {
+fn join_capacity(
+    fixture: &Fixture,
+    relay: &mut Relay,
+    receiver: u64,
+    capacity: Counts,
+) -> RelayStep {
     let mut frame = fixture.frame("joinB64");
     let offset = frame.len() - ReceiveCapacity::ENCODED_BYTES;
     frame[offset..offset + 8].copy_from_slice(&capacity.frames.to_be_bytes());
@@ -23,8 +28,8 @@ fn join_capacity(fixture: &Fixture, relay: &mut Relay, receiver: u64, capacity: 
     )
 }
 
-fn grants(turn: &Turn) -> Vec<crate::flow::Grant> {
-    turn.outputs
+fn grants(step: &RelayStep) -> Vec<crate::flow::Grant> {
+    step.outputs
         .iter()
         .filter_map(|output| match output {
             Output::Send {
@@ -82,8 +87,8 @@ fn asymmetric_connection_capacity_and_host_policy_both_bound_grants() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.register(&mut relay);
-    let turn = join_capacity(&fixture, &mut relay, 2, Counts::new(2, 2 * MAX_FRAME));
-    let initial = grants(&turn);
+    let step = join_capacity(&fixture, &mut relay, 2, Counts::new(2, 2 * MAX_FRAME));
+    let initial = grants(&step);
     assert_eq!(initial.len(), 2);
     let [up, down] = [initial[0].flow, initial[1].flow];
     for (flow, credit) in [
@@ -119,8 +124,8 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let stored = fixture.register(&mut relay);
-    let turn = join_capacity(&fixture, &mut relay, 2, Counts::new(1, MAX_FRAME));
-    let grants = grants(&turn);
+    let step = join_capacity(&fixture, &mut relay, 2, Counts::new(1, MAX_FRAME));
+    let grants = grants(&step);
     let [up, down] = [grants[0].flow, grants[1].flow];
     let receipt = receive(&mut relay, up.session(), fixture.at);
     assert_eq!(
@@ -133,7 +138,7 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
     let before = ledger_of(&relay, up.destination()).usage();
     let checkpoint =
         Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-    let (mut restored, turn) = Relay::restore(
+    let (mut restored, step) = Relay::restore(
         fixture.identity(2),
         Fixture::limits(),
         &Restore {
@@ -145,7 +150,7 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
         fixture.at,
     )
     .unwrap();
-    assert!(turn.outputs.is_empty());
+    assert!(step.outputs.is_empty());
     assert_eq!(ledger_of(&restored, up.destination()).usage(), before);
     assert_eq!(before.submitted, Counts::new(1, 21));
     assert_eq!(

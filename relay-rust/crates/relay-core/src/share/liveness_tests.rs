@@ -1,7 +1,7 @@
 use super::*;
 use crate::heartbeat::{CONNECTION_PROBE_INTERVAL, CONNECTION_SILENCE_TIMEOUT, ConnectionProbe};
 
-fn probe(relay: &mut Relay, connection: ConnectionRef, nonce: u64, now: UnixMillis) -> Turn {
+fn probe(relay: &mut Relay, connection: ConnectionRef, nonce: u64, now: UnixMillis) -> RelayStep {
     relay.handle(
         Input::Control {
             connection,
@@ -11,9 +11,9 @@ fn probe(relay: &mut Relay, connection: ConnectionRef, nonce: u64, now: UnixMill
     )
 }
 
-fn assert_ack(turn: &Turn, connection: ConnectionRef, nonce: u64) {
-    assert_eq!(turn.refusal, None, "{turn:?}");
-    assert!(matches!(turn.outputs.as_slice(), [Output::Send {
+fn assert_ack(step: &RelayStep, connection: ConnectionRef, nonce: u64) {
+    assert_eq!(step.refusal, None, "{step:?}");
+    assert!(matches!(step.outputs.as_slice(), [Output::Send {
         connection: destination, control: Control::ProbeAck(ack),
     }] if *destination == connection && ack.nonce() == nonce));
 }
@@ -53,10 +53,10 @@ fn idle_connections_only_reply_to_client_probes_and_expire_on_silence() {
     for nonce in 1..=4 {
         at = at.saturating_add(CONNECTION_PROBE_INTERVAL);
         assert!(relay.handle(Input::Tick, at).outputs.is_empty());
-        let turn = probe(&mut relay, sender, nonce, at);
-        assert_ack(&turn, sender, nonce);
+        let step = probe(&mut relay, sender, nonce, at);
+        assert_ack(&step, sender, nonce);
         assert_eq!(
-            turn.deadline,
+            step.deadline,
             Some(at.saturating_add(CONNECTION_SILENCE_TIMEOUT))
         );
     }
@@ -67,14 +67,14 @@ fn idle_connections_only_reply_to_client_probes_and_expire_on_silence() {
             .outputs
             .is_empty()
     );
-    let turn = probe(&mut relay, sender, 5, expires);
-    assert_eq!(turn.refusal, Some(Error::Unavailable));
+    let step = probe(&mut relay, sender, 5, expires);
+    assert_eq!(step.refusal, Some(Error::Unavailable));
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == sender))
     );
-    assert!(!turn.outputs.iter().any(|output| matches!(
+    assert!(!step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::ProbeAck(_),
@@ -202,11 +202,11 @@ fn nonce_validation_is_strict_connection_local_and_does_not_wrap() {
             key.receiver(),
             1,
         );
-        let turn = probe(&mut relay, key.receiver(), rejected, fixture.at);
+        let step = probe(&mut relay, key.receiver(), rejected, fixture.at);
         if rejected == 1 {
-            assert_eq!(turn.refusal, Some(Error::ProbeNonce));
+            assert_eq!(step.refusal, Some(Error::ProbeNonce));
             assert!(
-                turn.outputs.iter().any(
+                step.outputs.iter().any(
                     |output| matches!(output, Output::Close(value) if *value == key.receiver())
                 )
             );
@@ -215,7 +215,7 @@ fn nonce_validation_is_strict_connection_local_and_does_not_wrap() {
                 ConnectionPhase::Established
             ));
         } else {
-            assert_ack(&turn, key.receiver(), rejected);
+            assert_ack(&step, key.receiver(), rejected);
             assert_ack(
                 &probe(&mut relay, key.receiver(), u64::MAX, fixture.at),
                 key.receiver(),
@@ -242,20 +242,20 @@ fn malformed_probes_and_wrong_direction_acknowledgements_close_without_a_reply()
         let fixture = Fixture::new();
         let mut relay = fixture.relay();
         fixture.register(&mut relay);
-        let turn = relay.handle(
+        let step = relay.handle(
             Input::Control {
                 connection: connection(1),
                 frame,
             },
             fixture.at,
         );
-        assert!(turn.refusal.is_some());
+        assert!(step.refusal.is_some());
         assert!(
-            turn.outputs
+            step.outputs
                 .iter()
                 .any(|output| matches!(output, Output::Close(_)))
         );
-        assert!(!turn.outputs.iter().any(|output| matches!(
+        assert!(!step.outputs.iter().any(|output| matches!(
             output,
             Output::Send {
                 control: Control::ProbeAck(_),
@@ -274,13 +274,13 @@ fn pre_handshake_probes_cannot_create_an_established_connection() {
         relay.handle(Input::Connected(peer), fixture.at).refusal,
         None
     );
-    let turn = probe(&mut relay, peer, 1, UnixMillis(fixture.at.0 + 1));
+    let step = probe(&mut relay, peer, 1, UnixMillis(fixture.at.0 + 1));
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == peer))
     );
-    assert!(!turn.outputs.iter().any(|output| matches!(
+    assert!(!step.outputs.iter().any(|output| matches!(
         output,
         Output::Send {
             control: Control::ProbeAck(_),
@@ -327,19 +327,19 @@ fn synchronous_handoff_rechecks_silence_before_invoking_the_host() {
     fixture.register(&mut relay);
     let (key, _) = active(&mut relay, &fixture, 2);
     let receipt = receive_from(&mut relay, key, key.sender(), UnixMillis(fixture.at.0 + 1));
-    let turn = relay.submit(
+    let step = relay.submit(
         &receipt,
         fixture.at.saturating_add(CONNECTION_SILENCE_TIMEOUT),
         |_| panic!("silent destination submitted"),
     );
-    assert!(turn.refusal.is_some());
+    assert!(step.refusal.is_some());
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == key.receiver()))
     );
     assert!(
-        !turn
+        !step
             .outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == key.sender()))
@@ -424,11 +424,11 @@ fn a_silent_receiver_loses_authority_without_refunding_debt_or_closing_siblings(
     for peer in [healthy.sender(), healthy.receiver()] {
         assert_ack(&probe(&mut relay, peer, 1, at), peer, 1);
     }
-    let turn = relay.handle(
+    let step = relay.handle(
         Input::Tick,
         fixture.at.saturating_add(CONNECTION_SILENCE_TIMEOUT),
     );
-    let closed: Vec<_> = turn
+    let closed: Vec<_> = step
         .outputs
         .iter()
         .filter_map(|output| match output {
@@ -478,7 +478,7 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
     for incarnation in 2..=3 {
         let checkpoint =
             Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-        let (restored, turn) = Relay::restore(
+        let (restored, step) = Relay::restore(
             fixture.identity(incarnation),
             Fixture::limits(),
             &Restore {
@@ -490,8 +490,8 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
             UnixMillis(expires.0 - u64::from(4 - incarnation)),
         )
         .unwrap();
-        assert!(turn.outputs.is_empty());
-        assert_eq!(turn.deadline, Some(expires));
+        assert!(step.outputs.is_empty());
+        assert_eq!(step.deadline, Some(expires));
         assert_eq!(restored.delivery_usage(key.sender()), usage);
         relay = restored;
     }
@@ -523,7 +523,7 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
         deadline(&resumed, key.receiver()),
         received_at.saturating_add(CONNECTION_SILENCE_TIMEOUT)
     );
-    let (restored, turn) = Relay::restore(
+    let (restored, step) = Relay::restore(
         fixture.identity(4),
         Fixture::limits(),
         &Restore {
@@ -536,12 +536,12 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
     )
     .unwrap();
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == key.sender()))
     );
     assert!(
-        turn.outputs
+        step.outputs
             .iter()
             .any(|output| matches!(output, Output::Close(value) if *value == key.receiver()))
     );

@@ -4,7 +4,7 @@ use crate::flow::{DeliveryConsumed, Refusal, SettlementAck, SettlementNotice};
 const ONE_FRAME: Counts = Counts::new(1, 21);
 const TWO_FRAMES: Counts = Counts::new(2, 42);
 
-fn wire(relay: &mut Relay, connection: ConnectionRef, frame: &[u8], at: UnixMillis) -> Turn {
+fn wire(relay: &mut Relay, connection: ConnectionRef, frame: &[u8], at: UnixMillis) -> RelayStep {
     relay.handle(Input::Control { connection, frame }, at)
 }
 
@@ -35,9 +35,9 @@ fn cancel(relay: &mut Relay, key: SessionKey, at: UnixMillis) {
 fn discard(relay: &mut Relay, flows: &[FlowKey; 2], at: UnixMillis) -> Vec<SettlementNotice> {
     let mut notices = Vec::new();
     for flow in flows {
-        let turn = relay.handle(Input::Discarded(*flow), at);
-        assert_eq!(turn.refusal, None);
-        for output in turn.outputs {
+        let step = relay.handle(Input::Discarded(*flow), at);
+        assert_eq!(step.refusal, None);
+        for output in step.outputs {
             if let Output::Send {
                 connection,
                 control: Control::Settlement(notice),
@@ -49,6 +49,44 @@ fn discard(relay: &mut Relay, flows: &[FlowKey; 2], at: UnixMillis) -> Vec<Settl
         }
     }
     notices
+}
+
+#[test]
+fn feedback_wakes_only_its_destination_after_a_real_release() {
+    let fixture = Fixture::new();
+    let mut relay = fixture.relay();
+    fixture.register(&mut relay);
+    let (key, _) = fixture.join(&mut relay, 2);
+    let _ = fixture.join(&mut relay, 3);
+    submit_one(&mut relay, key, fixture.at);
+
+    let invalid = DeliveryConsumed::new(key.wire_id(), TWO_FRAMES)
+        .unwrap()
+        .encode();
+    let refused = wire(&mut relay, key.sender(), &invalid, fixture.at);
+    assert_eq!(
+        refused.refusal,
+        Some(Error::Flow(Refusal::InvalidConsumption))
+    );
+    assert!(
+        !refused
+            .outputs
+            .iter()
+            .any(|output| matches!(output, Output::DeliveryReady(_)))
+    );
+
+    let consumed = DeliveryConsumed::new(key.wire_id(), ONE_FRAME)
+        .unwrap()
+        .encode();
+    let accepted = wire(&mut relay, key.sender(), &consumed, fixture.at);
+    assert_eq!(accepted.refusal, None);
+    assert!(matches!(
+        accepted.outputs.as_slice(),
+        [Output::DeliveryReady(destination)] if *destination == key.sender()
+    ));
+    let duplicate = wire(&mut relay, key.sender(), &consumed, fixture.at);
+    assert_eq!(duplicate.refusal, None);
+    assert!(duplicate.outputs.is_empty());
 }
 
 #[test]
@@ -129,6 +167,11 @@ fn wire_ack_requires_retirement_discard_and_exact_frozen_totals() {
     assert_eq!(ledger_of(&relay, key.sender()).snapshot(flow), Some(before));
     let settled = wire(&mut relay, key.sender(), &ack, fixture.at);
     assert_eq!(settled.refusal, None);
+    assert!(
+        settled.outputs.iter().any(
+            |output| matches!(output, Output::DeliveryReady(target) if *target == key.sender())
+        )
+    );
     assert!(
         !settled
             .outputs
