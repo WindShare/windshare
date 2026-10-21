@@ -19,6 +19,17 @@ pub(super) struct Deadlines {
     ordered: BTreeSet<(u64, Key)>,
 }
 impl Deadlines {
+    pub const fn new() -> Self {
+        Self {
+            by_key: BTreeMap::new(),
+            ordered: BTreeSet::new(),
+        }
+    }
+
+    pub fn next_entry(&self) -> Option<(UnixMillis, Key)> {
+        self.ordered.first().map(|&(at, key)| (UnixMillis(at), key))
+    }
+
     pub fn set(&mut self, key: Key, deadline: Option<UnixMillis>) {
         if self.by_key.get(&key).copied() == deadline.map(|at| at.0) {
             return;
@@ -30,9 +41,6 @@ impl Deadlines {
             self.by_key.insert(key, at.0);
             self.ordered.insert((at.0, key));
         }
-    }
-    pub fn next(&self) -> Option<UnixMillis> {
-        self.ordered.first().map(|(at, _)| UnixMillis(*at))
     }
     pub fn expired(&mut self, now: UnixMillis) -> Option<Key> {
         let &(at, key) = self.ordered.first()?;

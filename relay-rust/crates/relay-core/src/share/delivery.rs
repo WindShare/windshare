@@ -1,7 +1,7 @@
 use super::RuntimeStatus;
 use super::{
-    ConnectionRef, Control, Error, Observer, Output, RelayDecision, Role, ShareRelay, Submission,
-    Turn,
+    ConnectionPhase, ConnectionRef, Control, Error, Observer, Output, RelayDecision, ShareRelay,
+    Submission, Turn,
 };
 use crate::{
     clock::UnixMillis,
@@ -35,7 +35,8 @@ impl<O: Observer> ShareRelay<O> {
     /// Hibernating hosts can resume scheduling from restored ledgers; this view
     /// grants no credit and must still be rechecked through `Input::Grant`.
     pub fn delivery_flows(&self) -> impl Iterator<Item = FlowKey> + '_ {
-        self.routes
+        self.sessions
+            .routes()
             .values()
             .copied()
             .filter(|flow| self.delivery_window(*flow, Counts::ZERO).is_some())
@@ -62,7 +63,11 @@ impl<O: Observer> ShareRelay<O> {
             }
             Some(Action::Active | Action::None) => unreachable!("frame must route or be rejected"),
         };
-        let entry = self.sessions.get(&id).ok_or(Error::UnknownSession)?;
+        let entry = self
+            .sessions
+            .entries()
+            .get(&id)
+            .ok_or(Error::UnknownSession)?;
         let flow = *entry
             .flows
             .iter()
@@ -78,8 +83,6 @@ impl<O: Observer> ShareRelay<O> {
             .update_ledger(
                 destination,
                 |ledger| ledger.receive(flow, &route, header, now),
-                &mut self.checkpointing,
-                &mut self.deadlines,
                 &mut self.observer,
             )
             .ok_or(Error::UnknownConnection)?
@@ -112,7 +115,7 @@ impl<O: Observer> ShareRelay<O> {
         self.apply_delivery_close(receipt.flow().destination(), now, &mut turn);
         self.progress_stop(now, &mut turn);
         self.start_work(now, &mut turn);
-        turn.deadline = self.deadlines.next();
+        turn.deadline = self.deadline();
         if let Err(error) = result {
             turn.refusal = Some(error);
             self.trace(
@@ -136,6 +139,7 @@ impl<O: Observer> ShareRelay<O> {
         let flow = receipt.flow();
         let entry = self
             .sessions
+            .entries()
             .get(&flow.session().wire_id())
             .ok_or(Error::UnknownSession)?;
         let route = entry
@@ -146,15 +150,13 @@ impl<O: Observer> ShareRelay<O> {
             .generations
             .connection(&flow.destination())
             .ok_or(Error::UnknownConnection)?;
-        if matches!(connection.role, Role::Closing) {
+        if connection.phase() == ConnectionPhase::Closing {
             return Err(Error::Unavailable);
         }
         self.generations
             .update_ledger(
                 flow.destination(),
                 |ledger| ledger.submit(&route, receipt, now),
-                &mut self.checkpointing,
-                &mut self.deadlines,
                 &mut self.observer,
             )
             .ok_or(Error::UnknownConnection)?
@@ -174,6 +176,7 @@ impl<O: Observer> ShareRelay<O> {
         }
         let entry = self
             .sessions
+            .entries()
             .get(&flow.session().wire_id())
             .ok_or(Error::UnknownSession)?;
         let route = entry
@@ -185,8 +188,6 @@ impl<O: Observer> ShareRelay<O> {
             .update_ledger(
                 flow.destination(),
                 |ledger| ledger.grant(flow, &route, credit, now),
-                &mut self.checkpointing,
-                &mut self.deadlines,
                 &mut self.observer,
             )
             .ok_or(Error::UnknownConnection)?
@@ -204,6 +205,7 @@ impl<O: Observer> ShareRelay<O> {
     ) -> Result<(), Error> {
         if self
             .sessions
+            .entries()
             .get(&flow.session().wire_id())
             .is_some_and(|entry| entry.deferred)
         {
@@ -212,8 +214,6 @@ impl<O: Observer> ShareRelay<O> {
         let Some(result) = self.generations.update_ledger(
             flow.destination(),
             |ledger| ledger.discarded(flow, now),
-            &mut self.checkpointing,
-            &mut self.deadlines,
             &mut self.observer,
         ) else {
             return Ok(());
@@ -244,7 +244,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        let Some(&flow) = self.routes.get(&(connection, session)) else {
+        let Some(&flow) = self.sessions.routes().get(&(connection, session)) else {
             return Ok(());
         };
         let Some(result) = self.generations.update_ledger(
@@ -256,8 +256,6 @@ impl<O: Observer> ShareRelay<O> {
                     ledger.consume(flow, connection, total, now)
                 }
             },
-            &mut self.checkpointing,
-            &mut self.deadlines,
             &mut self.observer,
         ) else {
             return Ok(());

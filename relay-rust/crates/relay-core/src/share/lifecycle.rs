@@ -20,7 +20,7 @@ impl<O: Observer> ShareRelay<O> {
         let effects = self.lifecycle.handle(event, now);
         self.flush_lifecycle();
         if let Some(revocation) = effects.revocation {
-            let ids: Vec<_> = self.sessions.keys().copied().collect();
+            let ids: Vec<_> = self.sessions.entries().keys().copied().collect();
             for id in ids {
                 self.session_event(id, SessionEvent::Revoke(revocation), now, turn);
             }
@@ -54,9 +54,6 @@ impl<O: Observer> ShareRelay<O> {
         match action {
             Action::Reserved(reservation) => {
                 let connection = reservation.id().connection();
-                if let Some(entry) = self.generations.connection_mut(&connection) {
-                    entry.reservation = Some(reservation.id());
-                }
                 self.offer_admission(connection, Admission::Fresh(reservation), turn);
             }
             Action::ResumeAdmitted(attempt) => {
@@ -85,8 +82,7 @@ impl<O: Observer> ShareRelay<O> {
             }
             Action::Registered(registration) => {
                 let connection = registration.owner.connection();
-                if let Some(entry) = self.generations.connection_mut(&connection) {
-                    entry.reservation = None;
+                if self.generations.registration_committed(connection) {
                     Self::send(
                         turn,
                         connection,
@@ -176,12 +172,13 @@ impl<O: Observer> ShareRelay<O> {
                 }
                 let deferred: Vec<_> = self
                     .sessions
+                    .entries()
                     .values()
                     .filter(|entry| entry.deferred)
                     .map(|entry| entry.session.key().wire_id())
                     .collect();
                 for id in deferred {
-                    if let Some(entry) = self.sessions.get(&id) {
+                    if let Some(entry) = self.sessions.entries().get(&id) {
                         connections.push(entry.session.key().receiver());
                     }
                     self.release_cleanup(id, now, turn);

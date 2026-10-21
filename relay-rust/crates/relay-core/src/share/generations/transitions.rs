@@ -1,14 +1,11 @@
-use super::{Connection, ConnectionRef, Delivery, Detached, Generation, Generations, Role};
+use super::{Connection, ConnectionRef, Delivery, Detached, Generation, Generations};
 use crate::share::{
     Error,
-    checkpoint_tracking::Checkpointing,
     deadlines::{Deadlines, Key},
-    handshake_checkpoint::HandshakeCheckpoint,
 };
 use crate::{
     clock::UnixMillis,
     flow::{ConnectionLedger, Counts},
-    handshake::ControlHandshake,
     observation::Journal,
     sessions::SessionKey,
 };
@@ -32,36 +29,29 @@ impl Generations {
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
     ) -> Result<(), Error> {
         self.check_control_admission(connection)?;
-        let handshake = ControlHandshake::open(self.identity.relay, connection, now);
-        deadlines.set(Key::Handshake(connection), handshake.deadline());
+        let previous = self.attempts.state();
+        let accepted = self.attempts.attempt(now);
+        if self.attempts.state() != previous {
+            self.changes.retention_changed();
+        }
+        if !accepted {
+            return Err(Error::HandshakeRate);
+        }
+        let socket = Connection::open(self.identity.relay, connection, now);
+        socket.synchronize_deadlines(connection, &mut self.deadlines);
         let deadline = now.saturating_add(crate::share::admission::CONTROL_LIFETIME);
-        deadlines.set(Key::Control(connection), Some(deadline));
-        self.entries.insert(
-            connection,
-            Generation::Control {
-                socket: Connection {
-                    role: Role::Handshake {
-                        handshake: Box::new(handshake),
-                        transcript: HandshakeCheckpoint::new(now),
-                    },
-                    reservation: None,
-                },
-                deadline,
-            },
-        );
-        checkpointing.inserted(connection);
+        self.deadlines.set(Key::Control(connection), Some(deadline));
+        self.entries
+            .insert(connection, Generation::Control { socket, deadline });
+        self.changes.inserted(connection);
         Ok(())
     }
 
     pub(in crate::share) fn admit_business(
         &mut self,
         connection: ConnectionRef,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
     ) -> Result<(), Error> {
         match self.entries.get(&connection) {
             Some(Generation::Business { .. }) => return Ok(()),
@@ -89,45 +79,21 @@ impl Generations {
                 ledger: Box::new(ledger),
             },
         );
-        deadlines.set(Key::Control(connection), None);
-        checkpointing.changed(connection);
-        checkpointing.retention_changed();
+        self.deadlines.set(Key::Control(connection), None);
+        self.changes.changed(connection);
+        self.changes.retention_changed();
         Ok(())
-    }
-
-    pub(in crate::share) fn close(
-        &mut self,
-        connection: ConnectionRef,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
-    ) -> bool {
-        let Some(socket) = self.connection_mut(&connection) else {
-            return false;
-        };
-        if matches!(socket.role, Role::Closing) {
-            return false;
-        }
-        socket.role = Role::Closing;
-        checkpointing.changed(connection);
-        clear_socket_deadlines(connection, deadlines);
-        true
     }
 
     /// The share revokes authority before detaching. Only control admission can
     /// disappear here: a business generation keeps its exact delivery ledger.
-    pub(in crate::share) fn detach(
-        &mut self,
-        connection: ConnectionRef,
-        now: UnixMillis,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
-    ) {
+    pub(in crate::share) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis) {
         let Some(entry) = self.entries.remove(&connection) else {
             return;
         };
-        clear_socket_deadlines(connection, deadlines);
+        clear_socket_deadlines(connection, &mut self.deadlines);
         match entry {
-            Generation::Control { .. } => checkpointing.removed(connection),
+            Generation::Control { .. } => self.changes.removed(connection),
             Generation::Business { ledger, .. } => {
                 self.entries.insert(
                     connection,
@@ -136,8 +102,9 @@ impl Generations {
                         state: self.limits.retirement.detached(now),
                     },
                 );
-                checkpointing.changed(connection);
-                checkpointing.retention_changed();
+                self.schedule_retirement(connection);
+                self.changes.changed(connection);
+                self.changes.retention_changed();
             }
             detached @ Generation::Detached { .. } => {
                 // Duplicate loss reports cannot restart the fixed grace.
@@ -152,8 +119,6 @@ impl Generations {
         &mut self,
         connection: ConnectionRef,
         now: UnixMillis,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
         observer: &mut impl crate::observation::Observer,
     ) -> Vec<SessionKey> {
         let Some(Generation::Detached { delivery, state }) = self.entries.get_mut(&connection)
@@ -170,7 +135,7 @@ impl Generations {
                 for event in ledger.observer_mut().0.drain(..) {
                     observer.observe(event);
                 }
-                checkpointing.changed(connection);
+                self.changes.changed(connection);
                 affected
             }
             Delivery::Unavailable(bound) => {
@@ -179,20 +144,15 @@ impl Generations {
             }
         };
         *state = Detached::Released;
-        checkpointing.retention_changed();
-        deadlines.set(Key::Retirement(connection), None);
-        deadlines.set(Key::Ledger(connection), None);
+        self.changes.retention_changed();
+        self.deadlines.set(Key::Retirement(connection), None);
+        self.deadlines.set(Key::Ledger(connection), None);
         affected
     }
 
     /// Called after cross-generation queue quiescence. Empty accounting alone
     /// never authorizes collection of a communicating or unretired generation.
-    pub(in crate::share) fn collect(
-        &mut self,
-        connection: ConnectionRef,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
-    ) -> bool {
+    pub(in crate::share) fn collect(&mut self, connection: ConnectionRef) -> bool {
         let Some(Generation::Detached {
             delivery,
             state: Detached::Released | Detached::RiskRetained { .. },
@@ -207,24 +167,19 @@ impl Generations {
         if !empty {
             return false;
         }
-        self.remove_detached(connection, checkpointing, deadlines);
+        self.remove_detached(connection);
         true
     }
 
-    pub(super) fn remove_detached(
-        &mut self,
-        connection: ConnectionRef,
-        checkpointing: &mut Checkpointing,
-        deadlines: &mut Deadlines,
-    ) {
+    pub(super) fn remove_detached(&mut self, connection: ConnectionRef) {
         self.entries.remove(&connection);
-        deadlines.set(Key::Retirement(connection), None);
-        deadlines.set(Key::Ledger(connection), None);
-        checkpointing.removed(connection);
+        self.deadlines.set(Key::Retirement(connection), None);
+        self.deadlines.set(Key::Ledger(connection), None);
+        self.changes.removed(connection);
     }
 }
 
-fn clear_socket_deadlines(connection: ConnectionRef, deadlines: &mut Deadlines) {
+pub(super) fn clear_socket_deadlines(connection: ConnectionRef, deadlines: &mut Deadlines) {
     deadlines.set(Key::Handshake(connection), None);
     deadlines.set(Key::Control(connection), None);
     deadlines.set(Key::Liveness(connection), None);

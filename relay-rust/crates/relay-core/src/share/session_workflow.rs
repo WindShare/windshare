@@ -1,6 +1,6 @@
-use super::{
-    AdmissionState, ConnectionRef, Control, Error, Key, Observer, Output, RelayDecision,
-    RelaySessionId, Session, ShareRelay, Turn,
+use crate::share::{
+    ConnectionRef, Control, Error, Observer, Output, RelayDecision, RelaySessionId, Session,
+    ShareRelay, Turn,
 };
 use crate::{
     clock::UnixMillis,
@@ -10,7 +10,7 @@ use crate::{
     lifecycle::{Event, Joined},
     observation::SessionInputKind,
     sessions::{
-        Action, Direction, EndReason, Event as SessionEvent, Phase, Retirement, RetirementReason,
+        Action, Direction, EndReason, Event as SessionEvent, Retirement, RetirementReason,
         SessionAdmitted,
     },
 };
@@ -28,12 +28,7 @@ impl<O: Observer> ShareRelay<O> {
         if !self.declare_capacity(connection, request.receive_capacity(), now, turn) {
             return;
         }
-        let admitted = self
-            .sessions
-            .values()
-            .filter(|entry| entry.session.phase() != Phase::Retired)
-            .count();
-        if admitted >= self.limits.sessions || self.last_session == u64::MAX {
+        let Ok(session) = self.sessions.allocate(self.limits.sessions) else {
             Self::send(
                 turn,
                 connection,
@@ -41,11 +36,7 @@ impl<O: Observer> ShareRelay<O> {
             );
             self.disconnect(connection, now, turn);
             return;
-        }
-        self.last_session += 1;
-        self.checkpointing.retention_changed();
-        let session =
-            RelaySessionId::new(self.last_session.to_be_bytes()).expect("nonzero sequence");
+        };
         self.lifecycle_event(
             Event::Join { request, session },
             Some(connection),
@@ -58,21 +49,8 @@ impl<O: Observer> ShareRelay<O> {
         let key = joined.session.key();
         match self.open_directions(&joined.session, now, turn) {
             Ok(grants) => {
-                self.checkpointing.changed(key.receiver());
-                for grant in grants {
-                    self.routes
-                        .insert((grant.flow.destination(), key.wire_id()), grant.flow);
-                }
-                self.deadlines
-                    .set(Key::Session(key.wire_id()), joined.session.deadline());
-                self.sessions.insert(
-                    key.wire_id(),
-                    AdmissionState {
-                        session: joined.session,
-                        flows: grants.map(|grant| grant.flow),
-                        deferred: false,
-                    },
-                );
+                self.sessions
+                    .install(joined.session, &grants.map(|grant| grant.flow));
                 Self::send(
                     turn,
                     key.receiver(),
@@ -114,8 +92,6 @@ impl<O: Observer> ShareRelay<O> {
                 .update_ledger(
                     destination,
                     |ledger| ledger.open(&route, now),
-                    &mut self.checkpointing,
-                    &mut self.deadlines,
                     &mut self.observer,
                 )
                 .ok_or(Error::UnknownConnection)
@@ -137,8 +113,6 @@ impl<O: Observer> ShareRelay<O> {
                                 let _ = ledger.retire(retirement, now);
                                 let _ = ledger.discarded(grant.flow, now);
                             },
-                            &mut self.checkpointing,
-                            &mut self.deadlines,
                             &mut self.observer,
                         );
                         self.apply_delivery_close(grant.flow.destination(), now, turn);
@@ -158,28 +132,20 @@ impl<O: Observer> ShareRelay<O> {
         turn: &mut Turn,
     ) -> Option<Action> {
         let deferred = self.cleanup_deferred();
-        let entry = self.sessions.get_mut(&id)?;
-        let before = self
-            .checkpointing
-            .enabled()
-            .then(|| entry.session.snapshot());
-        let effects = entry
-            .session
-            .handle(&self.lifecycle, event, now, &mut self.observer);
-        if before.is_some_and(|snapshot| snapshot != entry.session.snapshot()) {
-            self.checkpointing.changed(entry.session.key().receiver());
-        }
-        self.deadlines
-            .set(Key::Session(id), entry.session.deadline());
+        let effects = self.sessions.handle(
+            id,
+            &self.lifecycle,
+            event,
+            deferred,
+            now,
+            &mut self.observer,
+        )?;
         if let Some(retirement) = effects.retirement {
-            entry.deferred = deferred;
-            let flows = entry.flows;
+            let flows = self.sessions.entries()[&id].flows;
             for flow in flows {
                 let _ = self.generations.update_ledger(
                     flow.destination(),
                     |ledger| ledger.retire(retirement, now),
-                    &mut self.checkpointing,
-                    &mut self.deadlines,
                     &mut self.observer,
                 );
                 self.apply_delivery_close(flow.destination(), now, turn);
@@ -197,9 +163,8 @@ impl<O: Observer> ShareRelay<O> {
         _now: UnixMillis,
         turn: &mut Turn,
     ) {
-        if let Some(entry) = self.sessions.get_mut(&id) {
-            entry.deferred = false;
-            for flow in entry.flows {
+        if let Some(flows) = self.sessions.release_cleanup(id) {
+            for flow in flows {
                 if self
                     .generations
                     .ledger(&flow.destination())
@@ -218,7 +183,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        let Some(entry) = self.sessions.get(&id) else {
+        let Some(entry) = self.sessions.entries().get(&id) else {
             return self.discard_collected_session(
                 participant,
                 id,
@@ -287,7 +252,7 @@ impl<O: Observer> ShareRelay<O> {
         // Collection can precede frames already in flight on the shared sender.
         // The persisted, never-reused ID watermark avoids unbounded tombstones.
         // No route, credit or liveness is restored by discarding these inputs.
-        if u64::from_be_bytes(*id.as_bytes()) > self.last_session {
+        if u64::from_be_bytes(*id.as_bytes()) > self.sessions.last_issued() {
             return Err(Error::UnknownSession);
         }
         self.trace(
@@ -304,40 +269,17 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) {
-        // Feedback touches only its own two directions. Other sessions may share
-        // the sender, but neither their routing nor their lifetime changes here.
-        let mut cleanup_pending = false;
-        let mut retained = false;
-        for destination in [key.sender(), key.receiver()] {
-            let route = (destination, key.wire_id());
-            if let Some(flow) = self.routes.get(&route) {
-                if let Some(snapshot) = self
-                    .generations
-                    .ledger(&destination)
-                    .and_then(|ledger| ledger.snapshot(*flow))
-                {
-                    retained = true;
-                    cleanup_pending |= snapshot.phase != crate::flow::Phase::Settling;
-                } else {
-                    self.routes.remove(&route);
-                }
-            }
-        }
-        if cleanup_pending
-            || self
-                .sessions
-                .get(&key.wire_id())
-                .is_some_and(|entry| entry.session.phase() != Phase::Retired || entry.deferred)
-        {
-            return;
-        }
-        self.sessions.remove(&key.wire_id());
-        self.deadlines.set(Key::Session(key.wire_id()), None);
-        if !retained
+        let collection = self.sessions.collect(key, |flow| {
+            self.generations
+                .ledger(&flow.destination())
+                .and_then(|ledger| ledger.snapshot(flow))
+                .map(|snapshot| snapshot.phase)
+        });
+        if collection == super::sessions::Collection::Released
             && self
                 .generations
                 .connection(&key.receiver())
-                .is_some_and(|entry| !matches!(entry.role, super::Role::Closing))
+                .is_some_and(|entry| entry.phase() != super::ConnectionPhase::Closing)
         {
             self.close(key.receiver(), turn);
             self.trace(Some(key.receiver()), RelayDecision::Closing, now);

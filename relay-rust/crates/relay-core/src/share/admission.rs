@@ -96,11 +96,7 @@ impl<O: Observer> ShareRelay<O> {
         if self.generations.ledger(&connection).is_some() {
             return Ok(());
         }
-        if let Err(error) = self.generations.admit_business(
-            connection,
-            &mut self.checkpointing,
-            &mut self.deadlines,
-        ) {
+        if let Err(error) = self.generations.admit_business(connection) {
             if error == Error::Capacity {
                 self.trace(
                     Some(connection),

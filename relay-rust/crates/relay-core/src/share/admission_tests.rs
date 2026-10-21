@@ -85,8 +85,12 @@ fn full_business_budget_allows_authenticated_stop_without_refunding_delivery() {
     );
     assert_eq!(relay.connection_usage().business, 2);
     assert!(matches!(
-        relay.generations.connection(&connection(99)).unwrap().role,
-        Role::Closing
+        relay
+            .generations
+            .connection(&connection(99))
+            .unwrap()
+            .phase(),
+        ConnectionPhase::Closing
     ));
     let _ = relay.handle(Input::Closed(connection(99)), fixture.at);
     assert_eq!(relay.connection_usage().controls, 0);

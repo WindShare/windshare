@@ -184,8 +184,6 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
                 );
                 assert_eq!(ledger.usage(), usage);
             },
-            &mut restored.checkpointing,
-            &mut restored.deadlines,
             &mut restored.observer,
         )
         .unwrap();

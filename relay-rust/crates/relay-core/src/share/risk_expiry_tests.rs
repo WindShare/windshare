@@ -300,8 +300,18 @@ fn expiry_does_not_refund_delivery_to_a_communicating_destination() {
         ledger_of(&relay, key.sender()).checkpoint().unwrap(),
         sender_ledger
     );
-    assert!(relay.routes.contains_key(&(key.sender(), key.wire_id())));
-    assert!(!relay.routes.contains_key(&(key.receiver(), key.wire_id())));
+    assert!(
+        relay
+            .sessions
+            .routes()
+            .contains_key(&(key.sender(), key.wire_id()))
+    );
+    assert!(
+        !relay
+            .sessions
+            .routes()
+            .contains_key(&(key.receiver(), key.wire_id()))
+    );
     let mut targets = Vec::new();
     let limits = relay.limits;
     relay

@@ -285,8 +285,8 @@ impl<O: Observer> ShareRelay<O> {
         self.checkpoint_ready()?;
         Ok(CheckpointManifest {
             identity: self.identity,
-            last_session: self.last_session,
-            attempts: self.handshake_rate.state(),
+            last_session: self.sessions.last_issued(),
+            attempts: self.generations.attempts(),
             reservations: self.generations.reservations(),
         })
     }

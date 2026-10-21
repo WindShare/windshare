@@ -9,48 +9,71 @@ pub(super) enum Checkpointing {
     Disabled,
     Enabled {
         budget: CheckpointBudget,
-        dirty: BTreeSet<ConnectionRef>,
-        manifest_dirty: bool,
     },
 }
 
-impl Checkpointing {
-    pub(super) const fn retention_changed(&mut self) {
-        if let Self::Enabled { manifest_dirty, .. } = self {
-            *manifest_dirty = true;
-        }
-    }
-    pub(super) const fn enabled(&self) -> bool {
-        matches!(self, Self::Enabled { .. })
+/// Owners retain their own pending projections until the whole host batch succeeds.
+/// Disabled owners allocate no journal and skip snapshot comparisons.
+#[derive(Debug, Default)]
+pub(super) enum Changes {
+    #[default]
+    Disabled,
+    Enabled(Pending),
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Pending {
+    pub connections: BTreeSet<ConnectionRef>,
+    pub manifest: bool,
+}
+
+impl Changes {
+    pub fn tracking(connections: impl IntoIterator<Item = ConnectionRef>, manifest: bool) -> Self {
+        Self::Enabled(Pending {
+            connections: connections.into_iter().collect(),
+            manifest,
+        })
     }
 
-    pub(super) fn changed(&mut self, connection: ConnectionRef) {
-        if let Self::Enabled { dirty, .. } = self {
-            dirty.insert(connection);
+    pub const fn enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    pub const fn pending(&self) -> Option<&Pending> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(pending) => Some(pending),
         }
     }
 
-    pub(super) fn inserted(&mut self, connection: ConnectionRef) {
-        if let Self::Enabled {
-            dirty,
-            manifest_dirty,
-            ..
-        } = self
-        {
-            dirty.insert(connection);
-            *manifest_dirty = true;
+    pub fn acknowledge(&mut self) {
+        if let Self::Enabled(pending) = self {
+            pending.connections.clear();
+            pending.manifest = false;
         }
     }
 
-    pub(super) fn removed(&mut self, connection: ConnectionRef) {
-        if let Self::Enabled {
-            dirty,
-            manifest_dirty,
-            ..
-        } = self
-        {
-            dirty.remove(&connection);
-            *manifest_dirty = true;
+    pub const fn retention_changed(&mut self) {
+        if let Self::Enabled(pending) = self {
+            pending.manifest = true;
+        }
+    }
+
+    pub fn changed(&mut self, connection: ConnectionRef) {
+        if let Self::Enabled(pending) = self {
+            pending.connections.insert(connection);
+        }
+    }
+
+    pub fn inserted(&mut self, connection: ConnectionRef) {
+        self.changed(connection);
+        self.retention_changed();
+    }
+
+    pub fn removed(&mut self, connection: ConnectionRef) {
+        if let Self::Enabled(pending) = self {
+            pending.connections.remove(&connection);
+            pending.manifest = true;
         }
     }
 }
@@ -100,14 +123,9 @@ impl<O: Observer> ShareRelay<O> {
             self.trace(None, RelayDecision::Rejected(error), now);
             return Err(error);
         }
-        // Native ledgers leave their change bit latched. The initial full flush
-        // establishes a new baseline without imposing comparisons on native forwarding.
-        self.generations.reset_ledger_changes();
-        self.checkpointing = Checkpointing::Enabled {
-            budget,
-            dirty: self.generations.record_ids().collect(),
-            manifest_dirty: true,
-        };
+        self.generations.enable_checkpoints();
+        self.sessions.enable_checkpoints();
+        self.checkpointing = Checkpointing::Enabled { budget };
         self.trace(
             None,
             RelayDecision::CheckpointingEnabled {
@@ -161,15 +179,8 @@ impl<O: Observer> ShareRelay<O> {
             }
             flushed.encoded_bytes += bytes.len();
         }
-        if let Checkpointing::Enabled {
-            dirty,
-            manifest_dirty,
-            ..
-        } = &mut self.checkpointing
-        {
-            dirty.clear();
-            *manifest_dirty = false;
-        }
+        self.generations.acknowledge_checkpoints();
+        self.sessions.acknowledge_checkpoints();
         if !pending.is_empty() {
             self.trace(
                 None,
@@ -185,31 +196,42 @@ impl<O: Observer> ShareRelay<O> {
 
     fn prepare_checkpoints(&self) -> Result<Vec<(CheckpointTarget, Vec<u8>)>, Error> {
         self.checkpoint_ready()?;
-        let Checkpointing::Enabled {
-            budget,
-            dirty,
-            manifest_dirty,
-        } = &self.checkpointing
-        else {
+        let Checkpointing::Enabled { budget } = &self.checkpointing else {
             return Err(Error::CheckpointDisabled);
+        };
+        let generations = self
+            .generations
+            .checkpoint_changes()
+            .expect("tracking enabled");
+        let sessions = self
+            .sessions
+            .checkpoint_changes()
+            .expect("tracking enabled");
+        // Session snapshots belong to receiver records. A generation removed in
+        // the same turn must not be resurrected by its session's pending change.
+        let dirty = || {
+            generations
+                .connections
+                .union(&sessions.connections)
+                .copied()
+                .filter(|connection| self.generations.has_record(connection))
         };
         // Clean ledgers have not changed since a successful flush, so only dirty
         // connections can contain payloads that would make this event unsafe to end.
-        for connection in dirty {
-            if self.generations.control_deadline(connection).is_some() {
+        for connection in dirty() {
+            if self.generations.control_deadline(&connection).is_some() {
                 continue;
             }
             let ledger = self
                 .generations
-                .ledger(connection)
+                .ledger(&connection)
                 .ok_or(Error::UnknownConnection)?;
             if ledger.usage().received != Counts::ZERO {
                 return Err(Error::CheckpointBusy);
             }
         }
-        let mut pending = dirty
-            .iter()
-            .map(|&connection| {
+        let mut pending = dirty()
+            .map(|connection| {
                 let bytes = self.checkpoint_connection(connection)?.encode();
                 if bytes.len() > budget.payload_bytes() {
                     return Err(Error::CheckpointCapacity);
@@ -217,7 +239,7 @@ impl<O: Observer> ShareRelay<O> {
                 Ok((CheckpointTarget::Generation(connection), bytes))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if *manifest_dirty {
+        if generations.manifest || sessions.manifest {
             pending.push((
                 CheckpointTarget::Manifest,
                 self.checkpoint_manifest()?.encode(),

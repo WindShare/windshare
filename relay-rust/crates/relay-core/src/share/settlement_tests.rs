@@ -233,8 +233,12 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
     );
     assert!(ledger_of(&restored, key.sender()).close_request().is_some());
     assert!(matches!(
-        restored.generations.connection(&key.sender()).unwrap().role,
-        Role::Closing
+        restored
+            .generations
+            .connection(&key.sender())
+            .unwrap()
+            .phase(),
+        ConnectionPhase::Closing
     ));
     let _ = restored.handle(Input::Closed(key.sender()), deadline);
     assert_eq!(

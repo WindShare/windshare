@@ -1,4 +1,5 @@
-use super::{ConnectionRef, Control, Error, Key, Observer, RelayDecision, Role, ShareRelay, Turn};
+use super::generations::Connection;
+use super::{ConnectionRef, Control, Error, Observer, RelayDecision, ShareRelay, Turn};
 use crate::{
     clock::UnixMillis,
     flow::{DeliveryConsumed, SettlementAck},
@@ -59,27 +60,25 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) -> Result<(), Error> {
-        let Some(Role::Established(liveness)) = self
+        let last_nonce = self
             .generations
-            .connection_mut(&connection)
-            .map(|entry| &mut entry.role)
-        else {
-            return Err(Error::Unavailable);
-        };
-        let last_nonce = liveness.last_probe_nonce();
-        if !liveness.accept_probe(probe) {
-            self.trace(
-                Some(connection),
-                RelayDecision::ProbeRejected {
-                    nonce: probe.nonce(),
-                    last_nonce,
-                },
-                now,
-            );
-            return Err(Error::ProbeNonce);
+            .connection(&connection)
+            .and_then(Connection::liveness)
+            .ok_or(Error::Unavailable)?
+            .last_probe_nonce();
+        if let Err(error) = self.generations.accept_probe(connection, probe, now) {
+            if error == Error::ProbeNonce {
+                self.trace(
+                    Some(connection),
+                    RelayDecision::ProbeRejected {
+                        nonce: probe.nonce(),
+                        last_nonce,
+                    },
+                    now,
+                );
+            }
+            return Err(error);
         }
-        self.checkpointing.changed(connection);
-        self.accepted_inbound(connection, now);
         Self::send(turn, connection, Control::ProbeAck(probe.acknowledgement()));
         self.trace(
             Some(connection),
@@ -92,16 +91,7 @@ impl<O: Observer> ShareRelay<O> {
     }
 
     pub(super) fn accepted_inbound(&mut self, connection: ConnectionRef, now: UnixMillis) {
-        if let Some(Role::Established(liveness)) = self
-            .generations
-            .connection_mut(&connection)
-            .map(|entry| &mut entry.role)
-            && liveness.accepted_inbound(now)
-        {
-            self.deadlines
-                .set(Key::Liveness(connection), Some(liveness.deadline()));
-            self.checkpointing.changed(connection);
-        }
+        self.generations.accepted_inbound(connection, now);
     }
 
     pub(super) fn expire_liveness(
@@ -110,10 +100,10 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         turn: &mut Turn,
     ) {
-        if let Some(Role::Established(liveness)) = self
+        if let Some(liveness) = self
             .generations
             .connection(&connection)
-            .map(|entry| &entry.role)
+            .and_then(Connection::liveness)
         {
             self.trace(
                 Some(connection),

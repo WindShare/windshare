@@ -118,7 +118,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
             ledger_of(&relay, healthy.receiver()).checkpoint().unwrap(),
             healthy_ledger
         );
-        assert_eq!(relay.sessions.len(), 1);
+        assert_eq!(relay.sessions.entries().len(), 1);
         download(
             &mut relay,
             healthy,
@@ -130,7 +130,7 @@ fn repeated_reconnects_leave_healthy_download_and_session_admission_available() 
     // More old generations than the active connection/session limits remain bounded separately.
     let (replacement, _) = fixture.join(&mut relay, RECONNECTS + 3);
     deliver(&fixture, &mut relay, replacement);
-    assert_eq!(relay.sessions.len(), 2);
+    assert_eq!(relay.sessions.entries().len(), 2);
     assert_eq!(
         relay.connection_usage().retired_generations,
         usize::try_from(RECONNECTS).unwrap()
@@ -403,7 +403,7 @@ fn retired_session_releases_admission_but_healthy_sender_keeps_its_flow_debt() {
         discard_outputs(&mut relay, turn, fixture.at);
         old.push(key);
     }
-    assert_eq!(relay.sessions.len(), 1);
+    assert_eq!(relay.sessions.entries().len(), 1);
     assert_eq!(
         ledger_of(&relay, healthy.sender())
             .metadata_usage()

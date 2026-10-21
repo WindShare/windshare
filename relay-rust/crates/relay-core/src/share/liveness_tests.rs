@@ -19,7 +19,11 @@ fn assert_ack(turn: &Turn, connection: ConnectionRef, nonce: u64) {
 }
 
 fn deadline(relay: &Relay, connection: ConnectionRef) -> UnixMillis {
-    let Role::Established(liveness) = relay.generations.connection(&connection).unwrap().role
+    let Some(liveness) = relay
+        .generations
+        .connection(&connection)
+        .unwrap()
+        .liveness()
     else {
         panic!("expected an established connection");
     };
@@ -91,14 +95,17 @@ fn probes_bypass_exhausted_credit_and_unsubmitted_content() {
     let _receipt = receive(&mut relay, key, fixture.at);
     let sender_usage = relay.delivery_usage(key.sender());
     let receiver_usage = relay.delivery_usage(key.receiver());
-    let admission = relay.sessions[&key.wire_id()].session.deadline();
+    let admission = relay.sessions.entries()[&key.wire_id()].session.deadline();
     let at = UnixMillis(fixture.at.0 + 1);
     for peer in [key.sender(), key.receiver()] {
         assert_ack(&probe(&mut relay, peer, 1, at), peer, 1);
     }
     assert_eq!(relay.delivery_usage(key.sender()), sender_usage);
     assert_eq!(relay.delivery_usage(key.receiver()), receiver_usage);
-    assert_eq!(relay.sessions[&key.wire_id()].session.deadline(), admission);
+    assert_eq!(
+        relay.sessions.entries()[&key.wire_id()].session.deadline(),
+        admission
+    );
 }
 
 #[test]
@@ -173,7 +180,7 @@ fn accepted_content_admission_and_feedback_refresh_only_the_inbound_connection()
             .is_empty()
     );
     assert_eq!(
-        relay.sessions[&key.wire_id()].session.phase(),
+        relay.sessions.entries()[&key.wire_id()].session.phase(),
         crate::sessions::Phase::Active
     );
 }
@@ -204,8 +211,8 @@ fn nonce_validation_is_strict_connection_local_and_does_not_wrap() {
                 )
             );
             assert!(matches!(
-                relay.generations.connection(&key.sender()).unwrap().role,
-                Role::Established(_)
+                relay.generations.connection(&key.sender()).unwrap().phase(),
+                ConnectionPhase::Established
             ));
         } else {
             assert_ack(&turn, key.receiver(), rejected);
@@ -431,7 +438,7 @@ fn a_silent_receiver_loses_authority_without_refunding_debt_or_closing_siblings(
         .collect();
     assert_eq!(closed, [silent.receiver()]);
     assert_eq!(
-        relay.sessions[&healthy.wire_id()].session.phase(),
+        relay.sessions.entries()[&healthy.wire_id()].session.phase(),
         crate::sessions::Phase::Active
     );
     assert_eq!(
@@ -576,7 +583,10 @@ fn heartbeats_do_not_extend_publication_admission_or_settlement_deadlines() {
             None
         );
     }
-    let original = relay.sessions[&key.wire_id()].session.deadline().unwrap();
+    let original = relay.sessions.entries()[&key.wire_id()]
+        .session
+        .deadline()
+        .unwrap();
     for peer in [key.sender(), key.receiver()] {
         assert_ack(
             &probe(&mut relay, peer, 1, UnixMillis(original.0 - 1)),

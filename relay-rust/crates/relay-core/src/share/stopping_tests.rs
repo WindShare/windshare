@@ -110,7 +110,7 @@ fn missing_delivery_records_cannot_erase_permanent_stop() {
             ..
         }
     )));
-    assert!(recovered.sessions.is_empty());
+    assert!(recovered.sessions.entries().is_empty());
 }
 
 #[test]

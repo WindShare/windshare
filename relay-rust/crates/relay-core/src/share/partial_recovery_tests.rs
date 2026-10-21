@@ -117,7 +117,9 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
     let sender_before = ledger_of(&original, healthy.sender())
         .snapshot(healthy_flows[0])
         .unwrap();
-    let deadline = original.sessions[&healthy.wire_id()].session.deadline();
+    let deadline = original.sessions.entries()[&healthy.wire_id()]
+        .session
+        .deadline();
     let checkpoint = without(&original, lost.receiver());
     let (mut recovered, turn) = Relay::restore(
         fixture.identity(2),
@@ -141,9 +143,11 @@ fn lost_receiver_preserves_sibling_delivery_deadline_and_sender_reverse_debt() {
             .collect::<Vec<_>>(),
         vec![lost.receiver()]
     );
-    assert!(!recovered.sessions.contains_key(&lost.wire_id()));
+    assert!(!recovered.sessions.entries().contains_key(&lost.wire_id()));
     assert_eq!(
-        recovered.sessions[&healthy.wire_id()].session.deadline(),
+        recovered.sessions.entries()[&healthy.wire_id()]
+            .session
+            .deadline(),
         deadline
     );
     assert_eq!(
@@ -361,8 +365,13 @@ fn corrupt_or_duplicate_receiver_records_are_isolated_without_rejecting_the_send
             fixture.at,
         )
         .unwrap();
-        assert!(recovered.sessions.contains_key(&healthy.wire_id()));
-        assert!(!recovered.sessions.contains_key(&lost.wire_id()));
+        assert!(
+            recovered
+                .sessions
+                .entries()
+                .contains_key(&healthy.wire_id())
+        );
+        assert!(!recovered.sessions.entries().contains_key(&lost.wire_id()));
         assert!(recovered.unavailable_reservation(lost.receiver()).is_some());
     }
 }
@@ -387,7 +396,7 @@ fn losing_sender_delivery_state_retires_all_its_sessions_and_persists_owner_grac
         fixture.at,
     )
     .unwrap();
-    assert!(recovered.sessions.is_empty());
+    assert!(recovered.sessions.entries().is_empty());
     for connection in [first.sender(), first.receiver(), second.receiver()] {
         assert!(
             turn.outputs

@@ -1,13 +1,9 @@
+use super::generations::Connection;
 use super::{
-    ChallengeRequest, Error, Output, Restore, Role, ShareRelay, Turn,
-    checkpoint::ConnectionRole,
-    deadlines::Key,
-    handshake_checkpoint::{HandshakeCheckpoint, Step},
+    ChallengeRequest, ConnectionPhase, Error, Output, Restore, ShareRelay, Turn,
+    checkpoint::ConnectionRole, handshake_checkpoint::Step,
 };
-use crate::{
-    challenge::ChallengeSeed, clock::UnixMillis, handshake::ControlHandshake, observation::Observer,
-};
-use alloc::boxed::Box;
+use crate::{challenge::ChallengeSeed, clock::UnixMillis, observation::Observer};
 
 impl<O: Observer> ShareRelay<O> {
     pub(super) fn restore_handshakes(
@@ -40,21 +36,7 @@ impl<O: Observer> ShareRelay<O> {
                 .generations
                 .ledger(&connection)
                 .and_then(crate::flow::ConnectionLedger::receive_capacity);
-            let entry = self
-                .generations
-                .connection_mut(&connection)
-                .ok_or(Error::InvalidCheckpoint)?;
-            let handshake =
-                ControlHandshake::open(self.identity.relay, connection, transcript.opened);
-            self.deadlines
-                .set(Key::Handshake(connection), handshake.deadline());
-            entry.role = Role::Handshake {
-                handshake: Box::new(handshake),
-                transcript: HandshakeCheckpoint {
-                    binding: transcript.binding,
-                    ..HandshakeCheckpoint::new(transcript.opened)
-                },
-            };
+            self.generations.replay_handshake(connection, transcript)?;
             let mut replay = Turn::default();
             for step in &transcript.steps {
                 match step {
@@ -73,10 +55,14 @@ impl<O: Observer> ShareRelay<O> {
                 match self
                     .generations
                     .connection(&connection)
-                    .map(|entry| &entry.role)
+                    .map(Connection::phase)
                 {
-                    Some(Role::Handshake { .. } | Role::Admitting { .. }) => {}
-                    Some(Role::Closing) => {
+                    Some(
+                        ConnectionPhase::AwaitingFirstFrame
+                        | ConnectionPhase::Handshaking
+                        | ConnectionPhase::Admitting,
+                    ) => {}
+                    Some(ConnectionPhase::Closing) => {
                         turn.outputs.extend(
                             replay
                                 .outputs
@@ -99,8 +85,8 @@ impl<O: Observer> ShareRelay<O> {
             if matches!(
                 self.generations
                     .connection(&connection)
-                    .map(|entry| &entry.role),
-                Some(Role::Admitting { .. })
+                    .map(Connection::phase),
+                Some(ConnectionPhase::Admitting)
             ) {
                 turn.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
                     connection,

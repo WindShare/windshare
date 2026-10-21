@@ -2,8 +2,8 @@ use super::Checkpoint;
 use super::RuntimeStatus;
 use super::checkpoint::ConnectionRole;
 use super::{
-    AdmissionState, ConnectionRef, Deadlines, Error, Identity, Key, Limits, Observer, Output,
-    Record, RelayDecision, Role, ShareLifecycle, ShareRelay, Turn,
+    ConnectionPhase, ConnectionRef, Error, Identity, Limits, Observer, Output, Record,
+    RelayDecision, ShareLifecycle, ShareRelay, Turn,
 };
 use crate::{
     clock::UnixMillis,
@@ -11,10 +11,7 @@ use crate::{
     observation::Journal,
     sessions::{Retirement, RetirementReason},
 };
-use alloc::{
-    collections::{BTreeMap, VecDeque},
-    vec::Vec,
-};
+use alloc::{collections::VecDeque, vec::Vec};
 
 #[derive(Clone, Copy, Debug)]
 // This cold-path input already carries Record by value; keep absence/uncertainty
@@ -146,21 +143,24 @@ impl<O: Observer> ShareRelay<O> {
             identity,
             limits,
             lifecycle,
-            generations: super::Generations::new(identity, limits),
-            handshake_rate: match restored.manifest() {
-                Some(manifest) => {
-                    super::AttemptLimiter::restore(limits.handshakes.attempts, manifest.attempts)?
-                }
-                None => super::AttemptLimiter::new(limits.handshakes.attempts, now)?,
-            },
-            sessions: BTreeMap::new(),
-            routes: BTreeMap::new(),
-            deadlines: Deadlines::default(),
+            generations: super::Generations::new(
+                identity,
+                limits,
+                match restored.manifest() {
+                    Some(manifest) => super::AttemptLimiter::restore(
+                        limits.handshakes.attempts,
+                        manifest.attempts,
+                    )?,
+                    None => super::AttemptLimiter::new(limits.handshakes.attempts, now)?,
+                },
+            ),
+            sessions: super::sessions::Sessions::new(
+                restored
+                    .manifest()
+                    .map_or(0, |manifest| manifest.last_session),
+            ),
             stored: record,
             runtime: RuntimeStatus::Running,
-            last_session: restored
-                .manifest()
-                .map_or(0, |manifest| manifest.last_session),
             last_work: 0,
             tasks: VecDeque::new(),
             stop_barrier: None,
@@ -174,7 +174,7 @@ impl<O: Observer> ShareRelay<O> {
             if relay
                 .generations
                 .connection(&connection)
-                .is_none_or(|entry| matches!(entry.role, Role::Closing))
+                .is_none_or(|entry| entry.phase() == ConnectionPhase::Closing)
             {
                 turn.outputs.push(Output::Close(connection));
             }
@@ -212,18 +212,10 @@ impl<O: Observer> ShareRelay<O> {
                 snapshot,
                 restored.surviving.contains(&connection),
                 now,
-                &mut self.deadlines,
             )?;
             if let Some(ledger) = self.generations.ledger(&connection) {
-                for (flow, _) in ledger.checkpoint_flows() {
-                    if self
-                        .routes
-                        .insert((connection, flow.session().wire_id()), flow)
-                        .is_some()
-                    {
-                        return Err(Error::InvalidCheckpoint);
-                    }
-                }
+                self.sessions
+                    .restore_routes(connection, ledger.checkpoint_flows().map(|(flow, _)| flow))?;
                 let usage = ledger.usage();
                 let communicating = self.generations.connection(&connection).is_some();
                 self.trace(
@@ -263,16 +255,7 @@ impl<O: Observer> ShareRelay<O> {
             match decision {
                 SessionRestore::Restored(session) => {
                     if let Some(flows) = self.session_flows(session.key()) {
-                        self.deadlines
-                            .set(Key::Session(session.key().wire_id()), session.deadline());
-                        self.sessions.insert(
-                            session.key().wire_id(),
-                            AdmissionState {
-                                session,
-                                flows,
-                                deferred: false,
-                            },
-                        );
+                        self.sessions.install(session, &flows);
                     } else {
                         self.close(session.key().receiver(), turn);
                         self.trace(
@@ -298,6 +281,7 @@ impl<O: Observer> ShareRelay<O> {
             for (flow, open) in flows {
                 let valid = self
                     .sessions
+                    .entries()
                     .get(&flow.session().wire_id())
                     .is_some_and(|entry| {
                         entry
@@ -317,8 +301,6 @@ impl<O: Observer> ShareRelay<O> {
                                 now,
                             )
                         },
-                        &mut self.checkpointing,
-                        &mut self.deadlines,
                         &mut self.observer,
                     );
                     turn.outputs.push(Output::Discard(flow));
@@ -329,7 +311,7 @@ impl<O: Observer> ShareRelay<O> {
             if self
                 .generations
                 .connection(&destination)
-                .is_some_and(|entry| matches!(entry.role, Role::Closing))
+                .is_some_and(|entry| entry.phase() == ConnectionPhase::Closing)
                 && !turn
                     .outputs
                     .iter()
