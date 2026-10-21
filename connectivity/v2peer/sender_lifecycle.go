@@ -66,7 +66,7 @@ func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 				handler.mu.Unlock()
 			},
 		})
-		turnControls.SetTURNControlHandler(func(_ context.Context, body []byte) error { return handler.turn.Handle(body) })
+		turnControls.SetTURNControlHandler(func(ctx context.Context, body []byte) error { return handler.turn.Handle(ctx, body) })
 		work.Go(func() {
 			handler.turn.Run(child)
 		})

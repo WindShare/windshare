@@ -206,7 +206,15 @@ func (p *Path) Done() <-chan struct{}  { return p.done }
 func (p *Path) Lane() (sessionruntime.LaneIdentity, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.lane, p.lane.ID != 0
+	if p.current == nil || p.lane.ID == 0 {
+		return sessionruntime.LaneIdentity{}, false
+	}
+	select {
+	case <-p.current.Done():
+		return sessionruntime.LaneIdentity{}, false
+	default:
+		return p.lane, true
+	}
 }
 func (p *Path) Result() Result       { p.mu.Lock(); defer p.mu.Unlock(); return p.result }
 func (p *Path) Err() error           { return p.Result().Cause }

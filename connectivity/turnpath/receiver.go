@@ -12,7 +12,7 @@ import (
 )
 
 type ReceiverPath interface {
-	Ready() <-chan struct{}
+	Lane() (turncontrol.Lane, bool)
 	Done() <-chan struct{}
 	Close() error
 }
@@ -31,16 +31,16 @@ type Measurement struct {
 	Unhelpful   bool
 }
 type receiverPath struct {
-	grant    turncontrol.Grant
-	path     ReceiverPath
-	expires  time.Time
-	ready    bool
-	notified bool
-	reported uint64
+	grant         turncontrol.Grant
+	path          ReceiverPath
+	expires       time.Time
+	observedLane  turncontrol.Lane
+	sentReadyLane turncontrol.Lane
+	reported      uint64
 }
 type Receiver struct {
 	config               ReceiverConfig
-	messages             chan turncontrol.Message
+	messages             *controlMailbox
 	demands              chan bool
 	mu                   sync.Mutex
 	active               bool
@@ -58,19 +58,20 @@ func NewReceiver(config ReceiverConfig) *Receiver {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Receiver{config: config, messages: make(chan turncontrol.Message, 32), demands: make(chan bool, 1),
+	return &Receiver{config: config, messages: newControlMailbox(), demands: make(chan bool, 1),
 		paths: make(map[[16]byte]*receiverPath), retired: make(map[[16]byte]time.Time), recoveries: make(map[[16]byte]turncontrol.RecoveryReason)}
 }
-func (r *Receiver) Handle(body []byte) error {
+func (r *Receiver) Handle(ctx context.Context, body []byte) error {
 	message, err := turncontrol.Decode(body)
 	if err != nil || message.Header().SessionID != r.config.SessionID {
 		return turncontrol.ErrMessage
 	}
-	select {
-	case r.messages <- message:
+	switch message.(type) {
+	case turncontrol.Available, turncontrol.Grant, turncontrol.Retire, turncontrol.Unavailable:
+		return r.messages.put(ctx, message)
 	default:
+		return turncontrol.ErrMessage
 	}
-	return nil
 }
 func (r *Receiver) SetDemand(active bool) {
 	r.mu.Lock()
@@ -94,6 +95,7 @@ func (r *Receiver) Run(ctx context.Context) {
 		tick = ticker.C
 	}
 	defer func() {
+		r.messages.close()
 		for _, entry := range r.paths {
 			_ = entry.path.Close()
 		}
@@ -102,8 +104,10 @@ func (r *Receiver) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case message := <-r.messages:
-			r.apply(ctx, message)
+		case <-r.messages.wake:
+			if message, ok := r.messages.take(); ok {
+				r.apply(ctx, message)
+			}
 		case <-r.demands:
 			r.maintain(ctx)
 		case <-tick:
@@ -260,25 +264,24 @@ func (path *receiverPath) retirementReason(now time.Time, active bool) turncontr
 }
 
 func (r *Receiver) notifyReady(ctx context.Context, path *receiverPath) {
-	select {
-	case <-path.path.Ready():
-	default:
+	lane, live := path.path.Lane()
+	if !live || !lane.Valid() || signalClosed(path.path.Done()) {
 		return
 	}
-	if !path.ready {
-		path.ready = true
+	if path.observedLane != lane {
+		path.observedLane = lane
 		if r.config.Admitted != nil {
 			r.config.Admitted(path.grant, path.path)
 		}
 		r.observe(path.grant, "ready", "")
 	}
-	if !path.notified {
-		path.notified = r.send(ctx, turncontrol.Ready{Authority: path.grant.Authority, PathID: path.grant.PathID})
+	if path.sentReadyLane != lane && r.send(ctx, turncontrol.Ready{Authority: path.grant.Authority, PathID: path.grant.PathID, Lane: lane}) {
+		path.sentReadyLane = lane
 	}
 }
 
 func (r *Receiver) measure(ctx context.Context, path *receiverPath) Measurement {
-	if !path.ready || r.config.Measure == nil {
+	if !path.observedLane.Valid() || r.config.Measure == nil {
 		return Measurement{}
 	}
 	measurement := r.config.Measure(path.path)

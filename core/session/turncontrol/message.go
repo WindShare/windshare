@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Schema                    = uint64(3)
+	Schema                    = uint64(4)
 	IdentityBytes             = 16
 	MaximumBodyBytes          = 8192
 	MaximumTextBytes          = 1024
@@ -63,9 +63,21 @@ type Grant struct {
 func (m Grant) Header() Header { return m.Authority }
 func (Grant) turnMessage()     {}
 
+// Lane identifies an authenticated connection incarnation within the session.
+// Epoch prevents a late readiness message from authorizing a later attempt.
+type Lane struct {
+	ID    uint32
+	Epoch uint32
+}
+
+func (lane Lane) Valid() bool { return lane.ID != 0 && lane.Epoch != 0 }
+
+// Ready acknowledges receiver admission for one exact lane. Replays are
+// idempotent; only matching, still-live sender admission can commit a handoff.
 type Ready struct {
 	Authority Header
 	PathID    [IdentityBytes]byte
+	Lane      Lane
 }
 
 func (m Ready) Header() Header { return m.Authority }

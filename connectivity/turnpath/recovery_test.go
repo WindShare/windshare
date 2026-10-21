@@ -33,8 +33,8 @@ func recoverySender(t *testing.T) (*Sender, *fixedRecoveryAccounts, *time.Time) 
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: turncontrol.MaximumDemandLifetime})
 	issueNext(t, s)
 	pending := s.services[0].pending
-	s.Admitted(pending.grant.PathID)
-	s.apply(t.Context(), turncontrol.Ready{Authority: pending.grant.Authority, PathID: pending.grant.PathID})
+	s.Admit(t.Context(), pending.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
+	s.apply(t.Context(), turncontrol.Ready{Authority: pending.grant.Authority, PathID: pending.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	return s, accounts, &now
 }
 
@@ -51,11 +51,11 @@ func TestFixedCredentialsRecoverWithoutRenewalOrBreakingCurrentPath(t *testing.T
 	if next == nil || next.grant.Replaces != old.grant.PathID || s.services[0].current != old {
 		t.Fatal("fixed recovery did not preserve predecessor")
 	}
-	s.apply(t.Context(), turncontrol.Ready{Authority: next.grant.Authority, PathID: next.grant.PathID})
+	s.apply(t.Context(), turncontrol.Ready{Authority: next.grant.Authority, PathID: next.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	if _, closed := accounts.counts(); closed != 0 {
 		t.Fatal("receiver-only readiness retired old path")
 	}
-	s.Admitted(next.grant.PathID)
+	s.Admit(t.Context(), next.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
 	s.maintain(t.Context())
 	if s.services[0].current != next {
 		t.Fatal("authenticated replacement not promoted")
@@ -224,8 +224,8 @@ func TestFaultyReplacementCannotRetireWorkingPredecessor(t *testing.T) {
 	issueNext(t, s)
 	next := s.services[0].pending
 	s.Recover(next.grant.PathID, turncontrol.AllocationStateMismatch)
-	s.Admitted(next.grant.PathID)
-	s.apply(t.Context(), turncontrol.Ready{Authority: next.grant.Authority, PathID: next.grant.PathID})
+	s.Admit(t.Context(), next.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
+	s.apply(t.Context(), turncontrol.Ready{Authority: next.grant.Authority, PathID: next.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	if s.services[0].current != old {
 		t.Fatal("authenticated but mismatched replacement retired predecessor")
 	}
@@ -234,12 +234,14 @@ func TestFaultyReplacementCannotRetireWorkingPredecessor(t *testing.T) {
 func TestRecoverySurvivesControlMailboxCongestion(t *testing.T) {
 	s, _, _ := recoverySender(t)
 	old := s.services[0].current
-	for range cap(s.controls) {
-		s.controls <- turncontrol.Report{}
+	for range controlCommandCapacity {
+		if err := s.controls.put(t.Context(), turncontrol.Demand{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	body, err := turncontrol.Encode(turncontrol.Recover{Authority: old.grant.Authority, PathID: old.grant.PathID,
 		Reason: turncontrol.AllocationStateMismatch})
-	if err != nil || s.Handle(body) != nil {
+	if err != nil || s.Handle(t.Context(), body) != nil {
 		t.Fatal("valid recovery control was rejected")
 	}
 	if !s.needsRecovery(old) {

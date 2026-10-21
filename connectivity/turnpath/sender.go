@@ -53,14 +53,16 @@ type service struct {
 	recoveryAttempts int
 }
 type delegation struct {
-	lease         *Lease
-	grant         turncontrol.Grant
-	created       time.Time
-	admitted      bool
-	ready         bool
-	useful        uint64
-	recovery      turncontrol.RecoveryReason
-	recoveryUntil time.Time
+	lease          *Lease
+	grant          turncontrol.Grant
+	created        time.Time
+	admission      *Admission
+	admissionEpoch uint32
+	readyLane      turncontrol.Lane
+	reported       uint64
+	useful         uint64
+	recovery       turncontrol.RecoveryReason
+	recoveryUntil  time.Time
 }
 type issued struct {
 	service             *service
@@ -77,7 +79,7 @@ type Sender struct {
 	mu                 sync.Mutex
 	paths              map[[16]byte]*delegation
 	retired            map[[16]byte]time.Time
-	controls           chan turncontrol.Message
+	controls           *controlMailbox
 	completed          chan issued
 	work               sync.WaitGroup
 	services           []*service
@@ -88,7 +90,7 @@ type Sender struct {
 	advertisedAt       time.Time
 	advertisedRevision uint64
 	inventory          Inventory
-	recoveryWake       chan struct{}
+	reconcileWake      chan struct{}
 	networkGeneration  uint64
 }
 
@@ -100,7 +102,7 @@ func NewSender(config SenderConfig) *Sender {
 		config.Random = rand.Reader
 	}
 	s := &Sender{config: config, paths: make(map[[16]byte]*delegation), retired: make(map[[16]byte]time.Time),
-		controls: make(chan turncontrol.Message, 32), completed: make(chan issued, 16), recoveryWake: make(chan struct{}, 1)}
+		controls: newControlMailbox(), completed: make(chan issued, 16), reconcileWake: make(chan struct{}, 1)}
 	if config.Accounts != nil {
 		s.inventory = config.Accounts.Inventory()
 		for _, profile := range s.inventory.Profiles {
@@ -115,18 +117,22 @@ func NewSender(config SenderConfig) *Sender {
 	return s
 }
 
-func (s *Sender) Handle(body []byte) error {
+func (s *Sender) Handle(ctx context.Context, body []byte) error {
 	message, err := turncontrol.Decode(body)
 	if err != nil || message.Header().SessionID != s.config.SessionID {
 		return turncontrol.ErrMessage
 	}
+	if err := s.controls.check(ctx); err != nil {
+		return err
+	}
 	switch value := message.(type) {
+	case turncontrol.Report:
+		s.retainReport(value)
+		return nil
 	case turncontrol.Recover:
-		// The bounded control mailbox may drop redundant demand/report updates.
-		// A selected-path fault must survive congestion until maintenance sees it.
 		s.applyRecovery(value)
 		return nil
-	case turncontrol.Demand, turncontrol.Ready, turncontrol.Report:
+	case turncontrol.Demand, turncontrol.Ready:
 	case turncontrol.Retire:
 		if value.Reason != turncontrol.Unhelpful && value.Reason != turncontrol.Idle && value.Reason != turncontrol.Expired {
 			return turncontrol.ErrMessage
@@ -134,11 +140,7 @@ func (s *Sender) Handle(body []byte) error {
 	default:
 		return turncontrol.ErrMessage
 	}
-	select {
-	case s.controls <- message:
-	default:
-	}
-	return nil
+	return s.controls.put(ctx, message)
 }
 
 // AuthorizedPath binds delegated credentials to their authenticated predecessor.
@@ -152,6 +154,9 @@ type AuthorizedPath struct {
 func (s *Sender) Lookup(path [16]byte) (*AuthorizedPath, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.controls.check(context.Background()); err != nil {
+		return nil, true, err
+	}
 	if _, retired := s.retired[path]; retired {
 		return nil, true, errors.New("TURN path retired")
 	}
@@ -176,14 +181,6 @@ func (s *Sender) Lookup(path [16]byte) (*AuthorizedPath, bool, error) {
 	}
 	return &AuthorizedPath{Lease: value.lease, ReplacesPeerPathID: value.grant.Replaces}, true, nil
 }
-func (s *Sender) Admitted(path [16]byte) {
-	s.mu.Lock()
-	if value := s.paths[path]; value != nil {
-		value.admitted = true
-	}
-	s.mu.Unlock()
-}
-
 func (s *Sender) Run(ctx context.Context) {
 	var ticker *time.Ticker
 	tick := s.config.Tick
@@ -198,15 +195,17 @@ func (s *Sender) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case message := <-s.controls:
-			s.apply(ctx, message)
+		case <-s.controls.wake:
+			if message, ok := s.controls.take(); ok {
+				s.apply(ctx, message)
+			}
 		case result := <-s.completed:
 			s.install(ctx, result)
 		case <-s.inventory.Changed:
 			s.maintain(ctx)
 		case <-tick:
 			s.maintain(ctx)
-		case <-s.recoveryWake:
+		case <-s.reconcileWake:
 			s.maintain(ctx)
 		}
 	}
@@ -226,21 +225,16 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 			if pending == nil || pending.grant.PathID != value.PathID || pending.grant.Authority != header {
 				continue
 			}
-			pending.ready = true
+			if value.Lane.Epoch >= pending.readyLane.Epoch {
+				pending.readyLane = value.Lane
+			}
 			s.promote(ctx, service)
 		}
 	case turncontrol.Recover:
 		s.applyRecovery(value)
 	case turncontrol.Report:
-		s.mu.Lock()
-		path := s.paths[value.PathID]
-		s.mu.Unlock()
-		if path != nil && path.grant.Authority == header && value.UsefulBytes > path.useful {
-			path.lease.Charge(Usage{Useful: value.UsefulBytes - path.useful})
-			path.useful = value.UsefulBytes
-			s.recoverBudgetAfterProgress(path)
-			s.observe(path, "useful_content", "")
-		}
+		s.retainReport(value)
+		s.applyReports()
 	case turncontrol.Retire:
 		retryAt := s.config.Now()
 		if value.Reason != turncontrol.Idle {
@@ -263,6 +257,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 }
 
 func (s *Sender) maintain(ctx context.Context) {
+	s.applyReports()
 	s.refreshConfiguration(ctx)
 	s.refreshRecoveryNetwork()
 	now := s.config.Now()
@@ -452,7 +447,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 
 func (s *Sender) promote(ctx context.Context, service *service) {
 	pending := service.pending
-	if pending == nil || !pending.ready {
+	if pending == nil || !pending.readyLane.Valid() {
 		return
 	}
 	now := s.config.Now()
@@ -465,14 +460,17 @@ func (s *Sender) promote(ctx context.Context, service *service) {
 		return
 	default:
 	}
+	// Admission revocation and promotion share one commit boundary. Checking the
+	// channel's terminal signal also covers delayed attempt cleanup callbacks.
 	s.mu.Lock()
-	admitted := pending.admitted && pending.recovery == 0
-	s.mu.Unlock()
-	if !admitted {
+	admission := pending.admission
+	if admission == nil || admission.lane != pending.readyLane || !admission.live() || pending.recovery != 0 {
+		s.mu.Unlock()
 		return
 	}
 	old := service.current
 	service.current, service.pending = pending, nil
+	s.mu.Unlock()
 	if old != nil {
 		s.retire(ctx, old, turncontrol.Replaced)
 	}
@@ -494,6 +492,7 @@ func (s *Sender) retire(ctx context.Context, value *delegation, reason turncontr
 		s.retired[value.grant.PathID] = now.Add(turncontrol.MaximumDemandLifetime)
 	}
 	s.mu.Unlock()
+	s.applyReport(value)
 	s.send(ctx, turncontrol.Retire{Authority: value.grant.Authority, PathID: value.grant.PathID, Reason: reason})
 	if s.config.Retire != nil {
 		s.config.Retire(value.grant.PathID)
@@ -502,6 +501,10 @@ func (s *Sender) retire(ctx context.Context, value *delegation, reason turncontr
 	s.observe(value, "path_retired", fmt.Sprint(reason))
 }
 func (s *Sender) close() {
+	s.controls.close()
+	s.mu.Lock()
+	clear(s.paths)
+	s.mu.Unlock()
 	for _, service := range s.services {
 		if service.cancel != nil {
 			service.cancel()

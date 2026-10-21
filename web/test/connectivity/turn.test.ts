@@ -16,7 +16,7 @@ const grant: TurnGrant = { ...header, kind: 'grant', pathId: new Uint8Array(16).
 afterEach(() => vi.useRealTimers())
 
 it('reconstructs every Go-authored TURN delegation message byte for byte', () => {
-  const vectors = JSON.parse(readFileSync(new URL('../../../core/testvectors/turn-control-v3.json', import.meta.url), 'utf8')) as { bodyB64: string }[]
+  const vectors = JSON.parse(readFileSync(new URL('../../../core/testvectors/turn-control-v4.json', import.meta.url), 'utf8')) as { bodyB64: string }[]
   for (const vector of vectors) {
     const body = Uint8Array.from(Buffer.from(vector.bodyB64, 'base64'))
     expect([...encodeTurnControl(decodeTurnControl(body))]).toEqual([...body])
@@ -25,7 +25,7 @@ it('reconstructs every Go-authored TURN delegation message byte for byte', () =>
 
 it('preserves bounded endpoint alternatives, expiry, authority and unsigned useful counts', () => {
   const messages: TurnControl[] = [grant, { ...header, kind: 'available', profiles: ['primary', 'secondary'] },
-    { ...header, kind: 'demand', holdForMs: 120_000 }, { ...header, kind: 'ready', pathId: grant.pathId },
+    { ...header, kind: 'demand', holdForMs: 120_000 }, { ...header, kind: 'ready', pathId: grant.pathId, laneId: 7, laneEpoch: 2 },
     { ...header, kind: 'retire', pathId: grant.pathId, reason: 2 },
     { ...header, kind: 'unavailable', profile: 'primary', retryAfterMs: 10_000, reason: 'unavailable' },
     { ...header, kind: 'report', pathId: grant.pathId, usefulBytes: 1n << 40n },
@@ -59,10 +59,10 @@ it('starts only for demand and replaces over surviving session control without r
   receiver.setDemand(true)
   expect(sent[0]).toMatchObject({ kind: 'demand', holdForMs: 120_000 })
   receive(encodeTurnControl(grant))
-  receiver.admitted(grant.pathId)
+  receiver.admitted(grant.pathId, { laneId: 7, laneEpoch: 2 })
   const replacement = { ...grant, pathId: new Uint8Array(16).fill(4), replaces: grant.pathId }
   receive(encodeTurnControl(replacement))
-  receiver.admitted(replacement.pathId)
+  receiver.admitted(replacement.pathId, { laneId: 8, laneEpoch: 3 })
   expect(opened).toHaveLength(2)
   expect(retired).toHaveLength(0)
   receive(encodeTurnControl({ ...header, kind: 'retire', pathId: grant.pathId, reason: 2 }))
@@ -113,7 +113,7 @@ it('retries readiness and useful reports across a temporary control-lane failure
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receiver.setDemand(true)
   receive(encodeTurnControl(grant))
-  receiver.admitted(grant.pathId)
+  receiver.admitted(grant.pathId, { laneId: 7, laneEpoch: 2 })
   await vi.advanceTimersByTimeAsync(2000)
   expect(readyAttempts).toBe(2)
   expect(reportAttempts).toBe(2)

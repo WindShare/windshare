@@ -12,7 +12,7 @@ func TestDelegationCanonicalAuthorityAndLifetime(t *testing.T) {
 	header := Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 3}
 	grant := Grant{Authority: header, PathID: [16]byte{4}, Replaces: [16]byte{5}, Provider: "coturn", Account: "home", Profile: "primary",
 		CredentialKind: Expiring, Username: "123:user", Password: "password", ValidFor: time.Hour, URLs: []string{"turn:127.0.0.1:3478?transport=udp", "turns:example.org:443?transport=tcp"}}
-	messages := []Message{Demand{header, MaximumDemandLifetime}, grant, Ready{header, grant.PathID},
+	messages := []Message{Demand{header, MaximumDemandLifetime}, grant, Ready{header, grant.PathID, Lane{ID: 7, Epoch: 2}},
 		Retire{header, grant.PathID, Replaced}, Unavailable{header, "primary", time.Second, "provider unavailable"},
 		Available{header, []string{"primary", "secondary"}}, Available{header, []string{}}, Report{header, grant.PathID, 1 << 40},
 		Recover{header, grant.PathID, AllocationStateMismatch}, Recover{header, grant.PathID, ChannelUnavailable}}
@@ -60,6 +60,25 @@ func TestDelegationCanonicalAuthorityAndLifetime(t *testing.T) {
 	for _, reason := range []RecoveryReason{0, ChannelUnavailable + 1} {
 		if _, err := Encode(Recover{header, grant.PathID, reason}); err == nil {
 			t.Fatal("invalid recovery reason")
+		}
+	}
+}
+
+func TestReadinessRequiresLaneIncarnation(t *testing.T) {
+	header := Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 1}
+	for _, lane := range []Lane{{}, {ID: 1}, {Epoch: 1}} {
+		if _, err := Encode(Ready{Authority: header, PathID: [16]byte{3}, Lane: lane}); err == nil {
+			t.Fatal("readiness omitted its lane incarnation")
+		}
+	}
+	for _, identity := range [][]uint64{{1 << 32, 1}, {1, 1 << 32}} {
+		body, err := cbor.Marshal([]any{Schema, readyKind, header.SessionID[:], header.OwnerPathID[:],
+			header.Sequence, [16]byte{3}, identity[0], identity[1]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Decode(body); err == nil {
+			t.Fatal("readiness accepted an overflowing lane identity")
 		}
 	}
 }

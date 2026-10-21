@@ -5,7 +5,7 @@ export const TURN_RECOVERY = Object.freeze({ allocationStateMismatch: 1, channel
 export const TURN_RETIRE = Object.freeze({ idle: 1, replaced: 2, expired: 3, budget: 4, revoked: 5, unhelpful: 6 } as const)
 export const TURN_DEMAND_LIFETIME_MS = 120_000
 export const TURN_MAX_CREDENTIAL_LIFETIME_MS = 48 * 60 * 60 * 1000
-const SCHEMA = 3
+const SCHEMA = 4
 const MAX_BODY_BYTES = 8192
 const MAX_URLS = 8
 const MAX_SECRET_BYTES = 1024
@@ -29,10 +29,14 @@ export interface TurnGrant extends TurnHeader {
     | { readonly kind: 'expiring'; readonly username: string; readonly password: string; readonly validForMs: number }
   readonly urls: readonly string[]
 }
+export interface TurnLane {
+  readonly laneId: number
+  readonly laneEpoch: number
+}
 export type TurnControl =
   | (TurnHeader & { readonly kind: 'demand'; readonly holdForMs: number })
   | TurnGrant
-  | (TurnHeader & { readonly kind: 'ready'; readonly pathId: Uint8Array<ArrayBuffer> })
+  | (TurnHeader & TurnLane & { readonly kind: 'ready'; readonly pathId: Uint8Array<ArrayBuffer> })
   | (TurnHeader & { readonly kind: 'retire'; readonly pathId: Uint8Array<ArrayBuffer>; readonly reason: number })
   | (TurnHeader & { readonly kind: 'unavailable'; readonly profile: string; readonly retryAfterMs: number; readonly reason: string })
   | (TurnHeader & { readonly kind: 'available'; readonly profiles: readonly string[] })
@@ -46,7 +50,7 @@ export function encodeTurnControl(message: TurnControl): Uint8Array<ArrayBuffer>
     case 'grant': fields.push(message.pathId, message.replaces, message.provider, message.account, message.profile,
       message.credentials.kind === 'fixed' ? 1 : 2, message.credentials.username, message.credentials.password,
       message.credentials.kind === 'fixed' ? 0 : message.credentials.validForMs, [...message.urls]); break
-    case 'ready': fields.push(message.pathId); break
+    case 'ready': fields.push(message.pathId, message.laneId, message.laneEpoch); break
     case 'retire': fields.push(message.pathId, message.reason); break
     case 'unavailable': fields.push(message.profile, message.retryAfterMs, message.reason); break
     case 'available': fields.push([...message.profiles]); break
@@ -74,8 +78,9 @@ export function decodeTurnControl(body: Uint8Array): TurnControl {
       return { ...header, kind: 'demand', holdForMs: duration(fields[5], TURN_DEMAND_LIFETIME_MS) }
     case TURN_CONTROL.grant: return decodeGrant(fields, header)
     case TURN_CONTROL.ready:
-      count(fields, 6)
-      return { ...header, kind: 'ready', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN ready path', true) }
+      count(fields, 8)
+      return { ...header, kind: 'ready', pathId: requireBytes(fields[5], IDENTITY_BYTES, 'TURN ready path', true),
+        laneId: laneIdentity(fields[6]), laneEpoch: laneIdentity(fields[7]) }
     case TURN_CONTROL.report: {
       count(fields, 7)
       const usefulBytes = requireUnsigned(fields[6], 'TURN useful bytes')
@@ -105,6 +110,12 @@ export function decodeTurnControl(body: Uint8Array): TurnControl {
     }
     default: throw new TypeError('Invalid TURN control kind')
   }
+}
+
+function laneIdentity(value: unknown): number {
+  const identity = requireUnsigned(value, 'TURN lane identity')
+  if (identity === 0n || identity > 0xffff_ffffn) throw new RangeError('Invalid TURN lane identity')
+  return Number(identity)
 }
 
 function decodeGrant(fields: readonly unknown[], header: TurnHeader): TurnGrant {

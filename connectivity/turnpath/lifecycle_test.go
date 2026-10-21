@@ -78,11 +78,11 @@ func TestDemandReplacementRequiresBothAdmissionsAndRetainsValidOldOnFailure(t *t
 	if pending == nil {
 		t.Fatal("grant missing")
 	}
-	s.apply(ctx, turncontrol.Ready{Authority: pending.grant.Authority, PathID: pending.grant.PathID})
+	s.apply(ctx, turncontrol.Ready{Authority: pending.grant.Authority, PathID: pending.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	if s.services[0].current != nil {
 		t.Fatal("receiver readiness bypassed sender authentication")
 	}
-	s.Admitted(pending.grant.PathID)
+	s.Admit(t.Context(), pending.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
 	s.maintain(ctx)
 	if s.services[0].current != pending {
 		t.Fatal("early receiver readiness was lost")
@@ -99,8 +99,8 @@ func TestDemandReplacementRequiresBothAdmissionsAndRetainsValidOldOnFailure(t *t
 	if err != nil || !known || authorized == nil || authorized.ReplacesPeerPathID != old.grant.PathID {
 		t.Fatalf("replacement lost predecessor authority: %+v, %v", authorized, err)
 	}
-	s.Admitted(replacement.grant.PathID)
-	s.apply(ctx, turncontrol.Ready{Authority: replacement.grant.Authority, PathID: replacement.grant.PathID})
+	s.Admit(t.Context(), replacement.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
+	s.apply(ctx, turncontrol.Ready{Authority: replacement.grant.Authority, PathID: replacement.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	if len(retired) != 1 || retired[0] != old.grant.PathID {
 		t.Fatal("old path retained after replacement")
 	}
@@ -156,9 +156,11 @@ type receiverFixturePath struct {
 	once        sync.Once
 }
 
-func (p *receiverFixturePath) Ready() <-chan struct{} { return p.ready }
-func (p *receiverFixturePath) Done() <-chan struct{}  { return p.done }
-func (p *receiverFixturePath) Close() error           { p.once.Do(func() { close(p.done) }); return nil }
+func (p *receiverFixturePath) Lane() (turncontrol.Lane, bool) {
+	return turncontrol.Lane{ID: 1, Epoch: 1}, signalClosed(p.ready) && !signalClosed(p.done)
+}
+func (p *receiverFixturePath) Done() <-chan struct{} { return p.done }
+func (p *receiverFixturePath) Close() error          { p.once.Do(func() { close(p.done) }); return nil }
 
 func TestReceiverSurvivingControlReplacesWithoutClosingOldLane(t *testing.T) {
 	now := time.Unix(1700000000, 0)

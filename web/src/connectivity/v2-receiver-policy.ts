@@ -448,7 +448,7 @@ export class V2ReceiverConnectivity {
       this.#peerDetached(candidate.laneId, candidate.laneEpoch)
     })
     if (unsubscribe !== undefined) installed.unsubscribePathRoute = unsubscribe
-    this.#turn.admitted(candidate.peerPathId.copyBytes())
+    this.#turn.admitted(candidate.peerPathId.copyBytes(), { laneId: candidate.laneId, laneEpoch: candidate.laneEpoch })
     return true
   }
 
@@ -497,6 +497,7 @@ export class V2ReceiverConnectivity {
 
   #startInstalledPeerCleanup(installed: V2InstalledPeer): void {
     if (installed.closeTask !== undefined) return
+    this.#turn.detached(installed.peerPathId.copyBytes(), { laneId: installed.laneId, laneEpoch: installed.laneEpoch })
     installed.unsubscribePathRoute?.()
     const closeTask = Promise.allSettled([
       Promise.resolve().then(() => installed.peer.close()),

@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
@@ -302,7 +303,11 @@ func (execution *attemptExecution) acceptAdmission(
 	}
 	execution.attempt.attached.Store(true)
 	if execution.attempt.config.turnLease != nil {
-		execution.attempt.config.turn.Admitted([16]byte(execution.attempt.binding().PeerPathID))
+		execution.turnAdmission = execution.attempt.config.turn.Admit(
+			execution.ctx, [16]byte(execution.attempt.binding().PeerPathID),
+			turncontrol.Lane{ID: result.Lane.ID, Epoch: result.Lane.Epoch},
+			execution.channel.Done(),
+		)
 	}
 	direct := execution.attempt.config.turnLease == nil
 	if source, ok := execution.peer.(interface {

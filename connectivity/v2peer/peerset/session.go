@@ -94,7 +94,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 				budget = NewBudget(s.owner.config.Clock.Now())
 				serviceBudgets[grant.Profile] = budget
 			}
-			return s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
+			path, err := s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
 				Budget: budget, Native: receiver.Factory.NativeConnectivity(), ICE: ice, Demand: ContentDemand,
 				Prepare: func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {
 					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
@@ -107,14 +107,18 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 					}}, nil
 				},
 			})
+			if err != nil {
+				return nil, err
+			}
+			return receiverTURNPath{path}, nil
 		},
-		Admitted: func(_ turncontrol.Grant, path turnpath.ReceiverPath) { s.admitted(path.(*Path)) },
+		Admitted: func(_ turncontrol.Grant, path turnpath.ReceiverPath) { s.admitted(path.(receiverTURNPath).Path) },
 		Measure: func(path turnpath.ReceiverPath) turnpath.Measurement {
 			lanes, ok := receiver.Lanes.(interface{ LaneSet() *transfer.LaneSet })
 			if !ok {
 				return turnpath.Measurement{}
 			}
-			lane, ok := path.(*Path).Lane()
+			lane, ok := path.Lane()
 			if !ok {
 				return turnpath.Measurement{}
 			}
@@ -123,9 +127,16 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 		},
 	})
 	// Delegation belongs to the session, even while no direct path is running.
-	controls.SetTURNControlHandler(func(_ context.Context, body []byte) error { return s.turn.Handle(body) })
+	controls.SetTURNControlHandler(func(ctx context.Context, body []byte) error { return s.turn.Handle(ctx, body) })
 	s.turn.SetDemand(receiver.Demand == ContentDemand)
 	s.work.Go(func() { s.turn.Run(s.ctx) })
+}
+
+type receiverTURNPath struct{ *Path }
+
+func (path receiverTURNPath) Lane() (turncontrol.Lane, bool) {
+	lane, live := path.Path.Lane()
+	return turncontrol.Lane{ID: lane.ID, Epoch: lane.Epoch}, live
 }
 
 func (s *ReceiverSession) startDirectLocked() error {
