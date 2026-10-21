@@ -27,13 +27,13 @@ describe('trace evidence under high-volume protocol traffic', () => {
 
   it('retains cancellation and product milestones across a trace-11 sized burst within the original budgets', () => {
     const time = new FakeTraceTime()
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, number, number>({
-      captureGeneration: 1n, clock: time, scheduler: time,
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, number>({
+      captureGeneration: 1n, clock: time,
       eventName: event => event.eventName,
       eventRetention: traceEventRetention,
       snapshotEvent: snapshotTraceEventObservationV2, eventBytes: traceEventObservationBytesV2,
       snapshotIncident: value => value, incidentMarkerBytes: () => 1,
-      incidentScope: value => value, sameScope: (a, b) => a === b,
+
     })
     const correlation = { protocol_session_id: 'AQEBAQEBAQEBAQEBAQEBAQ', protocol_operation_id: 'AgICAgICAgICAgICAgICAg' }
     const cancelled: TraceEventObservationV2 = {
@@ -66,10 +66,10 @@ describe('trace evidence under high-volume protocol traffic', () => {
     expect(events).toContainEqual(cancelled)
     expect(events).toContainEqual(late)
     expect(events).toContainEqual(milestone)
-    expect(snapshot.retainedEventCount).toBe(2048n)
-    expect(snapshot.retainedEventBytes).toBeLessThanOrEqual(2_097_152n)
+    expect(snapshot.retainedEventCount).toBe(4096n)
+    expect(snapshot.retainedEventBytes).toBeLessThanOrEqual(4_194_304n)
     expect(snapshot.health.droppedCount).toBe(0n)
-    expect(snapshot.health.overwrittenCount).toBe(14_375n)
+    expect(snapshot.health.overwrittenCount).toBe(12_327n)
     expect(snapshot.events.map(event => event.sequence)).toEqual(
       snapshot.events.map(event => event.sequence).sort((a, b) => a < b ? -1 : 1))
   })

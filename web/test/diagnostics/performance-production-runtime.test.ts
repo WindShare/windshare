@@ -41,19 +41,16 @@ describe('FSA performance production observations', () => {
         return observed
       },
     }
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never, never>({
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never>({
       captureGeneration: 1n,
       clock,
-      scheduler: {
-        schedule: () => Object.freeze({ cancel: () => undefined }),
-      },
+
       eventName: traceEventObservationNameV2,
       snapshotEvent: snapshotTraceEventObservationV2,
       eventBytes: traceEventObservationBytesV2,
       snapshotIncident: incident => incident,
       incidentMarkerBytes: () => 1,
-      incidentScope: incident => incident,
-      sameScope: () => true,
+
     })
     const trace = Object.freeze({
       current: (event: OutputTraceEvent) => {

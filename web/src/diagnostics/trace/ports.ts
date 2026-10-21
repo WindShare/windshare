@@ -26,9 +26,8 @@ export interface TraceHealthReadPort {
   traceHealthSnapshot(): TraceHealthSnapshot
 }
 
-export type TraceCaptureSignal<Incident, Scope> =
-  | Readonly<{ kind: 'incident_sealed'; incident: Incident; elapsedMs: bigint }>
-  | Readonly<{ kind: 'scope_terminal'; scope: Scope; elapsedMs: bigint }>
+export type TraceCaptureSignal<Incident> =
+  Readonly<{ kind: 'incident_sealed'; incident: Incident; elapsedMs: bigint }>
 
 export const SYSTEM_TRACE_CLOCK: TraceClock = Object.freeze({
   nowMilliseconds: () => Date.now(),

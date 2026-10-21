@@ -8,208 +8,98 @@ import {
   testEvent,
   testIncident,
   testTraceCapacity,
-  type TestScope,
 } from './test-support'
 
 describe('bounded trace recorder', () => {
-  it('crosses pre-failure count and byte bounds with only limit plus one', () => {
-    const countTime = new FakeTraceTime()
-    const countRecorder = makeTestRecorder(countTime, testTraceCapacity({
-      maxEventCount: 4,
-      maxTotalBytes: 8,
-      maxPreFailureEventCount: 2,
-      maxPreFailureBytes: 8,
-      maxPostFailureEventCount: 2,
-      maxPostFailureBytes: 4,
-    }))
-    countRecorder.record(testEvent(1))
-    countRecorder.record(testEvent(2))
-    countRecorder.record(testEvent(3))
-
+  it.each([false, true])('rolls count and byte limits without stopping after failure=%s', failed => {
+    const countRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({ maxEventCount: 2 }))
+    if (failed) countRecorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
+    for (let ordinal = 1; ordinal <= 3; ordinal++) countRecorder.record(testEvent(ordinal))
     expect(retainedOrdinals(countRecorder)).toEqual([2, 3])
-    expect(countRecorder.snapshot().health.overwrittenCount).toBe(1n)
+    expect(countRecorder.snapshot()).toMatchObject({
+      state: 'recording', retainedEventCount: 2n, incidentMarkerCount: 0n,
+      health: { overwrittenCount: failed ? 2n : 1n, droppedCount: 0n },
+    })
 
-    const byteTime = new FakeTraceTime()
-    const byteRecorder = makeTestRecorder(byteTime, testTraceCapacity({
-      maxEventCount: 4,
-      maxEventBytes: 3,
-      maxTotalBytes: 6,
-      maxPreFailureEventCount: 2,
-      maxPreFailureBytes: 3,
-      maxPostFailureEventCount: 2,
-      maxPostFailureBytes: 3,
+    const byteRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
+      maxEventBytes: 3, maxTotalBytes: 3,
     }))
+    if (failed) byteRecorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
     byteRecorder.record(testEvent(1, { bytes: 2 }))
     byteRecorder.record(testEvent(2, { bytes: 2 }))
-
     expect(retainedOrdinals(byteRecorder)).toEqual([2])
-    expect(byteRecorder.snapshot().retainedEventBytes).toBe(2n)
-    expect(byteRecorder.snapshot().health.overwrittenCount).toBe(1n)
-  })
-
-  it('drops an oversized event without sealing or evicting the pre-window', () => {
-    const time = new FakeTraceTime()
-    const recorder = makeTestRecorder(time, testTraceCapacity({ maxEventBytes: 2 }))
-    recorder.record(testEvent(1))
-    recorder.record(testEvent(2, { bytes: 3 }))
-
-    expect(recorder.state).toBe('recording_pre_failure')
-    expect(retainedOrdinals(recorder)).toEqual([1])
-    expect(recorder.snapshot().health).toEqual({
-      droppedCount: 1n,
-      overwrittenCount: 0n,
-      sampledCount: 0n,
-      coalescedCount: 0n,
+    expect(byteRecorder.snapshot()).toMatchObject({
+      state: 'recording', retainedEventBytes: 2n, incidentMarkerCount: 0n,
+      health: { overwrittenCount: failed ? 2n : 1n, droppedCount: 0n },
     })
   })
 
-  it('pins the pre-window and seals instead of overwriting it at tail capacity', () => {
-    const time = new FakeTraceTime()
-    const recorder = makeTestRecorder(time, testTraceCapacity({
-      maxEventCount: 4,
-      maxEventBytes: 2,
-      maxTotalBytes: 4,
-      maxPreFailureEventCount: 2,
-      maxPreFailureBytes: 2,
-      maxPostFailureEventCount: 2,
-      maxPostFailureBytes: 2,
-    }))
-    recorder.record(testEvent(1))
-    recorder.record(testEvent(2))
-    recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 10n })
-    recorder.record(testEvent(3))
-    recorder.record(testEvent(4))
-
-    const snapshot = recorder.snapshot()
-    expect(snapshot.state).toBe('sealed')
-    expect(snapshot.sealReason).toBe('capacity_exhausted')
-    expect(retainedOrdinals(recorder)).toEqual([1, 2, 3])
-    expect(snapshot.incidentMarkerCount).toBe(1n)
-    expect(snapshot.health.droppedCount).toBe(1n)
-    expect(snapshot.health.overwrittenCount).toBe(0n)
-  })
-
-  it('crosses distinct post-failure and whole-capture bounds with limit plus one', () => {
-    const postCountRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
-      maxPostFailureEventCount: 2,
-    }))
-    postCountRecorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n),
-      elapsedMs: 1n,
-    })
-    postCountRecorder.record(testEvent(1))
-    postCountRecorder.record(testEvent(2))
-    expect(postCountRecorder.snapshot().sealReason).toBe('capacity_exhausted')
-
-    const postBytesRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
-      maxEventBytes: 3,
-      maxPostFailureBytes: 3,
-    }))
-    postBytesRecorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n),
-      elapsedMs: 1n,
-    })
-    postBytesRecorder.record(testEvent(1, { bytes: 2 }))
-    postBytesRecorder.record(testEvent(2))
-    expect(postBytesRecorder.snapshot().sealReason).toBe('capacity_exhausted')
-
-    const totalCountRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
-      maxEventCount: 3,
-      maxPreFailureEventCount: 2,
-      maxPostFailureEventCount: 3,
-    }))
-    totalCountRecorder.record(testEvent(1))
-    totalCountRecorder.record(testEvent(2))
-    totalCountRecorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n),
-      elapsedMs: 1n,
-    })
-    totalCountRecorder.record(testEvent(3))
-    expect(totalCountRecorder.snapshot().sealReason).toBe('capacity_exhausted')
-
-    const totalBytesRecorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
-      maxEventBytes: 3,
-      maxTotalBytes: 4,
-      maxPreFailureBytes: 4,
-      maxPostFailureBytes: 4,
-    }))
-    totalBytesRecorder.record(testEvent(1))
-    totalBytesRecorder.record(testEvent(2))
-    totalBytesRecorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n),
-      elapsedMs: 1n,
-    })
-    totalBytesRecorder.record(testEvent(3, { bytes: 2 }))
-    expect(totalBytesRecorder.snapshot().sealReason).toBe('capacity_exhausted')
-  })
-
-  it('keeps one root tail, bounds later markers, and seals only for its root scope', () => {
-    const time = new FakeTraceTime()
-    const recorder = makeTestRecorder(time)
-    const rootScope: TestScope = Object.freeze({ kind: 'receive', sequence: 7n })
-    recorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n, rootScope),
-      elapsedMs: 1n,
-    })
-    recorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(2n, Object.freeze({ kind: 'preview', sequence: 8n })),
-      elapsedMs: 2n,
-    })
-    recorder.signal({
-      kind: 'scope_terminal',
-      scope: Object.freeze({ kind: 'preview', sequence: 8n }),
-      elapsedMs: 3n,
-    })
-
-    expect(recorder.state).toBe('recording_post_failure')
-    expect(recorder.snapshot().incidentMarkerCount).toBe(2n)
-
-    recorder.signal({ kind: 'scope_terminal', scope: rootScope, elapsedMs: 4n })
-    expect(recorder.snapshot().sealReason).toBe('scope_terminal')
-  })
-
-  it('seals a bounded marker overflow as capacity exhaustion', () => {
+  it('protects a bounded failure marker while later download traffic rolls through', () => {
     const time = new FakeTraceTime()
     const recorder = makeTestRecorder(time)
     recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
-    recorder.signal({ kind: 'incident_sealed', incident: testIncident(2n), elapsedMs: 2n })
-    recorder.signal({ kind: 'incident_sealed', incident: testIncident(3n), elapsedMs: 3n })
-
-    expect(recorder.snapshot().incidentMarkerCount).toBe(2n)
-    expect(recorder.snapshot().sealReason).toBe('capacity_exhausted')
-    expect(recorder.snapshot().health.droppedCount).toBe(1n)
+    time.advance(60_000)
+    for (let ordinal = 1; ordinal <= 20; ordinal++) recorder.record(testEvent(ordinal))
+    expect(recorder.snapshot()).toMatchObject({
+      state: 'recording', retainedEventCount: 8n, incidentMarkerCount: 1n,
+      health: { overwrittenCount: 13n, droppedCount: 0n },
+    })
+    expect(retainedOrdinals(recorder)).toEqual([14, 15, 16, 17, 18, 19, 20])
   })
 
-  it('uses resettable silence and an absolute post-failure deadline', () => {
-    const silenceTime = new FakeTraceTime()
-    const silenceRecorder = makeTestRecorder(silenceTime)
-    silenceRecorder.signal({
-      kind: 'incident_sealed',
-      incident: testIncident(1n),
-      elapsedMs: 1n,
-    })
-    silenceTime.advance(4)
-    silenceRecorder.record(testEvent(1))
-    silenceTime.advance(4)
-    expect(silenceRecorder.state).toBe('recording_post_failure')
-    silenceTime.advance(1)
-    expect(silenceRecorder.snapshot().sealReason).toBe('post_failure_silence')
-
-    const hardTime = new FakeTraceTime()
-    const hardRecorder = makeTestRecorder(hardTime)
-    hardRecorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
-    for (let ordinal = 1; ordinal <= 3; ordinal += 1) {
-      hardTime.advance(4)
-      hardRecorder.record(testEvent(ordinal, { name: 'checkpoint' }))
+  it('rolls the marker limit independently and accepts later events', () => {
+    const recorder = makeTestRecorder(new FakeTraceTime())
+    recorder.record(testEvent(1))
+    for (let sequence = 1n; sequence <= 3n; sequence++) {
+      recorder.signal({ kind: 'incident_sealed', incident: testIncident(sequence), elapsedMs: sequence })
     }
-    hardTime.advance(8)
-    expect(hardRecorder.snapshot().sealReason).toBe('post_failure_silence')
+    recorder.record(testEvent(2))
+    expect(recorder.snapshot().events.flatMap(record =>
+      record.value.kind === 'incident_marker' ? [record.value.incident.sequence] : [])).toEqual([2n, 3n])
+    expect(retainedOrdinals(recorder)).toEqual([1, 2])
+    expect(recorder.snapshot()).toMatchObject({
+      state: 'recording', incidentMarkerCount: 2n,
+      health: { overwrittenCount: 1n, droppedCount: 0n },
+    })
+  })
+
+  it('drops oversized events and invalid incident timestamps without evicting existing evidence', () => {
+    const recorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({ maxEventBytes: 2 }))
+    recorder.record(testEvent(1))
+    recorder.record(testEvent(2, { bytes: 3 }))
+    recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: -1n })
+    expect(recorder.state).toBe('recording')
+    expect(retainedOrdinals(recorder)).toEqual([1])
+    expect(recorder.snapshot().health).toMatchObject({ droppedCount: 2n, overwrittenCount: 0n })
+  })
+
+  it('keeps a growing coalesced checkpoint within the byte budget after a failure', () => {
+    const recorder = makeTestRecorder(new FakeTraceTime(), testTraceCapacity({
+      maxTotalBytes: 8,
+    }))
+    recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
+    recorder.record(testEvent(1, { bytes: 3 }))
+    recorder.record(testEvent(2, { name: 'checkpoint', bytes: 1 }))
+    recorder.record(testEvent(3, { bytes: 2 }))
+    recorder.record(testEvent(4, { name: 'checkpoint', bytes: 4 }))
+    expect(retainedOrdinals(recorder)).toEqual([3, 4])
+    expect(recorder.snapshot()).toMatchObject({
+      state: 'recording', retainedEventBytes: 7n, incidentMarkerCount: 1n,
+      health: { coalescedCount: 1n, overwrittenCount: 1n },
+    })
+    const sequences = recorder.snapshot().events.map(record => record.sequence)
+    expect(sequences).toEqual([1n, 4n, 5n])
+  })
+
+  it('makes old observers and incident signals inert after explicit sealing', () => {
+    const recorder = makeTestRecorder(new FakeTraceTime())
+    recorder.record(testEvent(1))
+    recorder.seal('manual_disable')
+    const sealed = recorder.snapshot()
+    recorder.record(testEvent(2))
+    expect(recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })).toBe(false)
+    recorder.clear()
+    expect(recorder.snapshot()).toEqual(sealed)
   })
 
   it('samples progress and coalesces checkpoint observations with distinct counters', () => {
@@ -247,17 +137,17 @@ describe('bounded trace recorder', () => {
     expect(snapshot.events.map((event) => event.sequence)).toEqual([2n, 3n])
   })
 
-  it('clears back to a fresh pre-window and fences stale tail timers', () => {
+  it('clears evidence without changing the capture lifetime or sequence', () => {
     const time = new FakeTraceTime()
     const recorder = makeTestRecorder(time)
     recorder.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 1n })
-    const staleDeadlineIndex = 0
+    const prior = recorder.snapshot()
     recorder.clear()
-    time.runEvenIfCancelled(staleDeadlineIndex)
-
-    expect(recorder.state).toBe('recording_pre_failure')
-    expect(recorder.snapshot().retainedEventCount).toBe(0n)
+    recorder.record(testEvent(2))
+    expect(recorder.state).toBe('recording')
     expect(recorder.snapshot().incidentMarkerCount).toBe(0n)
+    expect(recorder.snapshot().events[0]?.sequence).toBe(2n)
+    expect(prior.incidentMarkerCount).toBe(1n)
   })
 
   it('contains fallible projection and byte sizing as named drops', () => {

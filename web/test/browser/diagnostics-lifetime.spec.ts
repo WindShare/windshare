@@ -77,12 +77,12 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
   const clearedBundle = parseBundle(clearedWhileEnabled.bundle)
 
   expect(clearedWhileEnabled.enabled).toMatchObject({
-    state: 'recording_pre_failure',
+    state: 'recording',
     enabled: true,
     capture_generation: '1',
   })
   expect(clearedWhileEnabled.afterClear).toMatchObject({
-    state: 'recording_pre_failure',
+    state: 'recording',
     enabled: true,
     capture_generation: clearedWhileEnabled.enabled.capture_generation,
     expires_at: clearedWhileEnabled.enabled.expires_at,
@@ -171,13 +171,14 @@ test('diagnostic activation survives reload without leaking to another tab or sh
   })
   // Invalid key material fails during controller startup without external networking.
   await reopened.goto('/AAAAAAAAAAAAAAAA?trace=1#invalid-key')
-  await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.status().state))
-    .toBe('sealed')
+  await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event))
+    .toBe('failure_incident')
   const restored = await reopened.evaluate(() => ({
     status: window.windshareDiagnostics.status(),
     bundle: window.windshareDiagnostics.export(),
   }))
-  expect(restored.status).toMatchObject({ capture_generation: '1', seal_reason: 'scope_terminal' })
+  expect(restored.status).toMatchObject({ capture_generation: '1', enabled: true })
+  expect(restored.status).not.toHaveProperty('seal_reason')
   expect(restored.bundle).toContain('"event":"join_transition"')
   expect(restored.bundle).toContain('"transition":"started"')
   expect(parseBundle(restored.bundle).runtimeRunId).not.toBe(reloadedIdentity)

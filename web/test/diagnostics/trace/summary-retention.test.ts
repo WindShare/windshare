@@ -5,11 +5,11 @@ import { FakeTraceTime, testTraceCapacity } from './test-support'
 interface Event { name: 'peer_attempt' | 'cleanup' | 'checkpoint'; id: number; bytes: number }
 function recorder() {
   const time = new FakeTraceTime()
-  return new BoundedTraceRecorder<Event, number, number>({
-    captureGeneration: 1n, clock: time, scheduler: time, capacity: testTraceCapacity(),
+  return new BoundedTraceRecorder<Event, number>({
+    captureGeneration: 1n, clock: time, capacity: testTraceCapacity({ maxEventCount: 4, maxTotalBytes: 8 }),
     eventName: event => event.name, snapshotEvent: event => Object.freeze({ ...event }), eventBytes: event => event.bytes,
     eventRetention: event => event.name === 'peer_attempt' ? 'outcome' : 'recent',
-    snapshotIncident: value => value, incidentMarkerBytes: () => 1, incidentScope: value => value, sameScope: (a, b) => a === b,
+    snapshotIncident: value => value, incidentMarkerBytes: () => 1,
   })
 }
 function ids(value: ReturnType<typeof recorder>) {

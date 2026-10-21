@@ -59,7 +59,7 @@ wind share <path> --browser-trace --trace-dir ./traces
 You can also add `?trace=1` (or `&trace=1` when a query exists) to an existing link.
 
 1. Open the test link or paste it into the receiver's input, then reproduce the issue.
-   The top bar shows recording or retained-failure status.
+   The top bar shows recording or retained-evidence status.
 2. Click **Export diagnostics**. Choose **Share file**, **Save file**, or **Copy log**.
    File sharing appears when supported; some phones receive the same NDJSON content as a `.txt` attachment.
    Clipboard denial exposes selectable text for manual copying.
@@ -69,11 +69,13 @@ You can also add `?trace=1` (or `&trace=1` when a query exists) to an existing l
 
 Activation is scoped to the current tab and page path. Reload preserves the original 30-minute
 deadline; it does not extend capture or undo a manual stop. The activation query is consumed on entry.
-Faults can seal the current evidence while leaving reload capture active until that deadline;
-**Stop recording** remains available to turn it off without deleting evidence.
+Failures retain incident details without ending capture; later previews, retries, and downloads
+continue recording until **Stop recording** or the original deadline.
 
-The trace ring is bounded to 4 MiB / 4,096 events. During capture, changed evidence is saved every five
-seconds and on page hiding; sealed captures are saved immediately after publication. Unchanged evidence
+The trace ring is bounded to 4 MiB / 4,096 events. Older events roll out, with bounded priority
+for failure markers, outcomes, and milestones. Incident details have a separate bounded history.
+Changed evidence is saved every five seconds and on page hiding; failures and capture stops
+trigger an immediate save after publication. Unchanged evidence
 is not rewritten, and retained events reuse their encoded records. Empty captures are not archived.
 After reload, **Previous diagnostics** exports the latest saved capture for that page, with its original
 run identity. An empty current run offers no file, so it cannot be mistaken for the saved evidence.
@@ -93,7 +95,7 @@ The same controls are available through `window.windshareDiagnostics`:
 | `disable()` | Stops recording and prevents capture on subsequent page loads. |
 | `export()` | Returns the current run's events and incidents as NDJSON text. |
 | `status()` | Prints current capture state, event counts, and expiry deadline. |
-| `activation()` | Reports whether reload can resume capture and its original deadline, independently of sealed evidence. |
+| `activation()` | Reports whether reload can resume capture and its original deadline, independently of retained evidence. |
 | `inspectLastFailure()` | Returns the most recent failure incident and stack trace. |
 | `clear()` | Clears buffered logs and the current capture's saved snapshot without disabling capture. |
 

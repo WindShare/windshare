@@ -114,7 +114,7 @@ test('receives and recovers downloads through the real sender and relay', async 
       return diagnostics.enable()
     })
     expect(enabledDiagnostics).toMatchObject({
-      state: 'recording_pre_failure',
+      state: 'recording',
       enabled: true,
     })
 

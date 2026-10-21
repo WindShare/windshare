@@ -8,15 +8,15 @@ import {
   testTraceCapacity,
   type TestEvent,
   type TestIncident,
-  type TestScope,
 } from './test-support'
 
 function makeSwitch(time: FakeTraceTime, activationStore?: TraceActivationStore) {
-  return new TraceSwitch<TestEvent, TestIncident, TestScope>({
+  return new TraceSwitch<TestEvent, TestIncident>({
     ...(activationStore === undefined ? {} : { activationStore }),
     capacity: testTraceCapacity(),
     clock: time,
     scheduler: time,
+
     eventName: (event) => event.name,
     snapshotEvent: (event) => Object.freeze({ ...event }),
     eventBytes: (event) => event.bytes,
@@ -25,8 +25,7 @@ function makeSwitch(time: FakeTraceTime, activationStore?: TraceActivationStore)
       scope: Object.freeze({ ...incident.scope }),
     }),
     incidentMarkerBytes: () => 1,
-    incidentScope: (incident) => incident.scope,
-    sameScope: (left, right) => left.kind === right.kind && left.sequence === right.sequence,
+
   })
 }
 
@@ -84,7 +83,7 @@ describe('trace switch', () => {
     expect(first.captureGeneration).toBe(1n)
     expect(second.captureGeneration).toBe(2n)
     time.runEvenIfCancelled(firstExpiryIndex)
-    expect(trace.status().state).toBe('recording_pre_failure')
+    expect(trace.status().state).toBe('recording')
 
     const secondExpiryIndex = 1
     time.runEvenIfCancelled(secondExpiryIndex)
@@ -115,7 +114,7 @@ describe('trace switch', () => {
 
     expect(cleared.captureGeneration).toBe(enabled.captureGeneration)
     expect(cleared.expiresAtMilliseconds).toBe(enabled.expiresAtMilliseconds)
-    expect(cleared.state).toBe('recording_pre_failure')
+    expect(cleared.state).toBe('recording')
     expect(cleared.retainedEventCount).toBe(0n)
     expect(trace.current).toBeDefined()
   })
@@ -160,52 +159,66 @@ describe('trace switch', () => {
     expect(store.readExpiry()).toBeUndefined()
   })
 
-  it('keeps re-entry activated when a failure seals the current page evidence', () => {
+  it('continues after failures with unchanged activation and persists the original reload deadline', () => {
     const time = new FakeTraceTime()
     const store = activationStore()
-    const first = makeSwitch(time, store)
-    const enabled = first.enable()
-    first.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
-    time.advance(testTraceCapacity().postFailureSilenceMs)
-    expect(first.status().state).toBe('sealed')
-    first.clear()
-
-    const reopened = makeSwitch(time, store)
-    expect(reopened.status()).toMatchObject({
-      enabled: true, expiresAtMilliseconds: enabled.expiresAtMilliseconds,
+    const trace = makeSwitch(time, store)
+    const enabled = trace.enable()
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
+    time.advance(40)
+    trace.current?.(testEvent(1))
+    expect(trace.status()).toMatchObject({
+      state: 'recording', captureGeneration: enabled.captureGeneration,
+      expiresAtMilliseconds: enabled.expiresAtMilliseconds, retainedEventCount: 2n,
     })
-    reopened.disable()
+    const reopened = makeSwitch(time, store)
+    expect(reopened.status().expiresAtMilliseconds).toBe(enabled.expiresAtMilliseconds)
+    time.advance(60)
+    expect(trace.status()).toMatchObject({ enabled: false, sealReason: 'expired' })
+    expect(reopened.status()).toMatchObject({ enabled: false, sealReason: 'expired' })
     expect(store.readExpiry()).toBeUndefined()
-    expect(makeSwitch(time, store).status().state).toBe('idle')
   })
 
-  it('revokes activation after a failure seals evidence, without discarding that evidence', () => {
+  it('notifies evidence consumers of each failure without revoking the observer', () => {
+    const trace = makeSwitch(new FakeTraceTime())
+    trace.enable()
+    const observer = trace.current
+    let notifications = 0
+    trace.subscribe(() => notifications++)
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(2n), elapsedMs: 1n })
+    expect(notifications).toBe(2)
+    expect(trace.current).toBe(observer)
+    expect(trace.status().incidentMarkerCount).toBe(2n)
+    trace.disable()
+    const stopped = trace.captureSnapshot()
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(3n), elapsedMs: 2n })
+    expect(trace.captureSnapshot()).toEqual(stopped)
+    expect(notifications).toBe(3)
+  })
+
+  it('manual stop retains failure evidence and revokes reload activation', () => {
     const time = new FakeTraceTime()
     const store = activationStore()
     const trace = makeSwitch(time, store)
     trace.enable()
     trace.current?.(testEvent(1))
-    const activation = trace.activation()
     trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
-    time.advance(testTraceCapacity().postFailureSilenceMs)
-    const sealed = trace.captureSnapshot()
-    expect(trace.status().enabled).toBe(false)
-    expect(trace.activation()).toEqual(activation)
+    const evidence = trace.captureSnapshot()?.events
     trace.disable()
     expect(trace.activation()).toEqual({ kind: 'off' })
-    expect(trace.captureSnapshot()).toEqual(sealed)
+    expect(trace.captureSnapshot()?.events).toEqual(evidence)
     expect(makeSwitch(time, store).activation()).toEqual({ kind: 'off' })
   })
 
-  it('expires activation even after sealed evidence has been cleared', () => {
+  it('expires activation even after failure evidence has been cleared', () => {
     const time = new FakeTraceTime()
     const store = activationStore()
     const trace = makeSwitch(time, store)
     trace.enable()
     trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
-    time.advance(testTraceCapacity().postFailureSilenceMs)
     trace.clear()
-    expect(trace.activation().kind).toBe('active')
+    expect(trace.status().enabled).toBe(true)
     time.advance(testTraceCapacity().captureExpiryMs)
     expect(trace.activation()).toEqual({ kind: 'off' })
     expect(store.readExpiry()).toBeUndefined()

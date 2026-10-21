@@ -441,19 +441,16 @@ describe('bounded performance summary limits', () => {
 
   it('keeps a 582-file success within normal trace capacity without overwrite', () => {
     let now = 0
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never, never>({
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never>({
       captureGeneration: 1n,
       clock: { nowMilliseconds: () => now },
-      scheduler: {
-        schedule: () => Object.freeze({ cancel: () => undefined }),
-      },
+
       eventName: traceEventObservationNameV2,
       snapshotEvent: snapshotTraceEventObservationV2,
       eventBytes: traceEventObservationBytesV2,
       snapshotIncident: (incident) => incident,
       incidentMarkerBytes: () => 1,
-      incidentScope: (incident) => incident,
-      sameScope: () => true,
+
     })
     const summary = createBoundedPerformanceSummary({
       correlation: CORRELATION,

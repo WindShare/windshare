@@ -6,7 +6,6 @@ export function diagnosticsCaptureLabel(status: DiagnosticsStatusV2): string {
   switch (status.seal_reason) {
     case 'manual_disable': return 'Recording stopped'
     case 'expired': return 'Recording time limit reached'
-    case 'capacity_exhausted': return 'Diagnostic buffer is full'
-    default: return 'Failure evidence retained'
+    default: return 'Diagnostics retained'
   }
 }

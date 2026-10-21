@@ -87,13 +87,7 @@ export function testTraceCapacity(
     maxEventCount: 8,
     maxEventBytes: 4,
     maxTotalBytes: 16,
-    maxPreFailureEventCount: 4,
-    maxPreFailureBytes: 8,
-    maxPostFailureEventCount: 4,
-    maxPostFailureBytes: 8,
     maxIncidentMarkers: 2,
-    maxPostFailureMs: 20,
-    postFailureSilenceMs: 5,
     progressSampleIntervalMs: 10,
     checkpointCoalesceIntervalMs: 10,
     ...overrides,
@@ -122,12 +116,12 @@ export function makeTestRecorder(
   time: FakeTraceTime,
   capacity: TraceCapacityPolicy = testTraceCapacity(),
   health = new TraceHealthAccumulator(),
-): BoundedTraceRecorder<TestEvent, TestIncident, TestScope> {
+): BoundedTraceRecorder<TestEvent, TestIncident> {
   return new BoundedTraceRecorder({
     captureGeneration: 1n,
     capacity,
     clock: time,
-    scheduler: time,
+
     eventName: (event) => event.name,
     snapshotEvent: (event) => Object.freeze({ ...event }),
     eventBytes: (event) => event.bytes,
@@ -136,14 +130,13 @@ export function makeTestRecorder(
       scope: Object.freeze({ ...incident.scope }),
     }),
     incidentMarkerBytes: () => 1,
-    incidentScope: (incident) => incident.scope,
-    sameScope: (left, right) => left.kind === right.kind && left.sequence === right.sequence,
+
     health,
   })
 }
 
 export function retainedOrdinals(
-  recorder: BoundedTraceRecorder<TestEvent, TestIncident, TestScope>,
+  recorder: BoundedTraceRecorder<TestEvent, TestIncident>,
 ): number[] {
   return recorder.snapshot().events.flatMap((record) =>
     record.value.kind === 'event' ? [record.value.event.ordinal] : [])
