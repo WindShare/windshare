@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/statefile"
-	"github.com/windshare/windshare/engine/turnconfig"
+	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -26,19 +26,27 @@ const (
 var ErrConfig = errors.New("invalid sharing configuration")
 
 type Config struct {
-	ManagedTURNPolicies []turnconfig.ManagedPolicy
-	TURN                turnconfig.Config
+	ManagedTURNPolicies []turn.ManagedPolicy
+	TURN                turn.ManualSettings
 	FrontURL            string
 	Profiles            []senderrelay.Candidate
 	ActiveRelays        []string
 }
 
+// TURNSettings projects only authority and policy; unrelated application settings
+// cannot become a dependency of runtime TURN configuration.
+func (config Config) TURNSettings() turn.Settings {
+	return (turn.Settings{Manual: config.TURN, Managed: turn.ManagedSettings{
+		Relays: config.Profiles, Policies: config.ManagedTURNPolicies,
+	}}).Clone()
+}
+
 type document struct {
-	ManagedTURNPolicies []turnconfig.ManagedPolicy `json:"managed_turn_policies,omitempty"`
-	TURN                *turnconfig.Config         `json:"turn,omitempty"`
-	FrontURL            string                     `json:"front_url,omitempty"`
-	Profiles            []savedRelay               `json:"profiles"`
-	ActiveRelays        []string                   `json:"active_relays,omitempty"`
+	ManagedTURNPolicies []turn.ManagedPolicy `json:"managed_turn_policies,omitempty"`
+	TURN                *turn.ManualSettings `json:"turn,omitempty"`
+	FrontURL            string               `json:"front_url,omitempty"`
+	Profiles            []savedRelay         `json:"profiles"`
+	ActiveRelays        []string             `json:"active_relays,omitempty"`
 }
 type savedRelay struct {
 	URL       string `json:"url"`
@@ -107,7 +115,7 @@ func (config Config) Validate() error {
 }
 
 func (config Config) validateFields() error {
-	if err := config.TURN.Validate(); err != nil {
+	if err := config.TURNSettings().Validate(); err != nil {
 		return errors.Join(ErrConfig, err)
 	}
 	if config.FrontURL != "" && ValidateFrontURL(config.FrontURL) != nil {
@@ -124,17 +132,6 @@ func (config Config) validateFields() error {
 	for _, profile := range config.Profiles {
 		endpoint, _ := v2.NormalizeRelayEndpoint(profile.PublicURL)
 		saved[endpoint.DialURL] = true
-	}
-	policies := map[string]bool{}
-	if len(config.ManagedTURNPolicies) > MaximumProfiles {
-		return ErrConfig
-	}
-	for _, policy := range config.ManagedTURNPolicies {
-		endpoint, err := v2.NormalizeRelayEndpoint(policy.RelayURL)
-		if err != nil || policy.Validate() != nil || !saved[endpoint.DialURL] || policies[endpoint.DialURL] {
-			return ErrConfig
-		}
-		policies[endpoint.DialURL] = true
 	}
 	seen := map[string]bool{}
 	for _, address := range config.ActiveRelays {

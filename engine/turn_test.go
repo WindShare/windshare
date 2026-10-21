@@ -7,32 +7,33 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/turnpath"
-	"github.com/windshare/windshare/engine/turnaccount"
-	"github.com/windshare/windshare/engine/turnconfig"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestTURNConfigurationKeepsAccountBudgetAndOwnsItsInputs(t *testing.T) {
 	for _, initial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "configure", true: "new"}[initial], func(t *testing.T) {
-			config := turnconfig.Config{
-				Accounts: []turnconfig.Account{{ID: "owner", Provider: "standard", Issuer: "static",
+			config := turn.ManualSettings{
+				Accounts: []turn.AccountSettings{{ID: "owner", Provider: "standard", Issuer: "static",
 					LocalBudgetBytes: 100, Credentials: json.RawMessage(`{"username":"user","password":"password"}`)}},
-				Profiles: []turnconfig.Profile{{ID: "primary", Account: "owner", URLs: []string{"turn:localhost"}}},
+				Profiles: []turn.ProfileSettings{{ID: "primary", Account: "owner", URLs: []string{"turn:localhost"}}},
 			}
 			saved := config.Clone()
 			engineConfig := Config{}
 			if initial {
-				engineConfig.TURN = config
+				engineConfig.TURN = turn.Settings{Manual: config}
 			}
 			application := newTestEngine(t, engineConfig)
+			selection, release := application.turn.ForShare(t.Context(), nil)
+			defer release()
 			if !initial {
-				if err := application.ConfigureTURN(config); err != nil {
+				if err := application.ConfigureTURN(turn.Settings{Manual: config}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			config.Accounts[0].Credentials[0] = '!'
 			config.Profiles[0].URLs[0] = "turn:changed"
-			lease, err := application.turn.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{1}, PathID: [16]byte{2}})
+			lease, err := selection.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{1}, PathID: [16]byte{2}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -43,18 +44,18 @@ func TestTURNConfigurationKeepsAccountBudgetAndOwnsItsInputs(t *testing.T) {
 			if lease.Charge(turnpath.Usage{TransportSent: 100}) {
 				t.Fatal("account budget was not exhausted")
 			}
-			if err = application.ConfigureTURN(saved); err != nil {
+			if err = application.ConfigureTURN(turn.Settings{Manual: saved}); err != nil {
 				t.Fatal(err)
 			}
 			status := application.TURNStatus()
 			if len(status) != 1 || !status[0].Exhausted || status[0].ChargedBytes != 100 {
 				t.Fatalf("re-import reset shared budget: %+v", status)
 			}
-			if _, err = application.turn.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{3}, PathID: [16]byte{4}}); !errors.Is(err, turnaccount.ErrBudget) {
+			if _, err = selection.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{3}, PathID: [16]byte{4}}); !errors.Is(err, turn.ErrBudget) {
 				t.Fatalf("new session bypassed exhausted account: %v", err)
 			}
 			saved.Accounts[0].LocalBudgetBytes++
-			if err = application.ConfigureTURN(saved); err != nil {
+			if err = application.ConfigureTURN(turn.Settings{Manual: saved}); err != nil {
 				t.Fatal(err)
 			}
 			status = application.TURNStatus()
@@ -64,7 +65,7 @@ func TestTURNConfigurationKeepsAccountBudgetAndOwnsItsInputs(t *testing.T) {
 			if lease.Charge(turnpath.Usage{}) {
 				t.Fatal("raising budget revived a revoked lease")
 			}
-			next, err := application.turn.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{5}, PathID: [16]byte{6}})
+			next, err := selection.Acquire(t.Context(), "primary", turnpath.Subject{SessionID: [16]byte{5}, PathID: [16]byte{6}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +77,7 @@ func TestTURNConfigurationKeepsAccountBudgetAndOwnsItsInputs(t *testing.T) {
 			if err = application.Close(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if err = application.ConfigureTURN(saved); !errors.Is(err, ErrClosed) {
+			if err = application.ConfigureTURN(turn.Settings{Manual: saved}); !errors.Is(err, ErrClosed) {
 				t.Fatalf("closed engine accepted configuration: %v", err)
 			}
 		})

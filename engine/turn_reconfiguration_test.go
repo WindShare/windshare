@@ -7,12 +7,14 @@ import (
 
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/engine/turnconfig"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestTURNConfigurationUpdatesWhileApplicationTaskRemainsRunning(t *testing.T) {
 	application := newTestEngine(t, Config{})
 	owner := application.turn
+	selection, release := owner.ForShare(t.Context(), nil)
+	defer release()
 	started := make(chan struct{})
 	current, err := start(application, t.Context(), func(ctx context.Context, _ task.Control) task.Completion[int] {
 		close(started)
@@ -23,15 +25,15 @@ func TestTURNConfigurationUpdatesWhileApplicationTaskRemainsRunning(t *testing.T
 		t.Fatal(err)
 	}
 	<-started
-	config := turnconfig.Config{
-		Accounts: []turnconfig.Account{{ID: "owner", Provider: "standard", Issuer: "static",
+	config := turn.ManualSettings{
+		Accounts: []turn.AccountSettings{{ID: "owner", Provider: "standard", Issuer: "static",
 			LocalBudgetBytes: 100, Credentials: json.RawMessage(`{"username":"old","password":"password"}`)}},
-		Profiles: []turnconfig.Profile{{ID: "primary", Account: "owner", URLs: []string{"turn:localhost:3478"}}},
+		Profiles: []turn.ProfileSettings{{ID: "primary", Account: "owner", URLs: []string{"turn:localhost:3478"}}},
 	}
-	if err = application.ConfigureTURN(config); err != nil {
+	if err = application.ConfigureTURN(turn.Settings{Manual: config}); err != nil {
 		t.Fatal(err)
 	}
-	old, err := owner.Acquire(t.Context(), "primary", turnpath.Subject{})
+	old, err := selection.Acquire(t.Context(), "primary", turnpath.Subject{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,10 +42,10 @@ func TestTURNConfigurationUpdatesWhileApplicationTaskRemainsRunning(t *testing.T
 	config.Accounts[0].Credentials = json.RawMessage(`{"username":"new","password":"password"}`)
 	config.Accounts[0].LocalBudgetBytes = 200
 	config.Profiles[0].URLs[0] = "turn:localhost:3479"
-	if err = application.ConfigureTURN(config); err != nil {
+	if err = application.ConfigureTURN(turn.Settings{Manual: config}); err != nil {
 		t.Fatal(err)
 	}
-	next, err := owner.Acquire(t.Context(), "primary", turnpath.Subject{})
+	next, err := selection.Acquire(t.Context(), "primary", turnpath.Subject{})
 	if err != nil {
 		t.Fatal(err)
 	}

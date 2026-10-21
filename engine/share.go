@@ -55,14 +55,8 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		Peers: injected.Peers, PollNetwork: injected.PollNetwork,
 	}
 	current, err := start(engine, ctx, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
-		engine.mu.Lock()
-		addresses := make([]string, 0, len(request.Relays))
-		for _, relay := range request.Relays {
-			addresses = append(addresses, relay.PublicURL)
-		}
-		dependencies.TURN = engine.turn.Select(addresses)
-		engine.mu.Unlock()
-		stopDiscovery := engine.turnServices.Watch(ctx, request.Relays)
+		var stopDiscovery func()
+		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.Relays)
 		defer stopDiscovery()
 		dependencies.Control = control
 		return share.Run(ctx, request, dependencies)

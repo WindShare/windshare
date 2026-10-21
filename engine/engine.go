@@ -16,8 +16,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turnaccount"
-	"github.com/windshare/windshare/engine/turnservice"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 const (
@@ -48,8 +47,7 @@ type managedTask interface {
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
 	relaySetup    *relaysetup.Service
-	turn          *turnaccount.Manager
-	turnServices  *turnservice.Registry
+	turn          *turn.Runtime
 	mu            sync.Mutex
 	config        Config
 	random        *lockedReader
@@ -116,24 +114,18 @@ func New(config Config) (*Engine, error) {
 	if turnDependencies.Now == nil {
 		turnDependencies.Now = config.Now
 	}
-	turnConfig, err := config.TURN.Build(turnDependencies)
-	if err != nil {
-		_ = revisions.Close()
-		return nil, err
-	}
-	turn, err := turnaccount.New(turnConfig)
+	turn, err := turn.New(config.TURN, turnDependencies)
 	if err != nil {
 		_ = revisions.Close()
 		return nil, err
 	}
 	if config.RelaySetup.Cache == nil {
-		config.RelaySetup.Cache = config.TURNCache
+		config.RelaySetup.Cache = turnDependencies.Cache
 	}
 	return &Engine{
-		turn:         turn,
-		turnServices: turnservice.New(turn, turnDependencies, config.TURNCache),
-		relaySetup:   relaysetup.New(config.RelaySetup),
-		config:       config, random: random, identity: hex.EncodeToString(identity[:]),
+		turn:       turn,
+		relaySetup: relaysetup.New(config.RelaySetup),
+		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
 		tasks: make(map[task.ID]managedTask), closed: make(chan struct{}),
 	}, nil
@@ -206,7 +198,6 @@ func (engine *Engine) shutdown(active []managedTask) {
 		<-current.Done()
 	}
 	capacityErr := engine.revisions.Close()
-	engine.turnServices.Close()
 	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()

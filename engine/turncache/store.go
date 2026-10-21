@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -23,10 +23,10 @@ const maximumRecordBytes = 4096
 
 type FileStore struct{ Settings relayconfig.FileStore }
 type observation struct {
-	RelayURL    string                  `json:"relay_url"`
-	Authority   string                  `json:"authority"`
-	Capability  turnprovider.Capability `json:"capability"`
-	RequestedAt time.Time               `json:"requested_at"`
+	RelayURL    string          `json:"relay_url"`
+	Authority   string          `json:"authority"`
+	Capability  turn.Capability `json:"capability"`
+	RequestedAt time.Time       `json:"requested_at"`
 }
 
 func digest(value string) string {
@@ -64,12 +64,12 @@ func read(path string) (*observation, error) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, err
 	}
-	if !turnprovider.ValidServiceID(result.Capability.ServiceID) || result.RequestedAt.IsZero() {
+	if result.Capability.Validate() != nil || result.RequestedAt.IsZero() {
 		return nil, errors.New("invalid TURN cache observation")
 	}
 	return &result, nil
 }
-func (store FileStore) Load(candidate senderrelay.Candidate) (*turnprovider.Capability, error) {
+func (store FileStore) Load(candidate senderrelay.Candidate) (*turn.Capability, error) {
 	path, address, err := store.location(candidate)
 	if err != nil {
 		return nil, err
@@ -83,9 +83,9 @@ func (store FileStore) Load(candidate senderrelay.Candidate) (*turnprovider.Capa
 	}
 	return &record.Capability, nil
 }
-func (store FileStore) Save(ctx context.Context, candidate senderrelay.Candidate, capability turnprovider.Capability, requestedAt time.Time) error {
-	if !turnprovider.ValidServiceID(capability.ServiceID) || candidate.AccessKey == "" || requestedAt.IsZero() {
-		return turnprovider.ErrConfiguration
+func (store FileStore) Save(ctx context.Context, candidate senderrelay.Candidate, capability turn.Capability, requestedAt time.Time) error {
+	if capability.Validate() != nil || candidate.AccessKey == "" || requestedAt.IsZero() {
+		return turn.ErrConfiguration
 	}
 	path, address, err := store.location(candidate)
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turnprovider"
+	"github.com/windshare/windshare/engine/turn"
 	"net/http"
 	"net/url"
 )
@@ -80,7 +80,7 @@ func (service *Service) confirm(ctx context.Context, saved Snapshot, progress fu
 	pending := saved.Pending
 	var response struct {
 		Services []struct {
-			turnprovider.Capability
+			turn.Capability
 			RelayURL string `json:"relay_url"`
 		} `json:"managed_turn"`
 	}
@@ -122,7 +122,7 @@ func (service *Service) confirm(ctx context.Context, saved Snapshot, progress fu
 	}
 	if service.dependencies.Cache != nil && len(response.Services) == 1 {
 		discovered := response.Services[0]
-		if sameRelay(discovered.RelayURL, pending.RelayURL) && turnprovider.ValidServiceID(discovered.ServiceID) {
+		if sameRelay(discovered.RelayURL, pending.RelayURL) && discovered.Validate() == nil {
 			candidate := senderrelay.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
 			if err := service.dependencies.Cache.Save(ctx, candidate, discovered.Capability, requestedAt); err != nil {
 				service.dependencies.Log.Debug("relay_setup_cache_failed", "operation_id", pending.OperationID, "reason", err)

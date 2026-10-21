@@ -110,9 +110,11 @@ recovery is capped until fresh demand, network change or stable useful progress.
 
 `local_budget_bytes: 0` disables the local limit. Nonzero limits share socket
 usage across all profiles, shares and recipients using that account in one
-Engine instance. Counters reset with the Engine. `ConfigureTURN` preserves usage
-by account ID, including removal/re-import, and updates running sessions. New
-requests use the latest settings; existing leases retain their issuing source.
+Engine instance. Counters reset with the Engine. `ConfigureTURN(turn.Settings)`
+validates and publishes manual accounts and managed deployment policies together,
+preserving usage by account ID, including removal/re-import. Application settings
+project through `relayconfig.Config.TURNSettings()`; discovery observations remain
+separate. New requests use the latest settings; existing leases retain their issuing source.
 Removing an account/profile or lowering its limit below usage retires affected
 paths. Raising a limit permits new leases without reviving revoked ones.
 Exhaustion stops issuance and retires that account's paths, leaving other services
@@ -127,8 +129,10 @@ CLI traces associate route decisions, binding failures, issuance, replacement, r
 socket counters with their service, session, path and available attempt IDs.
 Cleanup distinguishes local protocol completion from a forced deadline; neither
 claims remote deallocation acknowledgment.
-Engine callers can inspect `TURNStatus()` and subscribe through
-`TURNDependencies.Observe`; local shutdown and provider-confirmed revocation are
+The `engine/turn` module owns validation, budgets and discovery; provider implementations
+are internal. Engine callers inspect `TURNStatus()` and subscribe through
+`TURNDependencies.Observe`; `TURNDependencies.Cache` supplies optional discovery persistence.
+Local shutdown and provider-confirmed revocation are
 separate events. Cloudflare supports credential revocation; static and coturn
 credentials remain reusable until their own authority expires.
 

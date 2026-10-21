@@ -120,7 +120,7 @@ func Main() int {
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
-	app.engineConfig.TURNCache = turncache.FileStore{Settings: relayconfig.FileStore{}}
+	app.engineConfig.TURNDependencies.Cache = turncache.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
 	app.processTrace = trace
 	code := runCLIWithInterruptEscalation(
