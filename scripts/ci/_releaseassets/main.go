@@ -51,7 +51,7 @@ func buildAssets(source, archive, out, version, commit string) error {
 	if err := buildNativeRelay(source, filepath.Join(staging, "wsrelay"+extension)); err != nil {
 		return err
 	}
-	for _, path := range []string{"LICENSE", "NOTICE", "docs/installation.md", "docs/stun.md", "scripts/deploy/wsrelay/README.md", "relay-rust/crates/relay-native/README.md", "third_party/pion/README.md", "third_party/pion/manifest.json", "third_party/pion/ice/LICENSE", "third_party/pion/webrtc/LICENSE", "third_party/pion/turn/LICENSE"} {
+	for _, path := range []string{"LICENSE", "NOTICE", "docs/installation.md", "docs/stun.md", "scripts/deploy/wsrelay/README.md", "relay-rust/crates/relay-native/README.md", "third_party/pion/README.md", "third_party/pion/manifest.json", "third_party/pion/ice/LICENSE", "third_party/pion/webrtc/LICENSE", "third_party/pion/turn/LICENSE", "third_party/pion/sctp/LICENSE"} {
 		if err := copyFile(filepath.Join(source, filepath.FromSlash(path)), filepath.Join(staging, filepath.FromSlash(path))); err != nil {
 			return err
 		}

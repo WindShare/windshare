@@ -20,6 +20,7 @@ exclude = [
   # WindShare provider wrappers and tests remain under normal source limits.
   "third_party/pion/ice/**",
   "third_party/pion/webrtc/**",
+  "third_party/pion/sctp/**",
 ]
 
 # =============================================================================

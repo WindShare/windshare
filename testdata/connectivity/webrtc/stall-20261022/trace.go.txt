@@ -1,0 +1,98 @@
+// #region DEBUG
+package PACKAGE
+
+import (
+ "bufio"
+ "encoding/binary"
+ "encoding/json"
+ "os"
+ "strconv"
+ "sync"
+ "time"
+)
+
+const researchLimit = 600000
+var researchTrace = struct {
+ sync.Mutex
+ path string
+ rows [][10]uint64
+ omitted uint64
+}{path: os.Getenv("WS_STALL_TRACE") + ".PACKAGE.ndjson"}
+
+func researchRecord(kind uint64, values ...uint64) {
+ if os.Getenv("WS_STALL_TRACE") == "" { return }
+ row := [10]uint64{uint64(time.Now().UnixMicro()), kind}
+ copy(row[2:], values)
+ researchTrace.Lock()
+ if researchTrace.rows == nil { researchTrace.rows = make([][10]uint64, 0, researchLimit) }
+ if len(researchTrace.rows) < researchLimit { researchTrace.rows = append(researchTrace.rows, row) } else { researchTrace.omitted++ }
+ researchTrace.Unlock()
+}
+func researchFlush() {
+ researchTrace.Lock()
+ defer researchTrace.Unlock()
+ if len(researchTrace.rows) == 0 { return }
+ file, err := os.OpenFile(researchTrace.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+ if err != nil { return }
+ writer := bufio.NewWriterSize(file, 1024*1024)
+ encoder := json.NewEncoder(writer)
+ _ = encoder.Encode(map[string]any{"debug":"[DEBUG H1 H2 H3 H4]", "package":"PACKAGE", "rows":len(researchTrace.rows), "omitted":researchTrace.omitted})
+ for _, row := range researchTrace.rows { _ = encoder.Encode(row) }
+ _ = writer.Flush()
+ _ = file.Close()
+ researchTrace.rows = researchTrace.rows[:0]
+ researchTrace.omitted = 0
+}
+func researchPacket(kind uint64, epoch uint16, sequence uint64, raw []byte) {
+ for offset := 12; offset+4 <= len(raw); {
+  chunk := raw[offset:]
+  size := int(binary.BigEndian.Uint16(chunk[2:4]))
+  if size < 4 || size > len(chunk) { return }
+  var tsn, extra uint64
+  if size >= 8 { tsn = uint64(binary.BigEndian.Uint32(chunk[4:8])) }
+  if size >= 12 { extra = uint64(binary.BigEndian.Uint32(chunk[8:12])) }
+  researchRecord(kind, uint64(epoch), sequence, uint64(chunk[0]), tsn, uint64(chunk[1]), uint64(size), extra)
+  if chunk[0] == 3 && size >= 16 {
+   gaps := int(binary.BigEndian.Uint16(chunk[12:14]))
+   for index := 0; index < gaps && 20+index*4 <= size; index++ {
+    start := 16+index*4
+    researchRecord(3, uint64(epoch), sequence, tsn, uint64(binary.BigEndian.Uint16(chunk[start:start+2])), uint64(binary.BigEndian.Uint16(chunk[start+2:start+4])))
+   }
+  }
+  offset += (size+3)&^3
+ }
+}
+var researchDropAt, _ = strconv.ParseUint(os.Getenv("WS_STALL_DROP_AT"),10,64)
+var researchDropTSN uint32
+var researchDropRemaining = 2
+var researchDataCount uint64
+var researchHighestTSN uint32
+var researchHaveTSN bool
+var researchDropRecords = make(map[uint64]bool)
+func researchPlanDrop(epoch uint16, sequence uint64, raw []byte) {
+ if researchDropAt == 0 || epoch != 1 { return }
+ for offset:=12; offset+8<=len(raw); {
+  chunk:=raw[offset:]; size:=int(binary.BigEndian.Uint16(chunk[2:4]))
+  if size<4 || size>len(chunk) {return}
+  if (chunk[0]==0 || chunk[0]==64) && size>1000 {
+   tsn:=binary.BigEndian.Uint32(chunk[4:8])
+   if !researchHaveTSN || int32(tsn-researchHighestTSN)>0 {
+    researchHaveTSN=true;researchHighestTSN=tsn;researchDataCount++
+    if researchDataCount==researchDropAt {researchDropTSN=tsn}
+   }
+   if researchDataCount>=researchDropAt && tsn==researchDropTSN && researchDropRemaining>0 {
+    researchDropRemaining--;researchDropRecords[sequence]=true
+   }
+  }
+  offset+=(size+3)&^3
+ }
+}
+func researchDropWire(raw []byte) bool {
+ if researchDropAt==0 || len(raw)<13 {return false}
+ var sequence uint64;for _,b:=range raw[5:11] {sequence=sequence<<8|uint64(b)}
+ if !researchDropRecords[sequence] {return false}
+ delete(researchDropRecords,sequence)
+ researchRecord(5,1,sequence,uint64(researchDropTSN))
+ return true
+}
+// #endregion DEBUG

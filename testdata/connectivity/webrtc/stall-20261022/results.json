@@ -1,0 +1,1175 @@
+{
+  "date": "2026-10-22",
+  "scope": "Windows native sender to Linux Chrome 155 over one verified LAN UDP WebRTC peer; 256 MiB, 1 MiB blocks, OPFS. Setup and final hash excluded from throughput.",
+  "passedRuns": 20,
+  "failedReportsRetained": 3,
+  "fixtureSHA256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+  "normalABBA": {
+    "before": {
+      "runs": 4,
+      "throughputMBps": [
+        19.336665370017304,
+        17.58583465994447,
+        14.720164949353322,
+        17.88925693416326
+      ],
+      "medianMBps": 17.737545797053865,
+      "firstWriteMs": [
+        173.30000001192093,
+        211.30000001192093,
+        188.30000001192093,
+        213.19999998807907
+      ],
+      "medianFirstWriteMs": 199.80000001192093,
+      "sctpCounters": "not instrumented"
+    },
+    "after": {
+      "runs": 4,
+      "throughputMBps": [
+        18.32536581035216,
+        19.654657919408763,
+        17.736423979346235,
+        17.357947842519216
+      ],
+      "medianMBps": 18.030894894849197,
+      "firstWriteMs": [
+        190.09999999403954,
+        181.19999998807907,
+        191.69999998807907,
+        222.90000000596046
+      ],
+      "medianFirstWriteMs": 190.8999999910593,
+      "sctpCounters": "not instrumented"
+    }
+  },
+  "doubleLoss": {
+    "before": {
+      "runs": 3,
+      "retryRecoveryMs": [
+        994.314,
+        984.431,
+        1003.562
+      ],
+      "t3Timeouts": [
+        1,
+        1,
+        1
+      ],
+      "kernelDrops": [
+        0,
+        0,
+        0
+      ]
+    },
+    "after": {
+      "runs": 3,
+      "retryRecoveryMs": [
+        41.632,
+        49.142,
+        28.401
+      ],
+      "t3Timeouts": [
+        0,
+        0,
+        0
+      ],
+      "kernelDrops": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "naturalTimeout": {
+    "label": "pause100-default-2",
+    "t3SenderUs": 1792660939463053,
+    "lastAck": [
+      1792660939462042,
+      2,
+      1,
+      4842,
+      3,
+      2224140877,
+      0,
+      20,
+      3013223,
+      0
+    ],
+    "state": {
+      "cumulativeTsn": 2224140877,
+      "cwndBeforeTimeout": 1500348,
+      "rwnd": 2999136,
+      "inflightBytes": 14087,
+      "pendingBytes": 0,
+      "nextTsn": 2224142335,
+      "rtoUs": 1000000,
+      "t3Count": 1
+    },
+    "clockOffsetReceiverMinusSenderUs": [
+      2133315.75,
+      2133771.5
+    ],
+    "injectedPauseAfterT3MsBounds": [
+      525.51425,
+      525.97
+    ],
+    "kernelDrops": 402,
+    "unreceivedDataRecords": 402,
+    "missingBursts": [
+      {
+        "firstSequence": 6791,
+        "lastSequence": 6861,
+        "firstSentUs": 1792660938436305,
+        "lastSentUs": 1792660938438433,
+        "count": 71
+      },
+      {
+        "firstSequence": 7540,
+        "lastSequence": 7640,
+        "firstSentUs": 1792660938492800,
+        "lastSentUs": 1792660938495436,
+        "count": 101
+      },
+      {
+        "firstSequence": 15564,
+        "lastSequence": 15792,
+        "firstSentUs": 1792660940001885,
+        "lastSentUs": 1792660940012641,
+        "count": 229
+      },
+      {
+        "firstSequence": 98816,
+        "lastSequence": 98816,
+        "firstSentUs": 1792660945758301,
+        "lastSentUs": 1792660945758301,
+        "count": 1
+      }
+    ],
+    "outstanding": [
+      {
+        "tsn": 2224140878,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6791,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7606,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140879,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6792,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7607,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140880,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6793,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7608,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140881,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6794,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7609,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140882,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6795,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7610,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140883,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436305,
+            "epoch": 1,
+            "sequence": 6796,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7611,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140884,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6797,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7612,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140885,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 576,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6798,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7613,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140886,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6799,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7614,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140887,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 637,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6800,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7615,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140888,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6801,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7616,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140889,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 637,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6802,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7617,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140890,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 1160,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6803,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7618,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      },
+      {
+        "tsn": 2224140891,
+        "sendCount": 2,
+        "missIndicator": 3,
+        "flags": 0,
+        "sinceUs": 1792660938494934,
+        "bytes": 637,
+        "transmissions": [
+          {
+            "atUs": 1792660938436807,
+            "epoch": 1,
+            "sequence": 6804,
+            "received": false,
+            "receiverUs": null
+          },
+          {
+            "atUs": 1792660938494934,
+            "epoch": 1,
+            "sequence": 7619,
+            "received": false,
+            "receiverUs": null
+          }
+        ]
+      }
+    ]
+  },
+  "repairMatchesProductionAssociation": "f7a29707a1406d01fdf66f96a3a67cc5c5bcc482e843fe5273809a7c933b7d4b",
+  "records": [
+    {
+      "label": "sender-natural-1",
+      "status": "failed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660179612/report.json",
+      "MBps": 15.160877000746606,
+      "firstWriteMs": 166.7000000178814,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 1,
+      "kernelDrops": 301,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": 303,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "da4428f05c355f3cb0c8e091c14e35e129fcefe633699f1d050b22097993252b",
+        "native-stats.ndjson": "994ca5bb89fdda0bfcf777873b797eb26d932bfe44fc29d215d49d2a8dba85d9",
+        "sender.dtls.ndjson": "63202aadfcf5a9ecbe8e4415eece475f5a44c6c32a085a83b6e4fcb9c08cdf11"
+      },
+      "senderTraceOmitted": [
+        0
+      ],
+      "receiverTraceOmitted": null,
+      "errorRecorded": true,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "packet-natural-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660474508/report.json",
+      "MBps": 16.91912516231785,
+      "firstWriteMs": 216.89999997615814,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 1,
+      "kernelDrops": 330,
+      "unreceivedDataRecords": 330,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 331,
+      "maxGatherPackets": 861,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "5c7b86333fcfd1c04f5cca5fc2893511017d30acb49c83762daf7915054bdb93",
+        "native-stats.ndjson": "34797e33bbdf1b26e8fc067bde66dfe7ac2903d82863e8c3999d6d5fe439dd35",
+        "sender.dtls.ndjson": "00bf6f0925ab372d561e1ab0715c7798dda1dffcb990b66841267f90f3ff1cee",
+        "sender.sctp.ndjson": "ad215f5164a85d166659e3a15048213525bbc1d6e9023e3e869ed4133db887cd",
+        "receiver.bin": "786c5bcfb9f8d9c70e207e319729c421e46422db7a96a8317108fe9ba0d26a77"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "packet-natural-2",
+      "status": "failed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660508133/report.json",
+      "MBps": null,
+      "firstWriteMs": null,
+      "sha256": null,
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": null,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "a0b20acb0d0d4ec2835df702ed51b24bc76e6b1acf5ca155840197ac18bd98de",
+        "native-stats.ndjson": "ca98ae1e68cdc047b0f3d00b8e917d4b9b23283e856c689056608b5910ff2a55",
+        "receiver.bin": "ac0f3608bac33c99822610ef8e8547b11ec0915571f35234e4895637a945a3fc"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": true,
+      "remoteCleanup": null
+    },
+    {
+      "label": "pause100-default-1",
+      "status": "failed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660768549/report.json",
+      "MBps": null,
+      "firstWriteMs": null,
+      "sha256": null,
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": null,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "e733b5157fbbedf3b3de0e38816ff61319518f69eb626df017df04c896ea4671",
+        "native-stats.ndjson": "cdd079441d3833e442f40e4fa2a10739c7e087283110b272f831cf266b1195a3",
+        "receiver.bin": "9f13d3317975f40b0dcdc2a01ec2bf9e161cd57919840d4356a7ed67b413473e"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": true,
+      "remoteCleanup": null
+    },
+    {
+      "label": "pause100-default-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660899433/report.json",
+      "MBps": 15.853548623344219,
+      "firstWriteMs": 189.09999999403954,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 2,
+      "kernelDrops": 591,
+      "unreceivedDataRecords": 633,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 634,
+      "maxGatherPackets": 869,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "7116cefd53d669fcdb5c97c1d68e6c997f336d30b184d38f46118f976aab970d",
+        "native-stats.ndjson": "280996ab6a4ea93fc7fbdfdc081a2dd915a4d6c84f632b95a3dc461a2fe6daa4",
+        "sender.dtls.ndjson": "a9233c63a6de6cfa9612ae93d492d9946ff7e3c9b81fb957e3727cd0d416e5e4",
+        "sender.sctp.ndjson": "bb8b2a566fa16ffe6ddaae0cf4bafe94250c29e2694b1c6865e618a59182f393",
+        "receiver.bin": "841ffa85abc777a36d3e0ae4a9c4497e9509bd320cb77c56b76852ef6735c5dd"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "pause100-default-2",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792660930937/report.json",
+      "MBps": 16.830758851602933,
+      "firstWriteMs": 187.90000000596046,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 1,
+      "fastRetransmissions": 0,
+      "kernelDrops": 402,
+      "unreceivedDataRecords": 402,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 403,
+      "maxGatherPackets": 855,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "f6e54f8c61b889690457c0d1c7fb53f453e508840baff68b783e80ba306fdb42",
+        "native-stats.ndjson": "1f576936b3c2b70dd56e4cbed1b64e5eacf41538788e1ef2daabb20350056056",
+        "sender.dtls.ndjson": "92842f35c6d0349bec472a385e9cdde82826f3aa79cdb2394559968e97b4a56e",
+        "sender.sctp.ndjson": "5babeb46323dc09aa229093b6918e592611fc7f8a90de077384641e7ade4852a",
+        "receiver.bin": "c34b8527320e830b3274acb7a4147b657b490967322e2e1c60d65ad08ba268a2"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "large-buffer-natural-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661292921/report.json",
+      "MBps": 12.351400438029335,
+      "firstWriteMs": 229.90000000596046,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 0,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 1,
+      "unreceivedReverseRecords": 0,
+      "repeatedDataChunks": 7,
+      "maxGatherPackets": 874,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "ddae941f4064d5bc5c33157765d4338463e458a1951bc3fba2c8a8ebf627380c",
+        "native-stats.ndjson": "d8c0ada3127eded236e92d58f9af9367658b9320c10e23390e737fb491a893ac",
+        "sender.dtls.ndjson": "bea94e3fb03c58008322be9a492a21fefe71ad425c39fdee93cdeb28178e7ae8",
+        "sender.sctp.ndjson": "354244ee6bf7d1644f6533c42005321373208e0b4f3c0721792264fee8b6cb2e",
+        "receiver.bin": "ecfdba093d26a304ce63ad72788f361c183780294956a0c84537bb907dc31205"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "large-buffer-natural-2",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661329241/report.json",
+      "MBps": 18.019793377035032,
+      "firstWriteMs": 181,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 0,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 0,
+      "unreceivedReverseRecords": 49,
+      "repeatedDataChunks": 6,
+      "maxGatherPackets": 863,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "4736a6320a0290959a4fcb0fe594dc7e8ac907e187df9be2d5f454b226ff6cb4",
+        "native-stats.ndjson": "7cddf941cd4d729df85e3d577ee48901ccb4b82a91593ccea01bc15ddf36bd08",
+        "sender.dtls.ndjson": "db88f86e60060bf3fa23006ea976fe8b6e4460ff519b98a51f521fe8677b4c33",
+        "sender.sctp.ndjson": "def8151b88c35b06d493996719aff06ba9972691b9b4f2e16fa7203eabb74b45",
+        "receiver.bin": "4ae536144acd97c0f21899d373e2310d1b5e4364d999570ff5ba0af5cba2dfd2"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "large-buffer-natural-3",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661358747/report.json",
+      "MBps": 16.591802605897637,
+      "firstWriteMs": 191.19999998807907,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 0,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 186,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 195,
+      "maxGatherPackets": 913,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "4bd57baab267326c0993b69a03a9c18e20012787ed851dbeb3919b3be5a44065",
+        "native-stats.ndjson": "9d4a56e5a820407ccb0732c5201270c6efe972c6ced9d5681e256f28ea05d92f",
+        "sender.dtls.ndjson": "6f43b84fcaf9622ce9e27f223dbb2356be1bda292a2435901de89962007d442f",
+        "sender.sctp.ndjson": "ede67f363de537060a74815927c0fd4024babd04c97f8aee78e05d9893a3da6d",
+        "receiver.bin": "f1e4624bb62b04cd8f0c8c87123a240ac4369b8a76da695b7db095a872467434"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "double-loss-before-1-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661682406/report.json",
+      "MBps": 16.633234563311337,
+      "firstWriteMs": 213.2000000178814,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 1,
+      "fastRetransmissions": 1,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 2,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 2,
+      "maxGatherPackets": 855,
+      "injectedRetryRecoveryMs": 994.314,
+      "rawSHA256": {
+        "report.json": "addde733542841b9fa0a7dc7484bec02721291e51852492c126c4a908af909fc",
+        "native-stats.ndjson": "467cd4838009a7d37bf228cea35729fd4b29d404db7309b5acde926433a463d6",
+        "sender.dtls.ndjson": "f0329d46235db6fd16ed3aa83c6ba5919bc4ad4c5ddf58f44b0eec2f9ae749d7",
+        "sender.sctp.ndjson": "baa44645fca2766386c88e0a9b640a9e894298b35cf39b0887b03f501f7779b8",
+        "receiver.bin": "d1df0c9202a32556c808006f40badfebc0426967d117ab581bc9fef12771ec0b"
+      },
+      "senderTraceOmitted": [
+        0,
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "double-loss-after-1-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661714735/report.json",
+      "MBps": 17.35424463408327,
+      "firstWriteMs": 235.90000000596046,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 1,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 2,
+      "unreceivedReverseRecords": 2,
+      "repeatedDataChunks": 4,
+      "maxGatherPackets": 913,
+      "injectedRetryRecoveryMs": 41.632,
+      "rawSHA256": {
+        "report.json": "828af5774fc779928fcecd15621a87b3f06bbeff744b5bdf8ef4b37efbdb231c",
+        "native-stats.ndjson": "216601f4c74bbfcdc3e2268845b45240804d48ca98669b91fb9f338941dce8d1",
+        "sender.dtls.ndjson": "23d8be15860c220a1497a68781cb9d08ab5570bd730fa36767c878346cf1e61a",
+        "sender.sctp.ndjson": "16dc6ec703ba814e742239f04ee2e8093e14ed5e0a45b1563c2ac3ea947c0ffc",
+        "receiver.bin": "c2c908ee597ee89c06f6f2096bfbad0a162d30bea32e5ebe15ac028151943192"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "double-loss-after-2-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661746866/report.json",
+      "MBps": 19.42453767890677,
+      "firstWriteMs": 185.2000000178814,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 1,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 2,
+      "unreceivedReverseRecords": 0,
+      "repeatedDataChunks": 2,
+      "maxGatherPackets": 859,
+      "injectedRetryRecoveryMs": 49.142,
+      "rawSHA256": {
+        "report.json": "1837686e5fa43f33a709451f425ccb652e997e66e602a841648d26ef36f9d554",
+        "native-stats.ndjson": "e96bd945aac7a700243c6f8f91304217dbc325fe8726929beab5993494ecea65",
+        "sender.dtls.ndjson": "34639100662c23fefbaa97bb1af9b7eeb6e765a459d80c202a67abe07180d530",
+        "sender.sctp.ndjson": "312d9fc1b3c95342b72ff5121ae4720c95d8b90c1824178fba7dd1b182f2662b",
+        "receiver.bin": "f6fe0feb46105af70dbe822d810221eb1d2b8f5c4655e1196ab90e26b8effed4"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "double-loss-before-2-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792661775357/report.json",
+      "MBps": 17.15670077527961,
+      "firstWriteMs": 161.59999999403954,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 1,
+      "fastRetransmissions": 1,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 2,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 598,
+      "maxGatherPackets": 741,
+      "injectedRetryRecoveryMs": 984.431,
+      "rawSHA256": {
+        "report.json": "dedba02a909e638f365d04646f6c2e6451e5ca9cd069e80d37b88b287aef7ab7",
+        "native-stats.ndjson": "a7c5f6e28c1fafeca20427b50bef631969fa702eaae59c16393740705efe7138",
+        "sender.dtls.ndjson": "d78b6f42d1052920ec560d88209944ab42086838b75fcdde1cf744d5547b4421",
+        "sender.sctp.ndjson": "e6b1f80f73d040ba83e8098adc7871ab6cc443b8cfbe787db277dd2ee319be5b",
+        "receiver.bin": "a982436b64ab11502cab738750ae3a5bd6db7ed604edc8ffd3ee777addbc3120"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-before-1-a-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662123445/report.json",
+      "MBps": 19.336665370017304,
+      "firstWriteMs": 173.30000001192093,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 418,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "a933c4c29708b1c251139f76aba144fc47e21c7e93c27c160f938698a5440c33"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-after-1-a-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662153250/report.json",
+      "MBps": 18.32536581035216,
+      "firstWriteMs": 190.09999999403954,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 323,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "70fbe9ef0e365b214aff3633cb7aaca50b559c61230075c174acfe260879b3d0"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-after-1-b-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662183909/report.json",
+      "MBps": 19.654657919408763,
+      "firstWriteMs": 181.19999998807907,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 50,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "5ebecada26e4a73b2d7d221bfcf1c908fff621322365b4108f309cc42af1819c"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-before-1-b-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662212386/report.json",
+      "MBps": 17.58583465994447,
+      "firstWriteMs": 211.30000001192093,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 454,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "dfb5a853980593ce8e7261d6d0fad56c1f34b73bc5cfaae66b9059bf3f12d71b"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-before-2-a-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662242298/report.json",
+      "MBps": 14.720164949353322,
+      "firstWriteMs": 188.30000001192093,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 242,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "4e30110b425933e036f7979ae35e018fbb659ee2df5684bf5fa442008d675460"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-after-2-a-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662276643/report.json",
+      "MBps": 17.736423979346235,
+      "firstWriteMs": 191.69999998807907,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 347,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "cc266749776134109cb08f72b7380788283a1b378c00354d363f0291db3bf4ae"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-after-2-b-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662307619/report.json",
+      "MBps": 17.357947842519216,
+      "firstWriteMs": 222.90000000596046,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 62,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "2de98592311f510246fe5be51b7bb9bf7952f6153f80d3f0ab8185ab822438e3"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "normal-before-2-b-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792662339236/report.json",
+      "MBps": 17.88925693416326,
+      "firstWriteMs": 213.19999998807907,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": null,
+      "fastRetransmissions": null,
+      "kernelDrops": 222,
+      "unreceivedDataRecords": null,
+      "unreceivedReverseRecords": null,
+      "repeatedDataChunks": null,
+      "maxGatherPackets": null,
+      "injectedRetryRecoveryMs": null,
+      "rawSHA256": {
+        "report.json": "0c2dd3b5b8f78cc3565c01b13633588ea9bd73bc767a1d5ea4faf87d300ad296"
+      },
+      "senderTraceOmitted": [],
+      "receiverTraceOmitted": null,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "final-double-loss-before-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792663217885/report.json",
+      "MBps": 16.72734759496382,
+      "firstWriteMs": 196.59999999403954,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 1,
+      "fastRetransmissions": 1,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 309,
+      "unreceivedReverseRecords": 137,
+      "repeatedDataChunks": 506,
+      "maxGatherPackets": 855,
+      "injectedRetryRecoveryMs": 1003.562,
+      "rawSHA256": {
+        "report.json": "4d69719f60a873a011399cc447b433b44949060b2fe9a1b615831e002522a1cf",
+        "native-stats.ndjson": "749592ae48c54b2f7bafc48231ed66ec4e33f31e7756abe9b72b254041eac9a3",
+        "sender.dtls.ndjson": "af00b504208b1e5b9e30003ae395b34392a949ce951af4159ebf5fc093ff2457",
+        "sender.sctp.ndjson": "b4139ec42924c5a7b2fa68386c849d00a66faa61d96186576ae9d34a0f7fa288",
+        "receiver.bin": "0185ab36e626931cba3e385c516d8b9d76eb6953e59f95d0d08c07fc8bbf7e01"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    },
+    {
+      "label": "final-double-loss-after-1",
+      "status": "passed",
+      "report": ".tmp/webrtc-stall-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792663250322/report.json",
+      "MBps": 18.474821126221954,
+      "firstWriteMs": 213.40000000596046,
+      "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+      "timeoutsCounter": 0,
+      "fastRetransmissions": 2,
+      "kernelDrops": 0,
+      "unreceivedDataRecords": 87,
+      "unreceivedReverseRecords": 1,
+      "repeatedDataChunks": 88,
+      "maxGatherPackets": 855,
+      "injectedRetryRecoveryMs": 28.401,
+      "rawSHA256": {
+        "report.json": "35c55662d950d8682838bdf1984a2fe285d8638efa89f84bf3f40738830ccdaf",
+        "native-stats.ndjson": "eee59e4b94a5c2cc68fa011957ee33828e6a7df0b65ae1faa8452fe158128c24",
+        "sender.dtls.ndjson": "f4e06aa330e558e1f1ece3e1297b93ddc17dc8143f4aae83fd0a1c6e36b2b6d5",
+        "sender.sctp.ndjson": "ca4cc1a95e815176f16d9af6304bd4e38c5cc6a40ce7788c0f6c71cefed5f4c6",
+        "receiver.bin": "6c2741e2cda9265c43469787646c753719610133e21245df3b03e7aab746f68a"
+      },
+      "senderTraceOmitted": [
+        0,
+        0
+      ],
+      "receiverTraceOmitted": 0,
+      "errorRecorded": false,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "status": "complete"
+      }
+    }
+  ]
+}

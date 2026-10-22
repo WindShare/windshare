@@ -190,6 +190,7 @@ func TestMaintainedOutputRejectsUnverifiedProjection(t *testing.T) {
 					Files: []sourceFile{{Path: "source.go", SHA256: digest([]byte("package expected\n"))}}},
 				{Name: "webrtc", Path: "github.com/pion/webrtc/v4", Version: "v4.2.16"},
 				{Name: "turn", Path: "github.com/pion/turn/v5", Version: "v5.1.0"},
+				{Name: "sctp", Path: "github.com/pion/sctp", Version: "v1.11.1"},
 			}}
 			raw, err := json.Marshal(sources)
 			if err != nil {
@@ -204,7 +205,7 @@ func TestMaintainedOutputRejectsUnverifiedProjection(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(boundary, "ice", "source.go"), []byte("package changed\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			module := "module example.com/product\nrequire (\ngithub.com/pion/ice/v4 v4.2.7\ngithub.com/pion/webrtc/v4 v4.2.16\ngithub.com/pion/turn/v5 v5.1.0\n)\nreplace github.com/pion/ice/v4 => ./third_party/pion/ice\nreplace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc\nreplace github.com/pion/turn/v5 => ./third_party/pion/turn\n"
+			module := "module example.com/product\nrequire (\ngithub.com/pion/ice/v4 v4.2.7\ngithub.com/pion/webrtc/v4 v4.2.16\ngithub.com/pion/turn/v5 v5.1.0\ngithub.com/pion/sctp v1.11.1\n)\nreplace github.com/pion/ice/v4 => ./third_party/pion/ice\nreplace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc\nreplace github.com/pion/turn/v5 => ./third_party/pion/turn\nreplace github.com/pion/sctp => ./third_party/pion/sctp\n"
 			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0600); err != nil {
 				t.Fatal(err)
 			}
