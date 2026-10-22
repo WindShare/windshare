@@ -1,0 +1,5437 @@
+{
+  "date": "2026-10-22",
+  "timezone": "Asia/Singapore",
+  "sourceRevision": "50892293a2062efe1c96c1731ff48c97ef05a205",
+  "status": "Research only; production source, installed Go, module cache, driver and system network settings remain unchanged.",
+  "units": "Decimal MB/s; 40 MB/s = 320 Mbps.",
+  "environments": {
+    "primary": "Windows native sender 192.0.2.10 to Linux Chrome 192.0.2.20 over the physical Wi-Fi LAN; direct IPv4 UDP, no TURN.",
+    "reverse": "Linux native sender 192.0.2.20 to Windows Chrome 192.0.2.10 over the same physical LAN; changes both endpoint roles and receiver OS/browser, so it does not isolate the sender alone.",
+    "sameHost": "Windows native sender to Windows Chrome through the host LAN address; routes locally without the physical Wi-Fi hop. This is not a LAN throughput claim.",
+    "windowsNIC": "Realtek 8852CE WiFi 6E PCI-E NIC; reported link speed 2.4 Gbps; driver 6001.16.172.0 dated 2025-10-16. Reported link speed is not available application bandwidth.",
+    "go": "1.27.0",
+    "browsers": {
+      "screen": "155.0.8059.84",
+      "instrument": "155.0.8059.84",
+      "dtls": "155.0.8059.84",
+      "batch": "155.0.8059.84",
+      "uso": "155.0.8059.84",
+      "uso-debug": "155.0.8059.84",
+      "uso-debug2": "155.0.8059.84",
+      "uso-fixed": "155.0.8059.84",
+      "overlap": "155.0.8059.84",
+      "connected": "155.0.8059.84",
+      "local": "155.0.8059.86",
+      "reverse": "155.0.8059.86",
+      "confirm": "155.0.8059.84",
+      "local-long": "155.0.8059.86",
+      "reverse-batch": "155.0.8059.86",
+      "reverse-repeat": "155.0.8059.86"
+    }
+  },
+  "method": {
+    "connection": "Exactly one PeerConnection, one reliable ordered DataChannel, one SCTP association and one native UniversalUDPMux socket per trial.",
+    "emptyVideo": "A recvonly video transceiver is present in every arm, including all baselines.",
+    "crypto": "Production sealed-record construction and browser authentication/decryption, with four decoder operations; final plaintext and ciphertext SHA-256 equality checked for every successful transfer.",
+    "timing": "Browser start request to last authenticated plaintext; includes transfer slow start. Excludes sender file reading/sealing, ICE/DTLS setup, final whole-file hashes and disk output. Cached input and memory output are not the full product pipeline.",
+    "repetition": "Most parameter arms are single screening runs. The confirm batch alternates baseline and overlapped submission across three 473 MB transfers per arm. local-long repeats the ordinary baseline three times. reverse-repeat runs three 473 MB transfers for each of three arms, reversing order for the middle repetition. No warmups were excluded from these batches.",
+    "TCP": "64 MiB raw TCP transfer with receiver byte count and SHA-256 before/after primary batches and reverse-repeat. Reverse-repeat uses a connection initiated by Windows with Linux sending the data; an earlier inbound Windows listening control timed out. No firewall settings changed. TCP is a path-capacity control, not an equivalent application/crypto benchmark.",
+    "timingCounters": "Native counters are wall time spent inside calls, not CPU time. Sampled intervals subtract the first sample from the last to reduce startup effects. Kernel/driver waits, scheduling and packet processing are not separated by these counters.",
+    "dropCounters": "Linux /proc/net/snmp deltas are host-wide observations, not definitive per-flow attribution. They are unavailable for the Windows receiver controls.",
+    "source": "Local research harness and raw reports remain in .tmp/webrtc-single-20261022. All dependency experiments use local copies or Go build overlays.",
+    "changes": "Screened send-watermarks, pacing/burst sizes, SCTP congestion growth, MTU, socket buffers, context cancellation, DTLS batching, Windows UDP segmentation, bounded overlapped send submission, connected UDP, and Linux sendmmsg batching."
+  },
+  "outcome": {
+    "attemptedTransfers": 105,
+    "completedIntegrityCheckedTransfers": 97,
+    "failedExperiments": 8
+  },
+  "interpretations": [
+    "A 20 MB/s universal SCTP/WebRTC single-connection limit is contradicted by the local single-connection control. A same-host result does not establish physical LAN or WAN performance.",
+    "The primary Windows-to-Linux direction often spends most of the native send loop in UDP write calls despite sufficiently large congestion/receive windows and sometimes zero observed receiver drops. This localizes work but does not prove a specific kernel, driver, filter or CPU cause.",
+    "Reducing approximately 100,000 UDP send calls to roughly 6,000 with Windows segmentation did not establish a repeatable doubling. Fewer syscalls alone are insufficient on this path.",
+    "Reverse-direction queue-depth gains are environment dependent; use actual progress and byte ownership to keep the pipeline supplied instead of adopting one large global queue.",
+    "Single-connection work and demand-driven multiple connections remain complementary. More efficient endpoints can lift a WAN ceiling; WAN RTT, loss, receive/congestion windows, path capacity and relay behavior still constrain the result.",
+    "The first Windows WSASendMsg experiments failed on immediate successful sends reported as zero bytes. A research-only Go internal/poll build overlay supplied the synchronous byte-count pointer; subsequent integrity-checked segmentation transfers succeeded. The installed Go toolchain was not modified.",
+    "The raw Windows overlapped prototype has a fixed research timeout and is not suitable for production integration without the existing cancellation/deadline owner. Connecting an ICE socket to one remote endpoint also changes filtering/recovery semantics and is diagnostic only."
+  ],
+  "keyResults": {
+    "primary473MB": {
+      "baselineMedianMBps": 20.842,
+      "overlappedPrototypeMedianMBps": 23.887,
+      "repetitionsPerArm": 3,
+      "improvementPercent": 14.61
+    },
+    "reverse473MB": {
+      "baselineMedianMBps": 29.069,
+      "batchAndQueueMedianMBps": 34.134,
+      "repetitionsPerArm": 3,
+      "improvementPercent": 17.42
+    },
+    "local473MB": {
+      "baselineMedianMBps": 56.377,
+      "measuredMBps": [
+        56.377,
+        56.219,
+        57.282
+      ],
+      "physicalNetwork": false
+    },
+    "largerMTUReverse473MB": {
+      "measuredMBps": [
+        38.348,
+        24.569,
+        37.372
+      ],
+      "interpretation": "Higher individual throughput but substantial variability; do not adopt a larger global path MTU."
+    },
+    "conclusion": "Single-connection gains are demonstrated in these small repeated samples; stable physical-LAN 40 MB/s has not been demonstrated. No universal maximum has been established."
+  },
+  "measurements": [
+    {
+      "id": "screen-0-baseline-start",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "baseline-start"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 17.591,
+      "verifiedMs": 6718.7,
+      "ciphertextSHA256": "9fa9147e487722675dff368043b9a6da149e5ce8280793e6de419ff18fae5c4b",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.89,
+      "medianCongestionWindowBytes": 1359500.5,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 554444,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": 85,
+      "sampledInterval": {
+        "elapsedMs": 6609,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-1-window1-low90",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window1-low90",
+        "buffer": 1048576,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.458,
+      "verifiedMs": 7181.5,
+      "ciphertextSHA256": "3899cea3a5e1deaa331c6090f9a12c59ee6b0f7f4d3323a5dfa02100781789e7",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 17.106,
+      "medianCongestionWindowBytes": 2635247.5,
+      "medianReceiverWindowBytes": 4035972,
+      "medianInflightBytes": 641732,
+      "medianPendingBytes": 363056,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 422,
+      "sampledInterval": {
+        "elapsedMs": 7072,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-2-window4-low90",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window4-low90",
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 23.016,
+      "verifiedMs": 5135.1,
+      "ciphertextSHA256": "63adacf732eb9d376ca7fe6d83f42d61d9746c31e2c1f1b5e208f4733e8ce81a",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 15.172,
+      "medianCongestionWindowBytes": 2642413.5,
+      "medianReceiverWindowBytes": 3417148,
+      "medianInflightBytes": 1232424,
+      "medianPendingBytes": 2752512,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 207,
+      "sampledInterval": {
+        "elapsedMs": 5026,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-3-pace24",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "pace24",
+        "pace": 24
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 17.086,
+      "verifiedMs": 6917.5,
+      "ciphertextSHA256": "166be15295ed543d6cd1c9a21663afdbf429471af65baa77eeea56b336c41cec",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.22,
+      "medianCongestionWindowBytes": 5250943,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 631580,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 6809,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-4-pace36",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "pace36",
+        "pace": 36
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.817,
+      "verifiedMs": 5964.1,
+      "ciphertextSHA256": "6b86c3614b408201970d156d4eb30c4468743969d60117466053d4f84ff924fb",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.303,
+      "medianCongestionWindowBytes": 5247436.5,
+      "medianReceiverWindowBytes": 4030464,
+      "medianInflightBytes": 655068,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5851,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-5-pace48",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "pace48",
+        "pace": 48
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.078,
+      "verifiedMs": 6195,
+      "ciphertextSHA256": "4f4876ce61049b27cf903fe0c63b09ebd81127177904bab0eed354fd605e263f",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.529,
+      "medianCongestionWindowBytes": 2642422.5,
+      "medianReceiverWindowBytes": 4078600,
+      "medianInflightBytes": 627232,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 77,
+      "sampledInterval": {
+        "elapsedMs": 6088,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-6-pace48-burst128",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "pace48-burst128",
+        "pace": 48,
+        "burst": 131072
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.049,
+      "verifiedMs": 5615,
+      "ciphertextSHA256": "f647f2cbf5c05394940c6605e95f96db08e0f4baa87f04283f69dad35d19e70a",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.214,
+      "medianCongestionWindowBytes": 4570500,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 605480,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 378,
+      "sampledInterval": {
+        "elapsedMs": 5507,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-7-ca16",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "ca16",
+        "caStep": 16384
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 18.704,
+      "verifiedMs": 6319,
+      "ciphertextSHA256": "7bf310b450ec199b3db7eed0a6e92d4025e4a642c6a9fe6d62e7d4e8430bf279",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.544,
+      "medianCongestionWindowBytes": 2689478,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 514136,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 284,
+      "sampledInterval": {
+        "elapsedMs": 6210,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-8-ca64",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "ca64",
+        "caStep": 65536
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.633,
+      "verifiedMs": 5463.3,
+      "ciphertextSHA256": "d5dadfc1fd8e7915811c75d8fd5b0b00ff46146c4a564176ca7b4bff8e86dcd0",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.743,
+      "medianCongestionWindowBytes": 2755886,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 662896,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 67,
+      "sampledInterval": {
+        "elapsedMs": 5356,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-9-mtu1400",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "mtu1400",
+        "mtu": 1400
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.885,
+      "verifiedMs": 5400.5,
+      "ciphertextSHA256": "ec8e2ffb52b398d0834b5c4cf2ba39bce474766c02af8addeced4e8b16937861",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.655,
+      "medianCongestionWindowBytes": 5248224,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 659156,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5292,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-10-window4-pace48",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window4-pace48",
+        "buffer": 4194304,
+        "low": 0.9,
+        "pace": 48
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.163,
+      "verifiedMs": 6167.7,
+      "ciphertextSHA256": "f4cc57c1cab789325daf9bd1ac0a2a75f394ca707af7e5ecc5daee5aac909fb5",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 14.179,
+      "medianCongestionWindowBytes": 2638213.5,
+      "medianReceiverWindowBytes": 3422080,
+      "medianInflightBytes": 1225176,
+      "medianPendingBytes": 2666096,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 90,
+      "sampledInterval": {
+        "elapsedMs": 6060,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-11-window4-ca16",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window4-ca16",
+        "buffer": 4194304,
+        "low": 0.9,
+        "caStep": 16384
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.303,
+      "verifiedMs": 7249.7,
+      "ciphertextSHA256": "87e6f7f7fd07266a1511f9684282bcbd724b8e368fd26afd2cc4992491e77d56",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.209,
+      "medianCongestionWindowBytes": 2696490,
+      "medianReceiverWindowBytes": 3288976,
+      "medianInflightBytes": 912864,
+      "medianPendingBytes": 2764688,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 711,
+      "sampledInterval": {
+        "elapsedMs": 7139,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-12-window4-ca16-pace48",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window4-ca16-pace48",
+        "buffer": 4194304,
+        "low": 0.9,
+        "caStep": 16384,
+        "pace": 48
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 18.266,
+      "verifiedMs": 6470.4,
+      "ciphertextSHA256": "f12498e10e60237bf4798ccfef0abacaaa84bfadce7ff545c2e777b597ff6823",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.979,
+      "medianCongestionWindowBytes": 2697650,
+      "medianReceiverWindowBytes": 3374232,
+      "medianInflightBytes": 1238224,
+      "medianPendingBytes": 2752512,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 139,
+      "sampledInterval": {
+        "elapsedMs": 6360,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-13-window4-ca64-pace48",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "window4-ca64-pace48",
+        "buffer": 4194304,
+        "low": 0.9,
+        "caStep": 65536,
+        "pace": 48
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.544,
+      "verifiedMs": 5753,
+      "ciphertextSHA256": "cab4193f5e5f621630d37dcbfbcf3d54974cd1e9814205c2648bc162bb8b5b83",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.897,
+      "medianCongestionWindowBytes": 5834764,
+      "medianReceiverWindowBytes": 2555904,
+      "medianInflightBytes": 2149928,
+      "medianPendingBytes": 1835008,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5644,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-14-socket4",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "socket4",
+        "socketBuffer": 4194304
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 23.502,
+      "verifiedMs": 5028.9,
+      "ciphertextSHA256": "ed34825334d2538534fe058fc2d89b54f9f5570fecb9a3f33ead91f70c37ca9b",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 13.632,
+      "medianCongestionWindowBytes": 413482,
+      "medianReceiverWindowBytes": 4320736,
+      "medianInflightBytes": 372336,
+      "medianPendingBytes": 296360,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 94,
+      "sampledInterval": {
+        "elapsedMs": 4923,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "screen-15-baseline-end",
+      "batch": "screen",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "baseline-end"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.13,
+      "verifiedMs": 7327.4,
+      "ciphertextSHA256": "e14da83b29263b4a1a3fd0afda75f5365e5ee0db6abac6b36fff5e735b88a6a6",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.989,
+      "medianCongestionWindowBytes": 1343451.5,
+      "medianReceiverWindowBytes": 4287096,
+      "medianInflightBytes": 394956,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": 164,
+      "sampledInterval": {
+        "elapsedMs": 7219,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "instrument-0-baseline",
+      "batch": "instrument",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "profile": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 18.606,
+      "verifiedMs": 6352.3,
+      "ciphertextSHA256": "e7d5a3b6a4d75acd68446193284678aa712d0665f52f0f7e0e72d761409da299",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.79,
+      "medianCongestionWindowBytes": 2649548.5,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 677976,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 41,
+      "sampledInterval": {
+        "elapsedMs": 6247,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": 5429.589,
+        "gatherWallMs": 74.772,
+        "waitWallMs": 733.308
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "instrument-1-window4-low90",
+      "batch": "instrument",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "window4-low90",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "profile": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 15.827,
+      "verifiedMs": 7467.7,
+      "ciphertextSHA256": "68fdad56bcd5861a69cd3cf20e24064d1b9990c4b7cd749998d4b7179b314b17",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 18.216,
+      "medianCongestionWindowBytes": 5246777,
+      "medianReceiverWindowBytes": 2918960,
+      "medianInflightBytes": 1472528,
+      "medianPendingBytes": 2359296,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 255,
+      "sampledInterval": {
+        "elapsedMs": 7357,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": 6902.916,
+        "gatherWallMs": 64.4,
+        "waitWallMs": 364.02
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "instrument-2-baseline-long",
+      "batch": "instrument",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline-long",
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin",
+        "profile": true
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.063,
+      "verifiedMs": 22445.4,
+      "ciphertextSHA256": "3c96fdacd8499a8fd71a417ae00be22f883d9c7b8c8d24c064d7dfdf0360e27d",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.647,
+      "medianCongestionWindowBytes": 483257,
+      "medianReceiverWindowBytes": 4313776,
+      "medianInflightBytes": 375816,
+      "medianPendingBytes": 227344,
+      "fastRetransmits": 4,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 444,
+      "sampledInterval": {
+        "elapsedMs": 22336,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": 18089.995,
+        "gatherWallMs": 305.654,
+        "waitWallMs": 3897.632
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "dtls-0-baseline",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.355,
+      "verifiedMs": 5534.6,
+      "ciphertextSHA256": "f95f00bf682969fb5bef3cf9a9bd4e47c43acfe765edb167a592b364ea069c86",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.516,
+      "medianCongestionWindowBytes": 5250959,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 703496,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5426,
+        "udpWriteWallMs": 4153.03,
+        "transportWriteWallMs": 4945.047,
+        "gatherWallMs": 69.278,
+        "waitWallMs": 395.337
+      },
+      "nativeUDP": {
+        "calls": 102835,
+        "nanos": 4194800900,
+        "slowCalls": 3276
+      }
+    },
+    {
+      "id": "dtls-1-afterfunc-only",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "afterfunc-only",
+        "fastContext": "both"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.656,
+      "verifiedMs": 7095.8,
+      "ciphertextSHA256": "b8725401d4e27af104eeedd7de842e1e291531d5e3fec3a24b4ad397eebb065f",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 16.271,
+      "medianCongestionWindowBytes": 2631676,
+      "medianReceiverWindowBytes": 4013352,
+      "medianInflightBytes": 635640,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 3,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 369,
+      "sampledInterval": {
+        "elapsedMs": 6987,
+        "udpWriteWallMs": 5602.636,
+        "transportWriteWallMs": 6356.513,
+        "gatherWallMs": 61.321,
+        "waitWallMs": 543.007
+      },
+      "nativeUDP": {
+        "calls": 103210,
+        "nanos": 5657490700,
+        "slowCalls": 3285
+      }
+    },
+    {
+      "id": "dtls-2-standard-context-only",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "standard-context-only",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.52,
+      "verifiedMs": 5759.8,
+      "ciphertextSHA256": "109ae610446d26951dd6bbdb5df3205936cddc21523b41089e1053222df6d28a",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.72,
+      "medianCongestionWindowBytes": 5250943,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 726692,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5651,
+        "udpWriteWallMs": 4464.743,
+        "transportWriteWallMs": 5233.423,
+        "gatherWallMs": 50.942,
+        "waitWallMs": 344.727
+      },
+      "nativeUDP": {
+        "calls": 102834,
+        "nanos": 4516578300,
+        "slowCalls": 3237
+      }
+    },
+    {
+      "id": "dtls-3-standard-context-afterfunc",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "standard-context-afterfunc",
+        "standardContext": true,
+        "fastContext": "both"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.1,
+      "verifiedMs": 5601.4,
+      "ciphertextSHA256": "fb61ab48f8e3f893538b66a4fa37c655c45136a451e995760943a6d3b74b03bf",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.318,
+      "medianCongestionWindowBytes": 2636144.5,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 650140,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 239,
+      "sampledInterval": {
+        "elapsedMs": 5493,
+        "udpWriteWallMs": 4391.76,
+        "transportWriteWallMs": 5085.073,
+        "gatherWallMs": 62.818,
+        "waitWallMs": 328.039
+      },
+      "nativeUDP": {
+        "calls": 103074,
+        "nanos": 4435572100,
+        "slowCalls": 3353
+      }
+    },
+    {
+      "id": "dtls-4-standard-context-afterfunc-window4",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "standard-context-afterfunc-window4",
+        "standardContext": true,
+        "fastContext": "both",
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 17.818,
+      "verifiedMs": 6633.3,
+      "ciphertextSHA256": "230418a041296b83095f5256db9a10d86df1708e76a0770687861385cf4957e3",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 15.402,
+      "medianCongestionWindowBytes": 5245586,
+      "medianReceiverWindowBytes": 3360312,
+      "medianInflightBytes": 1322320,
+      "medianPendingBytes": 2490368,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 555,
+      "sampledInterval": {
+        "elapsedMs": 6523,
+        "udpWriteWallMs": 5575.428,
+        "transportWriteWallMs": 6306.615,
+        "gatherWallMs": 65.599,
+        "waitWallMs": 129.947
+      },
+      "nativeUDP": {
+        "calls": 103391,
+        "nanos": 5624082900,
+        "slowCalls": 3391
+      }
+    },
+    {
+      "id": "dtls-5-standard-context-afterfunc",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "standard-context-afterfunc",
+        "standardContext": true,
+        "fastContext": "both"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.722,
+      "verifiedMs": 5441,
+      "ciphertextSHA256": "6ffa70c365343cee6f159beb668a1b7841089962fa78ef822822a9d20bc0d969",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.359,
+      "medianCongestionWindowBytes": 2814340,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 625200,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 185,
+      "sampledInterval": {
+        "elapsedMs": 5331,
+        "udpWriteWallMs": 4193.955,
+        "transportWriteWallMs": 4888.126,
+        "gatherWallMs": 60.669,
+        "waitWallMs": 359.278
+      },
+      "nativeUDP": {
+        "calls": 103021,
+        "nanos": 4235092800,
+        "slowCalls": 3298
+      }
+    },
+    {
+      "id": "dtls-6-baseline",
+      "batch": "dtls",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.679,
+      "verifiedMs": 5451.8,
+      "ciphertextSHA256": "8acd4eaec0f4402c3cd56eddce94c039d7a0291a97085d071c561777d0ec13dc",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.209,
+      "medianCongestionWindowBytes": 664939,
+      "medianReceiverWindowBytes": 4290576,
+      "medianInflightBytes": 396696,
+      "medianPendingBytes": 266200,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5343,
+        "udpWriteWallMs": 4170.51,
+        "transportWriteWallMs": 4893.493,
+        "gatherWallMs": 70.247,
+        "waitWallMs": 359.103
+      },
+      "nativeUDP": {
+        "calls": 102889,
+        "nanos": 4215260200,
+        "slowCalls": 3341
+      }
+    },
+    {
+      "id": "batch-0-baseline",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": false,
+        "fastContext": "",
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 18.554,
+      "verifiedMs": 6370.1,
+      "ciphertextSHA256": "6217ff81bd1ca19233c197594fdcc80a1e5005ffd98d73f32729211c513286a3",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.923,
+      "medianCongestionWindowBytes": 961709,
+      "medianReceiverWindowBytes": 4303336,
+      "medianInflightBytes": 382776,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 428,
+      "sampledInterval": {
+        "elapsedMs": 6263,
+        "udpWriteWallMs": 3990.648,
+        "transportWriteWallMs": 4726.003,
+        "gatherWallMs": 71.955,
+        "waitWallMs": 1446.957
+      },
+      "nativeUDP": {
+        "calls": 103266,
+        "nanos": 4030280100,
+        "slowCalls": 3267
+      }
+    },
+    {
+      "id": "batch-1-batch8",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch8",
+        "batch": 8
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 14.646,
+      "verifiedMs": 8069.7,
+      "ciphertextSHA256": "2ad21e36bee62834925178b58ff028a7887978c56af700918949ea5d4eff98cd",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 18.253,
+      "medianCongestionWindowBytes": 2627811,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 648400,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 79,
+      "sampledInterval": {
+        "elapsedMs": 7957,
+        "udpWriteWallMs": 7267.255,
+        "transportWriteWallMs": 7446.126,
+        "gatherWallMs": 71.208,
+        "waitWallMs": 438.17
+      },
+      "nativeUDP": {
+        "calls": 102918,
+        "nanos": 7329927100,
+        "slowCalls": 3316
+      }
+    },
+    {
+      "id": "batch-2-batch32",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch32",
+        "batch": 32
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.308,
+      "verifiedMs": 5546.8,
+      "ciphertextSHA256": "4a647bf85e50033c5d719950dadd9ae68a1d9f45a9333f7952ce7b1ca71f5a82",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.664,
+      "medianCongestionWindowBytes": 5249207,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 615920,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5438,
+        "udpWriteWallMs": 5012.56,
+        "transportWriteWallMs": 5143.221,
+        "gatherWallMs": 59.351,
+        "waitWallMs": 235.047
+      },
+      "nativeUDP": {
+        "calls": 102835,
+        "nanos": 5079760000,
+        "slowCalls": 3366
+      }
+    },
+    {
+      "id": "batch-3-batch64",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch64",
+        "batch": 64
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.153,
+      "verifiedMs": 6170.8,
+      "ciphertextSHA256": "1ec9f7c065c31713c4ca9222b8468de269af1dc012fd9cd4998301145bf6a5aa",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.487,
+      "medianCongestionWindowBytes": 5252757,
+      "medianReceiverWindowBytes": 4030464,
+      "medianInflightBytes": 649268,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 6062,
+        "udpWriteWallMs": 5617.123,
+        "transportWriteWallMs": 5661.689,
+        "gatherWallMs": 56.927,
+        "waitWallMs": 343.799
+      },
+      "nativeUDP": {
+        "calls": 102838,
+        "nanos": 5671592400,
+        "slowCalls": 3262
+      }
+    },
+    {
+      "id": "batch-4-batch32-window4",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch32-window4",
+        "batch": 32,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.04,
+      "verifiedMs": 5362.4,
+      "ciphertextSHA256": "47f8b597f00667d67ccea55a51a54ff918e3e92fb63f43b8c49695347d258bd0",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.476,
+      "medianCongestionWindowBytes": 2635236.5,
+      "medianReceiverWindowBytes": 3349004,
+      "medianInflightBytes": 1291872,
+      "medianPendingBytes": 2620568,
+      "fastRetransmits": 16,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 241,
+      "sampledInterval": {
+        "elapsedMs": 5253,
+        "udpWriteWallMs": 4954.565,
+        "transportWriteWallMs": 5078.056,
+        "gatherWallMs": 66.62,
+        "waitWallMs": 109.975
+      },
+      "nativeUDP": {
+        "calls": 103117,
+        "nanos": 5007287800,
+        "slowCalls": 3281
+      }
+    },
+    {
+      "id": "batch-5-batch32-mtu1400",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch32-mtu1400",
+        "batch": 32,
+        "mtu": 1400
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.598,
+      "verifiedMs": 5230,
+      "ciphertextSHA256": "70da2733dfd8d7cf37b0e9697341880ac918be299d78a31c7ace75d432b5d100",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.818,
+      "medianCongestionWindowBytes": 5252612,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 556896,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5120,
+        "udpWriteWallMs": 4703.47,
+        "transportWriteWallMs": 4824.123,
+        "gatherWallMs": 58.257,
+        "waitWallMs": 238.718
+      },
+      "nativeUDP": {
+        "calls": 86601,
+        "nanos": 4769153600,
+        "slowCalls": 3168
+      }
+    },
+    {
+      "id": "batch-6-batch32",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch32",
+        "batch": 32
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.993,
+      "verifiedMs": 5374,
+      "ciphertextSHA256": "d6c5de769a8b4f133f74fae7bd1a7350ab38e34c735a3fce210a8d439092ae83",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.646,
+      "medianCongestionWindowBytes": 5250970.5,
+      "medianReceiverWindowBytes": 4030464,
+      "medianInflightBytes": 662608,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5267,
+        "udpWriteWallMs": 4765.054,
+        "transportWriteWallMs": 4919.533,
+        "gatherWallMs": 61.748,
+        "waitWallMs": 284.001
+      },
+      "nativeUDP": {
+        "calls": 102834,
+        "nanos": 4816877400,
+        "slowCalls": 3361
+      }
+    },
+    {
+      "id": "batch-7-baseline",
+      "batch": "batch",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": false,
+        "fastContext": "",
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.93,
+      "verifiedMs": 5647,
+      "ciphertextSHA256": "0134ad47daf11d8068273d01a69a6cc95b682f82bcf599d7084ca2c94807cf61",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.862,
+      "medianCongestionWindowBytes": 724029,
+      "medianReceiverWindowBytes": 4230840,
+      "medianInflightBytes": 451792,
+      "medianPendingBytes": 230824,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 34,
+      "sampledInterval": {
+        "elapsedMs": 5537,
+        "udpWriteWallMs": 4211.237,
+        "transportWriteWallMs": 4948.923,
+        "gatherWallMs": 51.025,
+        "waitWallMs": 526.67
+      },
+      "nativeUDP": {
+        "calls": 102888,
+        "nanos": 4261348400,
+        "slowCalls": 3260
+      }
+    },
+    {
+      "id": "uso-0-baseline",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": false,
+        "fastContext": "",
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.624,
+      "verifiedMs": 5465.8,
+      "ciphertextSHA256": "a599100f5ea365705cf0ab55ab4ea43d27545a799b904b6f9160f81e74ae1db4",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.313,
+      "medianCongestionWindowBytes": 2665852,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 607800,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 81,
+      "sampledInterval": {
+        "elapsedMs": 5356,
+        "udpWriteWallMs": 4138.179,
+        "transportWriteWallMs": 4888.075,
+        "gatherWallMs": 64.102,
+        "waitWallMs": 378.238
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102915,
+        "nanos": 4195964500,
+        "slowCalls": 3310
+      }
+    },
+    {
+      "id": "uso-1-batch32-control",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "batch32-control",
+        "batch": 32
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.347,
+      "verifiedMs": 7230.1,
+      "ciphertextSHA256": "ba082dffa7d7e2e51cb6ebac9dd87569d131978e843057a76d1c7e4fd7be741d",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 15.152,
+      "medianCongestionWindowBytes": 2632571,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 662896,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 75,
+      "sampledInterval": {
+        "elapsedMs": 7119,
+        "udpWriteWallMs": 6303.159,
+        "transportWriteWallMs": 6389.809,
+        "gatherWallMs": 72.843,
+        "waitWallMs": 656.073
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102955,
+        "nanos": 6361510900,
+        "slowCalls": 3296
+      }
+    },
+    {
+      "id": "uso-2-uso8",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso8",
+        "batch": 8,
+        "uso": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-3-uso32",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso32",
+        "batch": 32,
+        "uso": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-4-uso64",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso64",
+        "batch": 64,
+        "uso": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-5-uso32-window4",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso32-window4",
+        "batch": 32,
+        "uso": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-6-uso32-window4",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso32-window4",
+        "batch": 32,
+        "uso": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-7-uso32",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "uso32",
+        "batch": 32,
+        "uso": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-8-baseline",
+      "batch": "uso",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "standardContext": false,
+        "fastContext": "",
+        "name": "baseline"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.715,
+      "verifiedMs": 5442.7,
+      "ciphertextSHA256": "0e9d4f8fcb17cc068aaf09b21f8b26420b25f345870f8cf618c7b8371598441d",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.05,
+      "medianCongestionWindowBytes": 5244404,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 660576,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 56,
+      "sampledInterval": {
+        "elapsedMs": 5333,
+        "udpWriteWallMs": 4107.414,
+        "transportWriteWallMs": 4855.533,
+        "gatherWallMs": 67.861,
+        "waitWallMs": 390.024
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102891,
+        "nanos": 4159697700,
+        "slowCalls": 3343
+      }
+    },
+    {
+      "id": "uso-debug-0-uso32",
+      "batch": "uso-debug",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "uso32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-debug2-0-cmsg",
+      "batch": "uso-debug2",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "cmsg",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": false,
+      "error": "Error: page.evaluate: Error: early close\n    at dc.onclose (eval at evaluate (:311:30), <anonymous>:26:99)",
+      "verifiedMBps": null,
+      "verifiedMs": null,
+      "ciphertextSHA256": null,
+      "plaintextSHA256": null,
+      "medianSCTPRttMs": null,
+      "medianCongestionWindowBytes": null,
+      "medianReceiverWindowBytes": null,
+      "medianInflightBytes": null,
+      "medianPendingBytes": null,
+      "fastRetransmits": null,
+      "t3Timeouts": null,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": null,
+        "udpWriteWallMs": null,
+        "transportWriteWallMs": null,
+        "gatherWallMs": null,
+        "waitWallMs": null
+      },
+      "nativeUDP": null
+    },
+    {
+      "id": "uso-debug2-1-socket",
+      "batch": "uso-debug2",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "socket",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "usoSocket": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.656,
+      "verifiedMs": 5216.7,
+      "ciphertextSHA256": "f5578c5b9b4d3edf5db49cea0b5e65633643558cf0711acf093d2c333cc41b4a",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 9.623,
+      "medianCongestionWindowBytes": 5250375,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 534144,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5108,
+        "udpWriteWallMs": 4738.74,
+        "transportWriteWallMs": 4894.403,
+        "gatherWallMs": 56.703,
+        "waitWallMs": 156.115
+      },
+      "nativeUDP": {
+        "batchCalls": 4814,
+        "batchDatagrams": 100987,
+        "calls": 6660,
+        "nanos": 4792147100,
+        "slowCalls": 2647
+      }
+    },
+    {
+      "id": "uso-fixed-0-baseline",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.69,
+      "verifiedMs": 5712.3,
+      "ciphertextSHA256": "104e01b4e7969c30c15a8768ae84eb2110799ddcc782e1687a6b922d66fb4b10",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.951,
+      "medianCongestionWindowBytes": 5246806.5,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 610700,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 56,
+      "sampledInterval": {
+        "elapsedMs": 5605,
+        "udpWriteWallMs": 4430.712,
+        "transportWriteWallMs": 5214.708,
+        "gatherWallMs": 61.702,
+        "waitWallMs": 308.818
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102893,
+        "nanos": 4481815100,
+        "slowCalls": 3385
+      }
+    },
+    {
+      "id": "uso-fixed-1-cmsg32",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "cmsg32"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.14,
+      "verifiedMs": 7323,
+      "ciphertextSHA256": "63dc7b1fd979b718896c5548c96215bd9ba3a51e503cb373f98578626ff85960",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 14.016,
+      "medianCongestionWindowBytes": 5250390,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 611860,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 7213,
+        "udpWriteWallMs": 6520.971,
+        "transportWriteWallMs": 6709.206,
+        "gatherWallMs": 63.165,
+        "waitWallMs": 441.836
+      },
+      "nativeUDP": {
+        "batchCalls": 4822,
+        "batchDatagrams": 100900,
+        "calls": 6765,
+        "nanos": 6567343800,
+        "slowCalls": 2546
+      }
+    },
+    {
+      "id": "uso-fixed-2-socket32-persist",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "socket32-persist",
+        "usoSocket": true,
+        "usoPersist": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.936,
+      "verifiedMs": 5928.6,
+      "ciphertextSHA256": "69301a305293aed52a187747ec65b2fd0e92f968dea8715e07dd47a3a239c155",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.883,
+      "medianCongestionWindowBytes": 5249784,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 624040,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5818,
+        "udpWriteWallMs": 5300.665,
+        "transportWriteWallMs": 5475.305,
+        "gatherWallMs": 58.602,
+        "waitWallMs": 283.327
+      },
+      "nativeUDP": {
+        "batchCalls": 4825,
+        "batchDatagrams": 101005,
+        "calls": 6653,
+        "nanos": 5339115200,
+        "slowCalls": 2592
+      }
+    },
+    {
+      "id": "uso-fixed-3-cmsg32-window4",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "cmsg32-window4",
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.486,
+      "verifiedMs": 6065.5,
+      "ciphertextSHA256": "0995003cc53afd74fd3d78abdc9d342a4ea930e7e7b5db3e78329371ccfc06fb",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.201,
+      "medianCongestionWindowBytes": 1357606,
+      "medianReceiverWindowBytes": 3723952,
+      "medianInflightBytes": 638544,
+      "medianPendingBytes": 3247800,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 219,
+      "sampledInterval": {
+        "elapsedMs": 5957,
+        "udpWriteWallMs": 4750.491,
+        "transportWriteWallMs": 4904.205,
+        "gatherWallMs": 62.006,
+        "waitWallMs": 989.162
+      },
+      "nativeUDP": {
+        "batchCalls": 4845,
+        "batchDatagrams": 100896,
+        "calls": 7003,
+        "nanos": 4806123100,
+        "slowCalls": 2490
+      }
+    },
+    {
+      "id": "uso-fixed-4-cmsg8",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 8,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "cmsg8"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.35,
+      "verifiedMs": 7228.7,
+      "ciphertextSHA256": "c11d20ace1935e1c8e97ecf64de3d81d2dc66d1d1d447a288cb17e6f74b7282b",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.848,
+      "medianCongestionWindowBytes": 949648,
+      "medianReceiverWindowBytes": 4259840,
+      "medianInflightBytes": 414672,
+      "medianPendingBytes": 122952,
+      "fastRetransmits": 1,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": 224,
+      "sampledInterval": {
+        "elapsedMs": 7118,
+        "udpWriteWallMs": 4653.051,
+        "transportWriteWallMs": 4848.901,
+        "gatherWallMs": 58.21,
+        "waitWallMs": 2209.455
+      },
+      "nativeUDP": {
+        "batchCalls": 13663,
+        "batchDatagrams": 100295,
+        "calls": 16425,
+        "nanos": 4708725100,
+        "slowCalls": 2663
+      }
+    },
+    {
+      "id": "uso-fixed-5-cmsg64",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "cmsg64"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.516,
+      "verifiedMs": 5249.2,
+      "ciphertextSHA256": "c6063b4f6d45b3d9f1d97c46f4e89be625405de480b587f2f3e011c011db047b",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.472,
+      "medianCongestionWindowBytes": 2648058,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 602000,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 2,
+      "sampledInterval": {
+        "elapsedMs": 5140,
+        "udpWriteWallMs": 4580.543,
+        "transportWriteWallMs": 4781.771,
+        "gatherWallMs": 62.049,
+        "waitWallMs": 296.806
+      },
+      "nativeUDP": {
+        "batchCalls": 3635,
+        "batchDatagrams": 100965,
+        "calls": 5507,
+        "nanos": 4619238700,
+        "slowCalls": 2456
+      }
+    },
+    {
+      "id": "uso-fixed-6-cmsg32",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "standardContext": true,
+        "fastContext": "both",
+        "name": "cmsg32"
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.326,
+      "verifiedMs": 5293.8,
+      "ciphertextSHA256": "b7653309a7a7854739f6b503fa9459e2449bad327f5aa9e2d9ff3ab41d7594bb",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 9.79,
+      "medianCongestionWindowBytes": 5249807,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 549224,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 0,
+      "sampledInterval": {
+        "elapsedMs": 5186,
+        "udpWriteWallMs": 4755.353,
+        "transportWriteWallMs": 4916.684,
+        "gatherWallMs": 54.87,
+        "waitWallMs": 212.684
+      },
+      "nativeUDP": {
+        "batchCalls": 4824,
+        "batchDatagrams": 101004,
+        "calls": 6652,
+        "nanos": 4801948100,
+        "slowCalls": 2574
+      }
+    },
+    {
+      "id": "uso-fixed-7-baseline",
+      "batch": "uso-fixed",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 19.442,
+      "verifiedMs": 6079,
+      "ciphertextSHA256": "e26d0275686d91532abc489d3ea112865d42b3056477b06555dfe6cb8954bb00",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.831,
+      "medianCongestionWindowBytes": 654362,
+      "medianReceiverWindowBytes": 4275496,
+      "medianInflightBytes": 405392,
+      "medianPendingBytes": 255184,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 34,
+      "sampledInterval": {
+        "elapsedMs": 5972,
+        "udpWriteWallMs": 4584.252,
+        "transportWriteWallMs": 5349.883,
+        "gatherWallMs": 64.24,
+        "waitWallMs": 538.352
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102871,
+        "nanos": 4626077300,
+        "slowCalls": 3357
+      }
+    },
+    {
+      "id": "overlap-0-baseline",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.135,
+      "verifiedMs": 5592.2,
+      "ciphertextSHA256": "869da82047acf9bfa25c0199229a91a28b6ac035bd9e813cc452cee2fb56f68d",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.36,
+      "medianCongestionWindowBytes": 1954228,
+      "medianReceiverWindowBytes": 4093968,
+      "medianInflightBytes": 587504,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 3,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 175,
+      "sampledInterval": {
+        "elapsedMs": 5485,
+        "udpWriteWallMs": 4434.904,
+        "transportWriteWallMs": 5067.891,
+        "gatherWallMs": 61.72,
+        "waitWallMs": 342.71
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 103009,
+        "nanos": 4495489600,
+        "pendingCalls": 0,
+        "slowCalls": 3467
+      }
+    },
+    {
+      "id": "overlap-1-overlap8",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap8",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 8,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 15.9,
+      "verifiedMs": 7433.1,
+      "ciphertextSHA256": "bf784f462fbc736fd0253b0ef47bd8c7f257cecbab662274fbd8a73936d82ce4",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 13.006,
+      "medianCongestionWindowBytes": 5246234,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 640280,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 105,
+      "sampledInterval": {
+        "elapsedMs": 7323,
+        "udpWriteWallMs": 5971.649,
+        "transportWriteWallMs": 6223.922,
+        "gatherWallMs": 68.339,
+        "waitWallMs": 1031.501
+      },
+      "nativeUDP": {
+        "batchCalls": 13015,
+        "batchDatagrams": 102737,
+        "calls": 102949,
+        "nanos": 6033143900,
+        "pendingCalls": 3937,
+        "slowCalls": 12
+      }
+    },
+    {
+      "id": "overlap-2-overlap32",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.149,
+      "verifiedMs": 5336.2,
+      "ciphertextSHA256": "c180a24115e1ee84a87856e1a72354fc2cd45dda06ad3058ec9cadd96f7e9b34",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.677,
+      "medianCongestionWindowBytes": 1767192,
+      "medianReceiverWindowBytes": 4045832,
+      "medianInflightBytes": 642888,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 91,
+      "sampledInterval": {
+        "elapsedMs": 5228,
+        "udpWriteWallMs": 4414.108,
+        "transportWriteWallMs": 4592.617,
+        "gatherWallMs": 65.055,
+        "waitWallMs": 570.367
+      },
+      "nativeUDP": {
+        "batchCalls": 3389,
+        "batchDatagrams": 102899,
+        "calls": 102927,
+        "nanos": 4437189500,
+        "pendingCalls": 15294,
+        "slowCalls": 1
+      }
+    },
+    {
+      "id": "overlap-3-overlap64",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap64",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 24.171,
+      "verifiedMs": 4889.7,
+      "ciphertextSHA256": "7a5e07d5da37a23afe0d737976fbbb512b2897f8da7ad88a88b8c8cb3cb13179",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.229,
+      "medianCongestionWindowBytes": 3902348,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 581704,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 24,
+      "sampledInterval": {
+        "elapsedMs": 4782,
+        "udpWriteWallMs": 4181.962,
+        "transportWriteWallMs": 4323.326,
+        "gatherWallMs": 64.608,
+        "waitWallMs": 391.987
+      },
+      "nativeUDP": {
+        "batchCalls": 1689,
+        "batchDatagrams": 102833,
+        "calls": 102855,
+        "nanos": 4232609800,
+        "pendingCalls": 16662,
+        "slowCalls": 1
+      }
+    },
+    {
+      "id": "overlap-4-overlap32-buffer4",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap32-buffer4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "overlapped": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.612,
+      "verifiedMs": 5468.6,
+      "ciphertextSHA256": "c6a6ad3b14a482ad4eff1023633b3ee9b7c74dc2502fb5f3a1aef1b3b79b1a36",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 15.151,
+      "medianCongestionWindowBytes": 2647146,
+      "medianReceiverWindowBytes": 2893440,
+      "medianInflightBytes": 1709736,
+      "medianPendingBytes": 2293760,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 139,
+      "sampledInterval": {
+        "elapsedMs": 5360,
+        "udpWriteWallMs": 5118.13,
+        "transportWriteWallMs": 5279.294,
+        "gatherWallMs": 50.481,
+        "waitWallMs": 30.461
+      },
+      "nativeUDP": {
+        "batchCalls": 3296,
+        "batchDatagrams": 102917,
+        "calls": 102971,
+        "nanos": 5174960900,
+        "pendingCalls": 15475,
+        "slowCalls": 3
+      }
+    },
+    {
+      "id": "overlap-5-overlap32-socket4",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap32-socket4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "overlapped": true,
+        "socketBuffer": 4194304,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.112,
+      "verifiedMs": 5598.2,
+      "ciphertextSHA256": "0931adf1c3b6aa6fa8c4b5b0d68f617c037dd5752b3adc7df5322d0fcfd70e86",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.504,
+      "medianCongestionWindowBytes": 422054.5,
+      "medianReceiverWindowBytes": 4270856,
+      "medianInflightBytes": 341020,
+      "medianPendingBytes": 475280,
+      "fastRetransmits": 1,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": 85,
+      "sampledInterval": {
+        "elapsedMs": 5492,
+        "udpWriteWallMs": 907.471,
+        "transportWriteWallMs": 1067.153,
+        "gatherWallMs": 104.394,
+        "waitWallMs": 4324.344
+      },
+      "nativeUDP": {
+        "batchCalls": 4618,
+        "batchDatagrams": 102859,
+        "calls": 102917,
+        "nanos": 922205400,
+        "pendingCalls": 0,
+        "slowCalls": 4
+      }
+    },
+    {
+      "id": "overlap-6-baseline",
+      "batch": "overlap",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.978,
+      "verifiedMs": 5633.9,
+      "ciphertextSHA256": "4ae4d55d5b70ceae9bc6a466bac4990b2e213c649c779e6235bb7dc9e761ec58",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.062,
+      "medianCongestionWindowBytes": 3529452,
+      "medianReceiverWindowBytes": 4194304,
+      "medianInflightBytes": 510368,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 386,
+      "sampledInterval": {
+        "elapsedMs": 5528,
+        "udpWriteWallMs": 4313.288,
+        "transportWriteWallMs": 5001.09,
+        "gatherWallMs": 67.142,
+        "waitWallMs": 446.764
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 103219,
+        "nanos": 4359226900,
+        "pendingCalls": 0,
+        "slowCalls": 3408
+      }
+    },
+    {
+      "id": "connected-0-baseline",
+      "batch": "connected",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.501,
+      "verifiedMs": 5765.2,
+      "ciphertextSHA256": "063a54e6084e33361e680a8425c66da229de0d1ef58e48021ec803e86935dd08",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.129,
+      "medianCongestionWindowBytes": 1412723,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 600260,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 100,
+      "sampledInterval": {
+        "elapsedMs": 5654,
+        "udpWriteWallMs": 4250.102,
+        "transportWriteWallMs": 4926.231,
+        "gatherWallMs": 66.487,
+        "waitWallMs": 648.336
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102938,
+        "nanos": 4306854600,
+        "pendingCalls": 0,
+        "slowCalls": 3385
+      }
+    },
+    {
+      "id": "connected-1-connected",
+      "batch": "connected",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "connected",
+        "sealed": true,
+        "nativeMux": true,
+        "connected": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.223,
+      "verifiedMs": 7285.4,
+      "ciphertextSHA256": "cc27a895c97e73fb4ce23d86107cd2a18b2a18d3f5cdacf5918590976d60d6a9",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 16.339,
+      "medianCongestionWindowBytes": 1330813,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 545744,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 3,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 269,
+      "sampledInterval": {
+        "elapsedMs": 7176,
+        "udpWriteWallMs": 5611.449,
+        "transportWriteWallMs": 6395.157,
+        "gatherWallMs": 75.597,
+        "waitWallMs": 672.289
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 103117,
+        "nanos": 5668670800,
+        "pendingCalls": 0,
+        "slowCalls": 3228
+      }
+    },
+    {
+      "id": "connected-2-connected-window4",
+      "batch": "connected",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "connected-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "connected": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.676,
+      "verifiedMs": 5452.5,
+      "ciphertextSHA256": "10fc7326a631314655acc3d2cfb1d8b67a128aee26179f54a8068f8a1fa94261",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 12.909,
+      "medianCongestionWindowBytes": 792083,
+      "medianReceiverWindowBytes": 4213440,
+      "medianInflightBytes": 471512,
+      "medianPendingBytes": 3464128,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 47,
+      "sampledInterval": {
+        "elapsedMs": 5344,
+        "udpWriteWallMs": 4255.476,
+        "transportWriteWallMs": 5026.823,
+        "gatherWallMs": 68.507,
+        "waitWallMs": 229.663
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102879,
+        "nanos": 4289841900,
+        "pendingCalls": 0,
+        "slowCalls": 3191
+      }
+    },
+    {
+      "id": "connected-3-connected",
+      "batch": "connected",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "connected",
+        "sealed": true,
+        "nativeMux": true,
+        "connected": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 21.503,
+      "verifiedMs": 5496.5,
+      "ciphertextSHA256": "3846a9e74aaac505771350e181eed244ff9afd071b2e1b3a5b67e5152fa54da3",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.96,
+      "medianCongestionWindowBytes": 1206392,
+      "medianReceiverWindowBytes": 4287096,
+      "medianInflightBytes": 390896,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 87,
+      "sampledInterval": {
+        "elapsedMs": 5389,
+        "udpWriteWallMs": 4091.446,
+        "transportWriteWallMs": 4837.086,
+        "gatherWallMs": 68.414,
+        "waitWallMs": 462.675
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102935,
+        "nanos": 4147805300,
+        "pendingCalls": 0,
+        "slowCalls": 3169
+      }
+    },
+    {
+      "id": "connected-4-baseline",
+      "batch": "connected",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 16.717,
+      "verifiedMs": 7069.9,
+      "ciphertextSHA256": "f6eb027a41f4d5961646a26533642b5b0a862633149508b4cea02641a3e6fcf3",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.428,
+      "medianCongestionWindowBytes": 665629,
+      "medianReceiverWindowBytes": 4325376,
+      "medianInflightBytes": 344496,
+      "medianPendingBytes": 135128,
+      "fastRetransmits": 2,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": 423,
+      "sampledInterval": {
+        "elapsedMs": 6961,
+        "udpWriteWallMs": 4142.281,
+        "transportWriteWallMs": 4870.597,
+        "gatherWallMs": 66.88,
+        "waitWallMs": 2010.85
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 103260,
+        "nanos": 4179360100,
+        "pendingCalls": 0,
+        "slowCalls": 3305
+      }
+    },
+    {
+      "id": "local-0-baseline",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 79.917,
+      "verifiedMs": 1478.9,
+      "ciphertextSHA256": "69dd4f7cb89d4ad5367b3bf4d353bf5f6affbfc140bb48c952b291c7b9cc8eaa",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 3.869,
+      "medianCongestionWindowBytes": 5244500,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 708136,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 1376,
+        "udpWriteWallMs": 650.958,
+        "transportWriteWallMs": 1036.967,
+        "gatherWallMs": 83.87,
+        "waitWallMs": 247.939
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102830,
+        "nanos": 700885000,
+        "pendingCalls": 0,
+        "slowCalls": 1158
+      }
+    },
+    {
+      "id": "local-1-window4",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "window4",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 50.654,
+      "verifiedMs": 2333.3,
+      "ciphertextSHA256": "4931df812b7cfdfcc7105d3da0df8864c9de31383b6d477a26f6831550877e4c",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 66.645,
+      "medianCongestionWindowBytes": 5253916,
+      "medianReceiverWindowBytes": 655360,
+      "medianInflightBytes": 4030172,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 2229,
+        "udpWriteWallMs": 611.724,
+        "transportWriteWallMs": 1022.686,
+        "gatherWallMs": 589.807,
+        "waitWallMs": 605.318
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102831,
+        "nanos": 648736100,
+        "pendingCalls": 0,
+        "slowCalls": 1235
+      }
+    },
+    {
+      "id": "local-2-batch32",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "batch32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 62.182,
+      "verifiedMs": 1900.7,
+      "ciphertextSHA256": "a45cbdd6bf44285cb888070897353aa2366106ae790a5286b2f289b8d1a58a9b",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 8.539,
+      "medianCongestionWindowBytes": 3506900,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 726112,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 1799,
+        "udpWriteWallMs": 460.626,
+        "transportWriteWallMs": 550.508,
+        "gatherWallMs": 181.829,
+        "waitWallMs": 1064.495
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102827,
+        "nanos": 492340100,
+        "pendingCalls": 0,
+        "slowCalls": 947
+      }
+    },
+    {
+      "id": "local-3-uso32",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "uso32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "uso": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 62.767,
+      "verifiedMs": 1883,
+      "ciphertextSHA256": "8f54ae09fc261655197a836462e7c7b9585ded8613eb87b47c53f56b4327e5aa",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 8.682,
+      "medianCongestionWindowBytes": 4264924,
+      "medianReceiverWindowBytes": 3866624,
+      "medianInflightBytes": 806728,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 1779,
+        "udpWriteWallMs": 265.018,
+        "transportWriteWallMs": 369.584,
+        "gatherWallMs": 174.46,
+        "waitWallMs": 1231.388
+      },
+      "nativeUDP": {
+        "batchCalls": 4772,
+        "batchDatagrams": 101004,
+        "calls": 6597,
+        "nanos": 287192800,
+        "pendingCalls": 0,
+        "slowCalls": 547
+      }
+    },
+    {
+      "id": "local-4-overlap32",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "overlap32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 64.843,
+      "verifiedMs": 1822.7,
+      "ciphertextSHA256": "6151cc0d648288f4ddb1d77660f327a09917a867c14cd451c2bf6628c77f7f12",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 8.261,
+      "medianCongestionWindowBytes": 3491828,
+      "medianReceiverWindowBytes": 3866624,
+      "medianInflightBytes": 841528,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 1720,
+        "udpWriteWallMs": 408.475,
+        "transportWriteWallMs": 548.171,
+        "gatherWallMs": 174.626,
+        "waitWallMs": 995.018
+      },
+      "nativeUDP": {
+        "batchCalls": 3390,
+        "batchDatagrams": 102812,
+        "calls": 102830,
+        "nanos": 440962500,
+        "pendingCalls": 0,
+        "slowCalls": 1
+      }
+    },
+    {
+      "id": "local-5-baseline",
+      "batch": "local",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 62.697,
+      "verifiedMs": 1885.1,
+      "ciphertextSHA256": "5dcda6a03929700a1a86086755bc59eb3b2ef035bd377e5e8371bd7a25f50e32",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 7.455,
+      "medianCongestionWindowBytes": 4252740,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 786432,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 1781,
+        "udpWriteWallMs": 561.532,
+        "transportWriteWallMs": 953.834,
+        "gatherWallMs": 124.082,
+        "waitWallMs": 692.428
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102830,
+        "nanos": 602908400,
+        "pendingCalls": 0,
+        "slowCalls": 1151
+      }
+    },
+    {
+      "id": "reverse-0-baseline",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 28.613,
+      "verifiedMs": 4130.7,
+      "ciphertextSHA256": "12f023b7d3c0cf20fc749519a56935c45e90004f2d807916148c17eee1c5a422",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.533,
+      "medianCongestionWindowBytes": 5246171,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 726112,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 4025,
+        "udpWriteWallMs": 1931.802,
+        "transportWriteWallMs": 2909.319,
+        "gatherWallMs": 322.421,
+        "waitWallMs": 756.987
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102865,
+        "nanos": 1953291724,
+        "pendingCalls": 0,
+        "slowCalls": 650
+      }
+    },
+    {
+      "id": "reverse-1-window4",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "window4",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 33.917,
+      "verifiedMs": 3484.7,
+      "ciphertextSHA256": "ef54a79f4956c4ae5329caa641fc9a5200d2d1857f998c9f257769900d55dc6c",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 18.035,
+      "medianCongestionWindowBytes": 5255114,
+      "medianReceiverWindowBytes": 2621440,
+      "medianInflightBytes": 2068152,
+      "medianPendingBytes": 1835008,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3383,
+        "udpWriteWallMs": 2173.694,
+        "transportWriteWallMs": 3113.789,
+        "gatherWallMs": 194.827,
+        "waitWallMs": 41.233
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102831,
+        "nanos": 2190201328,
+        "pendingCalls": 0,
+        "slowCalls": 762
+      }
+    },
+    {
+      "id": "reverse-2-pace48",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "pace48",
+        "sealed": true,
+        "nativeMux": true,
+        "pace": 48
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 25.14,
+      "verifiedMs": 4701.2,
+      "ciphertextSHA256": "1341d84c2243e2e19758e5e0ee95c08ca9fcac6a1c9bc74ad6de81f518bbc8e9",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.371,
+      "medianCongestionWindowBytes": 2649832,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 695376,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 4598,
+        "udpWriteWallMs": 1323.738,
+        "transportWriteWallMs": 3771.64,
+        "gatherWallMs": 287.616,
+        "waitWallMs": 499.11
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102839,
+        "nanos": 1346556838,
+        "pendingCalls": 0,
+        "slowCalls": 189
+      }
+    },
+    {
+      "id": "reverse-3-baseline",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 28.771,
+      "verifiedMs": 4107.9,
+      "ciphertextSHA256": "5d274ea3cc87baead59186549cc9dd13459b421f17e10573447897d99c23e535",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.091,
+      "medianCongestionWindowBytes": 5252168.5,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 679136,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 4006,
+        "udpWriteWallMs": 1926.783,
+        "transportWriteWallMs": 2893.749,
+        "gatherWallMs": 309.044,
+        "waitWallMs": 767.218
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102832,
+        "nanos": 1955166662,
+        "pendingCalls": 0,
+        "slowCalls": 649
+      }
+    },
+    {
+      "id": "reverse-4-window4",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "window4",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 33.764,
+      "verifiedMs": 3500.5,
+      "ciphertextSHA256": "9c42715825964b63f632ccb0abbf54a15e5874824e268e1ee64c181a190e6163",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 16.231,
+      "medianCongestionWindowBytes": 5256850,
+      "medianReceiverWindowBytes": 1703936,
+      "medianInflightBytes": 3014656,
+      "medianPendingBytes": 917504,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3393,
+        "udpWriteWallMs": 2192.365,
+        "transportWriteWallMs": 3118.013,
+        "gatherWallMs": 202.023,
+        "waitWallMs": 38.483
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102830,
+        "nanos": 2236037232,
+        "pendingCalls": 0,
+        "slowCalls": 768
+      }
+    },
+    {
+      "id": "reverse-5-baseline",
+      "batch": "reverse",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 29.169,
+      "verifiedMs": 4051.9,
+      "ciphertextSHA256": "c0d4264b4274965b2f81d8abcd076f42d8481b4e36f9ad37a20d248bcb8efa17",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.481,
+      "medianCongestionWindowBytes": 5253309,
+      "medianReceiverWindowBytes": 4063232,
+      "medianInflightBytes": 641440,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3949,
+        "udpWriteWallMs": 1952.852,
+        "transportWriteWallMs": 2917.617,
+        "gatherWallMs": 308.77,
+        "waitWallMs": 686.495
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102830,
+        "nanos": 1977863005,
+        "pendingCalls": 0,
+        "slowCalls": 686
+      }
+    },
+    {
+      "id": "confirm-0-baseline",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "rep": 0,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 18.438,
+      "verifiedMs": 25641.2,
+      "ciphertextSHA256": "3b0667dd2599ea9b43bd5c91ca51fd16b32081e95456be7149f863421c9f60ef",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.907,
+      "medianCongestionWindowBytes": 1344511,
+      "medianReceiverWindowBytes": 4128768,
+      "medianInflightBytes": 544584,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 381,
+      "sampledInterval": {
+        "elapsedMs": 25529,
+        "udpWriteWallMs": 19978.342,
+        "transportWriteWallMs": 23089.428,
+        "gatherWallMs": 255.838,
+        "waitWallMs": 2097.498
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411681,
+        "nanos": 20021906600,
+        "pendingCalls": 0,
+        "slowCalls": 13389
+      }
+    },
+    {
+      "id": "confirm-1-overlap64",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap64",
+        "rep": 0,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin",
+        "batch": 64,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 24.253,
+      "verifiedMs": 19492.6,
+      "ciphertextSHA256": "6097b3b7157b322d2907ddf10df62b30b67ebd26d79532955e1b184d5ebbe5aa",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.043,
+      "medianCongestionWindowBytes": 672849,
+      "medianReceiverWindowBytes": 4297536,
+      "medianInflightBytes": 392056,
+      "medianPendingBytes": 93952,
+      "fastRetransmits": 3,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 245,
+      "sampledInterval": {
+        "elapsedMs": 19383,
+        "udpWriteWallMs": 15947.207,
+        "transportWriteWallMs": 16618.453,
+        "gatherWallMs": 276.512,
+        "waitWallMs": 2485.925
+      },
+      "nativeUDP": {
+        "batchCalls": 7814,
+        "batchDatagrams": 411502,
+        "calls": 411563,
+        "nanos": 16001466000,
+        "pendingCalls": 73780,
+        "slowCalls": 3
+      }
+    },
+    {
+      "id": "confirm-2-overlap64",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap64",
+        "rep": 1,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin",
+        "batch": 64,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 22.192,
+      "verifiedMs": 21302.8,
+      "ciphertextSHA256": "881ce1ed05cffca3d50a3b260fbc6526ee53c6ac0e3f3588faab0fae3f37ac2f",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.508,
+      "medianCongestionWindowBytes": 619868,
+      "medianReceiverWindowBytes": 4242440,
+      "medianInflightBytes": 442512,
+      "medianPendingBytes": 60896,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 490,
+      "sampledInterval": {
+        "elapsedMs": 21191,
+        "udpWriteWallMs": 17162.375,
+        "transportWriteWallMs": 17789.049,
+        "gatherWallMs": 258.514,
+        "waitWallMs": 3137.773
+      },
+      "nativeUDP": {
+        "batchCalls": 7887,
+        "batchDatagrams": 411529,
+        "calls": 411775,
+        "nanos": 17207980700,
+        "pendingCalls": 75424,
+        "slowCalls": 4
+      }
+    },
+    {
+      "id": "confirm-3-baseline",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "rep": 1,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.842,
+      "verifiedMs": 22683.4,
+      "ciphertextSHA256": "27dbd027623951d3dfb0f882d5d1f8646bef022fbddb99ef68e7631578a81bc4",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.852,
+      "medianCongestionWindowBytes": 583558,
+      "medianReceiverWindowBytes": 4259840,
+      "medianInflightBytes": 418152,
+      "medianPendingBytes": 165288,
+      "fastRetransmits": 2,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 145,
+      "sampledInterval": {
+        "elapsedMs": 22571,
+        "udpWriteWallMs": 16197.572,
+        "transportWriteWallMs": 19187.782,
+        "gatherWallMs": 268.533,
+        "waitWallMs": 3041.057
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411440,
+        "nanos": 16244533700,
+        "pendingCalls": 0,
+        "slowCalls": 12970
+      }
+    },
+    {
+      "id": "confirm-4-baseline",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "baseline",
+        "rep": 2,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 20.938,
+      "verifiedMs": 22578.9,
+      "ciphertextSHA256": "678e68d022cda7f038e80790b41781eb18dde1ac76ca1af1ef35cb6d9d4d7d1d",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 13.057,
+      "medianCongestionWindowBytes": 626963.5,
+      "medianReceiverWindowBytes": 4201260,
+      "medianInflightBytes": 467452,
+      "medianPendingBytes": 98592,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 358,
+      "sampledInterval": {
+        "elapsedMs": 22467,
+        "udpWriteWallMs": 16572.899,
+        "transportWriteWallMs": 19659.156,
+        "gatherWallMs": 247.602,
+        "waitWallMs": 2474.907
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411648,
+        "nanos": 16622029200,
+        "pendingCalls": 0,
+        "slowCalls": 13176
+      }
+    },
+    {
+      "id": "confirm-5-overlap64",
+      "batch": "confirm",
+      "environment": "windows-to-linux",
+      "config": {
+        "name": "overlap64",
+        "rep": 2,
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin",
+        "batch": 64,
+        "overlapped": true,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 23.887,
+      "verifiedMs": 19791.8,
+      "ciphertextSHA256": "a928f611f4e861c3b6b71ee48eed167a93dd14a2b5fe753f19c048efb6be4db4",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 11.528,
+      "medianCongestionWindowBytes": 914282,
+      "medianReceiverWindowBytes": 4194304,
+      "medianInflightBytes": 502248,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": 247,
+      "sampledInterval": {
+        "elapsedMs": 19682,
+        "udpWriteWallMs": 16390.919,
+        "transportWriteWallMs": 16981.932,
+        "gatherWallMs": 266.116,
+        "waitWallMs": 2429.25
+      },
+      "nativeUDP": {
+        "batchCalls": 7397,
+        "batchDatagrams": 411302,
+        "calls": 411531,
+        "nanos": 16443004900,
+        "pendingCalls": 71092,
+        "slowCalls": 3
+      }
+    },
+    {
+      "id": "local-long-0-baseline",
+      "batch": "local-long",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 56.377,
+      "verifiedMs": 8385.7,
+      "ciphertextSHA256": "a2086445803fee76a2d571e0b6d4c60f32619f6cb1ea0c0c39fe9e570aaaf245",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 6.945,
+      "medianCongestionWindowBytes": 5285037.5,
+      "medianReceiverWindowBytes": 3866624,
+      "medianInflightBytes": 833988,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 8282,
+        "udpWriteWallMs": 3541.803,
+        "transportWriteWallMs": 5659.654,
+        "gatherWallMs": 486.636,
+        "waitWallMs": 2104.136
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411274,
+        "nanos": 3588171400,
+        "pendingCalls": 0,
+        "slowCalls": 5694
+      }
+    },
+    {
+      "id": "local-long-1-baseline",
+      "batch": "local-long",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 56.219,
+      "verifiedMs": 8409.2,
+      "ciphertextSHA256": "52cd3a8610d9d4a86d3f92bde43b396b0c0d514dc4d32cb0739ef170c24d9506",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 6.705,
+      "medianCongestionWindowBytes": 5276082,
+      "medianReceiverWindowBytes": 3866624,
+      "medianInflightBytes": 833408,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 8305,
+        "udpWriteWallMs": 3353.137,
+        "transportWriteWallMs": 5455.922,
+        "gatherWallMs": 492.982,
+        "waitWallMs": 2321.771
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411274,
+        "nanos": 3390897300,
+        "pendingCalls": 0,
+        "slowCalls": 5543
+      }
+    },
+    {
+      "id": "local-long-2-baseline",
+      "batch": "local-long",
+      "environment": "same-host-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 57.282,
+      "verifiedMs": 8253.2,
+      "ciphertextSHA256": "f1f02efea1d0da8f46855ab66b55b5ba5fb8ad9267bc45682294c31b5303fcec",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 6.755,
+      "medianCongestionWindowBytes": 5284394,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 777152,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 8149,
+        "udpWriteWallMs": 3360.954,
+        "transportWriteWallMs": 5465.812,
+        "gatherWallMs": 472.654,
+        "waitWallMs": 2181.215
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411274,
+        "nanos": 3400774100,
+        "pendingCalls": 0,
+        "slowCalls": 5623
+      }
+    },
+    {
+      "id": "reverse-batch-0-baseline",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 28.796,
+      "verifiedMs": 4104.4,
+      "ciphertextSHA256": "6682f2d8ca6863159c7b8c8c3b961fd611b300a9cc983b28ecefdba9aef6215d",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 11.069,
+      "medianCongestionWindowBytes": 5252733,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 720896,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3998,
+        "udpWriteWallMs": 1953.188,
+        "transportWriteWallMs": 2887.972,
+        "gatherWallMs": 307.836,
+        "waitWallMs": 769.791
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102832,
+        "nanos": 1983668401,
+        "pendingCalls": 0,
+        "slowCalls": 708
+      }
+    },
+    {
+      "id": "reverse-batch-1-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "window4",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 31.751,
+      "verifiedMs": 3722.4,
+      "ciphertextSHA256": "a2cd65e36d58aee4fa1bd67e77b5835e7458ed67c28661435096f8feef4e1386",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 17.493,
+      "medianCongestionWindowBytes": 5253923,
+      "medianReceiverWindowBytes": 2293760,
+      "medianInflightBytes": 2392352,
+      "medianPendingBytes": 1376256,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3619,
+        "udpWriteWallMs": 2429.508,
+        "transportWriteWallMs": 3349.458,
+        "gatherWallMs": 196.588,
+        "waitWallMs": 41.406
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102831,
+        "nanos": 2457665298,
+        "pendingCalls": 0,
+        "slowCalls": 811
+      }
+    },
+    {
+      "id": "reverse-batch-2-batch32",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 30.637,
+      "verifiedMs": 3857.7,
+      "ciphertextSHA256": "df7d7f8e255a9d6d65b8f95227b0409c0f75cad38e835603a3f39bd561cb9c2a",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.929,
+      "medianCongestionWindowBytes": 5254500,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 721472,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3755,
+        "udpWriteWallMs": 2407.998,
+        "transportWriteWallMs": 2802.389,
+        "gatherWallMs": 296.179,
+        "waitWallMs": 647.348
+      },
+      "nativeUDP": {
+        "batchCalls": 4248,
+        "batchDatagrams": 102808,
+        "calls": 4269,
+        "nanos": 2445996649,
+        "pendingCalls": 0,
+        "slowCalls": 2
+      }
+    },
+    {
+      "id": "reverse-batch-3-batch32-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 34.81,
+      "verifiedMs": 3395.3,
+      "ciphertextSHA256": "2d14b375d5135b90076619b54a72ab5d08deb4026cef7d84c1015696db042673",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 17.736,
+      "medianCongestionWindowBytes": 5244990.5,
+      "medianReceiverWindowBytes": 2853424,
+      "medianInflightBytes": 1742504,
+      "medianPendingBytes": 2147896,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3283,
+        "udpWriteWallMs": 2657.08,
+        "transportWriteWallMs": 3045.137,
+        "gatherWallMs": 209.919,
+        "waitWallMs": 21.749
+      },
+      "nativeUDP": {
+        "batchCalls": 4423,
+        "batchDatagrams": 102870,
+        "calls": 4441,
+        "nanos": 2697070551,
+        "pendingCalls": 0,
+        "slowCalls": 5
+      }
+    },
+    {
+      "id": "reverse-batch-4-mtu1400-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "mtu1400-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "mtu": 1400,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 37.055,
+      "verifiedMs": 3189.6,
+      "ciphertextSHA256": "e2bfc2926e2e648f65da36bdf9fcf6d0bb7e9b234bfddd5e2bfa1f20f8a1da4c",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 17.683,
+      "medianCongestionWindowBytes": 5258836,
+      "medianReceiverWindowBytes": 3173008,
+      "medianInflightBytes": 1512656,
+      "medianPendingBytes": 2219091,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3086,
+        "udpWriteWallMs": 2017.845,
+        "transportWriteWallMs": 2834.47,
+        "gatherWallMs": 168.374,
+        "waitWallMs": 57.346
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 86597,
+        "nanos": 2056000609,
+        "pendingCalls": 0,
+        "slowCalls": 691
+      }
+    },
+    {
+      "id": "reverse-batch-5-batch32-mtu1400-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32-mtu1400-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "mtu": 1400,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 37.833,
+      "verifiedMs": 3124,
+      "ciphertextSHA256": "5d94ac26bcd6cdb09a60ed09a11cb59eea6fed6581d9c78071c3d698a33d5c44",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 13.756,
+      "medianCongestionWindowBytes": 5259216,
+      "medianReceiverWindowBytes": 2424832,
+      "medianInflightBytes": 2263576,
+      "medianPendingBytes": 1835008,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3021,
+        "udpWriteWallMs": 2399.688,
+        "transportWriteWallMs": 2776.159,
+        "gatherWallMs": 193.761,
+        "waitWallMs": 46.271
+      },
+      "nativeUDP": {
+        "batchCalls": 4399,
+        "batchDatagrams": 86579,
+        "calls": 4416,
+        "nanos": 2432171034,
+        "pendingCalls": 0,
+        "slowCalls": 2
+      }
+    },
+    {
+      "id": "reverse-batch-6-batch64-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch64-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 35.222,
+      "verifiedMs": 3355.6,
+      "ciphertextSHA256": "e4e2eb4caa361b0d590ca18793ff07b0d77036fc8095de63f152b1c2fed616c0",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 16.83,
+      "medianCongestionWindowBytes": 5255114,
+      "medianReceiverWindowBytes": 2392064,
+      "medianInflightBytes": 2299848,
+      "medianPendingBytes": 1376256,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 3254,
+        "udpWriteWallMs": 2623.227,
+        "transportWriteWallMs": 3000.704,
+        "gatherWallMs": 216.039,
+        "waitWallMs": 30.908
+      },
+      "nativeUDP": {
+        "batchCalls": 3146,
+        "batchDatagrams": 102810,
+        "calls": 3165,
+        "nanos": 2668988371,
+        "pendingCalls": 0,
+        "slowCalls": 4
+      }
+    },
+    {
+      "id": "reverse-batch-7-window4",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "window4",
+        "sealed": true,
+        "nativeMux": true,
+        "buffer": 4194304,
+        "low": 0.9
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 8.976,
+      "verifiedMs": 13166.9,
+      "ciphertextSHA256": "e71ef1ed0b0e9ab2c020f00aaf92a41075cd3eba2625771580d7c3b8ba06e210",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 19.013,
+      "medianCongestionWindowBytes": 2628152,
+      "medianReceiverWindowBytes": 3203432,
+      "medianInflightBytes": 1380024,
+      "medianPendingBytes": 2646376,
+      "fastRetransmits": 0,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 13065,
+        "udpWriteWallMs": 2273.414,
+        "transportWriteWallMs": 3310.516,
+        "gatherWallMs": 288.419,
+        "waitWallMs": 9429.183
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 105702,
+        "nanos": 2311117892,
+        "pendingCalls": 0,
+        "slowCalls": 853
+      }
+    },
+    {
+      "id": "reverse-batch-8-baseline",
+      "batch": "reverse-batch",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true
+      },
+      "plaintextBytes": 118189944,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 28.773,
+      "verifiedMs": 4107.6,
+      "ciphertextSHA256": "eae43f09591aa651cf28844eab613c515912d2c9a935f26d4ba3c5039a6ba2f0",
+      "plaintextSHA256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "medianSCTPRttMs": 10.314,
+      "medianCongestionWindowBytes": 5253904.5,
+      "medianReceiverWindowBytes": 3964928,
+      "medianInflightBytes": 714804,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 4005,
+        "udpWriteWallMs": 2010.274,
+        "transportWriteWallMs": 2975.876,
+        "gatherWallMs": 302.584,
+        "waitWallMs": 691.015
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 102832,
+        "nanos": 2043021166,
+        "pendingCalls": 0,
+        "slowCalls": 678
+      }
+    },
+    {
+      "id": "reverse-repeat-0-baseline",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "rep": 0,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 29.069,
+      "verifiedMs": 16263.5,
+      "ciphertextSHA256": "f2a4f8fda5011366bffecb1172cec3b4099f6bb3a8d54997b27c004204c8b8e6",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 11.573,
+      "medianCongestionWindowBytes": 5292067,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 721472,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 16161,
+        "udpWriteWallMs": 7788.362,
+        "transportWriteWallMs": 11652.629,
+        "gatherWallMs": 1263.984,
+        "waitWallMs": 3098.077
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411284,
+        "nanos": 7807511578,
+        "pendingCalls": 0,
+        "slowCalls": 2672
+      }
+    },
+    {
+      "id": "reverse-repeat-1-batch64-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch64-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 0,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 34.751,
+      "verifiedMs": 13604.1,
+      "ciphertextSHA256": "21b212c233eeafdc531b6f17ed524155d38e1bf57e2f127d4fbee998904421c2",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 18.257,
+      "medianCongestionWindowBytes": 5296799,
+      "medianReceiverWindowBytes": 2293760,
+      "medianInflightBytes": 2390032,
+      "medianPendingBytes": 1441792,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 13500,
+        "udpWriteWallMs": 11218.163,
+        "transportWriteWallMs": 12684.162,
+        "gatherWallMs": 765.953,
+        "waitWallMs": 27.796
+      },
+      "nativeUDP": {
+        "batchCalls": 11264,
+        "batchDatagrams": 411248,
+        "calls": 11292,
+        "nanos": 11248212031,
+        "pendingCalls": 0,
+        "slowCalls": 5
+      }
+    },
+    {
+      "id": "reverse-repeat-2-batch32-mtu1400-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32-mtu1400-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "mtu": 1400,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 0,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 38.348,
+      "verifiedMs": 12328.1,
+      "ciphertextSHA256": "528940873d8d9eee5672742d61b3cf7ed81152defa8046884a7f2cc110a5318c",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 17.325,
+      "medianCongestionWindowBytes": 5305736,
+      "medianReceiverWindowBytes": 2359296,
+      "medianInflightBytes": 2344204,
+      "medianPendingBytes": 1703936,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 12223,
+        "udpWriteWallMs": 10063.833,
+        "transportWriteWallMs": 11536.636,
+        "gatherWallMs": 640.935,
+        "waitWallMs": 25.442
+      },
+      "nativeUDP": {
+        "batchCalls": 14577,
+        "batchDatagrams": 346314,
+        "calls": 14603,
+        "nanos": 10090953460,
+        "pendingCalls": 0,
+        "slowCalls": 5
+      }
+    },
+    {
+      "id": "reverse-repeat-3-batch32-mtu1400-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32-mtu1400-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "mtu": 1400,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 1,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 24.569,
+      "verifiedMs": 19242.5,
+      "ciphertextSHA256": "e237c26083821600694ffb733df08888e259f9715e7d139134cf95745f30d161",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 15.91,
+      "medianCongestionWindowBytes": 2643390,
+      "medianReceiverWindowBytes": 3451456,
+      "medianInflightBytes": 1209832,
+      "medianPendingBytes": 2752512,
+      "fastRetransmits": 1,
+      "t3Timeouts": 1,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 19136,
+        "udpWriteWallMs": 9833.884,
+        "transportWriteWallMs": 11382.557,
+        "gatherWallMs": 783.958,
+        "waitWallMs": 6945.264
+      },
+      "nativeUDP": {
+        "batchCalls": 14490,
+        "batchDatagrams": 346302,
+        "calls": 16708,
+        "nanos": 9870313047,
+        "pendingCalls": 0,
+        "slowCalls": 54
+      }
+    },
+    {
+      "id": "reverse-repeat-4-batch64-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch64-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 1,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 33.761,
+      "verifiedMs": 14003.3,
+      "ciphertextSHA256": "7462aff87d69e26ac9e88d18a9fb1278852a44060d691369a8247046d81d8931",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 18.767,
+      "medianCongestionWindowBytes": 5297344,
+      "medianReceiverWindowBytes": 2424832,
+      "medianInflightBytes": 2246200,
+      "medianPendingBytes": 1835008,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 13901,
+        "udpWriteWallMs": 11650.56,
+        "transportWriteWallMs": 13098.784,
+        "gatherWallMs": 754.996,
+        "waitWallMs": 26.801
+      },
+      "nativeUDP": {
+        "batchCalls": 11330,
+        "batchDatagrams": 411249,
+        "calls": 11356,
+        "nanos": 11688551639,
+        "pendingCalls": 0,
+        "slowCalls": 3
+      }
+    },
+    {
+      "id": "reverse-repeat-5-baseline",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "rep": 1,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 29.129,
+      "verifiedMs": 16229.9,
+      "ciphertextSHA256": "bf166c8551a084bfea1ca272f83ea0b82e84fa3bf11f48e141e0b8e7cb80cad2",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 11.368,
+      "medianCongestionWindowBytes": 5262269,
+      "medianReceiverWindowBytes": 3997696,
+      "medianInflightBytes": 710456,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 16126,
+        "udpWriteWallMs": 7922.94,
+        "transportWriteWallMs": 11759.287,
+        "gatherWallMs": 1219.567,
+        "waitWallMs": 3002.481
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411324,
+        "nanos": 7953354100,
+        "pendingCalls": 0,
+        "slowCalls": 2807
+      }
+    },
+    {
+      "id": "reverse-repeat-6-baseline",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "baseline",
+        "sealed": true,
+        "nativeMux": true,
+        "rep": 2,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 28.433,
+      "verifiedMs": 16627,
+      "ciphertextSHA256": "a3f066a7206ce2cef5470c9162718d8fea3322f9bc6a8c8ed22483e3d98b3e9a",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 12.014,
+      "medianCongestionWindowBytes": 2666814,
+      "medianReceiverWindowBytes": 3932160,
+      "medianInflightBytes": 733072,
+      "medianPendingBytes": 0,
+      "fastRetransmits": 1,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 16525,
+        "udpWriteWallMs": 7884.884,
+        "transportWriteWallMs": 11732.436,
+        "gatherWallMs": 1234.409,
+        "waitWallMs": 3415.434
+      },
+      "nativeUDP": {
+        "batchCalls": 0,
+        "batchDatagrams": 0,
+        "calls": 411335,
+        "nanos": 7903759364,
+        "pendingCalls": 0,
+        "slowCalls": 2704
+      }
+    },
+    {
+      "id": "reverse-repeat-7-batch64-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch64-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "batch": 64,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 2,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 34.134,
+      "verifiedMs": 13850,
+      "ciphertextSHA256": "7a3ff66144ab935621bf27d2c1d0e767163204f6c2164001e723cb656c74c77d",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 16.626,
+      "medianCongestionWindowBytes": 2750168,
+      "medianReceiverWindowBytes": 2752512,
+      "medianInflightBytes": 1941720,
+      "medianPendingBytes": 1963760,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 13745,
+        "udpWriteWallMs": 11368.381,
+        "transportWriteWallMs": 12846.772,
+        "gatherWallMs": 806.02,
+        "waitWallMs": 69.072
+      },
+      "nativeUDP": {
+        "batchCalls": 11372,
+        "batchDatagrams": 411280,
+        "calls": 11400,
+        "nanos": 11409970803,
+        "pendingCalls": 0,
+        "slowCalls": 10
+      }
+    },
+    {
+      "id": "reverse-repeat-8-batch32-mtu1400-window4",
+      "batch": "reverse-repeat",
+      "environment": "linux-to-windows",
+      "config": {
+        "name": "batch32-mtu1400-window4",
+        "sealed": true,
+        "nativeMux": true,
+        "mtu": 1400,
+        "batch": 32,
+        "fastContext": "both",
+        "standardContext": true,
+        "buffer": 4194304,
+        "low": 0.9,
+        "rep": 2,
+        "file": "../webrtc-wan-20261021/payload-long.bin"
+      },
+      "plaintextBytes": 472759776,
+      "succeeded": true,
+      "error": null,
+      "verifiedMBps": 37.372,
+      "verifiedMs": 12650.1,
+      "ciphertextSHA256": "421a924c4be7b871bd302631da4adc8496f82d8f83ff3c24ceaf4fe41de00141",
+      "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "medianSCTPRttMs": 17.698,
+      "medianCongestionWindowBytes": 5306116,
+      "medianReceiverWindowBytes": 2359296,
+      "medianInflightBytes": 2309904,
+      "medianPendingBytes": 1835008,
+      "fastRetransmits": 0,
+      "t3Timeouts": 0,
+      "hostUDPReceiveBufferErrors": null,
+      "sampledInterval": {
+        "elapsedMs": 12546,
+        "udpWriteWallMs": 10306.118,
+        "transportWriteWallMs": 11817.258,
+        "gatherWallMs": 659.778,
+        "waitWallMs": 47.587
+      },
+      "nativeUDP": {
+        "batchCalls": 14909,
+        "batchDatagrams": 346316,
+        "calls": 14934,
+        "nanos": 10342382375,
+        "pendingCalls": 0,
+        "slowCalls": 5
+      }
+    }
+  ],
+  "aggregate": [
+    {
+      "group": "windows-to-linux/screen/baseline-start/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        17.591
+      ],
+      "medianVerifiedMBps": 17.591
+    },
+    {
+      "group": "windows-to-linux/screen/window1-low90/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.458
+      ],
+      "medianVerifiedMBps": 16.458
+    },
+    {
+      "group": "windows-to-linux/screen/window4-low90/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        23.016
+      ],
+      "medianVerifiedMBps": 23.016
+    },
+    {
+      "group": "windows-to-linux/screen/pace24/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        17.086
+      ],
+      "medianVerifiedMBps": 17.086
+    },
+    {
+      "group": "windows-to-linux/screen/pace36/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.817
+      ],
+      "medianVerifiedMBps": 19.817
+    },
+    {
+      "group": "windows-to-linux/screen/pace48/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.078
+      ],
+      "medianVerifiedMBps": 19.078
+    },
+    {
+      "group": "windows-to-linux/screen/pace48-burst128/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.049
+      ],
+      "medianVerifiedMBps": 21.049
+    },
+    {
+      "group": "windows-to-linux/screen/ca16/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        18.704
+      ],
+      "medianVerifiedMBps": 18.704
+    },
+    {
+      "group": "windows-to-linux/screen/ca64/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.633
+      ],
+      "medianVerifiedMBps": 21.633
+    },
+    {
+      "group": "windows-to-linux/screen/mtu1400/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.885
+      ],
+      "medianVerifiedMBps": 21.885
+    },
+    {
+      "group": "windows-to-linux/screen/window4-pace48/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.163
+      ],
+      "medianVerifiedMBps": 19.163
+    },
+    {
+      "group": "windows-to-linux/screen/window4-ca16/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.303
+      ],
+      "medianVerifiedMBps": 16.303
+    },
+    {
+      "group": "windows-to-linux/screen/window4-ca16-pace48/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        18.266
+      ],
+      "medianVerifiedMBps": 18.266
+    },
+    {
+      "group": "windows-to-linux/screen/window4-ca64-pace48/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        20.544
+      ],
+      "medianVerifiedMBps": 20.544
+    },
+    {
+      "group": "windows-to-linux/screen/socket4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        23.502
+      ],
+      "medianVerifiedMBps": 23.502
+    },
+    {
+      "group": "windows-to-linux/screen/baseline-end/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.13
+      ],
+      "medianVerifiedMBps": 16.13
+    },
+    {
+      "group": "windows-to-linux/instrument/baseline/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        18.606
+      ],
+      "medianVerifiedMBps": 18.606
+    },
+    {
+      "group": "windows-to-linux/instrument/window4-low90/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        15.827
+      ],
+      "medianVerifiedMBps": 15.827
+    },
+    {
+      "group": "windows-to-linux/instrument/baseline-long/472759776",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.063
+      ],
+      "medianVerifiedMBps": 21.063
+    },
+    {
+      "group": "windows-to-linux/dtls/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        21.355,
+        21.679
+      ],
+      "medianVerifiedMBps": 21.517
+    },
+    {
+      "group": "windows-to-linux/dtls/afterfunc-only/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.656
+      ],
+      "medianVerifiedMBps": 16.656
+    },
+    {
+      "group": "windows-to-linux/dtls/standard-context-only/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        20.52
+      ],
+      "medianVerifiedMBps": 20.52
+    },
+    {
+      "group": "windows-to-linux/dtls/standard-context-afterfunc/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        21.1,
+        21.722
+      ],
+      "medianVerifiedMBps": 21.411
+    },
+    {
+      "group": "windows-to-linux/dtls/standard-context-afterfunc-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        17.818
+      ],
+      "medianVerifiedMBps": 17.818
+    },
+    {
+      "group": "windows-to-linux/batch/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        18.554,
+        20.93
+      ],
+      "medianVerifiedMBps": 19.742
+    },
+    {
+      "group": "windows-to-linux/batch/batch8/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        14.646
+      ],
+      "medianVerifiedMBps": 14.646
+    },
+    {
+      "group": "windows-to-linux/batch/batch32/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        21.308,
+        21.993
+      ],
+      "medianVerifiedMBps": 21.651
+    },
+    {
+      "group": "windows-to-linux/batch/batch64/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.153
+      ],
+      "medianVerifiedMBps": 19.153
+    },
+    {
+      "group": "windows-to-linux/batch/batch32-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        22.04
+      ],
+      "medianVerifiedMBps": 22.04
+    },
+    {
+      "group": "windows-to-linux/batch/batch32-mtu1400/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        22.598
+      ],
+      "medianVerifiedMBps": 22.598
+    },
+    {
+      "group": "windows-to-linux/uso/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        21.624,
+        21.715
+      ],
+      "medianVerifiedMBps": 21.67
+    },
+    {
+      "group": "windows-to-linux/uso/batch32-control/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.347
+      ],
+      "medianVerifiedMBps": 16.347
+    },
+    {
+      "group": "windows-to-linux/uso-debug2/socket/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        22.656
+      ],
+      "medianVerifiedMBps": 22.656
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        20.69,
+        19.442
+      ],
+      "medianVerifiedMBps": 20.066
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/cmsg32/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        16.14,
+        22.326
+      ],
+      "medianVerifiedMBps": 19.233
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/socket32-persist/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.936
+      ],
+      "medianVerifiedMBps": 19.936
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/cmsg32-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        19.486
+      ],
+      "medianVerifiedMBps": 19.486
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/cmsg8/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        16.35
+      ],
+      "medianVerifiedMBps": 16.35
+    },
+    {
+      "group": "windows-to-linux/uso-fixed/cmsg64/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        22.516
+      ],
+      "medianVerifiedMBps": 22.516
+    },
+    {
+      "group": "windows-to-linux/overlap/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        21.135,
+        20.978
+      ],
+      "medianVerifiedMBps": 21.057
+    },
+    {
+      "group": "windows-to-linux/overlap/overlap8/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        15.9
+      ],
+      "medianVerifiedMBps": 15.9
+    },
+    {
+      "group": "windows-to-linux/overlap/overlap32/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        22.149
+      ],
+      "medianVerifiedMBps": 22.149
+    },
+    {
+      "group": "windows-to-linux/overlap/overlap64/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        24.171
+      ],
+      "medianVerifiedMBps": 24.171
+    },
+    {
+      "group": "windows-to-linux/overlap/overlap32-buffer4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.612
+      ],
+      "medianVerifiedMBps": 21.612
+    },
+    {
+      "group": "windows-to-linux/overlap/overlap32-socket4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.112
+      ],
+      "medianVerifiedMBps": 21.112
+    },
+    {
+      "group": "windows-to-linux/connected/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        20.501,
+        16.717
+      ],
+      "medianVerifiedMBps": 18.609
+    },
+    {
+      "group": "windows-to-linux/connected/connected/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        16.223,
+        21.503
+      ],
+      "medianVerifiedMBps": 18.863
+    },
+    {
+      "group": "windows-to-linux/connected/connected-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        21.676
+      ],
+      "medianVerifiedMBps": 21.676
+    },
+    {
+      "group": "same-host-windows/local/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        79.917,
+        62.697
+      ],
+      "medianVerifiedMBps": 71.307
+    },
+    {
+      "group": "same-host-windows/local/window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        50.654
+      ],
+      "medianVerifiedMBps": 50.654
+    },
+    {
+      "group": "same-host-windows/local/batch32/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        62.182
+      ],
+      "medianVerifiedMBps": 62.182
+    },
+    {
+      "group": "same-host-windows/local/uso32/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        62.767
+      ],
+      "medianVerifiedMBps": 62.767
+    },
+    {
+      "group": "same-host-windows/local/overlap32/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        64.843
+      ],
+      "medianVerifiedMBps": 64.843
+    },
+    {
+      "group": "linux-to-windows/reverse/baseline/118189944",
+      "repetitions": 3,
+      "verifiedMBps": [
+        28.613,
+        28.771,
+        29.169
+      ],
+      "medianVerifiedMBps": 28.771
+    },
+    {
+      "group": "linux-to-windows/reverse/window4/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        33.917,
+        33.764
+      ],
+      "medianVerifiedMBps": 33.841
+    },
+    {
+      "group": "linux-to-windows/reverse/pace48/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        25.14
+      ],
+      "medianVerifiedMBps": 25.14
+    },
+    {
+      "group": "windows-to-linux/confirm/baseline/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        18.438,
+        20.842,
+        20.938
+      ],
+      "medianVerifiedMBps": 20.842
+    },
+    {
+      "group": "windows-to-linux/confirm/overlap64/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        24.253,
+        22.192,
+        23.887
+      ],
+      "medianVerifiedMBps": 23.887
+    },
+    {
+      "group": "same-host-windows/local-long/baseline/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        56.377,
+        56.219,
+        57.282
+      ],
+      "medianVerifiedMBps": 56.377
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/baseline/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        28.796,
+        28.773
+      ],
+      "medianVerifiedMBps": 28.785
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/window4/118189944",
+      "repetitions": 2,
+      "verifiedMBps": [
+        31.751,
+        8.976
+      ],
+      "medianVerifiedMBps": 20.364
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/batch32/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        30.637
+      ],
+      "medianVerifiedMBps": 30.637
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/batch32-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        34.81
+      ],
+      "medianVerifiedMBps": 34.81
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/mtu1400-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        37.055
+      ],
+      "medianVerifiedMBps": 37.055
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/batch32-mtu1400-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        37.833
+      ],
+      "medianVerifiedMBps": 37.833
+    },
+    {
+      "group": "linux-to-windows/reverse-batch/batch64-window4/118189944",
+      "repetitions": 1,
+      "verifiedMBps": [
+        35.222
+      ],
+      "medianVerifiedMBps": 35.222
+    },
+    {
+      "group": "linux-to-windows/reverse-repeat/baseline/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        29.069,
+        29.129,
+        28.433
+      ],
+      "medianVerifiedMBps": 29.069
+    },
+    {
+      "group": "linux-to-windows/reverse-repeat/batch64-window4/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        34.751,
+        33.761,
+        34.134
+      ],
+      "medianVerifiedMBps": 34.134
+    },
+    {
+      "group": "linux-to-windows/reverse-repeat/batch32-mtu1400-window4/472759776",
+      "repetitions": 3,
+      "verifiedMBps": [
+        38.348,
+        24.569,
+        37.372
+      ],
+      "medianVerifiedMBps": 37.372
+    }
+  ],
+  "batchProvenance": [
+    {
+      "name": "screen",
+      "rawReportSHA256": "d8e6345ef09d78517f99aa8f2d90421bbb9e6be693121198575fe2803bd8b30c",
+      "executableSHA256": "3c08f591ac734edde55028fbca5e71ee8a8ce534c330dfbd00da0735b01ec5ed",
+      "started": "2026-10-21T16:26:14.173Z",
+      "finished": "2026-10-21T16:28:33.667Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-vdrl6dp0",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.332316814994556,
+          "MBps": 50.37004955932664,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1363.9801999999997
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1188004560099216,
+          "MBps": 59.98287151163341,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1156.8230999999796
+        }
+      ]
+    },
+    {
+      "name": "instrument",
+      "rawReportSHA256": "6f8f3e7cde263e94dd3ca811000a30a524cd793fb47c2aae078dc5b97f829c1f",
+      "executableSHA256": "2facecdbd1176680a1ae7ae4651d0105a458122fb0d1473aa143dd622bb966b3",
+      "started": "2026-10-21T16:28:52.532Z",
+      "finished": "2026-10-21T16:29:42.100Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-6wj1_efr",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.527072771001258,
+          "MBps": 43.94608120476055,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1557.8322
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.223052096000174,
+          "MBps": 54.86999631452367,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1255.277900000001
+        }
+      ]
+    },
+    {
+      "name": "dtls",
+      "rawReportSHA256": "4e7bec8b37d7c552dafeb34435f63b702992fc59c8eec97b8466a3a2be54cd90",
+      "executableSHA256": "8d7095b348468469e3c5cb416ebe58259ae49deb464ec1ab52b6221dfe3b843b",
+      "started": "2026-10-21T16:31:58.103Z",
+      "finished": "2026-10-21T16:32:59.764Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-jlqpki5x",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.1615001329919323,
+          "MBps": 57.77774973398659,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1193.3183999999999
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1423408660048153,
+          "MBps": 58.74679440883901,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1175.9214999999967
+        }
+      ]
+    },
+    {
+      "name": "batch",
+      "rawReportSHA256": "5da839ee85d6c10bf5cac826c6bbb43b3303e74a7d14eadfff90b44c1fcad521",
+      "executableSHA256": "ecddc539184a34a8f53a60cffb3a3b07d9864f0004e65e18362377d0cb4c6d33",
+      "started": "2026-10-21T16:34:02.830Z",
+      "finished": "2026-10-21T16:35:13.287Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-mq3ob3lj",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.3019598520040745,
+          "MBps": 51.544495705225465,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1337.3399
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.2568651620094897,
+          "MBps": 53.39384528146648,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1291.2163999999902
+        }
+      ]
+    },
+    {
+      "name": "uso",
+      "rawReportSHA256": "bd493504c63b83ce066291983d9e5b6d7077c3c2f159c81460ef290b96541235",
+      "executableSHA256": "0b50eb45bca2699d1cc36c27fd61cdc39499343bde259c34761b7b0846a3a0fc",
+      "started": "2026-10-21T16:35:51.501Z",
+      "finished": "2026-10-21T16:36:29.116Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-apicu7w7",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.116501572993002,
+          "MBps": 60.10637658136164,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1152.5538999999999
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.0864576349995332,
+          "MBps": 61.76850512908295,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1118.843200000003
+        }
+      ]
+    },
+    {
+      "name": "uso-debug",
+      "rawReportSHA256": "2367f7569f2c7071b0bb6f701c731f15edc3e3535abee755c3296ffa7bedd2a5",
+      "executableSHA256": "8bccc33adf5a252ba0ea806d2fc4425c98b9e040b0deeee531d05ec8ad35c35b",
+      "started": "2026-10-21T16:37:03.828Z",
+      "finished": "2026-10-21T16:37:09.985Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-vdr6wfwq",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.2507451370038325,
+          "MBps": 53.65510687553796,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1284.3622999999998
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.3311234270076966,
+          "MBps": 50.415207664744955,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1369.0866999999998
+        }
+      ]
+    },
+    {
+      "name": "uso-debug2",
+      "rawReportSHA256": "5ea81e14191bc90e85c508d5f6f5df9b80cc276ab199f8ebc2d898e1b45f7d86",
+      "executableSHA256": "d05c7be48d1be87d62cabeae39ac5a725d265a5ab235692579559c3fbae0e835",
+      "started": "2026-10-21T16:37:59.755Z",
+      "finished": "2026-10-21T16:38:13.223Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-hrkl42se",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.155669408995891,
+          "MBps": 58.06925707093681,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1187.3263000000002
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.2001586300029885,
+          "MBps": 55.916661616500555,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1234.6676000000007
+        }
+      ]
+    },
+    {
+      "name": "uso-fixed",
+      "rawReportSHA256": "137e10cd05ac2ca059bfee45462965a6e5766fca4fc3a47377dae32eb1631961",
+      "executableSHA256": "ef94448a76832520fb24fff0700773d92a735d40389dcfd11a2e4539069cb515",
+      "started": "2026-10-21T16:40:14.638Z",
+      "finished": "2026-10-21T16:41:26.592Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-zrj9xsbv",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.2508181430021068,
+          "MBps": 53.651975209546485,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1284.7513
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.2002960620011436,
+          "MBps": 55.91025924730232,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1233.5164000000077
+        }
+      ]
+    },
+    {
+      "name": "overlap",
+      "rawReportSHA256": "80d4fcf841584ebc79e0b215fe36292a2c0fa96bca8d551ee4079b4eeab08590",
+      "executableSHA256": "9f43da8747aa54a7beb67691a82af05b57c6de685a3d959bdf5b84c6ea00adca",
+      "started": "2026-10-21T16:43:42.536Z",
+      "finished": "2026-10-21T16:44:42.610Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-x8tdy45g",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.206860806007171,
+          "MBps": 55.60613425008455,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1241.1964
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.145823055994697,
+          "MBps": 58.56826117165388,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1182.1549999999988
+        }
+      ]
+    },
+    {
+      "name": "connected",
+      "rawReportSHA256": "86c95dec7edfaab9364c567ca92c5236787d87d742bfa98b6e560420dc467843",
+      "executableSHA256": "2cb1a64e70efe5084d3212b31708fba33c3206a3ab07530d2858331444f4b8be",
+      "started": "2026-10-21T16:49:36.804Z",
+      "finished": "2026-10-21T16:50:23.717Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-xd1wf2dn",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.2421628680021968,
+          "MBps": 54.02581716835003,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1275.14
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1426753050036496,
+          "MBps": 58.72960035640717,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1175.644699999997
+        }
+      ]
+    },
+    {
+      "name": "local",
+      "rawReportSHA256": "3f68bd30bb8c27b3f9d4f88d6bed1fc7d362f5760de23610972ba72494416cdd",
+      "executableSHA256": "9f43da8747aa54a7beb67691a82af05b57c6de685a3d959bdf5b84c6ea00adca",
+      "started": "2026-10-21T16:49:02.743Z",
+      "finished": "2026-10-21T16:49:20.959Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": null,
+      "tcpControls": []
+    },
+    {
+      "name": "reverse",
+      "rawReportSHA256": "dca39756b96b598c3b82c0cbb6c6b39238f7b69c008f03f1b063876d31fa9457",
+      "executableSHA256": "97af0abcb2d9c7fc0f98d0a8c6c2b2380202f24f5f2f624382bbe2766bf1e3b8",
+      "started": "2026-10-21T16:51:36.789Z",
+      "finished": "2026-10-21T16:52:11.081Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": null,
+      "tcpControls": []
+    },
+    {
+      "name": "confirm",
+      "rawReportSHA256": "ae7aadbb391de334b58c377451e8600045fd4bd326ae87e2d084035b52abe2e0",
+      "executableSHA256": "2cb1a64e70efe5084d3212b31708fba33c3206a3ab07530d2858331444f4b8be",
+      "started": "2026-10-21T16:52:25.929Z",
+      "finished": "2026-10-21T16:55:04.743Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-jpptnd_d",
+        "status": "complete"
+      },
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.1773075719975168,
+          "MBps": 57.001981127274654,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1214.7805
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1117853820032906,
+          "MBps": 60.36134769021579,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1143.1824999999953
+        }
+      ]
+    },
+    {
+      "name": "local-long",
+      "rawReportSHA256": "fe73bf2dcd021a6ae87bda2475decfe61929c6cb64dcf36d8ed29ae2bc45410e",
+      "executableSHA256": "2cb1a64e70efe5084d3212b31708fba33c3206a3ab07530d2858331444f4b8be",
+      "started": "2026-10-21T16:57:34.491Z",
+      "finished": "2026-10-21T16:58:07.441Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": null,
+      "tcpControls": []
+    },
+    {
+      "name": "reverse-batch",
+      "rawReportSHA256": "edcbe978fdf2c454a8943941fd315d6958769caaf71e8ceea0f46d4dc0bd72b2",
+      "executableSHA256": "9e506292714b493ff95d4e222b958dbf9bd614e80dc74774a7b2d830508c0639",
+      "started": "2026-10-21T16:55:59.108Z",
+      "finished": "2026-10-21T16:56:56.090Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": null,
+      "tcpControls": []
+    },
+    {
+      "name": "reverse-repeat",
+      "rawReportSHA256": "1f829954d5cf78d5a2bf6c7a76cf5477db482734b6d75a4e81796540de15320b",
+      "executableSHA256": "9e506292714b493ff95d4e222b958dbf9bd614e80dc74774a7b2d830508c0639",
+      "started": "2026-10-21T16:59:42.617Z",
+      "finished": "2026-10-21T17:02:34.645Z",
+      "error": null,
+      "cleanupError": null,
+      "remoteCleanup": null,
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.6352925,
+          "MBps": 41.03783512735489,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "connectionInitiator": "Windows",
+          "dataDirection": "Linux to Windows"
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1227543000000004,
+          "MBps": 59.77163837181472,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "connectionInitiator": "Windows",
+          "dataDirection": "Linux to Windows"
+        }
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "topic": "SCTP over DTLS over ICE/UDP",
+      "url": "https://www.rfc-editor.org/rfc/rfc8261.html"
+    },
+    {
+      "topic": "SCTP congestion window",
+      "url": "https://www.rfc-editor.org/rfc/rfc9260.html#section-7.2.2"
+    },
+    {
+      "topic": "TCP and UDP segmentation offloads",
+      "url": "https://docs.kernel.org/networking/segmentation-offloads.html"
+    },
+    {
+      "topic": "Windows NIC offloads",
+      "url": "https://learn.microsoft.com/en-us/windows-server/networking/technologies/network-subsystem/net-sub-performance-tuning-nics"
+    },
+    {
+      "topic": "Windows UDP segmentation socket option",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-udp-socket-options"
+    }
+  ],
+  "reverseCleanup": {
+    "removed": "/tmp/windshare-single-reverse-tnt45o6z",
+    "exists": false
+  },
+  "remoteBrowserCleanup": [
+    {
+      "batch": "screen",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "instrument",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "dtls",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "batch",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "uso",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "uso-debug",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "uso-debug2",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "uso-fixed",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "overlap",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "connected",
+      "profileExists": false,
+      "processExists": false
+    },
+    {
+      "batch": "confirm",
+      "profileExists": false,
+      "processExists": false
+    }
+  ],
+  "privacy": {
+    "labAddresses": "Documentation placeholders identify the same hosts consistently: 192.0.2.10 is the Windows host; 192.0.2.20 is the Linux host. These are not the actual lab addresses.",
+    "checkoutPaths": "<repo> replaces the local checkout path. Measurements, checksums, failures, and experimental limitations are retained."
+  }
+}

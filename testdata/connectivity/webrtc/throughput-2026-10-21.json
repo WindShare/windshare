@@ -1,0 +1,838 @@
+{
+  "date": "2026-10-21",
+  "localDateRange": "2026-10-21 to 2026-10-22, Asia/Singapore",
+  "sourceRevisionAtVerification": "50892293a2062efe1c96c1731ff48c97ef05a205",
+  "status": "Research evidence only; no production behavior changed.",
+  "units": "Decimal MB/s: 1 MB = 1,000,000 bytes. 40 MB/s = 320 Mbps.",
+  "environment": {
+    "sender": "Windows, Go 1.27.0, default GOMAXPROCS=28",
+    "receiver": "Linux 7.0.0-38, Chrome 155.0.8059.84, fresh headless profile per batch",
+    "network": "Two physical LAN hosts over Wi-Fi; direct IPv4 UDP; no TURN or WebSocket relay; SSH carries browser control only."
+  },
+  "method": {
+    "transport": "Production transport/webrtc.FrameChannel, pinned Pion WebRTC/ICE, reliable ordered DataChannel. Experimental Go build overlays instrument SCTP and vary send admission, pacing and inbound delivery delay.",
+    "socketModes": "Early batches use default Pion sockets. The mux batch explicitly uses one UniversalUDPMux and native UDP socket per PeerConnection, matching the production per-path socket structure. It still bypasses provider/session admission and product scheduling.",
+    "emptyVideo": "recvonly video negotiated on every PeerConnection in every arm, including all baselines.",
+    "parallelism": "Multiple independent PeerConnections/SCTP associations in one native process. Dynamic arms allocate 64 KiB frames (8-byte offset plus payload) from one shared work queue.",
+    "crypto": "Production Go sealed records; production TypeScript revision/block verification and decryption, with four concurrent decoder operations and final ciphertext/plaintext SHA-256 checks.",
+    "timing": "Browser start request after all channels open through last authenticated plaintext copy. Includes transfer slow start and record verification/decryption. Excludes file reading, sender sealing, ICE/DTLS setup, final whole-file SHA-256 calculation and disk output.",
+    "memory": "Sender reads and seals the full fixture before timing. Receiver retains ciphertext and plaintext in memory. This is a transport-plus-decoder experiment, not the complete product transfer pipeline.",
+    "repetitions": "Primary arms each have one declared warmup followed by three measured transfers. Arm order reverses on alternating repetitions; warmup values are retained. Screenings are exploratory, not equally repeated.",
+    "latency": "Additional 80 ms FIFO delivery delay applied to inbound native SCTP above DTLS. Actual SCTP RTT is sampled every 100 ms. ICE, physical packet propagation, loss and congestion are not shaped.",
+    "pacing": "Experimental per-association 32 KiB burst budget with timer sleeps and epoch reset; the requested MB/s is not a precision rate limiter or production control policy."
+  },
+  "payloads": [
+    {
+      "bytes": 118189944,
+      "sha256": "579c7666e42f9ce9a4ee5afb7de7a2c3c821c5125076aa4dd7b96238ee8e0472",
+      "records": 113
+    },
+    {
+      "bytes": 472759776,
+      "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+      "records": 451
+    }
+  ],
+  "measurements": [
+    {
+      "batch": "repeat",
+      "name": "single",
+      "plaintextBytes": 118189944,
+      "connections": 1,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": false,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        22.063,
+        15.56,
+        19.067
+      ],
+      "medianVerifiedMBps": 19.067,
+      "warmupVerifiedMBps": 21.603,
+      "measuredMedianSCTPRttMs": [
+        11.136,
+        10.555,
+        11.881
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "batch": "repeat",
+      "name": "four-dynamic-pace16",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        39.105,
+        38.327,
+        39.653
+      ],
+      "medianVerifiedMBps": 39.105,
+      "warmupVerifiedMBps": 36.556,
+      "measuredMedianSCTPRttMs": [
+        27.055,
+        24.76,
+        22.165
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "repeat",
+      "name": "six-dynamic",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        44.286,
+        40.576,
+        38.26
+      ],
+      "medianVerifiedMBps": 40.576,
+      "warmupVerifiedMBps": 36.108,
+      "measuredMedianSCTPRttMs": [
+        33.516,
+        35.622,
+        41.783
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "repeat",
+      "name": "six-dynamic-pace16",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        31.947,
+        45.565,
+        38.118
+      ],
+      "medianVerifiedMBps": 38.118,
+      "warmupVerifiedMBps": 33.837,
+      "measuredMedianSCTPRttMs": [
+        27.786,
+        29.937,
+        36.274
+      ],
+      "measuredT3TimeoutCounts": [
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "repeat",
+      "name": "four-window4-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 4194303,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        33.284,
+        29.075,
+        3.241
+      ],
+      "medianVerifiedMBps": 29.075,
+      "warmupVerifiedMBps": 2.628,
+      "measuredMedianSCTPRttMs": [
+        96.61,
+        109.355,
+        115.476
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "batch": "repeat",
+      "name": "six-window4-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 4194303,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        32.45,
+        18.39,
+        8.615
+      ],
+      "medianVerifiedMBps": 18.39,
+      "warmupVerifiedMBps": 6.186,
+      "measuredMedianSCTPRttMs": [
+        99.016,
+        130.296,
+        95.865
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        8
+      ]
+    },
+    {
+      "batch": "wan",
+      "name": "six-default-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        25.576,
+        8.021,
+        20.882
+      ],
+      "medianVerifiedMBps": 20.882,
+      "warmupVerifiedMBps": 10.743,
+      "measuredMedianSCTPRttMs": [
+        107.789,
+        103.749,
+        104.469
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "wan",
+      "name": "six-low75-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        21.273,
+        28.157,
+        19.907
+      ],
+      "medianVerifiedMBps": 21.273,
+      "warmupVerifiedMBps": 28.365,
+      "measuredMedianSCTPRttMs": [
+        123.113,
+        116.076,
+        105.313
+      ],
+      "measuredT3TimeoutCounts": [
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "batch": "wan",
+      "name": "six-low75-pace16-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        32.634,
+        26.468,
+        31.202
+      ],
+      "medianVerifiedMBps": 31.202,
+      "warmupVerifiedMBps": 32.538,
+      "measuredMedianSCTPRttMs": [
+        101.403,
+        117.224,
+        108.626
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "wan",
+      "name": "six-buffer2-low75-pace16-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 2097151,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        35.885,
+        29.731,
+        32.788
+      ],
+      "medianVerifiedMBps": 32.788,
+      "warmupVerifiedMBps": 26.621,
+      "measuredMedianSCTPRttMs": [
+        103.139,
+        111.05,
+        107.643
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "four",
+      "name": "four-lan-pace20",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": 20,
+      "measuredVerifiedMBps": [
+        39.96,
+        26.009,
+        37.119
+      ],
+      "medianVerifiedMBps": 37.119,
+      "warmupVerifiedMBps": 39.728,
+      "measuredMedianSCTPRttMs": [
+        19.643,
+        26.374,
+        23.754
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "batch": "four",
+      "name": "four-low75-pace16-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        25.968,
+        25.411,
+        26.353
+      ],
+      "medianVerifiedMBps": 25.968,
+      "warmupVerifiedMBps": 23.752,
+      "measuredMedianSCTPRttMs": [
+        100.845,
+        102.778,
+        97.922
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "four",
+      "name": "four-buffer2-low75-pace16-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 2097151,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        33.063,
+        30.353,
+        29.336
+      ],
+      "medianVerifiedMBps": 30.353,
+      "warmupVerifiedMBps": 26.21,
+      "measuredMedianSCTPRttMs": [
+        101.37,
+        102.973,
+        104.585
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "long",
+      "name": "single-long",
+      "plaintextBytes": 472759776,
+      "connections": 1,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": false,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        20.348,
+        22.04,
+        21.442
+      ],
+      "medianVerifiedMBps": 21.442,
+      "warmupVerifiedMBps": 18.548,
+      "measuredMedianSCTPRttMs": [
+        12.317,
+        12.447,
+        11.88
+      ],
+      "measuredT3TimeoutCounts": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "long",
+      "name": "four-long-pace16",
+      "plaintextBytes": 472759776,
+      "connections": 4,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        36.717,
+        36.709,
+        34.554
+      ],
+      "medianVerifiedMBps": 36.709,
+      "warmupVerifiedMBps": 35.005,
+      "measuredMedianSCTPRttMs": [
+        30.038,
+        33.308,
+        30.05
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "long",
+      "name": "six-long",
+      "plaintextBytes": 472759776,
+      "connections": 6,
+      "nativePerPathMux": false,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        40.656,
+        37.908,
+        38.59
+      ],
+      "medianVerifiedMBps": 38.59,
+      "warmupVerifiedMBps": 31.27,
+      "measuredMedianSCTPRttMs": [
+        54.162,
+        42.824,
+        40.296
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        2,
+        1
+      ]
+    },
+    {
+      "batch": "mux",
+      "name": "single-mux-long",
+      "plaintextBytes": 472759776,
+      "connections": 1,
+      "nativePerPathMux": true,
+      "dynamicChunkAllocation": false,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        19.945,
+        20.629,
+        21.674
+      ],
+      "medianVerifiedMBps": 20.629,
+      "warmupVerifiedMBps": 18.028,
+      "measuredMedianSCTPRttMs": [
+        12.23,
+        12.436,
+        12.135
+      ],
+      "measuredT3TimeoutCounts": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "mux",
+      "name": "four-mux-long-pace16",
+      "plaintextBytes": 472759776,
+      "connections": 4,
+      "nativePerPathMux": true,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        38.482,
+        39.677,
+        36.1
+      ],
+      "medianVerifiedMBps": 38.482,
+      "warmupVerifiedMBps": 35.707,
+      "measuredMedianSCTPRttMs": [
+        30.382,
+        31.557,
+        30.947
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "batch": "mux",
+      "name": "six-mux-long",
+      "plaintextBytes": 472759776,
+      "connections": 6,
+      "nativePerPathMux": true,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 0,
+      "sendHighWaterBytes": 1048575,
+      "sendLowWaterFraction": 0.25,
+      "experimentalPacingTargetMBpsPerConnection": null,
+      "measuredVerifiedMBps": [
+        31.068,
+        36.106,
+        41.274
+      ],
+      "medianVerifiedMBps": 36.106,
+      "warmupVerifiedMBps": 33.713,
+      "measuredMedianSCTPRttMs": [
+        44.989,
+        44.411,
+        39.038
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        4,
+        0
+      ]
+    },
+    {
+      "batch": "mux",
+      "name": "four-mux-buffer2-low75-pace16-delay80",
+      "plaintextBytes": 118189944,
+      "connections": 4,
+      "nativePerPathMux": true,
+      "dynamicChunkAllocation": true,
+      "additionalInboundSCTPDelayMs": 80,
+      "sendHighWaterBytes": 2097151,
+      "sendLowWaterFraction": 0.75,
+      "experimentalPacingTargetMBpsPerConnection": 16,
+      "measuredVerifiedMBps": [
+        32.485,
+        31.924,
+        32.496
+      ],
+      "medianVerifiedMBps": 32.485,
+      "warmupVerifiedMBps": 32.133,
+      "measuredMedianSCTPRttMs": [
+        97.533,
+        100.826,
+        101.174
+      ],
+      "measuredT3TimeoutCounts": [
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "tcpCapacityControls": {
+    "repeat": [
+      {
+        "position": "before",
+        "MBps": 45.356,
+        "bytes": 67108864
+      },
+      {
+        "position": "after",
+        "MBps": 57.986,
+        "bytes": 67108864
+      }
+    ],
+    "wan": [
+      {
+        "position": "before",
+        "MBps": 58.815,
+        "bytes": 67108864
+      },
+      {
+        "position": "after",
+        "MBps": 56.484,
+        "bytes": 67108864
+      }
+    ],
+    "four": [
+      {
+        "position": "before",
+        "MBps": 56.786,
+        "bytes": 67108864
+      },
+      {
+        "position": "after",
+        "MBps": 61.137,
+        "bytes": 67108864
+      }
+    ],
+    "long": [
+      {
+        "position": "before",
+        "MBps": 45.647,
+        "bytes": 67108864
+      },
+      {
+        "position": "after",
+        "MBps": 62.77,
+        "bytes": 67108864
+      }
+    ],
+    "mux": [
+      {
+        "position": "before",
+        "MBps": 51.718,
+        "bytes": 67108864
+      },
+      {
+        "position": "after",
+        "MBps": 56.28,
+        "bytes": 67108864
+      }
+    ]
+  },
+  "findings": [
+    "Parallel independent WebRTC associations demonstrate a substantial aggregate transport-plus-decoder improvement beyond the approximately 20 MB/s single-association baseline.",
+    "LAN capability does not establish 40 MB/s on a real WAN. High RTT, retransmission, receiver windows, TURN capacity and source/output pipelines remain independent constraints.",
+    "At 100 ms RTT, 40 MB/s requires about 4 MB of useful data in flight. Pion BufferedAmount includes unacknowledged data; the current roughly 1 MiB high watermark and 256 KiB resume threshold can limit continued supply.",
+    "Increasing admission buffers alone did not double single-connection LAN throughput. Four MiB per connection without suitable pacing produced severe high-latency stalls, including warmup outliers; those results remain in measurements.",
+    "The production protocol allows four peer continuation slots. Six-connection trials bypass that admission limit and demonstrate transport capability only.",
+    "GOMAXPROCS tuning, smaller messages and a context.AfterFunc-based socket cancellation prototype did not establish a repeatable single-connection doubling. The socket prototype is not a production change.",
+    "The initial CPU profile was dominated by blocking stdin ReadFile under runtime.cgocall. It does not establish network CPU saturation."
+  ],
+  "implementationDirection": [
+    "Extend the existing lane scheduler with bounded demand-driven independent paths and measured marginal-gain retirement, under shared memory and connection budgets.",
+    "Model queued and unacknowledged bytes separately in transport observations. Adapt outstanding-data capacity and wakeup thresholds using RTT, observed delivery, congestion and receiver windows.",
+    "Pace aggregate traffic and bound per-path bursts. Additional paths must not delay ordinary connection startup or discard verified transfer progress.",
+    "Integrate and measure live source sealing, real output and both WAN direct/TURN paths before promoting a policy. Do not copy the experimental fixed six-peer or four-MiB settings into production."
+  ],
+  "limitations": [
+    "One sender/receiver pair and one browser/OS combination; three repetitions per primary arm do not establish a stable minimum or broad performance guarantee.",
+    "The large fixture is approximately 473 MB. These runs test longer transfers but are not an hours-long soak.",
+    "Host-wide UDP drop counters cannot identify an individual connection as the drop source.",
+    "No real WAN 40 MB/s or complete product download benchmark was performed in this experiment.",
+    "The initial eight-trial pilot was excluded because its browser candidate-address oracle was incorrect. Later batches verify both native selected addresses and browser UDP protocols.",
+    "Some early launcher cleanup acknowledgements were missing. Exact owned Chrome process groups and temporary profiles were checked and cleaned separately. The launcher now uses ThreadingHTTPServer to avoid shutdown blocking on browser preconnects."
+  ],
+  "verification": {
+    "completedTransfers": 127,
+    "productionSealedTransfers": 107,
+    "failedTransfers": [],
+    "allPayloadsVerified": true,
+    "allPeersLANUDP": true,
+    "allVideoTransceiversNegotiated": true,
+    "productionDecoderRebuildEquivalent": true,
+    "allRemoteProfilesCleaned": true
+  },
+  "localEvidence": {
+    "directory": ".tmp/webrtc-wan-20261021 (git-ignored local research workspace)",
+    "rawReports": [
+      {
+        "batch": "screen",
+        "sha256": "ed32343e32f89b8adcd1f193fde6457ecf5383df1bedb8330a42f553ab94f3b6",
+        "executableSHA256": "60dc4f76ffde6d885848edd7f751e0cc888a7b57af864371f2da7bfb24f9e837",
+        "attempts": 8,
+        "failures": []
+      },
+      {
+        "batch": "cpu",
+        "sha256": "1d89ad592826e06c32337259b5c2957b2bcab95569144cbe4e3a8b03321ef340",
+        "executableSHA256": "60dc4f76ffde6d885848edd7f751e0cc888a7b57af864371f2da7bfb24f9e837",
+        "attempts": 12,
+        "failures": []
+      },
+      {
+        "batch": "verified",
+        "sha256": "7ffc92740bf4f9555f45ac7ce4a22479ea3018a13a604fc3400ec6a2ddfb1f9f",
+        "executableSHA256": "1cfc3c3684f65d3f42b931fdc9f86f05d848e29552cdf8d8c2d1ad648095b953",
+        "attempts": 8,
+        "failures": []
+      },
+      {
+        "batch": "pace",
+        "sha256": "dbf436b3db849e04dbdba6b355440601359328afb45f29cb494a154494b4e980",
+        "executableSHA256": "1cfc3c3684f65d3f42b931fdc9f86f05d848e29552cdf8d8c2d1ad648095b953",
+        "attempts": 12,
+        "failures": []
+      },
+      {
+        "batch": "afterfunc",
+        "sha256": "4f47be05c5c618425e169bb81b66121541265f6a289bcbb307bbf6395c9d5e34",
+        "executableSHA256": "9b378adeb00394a214da5473424f10e21785b08c6d6a3149636137d14994dbf2",
+        "attempts": 7,
+        "failures": []
+      },
+      {
+        "batch": "repeat",
+        "sha256": "e1040d7ee319b954a87d64fbf3cc98d4d3a0b5b78786cc3244fcd71b44f815b6",
+        "executableSHA256": "9b378adeb00394a214da5473424f10e21785b08c6d6a3149636137d14994dbf2",
+        "attempts": 24,
+        "failures": []
+      },
+      {
+        "batch": "wan",
+        "sha256": "1f43e1ec05026d3f461949fc7d9438854b445bfa922d16ffa613a6b7a8407acc",
+        "executableSHA256": "9b378adeb00394a214da5473424f10e21785b08c6d6a3149636137d14994dbf2",
+        "attempts": 16,
+        "failures": []
+      },
+      {
+        "batch": "four",
+        "sha256": "af088c86faff6319c44d5e1c3453cd9ab5cf877c45d6305a8af3659919db76ab",
+        "executableSHA256": "9b378adeb00394a214da5473424f10e21785b08c6d6a3149636137d14994dbf2",
+        "attempts": 12,
+        "failures": []
+      },
+      {
+        "batch": "long",
+        "sha256": "d43a92da050c539aecee7ffe41018b314ef80b87e273806beaffaa61356f9a0a",
+        "executableSHA256": "9b378adeb00394a214da5473424f10e21785b08c6d6a3149636137d14994dbf2",
+        "attempts": 12,
+        "failures": []
+      },
+      {
+        "batch": "mux",
+        "sha256": "9c46015fb68e5f78968e1bfaee619765260281ce2ab9efba1d63d52bde54b2aa",
+        "executableSHA256": "9e063fe2c5a8e6591865f87fee062891893d2160f26ae8106ed770b827f524ce",
+        "attempts": 16,
+        "failures": []
+      }
+    ],
+    "sourceSnapshots": {
+      "final-sources": {
+        "association_stats.go.overlay": "2f1dede9b051505efe4513f2b7f97737c248f3fb05a34d0ed57d41e4771b9275",
+        "config.go.overlay": "a63f239cfe87565533209d2ae53afcaf79d8ac956d4695c89f442673a269400a",
+        "context_afterfunc.go.source": "3b28c8f259cd3af8496c9bc2a8a8b63fabbe789d48a047c396da83ba4c523d5a",
+        "decoder.js": "300b2280bf4e0201b713b15186dc2fed893ccaa58cdc457fe5f6333d78b9ad41",
+        "go.mod": "b0d1450382f5e5c2ab612002445f245a4c868e89bea9e7e03f28cd9aa38fba4b",
+        "go.sum": "dfe56b1d411323953ca2241f9fd104a33d3c2448b4557d9eb6cec39a01bd2572",
+        "main.go": "887ee13a0781de9d3594e16921613198704cf087bc5da61f0476e28d6252299a",
+        "overlay.json": "e7493a5d9e725cc7754f9e4fdb78f1be3fd9db663afd35e0791b47193a5efe55",
+        "prepare-context.cjs": "ec14a00fc1beb9c1c61e6706450dcac41a3a306c4f264cf914f0ee59cb45e546",
+        "prepare-final.cjs": "5b9edb915b2c6ac73d59f7d35a75d265f10fcc6d97b3a298b36401db31550c25",
+        "prepare.cjs": "feecaf3af7a6b6e58f8ad8a889e0b2cfc992079884be030efb9b7fcb0b60d304",
+        "research_link.go.overlay": "9f190770cd0993d407cefb0a68376dce1fc6f160653e169e84d0ca4dfae68b01",
+        "research_stats.go.overlay": "56f09bd6d09d07dde7e3e8d9673ecfd6b6c3a9bd516b90128eecac6ea4938b2c",
+        "run.cjs": "82bda6331f28f4243ccfe9df816485169bd4a8913351df8e8890f500642c11e1",
+        "sctptransport.go.overlay": "49eccefedc1af3181e012f290412e11bba53c148e432ceaa0d9810341069f078",
+        "sealed.go": "deb6b9f5a30caa8f8e23865da61603aadb03dfdb2463c935f9439613e27f9e72"
+      },
+      "long-sources": {
+        "long.config.json": "e751bea90acad7d8571ddaec882e2899bf432f7723ff8b79e0702aaf8db138bf",
+        "remote.py": "45388e232054faed112a4673fcce78e3472d972217599938347a774281cfa1a2",
+        "run.cjs": "192bfb6385f36b1bf664592e5722c8a557aa162354541811cb58a52972f006bf"
+      },
+      "mux-sources": {
+        "main.go": "be0ca0e2b1db793a75d631817cc8489e4bb144c14643e23562419bdcd3549386",
+        "mux.config.json": "19ff8568144bb67f2a33572dafbf114a458a5e4278b41cc9aacd51faa6c842e6",
+        "prepare-mux.cjs": "6581e83fd5841b24e8950c8b1a5a23a7cfe63267dbbd0e47621b1134ddf6c19b",
+        "remote.py": "35e3d04ac76d60b9fa76362274ef55fe350c768118ec572c4aaf8c48ebbb8b00",
+        "run.cjs": "168d077e414b7b1a6eba9c5bdad91af6c6c63f273a7b46152226de99070d86e0"
+      }
+    },
+    "verificationFileSHA256": "b05bfac60b05caf8eae55c8c06544050216df0f61187c6a79a377b15acc079a2",
+    "productionSourceHashes": {
+      "transport/webrtc/config.go": "37f1bb1932e4373d097b7698fedc486913bf9406f96c9192398ad40a7f947ccd",
+      "transport/webrtc/flow.go": "72fb586c6998df4709eb9eeb8b0846d952cd6dfc2c65395cc89461476c357e68",
+      "transport/webrtc/provider/connection.go": "32b5e56ac3a0f55be45ac2d12cd38001576071d00d6ee1a2b81a4d61647fdfa7",
+      "connectivity/socketauthority/authority.go": "a7617fbfa2aa8e0f8690a0ae3f06de439f16c71f9a9911a2f2b050b79e47274e",
+      "third_party/pion/ice/udp_mux.go": "18b7196d26a7c851f91c1442f0b3e23670f7f197da017131ac823e8819c4568b",
+      "third_party/pion/ice/udp_mux_universal.go": "ff2f7ab5bab8ad17d2412da386fb703faafcbf482d2a0ec8a5a751a9886ed419",
+      "third_party/pion/webrtc/sctptransport.go": "8398d3ba6e2e69b1f0581f1918a886b91045863462c8380b94a1aad2a4f487dd",
+      "web/src/session/peer-slots/slots.ts": "172c514ed334fc198015a05705bd711f1ddcdd5a3005a538bef11839058e6f96",
+      "web/src/content/v2-records.ts": "d705c5ab4e67dc1df8c3f5f41d37ebd45d61a5b03ddd1fc597786a052732c113",
+      "go.mod": "e0988979a4a21b2bea6a014c0126c932925a243dc444155820e0f0aafa6b8bc4",
+      "go.sum": "2368ceba93cf4484f5f7a33fa9328879a55f9ff6768450f86545217969fff2b8"
+    }
+  },
+  "references": [
+    "https://www.rfc-editor.org/rfc/rfc8831.html#section-5",
+    "https://www.rfc-editor.org/rfc/rfc9260.html#section-6.1"
+  ]
+}
