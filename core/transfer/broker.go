@@ -73,7 +73,7 @@ type blockKey struct {
 
 type cachedBlock struct {
 	route  downloadmetrics.Route
-	buffer *bufferbudget.Cached
+	buffer *bufferbudget.Cached[blockKey]
 }
 
 type blockConsumer struct {
@@ -108,7 +108,7 @@ type BlockBroker struct {
 	maxBytes            uint64
 	maxConcurrentBlocks int
 	process             *PlaintextBudget
-	account             *bufferbudget.Account
+	account             *bufferbudget.Account[blockKey]
 	lifecycle           context.Context
 	stop                context.CancelFunc
 
@@ -144,7 +144,7 @@ func newBlockBroker(config BlockBrokerConfig, blocks blockFetcher) (*BlockBroker
 	return &BlockBroker{
 		share: config.ShareInstance, blocks: blocks, lanes: config.Lanes, maxBytes: config.MaxBytes,
 		maxConcurrentBlocks: config.MaxConcurrentBlocks, process: config.ProcessBudget,
-		lifecycle: lifecycle, stop: stop, entries: make(map[blockKey]*cachedBlock), account: config.ProcessBudget.Account(config.MaxBytes),
+		lifecycle: lifecycle, stop: stop, entries: make(map[blockKey]*cachedBlock), account: bufferbudget.NewAccount[blockKey](config.ProcessBudget, config.MaxBytes),
 		inflight: make(map[blockKey]*blockCall),
 	}, nil
 }
@@ -462,18 +462,22 @@ func (b *BlockBroker) completeAbandonedCallLocked(call *blockCall, err error) {
 }
 
 func (b *BlockBroker) storeReservedLocked(key blockKey, data []byte, route downloadmetrics.Route) {
-	// Process pressure may have reclaimed another receiver's cache. Stale handles
-	// hold no data and are removed before this receiver stores more content.
-	for cachedKey, cached := range b.entries {
-		if !cached.buffer.Live() {
-			delete(b.entries, cachedKey)
+	b.pruneEvictedLocked()
+	b.entries[key] = &cachedBlock{route: route, buffer: b.account.Store(key, data)}
+}
+
+func (b *BlockBroker) pruneEvictedLocked() {
+	for _, evicted := range b.account.TakeEvicted() {
+		key := evicted.Key()
+		if cached := b.entries[key]; cached != nil && cached.buffer == evicted {
+			delete(b.entries, key)
 		}
 	}
-	b.entries[key] = &cachedBlock{route: route, buffer: b.account.Store(data)}
 }
 
 func (b *BlockBroker) InvalidateRevision(file catalog.FileID, revision content.FileRevision) {
 	b.mu.Lock()
+	b.pruneEvictedLocked()
 	for key, cached := range b.entries {
 		if key.file == file && key.revision == revision {
 			delete(b.entries, key)
@@ -509,6 +513,7 @@ func (b *BlockBroker) Stop() {
 			cached.buffer.Drop()
 			delete(b.entries, key)
 		}
+		b.account.TakeEvicted()
 	}
 	b.mu.Unlock()
 	b.stop()
