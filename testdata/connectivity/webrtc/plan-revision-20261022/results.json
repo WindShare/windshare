@@ -1,0 +1,358 @@
+{
+  "date": "2026-10-22",
+  "baseCommit": "49f9919e136858ca0e4e5f9a9dc655c2dde48f7a",
+  "scope": "Plan research only. Production source unchanged. These opt-in fixtures are outside default test gates.",
+  "environment": {
+    "sender": "Windows, Intel Core i7-14700KF",
+    "go": "go version go1.27.0 windows/amd64",
+    "node": "v24.16.0",
+    "loopbackBrowser": "Edge 155.0.4283.62",
+    "physicalBrowser": "Chrome 155.0.8059.84, Linux 7.0.0-38-generic",
+    "receiverOutput": "Persistent Chrome profile under /home/lab/.cache, ext4 /dev/nvme0n1p2, YMTC PC411-512GB-B. /tmp is tmpfs and was not used for measured LAN output.",
+    "network": "Windows 192.0.2.234 to Linux 192.0.2.105 over 5 GHz Wi-Fi. SSH only carries orchestration, page assets and signaling; file blocks are WebRTC UDP."
+  },
+  "method": {
+    "file": "Random source fixture written before timing; source may be OS-cached. Production CLI reads/seals, browser authenticates and SingleFileStreamOutputSession writes OPFS through existing test settlement adapter. Require published, exact bytes and SHA-256, one RTCPeerConnection and direct-only block dispatch.",
+    "clock": "Transfer job start through OPFS writable close; connection/catalog setup and post-close SHA-256 excluded. No cold-disk, fsync/crash durability, real UI, resume, WAN or production-native-acceleration claim.",
+    "prototype": "Ready batch size 64, ordinary UDP writes, original watermarks. Frozen portable.patch reproduces the prior experimental SCTP/DTLS and ICE/mux adapters; no transport fork. Research cancellation adapter is not production-ready.",
+    "topology": "lan-isolated filters only the research peer to explicit IPv4 Wi-Fi host candidates, with no browser STUN; actual transport.selectedCandidatePairId is checked at start/end. Default-candidate lan runs are separate path-incident evidence. A succeeded/nominated candidate pair alone does not prove selection.",
+    "statistics": "Three interleaved baseline/batch 256 MiB LAN pairs. Wi-Fi is uncontrolled, TCP checks are not simultaneous, three samples do not establish a universal win. Do not pool default-path and isolated-LAN runs.",
+    "instrumentation": "Sender traces and bounded browser protocol traces enabled. CDP TaskDuration covers join/transfer/hash, not total machine or native WebRTC CPU. outputWriteMs sums awaited OPFS writes."
+  },
+  "comparisons": {
+    "lanBulkMBps": {
+      "baseline": {
+        "values": [
+          13.394,
+          13.754,
+          14.189
+        ],
+        "median": 13.754,
+        "runs": [
+          "baseline-256-0-none-1-lan-isolated-1792643056313:0",
+          "baseline-256-0-none-1-lan-isolated-1792643117871:0",
+          "baseline-256-0-none-1-lan-isolated-1792643185530:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          16.972,
+          12.291,
+          17.883
+        ],
+        "median": 16.972,
+        "runs": [
+          "batch-256-0-none-1-lan-isolated-1792643088932:0",
+          "batch-256-0-none-1-lan-isolated-1792643150654:0",
+          "batch-256-0-none-1-lan-isolated-1792643217273:0"
+        ]
+      },
+      "medianChangePercent": 23.397
+    },
+    "lanBulkFirstWriteMs": {
+      "baseline": {
+        "values": [
+          135.2,
+          158.2,
+          156.9
+        ],
+        "median": 156.9,
+        "runs": [
+          "baseline-256-0-none-1-lan-isolated-1792643056313:0",
+          "baseline-256-0-none-1-lan-isolated-1792643117871:0",
+          "baseline-256-0-none-1-lan-isolated-1792643185530:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          186,
+          198.5,
+          175.3
+        ],
+        "median": 186,
+        "runs": [
+          "batch-256-0-none-1-lan-isolated-1792643088932:0",
+          "batch-256-0-none-1-lan-isolated-1792643150654:0",
+          "batch-256-0-none-1-lan-isolated-1792643217273:0"
+        ]
+      },
+      "medianChangePercent": 18.547
+    },
+    "loopbackBulkMBps": {
+      "baseline": {
+        "values": [
+          59.39,
+          62.123,
+          60.828
+        ],
+        "median": 60.828,
+        "runs": [
+          "baseline-256-0-1792641427111:0",
+          "baseline-256-0-1792641441772:0",
+          "baseline-256-0-1792641455827:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          70.658,
+          76.558,
+          76.85
+        ],
+        "median": 76.558,
+        "runs": [
+          "batch-256-0-1792641434797:0",
+          "batch-256-0-1792641449233:0",
+          "batch-256-0-1792641463391:0"
+        ]
+      },
+      "medianChangePercent": 25.86
+    },
+    "lanSmallFirstWriteMs": {
+      "baseline": {
+        "values": [
+          90.1,
+          74.8,
+          75.6
+        ],
+        "median": 75.6,
+        "runs": [
+          "baseline-0.0625-0-none-1-lan-isolated-1792643302672:0",
+          "baseline-0.0625-0-none-1-lan-isolated-1792643302672:1",
+          "baseline-0.0625-0-none-1-lan-isolated-1792643302672:2"
+        ]
+      },
+      "batch": {
+        "values": [
+          78.1,
+          83.3,
+          84.1
+        ],
+        "median": 83.3,
+        "runs": [
+          "batch-0.0625-0-none-1-lan-isolated-1792643375761:0",
+          "batch-0.0625-0-none-1-lan-isolated-1792643375761:1",
+          "batch-0.0625-0-none-1-lan-isolated-1792643375761:2"
+        ]
+      },
+      "medianChangePercent": 10.185
+    },
+    "loopbackSlowSinkMBps": {
+      "baseline": {
+        "values": [
+          27.564,
+          28.443,
+          28.791
+        ],
+        "median": 28.443,
+        "runs": [
+          "baseline-64-30-1792641516489:0",
+          "baseline-64-30-1792641516489:1",
+          "baseline-64-30-1792641516489:2"
+        ]
+      },
+      "batch": {
+        "values": [
+          28.919,
+          28.645,
+          28.326
+        ],
+        "median": 28.645,
+        "runs": [
+          "batch-64-30-1792641528074:0",
+          "batch-64-30-1792641528074:1",
+          "batch-64-30-1792641528074:2"
+        ]
+      },
+      "medianChangePercent": 0.71
+    },
+    "lanSlowSinkMBps": {
+      "baseline": {
+        "values": [
+          17.746
+        ],
+        "median": 17.746,
+        "runs": [
+          "baseline-64-30-none-1-lan-isolated-1792643318724:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          11.069
+        ],
+        "median": 11.069,
+        "runs": [
+          "batch-64-30-none-1-lan-isolated-1792643391848:0"
+        ]
+      },
+      "medianChangePercent": -37.625
+    },
+    "lanPausedOutputPreviewMs": {
+      "baseline": {
+        "values": [
+          2746.9,
+          2547.8,
+          3650.6
+        ],
+        "median": 2746.9,
+        "runs": [
+          "baseline-128-0-preview-4-lan-isolated-1792643335257:0",
+          "baseline-128-0-preview-4-lan-isolated-1792643538785:0",
+          "baseline-128-0-preview-4-lan-isolated-1792643581096:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          8149.8,
+          4105,
+          3744.5
+        ],
+        "median": 4105,
+        "runs": [
+          "batch-128-0-preview-4-lan-isolated-1792643410447:0",
+          "batch-128-0-preview-4-lan-isolated-1792643559310:0",
+          "batch-128-0-preview-4-lan-isolated-1792643601416:0"
+        ]
+      },
+      "medianChangePercent": 49.441
+    },
+    "loopbackPausedOutputPreviewMs": {
+      "baseline": {
+        "values": [
+          1426.2
+        ],
+        "median": 1426.2,
+        "runs": [
+          "baseline-128-0-preview-4-1792641718618:0"
+        ]
+      },
+      "batch": {
+        "values": [
+          1315.9
+        ],
+        "median": 1315.9,
+        "runs": [
+          "batch-128-0-preview-4-1792641723964:0"
+        ]
+      },
+      "medianChangePercent": -7.734
+    }
+  },
+  "cancellation": [
+    {
+      "run": "baseline-128-0-cancel-preview-4-1792641728994",
+      "result": "cancelled",
+      "afterAbortMs": 0.9,
+      "bulkSHA256": "b9437cda1c8981ba3d112f978185c6a814c37527a95ab75d112ace91cd7814b2",
+      "worker": "Succeeded"
+    },
+    {
+      "run": "batch-128-0-cancel-preview-4-1792641734225",
+      "result": "cancelled",
+      "afterAbortMs": 0.8,
+      "bulkSHA256": "27482f8c5c6cff61b246a19b2e7dc3595d9c7d2e3b2b914f52569dc7f2b548a1",
+      "worker": "Succeeded"
+    },
+    {
+      "run": "baseline-128-0-cancel-preview-4-lan-isolated-1792643354654",
+      "result": "cancelled",
+      "afterAbortMs": 3.7,
+      "bulkSHA256": "6d30c24221fda3c9cecca2804cc595ffd9e69268449261f9b4d2cc3f239c65a7",
+      "worker": "Succeeded"
+    },
+    {
+      "run": "batch-128-0-cancel-preview-4-lan-isolated-1792643436454",
+      "result": "cancelled",
+      "afterAbortMs": 2.9,
+      "bulkSHA256": "9691d8819dd69156cf9cb25d75ce40b0d49a89a8c04fe706aa546149bcdce0c8",
+      "worker": "Succeeded"
+    }
+  ],
+  "tests": {
+    "supply": {
+      "command": "node --import ./testdata/connectivity/webrtc/plan-revision-20261022/loader.mjs --test ./testdata/connectivity/webrtc/plan-revision-20261022/supply.test.mjs",
+      "passed": 4,
+      "meaning": "Characterizes current retry/rescue private queues, cleanup ownership and 4 MiB capacity starvation; these are not desired-behavior assertions."
+    },
+    "native": {
+      "command": "go test -race -count=20 -timeout=60s -json ./testdata/connectivity/webrtc/plan-revision-20261022",
+      "passedExecutions": 100,
+      "uniqueTests": 5,
+      "failed": 0,
+      "raw": ".tmp/webrtc-plan-revision-20261022/native-tests.ndjson",
+      "sha256": "191262e975afe8036ac027eb173d1f169f1b65466e19d470a5a26ea4399bdffd",
+      "meaning": "Real Windows overlapped UDP: targeted cancellation, deadline versus completion ownership, close draining, cancellation/success race and success-error-success batch."
+    },
+    "socketAuthority": {
+      "command": "go test -short -race -count=10 -timeout=120s -json ./connectivity/socketauthority",
+      "passedExecutions": 290,
+      "uniqueTests": 29,
+      "failed": 0,
+      "raw": ".tmp/webrtc-plan-revision-20261022/socket-tests.ndjson",
+      "sha256": "950c000fe642e2b86b2e3d9a7f6fdbf112f3b7ef69de6acb14eae07c6f6f5ff5"
+    },
+    "browser": {
+      "command": "pnpm --dir web exec vitest run test/content/v2-broker-preview.test.ts test/content/receive-window.test.ts test/content/range-window.test.ts test/content/v2-lane-set.test.ts test/content/v2-lane-scheduling.test.ts",
+      "passed": 47,
+      "files": 5,
+      "raw": ".tmp/webrtc-plan-revision-20261022/browser-tests.txt",
+      "sha256": "6fa27f05a50e9c52a5609e7a67dd477230a582710a1c1262844e74cff0ee2394"
+    },
+    "records": {
+      "command": "go test ./core/content/records -run '^$' -bench '^BenchmarkFileLocalBlock$' -benchtime=200ms -count=3",
+      "scope": "SealBlock plus OpenBlock in memory; no disk. Block geometry changes per-block overhead; not a production-stage profile.",
+      "medianMBpsByBlockBytes": {
+        "1024": 16.11,
+        "65536": 118.64,
+        "1048576": 260.79,
+        "4194304": 398.43
+      },
+      "raw": "record-bench.txt"
+    }
+  },
+  "limitations": [
+    "Supply refactor, interactive reserve size/fairness, Go/browser contract convergence and native integrated gains still require implementation evidence.",
+    "No crash recovery or resume run was added; existing durability semantics must remain intact.",
+    "Early local contexts were nonpersistent, so their OPFS results establish API completion only.",
+    "Early LAN harness incorrectly used the first nominated succeeded pair; later transport.selectedCandidatePairId and packet counters exposed asymmetric routing. Those runs are excluded from LAN throughput comparisons.",
+    "Investigation failures include harness setup failures and path timeouts, not a product test-suite failure count."
+  ],
+  "completedFileRounds": 51,
+  "physicalFileRounds": 26,
+  "files": {
+    "rows": "runs.ndjson",
+    "investigationFailures": "investigation-failures.ndjson",
+    "pathIncident": "asymmetric-path.json",
+    "prototype": "portable.patch",
+    "prototypeManifest": "portable-manifest.json",
+    "prepare": "prepare.ps1"
+  },
+  "fixtureHashes": {
+    "full-file.mjs": "537d4e3f421ea730aa8b99d9d6389cf70db853ff225b1858750731856d402ee5",
+    "lan-browser.py": "aaff529b010d385f6143255a2e518dd57ede1cb3e230adb696d52afa662272db",
+    "linux-browser.mjs": "14ca837781c3eedb974cb73866b26453afc09b27176a12788a44d0d7f2251839",
+    "loader.mjs": "0493f626d0f2517ebf0286fbc9d0fdb599754fe9c6b127f609980a235fc11162",
+    "ownership_windows_test.go": "8a69483d5d250dc79c8dcf34d05190ffc7567d41213eb6ebc25e5df1d90f8771",
+    "portable.patch": "1916b639d22e2d0bf962aec170ad584b145ee86507717306f32640bf686fead9",
+    "prepare.ps1": "382cb715983de4328d5643f18bd5bab1070da5b62dc22b6c6d5486541201282d",
+    "supply.test.mjs": "28469d6708c566802dbc528544d392c8597df222181df089ef8cab5b08724348"
+  },
+  "baselineClarification": {
+    "optimizationCommit": "50892293a2062efe1c96c1731ff48c97ef05a205",
+    "includedInBaseline": true,
+    "runtimeCheck": {
+      "report": ".tmp/webrtc-plan-revision-20261022/video-check-baseline-16-0-none-1-lan-isolated-1792644252797/report.json",
+      "bundlePolicy": "max-bundle",
+      "videoDirection": "recvonly",
+      "negotiatedVideoDirection": "recvonly",
+      "senderHasMediaTrack": false,
+      "limitation": "Confirms negotiated media, not the selected kernel socket receive-buffer size. This additional diagnostic round is outside the original 51-round comparison."
+    },
+    "earlierMeasurement": {
+      "report": ".tmp/tcp-quic-20261021/research.json",
+      "group": "sealed-verified.json / udp-video",
+      "medianVerifiedMBps": 20.930428561320106,
+      "scope": "118189944 bytes; sender reads and seals before timing; transport and production browser authentication/decryption into memory; no product scheduler or disk output."
+    },
+    "interpretation": "13.75 to 16.97 MB/s compares this turn's interleaved 256 MiB file-pipeline arms, both including the video optimization. The 64 MiB unmodified file-pipeline pilot also reached 20.2605 MB/s. Cross-run workload, pipeline and network differences have not been causally decomposed; do not attribute the entire difference to file I/O or encryption, or infer a code regression from unlike measurements."
+  }
+}

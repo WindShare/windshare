@@ -1,0 +1,220 @@
+{
+  "findings": {
+    "currentProduction": {
+      "note": "The existing recvonly-video optimization remains effective. Complete-file performance can reach the earlier ~20 MB/s; output writes do not explain the repeated slow second round.",
+      "rounds": [
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792645555724",
+          "repetition": 0,
+          "MBps": 20.33235459073522,
+          "outputWriteMs": 670.000000089407,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 114
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792645555724",
+          "repetition": 1,
+          "MBps": 13.474621093776221,
+          "outputWriteMs": 667.2000002563,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 267
+        }
+      ]
+    },
+    "backgroundTraffic": {
+      "note": "NetLog source dependencies associate ~37 MB of external QUIC receive traffic with Chrome optimization-guide model downloads during file transfer. External-DNS blocking in the owned test Chrome removes the recurring second-round dip in these controls. This does not isolate all system traffic or explain every slow round.",
+      "host": "optimizationguide-pa.googleapis.com",
+      "attributionRun": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792647179849",
+      "socketSource": "2130",
+      "quicSource": "2131",
+      "receivedBytes": 37347401,
+      "normalDNS": [
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646131331",
+          "repetition": 0,
+          "MBps": 19.18979444715051,
+          "outputWriteMs": 832.0999999046326,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 341
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646131331",
+          "repetition": 1,
+          "MBps": 12.241700311780368,
+          "outputWriteMs": 611.3000001013279,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 311
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646131331",
+          "repetition": 2,
+          "MBps": 19.719686994243762,
+          "outputWriteMs": 940.4000000655651,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 149
+        }
+      ],
+      "externalDNSBlocked": [
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646174509",
+          "repetition": 0,
+          "MBps": 14.56222665781691,
+          "outputWriteMs": 715.599999755621,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 0
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646174509",
+          "repetition": 1,
+          "MBps": 20.24771191671373,
+          "outputWriteMs": 964.9000000953674,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 101
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792646174509",
+          "repetition": 2,
+          "MBps": 20.784669386584852,
+          "outputWriteMs": 892.2000000476837,
+          "kernelReceiveBufferBytes": 2097152,
+          "socketDrops": 0
+        }
+      ]
+    },
+    "receiveBuffer": {
+      "note": "Larger diagnostic receive buffers eliminate observed socket drops but not all throughput variation; there are slow rounds without drops, fast retransmissions or T3 expiry. The shim is not a product fix.",
+      "rounds": [
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792645703645",
+          "repetition": 0,
+          "MBps": 19.94935336315301,
+          "outputWriteMs": 818.200000077486,
+          "kernelReceiveBufferBytes": 8388608,
+          "socketDrops": 0
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792645703645",
+          "repetition": 1,
+          "MBps": 12.638608137731914,
+          "outputWriteMs": 721.6999998688698,
+          "kernelReceiveBufferBytes": 8388608,
+          "socketDrops": 0
+        },
+        {
+          "run": "slow-opfs-quiet-baseline-112.714714050293-0-none-1-lan-isolated-1792645703645",
+          "repetition": 2,
+          "MBps": 19.226005140365913,
+          "outputWriteMs": 842.5000000298023,
+          "kernelReceiveBufferBytes": 8388608,
+          "socketDrops": 0
+        }
+      ]
+    },
+    "batching": {
+      "note": "Three interleaved pairs per workflow with external DNS blocked do not establish a stable batch-64 throughput gain or the previously claimed preview regression. Both variants still have seconds of preview latency. DNS control is not full network isolation.",
+      "bulkOrder": [
+        "baseline",
+        "batch",
+        "batch",
+        "baseline",
+        "baseline",
+        "batch"
+      ],
+      "previewOrder": [
+        "baseline",
+        "batch",
+        "batch",
+        "baseline",
+        "baseline",
+        "batch"
+      ]
+    },
+    "unresolved": "Remaining variation after DNS control, including occasional delayed first output, is not fully attributed. No claim of constant 20 MB/s, production-code regression, or WAN performance."
+  },
+  "date": "2026-10-22",
+  "head": "49f9919e136858ca0e4e5f9a9dc655c2dde48f7a",
+  "productionOptimizationCommit": "50892293a2062efe1c96c1731ff48c97ef05a205",
+  "fullFileRounds": 47,
+  "cachedRecordRounds": 5,
+  "groups": {
+    "bulk-clean-baseline": {
+      "count": 3,
+      "MBps": [
+        20.866859657052032,
+        12.571852698332949,
+        16.668557838577357
+      ],
+      "medianMBps": 16.668557838577357,
+      "previewMs": [],
+      "runs": [
+        "slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792646337956:0",
+        "slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792646434555:0",
+        "slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792646475517:0"
+      ]
+    },
+    "bulk-clean-batch": {
+      "count": 3,
+      "MBps": [
+        14.84060924708528,
+        14.300845790762429,
+        13.442137638510324
+      ],
+      "medianMBps": 14.300845790762429,
+      "previewMs": [],
+      "runs": [
+        "slow-opfs-trace-batch-256-0-none-1-lan-isolated-1792646364673:0",
+        "slow-opfs-trace-batch-256-0-none-1-lan-isolated-1792646398926:0",
+        "slow-opfs-trace-batch-256-0-none-1-lan-isolated-1792646509900:0"
+      ]
+    },
+    "preview-clean-baseline": {
+      "count": 3,
+      "MBps": [
+        9.030264749600333,
+        14.268160054410629,
+        11.826705085176364
+      ],
+      "medianMBps": 11.826705085176364,
+      "previewMs": [
+        8311.40000000596,
+        4038.5999999940395,
+        4949.899999976158
+      ],
+      "medianPreviewMs": 4949.899999976158,
+      "runs": [
+        "slow-opfs-trace-baseline-128-0-preview-4-lan-isolated-1792646580743:0",
+        "slow-opfs-trace-baseline-128-0-preview-4-lan-isolated-1792646678208:0",
+        "slow-opfs-trace-baseline-128-0-preview-4-lan-isolated-1792646705532:0"
+      ]
+    },
+    "preview-clean-batch": {
+      "count": 3,
+      "MBps": [
+        8.120823834074422,
+        11.930252617743882,
+        17.63817964386622
+      ],
+      "medianMBps": 11.930252617743882,
+      "previewMs": [
+        5616.0999999940395,
+        5064,
+        3335.9000000059605
+      ],
+      "medianPreviewMs": 5064,
+      "runs": [
+        "slow-opfs-trace-batch-128-0-preview-4-lan-isolated-1792646613007:0",
+        "slow-opfs-trace-batch-128-0-preview-4-lan-isolated-1792646649141:0",
+        "slow-opfs-trace-batch-128-0-preview-4-lan-isolated-1792646731688:0"
+      ]
+    }
+  },
+  "binaries": {
+    "baseline": "97518ad1381627722264e49379fb65ea86261e4d8548ef716070bdf0dfd3058b",
+    "batch": "98a63820cd595847209892516c81dfdc347869a1a4ab9ba0884bbee1369e6221"
+  },
+  "currentNativeDiagnosticBinarySHA256": "331de44175ea3371f4d236d5765717ccd8cc802fede6957949f62a4f69ef4c85",
+  "scope": "Opt-in lab research. Complete files include native read/seal, production protocol, browser authentication and output close; exclude setup and post-close SHA-256. TCP controls bracket each browser batch. OS caches and OPFS close are not crash-durability evidence. Diagnostic native overlays only sample statistics. External DNS isolation affects only the owned test Chrome; WebRTC remains direct IPv4 LAN.",
+  "baselineCaveat": "Original plan-revision throughput and preview comparisons did not control Chrome background traffic and do not establish fixed gains or regressions.",
+  "runs": "runs.ndjson",
+  "backgroundNetwork": "background-network.json"
+}
