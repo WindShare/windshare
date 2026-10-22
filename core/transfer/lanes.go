@@ -103,23 +103,23 @@ type LaneSet struct {
 	lifecycle context.Context
 	stop      context.CancelFunc
 
-	mu                  sync.Mutex
-	attempts            sync.WaitGroup
-	fetches             sync.WaitGroup
-	publications        sync.WaitGroup
-	closeStarted        bool
-	closeDone           chan struct{}
-	closed              bool
-	lanes               map[uint32]*laneState
-	contentSuspensions  map[uint32]*contentLaneSuspensionPolicy
-	cursor              uint64
-	exploration         lanescheduling.Exploration
-	availabilityChanged chan struct{}
-	settlementProducer  observationstream.Producer[LaneSettlementSummary]
-	settlementConsumer  observationstream.Consumer[LaneSettlementSummary]
-	finalSettlements    []*laneState
-	contentActivity     [LaneRouteTURN + 1]LaneContentActivity
-	downloadMetrics     *downloadmetrics.Metrics
+	mu                 sync.Mutex
+	attempts           sync.WaitGroup
+	fetches            sync.WaitGroup
+	publications       sync.WaitGroup
+	closeStarted       bool
+	closeDone          chan struct{}
+	closed             bool
+	lanes              map[uint32]*laneState
+	contentSuspensions map[uint32]*contentLaneSuspensionPolicy
+	cursor             uint64
+	exploration        lanescheduling.Exploration
+	admissionChanged   chan struct{}
+	settlementProducer observationstream.Producer[LaneSettlementSummary]
+	settlementConsumer observationstream.Consumer[LaneSettlementSummary]
+	finalSettlements   []*laneState
+	contentActivity    [LaneRouteTURN + 1]LaneContentActivity
+	downloadMetrics    *downloadmetrics.Metrics
 }
 
 func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
@@ -154,11 +154,11 @@ func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
 		contentRoutePolicy: config.ContentRoutePolicy,
 		sessionID:          config.ProtocolSessionID, raceWidth: config.RaceWidth, now: config.Now,
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
-		contentSuspensions:  make(map[uint32]*contentLaneSuspensionPolicy),
-		availabilityChanged: make(chan struct{}),
-		settlementProducer:  settlementProducer,
-		settlementConsumer:  settlementConsumer,
-		closeDone:           make(chan struct{}),
+		contentSuspensions: make(map[uint32]*contentLaneSuspensionPolicy),
+		admissionChanged:   make(chan struct{}),
+		settlementProducer: settlementProducer,
+		settlementConsumer: settlementConsumer,
+		closeDone:          make(chan struct{}),
 	}, nil
 }
 
@@ -186,7 +186,7 @@ func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) er
 			s.publications.Add(1)
 		}
 		s.lanes[identity.ID] = state
-		s.notifyAvailabilityLocked()
+		s.notifyLaneAvailabilityLocked()
 		s.mu.Unlock()
 		s.publishRegisteredLaneSettlement(retired)
 		return nil
@@ -196,7 +196,7 @@ func (s *LaneSet) Add(identity LaneIdentity, route LaneRoute, lane BlockLane) er
 		return ErrLaneBudget
 	}
 	s.lanes[identity.ID] = state
-	s.notifyAvailabilityLocked()
+	s.notifyLaneAvailabilityLocked()
 	s.mu.Unlock()
 	return nil
 }
@@ -229,7 +229,7 @@ func (s *LaneSet) Remove(identity LaneIdentity) bool {
 	if retired != nil {
 		s.publications.Add(1)
 	}
-	s.notifyAvailabilityLocked()
+	s.notifyLaneAvailabilityLocked()
 	s.mu.Unlock()
 	s.publishRegisteredLaneSettlement(retired)
 	return true
@@ -302,7 +302,7 @@ func (s *LaneSet) candidates(
 			s.mu.Unlock()
 			return nil, true, nil
 		}
-		changed := s.availabilityChanged
+		changed := s.admissionChanged
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -478,10 +478,16 @@ func (s *LaneSet) supplementCandidateLocked(attempted map[LaneIdentity]struct{},
 	return best
 }
 
-func (s *LaneSet) notifyAvailabilityLocked() {
+func (s *LaneSet) notifyLaneAvailabilityLocked() {
 	s.observeDownloadAvailabilityLocked()
-	close(s.availabilityChanged)
-	s.availabilityChanged = make(chan struct{})
+	s.notifyAdmissionChangedLocked()
+}
+
+// Receipt readiness does not change authenticated route availability. Keeping
+// these events separate avoids rescanning lanes and locking metrics per fragment.
+func (s *LaneSet) notifyAdmissionChangedLocked() {
+	close(s.admissionChanged)
+	s.admissionChanged = make(chan struct{})
 }
 
 type laneResult struct {

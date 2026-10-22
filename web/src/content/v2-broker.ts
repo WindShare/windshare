@@ -9,7 +9,7 @@ import {
 import { V2LaneSet, authenticatedBlockRoute, inheritAuthenticatedBlockRoute, type V2BlockDemand } from './v2-lane-set'
 import type { V2BlockTransportRoute } from './v2-route-policy'
 import { MAXIMUM_SUPPLEMENTS } from './scheduling/exploration'
-import { V2_MAXIMUM_CHUNK_BYTES } from '../catalog/v2-records'
+import { BlockBufferPool, type BlockLoadBuffers } from './scheduling/block-buffers'
 import type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
 
 export type { V2BlockRouteEligibility, V2BlockTransportRoute } from './v2-route-policy'
@@ -24,7 +24,7 @@ export {
   type V2LaneSetOptions,
 } from './v2-lane-set'
 
-export const V2_BLOCK_BROKER_CACHE_BYTES = 64 * 1024 * 1024
+export const V2_BLOCK_BROKER_BUFFER_BYTES = 64 * 1024 * 1024
 export const V2_BLOCK_BROKER_RANGE_BUFFER_BYTES = 64 * 1024 * 1024
 export const V2_BLOCK_BROKER_PARALLEL_READS = 8
 export const V2_BLOCK_BROKER_UPSTREAM_READS = 8
@@ -40,7 +40,7 @@ interface ObservedBlockConsumer extends BlockConsumer {
 interface SharedBlockLoad {
   readonly capacity: ContentCapacity
   releaseConsumer: (() => void) | undefined
-  releaseShared: (() => void) | undefined
+  readonly buffers: BlockLoadBuffers
   record: V2BlockRecord | undefined
   retired: boolean
   activeAttempts: number
@@ -60,11 +60,6 @@ interface SharedBlockLoad {
   waiters: number
   started: boolean
   settled: boolean
-}
-
-interface CachedBlock {
-  readonly record: V2BlockRecord
-  touched: number
 }
 
 export interface V2BlockSlice {
@@ -98,7 +93,10 @@ export interface V2ContentLaneStatus {
 }
 
 export interface V2BlockBrokerOptions {
-  readonly maximumCacheBytes?: number
+  /** Broker payload budget: shared results, attempt buffers, and evictable cache. */
+  readonly maximumBlockBufferBytes?: number
+  /** Idle cache borrows unused block capacity. Zero disables retention, not transfers. */
+  readonly maximumRetainedCacheBytes?: number
   readonly maximumRangeBufferBytes?: number
   readonly maximumUpstreamReads?: number
   readonly validateDemand?: (demand: V2BlockDemand) => unknown
@@ -129,39 +127,31 @@ export interface V2RouteAuthorizedBlockRangeReader {
 export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
   readonly #lanes: V2LaneSet
   readonly #lifetime = new AbortController()
-  readonly #maximumCacheBytes: number
   readonly #rangeBudget: RangeBufferBudget
-  readonly #sharedBudget: RangeBufferBudget
-  #sharedBytes = 0
+  readonly #buffers: BlockBufferPool
   readonly #maximumUpstreamReads: number
   readonly #validateDemand: (demand: V2BlockDemand) => unknown
   readonly #inflight = new Map<string, SharedBlockLoad>()
   readonly #queued = new Set<SharedBlockLoad>()
-  readonly #cache = new Map<string, CachedBlock>()
-  #cacheBytes = 0
-  #clock = 0
   #activeLoads = 0
   #loadSequence = 0
   readonly #unsubscribeBudget: () => void
   #closed = false
 
   constructor(lanes: V2LaneSet, options: V2BlockBrokerOptions = {}) {
-    const maximumCacheBytes = options.maximumCacheBytes ?? V2_BLOCK_BROKER_CACHE_BYTES
+    const maximumBlockBufferBytes = options.maximumBlockBufferBytes ?? V2_BLOCK_BROKER_BUFFER_BYTES
     const maximumUpstreamReads = options.maximumUpstreamReads ?? V2_BLOCK_BROKER_UPSTREAM_READS
-    if (!Number.isSafeInteger(maximumCacheBytes) || maximumCacheBytes <= 0) {
-      throw new RangeError('Block broker cache budget must be a positive safe integer')
-    }
     if (!Number.isSafeInteger(maximumUpstreamReads) || maximumUpstreamReads <= 0 ||
         maximumUpstreamReads > V2_BLOCK_BROKER_UPSTREAM_READS) {
       throw new RangeError('Block broker upstream concurrency exceeds its receiver budget')
     }
     this.#lanes = lanes
     this.#rangeBudget = new RangeBufferBudget(options.maximumRangeBufferBytes ?? V2_BLOCK_BROKER_RANGE_BUFFER_BYTES)
-    this.#sharedBudget = new RangeBufferBudget(maximumCacheBytes, 2 * V2_MAXIMUM_CHUNK_BYTES)
+    this.#buffers = new BlockBufferPool(maximumBlockBufferBytes,
+      options.maximumRetainedCacheBytes ?? maximumBlockBufferBytes)
     const unsubscribeRange = this.#rangeBudget.subscribe(() => this.#lanes.wakeContent())
-    const unsubscribeShared = this.#sharedBudget.subscribe(() => this.#lanes.wakeContent())
+    const unsubscribeShared = this.#buffers.subscribe(() => this.#lanes.wakeContent())
     this.#unsubscribeBudget = () => { unsubscribeRange(); unsubscribeShared() }
-    this.#maximumCacheBytes = maximumCacheBytes
     this.#maximumUpstreamReads = maximumUpstreamReads
     this.#validateDemand = options.validateDemand ?? (() => undefined)
   }
@@ -175,17 +165,14 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     options.routes.assertActive()
     this.#requireAuthorized(demand)
     const key = demandKey(demand)
-    if (this.#cache.has(key)) {
+    if (this.#buffers.has(key)) {
       await options.consumer?.ready(options.signal ?? this.#lifetime.signal)
       this.#requireOpen()
       options.routes.assertActive()
       this.#requireAuthorized(demand)
       // A capacity wait cannot pin an otherwise evictable cache entry.
-      const cached = this.#cache.get(key)
-      if (cached !== undefined) {
-        cached.touched = ++this.#clock
-        return copyRecord(cached.record)
-      }
+      const cached = this.#buffers.get(key)
+      if (cached !== undefined) return copyRecord(cached)
     }
     let load = this.#inflight.get(key)
     if (load === undefined) {
@@ -310,12 +297,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         if (!load.started) this.#settleQueued(load, reason)
       }
     }
-    for (const [key, cached] of this.#cache) {
-      if (key.startsWith(prefix)) {
-        this.#cache.delete(key)
-        this.#cacheBytes -= cached.record.data.byteLength
-      }
-    }
+    this.#buffers.invalidate(prefix)
   }
 
   close(): void {
@@ -329,8 +311,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     }
     this.#inflight.clear()
     this.#queued.clear()
-    this.#cache.clear()
-    this.#cacheBytes = 0
+    this.#buffers.clearCache()
   }
 
   #createLoad(demand: V2BlockDemand, priority: V2BlockPriority): SharedBlockLoad {
@@ -344,32 +325,35 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     const consumers = new Set<ObservedBlockConsumer>()
     const block = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
     const bytes = bigintToSafeNumber(block.end - block.start, 'shared block bytes')
-    this.#sharedBudget.available(bytes * 2, priority)
-    const needed = () => bytes * (load.releaseShared === undefined ? 2 : 1)
+    const buffers = this.#buffers.createLoad(bytes)
     const attemptLimit = () => this.#maximumUpstreamReads + (load.activeAttempts > 0 ? MAXIMUM_SUPPLEMENTS : 0)
     const load: SharedBlockLoad = {
       capacity: {
         lastServed: () => Math.min(...[...consumers].map(consumer => consumer.lastServed())),
         available: () => this.#activeLoads < attemptLimit() &&
-          this.#sharedBudget.available(needed(), load.priority) &&
+          buffers.available(load.priority) &&
           (load.releaseConsumer !== undefined || [...consumers].some(consumer => !consumer.signal?.aborted && consumer.canDispatch())),
         acquire: () => {
           if (this.#activeLoads >= attemptLimit() ||
-            !this.#sharedBudget.available(needed(), load.priority)) return undefined
-          if (load.releaseConsumer === undefined) {
+            !buffers.available(load.priority)) return undefined
+          const hadConsumer = load.releaseConsumer !== undefined
+          if (!hadConsumer) {
             const consumer = [...consumers].find(candidate => !candidate.signal?.aborted && candidate.canDispatch())
             if (consumer === undefined) return undefined
             load.releaseConsumer = consumer.acquire()
             if (load.releaseConsumer === undefined) return undefined
           }
-          load.releaseShared ??= this.#reserveShared(bytes, load.priority)
-          const releaseAttempt = this.#reserveShared(bytes, load.priority)
+          const releaseAttempt = buffers.acquireAttempt(load.priority)
+          if (releaseAttempt === undefined) {
+            if (!hadConsumer) { load.releaseConsumer?.(); load.releaseConsumer = undefined }
+            return undefined
+          }
           this.#activeLoads++
           load.activeAttempts++
           return () => { releaseAttempt(); this.#activeLoads--; load.activeAttempts--; this.#lanes.wakeContent() }
         },
       },
-      releaseConsumer: undefined, releaseShared: undefined, record: undefined, retired: false, activeAttempts: 0,
+      buffers, releaseConsumer: undefined, record: undefined, retired: false, activeAttempts: 0,
       controller, signal: controller.signal, consumers,
       onReceive: bytes => {
         const observers = new Set([...consumers].filter(consumer => !consumer.signal?.aborted)
@@ -445,44 +429,12 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     load.reject(reason)
   }
 
-  #reserveShared(bytes: number, priority: V2BlockPriority): () => void {
-    const release = this.#sharedBudget.reserve(bytes, priority)
-    if (release === undefined) throw new Error('Shared block admission lost its reservation')
-    this.#sharedBytes += bytes
-    while (this.#cacheBytes + this.#sharedBytes > this.#maximumCacheBytes) this.#evictOldest()
-    return () => { this.#sharedBytes -= bytes; release() }
-  }
-
   #retireLoad(key: string, load: SharedBlockLoad): void {
     if (load.retired) return
     load.retired = true
     if (this.#inflight.get(key) === load) this.#inflight.delete(key)
-    load.releaseShared?.()
-    load.releaseShared = undefined
-    if (!this.#closed && !load.signal.aborted && load.record !== undefined) this.#commitCache(key, load.record)
-  }
-
-  #commitCache(key: string, record: V2BlockRecord): void {
-    const bytes = record.data.byteLength
-    if (bytes > this.#maximumCacheBytes - this.#sharedBytes) return
-    while (this.#cacheBytes + this.#sharedBytes + bytes > this.#maximumCacheBytes) this.#evictOldest()
-    this.#cache.set(key, { record, touched: ++this.#clock })
-    this.#cacheBytes += bytes
-  }
-
-  #evictOldest(): void {
-    let oldestKey: string | undefined
-    let oldestTouch = Number.POSITIVE_INFINITY
-    for (const [key, cached] of this.#cache) {
-      if (cached.touched < oldestTouch) {
-        oldestKey = key
-        oldestTouch = cached.touched
-      }
-    }
-    if (oldestKey === undefined) return
-    const cached = this.#cache.get(oldestKey)
-    this.#cache.delete(oldestKey)
-    if (cached !== undefined) this.#cacheBytes -= cached.record.data.byteLength
+    load.buffers.release()
+    if (!this.#closed && !load.signal.aborted && load.record !== undefined) this.#buffers.retain(key, load.record)
   }
 
   #requireOpen(): void {

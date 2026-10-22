@@ -25,6 +25,34 @@ func TestReceiptReplenishesSupplyBeforeAuthenticationCompletes(t *testing.T) {
 	}
 }
 
+func TestReceiptReportsReadinessEdgesWithoutDiscardingRateChanges(t *testing.T) {
+	const blockBytes = 1 << 20
+	const fragmentBytes = 64 << 10
+	var window ReceiveWindow
+	start := time.Unix(1, 0)
+	permit := window.TryReserve(blockBytes, start)
+	if !permit.Receive(fragmentBytes, start.Add(time.Millisecond)) {
+		t.Fatal("fast first receipt did not announce capacity")
+	}
+	if permit.Receive(fragmentBytes, start.Add(time.Second)) || window.Available() {
+		t.Fatal("slow streaming estimate did not close admission quietly")
+	}
+	if !permit.Receive(fragmentBytes, start.Add(time.Second+time.Millisecond)) {
+		t.Fatal("recovered supply did not announce a new readiness edge")
+	}
+	if permit.Receive(fragmentBytes, start.Add(time.Second+2*time.Millisecond)) {
+		t.Fatal("already available capacity generated another readiness edge")
+	}
+	permit.Close()
+	if permit.Receive(fragmentBytes, start.Add(2*time.Second)) || permit.Receive(0, start) {
+		t.Fatal("settled permit announced capacity")
+	}
+	var absent *ReceivePermit
+	if absent.Receive(fragmentBytes, start) {
+		t.Fatal("absent permit announced capacity")
+	}
+}
+
 func TestCancelledUnfinishedResponseReleasesOnlyItsRemainingBytes(t *testing.T) {
 	var window ReceiveWindow
 	start := time.Unix(1, 0)

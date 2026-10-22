@@ -70,19 +70,21 @@ frontiers in that priority remain on normal allocation; preview frontiers never 
 At most one exploratory allocation is active, with one start every five seconds. A successful sample
 is not a prerequisite for normal allocation.
 
-Each browser content lane starts one cold block request, then uses unique fragment receipt to admit
+Each content lane starts one cold block request, then uses unique fragment receipt to admit
 more work before the current block finishes. Another request starts when unfinished payload falls
 below measured response delay plus 250 ms of traffic, within the receiver's existing concurrency budget.
 Cold starts can add one response round trip before filling a fast lane. Idle measurements expire;
 cancellation releases queued admission without starting a protocol inactivity
-deadline. Correlated `content_scheduling.admission` records include the wait, unfinished bytes and
-receipt-based admission estimate.
+deadline. Browser `content_scheduling.admission` records include the wait, unfinished bytes and
+receipt-based admission estimate. Fragment accounting wakes admission only on a blocked-to-ready
+transition; completion, capacity release, and route changes retain their own notifications.
 
 Network slots refill independently of ordered output. Read-ahead is bounded by four times each
-reader's concurrency and a shared 64 MiB reservation budget, separate from the 64 MiB block cache.
-Budget offers rotate between readers. A blocked output frontier can trigger one duplicate rescue;
-two rescue attempts may run concurrently, independently of exploration. Canceled attempts retain
-lease ownership until they settle. Idle downloads generate no probes.
+reader's concurrency and a 64 MiB output buffer budget. A separate 64 MiB block buffer pool covers
+shared results, request attempts, and idle cache. Cache borrows unreserved space; its retention limit
+can be reduced to zero without restricting transfers. Budget offers rotate between readers. A blocked
+output frontier can trigger one duplicate rescue; two rescue attempts may run concurrently, independently
+of exploration. Canceled attempts retain lease ownership until they settle. Idle downloads generate no probes.
 
 Directory, revision, and lease requests use a separate latency router with per-kind response samples,
 pending request reservations, and content queue estimates. Before throughput is measured, each

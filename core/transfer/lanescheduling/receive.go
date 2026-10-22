@@ -52,11 +52,15 @@ func (w *ReceiveWindow) TryReserve(bytes uint64, now time.Time) *ReceivePermit {
 	return &ReceivePermit{window: w, started: now, remaining: bytes, first: true}
 }
 
-func (p *ReceivePermit) Receive(bytes uint64, now time.Time) {
+// Receive updates every fragment's supply estimate and reports a blocked-to-ready
+// transition. Waiters check and reserve under the same owner lock, so another
+// broadcast is unnecessary while capacity stays available.
+func (p *ReceivePermit) Receive(bytes uint64, now time.Time) bool {
 	if p == nil || p.closed || bytes == 0 {
-		return
+		return false
 	}
 	w := p.window
+	wasAvailable := w.Available()
 	streaming := w.receiving > 0 || (!w.lastReceipt.IsZero() && now.Sub(w.lastReceipt) < w.response)
 	w.lastReceipt = now
 	if !streaming {
@@ -94,6 +98,7 @@ func (p *ReceivePermit) Receive(bytes uint64, now time.Time) {
 		p.receiving = false
 		w.receiving--
 	}
+	return !wasAvailable && w.Available()
 }
 
 func (p *ReceivePermit) Complete(now time.Time) {
