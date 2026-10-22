@@ -7,10 +7,9 @@ import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
 import type { ClassifiedTransferFailure } from '../../src/transfer/job/failures'
 
-// Network completion refills the entire read-ahead window while output is gated.
-// The yielded block is already outside that window when it reaches the writer.
+// The yielded block retains its window reservation until the writer advances.
 export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =
-  V2_BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR + 1
+  V2_BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR
 
 // Every relay-cut route must retain fresh network demand after releasing output.
 export const HOT_SWITCH_TRANSFER_BLOCKS = HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + 1

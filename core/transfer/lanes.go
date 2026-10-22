@@ -44,7 +44,9 @@ type BlockDemand struct {
 }
 
 type BlockLane interface {
-	FetchBlock(context.Context, BlockDemand) (records.BlockRecord, error)
+	// Receipt reports unique sealed-object bytes before authentication. It may
+	// replenish network supply, but never proves output durability.
+	FetchBlock(context.Context, BlockDemand, func(uint64)) (records.BlockRecord, error)
 }
 
 // BlockAttemptSuperseded proves that the demand owner canceled a redundant
@@ -70,6 +72,7 @@ type laneState struct {
 	settlementHolds uint32
 	failures        uint32
 	performance     lanescheduling.Performance
+	receive         lanescheduling.ReceiveWindow
 	retired         bool
 	settled         bool
 	settlement      *laneSettlementCounters
@@ -238,6 +241,12 @@ func (s *LaneSet) Len() int {
 	return len(s.lanes)
 }
 
+type laneAdmission struct {
+	*laneState
+	permit  *lanescheduling.ReceivePermit
+	release func()
+}
+
 type laneCandidate struct {
 	state *laneState
 	order uint64
@@ -247,7 +256,8 @@ func (s *LaneSet) candidates(
 	ctx context.Context,
 	attempted map[LaneIdentity]struct{},
 	bytes uint64,
-) ([]*laneState, bool, error) {
+	claim blockClaim,
+) ([]*laneAdmission, bool, error) {
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -271,16 +281,24 @@ func (s *LaneSet) candidates(
 			}
 			ordered = append(ordered, state)
 		}
+		var capacityChanged <-chan struct{}
 		if len(ordered) != 0 {
-			selected := s.selectCandidatesLocked(ordered, remaining, bytes)
+			selected, changed, err := s.selectCandidatesLocked(ordered, remaining, bytes, claim)
+			capacityChanged = changed
+			if err != nil {
+				s.mu.Unlock()
+				return nil, false, err
+			}
 			// Registration remains inside the closed-state lock so Close cannot
 			// observe a zero group while an admitted hedge is about to start.
-			s.attempts.Add(len(selected))
-			s.mu.Unlock()
-			return selected, false, nil
+			if len(selected) > 0 {
+				s.attempts.Add(len(selected))
+				s.mu.Unlock()
+				return selected, false, nil
+			}
 		}
 		waitForFirstLane := len(s.lanes) == 0 && len(attempted) == 0
-		if !waitForFirstLane && !untriedSuspended {
+		if !waitForFirstLane && !untriedSuspended && len(ordered) == 0 {
 			s.mu.Unlock()
 			return nil, true, nil
 		}
@@ -292,11 +310,12 @@ func (s *LaneSet) candidates(
 		case <-s.lifecycle.Done():
 			return nil, false, ErrLaneClosed
 		case <-changed:
+		case <-capacityChanged:
 		}
 	}
 }
 
-func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int, bytes uint64) []*laneState {
+func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int, bytes uint64, claim blockClaim) ([]*laneAdmission, <-chan struct{}, error) {
 	slices.SortFunc(ordered, func(left, right *laneState) int {
 		return cmp.Compare(left.identity.ID, right.identity.ID)
 	})
@@ -325,13 +344,52 @@ func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int, by
 		return cmp.Compare(left.order, right.order)
 	})
 	limit := min(s.raceWidth, len(candidates), remaining)
-	selected := make([]*laneState, limit)
-	for index := range selected {
-		selected[index] = candidates[index].state
-		selected[index].inflight++
-		selected[index].performance.Begin(s.now(), bytes)
+	selected := make([]*laneAdmission, 0, limit)
+	for _, candidate := range candidates {
+		if len(selected) == limit {
+			break
+		}
+		admission, changed, err := s.admitLaneLocked(candidate.state, bytes, claim)
+		if admission != nil {
+			selected = append(selected, admission)
+		} else if changed == nil && err == nil {
+			// A busy preferred path is not evidence that a slower standby should
+			// own the output frontier. Bounded probes evaluate that alternative.
+			break
+		}
+		if changed != nil || err != nil {
+			if len(selected) > 0 {
+				return selected, nil, nil
+			}
+			return nil, changed, err
+		}
 	}
-	return selected
+	return selected, nil, nil
+}
+
+func (s *LaneSet) admitLaneLocked(state *laneState, bytes uint64, claim blockClaim) (*laneAdmission, <-chan struct{}, error) {
+	if !state.receive.Available() {
+		return nil, nil, nil
+	}
+	var release func()
+	if claim != nil {
+		var changed <-chan struct{}
+		var err error
+		release, changed, err = claim()
+		if release == nil {
+			return nil, changed, err
+		}
+	}
+	permit := state.receive.TryReserve(max(1, bytes), s.now())
+	if permit == nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, nil
+	}
+	state.inflight++
+	state.performance.Begin(s.now(), bytes)
+	return &laneAdmission{laneState: state, permit: permit, release: release}, nil, nil
 }
 
 func laneCompletionCost(state *laneState, bytes uint64) float64 {
@@ -354,8 +412,8 @@ func blockDemandBytes(demand BlockDemand) uint64 {
 // ownership of a new prefix block and cannot bypass content-route authority.
 func (s *LaneSet) supplement(
 	demand BlockDemand, attempted map[LaneIdentity]struct{}, primary *laneState,
-	elapsed, estimate time.Duration, purpose lanescheduling.Purpose,
-) *laneState {
+	elapsed, estimate time.Duration, purpose lanescheduling.Purpose, claim blockClaim,
+) *laneAdmission {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || len(attempted) >= MaxDemandLaneAttempts {
@@ -365,12 +423,37 @@ func (s *LaneSet) supplement(
 	if purpose == lanescheduling.Probe && !primary.performance.HasSuccessfulSample {
 		return nil
 	}
+	best := s.supplementCandidateLocked(attempted, bytes, purpose, now)
+	if best == nil {
+		return nil
+	}
+	if purpose == lanescheduling.Rescue && !lanescheduling.RescueDue(elapsed, estimate, best.performance.Estimate(bytes)) {
+		return nil
+	}
+	if !s.exploration.Acquire(purpose, now) {
+		return nil
+	}
+	admission, _, _ := s.admitLaneLocked(best, bytes, claim)
+	if admission == nil {
+		s.exploration.Release(purpose)
+		return nil
+	}
+	attempted[best.identity] = struct{}{}
+	s.attempts.Add(1)
+	return admission
+}
+
+func (s *LaneSet) supplementCandidateLocked(attempted map[LaneIdentity]struct{}, bytes uint64,
+	purpose lanescheduling.Purpose, now time.Time) *laneState {
 	var best *laneState
 	for _, state := range s.lanes {
 		if _, tried := attempted[state.identity]; tried {
 			continue
 		}
 		if _, suspended := s.contentSuspensions[state.identity.ID]; suspended || !s.contentRoutePolicy.Allows(state.route) {
+			continue
+		}
+		if !state.receive.Available() {
 			continue
 		}
 		if purpose == lanescheduling.Probe && !lanescheduling.ProbeDue(&state.performance, now) {
@@ -392,19 +475,6 @@ func (s *LaneSet) supplement(
 			best = state
 		}
 	}
-	if best == nil {
-		return nil
-	}
-	if purpose == lanescheduling.Rescue && !lanescheduling.RescueDue(elapsed, estimate, best.performance.Estimate(bytes)) {
-		return nil
-	}
-	if !s.exploration.Acquire(purpose, now) {
-		return nil
-	}
-	attempted[best.identity] = struct{}{}
-	best.inflight++
-	best.performance.Begin(now, bytes)
-	s.attempts.Add(1)
 	return best
 }
 
@@ -443,16 +513,11 @@ type laneRoundDecision struct {
 	winner *laneState
 }
 
-type laneFailureSet struct {
-	failure    *lifecycleFailure
-	diagnostic error
-}
-
 func (s *LaneSet) fetch(
 	ctx context.Context,
-	demand BlockDemand,
-	validate func(records.BlockRecord) error,
+	request blockRequest,
 ) (authenticatedBlock, error) {
+	demand, validate := request.demand, request.validate
 	if err := ctx.Err(); err != nil {
 		return authenticatedBlock{}, err
 	}
@@ -468,7 +533,7 @@ func (s *LaneSet) fetch(
 		s.resolveLaneReassignments(pendingReassignments, false)
 	}()
 	for len(attempted) < MaxDemandLaneAttempts {
-		candidates, exhausted, err := s.candidates(ctx, attempted, blockDemandBytes(demand))
+		candidates, exhausted, err := s.candidates(ctx, attempted, blockDemandBytes(demand), request.claim)
 		if err != nil {
 			normalized := admitInternalFailure(normalizeSourceBoundary(ctx, err))
 			return authenticatedBlock{}, collaboratorError(normalized, err)
@@ -483,7 +548,7 @@ func (s *LaneSet) fetch(
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
-		round := s.runLaneRound(ctx, demand, validate, candidates, attempted, &supplemented)
+		round := s.runLaneRound(ctx, demand, validate, candidates, attempted, &supplemented, request.claim)
 		switch round.kind {
 		case laneRoundSucceeded:
 			return round.record, nil
@@ -517,9 +582,10 @@ func (s *LaneSet) runLaneRound(
 	ctx context.Context,
 	demand BlockDemand,
 	validate func(records.BlockRecord) error,
-	candidates []*laneState,
+	candidates []*laneAdmission,
 	attempted map[LaneIdentity]struct{},
 	supplemented *bool,
+	claim blockClaim,
 ) laneRoundResult {
 	raceContext, cancel := context.WithCancelCause(ctx)
 	stopLifecycle := context.AfterFunc(s.lifecycle, func() { cancel(ErrLaneClosed) })
@@ -546,7 +612,7 @@ func (s *LaneSet) runLaneRound(
 		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
 			return
 		}
-		state := s.supplement(demand, attempted, candidates[0], s.now().Sub(started), estimate, purpose)
+		state := s.supplement(demand, attempted, candidates[0].laneState, s.now().Sub(started), estimate, purpose, claim)
 		if state == nil {
 			return
 		}
@@ -590,40 +656,4 @@ func interruptedLaneRound(ctx context.Context) laneRoundResult {
 		err = ErrLaneClosed
 	}
 	return laneRoundResult{kind: laneRoundInterrupted, err: err}
-}
-
-func laneResultsReassignable(results []laneResult) bool {
-	if len(results) == 0 {
-		return false
-	}
-	for _, result := range results {
-		if !result.reassignable {
-			return false
-		}
-	}
-	return true
-}
-
-func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {
-	ordered := slices.Clone(results)
-	slices.SortFunc(ordered, func(left, right laneResult) int {
-		if compared := cmp.Compare(left.state.identity.ID, right.state.identity.ID); compared != 0 {
-			return compared
-		}
-		return cmp.Compare(left.state.identity.Epoch, right.state.identity.Epoch)
-	})
-	reassignable := true
-	for _, result := range ordered {
-		diagnostic := fmt.Errorf(
-			"lane %d/%d: %w", result.state.identity.ID, result.state.identity.Epoch, result.err,
-		)
-		failure := result.normalized
-		if result.notAdmitted {
-			failure = sourceUnavailableFailure(diagnostic)
-		}
-		current.failure = joinClosedLifecycleFailures(current.failure, failure)
-		current.diagnostic = errors.Join(current.diagnostic, diagnostic)
-		reassignable = reassignable && result.reassignable
-	}
-	return current, reassignable
 }

@@ -76,7 +76,7 @@ func TestContentClientRejectsMissingAndZeroLeaseAuthorityLocally(t *testing.T) {
 	}
 	if _, err := lane.FetchBlock(context.Background(), transfer.BlockDemand{
 		LeaseID: id16[content.LeaseID](141),
-	}); !errors.Is(err, ErrRuntimeClosed) {
+	}, nil); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("unknown local lease demand error=%v", err)
 	}
 

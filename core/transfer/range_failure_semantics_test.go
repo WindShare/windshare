@@ -19,8 +19,8 @@ func TestBlockBrokerReadRangeRejectsForeignSelectionBeforeFetching(t *testing.T)
 			fetched = true
 			return records.BlockRecord{}, nil
 		}),
-		uint64(catalog.MinChunkSize),
-		uint64(catalog.MinChunkSize)*2,
+		uint64(catalog.MinChunkSize)*3,
+		uint64(catalog.MinChunkSize)*3,
 	)
 	defer broker.Close()
 	defer lanes.Close()
@@ -55,8 +55,8 @@ func TestBlockBrokerReadRangePreservesAsynchronousBlockFailure(t *testing.T) {
 		laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, want
 		}),
-		uint64(catalog.MinChunkSize),
-		uint64(catalog.MinChunkSize)*2,
+		uint64(catalog.MinChunkSize)*3,
+		uint64(catalog.MinChunkSize)*3,
 	)
 	defer broker.Close()
 	defer lanes.Close()
@@ -84,8 +84,8 @@ func TestBlockBrokerReadRangeRejectsAlreadyCancelledWork(t *testing.T) {
 		laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, errors.New("cancelled read unexpectedly fetched content")
 		}),
-		uint64(catalog.MinChunkSize),
-		uint64(catalog.MinChunkSize)*2,
+		uint64(catalog.MinChunkSize)*3,
+		uint64(catalog.MinChunkSize)*3,
 	)
 	defer broker.Close()
 	defer lanes.Close()

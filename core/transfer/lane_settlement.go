@@ -1,15 +1,17 @@
 package transfer
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/downloadmetrics"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
+	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
@@ -384,12 +386,16 @@ func (s *LaneSet) fetchLane(
 	ctx context.Context,
 	demand BlockDemand,
 	validate func(records.BlockRecord) error,
-	state *laneState,
+	admission *laneAdmission,
 	decision *laneRoundDecision,
 	results chan<- laneResult,
 	purpose lanescheduling.Purpose,
 ) {
 	defer s.attempts.Done()
+	state := admission.laneState
+	if admission.release != nil {
+		defer admission.release()
+	}
 	if purpose != lanescheduling.Content {
 		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
 	}
@@ -404,7 +410,12 @@ func (s *LaneSet) fetchLane(
 			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
 			"purpose", purpose, "expected_ms", expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
 	}
-	record, fetchErr := state.lane.FetchBlock(ctx, demand)
+	record, fetchErr := state.lane.FetchBlock(ctx, demand, func(bytes uint64) {
+		s.mu.Lock()
+		admission.permit.Receive(bytes, s.now())
+		s.notifyAvailabilityLocked()
+		s.mu.Unlock()
+	})
 	if fetchErr == nil {
 		fetchErr = validate(record)
 	}
@@ -414,7 +425,12 @@ func (s *LaneSet) fetchLane(
 	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
 	elapsed := s.now().Sub(started)
 	s.mu.Lock()
+	if fetchErr == nil {
+		admission.permit.Complete(s.now())
+	}
+	admission.permit.Close()
 	state.performance.Complete(s.now(), bytes, fetchErr == nil)
+	s.notifyAvailabilityLocked()
 	s.mu.Unlock()
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
@@ -621,4 +637,45 @@ func (s *LaneSet) EstimateQueuedContent(identity LaneIdentity) time.Duration {
 		return 0
 	}
 	return state.performance.EstimateQueue(state.inflight)
+}
+
+type laneFailureSet struct {
+	failure    *lifecycleFailure
+	diagnostic error
+}
+
+func laneResultsReassignable(results []laneResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if !result.reassignable {
+			return false
+		}
+	}
+	return true
+}
+
+func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {
+	ordered := slices.Clone(results)
+	slices.SortFunc(ordered, func(left, right laneResult) int {
+		if compared := cmp.Compare(left.state.identity.ID, right.state.identity.ID); compared != 0 {
+			return compared
+		}
+		return cmp.Compare(left.state.identity.Epoch, right.state.identity.Epoch)
+	})
+	reassignable := true
+	for _, result := range ordered {
+		diagnostic := fmt.Errorf(
+			"lane %d/%d: %w", result.state.identity.ID, result.state.identity.Epoch, result.err,
+		)
+		failure := result.normalized
+		if result.notAdmitted {
+			failure = sourceUnavailableFailure(diagnostic)
+		}
+		current.failure = joinClosedLifecycleFailures(current.failure, failure)
+		current.diagnostic = errors.Join(current.diagnostic, diagnostic)
+		reassignable = reassignable && result.reassignable
+	}
+	return current, reassignable
 }

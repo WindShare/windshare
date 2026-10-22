@@ -9,9 +9,6 @@ import (
 )
 
 func TestSmallContractHelpersFailClosedAtEmptyAuthorities(t *testing.T) {
-	if (*PlaintextBudget)(nil).tryReserve(1) {
-		t.Fatal("nil plaintext budget admitted bytes")
-	}
 	rules, err := NewPathSelectionRules([]string{"folder"})
 	if err != nil {
 		t.Fatal(err)

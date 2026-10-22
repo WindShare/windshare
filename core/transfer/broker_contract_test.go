@@ -23,7 +23,7 @@ type countingLane struct {
 	release chan struct{}
 }
 
-func (lane *countingLane) FetchBlock(ctx context.Context, demand BlockDemand) (records.BlockRecord, error) {
+func (lane *countingLane) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	lane.mu.Lock()
 	lane.calls = append(lane.calls, demand.Index)
 	started, release := lane.started, lane.release
@@ -77,7 +77,7 @@ func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 		records: map[uint64]records.BlockRecord{0: transferRecord(t, descriptor, 0)},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize)*4)
+	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*4)
 	defer lanes.Close()
 	defer broker.Close()
 	firstContext, cancelFirst := context.WithCancel(context.Background())
@@ -111,12 +111,13 @@ func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 	if data, err := broker.GetBlock(context.Background(), lease, descriptor, 0); err != nil || len(data) != catalog.MinChunkSize || len(lane.indices()) != 1 {
 		t.Fatalf("cache hit bytes=%d calls=%v err=%v", len(data), lane.indices(), err)
 	}
+	lanes.attempts.Wait()
 	if process.Used() != uint64(catalog.MinChunkSize) {
 		t.Fatalf("process cache usage=%d", process.Used())
 	}
 
 	otherLane := &countingLane{records: map[uint64]records.BlockRecord{0: transferRecord(t, descriptor, 0)}}
-	other, otherLanes, _, _, _ := newBrokerFixture(t, 1, otherLane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize)*2)
+	other, otherLanes, _, _, _ := newBrokerFixture(t, 1, otherLane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer other.Close()
 	defer otherLanes.Close()
 	if _, err := other.GetBlock(context.Background(), lease, descriptor, 0); err != nil {
@@ -197,10 +198,10 @@ func TestBlockBrokerReadRangeDispatchesDistinctBlocksAcrossDefaultLanes(t *testi
 	if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, newLane(2)); err != nil {
 		t.Fatal(err)
 	}
-	process, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
+	process, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 6)
 	broker, err := NewBlockBroker(BlockBrokerConfig{
 		ShareInstance: descriptor.ShareInstance(), Lanes: lanes,
-		MaxBytes: uint64(catalog.MinChunkSize) * 2, ProcessBudget: process, MaxConcurrentBlocks: 2,
+		MaxBytes: uint64(catalog.MinChunkSize) * 6, ProcessBudget: process, MaxConcurrentBlocks: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +229,7 @@ func TestBlockBrokerRejectsIdentityAndEnforcesSessionProcessBudgets(t *testing.T
 	descriptor := transferDescriptor(t, 2)
 	wrong := transferRecord(t, descriptor, 1)
 	lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) { return wrong, nil })
-	broker, lanes, _, lease, process := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize))
+	broker, lanes, _, lease, process := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer broker.Close()
 	defer lanes.Close()
 	if _, err := broker.GetBlock(context.Background(), lease, descriptor, 0); !errors.Is(err, ErrBlockIdentity) {
@@ -262,7 +263,7 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	lane := &countingLane{records: map[uint64]records.BlockRecord{
 		0: transferRecord(t, descriptor, 0), 1: transferRecord(t, descriptor, 1),
 	}}
-	broker, lanes, _, lease, process := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize)*2)
+	broker, lanes, _, lease, process := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer broker.Close()
 	defer lanes.Close()
 	if _, err := broker.GetBlock(context.Background(), lease, descriptor, 0); err != nil {
@@ -271,6 +272,7 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	if _, err := broker.GetBlock(context.Background(), lease, descriptor, 1); err != nil {
 		t.Fatal(err)
 	}
+	lanes.attempts.Wait()
 	if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
 		t.Fatalf("eviction usage broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
@@ -281,11 +283,12 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 		t.Fatalf("eviction calls=%v", lane.indices())
 	}
 	broker.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
+	lanes.attempts.Wait()
 	if broker.UsedBytes() != 0 || process.Used() != 0 {
 		t.Fatalf("invalidation usage broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
 
-	sharedProcess, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize))
+	sharedProcess, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
 	setA, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](31), RaceWidth: 1})
 	setB, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](32), RaceWidth: 1})
 	validLane := laneFunction(func(_ context.Context, demand BlockDemand) (records.BlockRecord, error) {
@@ -293,8 +296,8 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	})
 	_ = setA.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
 	_ = setB.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
-	brokerA, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setA, MaxBytes: uint64(catalog.MinChunkSize), ProcessBudget: sharedProcess})
-	brokerB, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setB, MaxBytes: uint64(catalog.MinChunkSize), ProcessBudget: sharedProcess})
+	brokerA, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setA, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
+	brokerB, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setB, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
 	defer brokerA.Close()
 	defer brokerB.Close()
 	defer setA.Close()
@@ -302,8 +305,13 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	if _, err := brokerA.GetBlock(context.Background(), lease, descriptor, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := brokerB.GetBlock(context.Background(), lease, descriptor, 1); !errors.Is(err, ErrPlaintextBudget) {
-		t.Fatalf("process admission error=%v", err)
+	if _, err := brokerB.GetBlock(context.Background(), lease, descriptor, 1); err != nil {
+		t.Fatalf("shared process could not reclaim idle cache: %v", err)
+	}
+	setA.attempts.Wait()
+	setB.attempts.Wait()
+	if brokerA.UsedBytes() != 0 || sharedProcess.Used() != uint64(catalog.MinChunkSize) {
+		t.Fatal("cross-receiver cache reclamation changed retained ownership")
 	}
 }
 
@@ -316,7 +324,7 @@ func TestBlockBrokerInvalidationRejectsLateIgnoringLaneResult(t *testing.T) {
 		<-release
 		return transferRecord(t, descriptor, 0), nil
 	})
-	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize)*2)
+	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer broker.Close()
 	defer lanes.Close()
 	result := make(chan error, 1)
@@ -334,10 +342,15 @@ func TestBlockBrokerInvalidationRejectsLateIgnoringLaneResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("invalidation waited for a lane that ignored cancellation")
 	}
-	if broker.UsedBytes() != 0 || process.Used() != 0 {
-		t.Fatalf("invalidated inflight result retained memory broker=%d process=%d", broker.UsedBytes(), process.Used())
+	broker.loads.Wait()
+	if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
+		t.Fatalf("pending attempt lost ownership broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
 	close(release)
+	lanes.Close()
+	if process.Used() != 0 {
+		t.Fatal("settled attempt retained memory")
+	}
 }
 
 func TestBlockBrokerCloseUnblocksAnIgnoringLaneAndReleasesAdmission(t *testing.T) {
@@ -349,7 +362,7 @@ func TestBlockBrokerCloseUnblocksAnIgnoringLaneAndReleasesAdmission(t *testing.T
 		<-release
 		return transferRecord(t, descriptor, 0), nil
 	})
-	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize)*2)
+	broker, lanes, _, lease, process := newBrokerFixture(t, 1, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer lanes.Close()
 	result := make(chan error, 1)
 	go func() {
@@ -366,10 +379,14 @@ func TestBlockBrokerCloseUnblocksAnIgnoringLaneAndReleasesAdmission(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("broker close waited for a lane that ignored cancellation")
 	}
-	if broker.UsedBytes() != 0 || process.Used() != 0 {
-		t.Fatalf("closed broker retained inflight memory broker=%d process=%d", broker.UsedBytes(), process.Used())
+	if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
+		t.Fatalf("pending attempt lost ownership broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
 	close(release)
+	lanes.Close()
+	if process.Used() != 0 {
+		t.Fatal("settled attempt retained memory")
+	}
 }
 
 func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
@@ -377,7 +394,7 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 	lane := &countingLane{records: map[uint64]records.BlockRecord{
 		0: transferRecord(t, descriptor, 0), 1: transferRecord(t, descriptor, 1),
 	}}
-	broker, lanes, _, lease, _ := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize)*2, uint64(catalog.MinChunkSize)*3)
+	broker, lanes, _, lease, _ := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer broker.Close()
 	defer lanes.Close()
 	sinkErr := errors.New("output stopped")
@@ -400,7 +417,7 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 	}))
 	result := make(chan error, 1)
 	go func() {
-		_, err := blockingSet.fetch(context.Background(), validDemand(t, descriptor, 0), validateTransferRecord(validDemand(t, descriptor, 0)))
+		_, err := blockingSet.fetch(context.Background(), blockRequest{demand: validDemand(t, descriptor, 0), validate: validateTransferRecord(validDemand(t, descriptor, 0))})
 		result <- err
 	}()
 	<-started
@@ -410,7 +427,7 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := lanes.fetch(cancelled, validDemand(t, descriptor, 0), validateTransferRecord(validDemand(t, descriptor, 0))); !errors.Is(err, context.Canceled) {
+	if _, err := lanes.fetch(cancelled, blockRequest{demand: validDemand(t, descriptor, 0), validate: validateTransferRecord(validDemand(t, descriptor, 0))}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancelled fetch error=%v", err)
 	}
 }

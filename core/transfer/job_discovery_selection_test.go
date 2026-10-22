@@ -288,7 +288,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 	defer lanes.Close()
 	_ = lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, lane)
 	budget, _ := NewPlaintextBudget(4 * chunk)
-	broker, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Lanes: lanes, MaxBytes: 2 * chunk, ProcessBudget: budget})
+	broker, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Lanes: lanes, MaxBytes: 3 * chunk, ProcessBudget: budget})
 	defer broker.Close()
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)

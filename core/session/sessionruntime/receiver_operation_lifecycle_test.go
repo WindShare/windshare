@@ -147,7 +147,7 @@ type receiverOperationBlockLane struct{}
 
 func (receiverOperationBlockLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand,
+	transfer.BlockDemand, func(uint64),
 ) (records.BlockRecord, error) {
 	return records.BlockRecord{}, errors.New("unexpected receiver operation block fetch")
 }

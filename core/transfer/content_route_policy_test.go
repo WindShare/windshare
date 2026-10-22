@@ -44,7 +44,7 @@ func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing
 			}
 			fetch := func(stage string) {
 				t.Helper()
-				if _, err := lanes.fetch(ctx, demand, validateTransferRecord(demand)); err != nil {
+				if _, err := lanes.fetch(ctx, blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 					t.Fatalf("%s lanes: %v", stage, err)
 				}
 			}

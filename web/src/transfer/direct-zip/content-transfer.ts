@@ -48,15 +48,10 @@ export async function transferDirectZipFileV1(
     }), options.signal)
     let offset = transaction.resumeOffset
     options.onInitialDurable(offset)
-    while (offset < opened.descriptor.exactSize) {
-      const end = minimum(
-        (offset / opened.descriptor.geometry.blockSize + 1n) * opened.descriptor.geometry.blockSize,
-        opened.descriptor.exactSize,
-      )
-      const data = await readAtomicRange(options, opened, offset, end)
-      await transaction.write(offset, data, options.signal)
-      options.onWriteAcknowledged(BigInt(data.byteLength))
-      offset = end
+    for await (const block of readAtomicBlocks(options, opened, offset)) {
+      await transaction.write(offset, block.data, options.signal)
+      options.onWriteAcknowledged(BigInt(block.data.byteLength))
+      offset = block.end
       // EOF leads straight into member completion and may be the archive's last
       // write. A cut here would copy the whole prefix merely to append its tail.
       if (offset < opened.descriptor.exactSize) await transaction.observeCheckpoint(options.signal)
@@ -86,34 +81,52 @@ export async function transferDirectZipFileV1(
   if (releaseFailure !== undefined) throw releaseFailure
 }
 
-async function readAtomicRange(
+async function* readAtomicBlocks(
   options: DirectZipContentTransferOptionsV1,
   opened: V2OpenedRevision,
   start: bigint,
-  end: bigint,
-): Promise<Uint8Array<ArrayBuffer>> {
-  const data = new Uint8Array(bigintToSafeNumber(end - start, 'direct ZIP atomic source range'))
+): AsyncGenerator<{ readonly data: Uint8Array<ArrayBuffer>; readonly end: bigint }> {
+  const { exactSize, geometry } = opened.descriptor
+  if (start === exactSize) return
   let covered = start
+  let blockStart = start
+  let blockEnd = minimum((start / geometry.blockSize + 1n) * geometry.blockSize, exactSize)
+  let assembled: Uint8Array<ArrayBuffer> | undefined
+  // One range lets the broker prefetch across blocks while this generator keeps
+  // member writes and checkpoint observations ordered and bounded in memory.
   for await (const slice of options.broker.readRange(
-    opened.descriptor,
-    opened.leaseId,
-    byteRange(start, end),
-    {
-      signal: options.signal,
-      maximumParallel: V2_BLOCK_BROKER_PARALLEL_READS,
-      priority: 'download',
-    },
+    opened.descriptor, opened.leaseId, byteRange(start, exactSize),
+    { signal: options.signal, maximumParallel: V2_BLOCK_BROKER_PARALLEL_READS, priority: 'download' },
   )) {
     options.signal.throwIfAborted()
     if (!(slice.data instanceof Uint8Array) || slice.data.byteLength === 0 ||
-        slice.offset !== covered || covered + BigInt(slice.data.byteLength) > end) {
+        slice.offset !== covered || covered + BigInt(slice.data.byteLength) > exactSize) {
       throw new Error('direct ZIP range reader escaped, overlapped, or left a source gap')
     }
-    data.set(slice.data, bigintToSafeNumber(covered - start, 'direct ZIP atomic slice offset'))
-    covered += BigInt(slice.data.byteLength)
+    let consumed = 0
+    while (consumed < slice.data.byteLength) {
+      const count = Math.min(slice.data.byteLength - consumed,
+        bigintToSafeNumber(blockEnd - covered, 'direct ZIP block remainder'))
+      const part = slice.data.subarray(consumed, consumed + count)
+      // Production slices already match block geometry. Borrow that retained
+      // copy; fragmented collaborators need at most one additional block.
+      if (assembled === undefined && covered === blockStart && BigInt(count) === blockEnd - blockStart) {
+        assembled = part
+      } else {
+        assembled ??= new Uint8Array(bigintToSafeNumber(blockEnd - blockStart, 'direct ZIP atomic source range'))
+        assembled.set(part, bigintToSafeNumber(covered - blockStart, 'direct ZIP atomic slice offset'))
+      }
+      covered += BigInt(count)
+      consumed += count
+      if (covered === blockEnd) {
+        yield { data: assembled, end: blockEnd }
+        assembled = undefined
+        blockStart = blockEnd
+        blockEnd = minimum(blockEnd + geometry.blockSize, exactSize)
+      }
+    }
   }
-  if (covered !== end) throw new Error('direct ZIP range reader ended before its authenticated range')
-  return data
+  if (covered !== exactSize) throw new Error('direct ZIP range reader ended before its authenticated range')
 }
 
 function minimum(left: bigint, right: bigint): bigint {

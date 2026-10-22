@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { V2BlockBroker } from '../../src/content/v2-broker'
-import { V2LaneSet, type V2BlockDemand } from '../../src/content/v2-lane-set'
+import { V2LaneSet, type V2BlockDemand, type V2BlockReadObserver } from '../../src/content/v2-lane-set'
 import { FileGeometry } from '../../src/content/geometry'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
@@ -19,8 +19,9 @@ class ControlledLane {
   readonly id = 1
   readonly calls: V2BlockDemand[] = []
   readonly active = new Map<string, () => void>()
-  fetchBlock(input: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
+  fetchBlock(input: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
     this.calls.push(input)
+    observer?.received(BLOCK_BYTES)
     const key = this.key(input.descriptor.fileIdText, input.localBlockIndex)
     return new Promise((resolve, reject) => {
       const abort = () => { this.active.delete(key); reject(signal.reason) }
@@ -55,8 +56,28 @@ function range(broker: V2BlockBroker, signal: AbortSignal, file = descriptor) {
 }
 
 describe('bounded ordered block delivery', () => {
+  it('keeps later cached blocks from taking the pending output frontier capacity', async () => {
+    const { lane, lanes, broker } = setup(2)
+    const cached = broker.readBlock({ descriptor, leaseId: new Uint8Array(16), localBlockIndex: 1n }, { routes })
+    await microtasks()
+    lane.complete(1n)
+    await cached
+    const controller = new AbortController()
+    const iterator = range(broker, controller.signal)
+    const first = iterator.next()
+    await microtasks()
+    expect(lane.active.has(lane.key('file', 0n))).toBe(true)
+    lane.complete(0n)
+    expect((await first).value?.offset).toBe(0n)
+    expect((await iterator.next()).value?.offset).toBe(BigInt(BLOCK_BYTES))
+    expect(lane.calls.filter(call => call.localBlockIndex === 1n)).toHaveLength(1)
+    controller.abort()
+    await iterator.return(undefined)
+    broker.close(); lanes.close()
+  })
+
   it('refills completed network slots while the output frontier waits, then stops at the byte budget', async () => {
-    const { lane, lanes, broker } = setup(4)
+    const { lane, lanes, broker } = setup(8)
     const controller = new AbortController()
     const iterator = range(broker, controller.signal)
     const first = iterator.next()
@@ -92,11 +113,13 @@ describe('bounded ordered block delivery', () => {
     expect(lane.calls.every(value => value.descriptor.fileIdText === 'file')).toBe(true)
     lane.complete(0n)
     await firstRead
+    const following = first.next().catch(() => undefined)
     await microtasks()
     expect(lane.active.has(lane.key('second', 0n))).toBe(true)
     lane.complete(0n, 'second')
     expect((await secondRead).value?.offset).toBe(0n)
     firstController.abort(); secondController.abort()
+    await following
     await Promise.all([first.return(undefined), second.return(undefined)])
     broker.close(); lanes.close()
   })

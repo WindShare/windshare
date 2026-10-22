@@ -17,15 +17,6 @@ export interface BlockReceivePermit {
   close(): void
 }
 
-interface PendingRead {
-  readonly queuedAt: number
-  readonly bytes: number
-  readonly signal: AbortSignal
-  readonly resolve: (permit: BlockReceivePermit) => void
-  readonly reject: (reason: unknown) => void
-  readonly abort: () => void
-}
-
 /**
  * A physical lane needs enough unfinished data to hide response latency, not a
  * fixed number of large competing records. Receipt replenishes the pipeline
@@ -33,7 +24,7 @@ interface PendingRead {
  */
 export class BlockReceiveWindow {
   readonly #now: () => number
-  readonly #queue: PendingRead[] = []
+  readonly #listeners = new Set<() => void>()
   #active = 0
   #receiving = 0
   #remainingBytes = 0
@@ -47,40 +38,27 @@ export class BlockReceiveWindow {
     this.#now = now
   }
 
-  acquire(bytes: number, signal: AbortSignal): Promise<BlockReceivePermit> {
-    signal.throwIfAborted()
-    if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new RangeError('Block admission requires positive bytes')
-    return new Promise((resolve, reject) => {
-      const pending: PendingRead = {
-        bytes, signal, resolve, reject, queuedAt: this.#now(),
-        abort: () => {
-          const index = this.#queue.indexOf(pending)
-          if (index < 0) return
-          this.#queue.splice(index, 1)
-          reject(signal.reason)
-          this.#drain()
-        },
-      }
-      this.#queue.push(pending)
-      signal.addEventListener('abort', pending.abort, { once: true })
-      this.#drain()
-    })
+  get available(): boolean {
+    const ahead = this.#bytesPerSecond * (this.#responseMilliseconds + RECEIVE_AHEAD_MILLISECONDS) / 1000
+    // Cold lanes need one real request, but waiting descriptors must remain in
+    // the receiver's allocation queue so a later frontier can overtake them.
+    return this.#active === 0 || (this.#bytesPerSecond > 0 && this.#remainingBytes <= ahead)
   }
 
-  #drain(): void {
-    while (this.#queue.length > 0) {
-      const ahead = this.#bytesPerSecond * (this.#responseMilliseconds + RECEIVE_AHEAD_MILLISECONDS) / 1000
-      // An idle lane always gets a real request. No timer or synthetic probe can
-      // establish capacity, and cold lanes must not start eight full records.
-      if (this.#active > 0 && (this.#bytesPerSecond === 0 || this.#remainingBytes > ahead)) return
-      const pending = this.#queue.shift()!
-      pending.signal.removeEventListener('abort', pending.abort)
-      if (pending.signal.aborted) {
-        pending.reject(pending.signal.reason)
-        continue
-      }
-      pending.resolve(this.#begin(pending.bytes, pending.queuedAt, ahead))
-    }
+  tryAcquire(bytes: number, queuedAt = this.#now()): BlockReceivePermit | undefined {
+    if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new RangeError('Block admission requires positive bytes')
+    if (!this.available) return undefined
+    const ahead = this.#bytesPerSecond * (this.#responseMilliseconds + RECEIVE_AHEAD_MILLISECONDS) / 1000
+    return this.#begin(bytes, queuedAt, ahead)
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
+
+  #changed(): void {
+    for (const listener of this.#listeners) listener()
   }
 
   #begin(bytes: number, queuedAt: number, ahead: number): BlockReceivePermit {
@@ -139,7 +117,7 @@ export class BlockReceiveWindow {
         }
         if (remaining > 0 && !receiving) { receiving = true; this.#receiving += 1 }
         if (remaining === 0 && receiving) { receiving = false; this.#receiving -= 1 }
-        this.#drain()
+        this.#changed()
       },
       close: () => {
         if (closed) return
@@ -147,7 +125,7 @@ export class BlockReceiveWindow {
         this.#active -= 1
         if (receiving) this.#receiving -= 1
         this.#remainingBytes -= remaining
-        this.#drain()
+        this.#changed()
       },
     }
   }

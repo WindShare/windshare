@@ -26,8 +26,7 @@ for (const mode of ['unchanged-revision', 'identical-content', 'changed-content'
       { phase: 'resumed', name: 'last.txt', offset: '0' },
     ])
     expect(result.ranges.filter(range => range.phase === 'resumed')).toEqual([
-      ...(mode === 'unchanged-revision' ? [] : [{ phase: 'resumed', name: 'active.txt', start: '0', end: '3' }]),
-      { phase: 'resumed', name: 'active.txt', start: '3', end: '6' },
+      { phase: 'resumed', name: 'active.txt', start: mode === 'unchanged-revision' ? '3' : '0', end: '6' },
       { phase: 'resumed', name: 'last.txt', start: '0', end: '3' },
     ])
     const archive = new ZipReader(new Uint8ArrayReader(Uint8Array.from(result.archive)), {

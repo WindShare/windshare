@@ -517,18 +517,20 @@ describe('v2 session queued block responses', () => {
       { leaseError: () => undefined } as never)
     const descriptor = { ...revision, exactSize: 150_000n, geometry: new FileGeometry(150_000n, 150_000n) }
     const demand = { descriptor, leaseId: identity(6), localBlockIndex: 0n }
-    const first = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
-    const queued = lane.fetchBlock(demand, new AbortController().signal).catch(error => error)
+    const lanes = new V2LaneSet({ now: Date.now })
+    lanes.add(lane, 'direct')
+    const first = lanes.fetch(demand, ALL_ROUTES, new AbortController().signal).catch(error => error)
+    const queued = lanes.fetch(demand, ALL_ROUTES, new AbortController().signal).catch(error => error)
     await vi.advanceTimersByTimeAsync(20_000)
     expect(cancelOperation).not.toHaveBeenCalled()
     if (duplicate) {
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(await first).toMatchObject({ name: 'V2BlockInactivityTimeoutError', phase: 'receiving_fragments' })
+      expect(await first).toMatchObject({ errors: [{ name: 'V2BlockInactivityTimeoutError', phase: 'receiving_fragments' }] })
       // Unsent requests acquire their inactivity deadline only after admission.
       await vi.advanceTimersByTimeAsync(15_000)
-      expect(await queued).toMatchObject({
+      expect(await queued).toMatchObject({ errors: [{
         name: 'V2BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 0,
-      })
+      }] })
     } else {
       await vi.advanceTimersByTimeAsync(15_000)
       // Deliberately unsigned records reach object authentication after their

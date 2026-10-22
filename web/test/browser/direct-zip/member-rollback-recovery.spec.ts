@@ -23,8 +23,7 @@ for (const mode of ['before-truncate', 'cancel-before-truncate', 'after-truncate
     expect(result.completed.completed.safePayload).toBe('12')
     expect(result.completed.prefixAfter).toEqual(result.prefix)
     expect(result.completed.ranges.filter(range => range.phase === 'resumed')).toEqual([
-      { phase: 'resumed', name: 'active.txt', start: '0', end: '3' },
-      { phase: 'resumed', name: 'active.txt', start: '3', end: '6' },
+      { phase: 'resumed', name: 'active.txt', start: '0', end: '6' },
       { phase: 'resumed', name: 'last.txt', start: '0', end: '3' },
     ])
     const archive = new ZipReader(new Uint8ArrayReader(Uint8Array.from(result.completed.archive)), {

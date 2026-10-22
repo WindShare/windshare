@@ -64,7 +64,7 @@ func newImmediateBenchmarkLane(recordsByIndex []records.BlockRecord) *immediateB
 	return &immediateBenchmarkLane{records: recordsByIndex, seen: make([]atomic.Uint64, len(recordsByIndex))}
 }
 
-func (lane *immediateBenchmarkLane) FetchBlock(ctx context.Context, demand BlockDemand) (records.BlockRecord, error) {
+func (lane *immediateBenchmarkLane) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return records.BlockRecord{}, err
 	}
@@ -175,7 +175,7 @@ func newExactWindowProbe(recordSet []records.BlockRecord) *exactWindowProbe {
 	}
 }
 
-func (probe *exactWindowProbe) FetchBlock(ctx context.Context, demand BlockDemand) (records.BlockRecord, error) {
+func (probe *exactWindowProbe) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	if demand.Index >= uint64(len(probe.records)) {
 		return records.BlockRecord{}, ErrInvalidDemand
 	}

@@ -57,7 +57,9 @@ class DeferredTransferLane implements V2BlockLane {
     this.id = id
   }
 
-  fetchBlock(demand: V2BlockDemand): Promise<V2BlockRecord> {
+  fetchBlock(demand: V2BlockDemand, _signal?: AbortSignal, observer?: import('../../src/content/v2-lane-set').V2BlockReadObserver): Promise<V2BlockRecord> {
+    const block = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
+    observer?.received?.(Number(block.end - block.start))
     return new Promise((resolve) => this.calls.push({ demand, resolve }))
   }
 

@@ -67,7 +67,7 @@ func TestUsefulContentActivityDoesNotRequireObservationQueue(t *testing.T) {
 		t.Fatal(initial)
 	}
 	demand := validDemand(t, descriptor, 0)
-	if _, err = lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err = lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.attempts.Wait()
@@ -117,7 +117,7 @@ func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 			}
 		}
 		demand := validDemand(t, descriptor, index)
-		if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+		if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestLaneSettlementCreditsReassignmentOnlyAfterNextRoundAdmission(t *testing
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.Close()
@@ -189,7 +189,7 @@ func TestLaneSettlementCreditsReassignmentOnlyAfterNextRoundAdmission(t *testing
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exhausted.fetch(context.Background(), demand, validateTransferRecord(demand)); err == nil {
+	if _, err := exhausted.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err == nil {
 		t.Fatal("exhausted fetch unexpectedly succeeded")
 	}
 	exhausted.Close()
@@ -229,7 +229,7 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.Close()
@@ -264,7 +264,7 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, fetchErr := canceled.fetch(ctx, demand, validateTransferRecord(demand))
+		_, fetchErr := canceled.fetch(ctx, blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		result <- fetchErr
 	}()
 	<-started
@@ -299,7 +299,7 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wrapped.fetch(context.Background(), demand, validateTransferRecord(demand)); !errors.Is(err, context.Canceled) {
+	if _, err := wrapped.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("wrapped cancellation error = %v", err)
 	}
 	wrapped.Close()
@@ -334,7 +334,7 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	}
 	fetched := make(chan error, 1)
 	go func() {
-		_, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+		_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		fetched <- fetchErr
 	}()
 	<-started
@@ -366,7 +366,7 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	}
 	removedFetch := make(chan error, 1)
 	go func() {
-		_, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+		_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		removedFetch <- fetchErr
 	}()
 	<-removedStarted

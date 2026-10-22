@@ -1,7 +1,6 @@
 package transfer
 
 import (
-	"container/list"
 	"context"
 	"errors"
 	"testing"
@@ -72,7 +71,7 @@ func TestBlockBrokerReservationCannotEvictAnInflightOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broker := &BlockBroker{maxBytes: 2, process: budget, entries: make(map[blockKey]*list.Element), lru: list.New()}
+	broker := &BlockBroker{maxBytes: 2, process: budget, account: budget.Account(2)}
 	if err := broker.reserveLocked(2); err != nil {
 		t.Fatalf("initial inflight reservation: %v", err)
 	}
@@ -99,7 +98,7 @@ func TestBlockBrokerLastCancelledWaiterOwnsAbandonment(t *testing.T) {
 	}
 	waitContext, cancelWait := context.WithCancel(context.Background())
 	cancelWait()
-	if data, err := broker.await(waitContext, key, call); data.data != nil || !errors.Is(err, context.Canceled) {
+	if data, err := broker.await(waitContext, key, call, nil); data.data != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled waiter = data %v, err %v", data, err)
 	}
 	if !call.completed || call.waiters != 0 || !errors.Is(call.err, context.Canceled) || broker.inflight[key] != nil {

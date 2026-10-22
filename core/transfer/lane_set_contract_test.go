@@ -53,7 +53,7 @@ func transferRecord(t *testing.T, descriptor content.FileRevisionDescriptor, ind
 
 type laneFunction func(context.Context, BlockDemand) (records.BlockRecord, error)
 
-func (function laneFunction) FetchBlock(ctx context.Context, demand BlockDemand) (records.BlockRecord, error) {
+func (function laneFunction) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	return function(ctx, demand)
 }
 
@@ -95,7 +95,7 @@ func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	record, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+	record, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 	if err != nil || record.LocalBlockIndex() != 0 {
 		t.Fatalf("winner=%+v err=%v", record, err)
 	}
@@ -123,7 +123,7 @@ func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
 	_ = lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, first)
 	_ = lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, second)
 	for range 4 {
-		if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+		if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,10 +138,10 @@ func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
 		return records.BlockRecord{}, errors.New("lane down")
 	}))
 	_ = failing.Add(LaneIdentity{ID: 2}, LaneRouteRelay, second)
-	if _, err := failing.fetch(context.Background(), demand, validateTransferRecord(demand)); err == nil {
+	if _, err := failing.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err == nil {
 		t.Fatal("an untyped block failure was unsafely reassigned as a new operation")
 	}
-	if _, err := failing.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := failing.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatalf("healthy lane was not selected after failure: %v", err)
 	}
 	if err := failing.Add(LaneIdentity{ID: 2, Epoch: 0}, LaneRouteRelay, second); !errors.Is(err, ErrStaleLane) {
@@ -207,7 +207,7 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 		time.Sleep(time.Millisecond)
 		return transferRecord(t, descriptor, 0), nil
 	}))
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatalf("hostile early result defeated valid lane: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
 	}
 	result := make(chan fetchResult, 1)
 	go func() {
-		record, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+		record, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		result <- fetchResult{record: record.BlockRecord, err: fetchErr}
 	}()
 
@@ -330,7 +330,7 @@ func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
 	}
 	result := make(chan fetchResult, 1)
 	go func() {
-		record, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+		record, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		result <- fetchResult{record: record.BlockRecord, err: fetchErr}
 	}()
 	<-peerFailed
@@ -375,7 +375,7 @@ func TestLaneSetRejectsForgedDemandNotAdmittedMarker(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err == nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err == nil {
 		t.Fatal("forged marker authorized a retry")
 	}
 	if fallbackCalls.Load() != 0 {
@@ -402,7 +402,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+		_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		result <- fetchErr
 	}()
 	if err := suspension.Resume(); err != nil {
@@ -424,7 +424,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	empty, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](36)})
 	closedResult := make(chan error, 1)
 	go func() {
-		_, fetchErr := empty.fetch(context.Background(), demand, validateTransferRecord(demand))
+		_, fetchErr := empty.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		closedResult <- fetchErr
 	}()
 	empty.Close()
@@ -442,7 +442,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelledResult := make(chan error, 1)
 	go func() {
-		_, fetchErr := cancellable.fetch(ctx, demand, validateTransferRecord(demand))
+		_, fetchErr := cancellable.fetch(ctx, blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 		cancelledResult <- fetchErr
 	}()
 	cancel()
@@ -537,7 +537,7 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	if replacementCalls.Load() != 0 || peerCalls.Load() != 1 {
@@ -549,7 +549,7 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	if !lanes.Remove(peer) {
 		t.Fatal("peer lane was not removed")
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	if replacementCalls.Load() != 1 {
@@ -589,7 +589,7 @@ func TestLaneSetContentSuspensionCanResumeBetweenEpochs(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	if replacementCalls.Load() != 1 {

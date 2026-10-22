@@ -426,14 +426,14 @@ type receiverBlockOperation struct {
 
 func (lane *receiverBlockLane) FetchBlock(
 	ctx context.Context,
-	demand transfer.BlockDemand,
+	demand transfer.BlockDemand, received func(uint64),
 ) (record records.BlockRecord, err error) {
 	operation, err := lane.beginBlockOperation(ctx, demand)
 	if err != nil {
 		return records.BlockRecord{}, err
 	}
 	defer func() { err = operation.finish(ctx, err) }()
-	return operation.receive(ctx, demand)
+	return operation.receive(ctx, demand, received)
 }
 
 func (lane *receiverBlockLane) beginBlockOperation(
@@ -507,6 +507,7 @@ func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason)
 func (operation *receiverBlockOperation) receive(
 	ctx context.Context,
 	demand transfer.BlockDemand,
+	received func(uint64),
 ) (records.BlockRecord, error) {
 	wait := operation.lane.responses.Begin(ctx, operation.lane.blockFragmentInactivityTimeout())
 	defer wait.Close()
@@ -520,7 +521,7 @@ func (operation *receiverBlockOperation) receive(
 		}
 		switch message.Kind() {
 		case protocolsession.MessageBlockFragment:
-			next, progressed, err := operation.lane.acceptBlockFragment(demand, message, record)
+			next, progressed, err := operation.lane.acceptBlockFragment(demand, message, record, received)
 			if err != nil {
 				// Decoding has no cancelable wait. Even a lifecycle-shaped opener
 				// error is a validation fault, regardless of a concurrent race winner.
@@ -561,10 +562,14 @@ func (lane *receiverBlockLane) acceptBlockFragment(
 	demand transfer.BlockDemand,
 	message protocolsession.Message,
 	current records.BlockRecord,
+	received func(uint64),
 ) (records.BlockRecord, bool, error) {
 	result, err := lane.assembler.AcceptAuthenticated(message.Body())
 	if err != nil {
 		return records.BlockRecord{}, false, err
+	}
+	if received != nil && result.ReceivedBytes > 0 {
+		received(result.ReceivedBytes)
 	}
 	progressed := result.Status == contentflow.FragmentAccepted || result.Status == contentflow.RecordComplete
 	if result.Status != contentflow.RecordComplete {
