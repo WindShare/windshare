@@ -10,6 +10,8 @@ Go and browser allocation/capacity ownership are implemented, along with bounded
 
 [Implementation evidence](../../testdata/connectivity/webrtc/allocation-20261022/README.md) records complete-file, Direct ZIP, small-file, slow-output, preview/cancellation and reserve-cost measurements, plus browser resume and process-crash recovery. Complete-file throughput improved neither consistently nor conclusively (1 MiB block medians: 19.26 to 18.71 MB/s). Batching and native acceleration are not adopted.
 
+The [readiness follow-up](../../testdata/connectivity/webrtc/readiness-20261022/README.md) adopts browser capacity-transition notifications and demand-owned probe deadlines. Admission scans fall 75%; complete-file throughput remains inconclusive, with no consistent first-output or preview delay established. Transport loss and the earlier retransmission stalls remain under investigation.
+
 ## Findings before implementation
 
 - Current production code still reaches 20.33 MB/s for a complete file; the selected Linux socket retains the optimized 2 MiB receive buffer. Chrome background model downloads interfere with repeated measurements. Enlarging the socket removes observed drops but does not eliminate slow rounds; neither output writes nor socket drops alone explain the variation.

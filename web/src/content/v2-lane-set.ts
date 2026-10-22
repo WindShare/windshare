@@ -142,7 +142,7 @@ export class V2LaneSet {
     }
     const performance = new LanePerformance()
     const receive = new BlockReceiveWindow(this.#now)
-    const unsubscribeReceive = receive.subscribe(() => this.wakeContent())
+    const unsubscribeReceive = receive.subscribeAvailable(() => this.wakeContent())
     this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance, receive, unsubscribeReceive })
     this.#useful.set(lane.id, { bytes: 0, admittedAt: this.#now(), lastAt: undefined })
     this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: performance })
