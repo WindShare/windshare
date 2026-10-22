@@ -1,0 +1,65 @@
+package sctp
+
+import (
+ "testing"
+ "time"
+)
+
+func TestResearchRackLostRetransmission(t *testing.T) {
+ for _, trigger := range []string{"sack","timer"} {
+  for _, test := range []struct{name string; sends uint32; age time.Duration; queued, acked, want bool}{
+   {"original",1,100*time.Millisecond,false,false,true},
+   {"retry",2,100*time.Millisecond,false,false,true},
+   {"repeated-retry",3,100*time.Millisecond,false,false,true},
+   {"recent-retry",2,5*time.Millisecond,false,false,false},
+   {"already-queued",2,100*time.Millisecond,true,false,true},
+   {"already-acked",2,100*time.Millisecond,false,true,false},
+  } {
+   t.Run(trigger+"/"+test.name,func(t *testing.T){
+    a:=newRackTestAssoc(t)
+    a.lock.Lock()
+    defer a.lock.Unlock()
+    now:=time.Now()
+    a.rackReorderingSeen=true
+    a.rackReoWnd=10*time.Millisecond
+    a.rackMinRTT=40*time.Millisecond
+    c:=mkChunk(100,now.Add(-test.age))
+    c.nSent=test.sends;c.retransmit=test.queued;c.acked=test.acked
+    a.inflightQueue.pushNoCheck(c);a.rackInsert(c)
+    delivered:=now.Add(-50*time.Millisecond)
+    if trigger=="sack" { a.onRackAfterSACK(true,delivered,101,&chunkSelectiveAck{}) } else { a.rackDeliveredTime=delivered;a.onRackTimeoutLocked() }
+    if c.retransmit!=test.want {t.Fatalf("retransmit=%v, want %v for latest transmission age %s",c.retransmit,test.want,test.age)}
+   })
+  }
+ }
+}
+
+func TestResearchRackDeliveryAmbiguity(t *testing.T) {
+ for _, selective:=range []bool{false,true} {
+  for _, test:=range []struct{name string; age time.Duration; valid bool}{
+   {"old-ack-arrives-before-minimum-rtt",time.Millisecond,false},
+   {"credible-retry-ack",80*time.Millisecond,true},
+  } {
+   name:=test.name+"/cumulative";if selective{name=test.name+"/selective"}
+   t.Run(name,func(t *testing.T){
+    a:=newRackTestAssoc(t)
+    a.lock.Lock();defer a.lock.Unlock()
+    a.rackMinRTT=40*time.Millisecond
+    a.rackReorderingSeen=true
+    a.rackReoWnd=10*time.Millisecond
+    now:=time.Now()
+    retryTSN,otherTSN:=uint32(100),uint32(101)
+    if selective {retryTSN,otherTSN=101,100}
+    retry:=mkChunk(retryTSN,now.Add(-test.age));retry.nSent=2
+    other:=mkChunk(otherTSN,now.Add(-150*time.Millisecond))
+    if selective {a.inflightQueue.pushNoCheck(other);a.inflightQueue.pushNoCheck(retry)} else {a.inflightQueue.pushNoCheck(retry);a.inflightQueue.pushNoCheck(other)}
+    a.rackInsert(other);a.rackInsert(retry)
+    sack:=&chunkSelectiveAck{cumulativeTSNAck:100,advertisedReceiverWindowCredit:1024*1024}
+    if selective {sack.cumulativeTSNAck=99;sack.gapAckBlocks=[]gapAckBlock{{start:2,end:2}}}
+    if err:=a.handleSack(sack);err!=nil {t.Fatal(err)}
+    if found:=!a.rackDeliveredTime.IsZero();found!=test.valid {t.Fatalf("retry used as delivery evidence=%v, want %v",found,test.valid)}
+    if other.retransmit!=test.valid {t.Fatalf("older chunk marked lost=%v, want %v",other.retransmit,test.valid)}
+   })
+  }
+ }
+}

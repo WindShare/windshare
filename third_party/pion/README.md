@@ -1,6 +1,7 @@
 # Pinned Pion provider adaptation
 
-WindShare carries source projections of Pion ICE v4.4.2, WebRTC v4.2.20 and TURN v5.1.0. Exact
+WindShare carries source projections of Pion ICE v4.4.2, WebRTC v4.2.20, TURN v5.1.0
+and SCTP v1.11.1. Exact
 upstream commits, Go checksums and file hashes are in `manifest.json`; upstream
 MIT licenses and SPDX notices remain beside the sources. These nested dependency
 modules are separate from WindShare's single production Go module and coverage set.
@@ -27,6 +28,9 @@ The narrow patches in `patches/` add:
   peer-scoped indication fallback, and structured recovery evidence.
 - An injected TURN route plan with cancellable UDP/TCP/TLS egress attempts and
   explicit allocation ownership; direct candidate filters remain independent.
+- SCTP RACK recovery of lost retransmissions using the latest send time, with
+  minimum-RTT rejection of ambiguous retry acknowledgements. Congestion limits
+  and retransmission timeouts are unchanged; [evidence](../../testdata/connectivity/webrtc/stall-20261022/README.md).
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses
 independent sockets per peer path; cross-path shared remote-tuple demultiplexing
@@ -45,7 +49,7 @@ Reproduce it from checksum-verified upstream modules in a temporary directory:
 
 ```sh
 go run ./scripts/ci/_piondeps -reproduce
-go test -race github.com/pion/turn/v5/internal/client ./connectivity/socketauthority ./transport/webrtc/provider
+go test -race github.com/pion/sctp github.com/pion/turn/v5/internal/client ./connectivity/socketauthority ./transport/webrtc/provider
 ```
 
 Reproduction reads the module cache and applies patches only to temporary copies.

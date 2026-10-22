@@ -24,7 +24,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make ci` | The ordinary gate set, serially. |
 | `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
 | `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |
-| `make short-go` | Pinned ICE/TURN state tests, then non-core and core short tests with race detection and coverage verdicts. |
+| `make short-go` | Pinned ICE/TURN/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
 | `make vectors` | Shared protocol, TURN control, signaling, and CLI trace vectors. |

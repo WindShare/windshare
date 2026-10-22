@@ -9,6 +9,8 @@ replace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc
 
 replace github.com/pion/turn/v5 => ./third_party/pion/turn
 
+replace github.com/pion/sctp => ./third_party/pion/sctp
+
 // WS 库选型:coder/websocket——context 原生 API、零第三方依赖、积极维护
 // (nhooyr.io/websocket 的官方延续);gorilla/websocket 处于维护模式且 API
 // 无 context 取消语义。
