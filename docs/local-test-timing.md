@@ -31,5 +31,6 @@ Ordering tests cover Windows/Linux selection, nested modules, tagged files, Unic
 determinism, and unreadable sources. An installed-gopls comparison also preserved compiler errors and
 hint diagnostics across 75 fixture files and two modules. The full run above was on Windows only.
 
-Raw local evidence is in `.tmp/ci-speed-before-20260910.log`, `.tmp/ci-speed-after-20260910.log`,
-their matching JSON timing summaries, and `.tmp/gopls-order-parity.log`.
+Raw local evidence is in `.tmp/ci-investigation/gates/ci-speed-before-20260910.log`,
+`.tmp/ci-investigation/gates/ci-speed-after-20260910.log`, their matching JSON timing summaries,
+and `.tmp/ci-investigation/go-package-discovery/gopls-order-parity.log`.
