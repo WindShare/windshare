@@ -51,6 +51,9 @@ Invoke-Step 'Release source and binary packaging contracts' { go test ./scripts/
 Invoke-Step 'Windows first-setup contract (fake firewall commands)' { & ./scripts/install/windows/firewall.tests.ps1 }
 Invoke-Step 'Pinned Pion source verifier tests' { go test ./scripts/ci/_piondeps }
 Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_piondeps -reproduce }
+# Requirement markers drift silently once a package starts importing an indirect
+# module; the release gate only notices after the module is extracted.
+Invoke-Step 'Committed module graph is tidy' { go mod tidy -diff }
 Invoke-Step 'Go diagnostic session contracts' { node --test scripts/ci/gopls/*.test.mjs }
 Invoke-Step 'Cloudflare deployment lifecycle' { node --test scripts/deploy/cloudflare/*.test.mjs }
 Invoke-Step 'Browser FSA reviewed support artifact syntax' {

@@ -33,6 +33,11 @@ go test ./scripts/ci/_piondeps
 echo "-- Pinned Pion source and patch reproduction"
 go run ./scripts/ci/_piondeps -reproduce
 
+# Requirement markers drift silently once a package starts importing an indirect
+# module; the release gate only notices after the module is extracted.
+echo "-- Committed module graph is tidy"
+go mod tidy -diff
+
 echo "-- Go diagnostic session contracts"
 node --test scripts/ci/gopls/*.test.mjs
 
