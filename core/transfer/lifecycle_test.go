@@ -21,9 +21,17 @@ type blockingBlockFetcher struct {
 
 func (fetcher *blockingBlockFetcher) fetch(
 	ctx context.Context,
-	_ BlockDemand,
-	_ func(records.BlockRecord) error,
+	request blockRequest,
 ) (authenticatedBlock, error) {
+	if request.claim != nil {
+		release, _, err := request.claim()
+		if err != nil {
+			return authenticatedBlock{}, err
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	close(fetcher.started)
 	<-ctx.Done()
 	close(fetcher.cancelled)
@@ -39,13 +47,13 @@ func TestBlockBrokerConcurrentCloseJoinsLoadAndReleasesBudget(t *testing.T) {
 			cancelled: make(chan struct{}),
 			release:   make(chan struct{}),
 		}
-		process, err := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
+		process, err := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 4)
 		if err != nil {
 			t.Fatal(err)
 		}
 		broker, err := newBlockBroker(BlockBrokerConfig{
 			ShareInstance: descriptor.ShareInstance(),
-			MaxBytes:      uint64(catalog.MinChunkSize),
+			MaxBytes:      uint64(catalog.MinChunkSize) * 4,
 			ProcessBudget: process,
 		}, fetcher)
 		if err != nil {
@@ -150,14 +158,14 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 		loserState := lanes.lanes[2]
 		lanes.mu.Unlock()
 
-		process, err := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
+		process, err := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 4)
 		if err != nil {
 			t.Fatal(err)
 		}
 		broker, err := NewBlockBroker(BlockBrokerConfig{
 			ShareInstance: descriptor.ShareInstance(),
 			Lanes:         lanes,
-			MaxBytes:      uint64(catalog.MinChunkSize),
+			MaxBytes:      uint64(catalog.MinChunkSize) * 4,
 			ProcessBudget: process,
 		})
 		if err != nil {
@@ -187,8 +195,9 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 			close(allowLoserExit)
 			t.Fatal("broker close tried to join a LaneSet-owned hedge")
 		}
-		if broker.UsedBytes() != 0 || process.Used() != 0 {
-			t.Fatalf("broker close retained winner budget: broker=%d process=%d", broker.UsedBytes(), process.Used())
+		synctest.Wait()
+		if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
+			t.Fatalf("pending hedge lost ownership: broker=%d process=%d", broker.UsedBytes(), process.Used())
 		}
 		lanes.mu.Lock()
 		closedSignal := lanes.availabilityChanged
@@ -235,7 +244,7 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 				remainingSuspensions,
 			)
 		}
-		if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); !errors.Is(err, ErrLaneClosed) {
+		if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); !errors.Is(err, ErrLaneClosed) {
 			t.Fatalf("closed lane set admitted a demand: %v", err)
 		}
 	})
@@ -265,7 +274,7 @@ func TestLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
 
 		fetchDone := make(chan error, 1)
 		go func() {
-			_, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
+			_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
 			fetchDone <- fetchErr
 		}()
 		select {
@@ -294,8 +303,8 @@ func TestBrokerLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
 			t,
 			1,
 			lane,
-			uint64(catalog.MinChunkSize),
-			uint64(catalog.MinChunkSize)*2,
+			uint64(catalog.MinChunkSize)*3,
+			uint64(catalog.MinChunkSize)*3,
 		)
 		broker = createdBroker
 
@@ -313,6 +322,7 @@ func TestBrokerLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
 		if err := <-getDone; !errors.Is(err, ErrBrokerClosed) {
 			t.Fatalf("self-stopped broker waiter error = %v", err)
 		}
+		lanes.Close()
 		if broker.UsedBytes() != 0 || process.Used() != 0 {
 			t.Fatalf("self-stopped broker retained budget: broker=%d process=%d", broker.UsedBytes(), process.Used())
 		}

@@ -110,6 +110,7 @@ describe('v2 receiver LaneSet', () => {
     const direct = new DeferredLane(1)
     lanes.add(direct, 'direct', 2)
     const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
+    for (let turn = 0; turn < 16; turn++) await Promise.resolve()
     lanes.remove(1)
     lanes.add(new ImmediateLane(1), 'turn', 3)
     direct.resolve(0)
@@ -138,7 +139,7 @@ describe('v2 receiver LaneSet', () => {
 
     const left = lanes.fetch(demand(0n), ALL_ROUTES, signal)
     const right = lanes.fetch(demand(1n), ALL_ROUTES, signal)
-    await Promise.resolve()
+    for (let turn = 0; turn < 16; turn++) await Promise.resolve()
     expect(first.calls).toEqual([0n])
     expect(second.calls).toEqual([1n])
     expect(dispatches).toEqual([
@@ -251,7 +252,7 @@ describe('v2 receiver LaneSet', () => {
     lanes.add(second, 'direct')
     const controller = new AbortController()
     const cancelled = lanes.fetch(demand(0n), ALL_ROUTES, controller.signal)
-    await Promise.resolve()
+    for (let turn = 0; turn < 16; turn++) await Promise.resolve()
     controller.abort(new DOMException('consumer left', 'AbortError'))
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
 

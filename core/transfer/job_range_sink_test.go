@@ -156,14 +156,17 @@ type attributedWindowLane struct {
 
 func (lane attributedWindowLane) FetchBlock(
 	ctx context.Context,
-	demand BlockDemand,
+	demand BlockDemand, received func(uint64),
 ) (records.BlockRecord, error) {
+	if received != nil {
+		received(blockDemandBytes(demand))
+	}
 	select {
 	case lane.assignments <- lane.id:
 	case <-ctx.Done():
 		return records.BlockRecord{}, ctx.Err()
 	}
-	return lane.probe.FetchBlock(ctx, demand)
+	return lane.probe.FetchBlock(ctx, demand, nil)
 }
 
 func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
@@ -196,14 +199,14 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	process, err := NewPlaintextBudget(exactSize * 2)
+	process, err := NewPlaintextBudget(exactSize * 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	broker, err := NewBlockBroker(BlockBrokerConfig{
 		ShareInstance: descriptor.ShareInstance(),
 		Lanes:         lanes,
-		MaxBytes:      exactSize,
+		MaxBytes:      exactSize * 3,
 		ProcessBudget: process,
 	})
 	if err != nil {

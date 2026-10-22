@@ -1,6 +1,5 @@
 import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
 import { BlockResponseQueue, V2BlockInactivityTimeoutError } from './scheduling/block-response-wait'
-import { BlockReceiveWindow, type BlockReceivePermit } from './scheduling/receive-window'
 import {
   LEASE_RETIREMENT_WAIT_MILLISECONDS, observeLeaseRetirement, LeaseRetirementQueue,
   type LeaseRetirementObservation, type LeaseRetirementOwner,
@@ -471,7 +470,6 @@ export class V2SessionBlockLane implements V2BlockLane {
   readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #revisions: V2RevisionService
   readonly #responses = new BlockResponseQueue()
-  readonly #receiveWindow = new BlockReceiveWindow()
   readonly #lifetime = new AbortController()
 
   constructor(
@@ -490,11 +488,7 @@ export class V2SessionBlockLane implements V2BlockLane {
 
   async fetchBlock(demand: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
     const linked = linkAbortSignals(signal, this.#lifetime.signal)
-    let permit: BlockReceivePermit | undefined
     try {
-      const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
-      permit = await this.#receiveWindow.acquire(Number(range.end - range.start), linked.signal)
-      try { observer?.admitted(permit.admission) } catch { /* Admission observers cannot own requests. */ }
       linked.signal.throwIfAborted()
       const leaseFailure = this.#revisions.leaseError(demand.leaseId)
       if (leaseFailure !== undefined) throw leaseFailure
@@ -505,11 +499,9 @@ export class V2SessionBlockLane implements V2BlockLane {
       )
       const assembler = new V2FragmentAssembler(operation.id)
       return await this.#receiveBlock(operation, assembler, demand, linked.signal, bytes => {
-        permit!.receive(bytes)
         try { observer?.received(bytes) } catch { /* Receipt observers cannot grant content authority. */ }
       })
     } finally {
-      permit?.close()
       linked.close()
     }
   }

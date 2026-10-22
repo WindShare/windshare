@@ -44,7 +44,7 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 					}
 					done := make(chan error, 1)
 					go func() {
-						_, err := operation.receive(t.Context(), fixture.demand)
+						_, err := operation.receive(t.Context(), fixture.demand, nil)
 						done <- operation.finish(t.Context(), err)
 					}()
 					synctest.Wait()
@@ -142,7 +142,7 @@ func TestQueuedBlockReceiverCancellationRemainsImmediate(t *testing.T) {
 		fixture := newBlockProtocolFixture(t, true)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { _, err := fixture.lane.FetchBlock(ctx, fixture.demand); done <- err }()
+		go func() { _, err := fixture.lane.FetchBlock(ctx, fixture.demand, nil); done <- err }()
 		synctest.Wait()
 		cancel()
 		if err := <-done; !errors.Is(err, context.Canceled) {

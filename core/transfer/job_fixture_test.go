@@ -199,7 +199,7 @@ type jobLane struct {
 	failErr  error
 }
 
-func (l *jobLane) FetchBlock(_ context.Context, demand BlockDemand) (records.BlockRecord, error) {
+func (l *jobLane) FetchBlock(_ context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	file := demand.Descriptor.FileID()
 	l.mu.Lock()
 	l.indices[file] = append(l.indices[file], demand.Index)

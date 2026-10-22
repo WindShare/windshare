@@ -4,7 +4,13 @@
 
 Improve useful throughput while keeping link creation, first content, browsing, preview, cancellation, and recovery responsive. Start with one connection; keep the allocation contract valid for multiple direct and relay lanes. Baselines retain the existing Chromium receive-buffer optimization.
 
-## Findings
+## Delivery
+
+Go and browser allocation/capacity ownership are implemented, along with bounded browser Direct ZIP prefetch. Receipt feedback releases unfinished network supply independently of retained output; shared consumers and canceled attempts keep explicit buffer ownership. Regression coverage includes blocked routes, preview fairness, cached/shared output frontiers, retries and lane replacement.
+
+[Implementation evidence](../../testdata/connectivity/webrtc/allocation-20261022/README.md) records complete-file, Direct ZIP, small-file, slow-output, preview/cancellation and reserve-cost measurements, plus browser resume and process-crash recovery. Complete-file throughput improved neither consistently nor conclusively (1 MiB block medians: 19.26 to 18.71 MB/s). Batching and native acceleration are not adopted.
+
+## Findings before implementation
 
 - Current production code still reaches 20.33 MB/s for a complete file; the selected Linux socket retains the optimized 2 MiB receive buffer. Chrome background model downloads interfere with repeated measurements. Enlarging the socket removes observed drops but does not eliminate slow rounds; neither output writes nor socket drops alone explain the variation.
 - With external DNS blocked only in the test browser, three interleaved 256 MiB pairs gave baseline/batch-64 medians of 16.67/14.30 MB/s, with substantial variation. Paused-output preview medians were 4.95/5.06 s. Earlier fixed throughput-gain and preview-regression claims are unsupported; packet experiments motivate investigation, not adoption.
@@ -31,4 +37,4 @@ Improve useful throughput while keeping link creation, first content, browsing, 
 
 Deliver allocation/capacity changes independently; batching and native acceleration are optional. Count SCTP/DTLS patch maintenance and platform lifecycle complexity even after removing the experimental transport fork.
 
-[Mechanism](../../testdata/connectivity/webrtc/single-connection-design-2026-10-22.json), [workflow/lifecycle](../../testdata/connectivity/webrtc/plan-revision-20261022/results.json), and [throughput investigation](../../testdata/connectivity/webrtc/slowdown-20261022/results.json) retain measurements and reproducible probes. Full UI/recovery, crash durability, WAN, and integrated native-acceleration gains remain unmeasured.
+[Mechanism](../../testdata/connectivity/webrtc/single-connection-design-2026-10-22.json), [workflow/lifecycle](../../testdata/connectivity/webrtc/plan-revision-20261022/results.json), and [throughput investigation](../../testdata/connectivity/webrtc/slowdown-20261022/results.json) retain measurements and reproducible probes. The implementation evidence adds UI/recovery and crash tests separately from LAN throughput; WAN and integrated native-acceleration gains remain unmeasured.

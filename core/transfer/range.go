@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -227,9 +228,12 @@ func (b *BlockBroker) ReadRange(
 	readContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan rangeBlockResult, b.maxConcurrentBlocks)
+	var nextAdmission atomic.Uint64
+	nextAdmission.Store(first)
 	launch := func(index uint64) {
 		go func() {
-			block, err := b.getBlock(readContext, leaseID, descriptor, index)
+			consumer := b.rangeConsumer(index, &nextAdmission)
+			block, err := b.getBlock(readContext, leaseID, descriptor, index, consumer)
 			results <- rangeBlockResult{index: index, block: block, err: err}
 		}()
 	}
@@ -242,6 +246,7 @@ func (b *BlockBroker) ReadRange(
 		inflight++
 	}
 	pending := make(map[uint64]deliveredBlock, b.maxConcurrentBlocks)
+	defer func() { cancel(); releaseRangeBlocks(pending, results, inflight) }()
 	for nextWrite <= last {
 		endWait := b.beginDownloadWait()
 		select {
@@ -258,20 +263,13 @@ func (b *BlockBroker) ReadRange(
 		}
 		for {
 			block, ready := pending[nextWrite]
-			data := block.data
 			if !ready {
 				break
 			}
-			blockOffset := nextWrite * chunkSize
-			start := max(requested.Offset, blockOffset) - blockOffset
-			end := min(requested.End, blockOffset+uint64(len(data))) - blockOffset
-			if start >= end || end > uint64(len(data)) {
-				return ErrBlockIdentity
-			}
-			b.observeDownloadSlice(descriptor, blockOffset+start, blockOffset+end, block.route)
-			if err := sink.WriteRange(ctx, blockOffset+start, data[start:end]); err != nil {
+			if err := b.writeRangeBlock(ctx, descriptor, requested, sink, nextWrite*chunkSize, block); err != nil {
 				return err
 			}
+			block.close()
 			delete(pending, nextWrite)
 			nextWrite++
 			if nextLaunch <= last {
@@ -285,6 +283,47 @@ func (b *BlockBroker) ReadRange(
 		}
 	}
 	return nil
+}
+
+func (b *BlockBroker) rangeConsumer(index uint64, next *atomic.Uint64) *blockConsumer {
+	var admitted atomic.Bool
+	return &blockConsumer{
+		ready: func() bool { return admitted.Load() || index == next.Load() },
+		admitted: func() {
+			if admitted.CompareAndSwap(false, true) {
+				next.Add(1)
+				b.process.Wake()
+			}
+		},
+	}
+}
+
+func (block deliveredBlock) close() {
+	if block.release != nil {
+		block.release()
+	}
+}
+
+func releaseRangeBlocks(pending map[uint64]deliveredBlock, results <-chan rangeBlockResult, inflight int) {
+	for _, block := range pending {
+		block.close()
+	}
+	for range inflight {
+		result := <-results
+		result.block.close()
+	}
+}
+
+func (b *BlockBroker) writeRangeBlock(ctx context.Context, descriptor content.FileRevisionDescriptor,
+	requested content.Range, sink RangeSink, offset uint64, block deliveredBlock) error {
+	data := block.data
+	start := max(requested.Offset, offset) - offset
+	end := min(requested.End, offset+uint64(len(data))) - offset
+	if start >= end || end > uint64(len(data)) {
+		return ErrBlockIdentity
+	}
+	b.observeDownloadSlice(descriptor, offset+start, offset+end, block.route)
+	return sink.WriteRange(ctx, offset+start, data[start:end])
 }
 
 func (r *jobRun) transferMissingRanges(

@@ -1,0 +1,1329 @@
+{
+  "date": "2026-10-22",
+  "units": "decimal MB/s; binary MiB fixtures",
+  "sender": "Windows production CLI, 192.0.2.234",
+  "receiver": "Linux Chromium, 192.0.2.105",
+  "control": "One UDP host-candidate connection; isolated external browser DNS; unchanged send watermarks and Pion dependencies.",
+  "senderBinarySHA256": {
+    "relay-native.exe": "d222f5dc186cbe173f309dbc056df68dd96d242a9077f32a2023fc8da240dcbf",
+    "wind.exe": "ede231dca3fb2abae61a73c7d85ae1b38066047fa7898d44127bd65c44feb9cf"
+  },
+  "profileScope": "CDP CPU deltas cover page imports/setup, transfer and post-close verification; transfer elapsed excludes setup and hash. Write durations are measured inside transfer. These coarse counters do not isolate an SCTP, DTLS or native-syscall bottleneck.",
+  "comparison": {
+    "allocation-before": {
+      "MBps": [
+        18.01822096925762,
+        19.26464256752247,
+        20.14343593824497
+      ],
+      "medianMBps": 19.26464256752247
+    },
+    "allocation-after": {
+      "MBps": [
+        19.454382165764528,
+        18.71178017257852,
+        14.944797069326116
+      ],
+      "medianMBps": 18.71178017257852
+    },
+    "allocation-reserve-file": {
+      "MBps": [
+        20.24644421648761,
+        16.107158218131723,
+        14.873171212791382
+      ],
+      "medianMBps": 16.107158218131723
+    },
+    "allocation-reserve-reserve-zero": {
+      "MBps": [
+        17.32456394204395,
+        15.775844284074262,
+        15.697245508998451
+      ],
+      "medianMBps": 15.775844284074262
+    }
+  },
+  "runs": [
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-0.125-0-none-1-lan-isolated-1792651239896/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 0.125,
+      "blockMiB": 1,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 1.2938993088309527,
+      "rounds": [
+        {
+          "MBps": 1.2938993088309527,
+          "elapsedMs": 101.30000001192093,
+          "firstPayloadWriteMs": 96.7000000178814,
+          "outputWriteMs": 2.0999999940395355,
+          "cpuSeconds": {
+            "ScriptDuration": 0.041285,
+            "V8CompileDuration": 0,
+            "TaskDuration": 0.43773
+          },
+          "bytes": 131072,
+          "sha256": "dc003a76575a802ed7d8f114ac7dd36623582e99aacaf42824e6b1f97ec24e53",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 1
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 59704,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 49430,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.017,
+              "bytesReceived": 141302
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 1.2542775119617224,
+          "elapsedMs": 104.5,
+          "firstPayloadWriteMs": 100.2999999821186,
+          "outputWriteMs": 1.800000011920929,
+          "cpuSeconds": {
+            "ScriptDuration": 0.041431,
+            "V8CompileDuration": 0,
+            "TaskDuration": 0.426019
+          },
+          "bytes": 131072,
+          "sha256": "dc003a76575a802ed7d8f114ac7dd36623582e99aacaf42824e6b1f97ec24e53",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 1
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 37969,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 53525,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.004,
+              "bytesReceived": 141300
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 1.3797052631578948,
+          "elapsedMs": 95,
+          "firstPayloadWriteMs": 91,
+          "outputWriteMs": 1.800000011920929,
+          "cpuSeconds": {
+            "ScriptDuration": 0.038856,
+            "V8CompileDuration": 0,
+            "TaskDuration": 0.422645
+          },
+          "bytes": 131072,
+          "sha256": "dc003a76575a802ed7d8f114ac7dd36623582e99aacaf42824e6b1f97ec24e53",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 1
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 54399,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 56991,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.004,
+              "bytesReceived": 141301
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792648309000/report.json",
+      "label": "allocation-before",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 1,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 19.26464256752247,
+      "rounds": [
+        {
+          "MBps": 18.01822096925762,
+          "elapsedMs": 14898,
+          "firstPayloadWriteMs": 196.2999999821186,
+          "outputWriteMs": 1794.2000001370907,
+          "cpuSeconds": {
+            "ScriptDuration": 0.36404,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.807852
+          },
+          "bytes": 268435456,
+          "sha256": "bbabec20c3324619b7f18b05947f48008ef4ee4f0b1bc4312403d5c148ff552e",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 56465,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 52606,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.004,
+              "bytesReceived": 284159165
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 19.26464256752247,
+          "elapsedMs": 13934.09999999404,
+          "firstPayloadWriteMs": 180.09999999403954,
+          "outputWriteMs": 1695.2999999523163,
+          "cpuSeconds": {
+            "ScriptDuration": 0.352187,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.827369
+          },
+          "bytes": 268435456,
+          "sha256": "bbabec20c3324619b7f18b05947f48008ef4ee4f0b1bc4312403d5c148ff552e",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 59111,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 55078,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.008,
+              "bytesReceived": 284158368
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 20.14343593824497,
+          "elapsedMs": 13326.199999988079,
+          "firstPayloadWriteMs": 203.09999999403954,
+          "outputWriteMs": 2044.9999998807907,
+          "cpuSeconds": {
+            "ScriptDuration": 0.32743,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.511819
+          },
+          "bytes": 268435456,
+          "sha256": "bbabec20c3324619b7f18b05947f48008ef4ee4f0b1bc4312403d5c148ff552e",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 59208,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 60313,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.013,
+              "bytesReceived": 284158029
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792650884670/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 1,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 18.71178017257852,
+      "rounds": [
+        {
+          "MBps": 19.454382165764528,
+          "elapsedMs": 13798.200000017881,
+          "firstPayloadWriteMs": 203.7000000178814,
+          "outputWriteMs": 2154.699999809265,
+          "cpuSeconds": {
+            "ScriptDuration": 0.571547,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.717021
+          },
+          "bytes": 268435456,
+          "sha256": "21b108a595131131b7166f7dd36b9d2c5d12bdcc415e80e040a90b2912774d98",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 36901,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 56840,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.016,
+              "bytesReceived": 284158329
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 18.71178017257852,
+          "elapsedMs": 14345.800000011921,
+          "firstPayloadWriteMs": 193.30000001192093,
+          "outputWriteMs": 2084.899999856949,
+          "cpuSeconds": {
+            "ScriptDuration": 0.56448,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.9874469999999995
+          },
+          "bytes": 268435456,
+          "sha256": "21b108a595131131b7166f7dd36b9d2c5d12bdcc415e80e040a90b2912774d98",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 34977,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 49776,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.007,
+              "bytesReceived": 284158669
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 14.944797069326116,
+          "elapsedMs": 17961.80000001192,
+          "firstPayloadWriteMs": 224.19999998807907,
+          "outputWriteMs": 1663.6000002026558,
+          "cpuSeconds": {
+            "ScriptDuration": 0.627698,
+            "V8CompileDuration": 0,
+            "TaskDuration": 8.536063
+          },
+          "bytes": 268435456,
+          "sha256": "21b108a595131131b7166f7dd36b9d2c5d12bdcc415e80e040a90b2912774d98",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 256
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 57691,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 62278,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.013,
+              "bytesReceived": 284156882
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792651109047/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 15.822804227480107,
+      "rounds": [
+        {
+          "MBps": 15.430694979373884,
+          "elapsedMs": 17396.19999998808,
+          "firstPayloadWriteMs": 660.5,
+          "outputWriteMs": 1246.3000000715256,
+          "cpuSeconds": {
+            "ScriptDuration": 0.644563,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.955895
+          },
+          "bytes": 268435456,
+          "sha256": "ee948b9bbe136129ccb35a34a6b92ad056594c1392273b5494289ed05b7b6f9a",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 54263,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 56528,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.017,
+              "bytesReceived": 284060927
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 18.025964704905466,
+          "elapsedMs": 14891.600000023842,
+          "firstPayloadWriteMs": 593.2000000178814,
+          "outputWriteMs": 1119.0999999940395,
+          "cpuSeconds": {
+            "ScriptDuration": 0.644049,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.900028
+          },
+          "bytes": 268435456,
+          "sha256": "ee948b9bbe136129ccb35a34a6b92ad056594c1392273b5494289ed05b7b6f9a",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 35562,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 56763,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.021,
+              "bytesReceived": 284063574
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 15.822804227480107,
+          "elapsedMs": 16965.100000023842,
+          "firstPayloadWriteMs": 560.4000000059605,
+          "outputWriteMs": 1099.1000000238419,
+          "cpuSeconds": {
+            "ScriptDuration": 0.647173,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.958886000000001
+          },
+          "bytes": 268435456,
+          "sha256": "ee948b9bbe136129ccb35a34a6b92ad056594c1392273b5494289ed05b7b6f9a",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 47773,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 60782,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.006,
+              "bytesReceived": 284062038
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652588736/report.json",
+      "label": "allocation-reserve-file",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 20.24644421648761,
+      "rounds": [
+        {
+          "MBps": 20.24644421648761,
+          "elapsedMs": 13258.40000000596,
+          "firstPayloadWriteMs": 688.3000000119209,
+          "outputWriteMs": 1194.1999998688698,
+          "cpuSeconds": {
+            "ScriptDuration": 0.622049,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.736166999999999
+          },
+          "bytes": 268435456,
+          "sha256": "41829707515a6ebdc54cf03ff77e6b327c2a0a39e47e0826a72b3ee83164140c",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 53457,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 51015,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.013,
+              "bytesReceived": 284061493
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652616427/report.json",
+      "label": "allocation-reserve-reserve-zero",
+      "workflow": "reserve-zero",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 17.32456394204395,
+      "rounds": [
+        {
+          "MBps": 17.32456394204395,
+          "elapsedMs": 15494.5,
+          "firstPayloadWriteMs": 603.7000000178814,
+          "outputWriteMs": 974.3000000417233,
+          "cpuSeconds": {
+            "ScriptDuration": 0.645476,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.875699
+          },
+          "bytes": 268435456,
+          "sha256": "d81d6673c8afafd9f3c6cf86c47dc71fcc9fc5f9d04ea6e5b523128f59152b76",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 42577,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 52606,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.026,
+              "bytesReceived": 284063415
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652646588/report.json",
+      "label": "allocation-reserve-reserve-zero",
+      "workflow": "reserve-zero",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 15.775844284074262,
+      "rounds": [
+        {
+          "MBps": 15.775844284074262,
+          "elapsedMs": 17015.59999999404,
+          "firstPayloadWriteMs": 667.8999999761581,
+          "outputWriteMs": 1078.5999999046326,
+          "cpuSeconds": {
+            "ScriptDuration": 0.676217,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.189175
+          },
+          "bytes": 268435456,
+          "sha256": "17d21a20ea873c952cdb8962b80de424659bfe6f264853c80b538d2f9dd39ac3",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 37821,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 64776,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.011,
+              "bytesReceived": 284066616
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652678306/report.json",
+      "label": "allocation-reserve-file",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 16.107158218131723,
+      "rounds": [
+        {
+          "MBps": 16.107158218131723,
+          "elapsedMs": 16665.59999999404,
+          "firstPayloadWriteMs": 591.2999999821186,
+          "outputWriteMs": 862.5000000298023,
+          "cpuSeconds": {
+            "ScriptDuration": 0.632568,
+            "V8CompileDuration": 0,
+            "TaskDuration": 6.98008
+          },
+          "bytes": 268435456,
+          "sha256": "3f528bd26adb86f3a94dbaf83659c89509ccf1b0077d6f2acd152fb68bd00d10",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 33559,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 60326,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.024,
+              "bytesReceived": 284066445
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652709904/report.json",
+      "label": "allocation-reserve-file",
+      "workflow": "file",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 14.873171212791382,
+      "rounds": [
+        {
+          "MBps": 14.873171212791382,
+          "elapsedMs": 18048.30000001192,
+          "firstPayloadWriteMs": 599.3000000119209,
+          "outputWriteMs": 837.3999999761581,
+          "cpuSeconds": {
+            "ScriptDuration": 0.657784,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.045818
+          },
+          "bytes": 268435456,
+          "sha256": "2e3f2ee0ef418bc16177d3f3ae3f64d11f4b52fa2c451ecae6ee52364a728cdf",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 34438,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 52051,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.012,
+              "bytesReceived": 284066434
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-256-0-none-4-lan-isolated-1792652743143/report.json",
+      "label": "allocation-reserve-reserve-zero",
+      "workflow": "reserve-zero",
+      "sizeMiB": 256,
+      "blockMiB": 4,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 15.697245508998451,
+      "rounds": [
+        {
+          "MBps": 15.697245508998451,
+          "elapsedMs": 17100.79999998212,
+          "firstPayloadWriteMs": 621.3999999761581,
+          "outputWriteMs": 1265.6000000536442,
+          "cpuSeconds": {
+            "ScriptDuration": 0.653373,
+            "V8CompileDuration": 0,
+            "TaskDuration": 7.069228
+          },
+          "bytes": 268435456,
+          "sha256": "d8352f8dc00ac361dd6be929e9ce55b33b66f185bda416eeeb0b5efe9159bbd5",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 47452,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 53630,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.006,
+              "bytesReceived": 284066347
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-64-0-none-1-lan-isolated-1792652509458/report.json",
+      "label": "allocation-after-zip",
+      "workflow": "zip",
+      "sizeMiB": 64,
+      "blockMiB": 1,
+      "slowWriteMs": 0,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI read/seal, protocol, authentication, Direct ZIP transfer, writer, journal and publication. Test picker selects OPFS and the existing activation fixture binds the authenticated share. Measures run through published settlement; ZIP member extraction and SHA-256 excluded. Not UI, crash or WAN evidence.",
+      "medianMBps": 16.526834457986137,
+      "rounds": [
+        {
+          "MBps": 16.185631180288112,
+          "elapsedMs": 4146.200000017881,
+          "firstPayloadWriteMs": 256.10000002384186,
+          "outputWriteMs": 765.1000000536442,
+          "cpuSeconds": {
+            "ScriptDuration": 0.140924,
+            "V8CompileDuration": 0,
+            "TaskDuration": 3.96354
+          },
+          "bytes": 67108864,
+          "sha256": "16f6395eef832e872f8176d13efd4bbdf31951d3fa7493f916c8189f3f3d51aa",
+          "archiveBytes": 67109368,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 46812,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 63553,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.015,
+              "bytesReceived": 71042700
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 16.526834457986137,
+          "elapsedMs": 4060.5999999940395,
+          "firstPayloadWriteMs": 253.69999998807907,
+          "outputWriteMs": 762.9000000059605,
+          "cpuSeconds": {
+            "ScriptDuration": 0.138577,
+            "V8CompileDuration": 0,
+            "TaskDuration": 3.968187
+          },
+          "bytes": 67108864,
+          "sha256": "16f6395eef832e872f8176d13efd4bbdf31951d3fa7493f916c8189f3f3d51aa",
+          "archiveBytes": 67109368,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 51758,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 51879,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.005,
+              "bytesReceived": 71041943
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 18.536824020200388,
+          "elapsedMs": 3620.2999999821186,
+          "firstPayloadWriteMs": 261.89999997615814,
+          "outputWriteMs": 681.3999999165535,
+          "cpuSeconds": {
+            "ScriptDuration": 0.131003,
+            "V8CompileDuration": 0,
+            "TaskDuration": 3.8801550000000002
+          },
+          "bytes": 67108864,
+          "sha256": "16f6395eef832e872f8176d13efd4bbdf31951d3fa7493f916c8189f3f3d51aa",
+          "archiveBytes": 67109368,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 39921,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 54544,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.016,
+              "bytesReceived": 71041314
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-64-125-none-1-lan-isolated-1792651260837/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 64,
+      "blockMiB": 1,
+      "slowWriteMs": 125,
+      "interaction": "none",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 7.407241139522053,
+      "rounds": [
+        {
+          "MBps": 7.407241139522053,
+          "elapsedMs": 9059.90000000596,
+          "firstPayloadWriteMs": 208.90000000596046,
+          "outputWriteMs": 407.9999999701977,
+          "cpuSeconds": {
+            "ScriptDuration": 0.166922,
+            "V8CompileDuration": 0,
+            "TaskDuration": 2.471648
+          },
+          "bytes": 67108864,
+          "sha256": "0005bb27b2fd47fc6d63e7c2105b9dca27ade93f2afe51d466036990be1be6bf",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": null,
+          "interactionMs": null,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 64
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 46794,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 60090,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.183,
+              "bytesReceived": 71041706
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-64-250-cancel-preview-4-lan-isolated-1792651210412/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 64,
+      "blockMiB": 4,
+      "slowWriteMs": 250,
+      "interaction": "cancel-preview",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 10.972757027197892,
+      "rounds": [
+        {
+          "MBps": 11.066582675044303,
+          "elapsedMs": 6064.100000023842,
+          "firstPayloadWriteMs": 553.8000000119209,
+          "outputWriteMs": 243.80000001192093,
+          "cpuSeconds": {
+            "ScriptDuration": 0.167733,
+            "V8CompileDuration": 0,
+            "TaskDuration": 2.0611740000000003
+          },
+          "bytes": 67108864,
+          "sha256": "a8b079b0b5e6220716e0185180071e4375ab2da85a3bc52887793e840f4b0227",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": "cancelled",
+          "interactionMs": 108,
+          "cancellationMs": 3.199999988079071,
+          "dispatches": {
+            "direct": 16
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 47320,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 63037,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.015,
+              "bytesReceived": 71018647
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 10.87893137935148,
+          "elapsedMs": 6168.700000017881,
+          "firstPayloadWriteMs": 460.80000001192093,
+          "outputWriteMs": 290.1999999284744,
+          "cpuSeconds": {
+            "ScriptDuration": 0.158466,
+            "V8CompileDuration": 0,
+            "TaskDuration": 1.989641
+          },
+          "bytes": 67108864,
+          "sha256": "a8b079b0b5e6220716e0185180071e4375ab2da85a3bc52887793e840f4b0227",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": "cancelled",
+          "interactionMs": 109.19999998807907,
+          "cancellationMs": 3.800000011920929,
+          "dispatches": {
+            "direct": 16
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 34011,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 51884,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.007,
+              "bytesReceived": 71018566
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    },
+    {
+      "report": ".tmp/webrtc-slowdown-20261022/slow-opfs-trace-baseline-64-250-preview-4-lan-isolated-1792651180105/report.json",
+      "label": "allocation-after",
+      "workflow": "file",
+      "sizeMiB": 64,
+      "blockMiB": 4,
+      "slowWriteMs": 250,
+      "interaction": "preview",
+      "browser": "155.0.8059.84",
+      "topology": "lan-isolated",
+      "scope": "Production CLI file read/seal, protocol, browser authentication and SingleFileStreamOutputSession to the recorded sinkMode (OPFS or memory). Persistent browser profile; production p2p-only policy; existing test plan-settlement adapter. Connection/catalog setup and post-close SHA-256 excluded from throughput. Not UI, crash durability, resume or WAN evidence.",
+      "medianMBps": 10.454988357383826,
+      "rounds": [
+        {
+          "MBps": 10.784005142214365,
+          "elapsedMs": 6223,
+          "firstPayloadWriteMs": 642.5999999940395,
+          "outputWriteMs": 282.5000000298023,
+          "cpuSeconds": {
+            "ScriptDuration": 0.190451,
+            "V8CompileDuration": 0,
+            "TaskDuration": 2.325407
+          },
+          "bytes": 67108864,
+          "sha256": "8fb8ebc4ebd48aa5bcc171a6ed62c39f210838d6473063070618d3849a54b17f",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": "image",
+          "interactionMs": 1746.5,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 17
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 44681,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 51388,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.066,
+              "bytesReceived": 75456567
+            }
+          ],
+          "browserErrors": []
+        },
+        {
+          "MBps": 10.125971572553286,
+          "elapsedMs": 6627.4000000059605,
+          "firstPayloadWriteMs": 1083.4000000059605,
+          "outputWriteMs": 243.70000004768372,
+          "cpuSeconds": {
+            "ScriptDuration": 0.177328,
+            "V8CompileDuration": 0,
+            "TaskDuration": 2.2210699999999997
+          },
+          "bytes": 67108864,
+          "sha256": "8fb8ebc4ebd48aa5bcc171a6ed62c39f210838d6473063070618d3849a54b17f",
+          "archiveBytes": null,
+          "worker": "Succeeded",
+          "lifecycle": "published",
+          "interaction": "image",
+          "interactionMs": 1102.9000000059605,
+          "cancellationMs": null,
+          "dispatches": {
+            "direct": 17
+          },
+          "peers": [
+            {
+              "local": {
+                "address": "192.0.2.105",
+                "port": 41628,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "remote": {
+                "address": "192.0.2.234",
+                "port": 53885,
+                "protocol": "udp",
+                "candidateType": "host"
+              },
+              "rttSeconds": 0.007,
+              "bytesReceived": 75458092
+            }
+          ],
+          "browserErrors": []
+        }
+      ]
+    }
+  ],
+  "recovery": {
+    "crossProcess": "durable-recovery.periodic.spec.ts: two tests passed, including forced Chromium process termination",
+    "directZip": "Production browser tests verify partial member resume, revision change rollback, checkpoint promotion faults and published ZIP payloads",
+    "scope": "Recovery uses real OPFS/IndexedDB and browser processes; independent of the LAN throughput probes. No WAN or native acceleration claim."
+  }
+}

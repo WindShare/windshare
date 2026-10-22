@@ -72,7 +72,7 @@ func newBlockProtocolFixture(t *testing.T, runWriter bool) blockProtocolFixture 
 
 type gatedBlockProtocolWinner struct{ ready <-chan struct{} }
 
-func (lane gatedBlockProtocolWinner) FetchBlock(ctx context.Context, demand transfer.BlockDemand) (records.BlockRecord, error) {
+func (lane gatedBlockProtocolWinner) FetchBlock(ctx context.Context, demand transfer.BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
 	select {
 	case <-lane.ready:
 		return records.NewBlockRecord(demand.Descriptor, demand.Index, []byte{42})
@@ -180,7 +180,7 @@ func TestBlockProtocolTraceRetainsUnownedCancellationAndDeadline(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				done := make(chan error, 1)
-				go func() { _, err := fixture.lane.FetchBlock(ctx, fixture.demand); done <- err }()
+				go func() { _, err := fixture.lane.FetchBlock(ctx, fixture.demand, nil); done <- err }()
 				synctest.Wait()
 				if !deadline {
 					cancel()
@@ -222,7 +222,7 @@ func TestBlockProtocolTraceWaitsForDecodingAfterRPCShutdown(t *testing.T) {
 			started: started, release: release, err: errors.Join(context.Canceled, decodeFailure),
 		}
 		done := make(chan error, 1)
-		go func() { _, err := fixture.lane.FetchBlock(context.Background(), fixture.demand); done <- err }()
+		go func() { _, err := fixture.lane.FetchBlock(context.Background(), fixture.demand, nil); done <- err }()
 		synctest.Wait()
 		call := onlyActiveCall(t, fixture.lane.rpc)
 		fragments, err := contentflow.FragmentRecord(call.id, []byte{1})
@@ -285,7 +285,7 @@ func TestBlockProtocolTraceRejectsMalformedFinalResponse(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fixture := newBlockProtocolFixture(t, true)
 		done := make(chan error, 1)
-		go func() { _, err := fixture.lane.FetchBlock(context.Background(), fixture.demand); done <- err }()
+		go func() { _, err := fixture.lane.FetchBlock(context.Background(), fixture.demand, nil); done <- err }()
 		synctest.Wait()
 		call := onlyActiveCall(t, fixture.lane.rpc)
 		message, err := protocolsession.NewMessage(protocolsession.MessageOperationComplete, &call.id, []byte{0xa0})

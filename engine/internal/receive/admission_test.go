@@ -68,7 +68,7 @@ type inertReceiverBlockLane struct{}
 
 func (inertReceiverBlockLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand,
+	transfer.BlockDemand, func(uint64),
 ) (records.BlockRecord, error) {
 	return records.BlockRecord{}, errors.New("admission race must not fetch content")
 }

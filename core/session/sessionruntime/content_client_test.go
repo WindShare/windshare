@@ -83,7 +83,7 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 
 	_, fetchErr := lane.FetchBlock(t.Context(), transfer.BlockDemand{
 		LeaseID: lease, Descriptor: descriptor, Index: 0,
-	})
+	}, nil)
 	capabilityType := reflect.TypeOf(transfer.NewDemandReassignableAfterRetirement(nil))
 	var boundary *transferfault.BoundaryError
 	expected, buildErr := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
@@ -116,7 +116,7 @@ func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T)
 		revisions: revisions,
 	}
 	demand := transfer.BlockDemand{LeaseID: lease}
-	_, err := lane.FetchBlock(context.Background(), demand)
+	_, err := lane.FetchBlock(context.Background(), demand, nil)
 	capabilityType := reflect.TypeOf(transfer.NewDemandNotAdmitted(ErrLaneUnavailable))
 	if reflect.TypeOf(err) != capabilityType || !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("pre-admission error=%v", err)
@@ -124,7 +124,7 @@ func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T)
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = lane.FetchBlock(cancelled, demand)
+	_, err = lane.FetchBlock(cancelled, demand, nil)
 	if !errors.Is(err, context.Canceled) || reflect.TypeOf(err) == capabilityType {
 		t.Fatalf("cancelled fetch error=%v", err)
 	}
@@ -154,7 +154,7 @@ type countingReceiverFallbackLane struct{ calls atomic.Int32 }
 
 func (lane *countingReceiverFallbackLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand,
+	transfer.BlockDemand, func(uint64),
 ) (records.BlockRecord, error) {
 	lane.calls.Add(1)
 	return records.BlockRecord{}, errors.New("fallback was reached")
@@ -168,9 +168,9 @@ type signalingReceiverBlockLane struct {
 
 func (lane *signalingReceiverBlockLane) FetchBlock(
 	ctx context.Context,
-	demand transfer.BlockDemand,
+	demand transfer.BlockDemand, _ func(uint64),
 ) (records.BlockRecord, error) {
-	record, err := lane.inner.FetchBlock(ctx, demand)
+	record, err := lane.inner.FetchBlock(ctx, demand, nil)
 	lane.once.Do(func() { close(lane.done) })
 	return record, err
 }
@@ -236,12 +236,12 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, transfer.LaneRouteRelay, fallback); err != nil {
 		t.Fatal(err)
 	}
-	processBudget, err := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
+	processBudget, err := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 2,
+		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
 		ProcessBudget: processBudget, MaxConcurrentBlocks: 1,
 	})
 	if err != nil {
@@ -304,9 +304,9 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 	descriptor, _ := content.NewFileRevisionDescriptor(
 		share, id16[catalog.FileID](80), id16[content.FileRevision](81), geometry, catalog.ModifiedTime{},
 	)
-	processBudget, _ := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 2)
+	processBudget, _ := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 2,
+		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
 		ProcessBudget: processBudget, MaxConcurrentBlocks: 1,
 	})
 	if err != nil {

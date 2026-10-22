@@ -103,8 +103,7 @@ function brokerWith(lane: ControlledLane, options: ConstructorParameters<typeof 
 }
 
 async function turn(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let step = 0; step < 32; step++) await Promise.resolve()
 }
 
 describe('v2 preview/download block broker', () => {
@@ -286,12 +285,12 @@ describe('v2 preview/download block broker', () => {
     const shared = lane.calls.find((call) => call.demand.localBlockIndex === 1n)
     const abandoned = lane.calls.find((call) => call.demand.localBlockIndex === 2n)
     expect(shared?.signal.aborted).toBe(false)
-    expect(abandoned?.signal.aborted).toBe(true)
+    // The shared predecessor has not delivered this range's copy yet, so its
+    // successor remains public waiting work and is cancelled before admission.
+    expect(abandoned).toBeUndefined()
     const sharedCall = lane.calls.indexOf(shared!)
-    const abandonedCall = lane.calls.indexOf(abandoned!)
     lane.complete(sharedCall)
     await expect(download).resolves.toMatchObject({ localBlockIndex: 1n })
-    lane.complete(abandonedCall)
     await turn()
   })
 

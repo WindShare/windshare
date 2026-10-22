@@ -21,10 +21,11 @@ const (
 )
 
 type AssemblyResult struct {
-	Status      AssemblyStatus
-	OperationID protocolsession.OperationID
-	RecordID    records.RecordID
-	Object      []byte
+	Status        AssemblyStatus
+	OperationID   protocolsession.OperationID
+	RecordID      records.RecordID
+	Object        []byte
+	ReceivedBytes uint64
 }
 
 type assemblyKey struct {
@@ -146,7 +147,7 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	// duplicates remain harmless, but cannot pin a reserved reassembly buffer.
 	state.progressDeadline = now.Add(FragmentInactivityTimeout)
 	if state.receivedCount != state.count {
-		return AssemblyResult{Status: FragmentAccepted, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
+		return AssemblyResult{Status: FragmentAccepted, OperationID: fragment.OperationID, RecordID: fragment.RecordID, ReceivedBytes: uint64(len(fragment.Payload))}, nil
 	}
 	if !recordDigestMatches(fragment.RecordID, state.buffer) {
 		_ = a.terminateOperationLocked(fragment.OperationID, now)
@@ -155,7 +156,7 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	object := slices.Clone(state.buffer)
 	a.releaseRecordLocked(key)
 	a.recordTombstones[key] = now.Add(FragmentTombstone)
-	return AssemblyResult{Status: RecordComplete, OperationID: fragment.OperationID, RecordID: fragment.RecordID, Object: object}, nil
+	return AssemblyResult{Status: RecordComplete, OperationID: fragment.OperationID, RecordID: fragment.RecordID, Object: object, ReceivedBytes: uint64(len(fragment.Payload))}, nil
 }
 
 func (a *Assembler) CancelOperation(operationID protocolsession.OperationID) error {

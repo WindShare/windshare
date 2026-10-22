@@ -74,7 +74,7 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 	if err := lanes.Add(initial, LaneRouteRelay, laneFor(initial)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); !errors.Is(err, notAdmitted) {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); !errors.Is(err, notAdmitted) {
 		t.Fatalf("bounded demand error = %v", err)
 	}
 

@@ -32,9 +32,9 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			process, _ := NewPlaintextBudget(exactBytes * 2)
+			process, _ := NewPlaintextBudget(exactBytes * 3)
 			broker, err := NewBlockBroker(BlockBrokerConfig{
-				ShareInstance: descriptor.ShareInstance(), Lanes: lanes, MaxBytes: exactBytes,
+				ShareInstance: descriptor.ShareInstance(), Lanes: lanes, MaxBytes: exactBytes * 3,
 				ProcessBudget: process, MaxConcurrentBlocks: laneCount,
 			})
 			if err != nil {
@@ -92,6 +92,7 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 					t.Fatalf("block %d fetched %d times", index, probe.seen[index].Load())
 				}
 			}
+			lanes.attempts.Wait()
 			if broker.UsedBytes() != exactBytes || process.Used() != exactBytes {
 				t.Fatalf("successful range budget broker=%d process=%d", broker.UsedBytes(), process.Used())
 			}

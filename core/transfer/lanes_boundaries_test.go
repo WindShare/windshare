@@ -55,7 +55,7 @@ func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), BlockDemand{}, func(records.BlockRecord) error { return nil }); err != nil {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: BlockDemand{}, validate: func(records.BlockRecord) error { return nil }}); err != nil {
 		t.Fatalf("retired block operation did not reach replacement lane: %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		for index := 1; index <= MaxDemandLaneAttempts; index++ {
 			attempted[LaneIdentity{ID: uint32(index), Epoch: 1}] = struct{}{}
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), attempted, 1)
+		selected, exhausted, err := lanes.candidates(context.Background(), attempted, 1, nil)
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempt budget = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -81,7 +81,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		})); err != nil {
 			t.Fatal(err)
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), map[LaneIdentity]struct{}{identity: {}}, 1)
+		selected, exhausted, err := lanes.candidates(context.Background(), map[LaneIdentity]struct{}{identity: {}}, 1, nil)
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempted identities = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -91,7 +91,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 4)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, _, err := lanes.candidates(ctx, nil, 1); !errors.Is(err, context.Canceled) {
+		if _, _, err := lanes.candidates(ctx, nil, 1, nil); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled candidate wait = %v", err)
 		}
 	})
@@ -100,7 +100,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 5)
 		done := make(chan error, 1)
 		go func() {
-			_, _, err := lanes.candidates(context.Background(), nil, 1)
+			_, _, err := lanes.candidates(context.Background(), nil, 1, nil)
 			done <- err
 		}()
 		lanes.stop()
@@ -112,12 +112,12 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 	t.Run("availability change", func(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 6)
 		type laneCandidatesResult struct {
-			selected []*laneState
+			selected []*laneAdmission
 			err      error
 		}
 		done := make(chan laneCandidatesResult, 1)
 		go func() {
-			selected, _, err := lanes.candidates(context.Background(), nil, 1)
+			selected, _, err := lanes.candidates(context.Background(), nil, 1, nil)
 			done <- laneCandidatesResult{selected: selected, err: err}
 		}()
 		if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
@@ -141,7 +141,7 @@ func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), BlockDemand{}, func(records.BlockRecord) error { return nil }); !errors.Is(err, rejection) {
+	if _, err := lanes.fetch(context.Background(), blockRequest{demand: BlockDemand{}, validate: func(records.BlockRecord) error { return nil }}); !errors.Is(err, rejection) {
 		t.Fatalf("exhausted lane fetch = %v", err)
 	}
 }
@@ -150,7 +150,7 @@ type boundaryBlockLaneFunc func(context.Context, BlockDemand) (records.BlockReco
 
 func (function boundaryBlockLaneFunc) FetchBlock(
 	ctx context.Context,
-	demand BlockDemand,
+	demand BlockDemand, _ func(uint64),
 ) (records.BlockRecord, error) {
 	return function(ctx, demand)
 }

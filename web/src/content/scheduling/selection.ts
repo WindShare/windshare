@@ -1,4 +1,5 @@
 import type { V2BlockDemand, V2BlockLane } from '../v2-lane-set'
+import type { BlockReceiveWindow } from './receive-window'
 import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
 import { completionCost, LanePerformance } from './performance'
 import { PROBE_INTERVAL_MILLISECONDS, type DispatchPurpose } from './exploration'
@@ -8,12 +9,21 @@ export interface ContentLane {
   readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
   readonly performance: LanePerformance
+  readonly receive: BlockReceiveWindow
+  readonly unsubscribeReceive: () => void
   inflight: number
   failed: boolean
 }
 export type ContentPriority = 'preview' | 'download' | 'prefetch'
 
+export interface ContentCapacity {
+  readonly lastServed: () => number
+  readonly available: () => boolean
+  readonly acquire: () => (() => void) | undefined
+}
+
 export interface ContentWork {
+  readonly capacity?: ContentCapacity
   /** Newly assembled sealed-object bytes; not authenticated output or resumable coverage. */
   readonly onReceive?: (objectBytes: number) => void
   readonly demand: V2BlockDemand
@@ -25,7 +35,7 @@ export interface ContentWork {
 }
 export interface ContentAssignment<T extends ContentWork> {
   readonly work: T
-  readonly lane: ContentLane | undefined
+  readonly lane: ContentLane
   readonly purpose: DispatchPurpose
 }
 
@@ -68,26 +78,31 @@ export class ContentAllocation {
   #lastProbe: number | undefined
   readonly #active = new Map<ContentWork, DispatchPurpose>()
 
-  select<T extends ContentWork>(work: readonly T[], lanes: readonly ContentLane[], now: number): ContentAssignment<T> {
-    const first = work[0]
-    if (first === undefined) throw new Error('Content allocation requires queued work')
-    const primary = orderedContentLanes(lanes, first)[0]
+  select<T extends ContentWork>(
+    work: readonly T[], lanes: readonly ContentLane[], now: number,
+    eligible: (lane: ContentLane, work: T) => boolean,
+  ): ContentAssignment<T> | undefined {
+    const primaryFor = (item: T) => orderedContentLanes(lanes, item).find(lane => eligible(lane, item))
+    const first = work.find(item => primaryFor(item)?.receive.available)
+    const primary = first === undefined ? undefined : primaryFor(first)
     if (![...this.#active.values()].includes('probe') && lanes.some(lane => lane.inflight > 0) &&
       (this.#lastProbe === undefined || now - this.#lastProbe >= PROBE_INTERVAL_MILLISECONDS)) {
       for (const item of exploratoryWork(work, this.#active.keys())) {
         const candidates = orderedContentLanes(lanes, item)
-        const candidate = candidates.filter(lane => lane !== candidates[0] && !lane.failed &&
+        const candidate = candidates.filter(lane => eligible(lane, item) && lane.receive.available && lane !== candidates[0] && !lane.failed &&
           lane.performance.pendingBytes === 0 &&
           (lane.performance.lastAttempt === undefined || now - lane.performance.lastAttempt >= PROBE_INTERVAL_MILLISECONDS))
           .sort((left, right) => (left.performance.lastAttempt ?? -Infinity) - (right.performance.lastAttempt ?? -Infinity))[0]
         if (candidate === undefined) continue
-        this.#lastProbe = now
-        this.#active.set(item, 'probe')
         return { work: item, lane: candidate, purpose: 'probe' }
       }
     }
-    this.#active.set(first, 'content')
-    return { work: first, lane: primary, purpose: 'content' }
+    return first === undefined || primary === undefined ? undefined : { work: first, lane: primary, purpose: 'content' }
+  }
+
+  started(work: ContentWork, purpose: DispatchPurpose, now: number): void {
+    if (purpose === 'probe') this.#lastProbe = now
+    this.#active.set(work, purpose)
   }
 
   completed(work: ContentWork): void {

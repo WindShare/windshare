@@ -3,7 +3,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockLaneAttemptsError } from '../../src/content/v2-broker'
+import { V2BlockLaneAttemptsError, V2BlockBroker, V2LaneSet } from '../../src/content/v2-broker'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import {
   V2SupervisedContent,
@@ -657,6 +657,52 @@ describe('direct ZIP output settlement', () => {
 })
 
 describe('direct ZIP receive lifecycle', () => {
+  it('prefetches bounded later blocks while the ordered ZIP writer is paused', async () => {
+    const member = contentFile('root/prefetch.bin', 16n)
+    const opened = directZipOpenedRevision(member)
+    const calls: bigint[] = []
+    const lanes = new V2LaneSet()
+    lanes.add({ id: 1, fetchBlock: async (demand, _signal, observer) => {
+      calls.push(demand.localBlockIndex)
+      observer?.received(2)
+      return { descriptor: opened.descriptor, localBlockIndex: demand.localBlockIndex, data: Uint8Array.of(1, 2) }
+    } }, 'direct')
+    const broker = new V2BlockBroker(lanes, { maximumRangeBufferBytes: 16 })
+    const entered = coordinatorGate()
+    const resume = coordinatorGate()
+    const writes: bigint[] = []
+    const output = directZipContentOutput()
+    const running = transferDirectZipFileV1({
+      descriptor: { shareInstance: opened.descriptor.shareInstance, chunkSize: 2 } as never,
+      revisions: { open: async () => opened },
+      broker: { readRange: (descriptor, lease, range, options) =>
+        broker.readRouteAuthorizedRange(descriptor, lease, range, { ...options,
+          routes: new V2ConnectivityRouteAuthority(),
+        }) },
+      output: { ...output, beginFile: async () => ({
+        resumeOffset: 0n,
+        write: async offset => {
+          writes.push(offset)
+          if (offset === 0n) { entered.resolve(); await resume.promise }
+        },
+        observeCheckpoint: async () => 0n,
+        commit: async () => undefined,
+      }) },
+      signal: SIGNAL,
+      onInitialDurable: () => undefined,
+      onWriteAcknowledged: () => undefined,
+      onComplete: () => undefined,
+    }, member)
+    await entered.promise
+    await expect.poll(() => calls.length).toBe(4)
+    expect(writes).toEqual([0n])
+    resume.resolve()
+    await running
+    expect(writes).toEqual([0n, 2n, 4n, 6n, 8n, 10n, 12n, 14n])
+    expect(calls).toEqual([0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n])
+    broker.close(); lanes.close()
+  })
+
   it('keeps one writer alive while a supervised network generation recovers', async () => {
     const harness = createWriterHarness()
     const writer = harness.writer()
@@ -743,14 +789,12 @@ describe('direct ZIP receive lifecycle', () => {
       revisions: { open: async () => opened },
       broker: {
         readRange: async function* (_descriptor, _lease, range, options) {
-          if (range.start === 2n) {
-            waiting.resolve()
-            await new Promise((_resolve, reject) => {
-              options!.signal!.addEventListener('abort',
-                () => reject(options!.signal!.reason), { once: true })
-            })
-          }
           yield { offset: range.start, data: Uint8Array.of(1, 2) }
+          waiting.resolve()
+          await new Promise((_resolve, reject) => {
+            options!.signal!.addEventListener('abort',
+              () => reject(options!.signal!.reason), { once: true })
+          })
         },
       },
       output,
@@ -825,6 +869,7 @@ describe('direct ZIP receive lifecycle', () => {
       revisions: { open: async () => opened },
       broker: { readRange: async function* (_descriptor, _lease, range) {
         yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        yield { offset: range.start + 2n, data: Uint8Array.of(3, 4) }
       } },
       output: { ...output, beginFile: async () => ({
         resumeOffset: 0n,

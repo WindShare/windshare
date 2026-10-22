@@ -60,11 +60,16 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
           if (index < 0) throw new Error('Requested content outside the authenticated catalog')
           ranges.push({ phase, name: members[index]!.sourcePath[0]!,
             start: range.start.toString(), end: range.end.toString() })
-          if (phase === 'initial' && index === 1 && range.start === BigInt(MEMBER_ROLLBACK_BLOCK_BYTES)) {
-            throw MEMBER_ROLLBACK_PAUSE
-          }
           const payload = phase === 'initial' ? payloads[index]! : expected[index]!
-          yield { offset: range.start, data: payload.slice(Number(range.start), Number(range.end)) }
+          for (let offset = Number(range.start); offset < Number(range.end); offset += MEMBER_ROLLBACK_BLOCK_BYTES) {
+            // The interruption belongs to the source block, independent of how
+            // many blocks the consumer groups into one prefetch range.
+            if (phase === 'initial' && index === 1 && offset === MEMBER_ROLLBACK_BLOCK_BYTES) {
+              throw MEMBER_ROLLBACK_PAUSE
+            }
+            yield { offset: BigInt(offset),
+              data: payload.slice(offset, Math.min(offset + MEMBER_ROLLBACK_BLOCK_BYTES, Number(range.end))) }
+          }
         },
       }
       return new DirectZipOrderedCoordinatorV1({
