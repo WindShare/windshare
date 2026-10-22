@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/bufferbudget"
 )
 
 func TestBlockBrokerConstructorAppliesOnlyDocumentedDefaults(t *testing.T) {
@@ -71,7 +72,7 @@ func TestBlockBrokerReservationCannotEvictAnInflightOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broker := &BlockBroker{maxBytes: 2, process: budget, account: budget.Account(2)}
+	broker := &BlockBroker{maxBytes: 2, process: budget, account: bufferbudget.NewAccount[blockKey](budget, 2)}
 	if err := broker.reserveLocked(2); err != nil {
 		t.Fatalf("initial inflight reservation: %v", err)
 	}

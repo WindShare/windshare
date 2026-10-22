@@ -10,11 +10,11 @@ func TestProcessPressureReclaimsCacheWithoutRevokingIndependentCopies(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, second := budget.Account(8), budget.Account(8)
+	first, second := NewAccount[string](budget, 8), NewAccount[int](budget, 8)
 	if !first.Reserve(2) {
 		t.Fatal("initial reservation failed")
 	}
-	cached := first.Store([]byte{1, 2})
+	cached := first.Store("first", []byte{1, 2})
 	copyData, live := cached.Copy()
 	if !live || !bytes.Equal(copyData, []byte{1, 2}) || first.Used() != 4 {
 		t.Fatal("copy was not independently charged")
@@ -26,6 +26,12 @@ func TestProcessPressureReclaimsCacheWithoutRevokingIndependentCopies(t *testing
 	if cached.Live() || first.Used() != 2 || budget.Used() != 8 {
 		t.Fatal("cache reclamation changed active ownership")
 	}
+	if evicted := first.TakeEvicted(); len(evicted) != 1 || evicted[0] != cached || evicted[0].Key() != "first" {
+		t.Fatal("process eviction did not identify the owning account's cache")
+	}
+	if len(second.TakeEvicted()) != 0 {
+		t.Fatal("process eviction was reported to the requesting account")
+	}
 	if !bytes.Equal(copyData, []byte{1, 2}) {
 		t.Fatal("eviction mutated the output copy")
 	}
@@ -35,6 +41,9 @@ func TestProcessPressureReclaimsCacheWithoutRevokingIndependentCopies(t *testing
 		t.Fatal("eviction did not wake admissions")
 	}
 	cached.Drop()
+	if len(first.TakeEvicted()) != 0 {
+		t.Fatal("repeated drop reported an already-consumed eviction")
+	}
 	if second.Reserve(1) {
 		t.Fatal("pending buffers were reclaimed")
 	}
@@ -47,11 +56,11 @@ func TestProcessPressureReclaimsCacheWithoutRevokingIndependentCopies(t *testing
 
 func TestAccountCeilingAndPinnedCacheSource(t *testing.T) {
 	budget, _ := New(8)
-	account := budget.Account(4)
+	account := NewAccount[string](budget, 4)
 	if !account.Reserve(3) {
 		t.Fatal("initial reservation failed")
 	}
-	cached := account.Store([]byte{1, 2, 3})
+	cached := account.Store("source", []byte{1, 2, 3})
 	if data, live := cached.Copy(); data != nil || !live {
 		t.Fatal("copy bypassed the session ceiling or evicted its own source")
 	}
@@ -60,6 +69,9 @@ func TestAccountCeilingAndPinnedCacheSource(t *testing.T) {
 	}
 	if !account.Reserve(4) || cached.Live() {
 		t.Fatal("new content could not reclaim cache")
+	}
+	if evicted := account.TakeEvicted(); len(evicted) != 1 || evicted[0] != cached {
+		t.Fatal("session pressure did not report its cache eviction")
 	}
 	account.Release(4)
 	if account.Used() != 0 || budget.Used() != 0 {
