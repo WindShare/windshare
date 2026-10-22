@@ -39,6 +39,11 @@ export interface ContentAssignment<T extends ContentWork> {
   readonly purpose: DispatchPurpose
 }
 
+export type ContentSelection<T extends ContentWork> =
+  | { readonly kind: 'dispatch'; readonly assignment: ContentAssignment<T> }
+  | { readonly kind: 'probe-deadline'; readonly at: number }
+  | { readonly kind: 'blocked' }
+
 export function demandBytes(demand: V2BlockDemand): number {
   const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
   return Number(range.end - range.start)
@@ -81,23 +86,41 @@ export class ContentAllocation {
   select<T extends ContentWork>(
     work: readonly T[], lanes: readonly ContentLane[], now: number,
     eligible: (lane: ContentLane, work: T) => boolean,
-  ): ContentAssignment<T> | undefined {
+  ): ContentSelection<T> {
     const primaryFor = (item: T) => orderedContentLanes(lanes, item).find(lane => eligible(lane, item))
     const first = work.find(item => primaryFor(item)?.receive.available)
     const primary = first === undefined ? undefined : primaryFor(first)
-    if (![...this.#active.values()].includes('probe') && lanes.some(lane => lane.inflight > 0) &&
-      (this.#lastProbe === undefined || now - this.#lastProbe >= PROBE_INTERVAL_MILLISECONDS)) {
-      for (const item of exploratoryWork(work, this.#active.keys())) {
-        const candidates = orderedContentLanes(lanes, item)
-        const candidate = candidates.filter(lane => eligible(lane, item) && lane.receive.available && lane !== candidates[0] && !lane.failed &&
-          lane.performance.pendingBytes === 0 &&
-          (lane.performance.lastAttempt === undefined || now - lane.performance.lastAttempt >= PROBE_INTERVAL_MILLISECONDS))
-          .sort((left, right) => (left.performance.lastAttempt ?? -Infinity) - (right.performance.lastAttempt ?? -Infinity))[0]
-        if (candidate === undefined) continue
-        return { work: item, lane: candidate, purpose: 'probe' }
+    const probe = this.#probe(work, lanes, now, eligible)
+    if (probe.kind === 'dispatch') return probe
+    return first === undefined || primary === undefined ? probe
+      : { kind: 'dispatch', assignment: { work: first, lane: primary, purpose: 'content' } }
+  }
+
+  #probe<T extends ContentWork>(
+    work: readonly T[], lanes: readonly ContentLane[], now: number,
+    eligible: (lane: ContentLane, work: T) => boolean,
+  ): ContentSelection<T> {
+    if (lanes.length < 2 || [...this.#active.values()].includes('probe') || !lanes.some(lane => lane.inflight > 0)) {
+      return { kind: 'blocked' }
+    }
+    const globalDue = this.#lastProbe === undefined ? now : this.#lastProbe + PROBE_INTERVAL_MILLISECONDS
+    let nextDue = Infinity
+    for (const item of exploratoryWork(work, this.#active.keys())) {
+      const candidates = orderedContentLanes(lanes, item)
+      const available = candidates.filter(lane => eligible(lane, item) && lane.receive.available &&
+        lane !== candidates[0] && !lane.failed && lane.performance.pendingBytes === 0)
+        .sort((left, right) => (left.performance.lastAttempt ?? -Infinity) - (right.performance.lastAttempt ?? -Infinity))
+      for (const lane of available) {
+        const laneDue = lane.performance.lastAttempt === undefined ? now
+          : lane.performance.lastAttempt + PROBE_INTERVAL_MILLISECONDS
+        const due = Math.max(globalDue, laneDue)
+        if (due <= now) return { kind: 'dispatch', assignment: { work: item, lane, purpose: 'probe' } }
+        nextDue = Math.min(nextDue, due)
       }
     }
-    return first === undefined || primary === undefined ? undefined : { work: first, lane: primary, purpose: 'content' }
+    // Only time-blocked, otherwise eligible work needs a deadline. Capacity and
+    // route changes have their own events, so idle paths never need polling.
+    return Number.isFinite(nextDue) ? { kind: 'probe-deadline', at: nextDue } : { kind: 'blocked' }
   }
 
   started(work: ContentWork, purpose: DispatchPurpose, now: number): void {

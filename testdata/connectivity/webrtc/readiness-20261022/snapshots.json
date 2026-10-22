@@ -1,0 +1,77 @@
+{
+  "baseRevision": "86446a6a8469b71f4b4fc4a754783d893473fe60",
+  "old": {
+    "sha256": "45c684ea61ad942868a54cd7122409ed10adbe013e36359b6c02eb872c99108d",
+    "files": 1421
+  },
+  "new": {
+    "sha256": "79059092e6feceb240c21801d8d19f0b982c5c703075faa8e81a04a7e4566c7a",
+    "files": 1422
+  },
+  "changes": {
+    "web/e2e/v2-local-turn.network.spec.ts": {
+      "before": "e6b3b77d1b9ae57ac06bdd4eecc02a2332825f880b34c96a92f4c9c4113f17b2",
+      "after": "7e2220016741cedff9e9222c81c1c18db4b42b7333c4caf312ab7bdf90fdc17c"
+    },
+    "web/src/content/scheduling/admission.ts": {
+      "before": "38ca095b3109489ad9116675851a3e4eb263e3668b6bab11a2320deed176fa63",
+      "after": "893535b1dd683d3c8c0709cb624779a5292f37313747b18622489d2ec8400352"
+    },
+    "web/src/content/scheduling/attempt-lifetimes.ts": {
+      "before": "308ac5a42355e109c5911de09513dee8ec12af6b5a1cf7a77707027b01200d8f",
+      "after": "f9939fbbc1d4f662382e71919afc4b2b7bb029e8d9a555672fe867c7a9c0ffd9"
+    },
+    "web/src/content/scheduling/performance.ts": {
+      "before": "e7e1bae3baf7a0f9abc12b386209a2d01595c77c427799b56140960c52180646",
+      "after": "cf270df806cbe80298db70cdc436d11e24bb8ba5774933bf7ae56de5e3830ad9"
+    },
+    "web/src/content/scheduling/range-window.ts": {
+      "before": "60d15ffe508cc80910b489cbb6f7a632e8ee9f6cdf2cf971065e4f47edd0e125",
+      "after": "2fd40b180851e3b37cb1ef8803050f64d35f7d676fb7f7bda4677136693c63f7"
+    },
+    "web/src/content/scheduling/receive-window.ts": {
+      "before": "4e5b05571421347fd69f9efd9b9f286dfffb149640d3f0ac57224b4ceef20394",
+      "after": "b849a2bbc4621113159d1635e29c0e3087acced7a1756900b9f338ea1257b28d"
+    },
+    "web/src/content/scheduling/selection.ts": {
+      "before": "0296081f4bdb6bc31e4dd262f47dd83749865ea24653f88dc4d09e0d403b2417",
+      "after": "25befbba6fed936c1902b99cec9192089c1c33fb05c9fe50dd9e0f8df5d6da2d"
+    },
+    "web/src/content/v2-lane-set.ts": {
+      "before": "7d58763b7d4091555ef5a5d6df13ee438a28d3d8347e16898318555e240b64ad",
+      "after": "4dd689e1e53595cf6d010eed3d6b1f2dabe83dfe9197f182703e512c47c967e4"
+    },
+    "web/src/content/v2-session-operations.ts": {
+      "before": "6d5f5453d728362759b4209760511a888d741af5086f4915865d706a108e438f",
+      "after": "93939b3f4a71e46281946667b0aa5a7e4393c41f57638bacdd2428fff0ccbb13"
+    },
+    "web/src/diagnostics/trace/lane-payload.ts": {
+      "before": "972fd8e2f10cf2fcfdfdfaedbf815b82da15b55e3d28e5c4c9c893f1008384ce",
+      "after": "4845515c70428a1d9ac2938c28af1e5b57cdbd6f70c3e1c755a8c9bc9d36fc3d"
+    },
+    "web/src/output/origin-private/admission-authority.ts": {
+      "before": "5477b923c81e4a93583222d40dd788ae4b4fa55cdf6764e182ff6cceb36ae924",
+      "after": "dd79718b8278de01770b4df86d1427345d38f109f8f7b76d6950e3f3c1388497"
+    },
+    "web/test/connectivity/peer-offer.test.ts": {
+      "before": "eae2a4ffb3eaace2fcffbf911e93bf39c3ff21dd40b7e8863448751c420673b1",
+      "after": "cbe43cd7355d9c851c50178fc98ffbe396b47cbc28e51114dea498fbfde60527"
+    },
+    "web/test/content/admission-wake.test.ts": {
+      "before": null,
+      "after": "d420e1080ce165ebff5ccb6d39acf4dc09ce153122f283105015c2871eeb3a7b"
+    },
+    "web/test/content/receive-window.test.ts": {
+      "before": "3879108ec13307c2e9b44091d443b09938b1396fb7b6b9171dae2ba375490735",
+      "after": "24f529de3882b77847b5cbf5d24e0f59546e23b959a3f8d85a5c42c7c734f48e"
+    },
+    "web/test/content/v2-session-progress.test.ts": {
+      "before": "e02c95d173ada6eb6a9d6a8621154a5ba5ad59653fc4330f8bed795aa3af18d2",
+      "after": "b7f8465da003abd330cd739e50ff25a1ef441c5bb63f078d16bc818df928681f"
+    },
+    "web/test/transfer/v2-discovery-pipeline.test.ts": {
+      "before": "301467168cd3623555f080f672f7246af47bd30594fb9d70aeba8b2076428981",
+      "after": "6548e73eb3943fb83d28dec4bfd41c5740fa2af236b6634c21aa1da2c0c5ceea"
+    }
+  }
+}

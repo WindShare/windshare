@@ -52,12 +52,13 @@ export class BlockReceiveWindow {
     return this.#begin(bytes, queuedAt, ahead)
   }
 
-  subscribe(listener: () => void): () => void {
+  /** A waiter drains available capacity; only a blocked-to-ready edge needs a new turn. */
+  subscribeAvailable(listener: () => void): () => void {
     this.#listeners.add(listener)
     return () => { this.#listeners.delete(listener) }
   }
 
-  #changed(): void {
+  #notifyAvailable(): void {
     for (const listener of this.#listeners) listener()
   }
 
@@ -84,6 +85,7 @@ export class BlockReceiveWindow {
       }),
       receive: objectBytes => {
         if (closed || !Number.isSafeInteger(objectBytes) || objectBytes <= 0) return
+        const wasAvailable = this.available
         const now = this.#now()
         const streaming = this.#receiving > 0 || (this.#lastReceiptAt !== undefined &&
           now - this.#lastReceiptAt < this.#responseMilliseconds)
@@ -117,15 +119,16 @@ export class BlockReceiveWindow {
         }
         if (remaining > 0 && !receiving) { receiving = true; this.#receiving += 1 }
         if (remaining === 0 && receiving) { receiving = false; this.#receiving -= 1 }
-        this.#changed()
+        if (!wasAvailable && this.available) this.#notifyAvailable()
       },
       close: () => {
         if (closed) return
+        const wasAvailable = this.available
         closed = true
         this.#active -= 1
         if (receiving) this.#receiving -= 1
         this.#remainingBytes -= remaining
-        this.#changed()
+        if (!wasAvailable && this.available) this.#notifyAvailable()
       },
     }
   }

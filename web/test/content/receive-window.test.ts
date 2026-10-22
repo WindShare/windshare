@@ -49,20 +49,65 @@ describe('physical lane receive admission', () => {
     first.close(); next.close()
   })
 
-  it('notifies allocation on receipts and releases without owning a task queue', () => {
+  it('notifies readiness once while repeated receipts leave capacity available', () => {
     const window = new BlockReceiveWindow(() => 0)
     let wakes = 0
-    const unsubscribe = window.subscribe(() => { wakes++ })
+    const unsubscribe = window.subscribeAvailable(() => { wakes++ })
     const first = window.tryAcquire(MIB)!
     first.receive(FRAGMENT)
+    expect(window.available).toBe(true)
+    first.receive(FRAGMENT)
     first.close()
     first.close()
     first.receive(FRAGMENT)
-    expect(wakes).toBe(2)
+    expect(wakes).toBe(1)
     unsubscribe()
     window.tryAcquire(MIB)!.close()
-    expect(wakes).toBe(2)
+    expect(wakes).toBe(1)
     expect(() => window.tryAcquire(0)).toThrow(RangeError)
+  })
+
+  it('keeps slow receipts quiet until another request can enter, and wakes when a blocked permit closes', () => {
+    let now = 0
+    const window = new BlockReceiveWindow(() => now)
+    let wakes = 0
+    window.subscribeAvailable(() => { wakes++ })
+    const first = window.tryAcquire(MIB)!
+    for (let fragment = 0; fragment < 14; fragment++) {
+      now += 500
+      first.receive(FRAGMENT)
+      expect(window.available).toBe(false)
+    }
+    expect(wakes).toBe(0)
+    now += 500
+    first.receive(FRAGMENT)
+    expect(window.available).toBe(true)
+    expect(wakes).toBe(1)
+    const next = window.tryAcquire(MIB)!
+    first.close()
+    expect(window.available).toBe(false)
+    expect(wakes).toBe(1)
+    next.close()
+    expect(window.available).toBe(true)
+    expect(wakes).toBe(2)
+  })
+
+  it('announces readiness again after a streaming estimate falls and recovers', () => {
+    let now = 0
+    const window = new BlockReceiveWindow(() => now)
+    let wakes = 0
+    window.subscribeAvailable(() => { wakes++ })
+    const permit = window.tryAcquire(MIB)!
+    now = 1
+    permit.receive(FRAGMENT)
+    expect(window.available).toBe(true)
+    now = 1001
+    permit.receive(FRAGMENT)
+    expect(window.available).toBe(false)
+    expect(wakes).toBe(1)
+    permit.close()
+    expect(window.available).toBe(true)
+    expect(wakes).toBe(2)
   })
 
   it('does not reuse stale fast capacity after an idle period', () => {

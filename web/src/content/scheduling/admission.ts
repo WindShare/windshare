@@ -1,4 +1,4 @@
-import { ContentAllocation, demandBytes, type ContentAssignment, type ContentLane, type ContentWork } from './selection'
+import { ContentAllocation, demandBytes, type ContentAssignment, type ContentLane, type ContentSelection, type ContentWork } from './selection'
 import type { BlockReceivePermit } from './receive-window'
 import type { DispatchPurpose } from './exploration'
 
@@ -37,6 +37,7 @@ export class ContentAdmissions {
   readonly #allocation = new ContentAllocation()
   readonly #served = { preview: 0, download: 0, prefetch: 0 }
   #scheduled = false
+  #probeWake: ReturnType<typeof setTimeout> | undefined
 
   constructor(lanes: () => readonly ContentLane[], now: () => number) {
     this.#lanes = lanes
@@ -71,8 +72,15 @@ export class ContentAdmissions {
     })
   }
 
+  #cancelProbeWake(): void {
+    if (this.#probeWake === undefined) return
+    clearTimeout(this.#probeWake)
+    this.#probeWake = undefined
+  }
+
   wake(): void {
-    if (this.#scheduled) return
+    this.#cancelProbeWake()
+    if (this.#pending.size === 0 || this.#scheduled) return
     this.#scheduled = true
     queueMicrotask(() => {
       this.#scheduled = false
@@ -81,14 +89,21 @@ export class ContentAdmissions {
   }
 
   #drain(): void {
+    this.#cancelProbeWake()
     for (const pending of this.#pending) {
       try { pending.signal.throwIfAborted(); pending.routes.assertActive() } catch (error) {
         this.#reject(pending, error)
       }
     }
     while (this.#pending.size > 0) {
-      const assignment = this.#select()
-      if (assignment === undefined || !this.#commit(assignment)) return
+      const selection = this.#select()
+      if (selection.kind === 'probe-deadline') {
+        this.#probeWake = setTimeout(() => {
+          this.#probeWake = undefined
+          this.wake()
+        }, Math.max(0, Math.ceil(selection.at - this.#now())))
+      }
+      if (selection.kind !== 'dispatch' || !this.#commit(selection.assignment)) return
     }
   }
 
@@ -98,19 +113,21 @@ export class ContentAdmissions {
     pending.reject(error)
   }
 
-  #select(): ContentAssignment<PendingAdmission> | undefined {
+  #select(): ContentSelection<PendingAdmission> {
+    let nextProbe = Infinity
     for (let round = 0; round < 2; round++) {
       for (const priority of PRIORITIES) {
         if (this.#served[priority] >= WEIGHTS[priority]) continue
         const candidates = [...this.#pending].filter(item => item.priority === priority &&
           (item.capacity?.available() ?? true)).sort(compareFrontiers)
-        const assignment = this.#allocation.select(candidates, this.#lanes(), this.#now(),
+        const selection = this.#allocation.select(candidates, this.#lanes(), this.#now(),
           (lane, item) => item.eligible(lane))
-        if (assignment !== undefined) return assignment
+        if (selection.kind === 'dispatch') return selection
+        if (selection.kind === 'probe-deadline') nextProbe = Math.min(nextProbe, selection.at)
       }
       for (const priority of PRIORITIES) this.#served[priority] = 0
     }
-    return undefined
+    return Number.isFinite(nextProbe) ? { kind: 'probe-deadline', at: nextProbe } : { kind: 'blocked' }
   }
 
   #commit(assignment: ContentAssignment<PendingAdmission>): boolean {

@@ -1,0 +1,438 @@
+{
+  "runs": [
+    {
+      "arm": "old",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792657873336/report.json",
+      "MBps": 18.58237787020828,
+      "firstOutputMs": 180.10000002384186,
+      "drainSampleMs": 226.85,
+      "clockOffsetBoundsMs": [
+        1963,
+        2446
+      ],
+      "selectedPort": 59904,
+      "socketSamples": 794,
+      "socketFirstSampleMs": -1027.599853515625,
+      "peakSocketReceiveMemoryBytes": 1446016,
+      "socketDropCount": 101,
+      "dropWindows": [
+        {
+          "fromMs": 434.400146484375,
+          "toMs": 455.400146484375,
+          "count": 12,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 1785.400146484375,
+          "toMs": 1806.400146484375,
+          "count": 86,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1243776
+        },
+        {
+          "fromMs": 4345.400146484375,
+          "toMs": 4366.400146484375,
+          "count": 3,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 581135,
+      "medianRoundTripMilliseconds": 14.94167277407486,
+      "fastRetransmissions": 2,
+      "tcpControlMBps": [
+        39.290027730631294,
+        42.62911039808814
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "new",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792657902499/report.json",
+      "MBps": 20.94288714647942,
+      "firstOutputMs": 145.80000001192093,
+      "drainSampleMs": 59.909,
+      "clockOffsetBoundsMs": [
+        1973,
+        2513
+      ],
+      "selectedPort": 52576,
+      "socketSamples": 721,
+      "socketFirstSampleMs": -1165.900146484375,
+      "peakSocketReceiveMemoryBytes": 1355008,
+      "socketDropCount": 208,
+      "dropWindows": [
+        {
+          "fromMs": 173.099853515625,
+          "toMs": 194.099853515625,
+          "count": 152,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 549.099853515625,
+          "toMs": 570.099853515625,
+          "count": 56,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 668442,
+      "medianRoundTripMilliseconds": 14.252806595881491,
+      "fastRetransmissions": 1,
+      "tcpControlMBps": [
+        51.226110419844346,
+        45.21682932867374
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "new",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792657930067/report.json",
+      "MBps": 18.558097424063618,
+      "firstOutputMs": 185.90000000596046,
+      "drainSampleMs": 60.124,
+      "clockOffsetBoundsMs": [
+        1973,
+        2426
+      ],
+      "selectedPort": 43960,
+      "socketSamples": 800,
+      "socketFirstSampleMs": -1102.599853515625,
+      "peakSocketReceiveMemoryBytes": 1162880,
+      "socketDropCount": 263,
+      "dropWindows": [
+        {
+          "fromMs": 1341.400146484375,
+          "toMs": 1361.400146484375,
+          "count": 143,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 2949.400146484375,
+          "toMs": 2970.400146484375,
+          "count": 25,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 515712
+        },
+        {
+          "fromMs": 4383.400146484375,
+          "toMs": 4404.400146484375,
+          "count": 64,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 5052.400146484375,
+          "toMs": 5073.400146484375,
+          "count": 12,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 784640
+        },
+        {
+          "fromMs": 10488.400146484375,
+          "toMs": 10509.400146484375,
+          "count": 19,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 530559.0,
+      "medianRoundTripMilliseconds": 15.421498665542222,
+      "fastRetransmissions": 5,
+      "tcpControlMBps": [
+        53.12837022206762,
+        38.43009760503255
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "old",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792657959292/report.json",
+      "MBps": 17.508867813761015,
+      "firstOutputMs": 192.30000001192093,
+      "drainSampleMs": 215.06,
+      "clockOffsetBoundsMs": [
+        1983,
+        2453
+      ],
+      "selectedPort": 36016,
+      "socketSamples": 838,
+      "socketFirstSampleMs": -1049.800048828125,
+      "peakSocketReceiveMemoryBytes": 1446976,
+      "socketDropCount": 358,
+      "dropWindows": [
+        {
+          "fromMs": 10805.199951171875,
+          "toMs": 10826.199951171875,
+          "count": 211,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 12516.199951171875,
+          "toMs": 12537.199951171875,
+          "count": 21,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 13097.199951171875,
+          "toMs": 13118.199951171875,
+          "count": 126,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1446976
+        }
+      ],
+      "medianCongestionWindowBytes": 5251553.5,
+      "medianRoundTripMilliseconds": 15.052414402343093,
+      "fastRetransmissions": 1,
+      "tcpControlMBps": [
+        37.42884756516807,
+        40.47999335774381
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "old",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792658478565/report.json",
+      "MBps": 12.916293648089708,
+      "firstOutputMs": 153.09999999403954,
+      "drainSampleMs": 277.393,
+      "clockOffsetBoundsMs": [
+        2006,
+        2584
+      ],
+      "selectedPort": 48719,
+      "socketSamples": 1099,
+      "socketFirstSampleMs": -1073.300048828125,
+      "peakSocketReceiveMemoryBytes": 1269056,
+      "socketDropCount": 312,
+      "dropWindows": [
+        {
+          "fromMs": 575.699951171875,
+          "toMs": 595.699951171875,
+          "count": 122,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 515712
+        },
+        {
+          "fromMs": 1346.699951171875,
+          "toMs": 1367.699951171875,
+          "count": 67,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1269056
+        },
+        {
+          "fromMs": 5274.699951171875,
+          "toMs": 5295.699951171875,
+          "count": 110,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 13828.699951171875,
+          "toMs": 13849.699951171875,
+          "count": 13,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 461400,
+      "medianRoundTripMilliseconds": 22.00679604782251,
+      "fastRetransmissions": 2,
+      "tcpControlMBps": [
+        48.3094498875958,
+        48.88140936946247
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "new",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792658514333/report.json",
+      "MBps": 15.937508519859882,
+      "firstOutputMs": 238.69999998807907,
+      "drainSampleMs": 76.427,
+      "clockOffsetBoundsMs": [
+        1982,
+        2824
+      ],
+      "selectedPort": 56147,
+      "socketSamples": 921,
+      "socketFirstSampleMs": -1326.900146484375,
+      "peakSocketReceiveMemoryBytes": 1789824,
+      "socketDropCount": 283,
+      "dropWindows": [
+        {
+          "fromMs": 388.099853515625,
+          "toMs": 410.099853515625,
+          "count": 56,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 80896
+        },
+        {
+          "fromMs": 2304.099853515625,
+          "toMs": 2326.099853515625,
+          "count": 193,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 232576
+        },
+        {
+          "fromMs": 2743.099853515625,
+          "toMs": 2764.099853515625,
+          "count": 23,
+          "rxBytesBefore": 65728,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 11337.099853515625,
+          "toMs": 11357.099853515625,
+          "count": 11,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 491405.5,
+      "medianRoundTripMilliseconds": 19.99179289634884,
+      "fastRetransmissions": 2,
+      "tcpControlMBps": [
+        15.429343024031995,
+        41.38146654857334
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "new",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792658548249/report.json",
+      "MBps": 13.67600982261048,
+      "firstOutputMs": 203.90000000596046,
+      "drainSampleMs": 74.12,
+      "clockOffsetBoundsMs": [
+        1993,
+        2476
+      ],
+      "selectedPort": 53866,
+      "socketSamples": 1051,
+      "socketFirstSampleMs": -1188.0,
+      "peakSocketReceiveMemoryBytes": 1729152,
+      "socketDropCount": 80,
+      "dropWindows": [
+        {
+          "fromMs": 769.0,
+          "toMs": 790.0,
+          "count": 35,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1729152
+        },
+        {
+          "fromMs": 2214.0,
+          "toMs": 2235.0,
+          "count": 12,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1562304
+        },
+        {
+          "fromMs": 3679.0,
+          "toMs": 3700.0,
+          "count": 32,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 10973.0,
+          "toMs": 10994.0,
+          "count": 1,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 509396,
+      "medianRoundTripMilliseconds": 21.303326637936483,
+      "fastRetransmissions": 1,
+      "tcpControlMBps": [
+        46.91524202693528,
+        22.109754350317864
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    },
+    {
+      "arm": "old",
+      "report": ".tmp/webrtc-readiness-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792658583349/report.json",
+      "MBps": 16.3094408496256,
+      "firstOutputMs": 216.59999999403954,
+      "drainSampleMs": 225.763,
+      "clockOffsetBoundsMs": [
+        2005,
+        2508
+      ],
+      "selectedPort": 60380,
+      "socketSamples": 903,
+      "socketFirstSampleMs": -1257.10009765625,
+      "peakSocketReceiveMemoryBytes": 1810048,
+      "socketDropCount": 212,
+      "dropWindows": [
+        {
+          "fromMs": 894.89990234375,
+          "toMs": 916.89990234375,
+          "count": 57,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 257856
+        },
+        {
+          "fromMs": 2919.89990234375,
+          "toMs": 2940.89990234375,
+          "count": 54,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 3294.89990234375,
+          "toMs": 3314.89990234375,
+          "count": 4,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1810048
+        },
+        {
+          "fromMs": 4591.89990234375,
+          "toMs": 4611.89990234375,
+          "count": 45,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        },
+        {
+          "fromMs": 10483.89990234375,
+          "toMs": 10503.89990234375,
+          "count": 35,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 1771520
+        },
+        {
+          "fromMs": 16279.89990234375,
+          "toMs": 16300.89990234375,
+          "count": 17,
+          "rxBytesBefore": 0,
+          "rxBytesAfter": 0
+        }
+      ],
+      "medianCongestionWindowBytes": 498700,
+      "medianRoundTripMilliseconds": 16.733569447192266,
+      "fastRetransmissions": 2,
+      "tcpControlMBps": [
+        44.94410611229942,
+        39.27101371932532
+      ],
+      "timeouts": [],
+      "queuedZeroProgressSamples": []
+    }
+  ],
+  "scope": "Diagnostic only. Socket receive queue bytes are kernel accounting. UDP sampled every 20 ms and native SCTP every 200 ms. Clock bounds include SSH startup round-trip uncertainty; timeout windows conservatively include this bound. Same socket port and inode tracked. Correlation cannot identify lost SCTP TSNs or prove the cause of every timeout."
+}
