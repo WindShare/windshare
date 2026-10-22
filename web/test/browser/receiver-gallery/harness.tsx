@@ -68,10 +68,10 @@ class GalleryController {
     if (this.#snapshot.share?.kind === 'video') {
       const name = this.#snapshot.share.name
       this.#publish({ preview: { state: 'loading', fileId: id, name } })
-      syntheticVideo().then(({ url, mimeType }) => {
-        this.#videoUrl = url
-        this.#publish({ preview: { state: 'video', fileId: id, name, url, presentationId: 2,
-          mimeType, width: 640, height: 360, durationSeconds: 0.3, positionSeconds: 0, seeking: false } })
+      syntheticVideo().then(video => {
+        this.#videoUrl = video.url
+        this.#publish({ preview: { state: 'video', fileId: id, name, ...video, presentationId: 2,
+          positionSeconds: 0, seeking: false } })
       }).catch(() => this.previewMediaFailed())
       return
     }
