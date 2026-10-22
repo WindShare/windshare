@@ -382,6 +382,14 @@ func (policy ContentRoutePolicy) Allows(route LaneRoute) bool {
 	}
 }
 
+func (a *laneAdmission) releaseCapacity() {
+	if a.release != nil {
+		release := a.release
+		a.release = nil
+		release()
+	}
+}
+
 func (s *LaneSet) fetchLane(
 	ctx context.Context,
 	demand BlockDemand,
@@ -393,9 +401,7 @@ func (s *LaneSet) fetchLane(
 ) {
 	defer s.attempts.Done()
 	state := admission.laneState
-	if admission.release != nil {
-		defer admission.release()
-	}
+	defer admission.releaseCapacity()
 	if purpose != lanescheduling.Content {
 		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
 	}
@@ -435,6 +441,12 @@ func (s *LaneSet) fetchLane(
 	// was already available; capacity-only edge notifications cannot replace it.
 	s.notifyAdmissionChangedLocked()
 	s.mu.Unlock()
+	if fetchErr != nil {
+		// Failed outcomes carry no plaintext. Return their capacity before
+		// publication, independently of the round's later settlement bookkeeping.
+		record = records.BlockRecord{}
+		admission.releaseCapacity()
+	}
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
 		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
