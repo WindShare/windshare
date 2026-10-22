@@ -1,0 +1,64 @@
+{
+  "scope": "Exact experimental sources used for batching measurements; contains switches and deadline coordination that must not ship.",
+  "modules": {
+    "sctp": "v1.11.1",
+    "dtls": "v3.1.8"
+  },
+  "sources": [
+    {
+      "target": "sctp/association.go",
+      "base": "5d63ffdf16113cc4b56f2a23abddc2423c48404c8d4bc2e0aed9f1555fe5574a",
+      "result": "b35f2f4a441ef74dfc4b19ec65528022b3f9478d03d0abd6b6fb8b627f6936a9"
+    },
+    {
+      "target": "sctp/research_batch.go",
+      "base": null,
+      "result": "92f76b6b3564a1c8fe68c896ca0157842b39f7669734146aacc687d6afa187dd"
+    },
+    {
+      "target": "sctp/research_stats.go",
+      "base": null,
+      "result": "ab41dec254a16ed89a8b5ab05ea339a0c527d94e1fdd3f57679303523789e386"
+    },
+    {
+      "target": "dtls/conn.go",
+      "base": "c6a3c9313d888e375a10198ba2bb3441866ee7cdbc6402e5bb6e73228b2740ca",
+      "result": "b5981eb8591bf7c4959bff3f4c8aa0971659e8e794518efebc09c172a440f46b"
+    },
+    {
+      "target": "dtls/research_context.go",
+      "base": null,
+      "result": "fefc784fcc3380a3c6282459fc203cda84164621b4bce001c7195b7efeec5da1"
+    },
+    {
+      "target": "webrtc/sctptransport.go",
+      "base": "8398d3ba6e2e69b1f0581f1918a886b91045863462c8380b94a1aad2a4f487dd",
+      "result": "a15921ce44e32c953548e6ec62b9b85a075f64f5465a3aa89b31e86839bdc699"
+    },
+    {
+      "target": "webrtc/research_link.go",
+      "base": null,
+      "result": "63b0f64f6d670e2cddd6235895a0aa6c574eb3eac8dc4bf9e98ba48b174e5a6c"
+    },
+    {
+      "target": "webrtc/research_stats.go",
+      "base": null,
+      "result": "56f09bd6d09d07dde7e3e8d9673ecfd6b6c3a9bd516b90128eecac6ea4938b2c"
+    },
+    {
+      "target": "ice/research_batch.go",
+      "base": null,
+      "result": "2bab9f07b5267fb0cb1012da36e23d0121001d7b9016e5ac1cacc495faa61de2"
+    },
+    {
+      "target": "webrtc/internal/mux/research_batch.go",
+      "base": null,
+      "result": "79fb69553a46d69a206d8d5869dea01ef60d0140b0289b02cbf884c61cc49e04"
+    },
+    {
+      "target": "dtls/research_batch.go",
+      "base": null,
+      "result": "c9b5ff2cb4c4910c53bc867f48171c924fa23cefa082f40884142dc1ebfa67e1"
+    }
+  ]
+}

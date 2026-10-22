@@ -1,0 +1,382 @@
+diff --git a/sctp/association.go b/sctp/association.go
+index 486c6d2d..a6f8331e 100644
+--- a/sctp/association.go
++++ b/sctp/association.go
+@@ -243,6 +243,10 @@ func getAssociationStateString(assoc uint32) string {
+ // Note: By nature of an Association being constructed with one net.Conn,
+ // it is not a multi-home supporting implementation of SCTP.
+ type Association struct {
++ researchWriteNanos uint64
++ researchGatherNanos uint64
++ researchWaitNanos uint64
++
+ 	bytesReceived uint64
+ 	bytesSent     uint64
+ 
+@@ -1192,11 +1196,18 @@ func (a *Association) writeLoop() { // nolint:cyclop
+ 
+ loop:
+ 	for {
+-		rawPackets, ok := a.gatherOutbound()
++		researchGatherStart := time.Now()
++ rawPackets, ok := a.gatherOutbound()
++ atomic.AddUint64(&a.researchGatherNanos,uint64(time.Since(researchGatherStart)))
+ 
+-		for _, raw := range rawPackets {
++		if handled,err:=a.researchSendBatch(rawPackets);handled {
++ if err!=nil {_ = a.closeNetConn();break loop};rawPackets=nil
++}
++ for _, raw := range rawPackets {
+ 			isAbortPacket := len(raw) > int(commonHeaderSize) && raw[commonHeaderSize] == byte(ctAbort)
+-			_, err := a.netConn.Write(raw)
++			researchWriteStart := time.Now()
++ _, err := a.netConn.Write(raw)
++ atomic.AddUint64(&a.researchWriteNanos,uint64(time.Since(researchWriteStart)))
+ 			if isAbortPacket {
+ 				a.abortSentOnce.Do(func() { close(a.abortSentCh) })
+ 			}
+@@ -1224,7 +1235,8 @@ loop:
+ 			return
+ 		}
+ 
+-		select {
++		researchWaitStart := time.Now()
++ select {
+ 		case <-a.awakeWriteLoopCh:
+ 		case <-a.closeWriteLoopCh:
+ 			a.lock.Lock()
+@@ -1238,6 +1250,7 @@ loop:
+ 
+ 			break loop
+ 		}
++ atomic.AddUint64(&a.researchWaitNanos,uint64(time.Since(researchWaitStart)))
+ 	}
+ 
+ 	a.setState(closed)
+diff --git a/sctp/research_batch.go b/sctp/research_batch.go
+new file mode 100644
+--- /dev/null
++++ b/sctp/research_batch.go
+@@ -0,0 +1,17 @@
++package sctp
++
++import("fmt";"os";"strconv";"sync/atomic";"time")
++var researchBatchSize,_=strconv.Atoi(os.Getenv("WS_PROBE_BATCH"))
++type researchDatagramWriter interface { WriteDatagrams([][]byte) error }
++func(a *Association) researchSendBatch(packets [][]byte)(bool,error){
++ if researchBatchSize<2||len(packets)<2{return false,nil}
++ writer,ok:=a.netConn.(researchDatagramWriter);if !ok{return false,nil}
++ for _,p:=range packets {if len(p)>int(commonHeaderSize)&&p[commonHeaderSize]==byte(ctAbort){return false,nil}}
++ for start:=0;start<len(packets);start+=researchBatchSize {
++  batch:=packets[start:min(start+researchBatchSize,len(packets))]
++  at:=time.Now();err:=writer.WriteDatagrams(batch);atomic.AddUint64(&a.researchWriteNanos,uint64(time.Since(at)))
++  if err!=nil{fmt.Fprintln(os.Stderr,"research batch failure:",err);return true,err}
++  for _,packet:=range batch {atomic.AddUint64(&a.bytesSent,uint64(len(packet)));a.stats.incPacketsSent()}
++ }
++ return true,nil
++}
+diff --git a/sctp/research_stats.go b/sctp/research_stats.go
+new file mode 100644
+--- /dev/null
++++ b/sctp/research_stats.go
+@@ -0,0 +1,6 @@
++package sctp
++import "sync/atomic"
++func(a *Association) ResearchStats() map[string]any {
++ a.lock.RLock();defer a.lock.RUnlock()
++ return map[string]any{"writeNanos":atomic.LoadUint64(&a.researchWriteNanos),"gatherNanos":atomic.LoadUint64(&a.researchGatherNanos),"waitNanos":atomic.LoadUint64(&a.researchWaitNanos),"packetsSent":a.stats.getNumPacketsSent(),"packetsReceived":a.stats.getNumPacketsReceived(),"sacksReceived":a.stats.getNumSACKsReceived(),"t3Timeouts":a.stats.getNumT3Timeouts(),"fastRetransmits":a.stats.getNumFastRetrans(),"ssthresh":a.ssthresh,"fastRecovery":a.inFastRecovery,"pendingBytes":a.pendingQueue.getNumBytes(),"inflightBytes":a.inflightQueue.getNumBytes(),"cwnd":a.CWND(),"rwnd":a.RWND()}
++}
+diff --git a/dtls/conn.go b/dtls/conn.go
+index f97d3abb..420fc3a1 100644
+--- a/dtls/conn.go
++++ b/dtls/conn.go
+@@ -571,7 +571,8 @@ func (c *Conn) writePackets(ctx context.Context, pkts []*packet) error {
+ 		return err
+ 	}
+ 
+-	for _, compactedRawPacket := range compactedRawPackets {
++	if researchBatchSize>1 && len(compactedRawPackets)>1 {return c.researchWritePrepared(ctx,compactedRawPackets,rAddr)}
++ for _, compactedRawPacket := range compactedRawPackets {
+ 		if _, err = c.nextConn.WriteToContext(ctx, compactedRawPacket, rAddr); err != nil {
+ 			if errors.Is(err, context.Canceled) && c.isConnectionClosed() {
+ 				return ErrConnClosed
+@@ -677,6 +678,7 @@ func (c *closeContext) close(err error) {
+ }
+ 
+ func (c *Conn) contextWithClose(ctx context.Context) (context.Context, context.CancelFunc) {
++ if researchStandardContext { return c.researchContextWithClose(ctx) }
+ 	closeCtx := &closeContext{
+ 		Context: ctx,
+ 		done:    make(chan struct{}),
+diff --git a/dtls/research_context.go b/dtls/research_context.go
+new file mode 100644
+--- /dev/null
++++ b/dtls/research_context.go
+@@ -0,0 +1,18 @@
++package dtls
++import ("context";"os")
++var researchStandardContext=os.Getenv("WS_PROBE_STANDARD_CONTEXT")=="1"
++type researchCloseContext struct { context.Context }
++func(c researchCloseContext) Err() error { return context.Cause(c.Context) }
++// A standard cancel context lets downstream AfterFunc register callbacks without
++// a second waiter goroutine for this custom connection/deadline combination.
++func(c *Conn) researchContextWithClose(parent context.Context)(context.Context,context.CancelFunc){
++ ctx,cancel:=context.WithCancelCause(context.Background())
++ go func(){
++  select{
++  case <-c.closed.Done():cancel(context.Canceled)
++  case <-parent.Done():err:=parent.Err();if err==nil{err=context.DeadlineExceeded};cancel(err)
++  case <-ctx.Done():
++  }
++ }()
++ return researchCloseContext{ctx},func(){cancel(context.Canceled)}
++}
+diff --git a/webrtc/sctptransport.go b/webrtc/sctptransport.go
+index 60c87f48..77b52b62 100644
+--- a/webrtc/sctptransport.go
++++ b/webrtc/sctptransport.go
+@@ -178,9 +178,9 @@ func (r *SCTPTransport) Start(capabilities SCTPCapabilities) error {
+ 
+ func (r *SCTPTransport) sctpClientOptions(netConn net.Conn, maxMessageSize uint32) []sctp.ClientOption {
+ 	opts := []sctp.ClientOption{
+-		sctp.WithNetConn(netConn),
++		sctp.WithNetConn(newResearchLink(netConn)),
+ 		sctp.WithLoggerFactory(r.api.settingEngine.LoggerFactory),
+-		sctp.WithMTU(sctpOutboundMTU),
++		sctp.WithMTU(researchMTU()),
+ 		sctp.WithMaxMessageSize(maxMessageSize),
+ 	}
+ 
+diff --git a/webrtc/research_link.go b/webrtc/research_link.go
+new file mode 100644
+--- /dev/null
++++ b/webrtc/research_link.go
+@@ -0,0 +1,88 @@
++package webrtc
++
++import (
++ "net"
++ "os"
++ "strconv"
++ "sync"
++ "time"
++)
++
++const researchQueuePackets = 32768
++type researchPacket struct { data []byte; ready time.Time; err error }
++type researchLink struct {
++ net.Conn
++ delay time.Duration
++ queue chan researchPacket
++ done chan struct{}
++ once sync.Once
++ rate float64
++ burst int
++ used int
++ epoch time.Time
++ loss float64
++ sequence uint64
++}
++func researchBurst() int { n:=int(researchNumber("WS_PROBE_BURST"));if n>=1200{return n};return 32768 }
++func researchMTU() uint32 { n:=uint32(researchNumber("WS_PROBE_MTU"));if n>=1000 && n<=1400{return n};return sctpOutboundMTU }
++func researchNumber(name string) float64 { v,_:=strconv.ParseFloat(os.Getenv(name),64); return v }
++func newResearchLink(conn net.Conn) net.Conn {
++ delay:=time.Duration(researchNumber("WS_PROBE_ACK_DELAY_MS")*float64(time.Millisecond))
++ rate:=researchNumber("WS_PROBE_PACE_MBPS")*1e6
++ loss:=researchNumber("WS_PROBE_LOSS")
++ if delay==0 && rate==0 && loss==0 { return conn }
++ p:=&researchLink{Conn:conn,delay:delay,rate:rate,loss:loss,burst:researchBurst(),done:make(chan struct{})}
++ if delay>0 {
++  p.queue=make(chan researchPacket,researchQueuePackets)
++  go func(){
++   defer close(p.queue)
++   buffer:=make([]byte,65536)
++   for {
++    n,err:=conn.Read(buffer)
++    packet:=researchPacket{data:append([]byte(nil),buffer[:n]...),ready:time.Now().Add(delay),err:err}
++    select { case p.queue<-packet: case <-p.done:return }
++    if err!=nil{return}
++   }
++  }()
++ }
++ return p
++}
++func(p *researchLink) Read(b []byte)(int,error) {
++ if p.delay==0{return p.Conn.Read(b)}
++ var packet researchPacket
++ select {case v,ok:=<-p.queue: if !ok{return 0,net.ErrClosed}; packet=v;case <-p.done:return 0,net.ErrClosed}
++ if wait:=time.Until(packet.ready);wait>0 {
++  timer:=time.NewTimer(wait)
++  select{case <-timer.C:case <-p.done:timer.Stop();return 0,net.ErrClosed}
++ }
++ return copy(b,packet.data),packet.err
++}
++func(p *researchLink) Write(b []byte)(int,error) {
++ if p.rate>0 {
++  if p.epoch.IsZero(){p.epoch=time.Now()}
++  if p.used+len(b)>p.burst {
++   target:=p.epoch.Add(time.Duration(float64(p.used)/p.rate*float64(time.Second)))
++   if wait:=time.Until(target);wait>0 {
++    timer:=time.NewTimer(wait)
++    select{case <-timer.C:case <-p.done:timer.Stop();return 0,net.ErrClosed}
++   }
++   p.epoch=time.Now();p.used=0
++  }
++  p.used+=len(b)
++ }
++ p.sequence++
++ if p.loss>0 {
++  v:=p.sequence*0x9e3779b97f4a7c15
++  v=(v^(v>>30))*0xbf58476d1ce4e5b9
++  if float64(uint32(v>>32))/4294967296.0<p.loss{return len(b),nil}
++ }
++ return p.Conn.Write(b)
++}
++func(p *researchLink) WriteDatagrams(packets [][]byte) error {
++ if p.rate==0 && p.loss==0 {
++  if sender,ok:=p.Conn.(interface{WriteDatagrams([][]byte)error});ok{return sender.WriteDatagrams(packets)}
++ }
++ for _,packet:=range packets{if _,err:=p.Write(packet);err!=nil{return err}}
++ return nil
++}
++func(p *researchLink) Close() error {p.once.Do(func(){close(p.done)});return p.Conn.Close()}
+diff --git a/webrtc/research_stats.go b/webrtc/research_stats.go
+new file mode 100644
+--- /dev/null
++++ b/webrtc/research_stats.go
+@@ -0,0 +1,2 @@
++package webrtc
++func(r *SCTPTransport) ResearchStats() any {a:=r.association();if a==nil{return nil};return a.ResearchStats()}
+diff --git a/ice/research_batch.go b/ice/research_batch.go
+new file mode 100644
+--- /dev/null
++++ b/ice/research_batch.go
+@@ -0,0 +1,47 @@
++package ice
++
++import("context";"io";"net/netip";"github.com/pion/stun/v4")
++
++type researchAddrBatchWriter interface{ WriteBatchToAddrPort([][]byte,netip.AddrPort)(int,error) }
++
++func(c *Conn) WriteDatagrams(packets [][]byte) error{
++ if err:=c.agent.loop.Err();err!=nil{return err}
++ pair:=c.agent.getSelectedPair()
++ if pair==nil{for _,p:=range packets{if _,err:=c.Write(p);err!=nil{return err}};return nil}
++ for _,p:=range packets{if stun.IsMessage(p){return errWriteSTUNMessageToIceConn}}
++ sender,ok:=pair.Local.(interface{researchWriteDatagrams([][]byte,Candidate)(int,error)})
++ if !ok{for _,p:=range packets{if _,err:=c.Write(p);err!=nil{return err}};return nil}
++ n,err:=sender.researchWriteDatagrams(packets,pair.Remote)
++ if n>0{c.bytesSent.Add(uint64(n));for _,p:=range packets{if n<len(p){break};pair.UpdatePacketSent(len(p));n-=len(p)}}
++ return err
++}
++func(c *candidateBase) researchWriteDatagrams(packets [][]byte,dst Candidate)(int,error){
++ var n int
++ sender,ok:=c.conn.(researchAddrBatchWriter)
++ if ok {written,err:=sender.WriteBatchToAddrPort(packets,dst.addrPort());if written>0{c.seen(true)};return written,err}
++ for _,p:=range packets{count,err:=c.writeTo(p,dst);n+=count;if err!=nil{return n,err}}
++ return n,nil
++}
++func(c *sharedPacketConn) WriteBatchToAddrPort(packets [][]byte,addr netip.AddrPort)(int,error){
++ if c.ctx.Err()!=nil{return 0,io.ErrClosedPipe}
++ if sender,ok:=c.underlying.(researchAddrBatchWriter);ok{return sender.WriteBatchToAddrPort(packets,addr)}
++ return 0,io.ErrNoProgress
++}
++func(c *udpMuxedConn) WriteBatchToAddrPort(packets [][]byte,addr netip.AddrPort)(int,error){
++ if c.isClosed(){return 0,io.ErrClosedPipe}
++ if !addr.IsValid(){return 0,errInvalidIPAddress}
++ c.registerAddress(canonicalAddrPort(addr))
++ return c.params.Mux.researchWriteDatagrams(packets,addr)
++}
++func(m *UDPMuxDefault) researchWriteDatagrams(packets [][]byte,addr netip.AddrPort)(n int,err error){
++ if err=m.startWriteContext(context.Background());err!=nil{return 0,err}
++ defer func(){err=m.finishWrite(err)}()
++ if sender,ok:=m.params.UDPConn.(researchAddrBatchWriter);ok{return sender.WriteBatchToAddrPort(packets,addr)}
++ for _,p:=range packets{count,e:=m.addrPortConn.WriteToAddrPort(p,addr);n+=count;if e!=nil{return n,e}}
++ return n,nil
++}
++func(c *udpAddrPortConn) WriteBatchToAddrPort(packets [][]byte,addr netip.AddrPort)(int,error){
++ if sender,ok:=c.addrPortConn.(researchAddrBatchWriter);ok{return sender.WriteBatchToAddrPort(packets,addr)}
++ var n int;for _,p:=range packets{count,err:=c.addrPortConn.WriteToAddrPort(p,addr);n+=count;if err!=nil{return n,err}}
++ return n,nil
++}
+diff --git a/webrtc/internal/mux/research_batch.go b/webrtc/internal/mux/research_batch.go
+new file mode 100644
+--- /dev/null
++++ b/webrtc/internal/mux/research_batch.go
+@@ -0,0 +1,10 @@
++package mux
++import("errors";"io";"net";"github.com/pion/ice/v4")
++func(e *Endpoint) WriteDatagrams(packets [][]byte,_ net.Addr) error{
++ sender,ok:=e.mux.nextConn.(interface{WriteDatagrams([][]byte)error})
++ if !ok{for _,p:=range packets{if _,err:=e.Write(p);err!=nil{return err}};return nil}
++ err:=sender.WriteDatagrams(packets)
++ if errors.Is(err,ice.ErrNoCandidatePairs){return nil}
++ if errors.Is(err,ice.ErrClosed){return io.ErrClosedPipe}
++ return err
++}
+diff --git a/dtls/research_batch.go b/dtls/research_batch.go
+new file mode 100644
+--- /dev/null
++++ b/dtls/research_batch.go
+@@ -0,0 +1,61 @@
++package dtls
++
++import (
++ "context"
++ "errors"
++ "io"
++ "net"
++ "os"
++ "strconv"
++ "time"
++ "github.com/pion/dtls/v3/pkg/protocol"
++ "github.com/pion/dtls/v3/pkg/protocol/recordlayer"
++)
++var researchBatchSize,_=strconv.Atoi(os.Getenv("WS_PROBE_BATCH"))
++
++func(c *Conn) WriteDatagrams(payloads [][]byte) error {
++ if c.isConnectionClosed(){return ErrConnClosed}
++ select{case <-c.writeDeadline.Done():return errDeadlineExceeded;default:}
++ if err:=c.Handshake();err!=nil{return err}
++ ctx,cancel:=c.contextWithClose(c.writeDeadline);defer cancel()
++ packets:=make([]*packet,0,len(payloads))
++ for _,payload:=range payloads{
++  packets=append(packets,&packet{
++   record:&recordlayer.RecordLayer{Header:recordlayer.Header{Epoch:c.state.getLocalEpoch(),Version:protocol.Version1_2},Content:&protocol.ApplicationData{Data:payload}},
++   shouldWrapCID:len(c.state.remoteConnectionID)>0,shouldEncrypt:true,
++  })
++ }
++ return c.writePackets(ctx,packets)
++}
++func(c *Conn) researchWritePrepared(ctx context.Context, packets [][]byte, addr net.Addr) error {
++ if err:=ctx.Err();err!=nil{return err}
++ var err error
++ // This spike removes the netctx fork using its existing Conn accessor.
++ // It retains the earlier deadline adapter for comparison; production still
++ // needs context-aware native operation ownership and completion draining.
++ if sender,ok:=c.nextConn.Conn().(interface{WriteDatagrams([][]byte,net.Addr)error});ok {
++  canceled:=make(chan struct{})
++  var deadlineErr error
++  stop:=context.AfterFunc(ctx,func(){
++   deadlineErr=c.nextConn.Conn().SetWriteDeadline(time.Unix(1,0))
++   close(canceled)
++  })
++  err=sender.WriteDatagrams(packets,addr)
++  if !stop(){
++   <-canceled
++   if deadlineErr==nil{deadlineErr=c.nextConn.Conn().SetWriteDeadline(time.Time{})}
++  }
++  if e:=ctx.Err();e!=nil{err=e}
++  if err==nil&&deadlineErr!=nil{err=deadlineErr}
++ }else{
++  for _,packet:=range packets{
++   var n int
++   n,err=c.nextConn.WriteToContext(ctx,packet,addr)
++   if err==nil&&n!=len(packet){err=io.ErrShortWrite}
++   if err!=nil{break}
++  }
++ }
++ if errors.Is(err,context.Canceled)&&c.isConnectionClosed(){return ErrConnClosed}
++ if err!=nil{return netError(err)}
++ return nil
++}

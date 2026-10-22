@@ -1,6 +1,6 @@
 # Allocation and bounded prefetch evidence
 
-2026-10-22. [Results](results.json) contain 14 runs / 26 successful transfers, hashes, timings, CPU counters and selected endpoint pairs. Raw bounded protocol/dispatch/output traces remain at the recorded local report paths.
+2026-10-22. [Results](results.json) contain 14 runs / 26 successful transfers, hashes, timings, CPU counters and selected endpoint pairs. Raw bounded protocol/dispatch/output traces remain at the recorded local report paths. The [interleaved follow-up](../interleaved-20261022/README.md) investigates the apparent throughput regression.
 
 The production receiver now admits an eligible work/lane pair together with its capacity. Receipt replenishes network supply while authentication, shared content, consumer copies and output retain their own reservations. Browser preview gets one supported block within existing budgets; reclaimable cache may borrow that capacity. Direct ZIP reads one bounded range across member blocks while preserving ordered writes and checkpoint cuts.
 

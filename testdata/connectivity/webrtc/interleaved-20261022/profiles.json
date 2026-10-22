@@ -1,0 +1,1977 @@
+[
+  {
+    "arm": "old",
+    "order": "1",
+    "report": ".tmp/webrtc-interleaved-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792654615505/report.json",
+    "MBps": 17.141910138196515,
+    "phases": {
+      "requestToFirstMedianMs": 69.0,
+      "lastFragmentToAuthMedianMs": 23.799999982118607,
+      "lastFragmentToAuthTotalMs": 6507.800000071526,
+      "betweenRecordsIdleMs": 14.0,
+      "largestBetweenRecordsGaps": [
+        {
+          "from": 1003.5,
+          "to": 1010.0,
+          "ms": 6.5
+        },
+        {
+          "from": 1484.699999988079,
+          "to": 1490.5999999940395,
+          "ms": 5.9000000059604645
+        },
+        {
+          "from": 127.19999998807907,
+          "to": 128.7999999821186,
+          "ms": 1.5999999940395355
+        }
+      ]
+    },
+    "hotSelf": [
+      {
+        "function": "(idle)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 8514.573
+      },
+      {
+        "function": "equalBytes",
+        "url": "http://127.0.0.1:64060/src/crypto/bytes.ts",
+        "line": 5,
+        "sampleMs": 970.266
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 780.957
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 437.007
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 430.258
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 403.999
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 383.752
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 312.305
+      },
+      {
+        "function": "decodeFragmentMessage",
+        "url": "http://127.0.0.1:64060/src/session/v2-message.ts",
+        "line": 249,
+        "sampleMs": 304.851
+      },
+      {
+        "function": "open",
+        "url": "http://127.0.0.1:64060/src/session/v2-envelope.ts",
+        "line": 76,
+        "sampleMs": 201.165
+      },
+      {
+        "function": "verifyV2SenderControl",
+        "url": "http://127.0.0.1:64060/src/session/v2-message.ts",
+        "line": 125,
+        "sampleMs": 199.379
+      },
+      {
+        "function": "snapshotBinaryMessage",
+        "url": "http://127.0.0.1:64060/src/transport/webrtc/channel.ts",
+        "line": 460,
+        "sampleMs": 184.499
+      },
+      {
+        "function": "accept",
+        "url": "http://127.0.0.1:64060/src/content/v2-flow.ts",
+        "line": 39,
+        "sampleMs": 181.912
+      },
+      {
+        "function": "decodeFragment",
+        "url": "http://127.0.0.1:64060/src/content/v2-flow.ts",
+        "line": 239,
+        "sampleMs": 172.911
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:64060/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 164.689
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:64060/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 151.996
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:64060/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 127.197
+      },
+      {
+        "function": "decodeBlock",
+        "url": "http://127.0.0.1:64060/src/content/v2-records.ts",
+        "line": 81,
+        "sampleMs": 113.244
+      },
+      {
+        "function": "write",
+        "url": "",
+        "line": 0,
+        "sampleMs": 112.587
+      },
+      {
+        "function": "transferMissingRange",
+        "url": "http://127.0.0.1:64060/src/transfer/job/file-transfer.ts",
+        "line": 348,
+        "sampleMs": 110.298
+      },
+      {
+        "function": "writeRange",
+        "url": "http://127.0.0.1:64060/src/output/streams/single-file.ts?import",
+        "line": 79,
+        "sampleMs": 109.555
+      },
+      {
+        "function": "readRouteAuthorizedRange",
+        "url": "http://127.0.0.1:64060/src/content/v2-broker.ts",
+        "line": 108,
+        "sampleMs": 103.88
+      },
+      {
+        "function": "toToken$3",
+        "url": "http://127.0.0.1:64060/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-2QPPnl/vite-cache/deps/cborg.js?v=40010e5a",
+        "line": 692,
+        "sampleMs": 102.237
+      },
+      {
+        "function": "requireBytes",
+        "url": "http://127.0.0.1:64060/src/protocol/cbor.ts",
+        "line": 74,
+        "sampleMs": 99.0
+      },
+      {
+        "function": "concat",
+        "url": "http://127.0.0.1:64060/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-2QPPnl/vite-cache/deps/cborg.js?v=40010e5a",
+        "line": 186,
+        "sampleMs": 98.799
+      }
+    ],
+    "schedulingInclusive": [
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/race.ts",
+        "line": 69,
+        "sampleMs": 77.802
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/race.ts",
+        "line": 16,
+        "sampleMs": 21.477
+      },
+      {
+        "function": "raceContent",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/race.ts",
+        "line": 14,
+        "sampleMs": 21.477
+      },
+      {
+        "function": "select",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 31,
+        "sampleMs": 18.326
+      },
+      {
+        "function": "resume",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/block-response-wait.ts",
+        "line": 64,
+        "sampleMs": 18.155
+      },
+      {
+        "function": "consumed",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/range-window.ts",
+        "line": 79,
+        "sampleMs": 18.096
+      },
+      {
+        "function": "progress",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/block-response-wait.ts",
+        "line": 45,
+        "sampleMs": 17.168
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/race.ts",
+        "line": 42,
+        "sampleMs": 13.951
+      },
+      {
+        "function": "#fill",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/range-window.ts",
+        "line": 93,
+        "sampleMs": 13.77
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/range-window.ts",
+        "line": 56,
+        "sampleMs": 13.77
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/range-window.ts",
+        "line": 24,
+        "sampleMs": 13.77
+      },
+      {
+        "function": "suspend",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/block-response-wait.ts",
+        "line": 60,
+        "sampleMs": 11.753
+      },
+      {
+        "function": "exploratoryWork",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 12,
+        "sampleMs": 8.609
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 7.61
+      },
+      {
+        "function": "ContentRaceWon",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/race.ts",
+        "line": 4,
+        "sampleMs": 7.514
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 16,
+        "sampleMs": 5.365
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 5.365
+      },
+      {
+        "function": "demandBytes",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 3,
+        "sampleMs": 4.394
+      },
+      {
+        "function": "receive",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/receive-window.ts",
+        "line": 86,
+        "sampleMs": 3.245
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:64060/src/content/scheduling/selection.ts",
+        "line": 9,
+        "sampleMs": 3.228
+      }
+    ],
+    "native": {
+      "first": {
+        "buffered": 696679,
+        "cpu": {
+          "kernel": 0.03125,
+          "user": 0.09375
+        },
+        "loss": {
+          "ackTimeouts": 0,
+          "fastRetransmissions": 0,
+          "packetsReceived": 567,
+          "packetsSent": 1336,
+          "t3Timeouts": 0
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 65378,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "2499949233",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 55963,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654621697,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.0139153295721261,
+          "congestionWindow": 1018217,
+          "receiverWindow": 3997553,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 1561192,
+          "bytesReceived": 16808
+        },
+        "state": "connected",
+        "time": 1792654621697
+      },
+      "last": {
+        "buffered": 849648,
+        "cpu": {
+          "kernel": 5.875,
+          "user": 3.671875
+        },
+        "loss": {
+          "ackTimeouts": 4,
+          "fastRetransmissions": 1,
+          "packetsReceived": 113969,
+          "packetsSent": 226231,
+          "t3Timeouts": 1
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 65378,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "2499949233",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 55963,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654636698,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.012443082015567614,
+          "congestionWindow": 521872,
+          "receiverWindow": 4194880,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 266179476,
+          "bytesReceived": 3223168
+        },
+        "state": "connected",
+        "time": 1792654636698
+      },
+      "sampleCount": 76,
+      "timeoutWindows": [
+        [
+          {
+            "time": 1792654624698,
+            "deltaMs": 200,
+            "sentBytes": 61192,
+            "buffered": 730949,
+            "cwnd": 2623929,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654624898,
+            "deltaMs": 200,
+            "sentBytes": 51688,
+            "buffered": 682813,
+            "cwnd": 2623929,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654625098,
+            "deltaMs": 200,
+            "sentBytes": 44560,
+            "buffered": 639317,
+            "cwnd": 2623929,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654625298,
+            "deltaMs": 200,
+            "sentBytes": 5356,
+            "buffered": 632357,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654625498,
+            "deltaMs": 200,
+            "sentBytes": 1188,
+            "buffered": 631781,
+            "cwnd": 1767,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654625698,
+            "deltaMs": 200,
+            "sentBytes": 2458576,
+            "buffered": 281280,
+            "cwnd": 1313852,
+            "t3Timeouts": 1
+          }
+        ]
+      ],
+      "bufferedMin": 265040,
+      "bufferedMedian": 728602.0,
+      "zeroBufferedSamples": 0,
+      "cwndMin": 1191,
+      "cwndMedian": 676254.5,
+      "rttMedian": 0.013611268440770923
+    }
+  },
+  {
+    "arm": "new",
+    "order": "2",
+    "report": ".tmp/webrtc-interleaved-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792654646212/report.json",
+    "MBps": 16.42661053146896,
+    "phases": {
+      "requestToFirstMedianMs": 66.05000001192093,
+      "lastFragmentToAuthMedianMs": 26.19999998807907,
+      "lastFragmentToAuthTotalMs": 7461.999999880791,
+      "betweenRecordsIdleMs": 0.8999999761581421,
+      "largestBetweenRecordsGaps": [
+        {
+          "from": 163.80000001192093,
+          "to": 164.69999998807907,
+          "ms": 0.8999999761581421
+        }
+      ]
+    },
+    "hotSelf": [
+      {
+        "function": "(idle)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 9080.403
+      },
+      {
+        "function": "equalBytes",
+        "url": "http://127.0.0.1:55227/src/crypto/bytes.ts",
+        "line": 5,
+        "sampleMs": 954.84
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 778.577
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 439.063
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 438.486
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 391.62
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 344.217
+      },
+      {
+        "function": "decodeFragmentMessage",
+        "url": "http://127.0.0.1:55227/src/session/v2-message.ts",
+        "line": 249,
+        "sampleMs": 325.762
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 321.376
+      },
+      {
+        "function": "open",
+        "url": "http://127.0.0.1:55227/src/session/v2-envelope.ts",
+        "line": 76,
+        "sampleMs": 209.521
+      },
+      {
+        "function": "accept",
+        "url": "http://127.0.0.1:55227/src/content/v2-flow.ts",
+        "line": 39,
+        "sampleMs": 188.353
+      },
+      {
+        "function": "verifyV2SenderControl",
+        "url": "http://127.0.0.1:55227/src/session/v2-message.ts",
+        "line": 125,
+        "sampleMs": 171.577
+      },
+      {
+        "function": "snapshotBinaryMessage",
+        "url": "http://127.0.0.1:55227/src/transport/webrtc/channel.ts",
+        "line": 460,
+        "sampleMs": 171.057
+      },
+      {
+        "function": "decodeFragment",
+        "url": "http://127.0.0.1:55227/src/content/v2-flow.ts",
+        "line": 239,
+        "sampleMs": 168.617
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:55227/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 156.098
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:55227/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 154.969
+      },
+      {
+        "function": "write",
+        "url": "",
+        "line": 0,
+        "sampleMs": 139.935
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:55227/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 135.202
+      },
+      {
+        "function": "decodeBlock",
+        "url": "http://127.0.0.1:55227/src/content/v2-records.ts",
+        "line": 81,
+        "sampleMs": 125.205
+      },
+      {
+        "function": "transferMissingRange",
+        "url": "http://127.0.0.1:55227/src/transfer/job/file-transfer.ts",
+        "line": 348,
+        "sampleMs": 119.184
+      },
+      {
+        "function": "requireBytes",
+        "url": "http://127.0.0.1:55227/src/protocol/cbor.ts",
+        "line": 74,
+        "sampleMs": 115.839
+      },
+      {
+        "function": "concat",
+        "url": "http://127.0.0.1:55227/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-beGPPG/vite-cache/deps/cborg.js?v=6041f4d9",
+        "line": 186,
+        "sampleMs": 111.381
+      },
+      {
+        "function": "copyRecord",
+        "url": "http://127.0.0.1:55227/src/content/v2-broker.ts",
+        "line": 382,
+        "sampleMs": 104.045
+      },
+      {
+        "function": "toToken$3",
+        "url": "http://127.0.0.1:55227/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-beGPPG/vite-cache/deps/cborg.js?v=6041f4d9",
+        "line": 692,
+        "sampleMs": 102.43
+      },
+      {
+        "function": "writeRange",
+        "url": "http://127.0.0.1:55227/src/output/streams/single-file.ts?import",
+        "line": 79,
+        "sampleMs": 94.054
+      }
+    ],
+    "schedulingInclusive": [
+      {
+        "function": "",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 71,
+        "sampleMs": 192.5
+      },
+      {
+        "function": "#drain",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 76,
+        "sampleMs": 191.438
+      },
+      {
+        "function": "#select",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 95,
+        "sampleMs": 130.463
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/race.ts",
+        "line": 69,
+        "sampleMs": 81.245
+      },
+      {
+        "function": "select",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/selection.ts",
+        "line": 31,
+        "sampleMs": 54.574
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 99,
+        "sampleMs": 41.823
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/race.ts",
+        "line": 16,
+        "sampleMs": 38.801
+      },
+      {
+        "function": "raceContent",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/race.ts",
+        "line": 14,
+        "sampleMs": 38.801
+      },
+      {
+        "function": "exploratoryWork",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/selection.ts",
+        "line": 12,
+        "sampleMs": 29.581
+      },
+      {
+        "function": "consumed",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/range-window.ts",
+        "line": 80,
+        "sampleMs": 19.194
+      },
+      {
+        "function": "#fill",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/range-window.ts",
+        "line": 93,
+        "sampleMs": 15.986
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/selection.ts",
+        "line": 16,
+        "sampleMs": 15.62
+      },
+      {
+        "function": "get priority",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 47,
+        "sampleMs": 15.077
+      },
+      {
+        "function": "resume",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/block-response-wait.ts",
+        "line": 64,
+        "sampleMs": 15.014
+      },
+      {
+        "function": "#commit",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/admission.ts",
+        "line": 107,
+        "sampleMs": 15.002
+      },
+      {
+        "function": "receive",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/receive-window.ts",
+        "line": 69,
+        "sampleMs": 13.764
+      },
+      {
+        "function": "suspend",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/block-response-wait.ts",
+        "line": 60,
+        "sampleMs": 12.895
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 11.675
+      },
+      {
+        "function": "progress",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/block-response-wait.ts",
+        "line": 45,
+        "sampleMs": 8.551
+      },
+      {
+        "function": "#changed",
+        "url": "http://127.0.0.1:55227/src/content/scheduling/receive-window.ts",
+        "line": 43,
+        "sampleMs": 8.45
+      }
+    ],
+    "native": {
+      "first": {
+        "buffered": 943600,
+        "cpu": {
+          "kernel": 0.09375,
+          "user": 0.078125
+        },
+        "loss": {
+          "ackTimeouts": 0,
+          "fastRetransmissions": 0,
+          "packetsReceived": 1201,
+          "packetsSent": 2787,
+          "t3Timeouts": 0
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 55880,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "1647856542",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 41704,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654652811,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.01662550257886132,
+          "congestionWindow": 1680537,
+          "receiverWindow": 3735552,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 3269220,
+          "bytesReceived": 34768
+        },
+        "state": "connected",
+        "time": 1792654652811
+      },
+      "last": {
+        "buffered": 711616,
+        "cpu": {
+          "kernel": 5.265625,
+          "user": 3.421875
+        },
+        "loss": {
+          "ackTimeouts": 9,
+          "fastRetransmissions": 2,
+          "packetsReceived": 113757,
+          "packetsSent": 226325,
+          "t3Timeouts": 1
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 55880,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "1647856542",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 41704,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654668412,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.012840365149729633,
+          "congestionWindow": 401477,
+          "receiverWindow": 4307976,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 266290500,
+          "bytesReceived": 3214644
+        },
+        "state": "connected",
+        "time": 1792654668412
+      },
+      "sampleCount": 79,
+      "timeoutWindows": [
+        [
+          {
+            "time": 1792654656212,
+            "deltaMs": 200,
+            "sentBytes": 42184,
+            "buffered": 753368,
+            "cwnd": 2626672,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654656412,
+            "deltaMs": 200,
+            "sentBytes": 51688,
+            "buffered": 702912,
+            "cwnd": 2626672,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654656611,
+            "deltaMs": 199,
+            "sentBytes": 35640,
+            "buffered": 668112,
+            "cwnd": 2626672,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654656812,
+            "deltaMs": 201,
+            "sentBytes": 33284,
+            "buffered": 633896,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654657011,
+            "deltaMs": 199,
+            "sentBytes": 1188,
+            "buffered": 633320,
+            "cwnd": 1767,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654657212,
+            "deltaMs": 201,
+            "sentBytes": 2376,
+            "buffered": 632160,
+            "cwnd": 2927,
+            "t3Timeouts": 1
+          }
+        ]
+      ],
+      "bufferedMin": 266200,
+      "bufferedMedian": 797564,
+      "zeroBufferedSamples": 0,
+      "cwndMin": 1191,
+      "cwndMedian": 683317,
+      "rttMedian": 0.015436766079128137
+    }
+  },
+  {
+    "arm": "new",
+    "order": "3",
+    "report": ".tmp/webrtc-interleaved-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792654677882/report.json",
+    "MBps": 15.489371563116446,
+    "phases": {
+      "requestToFirstMedianMs": 66.35000002384186,
+      "lastFragmentToAuthMedianMs": 25.69999998807907,
+      "lastFragmentToAuthTotalMs": 6954.500000059605,
+      "betweenRecordsIdleMs": 44.70000007748604,
+      "largestBetweenRecordsGaps": [
+        {
+          "from": 15566.09999999404,
+          "to": 15586.5,
+          "ms": 20.400000005960464
+        },
+        {
+          "from": 16064.299999982119,
+          "to": 16074.40000000596,
+          "ms": 10.100000023841858
+        },
+        {
+          "from": 4195.299999982119,
+          "to": 4205.0999999940395,
+          "ms": 9.800000011920929
+        },
+        {
+          "from": 4230.299999982119,
+          "to": 4233.5,
+          "ms": 3.2000000178813934
+        },
+        {
+          "from": 3516.0999999940395,
+          "to": 3516.9000000059605,
+          "ms": 0.800000011920929
+        },
+        {
+          "from": 16080.299999982119,
+          "to": 16080.699999988079,
+          "ms": 0.4000000059604645
+        }
+      ]
+    },
+    "hotSelf": [
+      {
+        "function": "(idle)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 10009.026
+      },
+      {
+        "function": "equalBytes",
+        "url": "http://127.0.0.1:56486/src/crypto/bytes.ts",
+        "line": 5,
+        "sampleMs": 888.52
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 855.815
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 441.277
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 410.703
+      },
+      {
+        "function": "decodeFragmentMessage",
+        "url": "http://127.0.0.1:56486/src/session/v2-message.ts",
+        "line": 249,
+        "sampleMs": 387.579
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 382.356
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 357.852
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 334.393
+      },
+      {
+        "function": "open",
+        "url": "http://127.0.0.1:56486/src/session/v2-envelope.ts",
+        "line": 76,
+        "sampleMs": 203.324
+      },
+      {
+        "function": "accept",
+        "url": "http://127.0.0.1:56486/src/content/v2-flow.ts",
+        "line": 39,
+        "sampleMs": 189.254
+      },
+      {
+        "function": "verifyV2SenderControl",
+        "url": "http://127.0.0.1:56486/src/session/v2-message.ts",
+        "line": 125,
+        "sampleMs": 187.954
+      },
+      {
+        "function": "decodeFragment",
+        "url": "http://127.0.0.1:56486/src/content/v2-flow.ts",
+        "line": 239,
+        "sampleMs": 176.368
+      },
+      {
+        "function": "snapshotBinaryMessage",
+        "url": "http://127.0.0.1:56486/src/transport/webrtc/channel.ts",
+        "line": 460,
+        "sampleMs": 174.028
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:56486/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 154.142
+      },
+      {
+        "function": "write",
+        "url": "",
+        "line": 0,
+        "sampleMs": 147.161
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:56486/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 143.832
+      },
+      {
+        "function": "transferMissingRange",
+        "url": "http://127.0.0.1:56486/src/transfer/job/file-transfer.ts",
+        "line": 348,
+        "sampleMs": 125.873
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:56486/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 122.291
+      },
+      {
+        "function": "requireBytes",
+        "url": "http://127.0.0.1:56486/src/protocol/cbor.ts",
+        "line": 74,
+        "sampleMs": 121.743
+      },
+      {
+        "function": "decodeBlock",
+        "url": "http://127.0.0.1:56486/src/content/v2-records.ts",
+        "line": 81,
+        "sampleMs": 100.581
+      },
+      {
+        "function": "copyRecord",
+        "url": "http://127.0.0.1:56486/src/content/v2-broker.ts",
+        "line": 382,
+        "sampleMs": 96.423
+      },
+      {
+        "function": "concat",
+        "url": "http://127.0.0.1:56486/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-w9G89D/vite-cache/deps/cborg.js?v=803a6798",
+        "line": 186,
+        "sampleMs": 96.396
+      },
+      {
+        "function": "toToken$3",
+        "url": "http://127.0.0.1:56486/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-w9G89D/vite-cache/deps/cborg.js?v=803a6798",
+        "line": 692,
+        "sampleMs": 90.087
+      },
+      {
+        "function": "writeRange",
+        "url": "http://127.0.0.1:56486/src/output/streams/single-file.ts?import",
+        "line": 79,
+        "sampleMs": 84.788
+      }
+    ],
+    "schedulingInclusive": [
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 71,
+        "sampleMs": 215.911
+      },
+      {
+        "function": "#drain",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 76,
+        "sampleMs": 213.733
+      },
+      {
+        "function": "#select",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 95,
+        "sampleMs": 153.263
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/race.ts",
+        "line": 69,
+        "sampleMs": 72.065
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 99,
+        "sampleMs": 60.95
+      },
+      {
+        "function": "select",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/selection.ts",
+        "line": 31,
+        "sampleMs": 52.652
+      },
+      {
+        "function": "raceContent",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/race.ts",
+        "line": 14,
+        "sampleMs": 46.321
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/race.ts",
+        "line": 16,
+        "sampleMs": 45.264
+      },
+      {
+        "function": "exploratoryWork",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/selection.ts",
+        "line": 12,
+        "sampleMs": 31.753
+      },
+      {
+        "function": "consumed",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/range-window.ts",
+        "line": 80,
+        "sampleMs": 26.693
+      },
+      {
+        "function": "#fill",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/range-window.ts",
+        "line": 93,
+        "sampleMs": 23.591
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/selection.ts",
+        "line": 16,
+        "sampleMs": 21.042
+      },
+      {
+        "function": "resume",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/block-response-wait.ts",
+        "line": 64,
+        "sampleMs": 19.278
+      },
+      {
+        "function": "suspend",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/block-response-wait.ts",
+        "line": 60,
+        "sampleMs": 18.209
+      },
+      {
+        "function": "get priority",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 47,
+        "sampleMs": 15.207
+      },
+      {
+        "function": "receive",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/receive-window.ts",
+        "line": 69,
+        "sampleMs": 15.018
+      },
+      {
+        "function": "progress",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/block-response-wait.ts",
+        "line": 45,
+        "sampleMs": 9.681
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 9.676
+      },
+      {
+        "function": "#commit",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/admission.ts",
+        "line": 107,
+        "sampleMs": 8.716
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:56486/src/content/scheduling/race.ts",
+        "line": 42,
+        "sampleMs": 8.616
+      }
+    ],
+    "native": {
+      "first": {
+        "buffered": 364216,
+        "cpu": {
+          "kernel": 0.046875,
+          "user": 0.109375
+        },
+        "loss": {
+          "ackTimeouts": 1,
+          "fastRetransmissions": 0,
+          "packetsReceived": 1057,
+          "packetsSent": 2161,
+          "t3Timeouts": 2
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 58518,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "183903761",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 56257,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654687264,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.005115400506696845,
+          "congestionWindow": 76069,
+          "receiverWindow": 4613616,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 2531956,
+          "bytesReceived": 30688
+        },
+        "state": "connected",
+        "time": 1792654687264
+      },
+      "last": {
+        "buffered": 660576,
+        "cpu": {
+          "kernel": 5.671875,
+          "user": 3.9375
+        },
+        "loss": {
+          "ackTimeouts": 10,
+          "fastRetransmissions": 0,
+          "packetsReceived": 112996,
+          "packetsSent": 225379,
+          "t3Timeouts": 2
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 58518,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "183903761",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 56257,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654700464,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.015365288942772134,
+          "congestionWindow": 558439,
+          "receiverWindow": 4100928,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 265180732,
+          "bytesReceived": 3189640
+        },
+        "state": "connected",
+        "time": 1792654700464
+      },
+      "sampleCount": 67,
+      "timeoutWindows": [
+        [
+          {
+            "time": 1792654684064,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 4380,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654684264,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 4380,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654684464,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 4380,
+            "t3Timeouts": 0
+          },
+          {
+            "time": 1792654684664,
+            "deltaMs": 200,
+            "sentBytes": 1188,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654684864,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654685064,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          }
+        ],
+        [
+          {
+            "time": 1792654686064,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654686264,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654686464,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 1
+          },
+          {
+            "time": 1792654686664,
+            "deltaMs": 200,
+            "sentBytes": 1188,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 2
+          },
+          {
+            "time": 1792654686864,
+            "deltaMs": 200,
+            "sentBytes": 0,
+            "buffered": 1048576,
+            "cwnd": 1191,
+            "t3Timeouts": 2
+          },
+          {
+            "time": 1792654687064,
+            "deltaMs": 200,
+            "sentBytes": 624440,
+            "buffered": 448312,
+            "cwnd": 37957,
+            "t3Timeouts": 2
+          }
+        ]
+      ],
+      "bufferedMin": 220005,
+      "bufferedMedian": 607800,
+      "zeroBufferedSamples": 0,
+      "cwndMin": 76069,
+      "cwndMedian": 448852,
+      "rttMedian": 0.01405114063159473
+    }
+  },
+  {
+    "arm": "old",
+    "order": "4",
+    "report": ".tmp/webrtc-interleaved-20261022/runs/slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792654709789/report.json",
+    "MBps": 19.73674019173613,
+    "phases": {
+      "requestToFirstMedianMs": 65.54999999701977,
+      "lastFragmentToAuthMedianMs": 24.30000001192093,
+      "lastFragmentToAuthTotalMs": 6691.300000041723,
+      "betweenRecordsIdleMs": 11.800000011920929,
+      "largestBetweenRecordsGaps": [
+        {
+          "from": 1088.0,
+          "to": 1094.300000011921,
+          "ms": 6.300000011920929
+        },
+        {
+          "from": 142.10000002384186,
+          "to": 147.60000002384186,
+          "ms": 5.5
+        }
+      ]
+    },
+    "hotSelf": [
+      {
+        "function": "(idle)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 6562.476
+      },
+      {
+        "function": "equalBytes",
+        "url": "http://127.0.0.1:62811/src/crypto/bytes.ts",
+        "line": 5,
+        "sampleMs": 943.594
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 740.676
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 439.842
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 437.389
+      },
+      {
+        "function": "decrypt",
+        "url": "",
+        "line": 0,
+        "sampleMs": 415.054
+      },
+      {
+        "function": "digest",
+        "url": "",
+        "line": 0,
+        "sampleMs": 383.716
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "line": 0,
+        "sampleMs": 317.849
+      },
+      {
+        "function": "decodeFragmentMessage",
+        "url": "http://127.0.0.1:62811/src/session/v2-message.ts",
+        "line": 249,
+        "sampleMs": 299.045
+      },
+      {
+        "function": "open",
+        "url": "http://127.0.0.1:62811/src/session/v2-envelope.ts",
+        "line": 76,
+        "sampleMs": 214.526
+      },
+      {
+        "function": "accept",
+        "url": "http://127.0.0.1:62811/src/content/v2-flow.ts",
+        "line": 39,
+        "sampleMs": 184.203
+      },
+      {
+        "function": "decodeFragment",
+        "url": "http://127.0.0.1:62811/src/content/v2-flow.ts",
+        "line": 239,
+        "sampleMs": 175.67
+      },
+      {
+        "function": "verifyV2SenderControl",
+        "url": "http://127.0.0.1:62811/src/session/v2-message.ts",
+        "line": 125,
+        "sampleMs": 172.954
+      },
+      {
+        "function": "snapshotBinaryMessage",
+        "url": "http://127.0.0.1:62811/src/transport/webrtc/channel.ts",
+        "line": 460,
+        "sampleMs": 170.469
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:62811/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 169.445
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:62811/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 165.044
+      },
+      {
+        "function": "copyBytes",
+        "url": "http://127.0.0.1:62811/src/crypto/bytes.ts",
+        "line": 2,
+        "sampleMs": 150.549
+      },
+      {
+        "function": "readRouteAuthorizedRange",
+        "url": "http://127.0.0.1:62811/src/content/v2-broker.ts",
+        "line": 108,
+        "sampleMs": 126.519
+      },
+      {
+        "function": "concat",
+        "url": "http://127.0.0.1:62811/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-4yxdrR/vite-cache/deps/cborg.js?v=a2ea60b7",
+        "line": 186,
+        "sampleMs": 123.518
+      },
+      {
+        "function": "decodeBlock",
+        "url": "http://127.0.0.1:62811/src/content/v2-records.ts",
+        "line": 81,
+        "sampleMs": 122.505
+      },
+      {
+        "function": "write",
+        "url": "",
+        "line": 0,
+        "sampleMs": 121.193
+      },
+      {
+        "function": "writeRange",
+        "url": "http://127.0.0.1:62811/src/output/streams/single-file.ts?import",
+        "line": 79,
+        "sampleMs": 116.754
+      },
+      {
+        "function": "requireBytes",
+        "url": "http://127.0.0.1:62811/src/protocol/cbor.ts",
+        "line": 74,
+        "sampleMs": 112.708
+      },
+      {
+        "function": "toToken$3",
+        "url": "http://127.0.0.1:62811/@fs/C:/Users/lab/AppData/Local/Temp/windshare-browser-direct-4yxdrR/vite-cache/deps/cborg.js?v=a2ea60b7",
+        "line": 692,
+        "sampleMs": 105.822
+      },
+      {
+        "function": "transferMissingRange",
+        "url": "http://127.0.0.1:62811/src/transfer/job/file-transfer.ts",
+        "line": 348,
+        "sampleMs": 102.79
+      }
+    ],
+    "schedulingInclusive": [
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/race.ts",
+        "line": 69,
+        "sampleMs": 42.694
+      },
+      {
+        "function": "resume",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/block-response-wait.ts",
+        "line": 64,
+        "sampleMs": 33.416
+      },
+      {
+        "function": "consumed",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/range-window.ts",
+        "line": 79,
+        "sampleMs": 21.472
+      },
+      {
+        "function": "select",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/selection.ts",
+        "line": 31,
+        "sampleMs": 20.35
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/range-window.ts",
+        "line": 24,
+        "sampleMs": 19.28
+      },
+      {
+        "function": "suspend",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/block-response-wait.ts",
+        "line": 60,
+        "sampleMs": 19.257
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/range-window.ts",
+        "line": 56,
+        "sampleMs": 18.191
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/race.ts",
+        "line": 16,
+        "sampleMs": 16.129
+      },
+      {
+        "function": "raceContent",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/race.ts",
+        "line": 14,
+        "sampleMs": 16.129
+      },
+      {
+        "function": "#fill",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/range-window.ts",
+        "line": 93,
+        "sampleMs": 16.058
+      },
+      {
+        "function": "progress",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/block-response-wait.ts",
+        "line": 45,
+        "sampleMs": 14.005
+      },
+      {
+        "function": "exploratoryWork",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/selection.ts",
+        "line": 12,
+        "sampleMs": 8.559
+      },
+      {
+        "function": "close",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/block-response-wait.ts",
+        "line": 84,
+        "sampleMs": 7.465
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/race.ts",
+        "line": 42,
+        "sampleMs": 7.464
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 6.449
+      },
+      {
+        "function": "close",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/deadlines.ts",
+        "line": 14,
+        "sampleMs": 5.352
+      },
+      {
+        "function": "ContentRaceWon",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/race.ts",
+        "line": 4,
+        "sampleMs": 5.31
+      },
+      {
+        "function": "distance",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/range-window.ts",
+        "line": 101,
+        "sampleMs": 4.393
+      },
+      {
+        "function": "orderedContentLanes",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/selection.ts",
+        "line": 7,
+        "sampleMs": 4.287
+      },
+      {
+        "function": "",
+        "url": "http://127.0.0.1:62811/src/content/scheduling/selection.ts",
+        "line": 16,
+        "sampleMs": 4.271
+      }
+    ],
+    "native": {
+      "first": {
+        "buffered": 936640,
+        "cpu": {
+          "kernel": 0.28125,
+          "user": 0.265625
+        },
+        "loss": {
+          "ackTimeouts": 0,
+          "fastRetransmissions": 0,
+          "packetsReceived": 2033,
+          "packetsSent": 4190,
+          "t3Timeouts": 0
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 62252,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "1135549079",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 55540,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654715989,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.01366973139424601,
+          "congestionWindow": 2017064,
+          "receiverWindow": 3735552,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 4920224,
+          "bytesReceived": 58136
+        },
+        "state": "connected",
+        "time": 1792654715989
+      },
+      "last": {
+        "buffered": 875887,
+        "cpu": {
+          "kernel": 5.390625,
+          "user": 3.8125
+        },
+        "loss": {
+          "ackTimeouts": 3,
+          "fastRetransmissions": 1,
+          "packetsReceived": 114217,
+          "packetsSent": 226714,
+          "t3Timeouts": 0
+        },
+        "pair": {
+          "Local": {
+            "foundation": "2122493302",
+            "priority": 2130705919,
+            "address": "192.0.2.234",
+            "protocol": 1,
+            "port": 62252,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          },
+          "Remote": {
+            "foundation": "1135549079",
+            "priority": 2122063615,
+            "address": "192.0.2.105",
+            "protocol": 1,
+            "port": 55540,
+            "type": "host",
+            "component": 1,
+            "relatedAddress": "",
+            "relatedPort": 0,
+            "tcpType": "",
+            "sdpMid": "",
+            "sdpMLineIndex": 0
+          }
+        },
+        "sctp": {
+          "timestamp": 1792654728789,
+          "type": "sctp-transport",
+          "id": "sctpTransport",
+          "transportId": "",
+          "smoothedRoundTripTime": 0.012479985663503375,
+          "congestionWindow": 403412,
+          "receiverWindow": 4274193,
+          "mtu": 1191,
+          "unackData": 0,
+          "metadata": {
+            "messageInterleavingEnabled": false,
+            "partialReliabilityMode": "forward-tsn",
+            "zeroChecksumSendingEnabled": false,
+            "zeroChecksumReceivingEnabled": false
+          },
+          "bytesSent": 266758688,
+          "bytesReceived": 3230968
+        },
+        "state": "connected",
+        "time": 1792654728789
+      },
+      "sampleCount": 65,
+      "timeoutWindows": [],
+      "bufferedMin": 277800,
+      "bufferedMedian": 750615,
+      "zeroBufferedSamples": 0,
+      "cwndMin": 309323,
+      "cwndMedian": 605670,
+      "rttMedian": 0.012871888291325906
+    }
+  }
+]

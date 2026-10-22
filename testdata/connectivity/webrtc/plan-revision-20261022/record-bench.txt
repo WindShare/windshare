@@ -1,0 +1,18 @@
+goos: windows
+goarch: amd64
+pkg: github.com/windshare/windshare/core/content/records
+cpu: Intel(R) Core(TM) i7-14700KF
+BenchmarkFileLocalBlock/block_bytes=0001024-28         	    3428	     61339 ns/op	  16.69 MB/s	         1.000 file-local-blocks/op	       163.0 record-overhead-bytes/op	      1187 sealed-bytes/op	   23329 B/op	     190 allocs/op
+BenchmarkFileLocalBlock/block_bytes=0001024-28         	    4028	     63579 ns/op	  16.11 MB/s	         1.000 file-local-blocks/op	       163.0 record-overhead-bytes/op	      1187 sealed-bytes/op	   23327 B/op	     190 allocs/op
+BenchmarkFileLocalBlock/block_bytes=0001024-28         	    4094	     66181 ns/op	  15.47 MB/s	         1.000 file-local-blocks/op	       163.0 record-overhead-bytes/op	      1187 sealed-bytes/op	   23323 B/op	     190 allocs/op
+BenchmarkFileLocalBlock/block_bytes=0065536-28         	     637	    366510 ns/op	 178.81 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	     65701 sealed-bytes/op	  621240 B/op	     195 allocs/op
+BenchmarkFileLocalBlock/block_bytes=0065536-28         	     571	    587153 ns/op	 111.62 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	     65701 sealed-bytes/op	  623779 B/op	     195 allocs/op
+BenchmarkFileLocalBlock/block_bytes=0065536-28         	     385	    552380 ns/op	 118.64 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	     65701 sealed-bytes/op	  620508 B/op	     195 allocs/op
+BenchmarkFileLocalBlock/block_bytes=1048576-28         	      58	   4020705 ns/op	 260.79 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   1048741 sealed-bytes/op	11312612 B/op	     213 allocs/op
+BenchmarkFileLocalBlock/block_bytes=1048576-28         	      78	   4590053 ns/op	 228.45 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   1048741 sealed-bytes/op	10947851 B/op	     211 allocs/op
+BenchmarkFileLocalBlock/block_bytes=1048576-28         	      82	   3644882 ns/op	 287.68 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   1048741 sealed-bytes/op	10863813 B/op	     210 allocs/op
+BenchmarkFileLocalBlock/block_bytes=4194304-28         	      21	  10527148 ns/op	 398.43 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   4194469 sealed-bytes/op	42640953 B/op	     210 allocs/op
+BenchmarkFileLocalBlock/block_bytes=4194304-28         	      20	  11573790 ns/op	 362.40 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   4194469 sealed-bytes/op	42459910 B/op	     212 allocs/op
+BenchmarkFileLocalBlock/block_bytes=4194304-28         	      22	  10173791 ns/op	 412.27 MB/s	         1.000 file-local-blocks/op	       165.0 record-overhead-bytes/op	   4194469 sealed-bytes/op	41089942 B/op	     214 allocs/op
+PASS
+ok  	github.com/windshare/windshare/core/content/records	3.169s
