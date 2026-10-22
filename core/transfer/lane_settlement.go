@@ -292,7 +292,7 @@ func (s *LaneSet) Stop() {
 		}
 		clear(s.lanes)
 		clear(s.contentSuspensions)
-		s.notifyAvailabilityLocked()
+		s.notifyLaneAvailabilityLocked()
 	}
 	s.mu.Unlock()
 	s.stop()
@@ -412,8 +412,9 @@ func (s *LaneSet) fetchLane(
 	}
 	record, fetchErr := state.lane.FetchBlock(ctx, demand, func(bytes uint64) {
 		s.mu.Lock()
-		admission.permit.Receive(bytes, s.now())
-		s.notifyAvailabilityLocked()
+		if admission.permit.Receive(bytes, s.now()) {
+			s.notifyAdmissionChangedLocked()
+		}
 		s.mu.Unlock()
 	})
 	if fetchErr == nil {
@@ -430,7 +431,9 @@ func (s *LaneSet) fetchLane(
 	}
 	admission.permit.Close()
 	state.performance.Complete(s.now(), bytes, fetchErr == nil)
-	s.notifyAvailabilityLocked()
+	// Completion can change preferred-lane ordering even if receipt capacity
+	// was already available; capacity-only edge notifications cannot replace it.
+	s.notifyAdmissionChangedLocked()
 	s.mu.Unlock()
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
@@ -598,7 +601,7 @@ func (s *LaneSet) SuspendContent(identity LaneIdentity) (*ContentLaneSuspension,
 	}
 	policy := &contentLaneSuspensionPolicy{laneID: identity.ID}
 	s.contentSuspensions[identity.ID] = policy
-	s.notifyAvailabilityLocked()
+	s.notifyLaneAvailabilityLocked()
 	return &ContentLaneSuspension{lanes: s, policy: policy}, nil
 }
 
@@ -623,7 +626,7 @@ func (suspension *ContentLaneSuspension) Resume() error {
 	}
 	suspension.policy.resumed = true
 	delete(lanes.contentSuspensions, suspension.policy.laneID)
-	lanes.notifyAvailabilityLocked()
+	lanes.notifyLaneAvailabilityLocked()
 	return nil
 }
 

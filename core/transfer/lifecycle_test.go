@@ -200,7 +200,7 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 			t.Fatalf("pending hedge lost ownership: broker=%d process=%d", broker.UsedBytes(), process.Used())
 		}
 		lanes.mu.Lock()
-		closedSignal := lanes.availabilityChanged
+		closedSignal := lanes.admissionChanged
 		lanes.mu.Unlock()
 
 		firstCloseDone := make(chan struct{})
