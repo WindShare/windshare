@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { capture, expectNoHorizontalOverflow, galleryEvidence, GALLERY_PATH, showScenario } from './assertions'
+import { holdVideoPresentation } from './video-presentation'
 
 interface VideoGallery {
   windshareHoldVideoSeeks(): void
@@ -60,6 +61,7 @@ for (const viewport of [{ width: 1024, height: 900 }, { width: 360, height: 740 
       await route.fulfill({ status: 206, body: Buffer.from(segment.bytes), contentType: segment.type,
         headers: { 'Accept-Ranges': 'bytes', 'Content-Range': `bytes 0-${segment.bytes.length - 1}/${segment.bytes.length}` } })
     })
+    const presentation = await holdVideoPresentation(page, 0.1)
     try {
       const request = page.waitForRequest('**/held-video-segment')
       await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.1, '/held-video-segment'))
@@ -70,6 +72,11 @@ for (const viewport of [{ width: 1024, height: 900 }, { width: 360, height: 740 
       expect((await galleryEvidence(page)).intents).not.toContain('presented:3')
       await capture(page, 'video-seek-pending-' + viewport.width, true)
       deliver()
+      await expect.poll(async () => (await presentation.state()).seeked).toBe(true)
+      expect((await galleryEvidence(page)).intents).not.toContain('presented:3')
+      expect(await visibleFrame(page)).toEqual(original)
+      await expect.poll(async () => (await presentation.state()).frames).toBeGreaterThan(0)
+      await presentation.release()
       await expect.poll(async () => (await galleryEvidence(page)).intents).toContain('presented:3')
       await expect(page.locator('.preview-frame-status')).toHaveText('')
       const next = await visibleFrame(page)
@@ -83,6 +90,7 @@ for (const viewport of [{ width: 1024, height: 900 }, { width: 360, height: 740 
       await capture(page, 'video-seek-ready-' + viewport.width, true)
     } finally {
       deliver()
+      await presentation.release()
     }
   })
 }
@@ -102,7 +110,12 @@ test('keyboard seeks, cancelled drags and closing a pending frame keep their int
   await page.mouse.up()
   await expect(slider).toHaveValue('0.1')
   expect(await seeks(page)).toEqual(['seek:0.1'])
+  const presentation = await holdVideoPresentation(page, 0.1)
+  await page.evaluate(() => (window as unknown as VideoGallery).windshareCompleteVideoSeek(0.1))
+  await expect.poll(async () => (await presentation.state()).frames).toBeGreaterThan(0)
   await page.getByRole('button', { name: 'Close preview', exact: true }).click()
+  await presentation.release()
+  expect((await galleryEvidence(page)).intents).not.toContain('presented:3')
   await expect(page.getByRole('region', { name: 'File preview' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Preview a frame', exact: true })).toBeVisible()
 })
