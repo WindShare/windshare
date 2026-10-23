@@ -1,10 +1,10 @@
 package receive
 
 import (
-	"github.com/windshare/windshare/engine/internal/task"
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/engine/internal/task"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )

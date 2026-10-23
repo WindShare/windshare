@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestTargetConstructorsRejectInvalidNamespacesBeforeOpening(t *testing.T) {
@@ -50,7 +51,7 @@ func TestExactTargetCollisionIsOneFailFastAttempt(t *testing.T) {
 	openCalls := 0
 	recorder, err := OpenWithDependencies(mustExactTarget(t, "evidence.ndjson"), clievent.CommandShare, Config{}, Dependencies{
 		Clock:  fixedClock(),
-		Random: bytes.NewReader(bytes.Repeat([]byte{1}, clievent.IdentityBytes)),
+		Random: bytes.NewReader(bytes.Repeat([]byte{1}, appobs.IdentityBytes)),
 		EnsureDirectory: func(string) error {
 			t.Fatal("exact target attempted to prepare a directory")
 			return nil
@@ -163,11 +164,11 @@ func TestDirectoryTargetPreparationFailureStopsBeforeIdentityAndFileClaim(t *tes
 func TestDirectoryTargetCollisionExhaustionPreservesEverySibling(t *testing.T) {
 	directory := t.TempDir()
 	started := time.Date(2026, 8, 17, 2, 34, 56, 0, time.UTC)
-	randomValues := make([]byte, 0, directoryCreateAttempts*clievent.IdentityBytes)
+	randomValues := make([]byte, 0, directoryCreateAttempts*appobs.IdentityBytes)
 	wantContents := make(map[string]string, directoryCreateAttempts)
 	for attempt := 1; attempt <= directoryCreateAttempts; attempt++ {
 		value := byte(attempt)
-		randomValues = append(randomValues, bytes.Repeat([]byte{value}, clievent.IdentityBytes)...)
+		randomValues = append(randomValues, bytes.Repeat([]byte{value}, appobs.IdentityBytes)...)
 		path := directoryTracePath(directory, clievent.CommandShare, started, repeatedRunIdentity(value))
 		contents := "retained evidence " + repeatedRunID(value)
 		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -328,16 +329,16 @@ func TestDirectoryTargetConcurrentNativeOpensOwnDistinctFiles(t *testing.T) {
 }
 
 func identitySequence(values ...byte) *bytes.Reader {
-	raw := make([]byte, 0, len(values)*clievent.IdentityBytes)
+	raw := make([]byte, 0, len(values)*appobs.IdentityBytes)
 	for _, value := range values {
-		raw = append(raw, bytes.Repeat([]byte{value}, clievent.IdentityBytes)...)
+		raw = append(raw, bytes.Repeat([]byte{value}, appobs.IdentityBytes)...)
 	}
 	return bytes.NewReader(raw)
 }
 
 func repeatedRunIdentity(value byte) runIdentity {
 	var identity runIdentity
-	copy(identity[:], bytes.Repeat([]byte{value}, clievent.IdentityBytes))
+	copy(identity[:], bytes.Repeat([]byte{value}, appobs.IdentityBytes))
 	return identity
 }
 

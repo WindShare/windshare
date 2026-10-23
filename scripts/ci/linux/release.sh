@@ -174,6 +174,7 @@ fi
   go list ./...
   echo "-- core production dependency boundary (extracted module)"
   go run ./scripts/ci/_coreboundary
+  go run ./scripts/ci/_engineboundary
   echo "-- GOWORK=off go vet ./... (extracted module)"
   go vet ./...
   echo "-- GOWORK=off go build ./... (extracted module)"

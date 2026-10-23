@@ -46,9 +46,9 @@ func TestReceiverDoesNotRedialSessionThatStoppedDuringBackoff(t *testing.T) {
 	var unavailableAttempts atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Clock: clock, Receiver: liveshare.ReceiverConfig{Capability: capability},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL != unavailableEndpoint {
-				return relayv2.DialReceiver(ctx, config)
+				return relayset.DialReceiver(ctx, config)
 			}
 			if unavailableAttempts.Add(1) > 1 {
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
@@ -87,17 +87,17 @@ func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
 	const lateEndpoint = "late"
 	capability := share.Capability()
 	capability.Relays = append(capability.Relays, lateEndpoint)
-	late := make(chan *relayv2.ReceiverConnection, 1)
+	late := make(chan relayset.ReceiverConnection, 1)
 	dialCanceled := make(chan struct{})
 	var connected atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Receiver: liveshare.ReceiverConfig{Capability: capability},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL != lateEndpoint {
-				return relayv2.DialReceiver(ctx, config)
+				return relayset.DialReceiver(ctx, config)
 			}
 			config.RelayBaseURL = urls[0]
-			candidate, err := relayv2.DialReceiver(ctx, config)
+			candidate, err := relayset.DialReceiver(ctx, config)
 			if err != nil {
 				return nil, err
 			}
@@ -108,7 +108,7 @@ func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
 			// the owner still transfers cleanup responsibility to the relay set.
 			return candidate, nil
 		},
-		Connected: func(*relayv2.ReceiverConnection) { connected.Add(1) },
+		Connected: func(relayset.ReceiverConnection) { connected.Add(1) },
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestReauthorizationCommitsCredentialAndDetectsConcurrentCredentialImport(t *testing.T) {
@@ -23,7 +23,7 @@ func TestReauthorizationCommitsCredentialAndDetectsConcurrentCredentialImport(t 
 				settings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
 				config := relayconfig.Config{
 					FrontURL:     address,
-					Profiles:     []senderrelay.Candidate{{PublicURL: address, AccessKey: priorKey}},
+					Profiles:     []relayprofile.Candidate{{PublicURL: address, AccessKey: priorKey}},
 					ActiveRelays: []string{address},
 				}
 				if err := settings.Save(config); err != nil {

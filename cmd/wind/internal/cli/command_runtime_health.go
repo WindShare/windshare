@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -14,9 +15,9 @@ const (
 )
 
 type pendingProjectionRejection struct {
-	category   clievent.ObserverLossCategory
-	reason     clievent.ObserverLossReason
-	sample     clievent.ObservationRejection
+	category   appobs.ObserverLossCategory
+	reason     appobs.ObserverLossReason
+	sample     appobs.ObservationRejection
 	count      uint64
 	reported   bool
 	lastReport time.Time
@@ -24,7 +25,7 @@ type pendingProjectionRejection struct {
 
 // The table is allocated only on failure. IDs are samples, not signature keys,
 // so retries and new sessions cannot grow its memory or reset rate limiting.
-func (runtime *commandRuntime) ReportObservationRejection(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, sample clievent.ObservationRejection) bool {
+func (runtime *commandRuntime) ReportObservationRejection(category appobs.ObserverLossCategory, reason appobs.ObserverLossReason, sample appobs.ObservationRejection) bool {
 	if runtime == nil {
 		return false
 	}
@@ -48,7 +49,7 @@ func (runtime *commandRuntime) ReportObservationRejection(category clievent.Obse
 	return true
 }
 
-func (runtime *commandRuntime) recordProjectionRejectionLocked(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, sample clievent.ObservationRejection) {
+func (runtime *commandRuntime) recordProjectionRejectionLocked(category appobs.ObserverLossCategory, reason appobs.ObserverLossReason, sample appobs.ObservationRejection) {
 	for i := range runtime.projectionRejections {
 		entry := &runtime.projectionRejections[i]
 		if entry.category == category && entry.reason == reason &&
@@ -66,13 +67,13 @@ func (runtime *commandRuntime) recordProjectionRejectionLocked(category clievent
 	if len(runtime.projectionRejections) == maxProjectionRejectionSignatures-1 {
 		// The final slot accounts for additional signatures without evicting
 		// the original samples or allocating unbounded keys.
-		category, reason = clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract
-		sample = clievent.ObservationRejection{
+		category, reason = appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract
+		sample = appobs.ObservationRejection{
 			Event: "observation_rejection", Source: "cli.commandRuntime",
 			Stage: "overflow", Field: "rejection_signatures", Rule: "detail_capacity_exceeded",
 		}
 	}
-	sample = clievent.CaptureObservationRejection(sample, sample.Evidence()...)
+	sample = appobs.CaptureObservationRejection(sample, sample.Evidence()...)
 	runtime.projectionRejections = append(runtime.projectionRejections, pendingProjectionRejection{
 		category: category, reason: reason, sample: sample, count: 1,
 	})
@@ -94,8 +95,8 @@ func (runtime *commandRuntime) collectProjectionRejectionsLocked(final bool) uin
 		if i == maxProjectionRejectionSignatures-1 {
 			omittedSamples = entry.count
 		}
-		runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
-			Command: runtime.command, Category: entry.category, Reason: entry.reason,
+		runtime.enqueueObserverLossLocked(appobs.ObserverLossSpec{
+			Workflow: clievent.WorkflowForCommand(runtime.command), Category: entry.category, Reason: entry.reason,
 			Count: entry.count, Rejection: entry.sample, OmittedSamples: omittedSamples,
 		})
 		entry.count, entry.reported, entry.lastReport = 0, true, now
@@ -103,19 +104,19 @@ func (runtime *commandRuntime) collectProjectionRejectionsLocked(final bool) uin
 	return count
 }
 
-func (runtime *commandRuntime) enqueueObserverLossLocked(spec clievent.ObserverLossSpec) {
+func (runtime *commandRuntime) enqueueObserverLossLocked(spec appobs.ObserverLossSpec) {
 	if runtime.trace == nil {
 		return
 	}
 	if runtime.entrySequence == ^uint64(0) {
-		if spec.Rejection != (clievent.ObservationRejection{}) {
+		if spec.Rejection != (appobs.ObservationRejection{}) {
 			runtime.loseRejectionEvidenceLocked(spec.Count)
 		}
 		return
 	}
 	event, err := clievent.NewObserverLossObserved(spec)
 	if err != nil {
-		if spec.Rejection != (clievent.ObservationRejection{}) {
+		if spec.Rejection != (appobs.ObservationRejection{}) {
 			runtime.loseRejectionEvidenceLocked(spec.Count)
 		}
 		return
@@ -162,7 +163,7 @@ func (runtime *commandRuntime) traceRecordingEnabled() bool {
 // ReportObserverLoss accounts for facts dropped by a bounded producer adapter
 // before they could be offered to Observe. Recorder-local Record failures must not
 // be reported here because runtrace already owns those counters.
-func (runtime *commandRuntime) ReportObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) bool {
+func (runtime *commandRuntime) ReportObserverLoss(category appobs.ObserverLossCategory, reason appobs.ObserverLossReason, count uint64) bool {
 	if runtime == nil {
 		return false
 	}
@@ -182,7 +183,7 @@ func (runtime *commandRuntime) ReportObserverLoss(category clievent.ObserverLoss
 	return true
 }
 
-func (runtime *commandRuntime) ReportCumulativeObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, cumulative uint64) bool {
+func (runtime *commandRuntime) ReportCumulativeObserverLoss(category appobs.ObserverLossCategory, reason appobs.ObserverLossReason, cumulative uint64) bool {
 	if runtime == nil || cumulative == 0 {
 		return false
 	}
@@ -208,8 +209,8 @@ func (runtime *commandRuntime) ReportCumulativeObserverLoss(category clievent.Ob
 	return true
 }
 
-func (runtime *commandRuntime) addObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) {
-	if category > 0 && category < clievent.ObserverLossCategoryLimit && reason > 0 && reason < clievent.ObserverLossReasonLimit {
+func (runtime *commandRuntime) addObserverLoss(category appobs.ObserverLossCategory, reason appobs.ObserverLossReason, count uint64) {
+	if category > 0 && category < appobs.ObserverLossCategoryLimit && reason > 0 && reason < appobs.ObserverLossReasonLimit {
 		saturatingAtomicAdd(&runtime.pendingObserverLoss[category][reason], count)
 	}
 }
@@ -259,8 +260,8 @@ func (runtime *commandRuntime) collectPendingLossLocked(final bool) clievent.Tra
 		ProgressDrops:      runtime.pendingProgressLoss.Swap(0),
 		ContractRejections: runtime.collectProjectionRejectionsLocked(final),
 	}
-	for category := clievent.ObserverLossCategory(1); category < clievent.ObserverLossCategoryLimit; category++ {
-		for reason := clievent.ObserverLossReason(1); reason < clievent.ObserverLossReasonLimit; reason++ {
+	for category := appobs.ObserverLossCategory(1); category < appobs.ObserverLossCategoryLimit; category++ {
+		for reason := appobs.ObserverLossReason(1); reason < appobs.ObserverLossReasonLimit; reason++ {
 			count := runtime.pendingObserverLoss[category][reason].Swap(0)
 			if count == 0 {
 				continue
@@ -270,8 +271,8 @@ func (runtime *commandRuntime) collectPendingLossLocked(final bool) clievent.Tra
 			} else {
 				loss.LifecycleDrops = saturatingAdd(loss.LifecycleDrops, count)
 			}
-			runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
-				Command: runtime.command, Category: category, Reason: reason, Count: count,
+			runtime.enqueueObserverLossLocked(appobs.ObserverLossSpec{
+				Workflow: clievent.WorkflowForCommand(runtime.command), Category: category, Reason: reason, Count: count,
 			})
 		}
 	}

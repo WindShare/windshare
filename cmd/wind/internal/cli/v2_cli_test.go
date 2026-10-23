@@ -3,8 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -17,15 +15,13 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/internal/testrun"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 func TestParseInterleavedV2Flags(t *testing.T) {
@@ -143,7 +139,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int, stopO
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
 		processTrace: privateTrace,
 		engineConfig: engine.Config{Share: engine.ShareDependencies{
-			Relays: func(context.Context, []string, relayset.SenderFactory) (engine.ShareRelays, error) {
+			Relays: func(context.Context, []relayprofile.Candidate) (engine.ShareRelays, error) {
 				return relays, nil
 			},
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
@@ -237,7 +233,7 @@ type cliShareRelays struct {
 	cleanupError   error
 }
 
-func (relays *cliShareRelays) Accept(ctx context.Context) (*relayv2.Channel, error) {
+func (relays *cliShareRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -246,10 +242,9 @@ func (relays *cliShareRelays) Accept(ctx context.Context) (*relayv2.Channel, err
 	}
 }
 
-func (*cliShareRelays) WaitReady(context.Context) error                       { return nil }
-func (*cliShareRelays) ReadyRelayURL() string                                 { return "https://relay.example" }
-func (*cliShareRelays) ObserveAvailability(func(relayset.SenderAvailability)) {}
-func (*cliShareRelays) Wake()                                                 {}
+func (*cliShareRelays) WaitReady(context.Context) error { return nil }
+func (*cliShareRelays) ReadyRelayURL() string           { return "https://relay.example" }
+func (*cliShareRelays) Wake()                           {}
 func (relays *cliShareRelays) StopRecovery() {
 	relays.stopOnce.Do(func() { close(relays.stopped) })
 }
@@ -371,16 +366,6 @@ func waitV2PrivateMilestones(
 
 func testApp(stdin string) *App {
 	return &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Stdin: strings.NewReader(stdin)}
-}
-
-func TestRegistrationMaterialUsesEd25519Width(t *testing.T) {
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(privateKey) != ed25519.PrivateKeySize || catalog.IdentityBytes != v2.ShareInstanceBytes {
-		t.Fatal("suite-02 identity widths diverged")
-	}
 }
 
 func projectTestGetResult(input engine.ReceiveSettlementInput) (clievent.TransferResult, error) {

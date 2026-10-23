@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/windshare/windshare/core/diagnosticerror"
 	"math"
 	"reflect"
 	"strings"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/core/diagnosticerror"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -21,11 +22,11 @@ const (
 )
 
 func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
-	snapshot, err := clievent.NewProgressSnapshot(clievent.ProgressSpec{
+	snapshot, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
 		DiscoveredFiles: 1, DiscoveredBytes: 4,
 		PublishedFiles: 1, PublishedBytes: 4, PreviouslyPublishedBytes: 4,
-		FileOutcomes: clievent.FileOutcomes{PreviouslyPublishedFiles: 1},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{PreviouslyPublishedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,23 +245,23 @@ func TestEncodeV4EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
 }
 
 func TestEncodeV4ProgressUsesNestedDecimalStrings(t *testing.T) {
-	snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
+	snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
 		DiscoveredFiles:         math.MaxUint64,
 		DiscoveredBytes:         math.MaxUint64,
 		PublishedFiles:          math.MaxUint64,
 		PublishedBytes:          math.MaxUint64,
 		VerifiedBytes:           math.MaxUint64,
 		NewlyVerifiedBytes:      math.MaxUint64,
-		FileOutcomes:            clievent.FileOutcomes{DownloadedFiles: math.MaxUint64},
+		FileOutcomes:            appobs.FileOutcomes{DownloadedFiles: math.MaxUint64},
 		CapacityActiveWaiters:   math.MaxUint32,
 		CapacityAccumulatedWait: 1250 * time.Millisecond,
 		CapacityWaitAttempts:    math.MaxUint64,
-		Discovery:               clievent.DiscoveryFailed,
+		Discovery:               appobs.DiscoveryFailed,
 		CountersExact:           false,
 	}))
 	event := mustValue(clievent.NewTransferProgress(
-		mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0xa1))),
-		mustValue(clievent.NewTransferJobID(testIdentity(t, 0xb2))),
+		mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0xa1))),
+		mustValue(appobs.NewTransferJobID(testIdentity(t, 0xb2))),
 		snapshot,
 	))
 	record, err := encodeV4(
@@ -297,19 +298,19 @@ func TestEncodeV4ProgressUsesNestedDecimalStrings(t *testing.T) {
 }
 
 func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
-	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
-	lane := mustValue(clievent.NewLaneIdentity(math.MaxUint32, 0))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
-		Command:           clievent.CommandGet,
-		Role:              clievent.ProtocolRoleReceiver,
-		Stage:             clievent.ProtocolOperationReceiverEnded,
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	lane := mustValue(appobs.NewLaneIdentity(math.MaxUint32, 0))
+	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+		Workflow:          appobs.WorkflowReceive,
+		Role:              appobs.ProtocolRoleReceiver,
+		Stage:             appobs.ProtocolOperationReceiverEnded,
 		ProtocolSession:   session,
 		ProtocolOperation: operation,
-		RequestKind:       clievent.ProtocolMessageRequestBlocks,
+		RequestKind:       appobs.ProtocolMessageRequestBlocks,
 		Lane:              lane,
 		HasLane:           true,
-		Cause:             clievent.ProtocolOperationCauseNone,
+		Cause:             appobs.ProtocolOperationCauseNone,
 	}))
 	record, err := encodeV4(
 		testRunIdentity(0x22),
@@ -329,12 +330,12 @@ func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 }
 
 func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
-	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
-		ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessagePeerOffer,
-		Stage: clievent.ProtocolOperationReceiverEnded, Cause: clievent.ProtocolOperationCauseCanceled,
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+		ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessagePeerOffer,
+		Stage: appobs.ProtocolOperationReceiverEnded, Cause: appobs.ProtocolOperationCauseCanceled,
 	}))
 	record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
 	if err != nil {
@@ -348,14 +349,14 @@ func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
 }
 
 func TestEncodeV4IncludesBlockWaitDecision(t *testing.T) {
-	for _, phase := range []clievent.BlockWaitPhase{clievent.BlockWaitAwaitingFirstFragment, clievent.BlockWaitReceivingFragments} {
-		session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
-		operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
-		event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-			ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
-			Stage: clievent.ProtocolOperationReceiverFailed, ProtocolSession: session, ProtocolOperation: operation,
-			RequestKind: clievent.ProtocolMessageRequestBlocks, Cause: clievent.ProtocolOperationCauseDeadline,
-			BlockWait: clievent.BlockWaitSpec{Phase: phase, WaitedMillis: 35_000, QueueProgress: 12},
+	for _, phase := range []appobs.BlockWaitPhase{appobs.BlockWaitAwaitingFirstFragment, appobs.BlockWaitReceivingFragments} {
+		session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+		operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+		event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+			ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+			Stage: appobs.ProtocolOperationReceiverFailed, ProtocolSession: session, ProtocolOperation: operation,
+			RequestKind: appobs.ProtocolMessageRequestBlocks, Cause: appobs.ProtocolOperationCauseDeadline,
+			BlockWait: appobs.BlockWaitSpec{Phase: phase, WaitedMillis: 35_000, QueueProgress: 12},
 		}))
 		record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
 		if err != nil {
@@ -371,15 +372,15 @@ func TestEncodeV4IncludesBlockWaitDecision(t *testing.T) {
 }
 
 func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
-	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
-	lane := mustValue(clievent.NewLaneIdentity(3, 2))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
-		Stage: clievent.ProtocolOperationReceiverEnded, ProtocolSession: session, ProtocolOperation: operation,
-		RequestKind: clievent.ProtocolMessageOpenRevisions, Lane: lane, HasLane: true,
-		Cause:             clievent.ProtocolOperationCauseNone,
-		RequestScheduling: clievent.RequestSchedulingSpec{ExpectedMillis: 42, ResponseMillis: 10, QueuedContentMillis: 12, PendingRequests: 2},
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	lane := mustValue(appobs.NewLaneIdentity(3, 2))
+	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+		Stage: appobs.ProtocolOperationReceiverEnded, ProtocolSession: session, ProtocolOperation: operation,
+		RequestKind: appobs.ProtocolMessageOpenRevisions, Lane: lane, HasLane: true,
+		Cause:             appobs.ProtocolOperationCauseNone,
+		RequestScheduling: appobs.RequestSchedulingSpec{ExpectedMillis: 42, ResponseMillis: 10, QueuedContentMillis: 12, PendingRequests: 2},
 	}))
 	record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
 	if err != nil {
@@ -393,18 +394,18 @@ func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T)
 }
 
 func TestEncodeV4SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x61)))
-	lane := mustValue(clievent.NewLaneIdentity(1, 0))
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x61)))
+	lane := mustValue(appobs.NewLaneIdentity(1, 0))
 	send := mustValue(clievent.NewSenderTerminalSendObserved(
 		session, lane, false,
-		clievent.SenderTerminalSendUnsettled,
-		clievent.SenderTerminalSendUnknown,
-		clievent.SenderTerminalSendFailed,
+		appobs.SenderTerminalSendUnsettled,
+		appobs.SenderTerminalSendUnknown,
+		appobs.SenderTerminalSendFailed,
 	))
 	root := mustValue(clievent.NewSenderSessionTerminated(
 		session,
-		clievent.SenderSessionTerminalGracefulStop,
-		clievent.SenderSessionTerminalNormalStop,
+		appobs.SenderSessionTerminalGracefulStop,
+		appobs.SenderSessionTerminalNormalStop,
 		diagnosticerror.Snapshot{},
 	))
 	sendRecord, err := encodeV4(
@@ -487,47 +488,47 @@ func assertEnvelopeAllowlist(t *testing.T, encoded []byte, hasCorrelation bool) 
 
 func allTraceEvents(t *testing.T) []clievent.Event {
 	t.Helper()
-	failure := mustValue(clievent.NewFailure(clievent.FailureUnexpected))
-	retryFailure := mustValue(clievent.NewRetryableFailure(
-		clievent.FailureRelayStarting, math.MaxUint64,
+	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
+	retryFailure := mustValue(appobs.NewRetryableFailure(
+		appobs.FailureRelayStarting, math.MaxUint64,
 	))
-	fault := mustValue(clievent.NewFaultContext(
-		clievent.FaultOutput, clievent.FaultFileLocal, 1,
+	fault := mustValue(appobs.NewFaultContext(
+		appobs.FaultOutput, appobs.FaultFileLocal, 1,
 	))
-	faultFailure := mustValue(clievent.NewFaultFailure(clievent.FailureOutputStateIO, fault))
-	authority := mustValue(clievent.NewRelayAuthority(
-		clievent.RelayWSS, "relay.example", 443,
+	faultFailure := mustValue(appobs.NewFaultFailure(appobs.FailureOutputStateIO, fault))
+	authority := mustValue(appobs.NewRelayAuthority(
+		appobs.RelayWSS, "relay.example", 443,
 	))
-	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0x11)))
-	protocolSession := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x22)))
-	protocolOperation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x23)))
-	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0x33)))
-	peerPath := mustValue(clievent.NewPeerPathID(testIdentity(t, 0x44)))
-	peerAttempt := mustValue(clievent.NewPeerAttemptID(testIdentity(t, 0x55)))
-	lane := mustValue(clievent.NewLaneIdentity(7, 9))
-	relaySession := mustValue(clievent.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}))
-	progress := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0x11)))
+	protocolSession := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x22)))
+	protocolOperation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x23)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0x33)))
+	peerPath := mustValue(appobs.NewPeerPathID(testIdentity(t, 0x44)))
+	peerAttempt := mustValue(appobs.NewPeerAttemptID(testIdentity(t, 0x55)))
+	lane := mustValue(appobs.NewLaneIdentity(7, 9))
+	relaySession := mustValue(appobs.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}))
+	progress := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
 		DiscoveredFiles:    3,
 		DiscoveredBytes:    500,
 		PublishedFiles:     1,
 		PublishedBytes:     100,
 		VerifiedBytes:      200,
 		NewlyVerifiedBytes: 150,
-		FileOutcomes:       clievent.FileOutcomes{DownloadedFiles: 1, ModifiedTimeWarnings: 2},
-		Discovery:          clievent.DiscoveryComplete,
+		FileOutcomes:       appobs.FileOutcomes{DownloadedFiles: 1, ModifiedTimeWarnings: 2},
+		Discovery:          appobs.DiscoveryComplete,
 		CountersExact:      true,
 	}))
-	subject := mustValue(clievent.NewFileSubject(
-		clievent.NewDisplayName(displayNameCanary), math.MaxUint64,
+	subject := mustValue(appobs.NewFileSubject(
+		appobs.NewDisplayName(displayNameCanary), math.MaxUint64,
 	))
 	transferResult := mustValue(clievent.NewTransferResult(clievent.TransferResultSpec{
 		Status:              clievent.ResultPartial,
 		ExitCode:            clievent.ExitFailure,
 		Drift:               clievent.DriftNone,
 		Elapsed:             3*time.Second + 4*time.Millisecond,
-		Destination:         clievent.NewDisplayPath(displayPathCanary),
+		Destination:         appobs.NewDisplayPath(displayPathCanary),
 		DestinationAdjusted: true,
-		Files:               clievent.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
+		Files:               appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
 		DirectoryFailures:   math.MaxUint64,
 		OmittedDiagnostics:  2,
 		PublishedBytes:      100,
@@ -544,11 +545,11 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		mustValue(clievent.NewSharingSubjectSelected(subject)),
 		mustValue(clievent.NewRelayConnected(clievent.CommandShare, authority)),
 		mustValue(clievent.NewRelayRecovering(
-			clievent.CommandGet, authority, 2, clievent.RelayRecoveryFailed, retryFailure,
+			clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed, retryFailure,
 		)),
-		mustValue(clievent.NewContentPathSelected(clievent.ContentPathDirect)),
+		mustValue(clievent.NewContentPathSelected(appobs.ContentPathDirect)),
 		mustValue(clievent.NewFallback(
-			clievent.CommandGet, clievent.TransportWebRTC, clievent.TransportRelay, failure,
+			clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay, failure,
 		)),
 		mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, progress)),
 		mustValue(clievent.NewWarning(clievent.CommandGet, faultFailure)),
@@ -561,72 +562,72 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			clievent.CommandGet, clievent.TraceIncompleteLifecycleDrop, clievent.TraceLoss{LifecycleDrops: math.MaxUint64, ProgressDrops: 4},
 		)),
 		mustValue(clievent.NewLaneAdopted(
-			clievent.CommandGet, protocolSession, lane, clievent.TransportWebRTC,
+			clievent.CommandGet, protocolSession, lane, appobs.TransportWebRTC,
 		)),
-		mustValue(clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
-			Command:          clievent.CommandShare,
+		mustValue(clievent.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
+			Workflow:         appobs.WorkflowShare,
 			LinkID:           math.MaxUint64,
 			RelaySession:     relaySession,
 			SendOperationID:  math.MaxUint64,
-			Stage:            clievent.RelaySendAdmitted,
-			Disposition:      clievent.SendAccepted,
-			RetirementSource: clievent.RelayRetirementNone,
-			Cause:            clievent.RelayCauseTransport,
-			DrainCause:       clievent.RelayCauseNone,
+			Stage:            appobs.RelaySendAdmitted,
+			Disposition:      appobs.SendAccepted,
+			RetirementSource: appobs.RelayRetirementNone,
+			Cause:            appobs.RelayCauseTransport,
+			DrainCause:       appobs.RelayCauseNone,
 			Dropped:          math.MaxUint64,
 		})),
-		mustValue(clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
-			Command:         clievent.CommandGet,
+		mustValue(clievent.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
+			Workflow:        appobs.WorkflowReceive,
 			ChannelID:       math.MaxUint64,
 			SendOperationID: math.MaxUint64,
-			Operation:       clievent.WebRTCChannel,
-			Transition:      clievent.WebRTCTraceDropped,
-			Disposition:     clievent.SendAccepted,
-			State:           clievent.ChannelOpen,
-			Terminal:        clievent.WebRTCTerminalNone,
-			Cause:           clievent.WebRTCCauseNone,
+			Operation:       appobs.WebRTCChannel,
+			Transition:      appobs.WebRTCTraceDropped,
+			Disposition:     appobs.SendAccepted,
+			State:           appobs.ChannelOpen,
+			Terminal:        appobs.WebRTCTerminalNone,
+			Cause:           appobs.WebRTCCauseNone,
 			Dropped:         math.MaxUint64,
 		})),
-		mustValue(clievent.NewPeerAttemptObserved(clievent.PeerAttemptSpec{
-			Command:       clievent.CommandGet,
+		mustValue(clievent.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+			Workflow:      appobs.WorkflowReceive,
 			Session:       protocolSession,
 			PeerPath:      peerPath,
 			Attempt:       peerAttempt,
 			Sequence:      math.MaxUint64,
 			ElapsedMillis: math.MaxUint64,
-			Stage:         clievent.PeerAttemptFailed,
-			FailedAtStage: clievent.PeerAdmissionResponseSettled,
-			Candidates:    clievent.CandidateCounts{LocalEmitted: 1, RemoteAccepted: 2},
+			Stage:         appobs.PeerAttemptFailed,
+			FailedAtStage: appobs.PeerAdmissionResponseSettled,
+			Candidates:    appobs.CandidateCounts{LocalEmitted: 1, RemoteAccepted: 2},
 			HasCandidates: true,
-			FailureScope:  clievent.PeerFailureAttempt,
+			FailureScope:  appobs.PeerFailureAttempt,
 			Failure:       failure,
 		})),
-		mustValue(clievent.NewTransferLifecycleObserved(clievent.TransferLifecycleSpec{
+		mustValue(clievent.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
 			ReceiveOperation: receiveOperation,
 			ProtocolSession:  protocolSession,
 			TransferJob:      transferJob,
-			Stage:            clievent.TransferFileSettled,
+			Stage:            appobs.TransferFileSettled,
 			Progress:         progress,
-			FileSelection:    clievent.FileSelectionInherited,
-			FileSettlement:   clievent.FileItemBlocked,
-			ItemBlockReason:  clievent.ItemBlockRevisionConflict,
-			TreeSettlement:   clievent.TreeSettlementPartial,
+			FileSelection:    appobs.FileSelectionInherited,
+			FileSettlement:   appobs.FileItemBlocked,
+			ItemBlockReason:  appobs.ItemBlockRevisionConflict,
+			TreeSettlement:   appobs.TreeSettlementPartial,
 			Failure:          failure,
 		})),
-		mustValue(clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-			Operation:           clievent.FilesystemRuntimeDecision,
+		mustValue(clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
+			Operation:           appobs.FilesystemRuntimeDecision,
 			ReceiveOperation:    receiveOperation,
-			Certification:       clievent.FilesystemCertificationWindowsNTFSProcessRestart,
-			NativeLockScope:     clievent.FilesystemNativeLockSession,
-			NativeLockMilestone: clievent.FilesystemNativeLockAcquired,
-			RootDisposition:     clievent.FilesystemRootAuthorityCreated,
-			RuntimeComponent:    clievent.FilesystemRuntimeFile,
-			RuntimeOperation:    clievent.FilesystemRuntimeWriteRange,
-			RuntimeDecision:     clievent.FilesystemRuntimeNeedsAttention,
-			CheckpointDecision:  clievent.FilesystemCheckpointRevisionConflict,
+			Certification:       appobs.FilesystemCertificationWindowsNTFSProcessRestart,
+			NativeLockScope:     appobs.FilesystemNativeLockSession,
+			NativeLockMilestone: appobs.FilesystemNativeLockAcquired,
+			RootDisposition:     appobs.FilesystemRootAuthorityCreated,
+			RuntimeComponent:    appobs.FilesystemRuntimeFile,
+			RuntimeOperation:    appobs.FilesystemRuntimeWriteRange,
+			RuntimeDecision:     appobs.FilesystemRuntimeNeedsAttention,
+			CheckpointDecision:  appobs.FilesystemCheckpointRevisionConflict,
 			OperationID:         math.MaxUint64,
 			ClaimID:             math.MaxUint64,
-			Counters: clievent.FilesystemOutputCounters{
+			Counters: appobs.FilesystemOutputCounters{
 				NodeClaims:             math.MaxUint64,
 				DirectoryClaims:        2,
 				FileClaims:             3,
@@ -636,26 +637,26 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 				CheckpointRecords:      7,
 			},
 			Failure:            faultFailure,
-			FailureStage:       clievent.FilesystemFailureNativeDurability,
-			ReconciliationStep: clievent.FilesystemReconciliationRecordPromotion,
-			NativeErrorClass:   clievent.FilesystemNativeErrorSharingViolation,
+			FailureStage:       appobs.FilesystemFailureNativeDurability,
+			ReconciliationStep: appobs.FilesystemReconciliationRecordPromotion,
+			NativeErrorClass:   appobs.FilesystemNativeErrorSharingViolation,
 		})),
 		mustValue(clievent.NewSenderTerminalSendObserved(
 			protocolSession, lane, false,
-			clievent.SenderTerminalSendUnsettled,
-			clievent.SenderTerminalSendUnknown,
-			clievent.SenderTerminalSendFailed,
+			appobs.SenderTerminalSendUnsettled,
+			appobs.SenderTerminalSendUnknown,
+			appobs.SenderTerminalSendFailed,
 		)),
 		mustValue(clievent.NewSenderSessionTerminated(
 			protocolSession,
-			clievent.SenderSessionTerminalGracefulStop,
-			clievent.SenderSessionTerminalNormalStop,
+			appobs.SenderSessionTerminalGracefulStop,
+			appobs.SenderSessionTerminalNormalStop,
 			diagnosticerror.Snapshot{},
 		)),
 		mustValue(clievent.NewCatalogStorageObserved(
-			clievent.CatalogStorageBudgetRejected,
-			clievent.CatalogStorageCauseBudget,
-			clievent.CatalogUsage{
+			appobs.CatalogStorageBudgetRejected,
+			appobs.CatalogStorageCauseBudget,
+			appobs.CatalogUsage{
 				ActiveScans: math.MaxUint64,
 				ScanWork:    math.MaxUint64,
 				Entries:     math.MaxUint64,
@@ -665,34 +666,34 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			math.MaxUint64,
 		)),
 		mustValue(clievent.NewRootPrefetchObserved(
-			clievent.RootPrefetchCommitted,
+			appobs.RootPrefetchCommitted,
 			math.MaxUint64,
 			math.MaxUint64,
 			math.MaxUint64,
 		)),
-		mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
-			Command:                 clievent.CommandGet,
-			Role:                    clievent.ProtocolRoleReceiver,
-			Stage:                   clievent.ProtocolOperationReceiverFailed,
+		mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+			Workflow:                appobs.WorkflowReceive,
+			Role:                    appobs.ProtocolRoleReceiver,
+			Stage:                   appobs.ProtocolOperationReceiverFailed,
 			ProtocolSession:         protocolSession,
 			ProtocolOperation:       protocolOperation,
-			RequestKind:             clievent.ProtocolMessageReleaseLease,
+			RequestKind:             appobs.ProtocolMessageReleaseLease,
 			Lane:                    lane,
 			HasLane:                 true,
 			HasSend:                 true,
 			SendSettled:             true,
 			SendAdmitted:            true,
-			SendOutcome:             clievent.ProtocolSendTransportConfirmed,
+			SendOutcome:             appobs.ProtocolSendTransportConfirmed,
 			DeadlineRemainingMillis: math.MaxUint64,
 			HasDeadline:             true,
 			OperationElapsedMillis:  math.MaxUint64,
 			UsableLanesAtSelection:  math.MaxUint32,
 			UsableLanesAtSettlement: math.MaxUint32,
-			Cause:                   clievent.ProtocolOperationCauseDeadline,
+			Cause:                   appobs.ProtocolOperationCauseDeadline,
 		})),
-		mustValue(clievent.NewLaneSettlementObserved(clievent.LaneSettlementSpec{
+		mustValue(clievent.NewLaneSettlementObserved(appobs.LaneSettlementSpec{
 			Session:             protocolSession,
-			Route:               clievent.LaneRouteDirect,
+			Route:               appobs.LaneRouteDirect,
 			Lane:                lane,
 			DeliveredBlocks:     math.MaxUint64,
 			DeliveredBytes:      math.MaxUint64,
@@ -700,36 +701,36 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			ReassignedBlocks:    3,
 			Incomplete:          true,
 		})),
-		mustValue(clievent.NewObserverLossObserved(clievent.ObserverLossSpec{
-			Command:  clievent.CommandGet,
-			Category: clievent.ObserverLossReceiverTermination,
-			Reason:   clievent.ObserverLossAdapterCapacityTimeout,
+		mustValue(clievent.NewObserverLossObserved(appobs.ObserverLossSpec{
+			Workflow: appobs.WorkflowReceive,
+			Category: appobs.ObserverLossReceiverTermination,
+			Reason:   appobs.ObserverLossAdapterCapacityTimeout,
 			Count:    math.MaxUint64,
 		})),
-		mustValue(clievent.NewReceiverTerminationObserved(clievent.ReceiverTerminationSpec{
+		mustValue(clievent.NewReceiverTerminationObserved(appobs.ReceiverTerminationSpec{
 			Operation:             protocolOperation,
 			HasOperation:          true,
 			LocalGeneration:       math.MaxUint64,
-			TransitionAuthority:   clievent.ReceiverTerminalRemote,
-			Disposition:           clievent.ReceiverSessionUnsafe,
-			TransitionProvenance:  clievent.ReceiverProvenanceRemoteFailureMalformed,
-			ConsequenceProvenance: clievent.ReceiverProvenanceRemoteFailureMalformed,
-			LocalStopReason:       clievent.ReceiverLocalStopNone,
+			TransitionAuthority:   appobs.ReceiverTerminalRemote,
+			Disposition:           appobs.ReceiverSessionUnsafe,
+			TransitionProvenance:  appobs.ReceiverProvenanceRemoteFailureMalformed,
+			ConsequenceProvenance: appobs.ReceiverProvenanceRemoteFailureMalformed,
+			LocalStopReason:       appobs.ReceiverLocalStopNone,
 			DiagnosticsTruncated:  true,
-			BenignComponents: []clievent.ReceiverBenignComponent{
-				clievent.ReceiverBenignContextCanceled,
+			BenignComponents: []appobs.ReceiverBenignComponent{
+				appobs.ReceiverBenignContextCanceled,
 			},
-			RetainedCauseClasses: []clievent.ReceiverCauseClass{
-				clievent.ReceiverCauseProtocol,
+			RetainedCauseClasses: []appobs.ReceiverCauseClass{
+				appobs.ReceiverCauseProtocol,
 			},
-			TeardownTransitions: []clievent.PeerTeardownTransition{
-				clievent.PeerTeardownShutdownInitiated,
+			TeardownTransitions: []appobs.PeerTeardownTransition{
+				appobs.PeerTeardownShutdownInitiated,
 			},
 			PeerShutdownFailed: true,
 			ChannelDrainFailed: true,
 		})),
 		mustValue(clievent.NewPlatformSetupObserved(clievent.CommandGet, "declined", "user-skipped")),
-		mustValue(clievent.NewNativeConnectivityObserved(clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Side: "receiver", Kind: "provider_created", State: "unknown"})),
+		mustValue(clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "provider_created", State: "unknown"})),
 	}
 }
 
@@ -770,7 +771,7 @@ func testRunIdentity(marker byte) runIdentity {
 
 func testIdentity(t *testing.T, marker byte) []byte {
 	t.Helper()
-	identity := make([]byte, clievent.IdentityBytes)
+	identity := make([]byte, appobs.IdentityBytes)
 	for index := range identity {
 		identity[index] = marker + byte(index)
 	}

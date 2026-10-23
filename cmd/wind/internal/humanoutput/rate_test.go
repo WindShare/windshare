@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestRateWindowUsesInjectedMonotonicSamples(t *testing.T) {
@@ -12,9 +12,9 @@ func TestRateWindowUsesInjectedMonotonicSamples(t *testing.T) {
 	base := time.Unix(1_000, 0)
 	window := rateWindow{}
 	observe := func(offset time.Duration, bytes uint64, exact bool) rateEstimate {
-		return window.observe(base.Add(offset), mustSnapshot(t, clievent.ProgressSpec{
+		return window.observe(base.Add(offset), mustSnapshot(t, appobs.ProgressSpec{
 			DiscoveredBytes: 20_000_000, VerifiedBytes: bytes, NewlyVerifiedBytes: bytes,
-			Discovery: clievent.DiscoveryOpen, CountersExact: exact,
+			Discovery: appobs.DiscoveryOpen, CountersExact: exact,
 		}))
 	}
 	if got := observe(0, 0, true); got.valid {
@@ -44,10 +44,10 @@ func TestRateWindowRejectsUnstableAndStalledSamples(t *testing.T) {
 	t.Parallel()
 	base := time.Unix(1_000, 0)
 	window := rateWindow{}
-	snapshot := func(bytes uint64) clievent.ProgressSnapshot {
-		return mustSnapshot(t, clievent.ProgressSpec{
+	snapshot := func(bytes uint64) appobs.ProgressSnapshot {
+		return mustSnapshot(t, appobs.ProgressSpec{
 			DiscoveredBytes: 100_000_000, VerifiedBytes: bytes, NewlyVerifiedBytes: bytes,
-			Discovery: clievent.DiscoveryComplete, CountersExact: true,
+			Discovery: appobs.DiscoveryComplete, CountersExact: true,
 		})
 	}
 	window.observe(base, snapshot(0))

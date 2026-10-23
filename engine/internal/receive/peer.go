@@ -288,8 +288,7 @@ type receiverPeerMonitorOutcome struct {
 type receiverPeerStarter interface {
 	Start(
 		context.Context,
-		v2peer.ReceiverSignaling,
-		v2peer.ReceiverLaneSession,
+		*sessionruntime.ReceiverRuntime,
 	) (receiverPeerAttempt, error)
 }
 
@@ -307,10 +306,13 @@ type receiverPeerFactoryAdapter struct {
 
 func (adapter receiverPeerFactoryAdapter) Start(
 	ctx context.Context,
-	signaling v2peer.ReceiverSignaling,
-	lanes v2peer.ReceiverLaneSession,
+	runtime *sessionruntime.ReceiverRuntime,
 ) (receiverPeerAttempt, error) {
-	return adapter.startPeerSet(ctx, signaling, lanes)
+	signaling, err := v2peer.NewRuntimeReceiverSignaling(runtime)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.startPeerSet(ctx, signaling, runtime)
 }
 
 func (adapter receiverPeerFactoryAdapter) ReceiverTerminationObservations() <-chan v2peer.ReceiverTerminationTrace {
@@ -413,13 +415,7 @@ func (a *runner) startReceiverPeer(
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
-	signaling, err := v2peer.NewRuntimeReceiverSignaling(runtime)
-	if err != nil {
-		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupSignaling))
-		notifyReceiverPeer(observe, receiverPeerFailed)
-		return nil
-	}
-	attempt, err := starter.Start(ctx, signaling, runtime)
+	attempt, err := starter.Start(ctx, runtime)
 	if err != nil || attempt == nil {
 		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupStart))
 		notifyReceiverPeer(observe, receiverPeerFailed)

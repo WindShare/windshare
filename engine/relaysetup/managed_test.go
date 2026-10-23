@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 )
 
-type cacheFunc func(context.Context, senderrelay.Candidate, turn.Capability, time.Time) error
+type cacheFunc func(context.Context, relayprofile.Candidate, turn.Capability, time.Time) error
 
-func (save cacheFunc) Save(ctx context.Context, candidate senderrelay.Candidate, capability turn.Capability, at time.Time) error {
+func (save cacheFunc) Save(ctx context.Context, candidate relayprofile.Candidate, capability turn.Capability, at time.Time) error {
 	return save(ctx, candidate, capability, at)
 }
 
@@ -23,7 +23,7 @@ func TestOnboardingDiscoveryIsOptionalAndPreservesManualAccountsAndBudget(t *tes
 	for _, cacheFailure := range []bool{false, true} {
 		t.Run(fmt.Sprint(cacheFailure), func(t *testing.T) {
 			saved := pendingCredential(time.Now())
-			saved.Profiles = append(saved.Profiles, senderrelay.Candidate{PublicURL: saved.Pending.RelayURL})
+			saved.Profiles = append(saved.Profiles, relayprofile.Candidate{PublicURL: saved.Pending.RelayURL})
 			saved.ManagedTURNPolicies = []turn.ManagedPolicy{{RelayURL: saved.Pending.RelayURL, LocalBudgetBytes: 99}}
 			for i := range turn.MaximumAccounts {
 				id := fmt.Sprintf("manual%d", i)
@@ -37,7 +37,7 @@ func TestOnboardingDiscoveryIsOptionalAndPreservesManualAccountsAndBudget(t *tes
 			service := New(Dependencies{Store: store, HTTP: fakeHTTP(func(*http.Request) (*http.Response, error) {
 				return response(200, map[string]any{"managed_turn": []any{map[string]any{
 					"service_id": "cf-service", "relay_url": saved.Pending.RelayURL, "enabled": true, "local_budget_bytes": 0}}})
-			}), Cache: cacheFunc(func(_ context.Context, candidate senderrelay.Candidate, capability turn.Capability, at time.Time) error {
+			}), Cache: cacheFunc(func(_ context.Context, candidate relayprofile.Candidate, capability turn.Capability, at time.Time) error {
 				if store.saved.Pending != nil || candidate.AccessKey != "claimed-key" || capability.ServiceID != "cf-service" || at.IsZero() {
 					t.Fatal("cache preceded committed enrollment or used unrelated authority")
 				}

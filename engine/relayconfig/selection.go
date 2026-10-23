@@ -2,13 +2,13 @@ package relayconfig
 
 import (
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 // SelectRelays treats a saved list or explicit override as the complete allowed
 // set. No infrastructure is added implicitly, including development listeners.
-func SelectRelays(config Config, override []string) ([]senderrelay.Candidate, error) {
+func SelectRelays(config Config, override []string) ([]relayprofile.Candidate, error) {
 	saved := config.Profiles
 	if len(override) == 0 {
 		override = config.ActiveRelays
@@ -24,7 +24,7 @@ func SelectRelays(config Config, override []string) ([]senderrelay.Candidate, er
 		}
 		credentials[endpoint.DialURL] = candidate.AccessKey
 	}
-	candidates := make([]senderrelay.Candidate, 0, len(override))
+	candidates := make([]relayprofile.Candidate, 0, len(override))
 	seen := make(map[string]bool, len(override))
 	for _, address := range override {
 		endpoint, err := v2.NormalizeRelayEndpoint(address)
@@ -37,11 +37,11 @@ func SelectRelays(config Config, override []string) ([]senderrelay.Candidate, er
 		seen[endpoint.DialURL] = true
 		// Identity excludes queries for protocol proofs. Credential matching must
 		// retain those queries so another routing target cannot inherit authority.
-		candidates = append(candidates, senderrelay.Candidate{
+		candidates = append(candidates, relayprofile.Candidate{
 			PublicURL: address, AccessKey: credentials[endpoint.DialURL],
 		})
 	}
-	if _, err := senderrelay.PublicURLs(candidates); err != nil || len(candidates) > relayset.MaximumEndpoints {
+	if _, err := relayprofile.PublicURLs(candidates); err != nil || len(candidates) > relayset.MaximumEndpoints {
 		return nil, ErrConfig
 	}
 	return candidates, nil

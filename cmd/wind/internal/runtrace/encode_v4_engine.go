@@ -4,23 +4,24 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type engineTaskPayloadV4 struct {
-	TaskID                 string                      `json:"engine_task_id"`
-	ObservedAt             string                      `json:"observed_at"`
-	Stage                  string                      `json:"stage"`
-	StopReason             string                      `json:"stop_reason"`
-	Outcome                clievent.EngineTaskOutcome  `json:"outcome,omitempty"`
-	FailureClass           clievent.EngineFailureClass `json:"failure_class,omitempty"`
-	ShareInstance          string                      `json:"share_instance,omitempty"`
-	ReceiveOperationID     string                      `json:"receive_operation_id,omitempty"`
-	TransferJobID          string                      `json:"transfer_job_id,omitempty"`
-	PreviousSessionID      string                      `json:"previous_protocol_session_id,omitempty"`
-	AdmissionTrigger       string                      `json:"admission_trigger,omitempty"`
-	AdmissionTerminalOwner string                      `json:"admission_terminal_owner,omitempty"`
-	Failure                *failureV4                  `json:"failure,omitempty"`
-	CleanupFailure         *failureV4                  `json:"cleanup_failure,omitempty"`
+	TaskID                 string                    `json:"engine_task_id"`
+	ObservedAt             string                    `json:"observed_at"`
+	Stage                  string                    `json:"stage"`
+	StopReason             string                    `json:"stop_reason"`
+	Outcome                appobs.EngineTaskOutcome  `json:"outcome,omitempty"`
+	FailureClass           appobs.EngineFailureClass `json:"failure_class,omitempty"`
+	ShareInstance          string                    `json:"share_instance,omitempty"`
+	ReceiveOperationID     string                    `json:"receive_operation_id,omitempty"`
+	TransferJobID          string                    `json:"transfer_job_id,omitempty"`
+	PreviousSessionID      string                    `json:"previous_protocol_session_id,omitempty"`
+	AdmissionTrigger       string                    `json:"admission_trigger,omitempty"`
+	AdmissionTerminalOwner string                    `json:"admission_terminal_owner,omitempty"`
+	Failure                *failureV4                `json:"failure,omitempty"`
+	CleanupFailure         *failureV4                `json:"cleanup_failure,omitempty"`
 }
 
 func (engineTaskPayloadV4) runTracePayloadV4() {}
@@ -55,7 +56,7 @@ func (visitor *encodeVisitorV4) VisitEngineTaskObserved(event clievent.EngineTas
 	if facts.PreviousSession.Valid() {
 		payload.PreviousSessionID = encodeTypedIdentity(facts.PreviousSession.Bytes())
 	}
-	if facts.Stage == clievent.EngineAdmissionDecision {
+	if facts.Stage == appobs.EngineAdmissionDecision {
 		payload.AdmissionTrigger, err = nameOf(facts.AdmissionTrigger)
 		if err != nil {
 			return err

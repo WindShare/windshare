@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/osfs"
-
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type ReceiveRequest = receive.Request
@@ -70,10 +70,10 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 	request.Capability.Relays = append([]string(nil), request.Capability.Relays...)
 	injected := engine.config.Receive
 	dependencies := receive.Dependencies{
-		Clock: injected.Clock, ReceiverDial: injected.ReceiverDial,
-		Recovery: injected.Recovery, PeerFactory: injected.PeerFactory,
+		Clock: injected.Clock, ReceiverDial: receiveDial(injected.ReceiverDial),
+		Recovery: injected.Recovery.native(), PeerFactory: injected.PeerFactory,
 	}
-	current, err := start(engine, ctx, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
+	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control
 		return receive.Run(ctx, request, dependencies)
 	})
@@ -92,7 +92,9 @@ func NewReceivePeerOutcome(disposition ReceivePeerDisposition, cause error) Rece
 }
 
 func SettleReceive(input ReceiveSettlementInput) (TaskCompletion[ReceiveResult], error) {
-	return receive.Settle(input)
+	result, err := receive.Settle(input)
+	result.Settlement = describeSettlement(result.Settlement)
+	return result, err
 }
 
 func ReceiveOutputDiagnostic(cause error) (osfs.FilesystemOutputDiagnostic, bool) {

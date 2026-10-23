@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type fakeClock struct{ now time.Time }
@@ -35,18 +35,18 @@ func newRenderHarness(t *testing.T, capabilities terminalcanvas.Capabilities, ve
 	return harness
 }
 
-func mustFailure(t *testing.T, code clievent.FailureCode) clievent.Failure {
+func mustFailure(t *testing.T, code appobs.FailureCode) appobs.Failure {
 	t.Helper()
-	failure, err := clievent.NewFailure(code)
+	failure, err := appobs.NewFailure(code)
 	if err != nil {
 		t.Fatalf("NewFailure() error = %v", err)
 	}
 	return failure
 }
 
-func mustSnapshot(t *testing.T, spec clievent.ProgressSpec) clievent.ProgressSnapshot {
+func mustSnapshot(t *testing.T, spec appobs.ProgressSpec) appobs.ProgressSnapshot {
 	t.Helper()
-	snapshot, err := clievent.NewProgressSnapshot(spec)
+	snapshot, err := appobs.NewProgressSnapshot(spec)
 	if err != nil {
 		t.Fatalf("NewProgressSnapshot() error = %v", err)
 	}
@@ -55,23 +55,23 @@ func mustSnapshot(t *testing.T, spec clievent.ProgressSpec) clievent.ProgressSna
 
 func mustID(t *testing.T, discriminator byte) []byte {
 	t.Helper()
-	raw := make([]byte, clievent.IdentityBytes)
+	raw := make([]byte, appobs.IdentityBytes)
 	raw[0] = discriminator
 	return raw
 }
 
-func mustReceiveID(t *testing.T) clievent.ReceiveOperationID {
+func mustReceiveID(t *testing.T) appobs.ReceiveOperationID {
 	t.Helper()
-	id, err := clievent.NewReceiveOperationID(mustID(t, 1))
+	id, err := appobs.NewReceiveOperationID(mustID(t, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func mustJobID(t *testing.T) clievent.TransferJobID {
+func mustJobID(t *testing.T) appobs.TransferJobID {
 	t.Helper()
-	id, err := clievent.NewTransferJobID(mustID(t, 2))
+	id, err := appobs.NewTransferJobID(mustID(t, 2))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,15 +7,14 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
-	"github.com/windshare/windshare/transport/relayv2"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestRecoveryAndAvailabilityPreserveLifecycleDecisionContext(t *testing.T) {
-	authority, _ := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
-	identity, _ := clievent.NewSharingInstanceID([]byte("share-instance-1"))
-	session, _ := clievent.NewProtocolSessionID([]byte("relay-session-01"))
-	event, err := clievent.NewRelayRecoveryObservation(clievent.CommandShare, authority, 8, clievent.RelayRecoveryWaiting, clievent.Failure{}, clievent.RelayRecoveryDetails{ShareInstance: identity, Generation: 7, Slow: true, Resume: true, NextDelay: 30 * time.Second, ProtocolSessionID: session})
+	authority, _ := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
+	identity, _ := appobs.NewSharingInstanceID([]byte("share-instance-1"))
+	session, _ := appobs.NewProtocolSessionID([]byte("relay-session-01"))
+	event, err := clievent.NewRelayRecoveryObservation(clievent.CommandShare, authority, 8, appobs.RelayRecoveryWaiting, appobs.Failure{}, appobs.RelayRecoveryDetails{ShareInstance: identity, Generation: 7, Slow: true, Resume: true, NextDelay: 30 * time.Second, ProtocolSessionID: session})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,19 +40,19 @@ func TestRecoveryAndAvailabilityPreserveLifecycleDecisionContext(t *testing.T) {
 }
 
 func TestNativeHeartbeatTraceReachesCLIProjectionAndEncoding(t *testing.T) {
-	for _, stage := range []relayv2.LifecycleStage{relayv2.LifecycleHeartbeatProbe, relayv2.LifecycleHeartbeatAcknowledged, relayv2.LifecycleHeartbeatFailed} {
-		wait, cause := time.Second, relayv2.LifecycleCauseNone
+	for _, stage := range []appobs.RelayLifecycleStage{appobs.RelayHeartbeatProbe, appobs.RelayHeartbeatAcknowledged, appobs.RelayHeartbeatFailed} {
+		wait, cause := time.Second, appobs.RelayCauseNone
 		expectedWait := `"wait_ms":"1000"`
-		if stage == relayv2.LifecycleHeartbeatProbe {
+		if stage == appobs.RelayHeartbeatProbe {
 			wait = 0
 			expectedWait = `"wait_ms":"0"`
 		}
-		if stage == relayv2.LifecycleHeartbeatFailed {
-			cause = relayv2.LifecycleCauseTransport
+		if stage == appobs.RelayHeartbeatFailed {
+			cause = appobs.RelayCauseTransport
 		}
-		event, err := commandprojection.ProjectRelayLifecycle(clievent.CommandShare, relayv2.LifecycleTrace{
-			LinkID: 11, OperationID: 12, Stage: stage,
-			RetirementSource: relayv2.LifecycleRetirementNone, Cause: cause, DrainCause: relayv2.LifecycleCauseNone,
+		event, err := clievent.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{Workflow: appobs.WorkflowShare,
+			LinkID: 11, SendOperationID: 12, Stage: stage,
+			RetirementSource: appobs.RelayRetirementNone, Cause: cause, DrainCause: appobs.RelayCauseNone,
 			HeartbeatRound: 3, Wait: wait, Timeout: 10 * time.Second,
 		})
 		if err != nil {

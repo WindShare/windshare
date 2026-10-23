@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -26,7 +25,7 @@ func TestLeaseRejectionProjectionAndExportKeepTheReleaseJoinKey(t *testing.T) {
 			session := protocolsession.ProtocolSessionID{1}
 			operation := protocolsession.OperationID{2}
 			lease := content.LeaseID{3}
-			event, err := commandprojection.ProjectProtocolObservation(clievent.CommandShare, sessionruntime.NewSenderContentDecision(sessionruntime.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Correlation: sessionruntime.ProtocolObservationCorrelation{Role: protocolsession.RoleSender, ProtocolSessionID: session, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks}}, contentflow.SenderDecisionTrace{Stage: scenario.stage, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: lease}, sessionruntime.LaneIdentity{}, false))
+			event, err := traceProtocolObservation(clievent.CommandShare, sessionruntime.NewSenderContentDecision(sessionruntime.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Correlation: sessionruntime.ProtocolObservationCorrelation{Role: protocolsession.RoleSender, ProtocolSessionID: session, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks}}, contentflow.SenderDecisionTrace{Stage: scenario.stage, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: lease}, sessionruntime.LaneIdentity{}, false))
 			if err != nil {
 				t.Fatal(err)
 			}

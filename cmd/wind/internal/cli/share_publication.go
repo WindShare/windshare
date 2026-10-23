@@ -1,9 +1,10 @@
 package cli
 
 import (
-	"github.com/windshare/windshare/core/link"
 	"io"
 	"net/url"
+
+	"github.com/windshare/windshare/core/link"
 )
 
 const (

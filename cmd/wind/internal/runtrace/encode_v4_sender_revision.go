@@ -1,6 +1,9 @@
 package runtrace
 
-import "github.com/windshare/windshare/cmd/wind/internal/clievent"
+import (
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
+)
 
 func (visitor *encodeVisitorV4) VisitSenderCapacityObserved(event clievent.SenderCapacityObserved) error {
 	stage, err := nameOf(event.Stage())
@@ -26,7 +29,7 @@ func (visitor *encodeVisitorV4) VisitSenderCapacityObserved(event clievent.Sende
 	}
 	var correlation *CorrelationV1
 	if session, ok := event.ProtocolSessionID(); ok {
-		correlation, err = projectSessionCorrelation(session, clievent.LaneIdentity{}, false)
+		correlation, err = projectSessionCorrelation(session, appobs.LaneIdentity{}, false)
 		if err != nil {
 			return err
 		}
@@ -35,7 +38,7 @@ func (visitor *encodeVisitorV4) VisitSenderCapacityObserved(event clievent.Sende
 	return nil
 }
 
-func projectCapacityScopeV4(value clievent.CapacityScopeSnapshot) capacityScopeV4 {
+func projectCapacityScopeV4(value appobs.CapacityScopeSnapshot) capacityScopeV4 {
 	return capacityScopeV4{
 		StableHandles: decimal(value.StableHandles), ActiveLeases: decimal(value.ActiveLeases),
 		StableHandleLimit: decimal(value.StableHandleLimit), ActiveLeaseLimit: decimal(value.ActiveLeaseLimit),
@@ -63,7 +66,7 @@ func (visitor *encodeVisitorV4) VisitSenderRevisionObserved(event clievent.Sende
 		if !sessionOK {
 			return errInvalidSchemaEvent
 		}
-		correlation, err = projectSessionCorrelation(session, clievent.LaneIdentity{}, false)
+		correlation, err = projectSessionCorrelation(session, appobs.LaneIdentity{}, false)
 		if err != nil {
 			return err
 		}

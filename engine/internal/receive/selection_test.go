@@ -1,9 +1,10 @@
 package receive
 
 import (
+	"testing"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
-	"testing"
 )
 
 func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {

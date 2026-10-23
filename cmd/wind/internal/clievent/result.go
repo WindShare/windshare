@@ -3,6 +3,8 @@ package clievent
 import (
 	"errors"
 	"time"
+
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var ErrInvalidResult = errors.New("CLI command result is invalid")
@@ -30,14 +32,14 @@ type TransferResultSpec struct {
 	ExitCode            ExitCode
 	Drift               DriftReason
 	Elapsed             time.Duration
-	Destination         DisplayPath
+	Destination         appobs.DisplayPath
 	DestinationAdjusted bool
-	Files               FileOutcomes
+	Files               appobs.FileOutcomes
 	DirectoryFailures   uint64
 	OmittedDiagnostics  uint64
 	PublishedBytes      uint64
 	CountersExact       bool
-	Failure             Failure
+	Failure             appobs.Failure
 }
 
 type TransferResult struct {
@@ -45,20 +47,20 @@ type TransferResult struct {
 	exitCode            ExitCode
 	drift               DriftReason
 	elapsed             time.Duration
-	destination         DisplayPath
+	destination         appobs.DisplayPath
 	destinationAdjusted bool
-	files               FileOutcomes
+	files               appobs.FileOutcomes
 	directoryFailures   uint64
 	omittedDiagnostics  uint64
 	publishedBytes      uint64
 	countersExact       bool
-	failure             Failure
+	failure             appobs.Failure
 	hasFailure          bool
 }
 
 func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 	if !spec.Status.Valid() || !spec.ExitCode.Valid() || spec.Elapsed < 0 || spec.Destination.Empty() ||
-		spec.CountersExact && !validExactItemBlockCounts(spec.Files) {
+		spec.CountersExact && !appobs.ValidExactItemBlockCounts(spec.Files) {
 		return TransferResult{}, ErrInvalidResult
 	}
 	if _, ok := spec.Drift.Name(); !ok {
@@ -87,18 +89,20 @@ func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 	}, nil
 }
 
-func (result TransferResult) Status() ResultStatus       { return result.status }
-func (result TransferResult) ExitCode() ExitCode         { return result.exitCode }
-func (result TransferResult) Drift() DriftReason         { return result.drift }
-func (result TransferResult) Elapsed() time.Duration     { return result.elapsed }
-func (result TransferResult) Destination() DisplayPath   { return result.destination }
-func (result TransferResult) DestinationAdjusted() bool  { return result.destinationAdjusted }
-func (result TransferResult) Files() FileOutcomes        { return result.files }
-func (result TransferResult) DirectoryFailures() uint64  { return result.directoryFailures }
-func (result TransferResult) OmittedDiagnostics() uint64 { return result.omittedDiagnostics }
-func (result TransferResult) PublishedBytes() uint64     { return result.publishedBytes }
-func (result TransferResult) CountersExact() bool        { return result.countersExact }
-func (result TransferResult) Failure() (Failure, bool)   { return result.failure, result.hasFailure }
+func (result TransferResult) Status() ResultStatus            { return result.status }
+func (result TransferResult) ExitCode() ExitCode              { return result.exitCode }
+func (result TransferResult) Drift() DriftReason              { return result.drift }
+func (result TransferResult) Elapsed() time.Duration          { return result.elapsed }
+func (result TransferResult) Destination() appobs.DisplayPath { return result.destination }
+func (result TransferResult) DestinationAdjusted() bool       { return result.destinationAdjusted }
+func (result TransferResult) Files() appobs.FileOutcomes      { return result.files }
+func (result TransferResult) DirectoryFailures() uint64       { return result.directoryFailures }
+func (result TransferResult) OmittedDiagnostics() uint64      { return result.omittedDiagnostics }
+func (result TransferResult) PublishedBytes() uint64          { return result.publishedBytes }
+func (result TransferResult) CountersExact() bool             { return result.countersExact }
+func (result TransferResult) Failure() (appobs.Failure, bool) {
+	return result.failure, result.hasFailure
+}
 func (result TransferResult) Valid() bool {
 	_, err := NewTransferResult(TransferResultSpec{
 		Status: result.status, ExitCode: result.exitCode, Drift: result.drift,
@@ -106,11 +110,11 @@ func (result TransferResult) Valid() bool {
 		DestinationAdjusted: result.destinationAdjusted, Files: result.files,
 		DirectoryFailures: result.directoryFailures, OmittedDiagnostics: result.omittedDiagnostics,
 		PublishedBytes: result.publishedBytes, CountersExact: result.countersExact,
-		Failure: func() Failure {
+		Failure: func() appobs.Failure {
 			if result.hasFailure {
 				return result.failure
 			}
-			return Failure{}
+			return appobs.Failure{}
 		}(),
 	})
 	return err == nil
@@ -119,13 +123,13 @@ func (result TransferResult) Valid() bool {
 type ShareResultSpec struct {
 	ExitCode ExitCode
 	Elapsed  time.Duration
-	Failure  Failure
+	Failure  appobs.Failure
 }
 
 type ShareResult struct {
 	exitCode   ExitCode
 	elapsed    time.Duration
-	failure    Failure
+	failure    appobs.Failure
 	hasFailure bool
 }
 
@@ -141,18 +145,20 @@ func NewShareResult(spec ShareResultSpec) (ShareResult, error) {
 	}, nil
 }
 
-func (result ShareResult) ExitCode() ExitCode       { return result.exitCode }
-func (result ShareResult) Elapsed() time.Duration   { return result.elapsed }
-func (result ShareResult) StoppedCleanly() bool     { return result.exitCode == ExitSuccess }
-func (result ShareResult) Failure() (Failure, bool) { return result.failure, result.hasFailure }
+func (result ShareResult) ExitCode() ExitCode     { return result.exitCode }
+func (result ShareResult) Elapsed() time.Duration { return result.elapsed }
+func (result ShareResult) StoppedCleanly() bool   { return result.exitCode == ExitSuccess }
+func (result ShareResult) Failure() (appobs.Failure, bool) {
+	return result.failure, result.hasFailure
+}
 func (result ShareResult) Valid() bool {
 	_, err := NewShareResult(ShareResultSpec{
 		ExitCode: result.exitCode, Elapsed: result.elapsed,
-		Failure: func() Failure {
+		Failure: func() appobs.Failure {
 			if result.hasFailure {
 				return result.failure
 			}
-			return Failure{}
+			return appobs.Failure{}
 		}(),
 	})
 	return err == nil

@@ -5,14 +5,15 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(identityBytes(0x61))
-	operation, _ := clievent.NewProtocolOperationID(identityBytes(0x62))
-	decisionID, _ := clievent.NewCapacityDecisionID("capacity-owner-3-decision-4")
-	decision, _ := clievent.NewSenderCapacityDecision(decisionID)
-	event, err := clievent.NewSenderContentDecisionObserved(clievent.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Command: clievent.CommandShare, Role: clievent.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessageOpenRevisions}, decision, clievent.LaneIdentity{}, false)
+	session, _ := appobs.NewProtocolSessionID(identityBytes(0x61))
+	operation, _ := appobs.NewProtocolOperationID(identityBytes(0x62))
+	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-3-decision-4")
+	decision, _ := appobs.NewSenderCapacityDecision(decisionID)
+	event, err := clievent.NewSenderContentDecisionObserved(appobs.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowShare, Role: appobs.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessageOpenRevisions}, decision, appobs.LaneIdentity{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,12 +32,12 @@ func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *tes
 }
 
 func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(identityBytes(0x71))
-	decisionID, _ := clievent.NewCapacityDecisionID("capacity-owner-5-decision-6")
-	revisionID, _ := clievent.NewSenderRevisionID([]byte("revision-one"))
-	scope := clievent.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := clievent.NewSenderCapacityObserved(clievent.SenderCapacitySpec{
-		Stage: clievent.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
+	session, _ := appobs.NewProtocolSessionID(identityBytes(0x71))
+	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-5-decision-6")
+	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-one"))
+	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
+	capacityEvent, err := clievent.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
 		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
 		HasShare: true, HasSessionScope: true,
 	})
@@ -55,9 +56,9 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 		t.Fatalf("sender capacity record = %#v", record)
 	}
 
-	lease, _ := clievent.NewRevisionLeaseID(identityBytes(0x72))
+	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x72))
 	revisionEvent, err := clievent.NewSenderRevisionObserved(
-		clievent.SenderRevisionLeaseSettlement, clievent.SenderRevisionCauseRelinquished,
+		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
 		revisionID, lease, session,
 	)
 	if err != nil {
@@ -77,21 +78,21 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 }
 
 func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(identityBytes(0x81))
-	decisionID, _ := clievent.NewCapacityDecisionID("capacity-owner-7-decision-8")
-	revisionID, _ := clievent.NewSenderRevisionID([]byte("revision-two"))
-	scope := clievent.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := clievent.NewSenderCapacityObserved(clievent.SenderCapacitySpec{
-		Stage: clievent.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
+	session, _ := appobs.NewProtocolSessionID(identityBytes(0x81))
+	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-7-decision-8")
+	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-two"))
+	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
+	capacityEvent, err := clievent.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
 		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
 		HasShare: true, HasSessionScope: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease, _ := clievent.NewRevisionLeaseID(identityBytes(0x82))
+	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x82))
 	revisionEvent, err := clievent.NewSenderRevisionObserved(
-		clievent.SenderRevisionLeaseSettlement, clievent.SenderRevisionCauseRelinquished,
+		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
 		revisionID, lease, session,
 	)
 	if err != nil {
@@ -124,7 +125,7 @@ func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
 }
 
 func identityBytes(first byte) []byte {
-	raw := make([]byte, clievent.IdentityBytes)
+	raw := make([]byte, appobs.IdentityBytes)
 	raw[0] = first
 	return raw
 }

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 type memoryStore struct {
@@ -69,7 +69,7 @@ func response(status int, value any) (*http.Response, error) {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 }
 func prior() Snapshot {
-	return Snapshot{Config: relayconfig.Config{FrontURL: "https://chosen.example", Profiles: []senderrelay.Candidate{{PublicURL: "https://public.example"}},
+	return Snapshot{Config: relayconfig.Config{FrontURL: "https://chosen.example", Profiles: []relayprofile.Candidate{{PublicURL: "https://public.example"}},
 		ActiveRelays: []string{"https://public.example"}}}
 }
 func TestOrdinaryAdditionPreservesSelectionAndFrontend(t *testing.T) {

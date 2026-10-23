@@ -1,10 +1,11 @@
 package commandprojection
 
 import (
-	"github.com/windshare/windshare/engine"
 	"math"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 // ProjectReceiveResult translates an already settled application outcome.
@@ -24,10 +25,10 @@ func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (cl
 		drift = clievent.DriftSource
 	}
 	r := input.Value.Transfer
-	spec := clievent.TransferResultSpec{Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Value.Elapsed, Destination: clievent.NewDisplayPath(input.Value.Destination), DestinationAdjusted: input.Value.DestinationAdjusted,
+	spec := clievent.TransferResultSpec{Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Value.Elapsed, Destination: appobs.NewDisplayPath(input.Value.Destination), DestinationAdjusted: input.Value.DestinationAdjusted,
 		Files: projectFileOutcomes(r.Progress.FileOutcomes), DirectoryFailures: saturatingCount(len(r.Directories), r.OmittedDirectoryFailures), OmittedDiagnostics: saturatingAdd(r.OmittedDirectoryFailures, r.OmittedFileFailures), PublishedBytes: r.Progress.PublishedBytes, CountersExact: r.Progress.CountersExact}
 	if input.Outcome != engine.OutcomeSuccess {
-		spec.Failure, _ = ClassifyError(input.Err)
+		spec.Failure = input.Failure
 	}
 	value, err := clievent.NewTransferResult(spec)
 	if err != nil {
@@ -50,54 +51,6 @@ func projectApplicationFailureClass(class engine.FailureClass) clievent.ExitCode
 	}
 }
 
-// The workflow's typed reason owns precedence over incidental diagnostic causes.
-func projectReceiveFailure(value engine.ReceiveFailure) (clievent.Failure, bool) {
-	if failure, ok := ProjectFault(value.Fault); ok {
-		return failure, true
-	}
-	if failure, ok := ProjectTransferInterruption(value.Interruption); ok {
-		return failure, true
-	}
-	local := map[engine.ReceiveLocalFailure]clievent.FailureCode{
-		engine.ReceiveLocalSelectionMissing: clievent.FailureSelectionMissing, engine.ReceiveLocalRevisionConflict: clievent.FailureCheckpointRevisionConflict,
-		engine.ReceiveLocalCheckpointInvalid: clievent.FailureCheckpointInvalid, engine.ReceiveLocalOwnedObjectUnknown: clievent.FailureOwnedObjectUnknown, engine.ReceiveLocalDestinationCollision: clievent.FailureDestinationCollision}
-	if code, ok := local[value.Local]; ok {
-		return mustFailure(code), true
-	}
-	if code, ok := ReceiveFailureCode(value.Code); ok {
-		return mustFailure(code), true
-	}
-	return clievent.Failure{}, false
-}
-func ReceiveFailureCode(code engine.ReceiveFailureCode) (clievent.FailureCode, bool) {
-	switch code {
-	case engine.ReceiveFailureInvalidInput:
-		return clievent.FailureInvalidInput, true
-	case engine.ReceiveFailureOutputContract:
-		return clievent.FailureOutputContract, true
-	case engine.ReceiveFailureOutputFileAlreadyActive:
-		return clievent.FailureOutputFileAlreadyActive, true
-	case engine.ReceiveFailureOutputNeedsAttention:
-		return clievent.FailureOutputNeedsAttention, true
-	case engine.ReceiveFailureOutputOwnership:
-		return clievent.FailureOutputOwnership, true
-	case engine.ReceiveFailureOutputRecoveryUnavailable:
-		return clievent.FailureOutputRecoveryUnavailable, true
-	case engine.ReceiveFailurePeerConfiguration:
-		return clievent.FailurePeerConfiguration, true
-	case engine.ReceiveFailurePeerNegotiation:
-		return clievent.FailurePeerNegotiation, true
-	case engine.ReceiveFailurePeerProtocol:
-		return clievent.FailurePeerProtocol, true
-	case engine.ReceiveFailurePeerSignaling:
-		return clievent.FailurePeerSignaling, true
-	case engine.ReceiveFailurePeerStopped:
-		return clievent.FailurePeerStopped, true
-	default:
-		return 0, false
-	}
-}
-
 func ProjectShareResult(input engine.TaskResult[engine.ShareResult]) (clievent.ShareResult, error) {
 	exit := clievent.ExitSuccess
 	switch input.FailureClass {
@@ -113,7 +66,7 @@ func ProjectShareResult(input engine.TaskResult[engine.ShareResult]) (clievent.S
 	default:
 		return clievent.ShareResult{}, ErrInvalidProjection
 	}
-	failure, _ := ClassifyError(input.Err)
+	failure := input.Failure
 	result, err := clievent.NewShareResult(clievent.ShareResultSpec{ExitCode: exit, Elapsed: input.Value.Elapsed, Failure: failure})
 	if err != nil {
 		return clievent.ShareResult{}, ErrInvalidProjection
@@ -127,7 +80,7 @@ func ProjectCommandFailure(
 ) (clievent.CommandFailed, error) {
 	failure, present := ClassifyError(cause)
 	if !present {
-		failure = mustFailure(clievent.FailureUnexpected)
+		failure = mustFailure(appobs.FailureUnexpected)
 	}
 	event, err := clievent.NewCommandFailed(command, exit, failure)
 	if err != nil {

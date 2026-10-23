@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -24,7 +23,7 @@ func TestSenderFailureSnapshotSurvivesProjectionAndNDJSONEncoding(t *testing.T) 
 		fmt.Errorf("peer response: %w", errors.New(nativeMessage)),
 		errors.New("cleanup failed"),
 	), "peer")
-	event, err := commandprojection.ProjectSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
+	event, err := traceSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
 		ProtocolSessionID: session,
 		Trigger:           sessionruntime.SenderSessionTerminalTriggerRuntimeFailed,
 		Provenance:        sessionruntime.SenderSessionTerminalProvenanceLocalFault,

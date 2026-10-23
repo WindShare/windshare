@@ -6,24 +6,25 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 	t.Parallel()
-	failure := mustFailure(t, clievent.FailureSourceRevisionChanged)
+	failure := mustFailure(t, appobs.FailureSourceRevisionChanged)
 	tests := []struct {
 		name      string
 		status    clievent.ResultStatus
 		exit      clievent.ExitCode
 		drift     clievent.DriftReason
-		failure   clievent.Failure
+		failure   appobs.Failure
 		headline  string
 		completed bool
 	}{
-		{"success", clievent.ResultSuccess, clievent.ExitSuccess, clievent.DriftNone, clievent.Failure{}, "Download completed", true},
-		{"partial", clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, clievent.FailureOutputStateIO), "finished partially", false},
-		{"paused", clievent.ResultPaused, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, clievent.FailureCheckpointBusy), "Download paused", false},
-		{"failed", clievent.ResultFailed, clievent.ExitNetwork, clievent.DriftNone, mustFailure(t, clievent.FailureRelayTransport), "Download failed", false},
+		{"success", clievent.ResultSuccess, clievent.ExitSuccess, clievent.DriftNone, appobs.Failure{}, "Download completed", true},
+		{"partial", clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, appobs.FailureOutputStateIO), "finished partially", false},
+		{"paused", clievent.ResultPaused, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, appobs.FailureCheckpointBusy), "Download paused", false},
+		{"failed", clievent.ResultFailed, clievent.ExitNetwork, clievent.DriftNone, mustFailure(t, appobs.FailureRelayTransport), "Download failed", false},
 		{"paused drift", clievent.ResultPaused, clievent.ExitDrift, clievent.DriftSource, failure, "Download paused", false},
 		{"drift", clievent.ResultFailed, clievent.ExitDrift, clievent.DriftSource, failure, "source changed", false},
 	}
@@ -32,8 +33,8 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 			result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 				Status: test.status, ExitCode: test.exit, Drift: test.drift,
 				Elapsed:     9*time.Second + 600*time.Millisecond,
-				Destination: clievent.NewDisplayPath("out\n\x1b[31m"), DestinationAdjusted: true,
-				Files: clievent.FileOutcomes{
+				Destination: appobs.NewDisplayPath("out\n\x1b[31m"), DestinationAdjusted: true,
+				Files: appobs.FileOutcomes{
 					DownloadedFiles: 3, ResumedFiles: 2, PausedFiles: 1,
 					CollisionFiles: 1, ItemBlockedFiles: 2, FailedFiles: 1,
 					ModifiedTimeWarnings: 1,
@@ -87,7 +88,7 @@ func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 	}
 
 	failed, err := clievent.NewShareResult(clievent.ShareResultSpec{
-		ExitCode: clievent.ExitNetwork, Failure: mustFailure(t, clievent.FailureRelayTransport),
+		ExitCode: clievent.ExitNetwork, Failure: mustFailure(t, appobs.FailureRelayTransport),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +103,7 @@ func TestTransferResultPreservesPublishedDestinationKind(t *testing.T) {
 	for _, destination := range []string{"./archive.zip", "./vacation_photos/"} {
 		result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 			Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
-			Destination: clievent.NewDisplayPath(destination), CountersExact: true,
+			Destination: appobs.NewDisplayPath(destination), CountersExact: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -116,20 +117,20 @@ func TestTransferResultPreservesPublishedDestinationKind(t *testing.T) {
 
 func TestTransferResultExplainsLocalOutcomeWithoutSourceOrUnexpectedWording(t *testing.T) {
 	tests := []struct {
-		code     clievent.FailureCode
-		outcomes clievent.FileOutcomes
+		code     appobs.FailureCode
+		outcomes appobs.FileOutcomes
 		want     string
 	}{
-		{clievent.FailureCheckpointRevisionConflict, clievent.FileOutcomes{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, "another source revision"},
-		{clievent.FailureCheckpointInvalid, clievent.FileOutcomes{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, "invalid checkpoint binding"},
-		{clievent.FailureOwnedObjectUnknown, clievent.FileOutcomes{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, "destination object it owns"},
-		{clievent.FailureDestinationCollision, clievent.FileOutcomes{CollisionFiles: 1}, "Existing destinations prevented"},
+		{appobs.FailureCheckpointRevisionConflict, appobs.FileOutcomes{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, "another source revision"},
+		{appobs.FailureCheckpointInvalid, appobs.FileOutcomes{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, "invalid checkpoint binding"},
+		{appobs.FailureOwnedObjectUnknown, appobs.FileOutcomes{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, "destination object it owns"},
+		{appobs.FailureDestinationCollision, appobs.FileOutcomes{CollisionFiles: 1}, "Existing destinations prevented"},
 	}
 	for _, test := range tests {
 		failure := mustFailure(t, test.code)
 		result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 			Status: clievent.ResultPartial, ExitCode: clievent.ExitFailure,
-			Destination: clievent.NewDisplayPath("out"), Files: test.outcomes,
+			Destination: appobs.NewDisplayPath("out"), Files: test.outcomes,
 			CountersExact: true, Failure: failure,
 		})
 		if err != nil {
@@ -149,7 +150,7 @@ func TestTransferResultExplainsLocalOutcomeWithoutSourceOrUnexpectedWording(t *t
 
 func TestDisplayValuesAreEscapedBeforeLayout(t *testing.T) {
 	t.Parallel()
-	subject, err := clievent.NewFileSubject(clievent.NewDisplayName("bad\n\x1b\u202efile"), 1)
+	subject, err := appobs.NewFileSubject(appobs.NewDisplayName("bad\n\x1b\u202efile"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

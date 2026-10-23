@@ -20,7 +20,7 @@ try {
     throw new Error('Set WINDSHARE_TURN_TRIAL_CONFIGURATION to an enrolled deployment configuration, or WINDSHARE_TURN_TRIAL_KEY to a temporary owner key')
   }
   const executable = join(temporary, process.platform === 'win32' ? 'turnprobe.exe' : 'turnprobe')
-  await promisify(execFile)('go', ['build', '-o', executable, './transport/webrtc/testdata/browser/turnprobe'], {
+  await promisify(execFile)('go', ['build', '-o', executable, './engine/internal/turnruntime/testdata/turnprobe'], {
     cwd: root, windowsHide: true, timeout: 60_000,
   })
   const payloadBytes = process.env.WINDSHARE_TURN_TRIAL_BYTES ?? String(512 * 1024)

@@ -87,9 +87,9 @@ type ReceiverConfig struct {
 	recovery    *ReceiverRecovery
 	Clock       ReceiverClock
 	Receiver    liveshare.ReceiverConfig
-	Dial        func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
+	Dial        func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error)
 	DialOptions relayv2.DialOptions
-	Connected   func(*relayv2.ReceiverConnection)
+	Connected   func(ReceiverConnection)
 }
 
 // Receiver owns relay connections for one cryptographic session. Competing
@@ -103,7 +103,7 @@ type Receiver struct {
 	mu               sync.Mutex
 	runtime          *sessionruntime.ReceiverRuntime
 	prepared         *liveshare.PreparedReceiver
-	first            *relayv2.ReceiverConnection
+	first            ReceiverConnection
 	remaining        int
 	failure          error
 	ready            chan struct{}
@@ -145,7 +145,7 @@ func NewReceiver(ctx context.Context, config ReceiverConfig) (*Receiver, error) 
 		config.Clock = receiverClock{}
 	}
 	if config.Dial == nil {
-		config.Dial = relayv2.DialReceiver
+		config.Dial = DialReceiver
 	}
 	if config.recovery == nil {
 		config.recovery, _ = NewReceiverRecovery(ReceiverRecoveryOptions{Clock: config.Clock})
@@ -159,7 +159,7 @@ func NewReceiver(ctx context.Context, config ReceiverConfig) (*Receiver, error) 
 	return receiver, nil
 }
 
-func (receiver *Receiver) WaitReady(ctx context.Context) (*sessionruntime.ReceiverRuntime, *relayv2.ReceiverConnection, error) {
+func (receiver *Receiver) WaitReady(ctx context.Context) (*sessionruntime.ReceiverRuntime, ReceiverConnection, error) {
 	select {
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
@@ -271,7 +271,7 @@ func (receiver *Receiver) current() *sessionruntime.ReceiverRuntime {
 
 var closedReceiverLane = func() <-chan struct{} { done := make(chan struct{}); close(done); return done }()
 
-func (receiver *Receiver) admit(ctx context.Context, connection *relayv2.ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
+func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
 	config := receiver.config.Receiver
 	config.DescriptorObject = connection.Descriptor()
 	prepared, err := liveshare.PrepareReceiver(config)
@@ -322,7 +322,7 @@ func (receiver *Receiver) attemptError(ctx context.Context) error {
 	return nil
 }
 
-func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *sessionruntime.LaneIdentity) (*relayv2.ReceiverConnection, error) {
+func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *sessionruntime.LaneIdentity) (ReceiverConnection, error) {
 	if err := receiver.attemptError(ctx); err != nil {
 		return nil, err
 	}
@@ -341,11 +341,11 @@ func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *
 	return connection, err
 }
 
-func (receiver *Receiver) dial(ctx context.Context, url string) (*relayv2.ReceiverConnection, error) {
+func (receiver *Receiver) dial(ctx context.Context, url string) (ReceiverConnection, error) {
 	return receiver.config.Dial(ctx, relayv2.ReceiverConfig{RelayBaseURL: url, ShareID: receiver.shareID, Dial: receiver.config.DialOptions})
 }
 
-func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection *relayv2.ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
+func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
 	candidate, connectErr := prepared.Connect(ctx, connection.Channel(), transfer.LaneRouteRelay)
 	if connectErr != nil {
 		prepared.Close()
@@ -362,7 +362,7 @@ func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshar
 	return nil
 }
 
-func (receiver *Receiver) publishInitial(ctx context.Context, candidate *sessionruntime.ReceiverRuntime, prepared *liveshare.PreparedReceiver, connection *relayv2.ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
+func (receiver *Receiver) publishInitial(ctx context.Context, candidate *sessionruntime.ReceiverRuntime, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
 	// An authenticated contradiction can race a still-running handshake. Hold
 	// identity authority through publication so rejection either prevents this
 	// generation or observes and terminates the published runtime.
@@ -419,7 +419,7 @@ func (receiver *Receiver) finishInitial(url string, err error) {
 		close(receiver.ready)
 	}
 }
-func (receiver *Receiver) waitLane(connection *relayv2.ReceiverConnection, lane sessionruntime.LaneIdentity) {
+func (receiver *Receiver) waitLane(connection ReceiverConnection, lane sessionruntime.LaneIdentity) {
 	receiver.mu.Lock()
 	runtime := receiver.runtime
 	receiver.mu.Unlock()

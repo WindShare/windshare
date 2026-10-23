@@ -3,39 +3,41 @@ package clievent
 import (
 	"testing"
 	"time"
+
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestProgressSnapshotEnforcesExactCounterRelationships(t *testing.T) {
-	valid := ProgressSpec{
+	valid := appobs.ProgressSpec{
 		DiscoveredFiles: 3, DiscoveredBytes: 100,
 		PublishedFiles: 2, PublishedBytes: 70,
 		VerifiedBytes: 90, NewlyVerifiedBytes: 60,
-		FileOutcomes: FileOutcomes{DownloadedFiles: 1, ResumedFiles: 1},
-		Discovery:    DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 1, ResumedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	}
-	snapshot, err := NewProgressSnapshot(valid)
+	snapshot, err := appobs.NewProgressSnapshot(valid)
 	if err != nil || !snapshot.Valid() || snapshot.VerifiedBytes() != 90 || snapshot.PublishedBytes() != 70 {
 		t.Fatalf("valid progress rejected: %+v err=%v", snapshot, err)
 	}
 	tests := []struct {
 		name   string
-		mutate func(*ProgressSpec)
+		mutate func(*appobs.ProgressSpec)
 	}{
-		{"new exceeds verified", func(value *ProgressSpec) { value.NewlyVerifiedBytes = 91 }},
-		{"verified exceeds discovered", func(value *ProgressSpec) { value.VerifiedBytes = 101 }},
-		{"published exceeds verified", func(value *ProgressSpec) { value.PublishedBytes = 91 }},
-		{"published files exceed discovered", func(value *ProgressSpec) { value.PublishedFiles = 4 }},
-		{"settlement count disagrees", func(value *ProgressSpec) { value.FileOutcomes.ResumedFiles = 0 }},
-		{"classified item blocks exceed total", func(value *ProgressSpec) {
+		{"new exceeds verified", func(value *appobs.ProgressSpec) { value.NewlyVerifiedBytes = 91 }},
+		{"verified exceeds discovered", func(value *appobs.ProgressSpec) { value.VerifiedBytes = 101 }},
+		{"published exceeds verified", func(value *appobs.ProgressSpec) { value.PublishedBytes = 91 }},
+		{"published files exceed discovered", func(value *appobs.ProgressSpec) { value.PublishedFiles = 4 }},
+		{"settlement count disagrees", func(value *appobs.ProgressSpec) { value.FileOutcomes.ResumedFiles = 0 }},
+		{"classified item blocks exceed total", func(value *appobs.ProgressSpec) {
 			value.FileOutcomes.RevisionConflictFiles = 1
 		}},
-		{"invalid discovery", func(value *ProgressSpec) { value.Discovery = 0 }},
+		{"invalid discovery", func(value *appobs.ProgressSpec) { value.Discovery = 0 }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := valid
 			test.mutate(&candidate)
-			if _, err := NewProgressSnapshot(candidate); err == nil {
+			if _, err := appobs.NewProgressSnapshot(candidate); err == nil {
 				t.Fatalf("accepted invalid exact progress: %+v", candidate)
 			}
 		})
@@ -43,14 +45,14 @@ func TestProgressSnapshotEnforcesExactCounterRelationships(t *testing.T) {
 	inexact := valid
 	inexact.CountersExact = false
 	inexact.VerifiedBytes = 101
-	if _, err := NewProgressSnapshot(inexact); err != nil {
+	if _, err := appobs.NewProgressSnapshot(inexact); err != nil {
 		t.Fatalf("inexact saturated snapshot rejected: %v", err)
 	}
 }
 
 func TestProgressSnapshotKeepsCapacityWaitOutsideFileOutcomes(t *testing.T) {
-	snapshot, err := NewProgressSnapshot(ProgressSpec{
-		Discovery: DiscoveryComplete, CountersExact: true,
+	snapshot, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		Discovery: appobs.DiscoveryComplete, CountersExact: true,
 		CapacityActiveWaiters: 1, CapacityAccumulatedWait: 750 * time.Millisecond,
 		CapacityWaitAttempts: 2, CapacityWaitVisible: true,
 	})
@@ -65,19 +67,19 @@ func TestProgressSnapshotKeepsCapacityWaitOutsideFileOutcomes(t *testing.T) {
 		t.Fatalf("capacity wait became a file outcome: %+v", snapshot.FileOutcomes())
 	}
 
-	invalid := []ProgressSpec{
-		{Discovery: DiscoveryComplete, CapacityAccumulatedWait: -time.Millisecond},
-		{Discovery: DiscoveryComplete, CapacityWaitVisible: true},
+	invalid := []appobs.ProgressSpec{
+		{Discovery: appobs.DiscoveryComplete, CapacityAccumulatedWait: -time.Millisecond},
+		{Discovery: appobs.DiscoveryComplete, CapacityWaitVisible: true},
 	}
 	for _, spec := range invalid {
-		if _, err := NewProgressSnapshot(spec); err == nil {
+		if _, err := appobs.NewProgressSnapshot(spec); err == nil {
 			t.Fatalf("accepted invalid capacity wait: %+v", spec)
 		}
 	}
 }
 
 func TestResultConstructorsFreezeExitAndDriftSemantics(t *testing.T) {
-	destination := NewDisplayPath("C:/receiver/result")
+	destination := appobs.NewDisplayPath("C:/receiver/result")
 	success, err := NewTransferResult(TransferResultSpec{
 		Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone,
 		Elapsed: time.Second, Destination: destination, CountersExact: true,
@@ -85,7 +87,7 @@ func TestResultConstructorsFreezeExitAndDriftSemantics(t *testing.T) {
 	if err != nil || !success.Valid() {
 		t.Fatalf("valid success rejected: %+v err=%v", success, err)
 	}
-	driftFailure, _ := NewFailure(FailureSourceRevisionChanged)
+	driftFailure, _ := appobs.NewFailure(appobs.FailureSourceRevisionChanged)
 	drifted, err := NewTransferResult(TransferResultSpec{
 		Status: ResultPartial, ExitCode: ExitDrift, Drift: DriftSource,
 		Elapsed: time.Second, Destination: destination, Failure: driftFailure,

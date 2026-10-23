@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
@@ -36,7 +35,7 @@ func TestFilesystemRuntimeFailuresSurviveProjectionAndEncoding(t *testing.T) {
 				source.NormalizedFaultScope = uint8(value.Scope())
 				source.NormalizedFaultCode = value.Code()
 			}
-			event, err := commandprojection.ProjectFilesystemOutput(source)
+			event, err := traceFilesystemOutput(source)
 			if err != nil {
 				t.Fatalf("runtime failure was rejected: %v", err)
 			}

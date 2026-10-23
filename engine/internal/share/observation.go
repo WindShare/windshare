@@ -135,7 +135,7 @@ func (o *observations) ObserveSenderSessionTerminated(value sessionruntime.Sende
 	o.emit(Observation{SessionTerminal: &value})
 }
 
-func (o *observations) runtimeConfig(relays Relays, peers *v2peer.Factory) liveshare.RuntimeFactoryConfig {
+func (o *observations) runtimeConfig(relays Relays, peers sessionruntime.SenderPeerHandlerFactory) liveshare.RuntimeFactoryConfig {
 	config := liveshare.RuntimeFactoryConfig{TerminalConnectivity: relays, PeerHandlers: peers, ProtocolObservations: o.protocol}
 	if o.trace {
 		config.TerminalSendObserver, config.SessionTerminalObserver = o, o

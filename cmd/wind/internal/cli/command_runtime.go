@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const defaultCommandEventCapacity = 256
@@ -71,8 +72,8 @@ type commandRuntime struct {
 	rejectionEvidenceDropped          atomic.Uint64
 	pendingRejectionEvidenceLoss      atomic.Uint64
 	rejectionEvidenceLossReportFailed atomic.Bool
-	pendingObserverLoss               [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
-	upstreamCumulative                [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
+	pendingObserverLoss               [appobs.ObserverLossCategoryLimit][appobs.ObserverLossReasonLimit]atomic.Uint64
+	upstreamCumulative                [appobs.ObserverLossCategoryLimit][appobs.ObserverLossReasonLimit]atomic.Uint64
 	pendingProgressLoss               atomic.Uint64
 	pendingTraceLoss                  atomic.Uint64
 	pendingTraceRejections            atomic.Uint64
@@ -191,11 +192,11 @@ func openNativeUserTrace(
 }
 
 func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Command, openErr error) {
-	code := clievent.FailureTraceOpen
+	code := appobs.FailureTraceOpen
 	if errors.Is(openErr, runtrace.ErrTraceExists) {
-		code = clievent.FailureTraceExists
+		code = appobs.FailureTraceExists
 	}
-	failure, err := clievent.NewFailure(code)
+	failure, err := appobs.NewFailure(code)
 	if err != nil {
 		return
 	}
@@ -221,18 +222,18 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		if _, progress := event.(clievent.TransferProgress); progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
 		} else {
-			runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossRecorderClosed, 1)
+			runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossRecorderClosed, 1)
 		}
 		runtime.signalReadyLocked()
 		return false
 	}
 	if event == nil || event.Command() != runtime.command {
-		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract, 1)
+		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
 		runtime.signalReadyLocked()
 		return false
 	}
 	if _, terminal := event.(clievent.TerminalEvent); terminal {
-		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract, 1)
+		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
 		runtime.signalReadyLocked()
 		return false
 	}
@@ -241,7 +242,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		if progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
 		} else {
-			runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossAdapterCapacityTimeout, 1)
+			runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossAdapterCapacityTimeout, 1)
 		}
 		runtime.signalReadyLocked()
 		return false
@@ -258,7 +259,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		return true
 	}
 	if runtime.observerLifecycleCount == len(runtime.observerLifecycle) {
-		runtime.addObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossAdapterCapacityTimeout, 1)
+		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossAdapterCapacityTimeout, 1)
 		runtime.signalReadyLocked()
 		return false
 	}

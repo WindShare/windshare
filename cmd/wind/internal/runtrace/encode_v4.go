@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var errInvalidSchemaEvent = errors.New("event cannot be represented by trace schema v4")
@@ -70,11 +71,11 @@ func (visitor *encodeVisitorV4) set(event string, correlation *CorrelationV1, pa
 }
 
 func projectEventCorrelation(
-	session clievent.ProtocolSessionID,
-	operation clievent.ProtocolOperationID,
-	path clievent.PeerPathID,
-	attempt clievent.PeerAttemptID,
-	lane clievent.LaneIdentity,
+	session appobs.ProtocolSessionID,
+	operation appobs.ProtocolOperationID,
+	path appobs.PeerPathID,
+	attempt appobs.PeerAttemptID,
+	lane appobs.LaneIdentity,
 	hasLane bool,
 ) (*CorrelationV1, error) {
 	var projectedLane *LaneCorrelation
@@ -95,24 +96,24 @@ func projectEventCorrelation(
 }
 
 func projectSessionCorrelation(
-	session clievent.ProtocolSessionID,
-	lane clievent.LaneIdentity,
+	session appobs.ProtocolSessionID,
+	lane appobs.LaneIdentity,
 	hasLane bool,
 ) (*CorrelationV1, error) {
 	return projectEventCorrelation(
-		session, clievent.ProtocolOperationID{}, clievent.PeerPathID{},
-		clievent.PeerAttemptID{}, lane, hasLane,
+		session, appobs.ProtocolOperationID{}, appobs.PeerPathID{},
+		appobs.PeerAttemptID{}, lane, hasLane,
 	)
 }
 
 func projectProtocolCorrelation(
-	session clievent.ProtocolSessionID,
-	operation clievent.ProtocolOperationID,
-	lane clievent.LaneIdentity,
+	session appobs.ProtocolSessionID,
+	operation appobs.ProtocolOperationID,
+	lane appobs.LaneIdentity,
 	hasLane bool,
 ) (*CorrelationV1, error) {
 	return projectEventCorrelation(
-		session, operation, clievent.PeerPathID{}, clievent.PeerAttemptID{}, lane, hasLane,
+		session, operation, appobs.PeerPathID{}, appobs.PeerAttemptID{}, lane, hasLane,
 	)
 }
 
@@ -120,7 +121,7 @@ func encodeTypedIdentity(raw []byte) string {
 	return encodeCorrelationIdentity(raw)
 }
 
-func projectRelayAuthority(authority clievent.RelayAuthority) (relayAuthorityV4, error) {
+func projectRelayAuthority(authority appobs.RelayAuthority) (relayAuthorityV4, error) {
 	scheme, err := nameOf(authority.Scheme())
 	if err != nil || !authority.Valid() {
 		return relayAuthorityV4{}, errInvalidSchemaEvent
@@ -128,7 +129,7 @@ func projectRelayAuthority(authority clievent.RelayAuthority) (relayAuthorityV4,
 	return relayAuthorityV4{Scheme: scheme, Host: authority.Host(), Port: authority.Port()}, nil
 }
 
-func projectFailure(failure clievent.Failure) (failureV4, error) {
+func projectFailure(failure appobs.Failure) (failureV4, error) {
 	code, err := nameOf(failure.Code())
 	if err != nil {
 		return failureV4{}, err
@@ -159,7 +160,7 @@ func projectFailure(failure clievent.Failure) (failureV4, error) {
 	return projected, nil
 }
 
-func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV4 {
+func projectFileOutcomes(outcomes appobs.FileOutcomes) fileOutcomesV4 {
 	return fileOutcomesV4{
 		DownloadedFiles:          decimal(outcomes.DownloadedFiles),
 		ResumedFiles:             decimal(outcomes.ResumedFiles),
@@ -172,7 +173,7 @@ func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV4 {
 	}
 }
 
-func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV4, error) {
+func projectProgress(snapshot appobs.ProgressSnapshot) (progressPayloadV4, error) {
 	discovery, err := nameOf(snapshot.Discovery())
 	if err != nil || !snapshot.Valid() {
 		return progressPayloadV4{}, errInvalidSchemaEvent
@@ -210,7 +211,7 @@ func (visitor *encodeVisitorV4) VisitSharingSubjectSelected(event clievent.Shari
 	payload := sharingSubjectPayloadV4{
 		SubjectKind: kind, SelectedItems: decimal(subject.SelectedItems()),
 	}
-	if subject.Kind() == clievent.SharingFile {
+	if subject.Kind() == appobs.SharingFile {
 		payload.FileBytes = decimalPointer(subject.FileBytes())
 	}
 	visitor.set("sharing_subject_selected", nil, payload)
@@ -259,7 +260,7 @@ func (visitor *encodeVisitorV4) VisitRelayRecovering(event clievent.RelayRecover
 		}
 		if details.ProtocolSessionID.Valid() {
 			var err error
-			correlation, err = projectSessionCorrelation(details.ProtocolSessionID, clievent.LaneIdentity{}, false)
+			correlation, err = projectSessionCorrelation(details.ProtocolSessionID, appobs.LaneIdentity{}, false)
 			if err != nil {
 				return err
 			}

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
@@ -34,7 +34,7 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	if stdout.Len() != 0 || strings.Contains(stderr.String(), "private-import-canary") {
 		t.Fatal("import leaked configuration or wrote to the capability stream")
 	}
-	expected := []senderrelay.Candidate{{PublicURL: "https://private.example", AccessKey: "private-import-canary"}}
+	expected := []relayprofile.Candidate{{PublicURL: "https://private.example", AccessKey: "private-import-canary"}}
 	request, outcome := app.parseShareRequest([]string{"root"})
 	if outcome != requestParseReady || !reflect.DeepEqual(request.relays, expected) || request.link.frontURL != "https://private.example" {
 		t.Fatal("ordinary share did not use the imported complete candidate set")

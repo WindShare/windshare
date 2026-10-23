@@ -3,13 +3,14 @@ package relayconfig
 import (
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/internal/turnruntime"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestTURNProjectionDoesNotDependOnUnrelatedApplicationSettings(t *testing.T) {
 	config := Config{
-		Profiles: []senderrelay.Candidate{{PublicURL: "https://relay.example", AccessKey: "key"}},
+		Profiles: []relayprofile.Candidate{{PublicURL: "https://relay.example", AccessKey: "key"}},
 		FrontURL: "not-a-frontend", ActiveRelays: []string{"https://not-saved.example"},
 		ManagedTURNPolicies: []turn.ManagedPolicy{{RelayURL: "https://relay.example", LocalBudgetBytes: 100}},
 	}
@@ -17,7 +18,7 @@ func TestTURNProjectionDoesNotDependOnUnrelatedApplicationSettings(t *testing.T)
 		t.Fatal("invalid application settings accepted")
 	}
 	settings := config.TURNSettings()
-	runtime, err := turn.New(settings, turn.Dependencies{})
+	runtime, err := turnruntime.New(settings, turn.Dependencies{})
 	if err != nil {
 		t.Fatal("unrelated application settings blocked TURN configuration", err)
 	}

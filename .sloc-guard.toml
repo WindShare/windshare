@@ -97,7 +97,7 @@ count_exclude = [
 # Keeping connectivity and internal runtime packages in scope prevents test
 # infrastructure from escaping the same module boundaries as product code.
 [[structure.rules]]
-scope = "{cmd,connectivity,core,internal,relay,relay-rust,transport}/"
+scope = "{cmd,connectivity,core,engine,internal,relay,relay-rust,transport}/"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 15

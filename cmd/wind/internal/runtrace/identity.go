@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 	"io"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-type runIdentity [clievent.IdentityBytes]byte
+type runIdentity [appobs.IdentityBytes]byte
 
 func newRunID(random io.Reader) (runIdentity, error) {
 	var identity runIdentity

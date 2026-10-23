@@ -5,11 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turn"
 	"net/http"
 	"net/url"
+
+	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 type enrollmentResponse struct {
@@ -123,7 +124,7 @@ func (service *Service) confirm(ctx context.Context, saved Snapshot, progress fu
 	if service.dependencies.Cache != nil && len(response.Services) == 1 {
 		discovered := response.Services[0]
 		if sameRelay(discovered.RelayURL, pending.RelayURL) && discovered.Validate() == nil {
-			candidate := senderrelay.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
+			candidate := relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
 			if err := service.dependencies.Cache.Save(ctx, candidate, discovered.Capability, requestedAt); err != nil {
 				service.dependencies.Log.Debug("relay_setup_cache_failed", "operation_id", pending.OperationID, "reason", err)
 			}

@@ -7,11 +7,12 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	authority, _ := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
+	authority, _ := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
 	for _, state := range []struct {
 		available, total, terminal uint32
 		ever                       bool
@@ -21,8 +22,8 @@ func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *test
 			t.Fatal(err)
 		}
 	}
-	for _, state := range []clievent.RelayRecoveryState{clievent.RelayRecoveryWaiting, clievent.RelayRecoverySucceeded} {
-		event, _ := clievent.NewRelayRecoveryObservation(clievent.CommandShare, authority, 70, state, clievent.Failure{}, clievent.RelayRecoveryDetails{Generation: 2, Slow: true, Resume: true, NextDelay: time.Second})
+	for _, state := range []appobs.RelayRecoveryState{appobs.RelayRecoveryWaiting, appobs.RelayRecoverySucceeded} {
+		event, _ := clievent.NewRelayRecoveryObservation(clievent.CommandShare, authority, 70, state, appobs.Failure{}, appobs.RelayRecoveryDetails{Generation: 2, Slow: true, Resume: true, NextDelay: time.Second})
 		if err := harness.renderer.Render(event); err != nil {
 			t.Fatal(err)
 		}

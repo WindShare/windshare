@@ -5,13 +5,14 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func runtimeRejectionSample() clievent.ObservationRejection {
-	return clievent.CaptureObservationRejection(clievent.ObservationRejection{
+func runtimeRejectionSample() appobs.ObservationRejection {
+	return appobs.CaptureObservationRejection(appobs.ObservationRejection{
 		Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation",
 		Stage: "unknown", Field: "stage", Rule: "known_enum",
-	}, clievent.RejectedEnum("stage", 255))
+	}, appobs.RejectedEnum("stage", 255))
 }
 
 func TestRejectionEvidenceFailureRetainsIndependentNumericLoss(t *testing.T) {
@@ -26,7 +27,7 @@ func TestRejectionEvidenceFailureRetainsIndependentNumericLoss(t *testing.T) {
 			runtime, _ := rejectionRuntime()
 			test.breakRuntime(runtime)
 			for range 5 {
-				if !runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, runtimeRejectionSample()) {
+				if !runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, runtimeRejectionSample()) {
 					t.Fatal("original rejection was not accounted")
 				}
 			}
@@ -49,7 +50,7 @@ func TestRejectionEvidenceFailureRetainsIndependentNumericLoss(t *testing.T) {
 
 func TestMalformedRejectionSampleRetainsLossWithoutRecursiveDiagnostics(t *testing.T) {
 	runtime, _ := rejectionRuntime()
-	if runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, clievent.ObservationRejection{}) {
+	if runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, appobs.ObservationRejection{}) {
 		t.Fatal("malformed sample accepted")
 	}
 	loss := runtime.collectPendingLossLocked(true)
@@ -81,20 +82,20 @@ func TestFailedEvidenceHealthUpdatePreservesPendingCounter(t *testing.T) {
 func TestRejectionSignaturesIncludeEventAndSourceButExcludeValues(t *testing.T) {
 	runtime, _ := rejectionRuntime()
 	sample := runtimeRejectionSample()
-	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, sample)
+	runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, sample)
 	sample.Source = "other.ProjectProtocolObservation"
-	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, sample)
+	runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, sample)
 	sample.Event = "protocol_send_attempt_settled"
-	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, sample)
+	runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, sample)
 	for i := range 100 {
-		sample = clievent.CaptureObservationRejection(sample, clievent.RejectedEnum("stage", uint64(i)))
-		runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, sample)
+		sample = appobs.CaptureObservationRejection(sample, appobs.RejectedEnum("stage", uint64(i)))
+		runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, sample)
 	}
 	if len(runtime.projectionRejections) != 3 || runtime.projectionRejections[2].count != 101 {
 		t.Fatal("source signatures merged or actual values grew signature cardinality")
 	}
 	runtime.projectionRejections[2].count = ^uint64(0)
-	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossUnknownEnum, sample)
+	runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossUnknownEnum, sample)
 	if runtime.projectionRejections[2].count != ^uint64(0) {
 		t.Fatal("repeat delta wrapped")
 	}

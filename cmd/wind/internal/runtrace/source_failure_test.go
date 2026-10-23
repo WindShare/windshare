@@ -5,20 +5,21 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *testing.T) {
 	const path = "selected/文件\nfile.bin"
-	failure, err := clievent.NewSourcePathFailure(clievent.FailureSourceMissing, clievent.NewDisplayPath(path))
+	failure, err := appobs.NewSourcePathFailure(appobs.FailureSourceMissing, appobs.NewDisplayPath(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, _ := clievent.NewEngineTaskID("application:42")
-	identity := make([]byte, clievent.IdentityBytes)
+	task, _ := appobs.NewEngineTaskID("application:42")
+	identity := make([]byte, appobs.IdentityBytes)
 	identity[0] = 1
-	share, _ := clievent.NewSharingInstanceID(identity)
-	sourceEvent, err := clievent.NewEngineTaskObserved(clievent.EngineTaskSpec{
-		Command: clievent.CommandShare, Task: task, Stage: clievent.EngineSourceFailed, ShareInstance: share, Failure: failure,
+	share, _ := appobs.NewSharingInstanceID(identity)
+	sourceEvent, err := clievent.NewEngineTaskObserved(appobs.EngineTaskSpec{
+		Workflow: appobs.WorkflowShare, Task: task, Stage: appobs.EngineSourceFailed, ShareInstance: share, Failure: failure,
 	})
 	if err != nil {
 		t.Fatal(err)

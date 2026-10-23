@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -33,7 +33,7 @@ func digest(value string) string {
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }
-func (store FileStore) location(candidate senderrelay.Candidate) (string, string, error) {
+func (store FileStore) location(candidate relayprofile.Candidate) (string, string, error) {
 	endpoint, err := v2.NormalizeRelayEndpoint(candidate.PublicURL)
 	if err != nil {
 		return "", "", err
@@ -69,7 +69,7 @@ func read(path string) (*observation, error) {
 	}
 	return &result, nil
 }
-func (store FileStore) Load(candidate senderrelay.Candidate) (*turn.Capability, error) {
+func (store FileStore) Load(candidate relayprofile.Candidate) (*turn.Capability, error) {
 	path, address, err := store.location(candidate)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (store FileStore) Load(candidate senderrelay.Candidate) (*turn.Capability, 
 	}
 	return &record.Capability, nil
 }
-func (store FileStore) Save(ctx context.Context, candidate senderrelay.Candidate, capability turn.Capability, requestedAt time.Time) error {
+func (store FileStore) Save(ctx context.Context, candidate relayprofile.Candidate, capability turn.Capability, requestedAt time.Time) error {
 	if capability.Validate() != nil || candidate.AccessKey == "" || requestedAt.IsZero() {
 		return turn.ErrConfiguration
 	}

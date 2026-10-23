@@ -3,8 +3,9 @@ package receive
 import (
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/connectivity/relayset"
 	"reflect"
+
+	"github.com/windshare/windshare/connectivity/relayset"
 )
 
 const (

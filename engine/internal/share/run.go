@@ -6,12 +6,11 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -63,7 +62,7 @@ type activeShare struct {
 	observations    *observations
 	prepared        Prepared
 	relays          Relays
-	peers           *v2peer.Factory
+	peers           Peers
 	factory         SessionFactory
 	server          *sessionServer
 	cancelResources context.CancelFunc
@@ -74,11 +73,11 @@ type activeShare struct {
 
 func (s *activeShare) start(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
 	d, o := s.dependencies, s.observations
-	urls, err := senderrelay.PublicURLs(request.Relays)
+	urls, err := relayprofile.PublicURLs(request.Relays)
 	if err != nil || len(urls) > relayset.MaximumEndpoints {
 		return task.FailureUsage, errors.Join(ErrConfiguration, err)
 	}
-	candidates := make(map[string]senderrelay.Candidate, len(request.Relays))
+	candidates := make(map[string]relayprofile.Candidate, len(request.Relays))
 	for _, candidate := range request.Relays {
 		candidates[candidate.PublicURL] = candidate
 	}
@@ -114,7 +113,11 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if s.relays == nil {
 		return task.FailureLocal, ErrConfiguration
 	}
-	s.relays.ObserveAvailability(func(value relayset.SenderAvailability) { o.emit(Observation{RelayAvailability: &value}) })
+	if observed, ok := s.relays.(interface {
+		ObserveAvailability(func(relayset.SenderAvailability))
+	}); ok {
+		observed.ObserveAvailability(func(value relayset.SenderAvailability) { o.emit(Observation{RelayAvailability: &value}) })
+	}
 	s.networkDone = make(chan struct{})
 	go func() {
 		defer close(s.networkDone)
@@ -131,8 +134,8 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 		TURN: d.TURN,
 		Now:  d.Control.Now, Diagnostics: request.Diagnostics, TraceLifecycle: request.TraceLifecycle, ObserveChannel: o.attachChannel,
 	})
-	if s.peers != nil {
-		o.attachPeers(s.peers)
+	if native, ok := s.peers.(nativePeers); ok {
+		o.attachPeers(native.Factory)
 	}
 	if err != nil {
 		return task.FailureLocal, err
@@ -204,9 +207,9 @@ func (s *activeShare) close() (task.FailureClass, error) {
 		}
 		s.server.workers.Wait()
 	}
-	if s.peers != nil && s.peers.NativeConnectivity() != nil {
+	if s.peers != nil {
 		cleanup, cancel := d.Control.CleanupContext()
-		localError = s.peers.NativeConnectivity().Close(cleanup)
+		localError = s.peers.Close(cleanup)
 		cancel()
 	}
 	if s.prepared != nil {

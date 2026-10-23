@@ -10,11 +10,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/engine"
-
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *testing.T) {
@@ -34,7 +33,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 	emitter := &shareRecordingEmitter{}
 	observations := newShareProjection(emitter)
 	application, err := engine.New(engine.Config{Share: engine.ShareDependencies{
-		Relays: func(context.Context, []string, relayset.SenderFactory) (engine.ShareRelays, error) {
+		Relays: func(context.Context, []relayprofile.Candidate) (engine.ShareRelays, error) {
 			return nil, errors.New("test ends after source preparation")
 		},
 	}})
@@ -49,9 +48,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 		t.Fatal(err)
 	}
 	for fact := range current.Observations() {
-		if event, ok := fact.Event.(engine.ShareObservation); ok {
-			(&App{}).observeEngineShare(observations, event)
-		}
+		(&App{}).observeEngineShare(observations, fact.Event)
 	}
 	result, err := current.Wait(context.Background())
 	if err != nil || result.CleanupError != nil {

@@ -16,14 +16,12 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
-	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turncache"
 	"github.com/windshare/windshare/internal/platformsetup"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -87,9 +85,9 @@ type App struct {
 	openUserTrace        userTraceOpener
 	commandEventCapacity int
 
-	receiverRecoveryOptions relayset.ReceiverRecoveryOptions
+	receiverRecoveryOptions engine.ReceiveRecoverySettings
 	receiverPeerFactory     func() (engine.ReceivePeerStarter, error)
-	receiverDial            func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
+	receiverDial            func(context.Context, engine.ReceiveDialRequest) (engine.ReceiveConnection, error)
 	processTrace            *processTrace
 	application             *engine.Engine
 	engineConfig            engine.Config

@@ -15,7 +15,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type bindingOnlyGetOutputAuthority struct {
@@ -55,7 +54,7 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.receiverDial = func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	app.receiverDial = func(context.Context, engine.ReceiveDialRequest) (engine.ReceiveConnection, error) {
 		events = append(events, "dial")
 		cancel()
 		return nil, context.Canceled

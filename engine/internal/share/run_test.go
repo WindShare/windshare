@@ -10,14 +10,12 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 const testWaitTimeout = 5 * time.Second
@@ -109,7 +107,7 @@ type testRelays struct {
 	once                           sync.Once
 }
 
-func (r *testRelays) Accept(ctx context.Context) (*relayv2.Channel, error) {
+func (r *testRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
 	if r.acceptErr != nil {
 		return nil, r.acceptErr
 	}
@@ -285,10 +283,10 @@ func TestSharePreparationFailuresReturnCleanupAndResolveReadiness(t *testing.T) 
 		}, task.FailureLocal},
 		{"readiness", func(f *shareFixture) { f.relays.waitErr = failure }, task.FailureNetwork},
 		{"peers", func(f *shareFixture) {
-			f.dependencies.Peers = func(nativeconnectivity.SenderConfig) (*v2peer.Factory, error) { return nil, failure }
+			f.dependencies.Peers = func(nativeconnectivity.SenderConfig) (Peers, error) { return nil, failure }
 		}, task.FailureLocal},
 		{"missing_peers", func(f *shareFixture) {
-			f.dependencies.Peers = func(nativeconnectivity.SenderConfig) (*v2peer.Factory, error) { return nil, nil }
+			f.dependencies.Peers = func(nativeconnectivity.SenderConfig) (Peers, error) { return nil, nil }
 		}, task.FailureLocal},
 		{"factory", func(f *shareFixture) { f.prepared.runtimeErr = failure }, task.FailureLocal},
 		{"missing_factory", func(f *shareFixture) { f.prepared.factory = nil }, task.FailureLocal},

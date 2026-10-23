@@ -2,11 +2,12 @@ package runtrace
 
 import (
 	"encoding/json"
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/core/downloadmetrics"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/core/downloadmetrics"
 )
 
 func TestDownloadConnectivityFinalExportUsesExistingTransferSettlement(t *testing.T) {

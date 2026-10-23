@@ -3,8 +3,9 @@ package receive
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/relayset"
 	"testing"
+
+	"github.com/windshare/windshare/connectivity/relayset"
 )
 
 func TestGetReceiverRecoveryOptionsFailure(t *testing.T) {

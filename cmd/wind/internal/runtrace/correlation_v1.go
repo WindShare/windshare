@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var ErrInvalidCorrelation = errors.New("diagnostic correlation is invalid")
@@ -19,10 +19,10 @@ type LaneCorrelation struct {
 // CorrelationInput keeps protocol identities strongly typed until the record
 // boundary, preventing unrelated 16-byte identities from being interchanged.
 type CorrelationInput struct {
-	ProtocolSessionID   clievent.ProtocolSessionID
-	ProtocolOperationID clievent.ProtocolOperationID
-	PeerPathID          clievent.PeerPathID
-	PeerAttemptID       clievent.PeerAttemptID
+	ProtocolSessionID   appobs.ProtocolSessionID
+	ProtocolOperationID appobs.ProtocolOperationID
+	PeerPathID          appobs.PeerPathID
+	PeerAttemptID       appobs.PeerAttemptID
 	Lane                *LaneCorrelation
 }
 

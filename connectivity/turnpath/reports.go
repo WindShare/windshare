@@ -1,6 +1,7 @@
 package turnpath
 
 import (
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -37,6 +38,6 @@ func (s *Sender) applyReport(path *delegation) {
 		path.lease.Charge(Usage{Useful: reported - path.useful})
 		path.useful = reported
 		s.recoverBudgetAfterProgress(path)
-		s.observe(path, MilestoneUsefulContent, "")
+		s.observe(path, connectionpath.MilestoneUsefulContent, "")
 	}
 }

@@ -6,13 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/transport/webrtc/provider"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
@@ -25,16 +22,13 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { recorder.Close() })
-	subject := nativepeer.Subject{
-		ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3},
-		AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver,
-	}
+	session, _ := appobs.NewProtocolSessionID(testShareBytes16(1))
+	path, _ := appobs.NewPeerPathID(testShareBytes16(2))
+	attempt, _ := appobs.NewPeerAttemptID(testShareBytes16(3))
 	for _, scope := range []string{"ice", "turnc"} {
 		for _, severity := range []string{"warning", "error"} {
-			diagnostic := &provider.Diagnostic{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
-			event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{
-				Subject: subject, Provider: &provider.Event{Milestone: "provider_diagnostic", Diagnostic: diagnostic},
-			})
+			diagnostic := &appobs.NativeProviderDiagnosticFacts{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
+			event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Session: session, Path: path, Attempt: attempt, AttemptSequence: 4, NetworkGeneration: 5, Profile: "ice-0123abcd", Side: "receiver", Kind: "provider_diagnostic", State: "unknown", Diagnostic: diagnostic})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +55,7 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 			Payload     struct {
 				Kind, State     string
 				AttemptSequence string `json:"attempt_sequence"`
-				Diagnostic      *clievent.NativeProviderDiagnosticFacts
+				Diagnostic      *appobs.NativeProviderDiagnosticFacts
 			}
 		}
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
@@ -82,31 +76,6 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 	for _, key := range []string{"ice/warning", "ice/error", "turnc/warning", "turnc/error"} {
 		if !seen[key] {
 			t.Errorf("missing provider diagnostic %s", key)
-		}
-	}
-}
-
-func TestNativeProviderDiagnosticMessageBoundaries(t *testing.T) {
-	for _, message := range []string{
-		"", "ordinary warning", "invalid \xff text",
-		strings.Repeat("界", clievent.NativeProviderDiagnosticMessageLimit),
-	} {
-		event, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, nativepeer.Observation{
-			Provider: &provider.Event{Milestone: "provider_diagnostic",
-				Diagnostic: &provider.Diagnostic{Scope: "ice", Severity: "warning", Message: message}},
-		})
-		if err != nil {
-			t.Fatalf("log text caused observation loss: %v", err)
-		}
-		got := event.Facts().Diagnostic.Message
-		if !utf8.ValidString(got) || len(got) > clievent.NativeProviderDiagnosticMessageLimit {
-			t.Fatal("provider diagnostic escaped its bounded UTF-8 contract")
-		}
-		if utf8.ValidString(message) && len(message) <= clievent.NativeProviderDiagnosticMessageLimit && got != message {
-			t.Fatal("bounded provider message changed")
-		}
-		if len(message) > clievent.NativeProviderDiagnosticMessageLimit && !strings.HasSuffix(got, "…") {
-			t.Fatal("truncated provider diagnostic was not marked")
 		}
 	}
 }

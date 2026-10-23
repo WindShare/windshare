@@ -6,6 +6,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.ShareResult], publicationErr error) int {
@@ -17,10 +18,10 @@ func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.
 		if publication, ok := errors.AsType[*engine.SharePublicationError](publicationErr); ok {
 			switch publication.Stage {
 			case engine.SharePublicationEncoding:
-				emitShareKnownFailure(runtime, code, clievent.FailureCapabilityInvalid)
+				emitShareKnownFailure(runtime, code, appobs.FailureCapabilityInvalid)
 				return code
 			case engine.SharePublicationOutput:
-				emitShareKnownFailure(runtime, code, clievent.FailurePublication)
+				emitShareKnownFailure(runtime, code, appobs.FailurePublication)
 				return code
 			}
 		}
@@ -39,12 +40,12 @@ func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.
 	}
 	projected, err := commandprojection.ProjectShareResult(result)
 	if err != nil {
-		emitShareKnownFailure(runtime, ExitFailure, clievent.FailureUnexpected)
+		emitShareKnownFailure(runtime, ExitFailure, appobs.FailureUnexpected)
 		return ExitFailure
 	}
 	event, err := clievent.NewSharingStopped(projected)
 	if err != nil {
-		emitShareKnownFailure(runtime, ExitFailure, clievent.FailureUnexpected)
+		emitShareKnownFailure(runtime, ExitFailure, appobs.FailureUnexpected)
 		return ExitFailure
 	}
 	runtime.Finalize(event)
@@ -65,7 +66,7 @@ func emitShareCommandFailure(emitter shareCommandPublisher, exit int, cause erro
 		cause,
 	)
 	if err != nil {
-		emitShareKnownFailure(emitter, ExitFailure, clievent.FailureUnexpected)
+		emitShareKnownFailure(emitter, ExitFailure, appobs.FailureUnexpected)
 		return
 	}
 	if finalizer, ok := emitter.(shareCommandFinalizer); ok {
@@ -75,7 +76,7 @@ func emitShareCommandFailure(emitter shareCommandPublisher, exit int, cause erro
 	emitter.Publish(event)
 }
 
-func emitShareKnownFailure(emitter shareCommandPublisher, exit int, code clievent.FailureCode) {
+func emitShareKnownFailure(emitter shareCommandPublisher, exit int, code appobs.FailureCode) {
 	if emitter == nil {
 		return
 	}

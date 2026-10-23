@@ -4,8 +4,8 @@ import (
 	"math/bits"
 	"strings"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -34,7 +34,7 @@ type progressComponents struct {
 // FormatProgress is pure: rate eligibility is supplied as a fact, while this
 // function owns only progress truth rules and width degradation.
 func FormatProgress(
-	snapshot clievent.ProgressSnapshot,
+	snapshot appobs.ProgressSnapshot,
 	metrics ProgressMetrics,
 	layout ProgressLayout,
 ) terminalcanvas.Line {
@@ -61,7 +61,7 @@ func FormatProgress(
 	return line
 }
 
-func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, unicode bool) progressComponents {
+func progressView(snapshot appobs.ProgressSnapshot, metrics ProgressMetrics, unicode bool) progressComponents {
 	symbols := SelectSymbols(unicode)
 	exactPrefix := ""
 	if !snapshot.CountersExact() {
@@ -73,7 +73,7 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 	}
 	rate := ""
 	if metrics.RateValid && metrics.RateBytesPerSecond != 0 && snapshot.CountersExact() &&
-		snapshot.Discovery() != clievent.DiscoveryFailed {
+		snapshot.Discovery() != appobs.DiscoveryFailed {
 		rate = FormatRate(metrics.RateBytesPerSecond)
 	}
 	if snapshot.CapacityWaitVisible() {
@@ -81,14 +81,14 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 	}
 
 	switch snapshot.Discovery() {
-	case clievent.DiscoveryOpen:
+	case appobs.DiscoveryOpen:
 		return progressComponents{
 			phase:     symbols.Discovery + " Discovering" + symbols.Ellipsis,
 			primary:   exactPrefix + FormatBytes(snapshot.DiscoveredBytes()) + " ready",
 			secondary: exactPrefix + formatFiles(snapshot.DiscoveredFiles()),
 			rate:      rate,
 		}
-	case clievent.DiscoveryFailed:
+	case appobs.DiscoveryFailed:
 		return progressComponents{
 			phase:     symbols.Failure + " Discovery failed",
 			primary:   exactPrefix + FormatBytes(snapshot.CompletedBytes()) + " completed",
@@ -187,7 +187,7 @@ func percentage(completed, total uint64) uint64 {
 
 func zeroBytePercentage(
 	settledFiles, discoveredFiles uint64,
-	outcomes clievent.FileOutcomes,
+	outcomes appobs.FileOutcomes,
 	successfulSettlement bool,
 ) uint64 {
 	if discoveredFiles == 0 {
@@ -216,7 +216,7 @@ func formatProgressBar(percent uint64, unicode bool) string {
 	return "[" + strings.Repeat(fill, filled) + strings.Repeat(empty, progressBarSegments-filled) + "]"
 }
 
-func terminalFileOutcomes(outcomes clievent.FileOutcomes) uint64 {
+func terminalFileOutcomes(outcomes appobs.FileOutcomes) uint64 {
 	total := outcomes.DownloadedFiles
 	for _, value := range []uint64{
 		outcomes.ResumedFiles, outcomes.PreviouslyPublishedFiles, outcomes.PausedFiles, outcomes.CollisionFiles,

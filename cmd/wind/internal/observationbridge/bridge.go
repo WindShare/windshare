@@ -1,4 +1,5 @@
 // Package observationbridge owns CLI-side execution of bounded producer
+
 // observation streams. Producers retain only queue and completion authority;
 // projection, cancellation, and join accounting stay at the command boundary.
 package observationbridge
@@ -8,17 +9,17 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type LossSink interface {
-	ReportObserverLoss(clievent.ObserverLossCategory, clievent.ObserverLossReason, uint64) bool
+	ReportObserverLoss(appobs.ObserverLossCategory, appobs.ObserverLossReason, uint64) bool
 }
 
 type cumulativeLossKey[Source comparable] struct {
 	source   Source
-	category clievent.ObserverLossCategory
-	reason   clievent.ObserverLossReason
+	category appobs.ObserverLossCategory
+	reason   appobs.ObserverLossReason
 }
 
 // CumulativeLosses keeps producer identities distinct until the narrower CLI
@@ -39,8 +40,8 @@ func NewCumulativeLosses[Source comparable](sink LossSink) *CumulativeLosses[Sou
 
 func (losses *CumulativeLosses[Source]) Report(
 	source Source,
-	category clievent.ObserverLossCategory,
-	reason clievent.ObserverLossReason,
+	category appobs.ObserverLossCategory,
+	reason appobs.ObserverLossReason,
 	cumulative uint64,
 ) {
 	if losses == nil || cumulative == 0 {

@@ -3,7 +3,6 @@ package commandprojection
 import (
 	"context"
 	"fmt"
-	"github.com/windshare/windshare/engine"
 	"math"
 	"strings"
 	"testing"
@@ -13,6 +12,8 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
+	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
@@ -36,7 +37,7 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 	if projected.DiscoveredFiles() != 5 || projected.DiscoveredBytes() != 500 ||
 		projected.PublishedFiles() != 2 || projected.PublishedBytes() != 200 ||
 		projected.VerifiedBytes() != 350 || projected.NewlyVerifiedBytes() != 300 ||
-		projected.Discovery() != clievent.DiscoveryComplete || !projected.CountersExact() ||
+		projected.Discovery() != appobs.DiscoveryComplete || !projected.CountersExact() ||
 		files.DownloadedFiles != 1 || files.ResumedFiles != 1 || files.PausedFiles != 1 ||
 		files.CollisionFiles != 1 || files.ItemBlockedFiles != 3 || files.FailedFiles != 1 ||
 		files.RevisionConflictFiles != 1 || files.CheckpointInvalidFiles != 1 ||
@@ -67,14 +68,11 @@ func TestHistoricalDeliveryCompletesWithoutVerifiedBytes(t *testing.T) {
 		t.Fatalf("historical progress = (%+v, %v)", progress, err)
 	}
 	result, err := ProjectGetResult(GetResultInput{
-		Result: job, Destination: clievent.NewDisplayPath("C:/downloads"),
+		Result: job, Destination: appobs.NewDisplayPath("C:/downloads"),
 	})
 	if err != nil || result.ExitCode() != clievent.ExitSuccess || result.Status() != clievent.ResultSuccess ||
 		result.Files().PreviouslyPublishedFiles != 2 {
 		t.Fatalf("historical result = (%+v, %v)", result, err)
-	}
-	if kind, ok := projectFileSettlement(transfer.FilePreviouslyPublished); !ok || kind != clievent.FilePreviouslyPublished {
-		t.Fatalf("historical lifecycle = (%d, %t)", kind, ok)
 	}
 	job.Progress.DiscoveredBytes, job.Progress.PublishedBytes = math.MaxUint64, math.MaxUint64
 	job.Progress.VerifiedBytes, job.Progress.PreviouslyPublishedBytes = math.MaxUint64, 1
@@ -132,14 +130,14 @@ func TestCapacityBudgetPauseProjectsAsResumableJobWithoutFileFailure(t *testing.
 				},
 			},
 		},
-		Destination: clievent.NewDisplayPath("C:/safe"),
+		Destination: appobs.NewDisplayPath("C:/safe"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failure, present := result.Failure()
 	if result.Status() != clievent.ResultPaused || !present ||
-		failure.Code() != clievent.FailureSessionResourceBudget {
+		failure.Code() != appobs.FailureSessionResourceBudget {
 		t.Fatalf("capacity pause projection = %+v failure=%+v present=%t", result, failure, present)
 	}
 	if files := result.Files(); files.FailedFiles != 0 || files.PausedFiles != 0 || files.HasNonSuccess() {
@@ -154,13 +152,13 @@ func TestGetResultProjectsClosedCallerCancellationBeforeCleanupDiagnostics(t *te
 	result.TerminationInterruption = transfer.TransferInterruptionCanceled
 	projected, err := ProjectGetResult(GetResultInput{
 		Result: result, RuntimeError: opaqueCanaryError{"late peer cleanup residue"},
-		ContextError: context.Canceled, Destination: clievent.NewDisplayPath("C:/safe"),
+		ContextError: context.Canceled, Destination: appobs.NewDisplayPath("C:/safe"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failure, present := projected.Failure()
-	if !present || failure.Code() != clievent.FailureCanceled || projected.ExitCode() != clievent.ExitFailure {
+	if !present || failure.Code() != appobs.FailureCanceled || projected.ExitCode() != clievent.ExitFailure {
 		t.Fatalf("canceled result=%+v failure=%+v present=%t", projected, failure, present)
 	}
 }
@@ -171,13 +169,13 @@ func TestGetResultProjectsClosedSettlementDeadline(t *testing.T) {
 	result.SettlementFailure = opaqueCanaryError{"private settlement carrier"}
 	result.SettlementInterruption = transfer.TransferInterruptionDeadline
 	projected, err := ProjectGetResult(GetResultInput{
-		Result: result, Destination: clievent.NewDisplayPath("C:/safe"),
+		Result: result, Destination: appobs.NewDisplayPath("C:/safe"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failure, present := projected.Failure()
-	if !present || failure.Code() != clievent.FailureDeadline || projected.ExitCode() != clievent.ExitFailure {
+	if !present || failure.Code() != appobs.FailureDeadline || projected.ExitCode() != clievent.ExitFailure {
 		t.Fatalf("deadline result=%+v failure=%+v present=%t", projected, failure, present)
 	}
 }
@@ -186,19 +184,19 @@ func TestGetResultProjectsAuthoritativeLocalOutcomesWithoutUnexpectedFallback(t 
 	tests := []struct {
 		name     string
 		outcomes transfer.FileOutcomeSummary
-		want     clievent.FailureCode
+		want     appobs.FailureCode
 	}{
-		{"revision conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, clievent.FailureCheckpointRevisionConflict},
-		{"invalid checkpoint", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, clievent.FailureCheckpointInvalid},
-		{"owned object conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, clievent.FailureOwnedObjectUnknown},
-		{"destination collision", transfer.FileOutcomeSummary{CollisionFiles: 1}, clievent.FailureDestinationCollision},
+		{"revision conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, appobs.FailureCheckpointRevisionConflict},
+		{"invalid checkpoint", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, appobs.FailureCheckpointInvalid},
+		{"owned object conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, appobs.FailureOwnedObjectUnknown},
+		{"destination collision", transfer.FileOutcomeSummary{CollisionFiles: 1}, appobs.FailureDestinationCollision},
 		{
 			"mixed local priority",
 			transfer.FileOutcomeSummary{
 				ItemBlockedFiles: 3, RevisionConflictFiles: 1,
 				CheckpointInvalidFiles: 1, OwnedObjectUnknownFiles: 1, CollisionFiles: 1,
 			},
-			clievent.FailureCheckpointRevisionConflict,
+			appobs.FailureCheckpointRevisionConflict,
 		},
 	}
 	for _, test := range tests {
@@ -211,13 +209,13 @@ func TestGetResultProjectsAuthoritativeLocalOutcomesWithoutUnexpectedFallback(t 
 			job.Progress.FileOutcomes = test.outcomes
 			job.SucceededFiles = 0
 			projected, err := ProjectGetResult(GetResultInput{
-				Result: job, Destination: clievent.NewDisplayPath("C:/safe"),
+				Result: job, Destination: appobs.NewDisplayPath("C:/safe"),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			failure, ok := projected.Failure()
-			if !ok || failure.Code() != test.want || failure.Code() == clievent.FailureUnexpected {
+			if !ok || failure.Code() != test.want || failure.Code() == appobs.FailureUnexpected {
 				t.Fatalf("failure = %+v, present=%t, want %v", failure, ok, test.want)
 			}
 		})
@@ -243,7 +241,7 @@ func TestGetResultUsesSettlementOwnedCountsAndDropsDiagnosticPathsAndCauses(t *t
 	result.OmittedDirectoryFailures = math.MaxUint64
 	result.OmittedFileFailures = 9
 	projected, err := ProjectGetResult(GetResultInput{
-		Result: result, Destination: clievent.NewDisplayPath("C:/safe-human-destination"),
+		Result: result, Destination: appobs.NewDisplayPath("C:/safe-human-destination"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -274,14 +272,14 @@ func TestShareAndCommandFailureProjectionNeverDeriveExitFromRenderer(t *testing.
 	}
 	failed, err := ProjectShareResult(engine.TaskResult[engine.ShareResult]{
 		Completion: engine.TaskCompletion[engine.ShareResult]{Settlement: engine.TaskSettlement{
-			Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"},
+			Outcome: engine.OutcomeFailed, FailureClass: engine.FailureNetwork, Err: opaqueCanaryError{"provider-secret"}, Failure: mustFailure(appobs.FailureUnexpected),
 		}},
 	})
 	if err != nil || failed.ExitCode() != clievent.ExitNetwork || failed.StoppedCleanly() {
 		t.Fatalf("failed share result = %+v err=%v", failed, err)
 	}
 	command, err := ProjectCommandFailure(clievent.CommandShare, clievent.ExitFailure, nil)
-	if err != nil || command.ExitCode() != clievent.ExitFailure || command.Failure().Code() != clievent.FailureUnexpected {
+	if err != nil || command.ExitCode() != clievent.ExitFailure || command.Failure().Code() != appobs.FailureUnexpected {
 		t.Fatalf("command failure = %+v err=%v", command, err)
 	}
 }
@@ -304,3 +302,7 @@ func successfulJobResult(t *testing.T) transfer.JobResult {
 		},
 	}
 }
+
+type opaqueCanaryError struct{ secret string }
+
+func (failure opaqueCanaryError) Error() string { return failure.secret }

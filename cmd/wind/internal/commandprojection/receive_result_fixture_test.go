@@ -1,10 +1,12 @@
 package commandprojection
 
 import (
+	"time"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine"
-	"time"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type GetResultInput struct {
@@ -14,7 +16,7 @@ type GetResultInput struct {
 	ConnectionError     error
 	ContextError        error
 	Elapsed             time.Duration
-	Destination         clievent.DisplayPath
+	Destination         appobs.DisplayPath
 	DestinationAdjusted bool
 }
 

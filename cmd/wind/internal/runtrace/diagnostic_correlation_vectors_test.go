@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -217,8 +217,8 @@ func correlationNumbers(start byte) []int {
 
 func correlationBytes(t *testing.T, numbers []int) []byte {
 	t.Helper()
-	if len(numbers) != clievent.IdentityBytes {
-		t.Fatalf("identity byte count = %d, want %d", len(numbers), clievent.IdentityBytes)
+	if len(numbers) != appobs.IdentityBytes {
+		t.Fatalf("identity byte count = %d, want %d", len(numbers), appobs.IdentityBytes)
 	}
 	raw := make([]byte, len(numbers))
 	for index, value := range numbers {

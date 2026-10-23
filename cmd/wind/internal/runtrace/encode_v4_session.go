@@ -1,8 +1,10 @@
 package runtrace
 
 import (
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"time"
+
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func (visitor *encodeVisitorV4) VisitSenderTerminalSendObserved(
@@ -47,7 +49,7 @@ func (visitor *encodeVisitorV4) VisitSenderSessionTerminated(
 		return err
 	}
 	correlation, err := projectSessionCorrelation(
-		event.ProtocolSessionID(), clievent.LaneIdentity{}, false,
+		event.ProtocolSessionID(), appobs.LaneIdentity{}, false,
 	)
 	if err != nil {
 		return err
@@ -108,14 +110,14 @@ func (visitor *encodeVisitorV4) VisitProtocolObservationObserved(event clievent.
 		if err != nil {
 			return err
 		}
-	} else if _, notStarted := event.Fact().(clievent.ResponseSendNotStartedFact); !notStarted {
+	} else if _, notStarted := event.Fact().(appobs.ResponseSendNotStartedFact); !notStarted {
 		return errInvalidSchemaEvent
 	}
 	context := protocolContextV4{ObservedAt: event.ObservedAt().UTC().Format(time.RFC3339Nano), Role: role, RequestKind: kind}
 	switch fact := event.Fact().(type) {
-	case clievent.ProtocolOperationFact:
+	case appobs.ProtocolOperationFact:
 		return visitor.encodeProtocolOperation(event, fact)
-	case clievent.SenderContentDecisionFact:
+	case appobs.SenderContentDecisionFact:
 		lane, hasLane := fact.Lane()
 		correlation, err := projectProtocolCorrelation(event.ProtocolSessionID(), event.ProtocolOperationID(), lane, hasLane)
 		if err != nil {
@@ -126,11 +128,11 @@ func (visitor *encodeVisitorV4) VisitProtocolObservationObserved(event clievent.
 			return err
 		}
 		visitor.set("sender_content_decision", correlation, senderContentDecisionPayloadV4{protocolContextV4: context, ContentDecision: decision})
-	case clievent.ResponseSendNotStartedFact:
+	case appobs.ResponseSendNotStartedFact:
 		return visitor.encodeResponseSend(event, context, "protocol_response_send_not_started", fact.ResponseSequence(), fact.ResponseKind(), fact.Content(), fact.Result())
-	case clievent.ResponseSendReturnedFact:
+	case appobs.ResponseSendReturnedFact:
 		return visitor.encodeResponseSend(event, context, "protocol_response_send_returned", fact.ResponseSequence(), fact.ResponseKind(), fact.Content(), fact.Result())
-	case clievent.SendAttemptSettledFact:
+	case appobs.SendAttemptSettledFact:
 		attempt, err := projectSendAttempt(fact.Attempt())
 		if err != nil {
 			return err
@@ -144,7 +146,7 @@ func (visitor *encodeVisitorV4) VisitProtocolObservationObserved(event clievent.
 			return err
 		}
 		visitor.set("protocol_send_attempt_settled", correlation, protocolSendAttemptSettledPayloadV4{protocolContextV4: context, ResponseSequence: decimal(fact.ResponseSequence()), ResponseKind: responseKind, Attempt: attempt})
-	case clievent.ReceivedProtocolErrorFact:
+	case appobs.ReceivedProtocolErrorFact:
 		content, err := projectProtocolErrorContent(fact.Content())
 		if err != nil {
 			return err
@@ -159,7 +161,7 @@ func (visitor *encodeVisitorV4) VisitProtocolObservationObserved(event clievent.
 	}
 	return nil
 }
-func (visitor *encodeVisitorV4) encodeResponseSend(event clievent.ProtocolObservationObserved, context protocolContextV4, name string, sequence uint64, kind clievent.ProtocolMessageKind, content clievent.ProtocolErrorContent, result clievent.ResponseSendResult) error {
+func (visitor *encodeVisitorV4) encodeResponseSend(event clievent.ProtocolObservationObserved, context protocolContextV4, name string, sequence uint64, kind appobs.ProtocolMessageKind, content appobs.ProtocolErrorContent, result appobs.ResponseSendResult) error {
 	responseKind, err := nameOf(kind)
 	if err != nil {
 		return err
@@ -172,14 +174,14 @@ func (visitor *encodeVisitorV4) encodeResponseSend(event clievent.ProtocolObserv
 	if err != nil {
 		return err
 	}
-	correlation, err := projectProtocolCorrelation(event.ProtocolSessionID(), event.ProtocolOperationID(), clievent.LaneIdentity{}, false)
+	correlation, err := projectProtocolCorrelation(event.ProtocolSessionID(), event.ProtocolOperationID(), appobs.LaneIdentity{}, false)
 	if err != nil {
 		return err
 	}
 	visitor.set(name, correlation, protocolResponseSendPayloadV4{protocolContextV4: context, ResponseSequence: decimal(sequence), ResponseKind: responseKind, ProtocolError: projectedContent, ResponseResult: projectedResult})
 	return nil
 }
-func projectSendAttempt(value clievent.SendAttemptSnapshot) (sendAttemptV4, error) {
+func projectSendAttempt(value appobs.SendAttemptSnapshot) (sendAttemptV4, error) {
 	outcome, err := nameOf(value.Outcome())
 	if err != nil {
 		return sendAttemptV4{}, err
@@ -199,7 +201,7 @@ func projectSendAttempt(value clievent.SendAttemptSnapshot) (sendAttemptV4, erro
 	}
 	return result, err
 }
-func projectResponseSendResult(value clievent.ResponseSendResult) (responseSendResultV4, error) {
+func projectResponseSendResult(value appobs.ResponseSendResult) (responseSendResultV4, error) {
 	evidence, err := nameOf(value.Evidence())
 	if err != nil {
 		return responseSendResultV4{}, err
@@ -227,7 +229,7 @@ func projectResponseSendResult(value clievent.ResponseSendResult) (responseSendR
 	return result, nil
 }
 func (visitor *encodeVisitorV4) encodeProtocolOperation(
-	event clievent.ProtocolObservationObserved, fact clievent.ProtocolOperationFact,
+	event clievent.ProtocolObservationObserved, fact appobs.ProtocolOperationFact,
 ) error {
 	role, err := nameOf(event.Role())
 	if err != nil {
@@ -299,7 +301,7 @@ func (visitor *encodeVisitorV4) encodeProtocolOperation(
 }
 
 func projectSenderContentDecision(
-	decision clievent.SenderContentDecision,
+	decision appobs.SenderContentDecision,
 ) (*senderContentDecisionV4, error) {
 	kind, err := nameOf(decision.Kind())
 	if err != nil || !decision.Valid() {
@@ -317,7 +319,7 @@ func projectSenderContentDecision(
 	return projected, nil
 }
 
-func projectProtocolErrorContent(content clievent.ProtocolErrorContent) (*ProtocolErrorContentV4, error) {
+func projectProtocolErrorContent(content appobs.ProtocolErrorContent) (*ProtocolErrorContentV4, error) {
 	if content.IsZero() {
 		return nil, nil
 	}

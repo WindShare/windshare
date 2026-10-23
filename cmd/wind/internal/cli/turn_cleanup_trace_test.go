@@ -2,19 +2,16 @@ package cli
 
 import (
 	"encoding/json"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/pion/turn/v5"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	"github.com/windshare/windshare/connectivity/iceconfig"
-	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turnpath"
-	"github.com/windshare/windshare/transport/webrtc/provider"
+	"github.com/windshare/windshare/core/connectionpath"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.T) {
@@ -27,13 +24,10 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { recorder.Close() })
-	identity := iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
-	for _, outcome := range []turnpath.CleanupOutcome{turnpath.CleanupProtocol, turnpath.CleanupDeadline} {
-		event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{
-			Subject: nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender},
-			Provider: &provider.Event{Milestone: outcome.EventKind(), TURNCleanup: outcome, TURNService: &identity,
-				TURN: &provider.TURNResourceSnapshot{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}},
-		})
+	for _, outcome := range []connectionpath.CleanupOutcome{connectionpath.CleanupProtocol, connectionpath.CleanupDeadline} {
+		spec := nativeFactSpec(appobs.WorkflowShare, outcome.EventKind())
+		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Cleanup: outcome, Reason: outcome.Reason(), Resources: &appobs.NativeTURNResources{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}}
+		event, err := clievent.NewNativeConnectivityObserved(spec)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +84,7 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 		}
 		found[wire.Payload.Kind] = wire.Payload.TURN.Reason
 	}
-	if len(found) != 2 || found[turnpath.CleanupDeadline.EventKind()] != "protocol_cleanup_deadline" || found[turnpath.CleanupProtocol.EventKind()] != "" {
+	if len(found) != 2 || found[connectionpath.CleanupDeadline.EventKind()] != "protocol_cleanup_deadline" || found[connectionpath.CleanupProtocol.EventKind()] != "" {
 		t.Fatalf("cleanup distinction lost: %+v", found)
 	}
 }
@@ -105,17 +99,17 @@ func TestTURNRecoveryEvidenceReachesTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { recorder.Close() })
-	identity := iceconfig.Identity{Provider: "test", Account: "owner", Profile: "primary"}
-	for _, evidence := range []provider.Event{
-		{Milestone: "turn_binding", TURNBinding: &turn.BindingEvent{Status: turn.BindingMismatch, Code: 400,
-			Channel: 0x4000, RelayedAddress: "127.0.0.1:10", PeerAddress: "127.0.0.1:20"}},
-		{Milestone: "turn_route", TURNRoute: &provider.TURNRouteEvent{Server: "turn:localhost:3478", Outcome: "started"}},
+	for _, evidence := range []struct {
+		kind    string
+		binding *appobs.NativeTURNBinding
+		route   *appobs.NativeTURNRoute
+	}{
+		{"turn_binding", &appobs.NativeTURNBinding{Status: "mismatch", Code: 400, Channel: 0x4000, Allocation: netip.MustParseAddrPort("127.0.0.1:10"), Peer: netip.MustParseAddrPort("127.0.0.1:20")}, nil},
+		{"turn_route", nil, &appobs.NativeTURNRoute{Server: "turn:localhost:3478", Outcome: "started"}},
 	} {
-		evidence.TURNService, evidence.TURN = &identity, &provider.TURNResourceSnapshot{ActiveSockets: 1}
-		event, err := commandprojection.ProjectNativeObservation(clievent.CommandShare, nativepeer.Observation{
-			Subject:  nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender},
-			Provider: &evidence,
-		})
+		spec := nativeFactSpec(appobs.WorkflowShare, evidence.kind)
+		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Resources: &appobs.NativeTURNResources{ActiveSockets: 1}, Binding: evidence.binding, Route: evidence.route}
+		event, err := clievent.NewNativeConnectivityObserved(spec)
 		if err != nil || !recorder.Record(event) {
 			t.Fatalf("recovery evidence rejected: %v", err)
 		}

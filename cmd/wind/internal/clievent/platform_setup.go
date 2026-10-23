@@ -1,5 +1,7 @@
 package clievent
 
+import appobs "github.com/windshare/windshare/engine/observation"
+
 var platformSetupStates = [...]string{"", "configured", "declined", "unavailable"}
 var platformSetupReasons = [...]string{
 	"", "application-udp-tcp-rules-created", "user-skipped", "rule-removed",
@@ -36,7 +38,7 @@ func NewPlatformSetupObserved(command Command, state, reason string) (PlatformSe
 
 func (PlatformSetupObserved) event()                 {}
 func (value PlatformSetupObserved) Command() Command { return value.command }
-func (PlatformSetupObserved) Level() Level           { return LevelDebug }
+func (PlatformSetupObserved) Level() appobs.Level    { return appobs.LevelDebug }
 func (value PlatformSetupObserved) State() string    { return platformSetupStates[value.state] }
 func (value PlatformSetupObserved) Reason() string   { return platformSetupReasons[value.reason] }
 func (value PlatformSetupObserved) Accept(visitor Visitor) error {

@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type recordedLoss struct {
-	category clievent.ObserverLossCategory
-	reason   clievent.ObserverLossReason
+	category appobs.ObserverLossCategory
+	reason   appobs.ObserverLossReason
 	count    uint64
 }
 
@@ -19,8 +19,8 @@ type recordingLossSink struct {
 }
 
 func (sink *recordingLossSink) ReportObserverLoss(
-	category clievent.ObserverLossCategory,
-	reason clievent.ObserverLossReason,
+	category appobs.ObserverLossCategory,
+	reason appobs.ObserverLossReason,
 	count uint64,
 ) bool {
 	sink.reported = append(sink.reported, recordedLoss{category: category, reason: reason, count: count})
@@ -30,22 +30,22 @@ func (sink *recordingLossSink) ReportObserverLoss(
 func TestCumulativeLossesReportIndependentSnapshotDeltas(t *testing.T) {
 	var sink recordingLossSink
 	losses := NewCumulativeLosses[string](&sink)
-	losses.Report("relay", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 2)
-	losses.Report("relay", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 2)
-	losses.Report("relay", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 5)
-	losses.Report("webrtc", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 1)
-	losses.Report("ignored", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 0)
+	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2)
+	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2)
+	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 5)
+	losses.Report("webrtc", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1)
+	losses.Report("ignored", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 0)
 
 	want := []recordedLoss{
-		{clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 2},
-		{clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 3},
-		{clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 1},
+		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2},
+		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 3},
+		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1},
 	}
 	if !reflect.DeepEqual(sink.reported, want) {
 		t.Fatalf("reported losses = %#v, want %#v", sink.reported, want)
 	}
 	var nilLosses *CumulativeLosses[string]
-	nilLosses.Report("ignored", clievent.ObserverLossRelayLifecycle, clievent.ObserverLossStreamCapacity, 1)
+	nilLosses.Report("ignored", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1)
 	if NewCumulativeLosses[string](nil) != nil {
 		t.Fatal("nil sink created cumulative loss accounting")
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *testing.T) {
@@ -28,7 +29,7 @@ func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *t
 		{"get partial", clievent.CommandGet, terminalTransfer(t, clievent.ResultPartial), "Download finished partially"},
 		{"get paused", clievent.CommandGet, terminalTransfer(t, clievent.ResultPaused), "Download paused"},
 		{"get failed", clievent.CommandGet, terminalTransfer(t, clievent.ResultFailed), "Download failed"},
-		{"get command failure", clievent.CommandGet, newRuntimeTestCommandFailure(t, clievent.CommandGet, clievent.FailureCanceled), "Error:"},
+		{"get command failure", clievent.CommandGet, newRuntimeTestCommandFailure(t, clievent.CommandGet, appobs.FailureCanceled), "Error:"},
 		{"share clean stop", clievent.CommandShare, newRuntimeTestSharingStopped(t), "Sharing stopped"},
 		{"share failure", clievent.CommandShare, terminalShareFailure(t), "Sharing failed:"},
 	}
@@ -232,14 +233,14 @@ func TestNativeTraceOrdersFinalProgressThenTerminalThenSummary(t *testing.T) {
 func terminalTransfer(t *testing.T, status clievent.ResultStatus) clievent.TransferSettled {
 	t.Helper()
 	exit := clievent.ExitSuccess
-	failure := clievent.Failure{}
+	failure := appobs.Failure{}
 	if status != clievent.ResultSuccess {
 		exit = clievent.ExitFailure
-		failure, _ = clievent.NewFailure(clievent.FailureRelayTransport)
+		failure, _ = appobs.NewFailure(appobs.FailureRelayTransport)
 	}
 	result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 		Status: status, ExitCode: exit, Drift: clievent.DriftNone,
-		Elapsed: time.Second, Destination: clievent.NewDisplayPath("output"),
+		Elapsed: time.Second, Destination: appobs.NewDisplayPath("output"),
 		CountersExact: true, Failure: failure,
 	})
 	if err != nil {
@@ -254,7 +255,7 @@ func terminalTransfer(t *testing.T, status clievent.ResultStatus) clievent.Trans
 
 func terminalShareFailure(t *testing.T) clievent.SharingStopped {
 	t.Helper()
-	failure, _ := clievent.NewFailure(clievent.FailureRelayTransport)
+	failure, _ := appobs.NewFailure(appobs.FailureRelayTransport)
 	result, err := clievent.NewShareResult(clievent.ShareResultSpec{
 		ExitCode: clievent.ExitNetwork, Elapsed: time.Second, Failure: failure,
 	})

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -76,7 +77,7 @@ func (s *Sender) discardReason(result issued) string {
 	}
 }
 
-func (s *Sender) observeIssuance(result issued, milestone Milestone, reason string) {
+func (s *Sender) observeIssuance(result issued, milestone connectionpath.Milestone, reason string) {
 	identity := result.service.profile.Identity
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: result.path, Provider: identity.Provider,
 		Account: identity.Account, Profile: identity.Profile}}, milestone, reason)

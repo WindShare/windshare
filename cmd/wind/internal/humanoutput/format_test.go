@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestFormatBytesUsesDecimalUnitsWithoutFloatLoss(t *testing.T) {
@@ -48,22 +48,22 @@ func TestDurationFormattersAreDeterministic(t *testing.T) {
 
 func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	t.Parallel()
-	codes := []clievent.FailureCode{
-		clievent.FailureUnexpected, clievent.FailureCanceled, clievent.FailureDeadline,
-		clievent.FailureInvalidInput, clievent.FailureCapabilityInvalid, clievent.FailureSelectionMissing,
-		clievent.FailurePublication, clievent.FailureTraceWrite, clievent.FailureRelayMalformed,
-		clievent.FailureRelayStarting, clievent.FailurePeerNegotiation, clievent.FailureSourceUnavailable,
-		clievent.FailurePeerPolicy, clievent.FailurePeerBusy, clievent.FailurePeerAdmission,
-		clievent.FailureSourceRevisionChanged, clievent.FailureCatalogUnavailable,
-		clievent.FailureSessionProtocol, clievent.FailureOutputStateIO, clievent.FailureCheckpointBusy,
+	codes := []appobs.FailureCode{
+		appobs.FailureUnexpected, appobs.FailureCanceled, appobs.FailureDeadline,
+		appobs.FailureInvalidInput, appobs.FailureCapabilityInvalid, appobs.FailureSelectionMissing,
+		appobs.FailurePublication, appobs.FailureTraceWrite, appobs.FailureRelayMalformed,
+		appobs.FailureRelayStarting, appobs.FailurePeerNegotiation, appobs.FailureSourceUnavailable,
+		appobs.FailurePeerPolicy, appobs.FailurePeerBusy, appobs.FailurePeerAdmission,
+		appobs.FailureSourceRevisionChanged, appobs.FailureCatalogUnavailable,
+		appobs.FailureSessionProtocol, appobs.FailureOutputStateIO, appobs.FailureCheckpointBusy,
 	}
 	for _, code := range codes {
 		message := failureMessage(mustFailure(t, code))
-		if message == "" || strings.Contains(message, "unexpected") && code != clievent.FailureUnexpected {
+		if message == "" || strings.Contains(message, "unexpected") && code != appobs.FailureUnexpected {
 			t.Errorf("failureMessage(%v) = %q", code, message)
 		}
 	}
-	retryable, err := clievent.NewRetryableFailure(clievent.FailureRelayStarting, 1_001)
+	retryable, err := appobs.NewRetryableFailure(appobs.FailureRelayStarting, 1_001)
 	if err != nil {
 		t.Fatal(err)
 	}

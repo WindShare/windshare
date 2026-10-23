@@ -19,6 +19,7 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -46,7 +47,7 @@ func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type Request struct {
 	Source         liveshare.FileSourceFactory
-	Relays         []senderrelay.Candidate
+	Relays         []relayprofile.Candidate
 	ChunkSize      uint32
 	Diagnostics    bool
 	TraceLifecycle bool
@@ -84,13 +85,17 @@ type SessionFactory interface {
 }
 
 type Relays interface {
-	Accept(context.Context) (*relayv2.Channel, error)
+	Accept(context.Context) (protocolsession.FrameChannel, error)
 	WaitReady(context.Context) error
 	ReadyRelayURL() string
-	ObserveAvailability(func(relayset.SenderAvailability))
 	Wake()
 	StopRecovery()
 	Cleanup(context.Context) error
+}
+
+type Peers interface {
+	sessionruntime.SenderPeerHandlerFactory
+	Close(context.Context) error
 }
 
 type Relay interface {
@@ -108,7 +113,7 @@ type Dependencies struct {
 	Prepare          func(context.Context, liveshare.SenderConfig) (Prepared, error)
 	Relays           func(context.Context, []string, relayset.SenderFactory) (Relays, error)
 	Relay            func(senderrelay.Config) (Relay, error)
-	Peers            func(nativeconnectivity.SenderConfig) (*v2peer.Factory, error)
+	Peers            func(nativeconnectivity.SenderConfig) (Peers, error)
 	PollNetwork      func(context.Context, func())
 }
 
@@ -130,17 +135,46 @@ func (d Dependencies) normalized() Dependencies {
 	}
 	if d.Relays == nil {
 		d.Relays = func(ctx context.Context, urls []string, create relayset.SenderFactory) (Relays, error) {
-			return relayset.NewSender(ctx, urls, create)
+			value, err := relayset.NewSender(ctx, urls, create)
+			if value == nil {
+				return nil, err
+			}
+			return nativeRelays{value}, err
 		}
 	}
 	if d.Relay == nil {
 		d.Relay = func(config senderrelay.Config) (Relay, error) { return senderrelay.New(config) }
 	}
 	if d.Peers == nil {
-		d.Peers = nativeconnectivity.NewSender
+		d.Peers = func(config nativeconnectivity.SenderConfig) (Peers, error) {
+			value, err := nativeconnectivity.NewSender(config)
+			if value == nil {
+				return nil, err
+			}
+			return nativePeers{value}, err
+		}
 	}
 	if d.PollNetwork == nil {
 		d.PollNetwork = wakeOnNetworkChange
 	}
 	return d
+}
+
+type nativeRelays struct{ *relayset.Sender }
+
+func (relays nativeRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
+	channel, err := relays.Sender.Accept(ctx)
+	if channel == nil {
+		return nil, err
+	}
+	return channel, err
+}
+
+type nativePeers struct{ *v2peer.Factory }
+
+func (peers nativePeers) Close(ctx context.Context) error {
+	if peers.NativeConnectivity() == nil {
+		return nil
+	}
+	return peers.NativeConnectivity().Close(ctx)
 }

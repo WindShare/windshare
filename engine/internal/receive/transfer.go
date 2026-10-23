@@ -104,8 +104,10 @@ func (a *runner) connectGetReceiver(ctx context.Context, request getRequest, obs
 				LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
 			},
 			DialOptions: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
-			Connected: func(connection *relayv2.ReceiverConnection) {
-				observation.registerRelayConnection(connection)
+			Connected: func(connection relayset.ReceiverConnection) {
+				if source, ok := connection.(relayObservationSource); ok {
+					observation.registerRelayConnection(source)
+				}
 				observation.relayConnected(connection.Endpoint())
 			},
 		},
@@ -144,7 +146,7 @@ func (recovery *getReceiverRecovery) open(ctx context.Context, connect func(cont
 type getReceiverSession struct {
 	recovery   *getReceiverRecovery
 	relays     *relayset.Receiver
-	connection *relayv2.ReceiverConnection
+	connection relayset.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
 	runtime    *sessionruntime.ReceiverRuntime
 }

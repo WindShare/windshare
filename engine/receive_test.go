@@ -5,12 +5,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type admissionOutput struct{}
@@ -38,7 +39,7 @@ func TestReceiveOwnsCapabilityAtAdmission(t *testing.T) {
 	outputEntered, releaseOutput := make(chan struct{}), make(chan struct{})
 	dialed := make(chan string, 1)
 	application := newTestEngine(t, Config{Receive: ReceiveDependencies{
-		ReceiverDial: func(_ context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		ReceiverDial: func(_ context.Context, config ReceiveDialRequest) (ReceiveConnection, error) {
 			dialed <- config.RelayBaseURL
 			return nil, relayset.ErrReceiverAuthentication
 		},
@@ -71,3 +72,31 @@ func TestReceiveOwnsCapabilityAtAdmission(t *testing.T) {
 		t.Fatal("receiver did not reach injected dial")
 	}
 }
+
+// A malformed descriptor exercises acquired-connection disposal with no socket or concrete relay object.
+func TestReceiveRejectsAndClosesInjectedConnectionBeforeChannelUse(t *testing.T) {
+	capability, err := link.NewSenderAuthenticated(bytes.Repeat([]byte{1}, link.ReadSecretBytes), ed25519.PublicKey(bytes.Repeat([]byte{2}, ed25519.PublicKeySize)), []string{"https://relay.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &facadeReceiveConnection{}
+	application := newTestEngine(t, Config{Receive: ReceiveDependencies{ReceiverDial: func(context.Context, ReceiveDialRequest) (ReceiveConnection, error) { return connection, nil }}})
+	current, err := application.StartReceive(t.Context(), ReceiveRequest{Capability: capability, Connectivity: ConnectivityRelayOnly, Output: OutputFactoryFunc(func(OutputConfig) (OutputAuthority, error) { return admissionOutput{}, nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := current.Wait(t.Context())
+	if err != nil || result.Outcome != OutcomeFailed || !result.Failure.Valid() || !connection.closed.Load() {
+		t.Fatalf("authentication failure=%+v wait=%v closed=%v", result, err, connection.closed.Load())
+	}
+}
+
+type facadeReceiveConnection struct{ closed atomic.Bool }
+
+func (*facadeReceiveConnection) Descriptor() []byte { return []byte("invalid descriptor") }
+func (*facadeReceiveConnection) Channel() protocolsession.FrameChannel {
+	panic("unauthenticated channel used")
+}
+func (*facadeReceiveConnection) Done() <-chan struct{}   { return nil }
+func (*facadeReceiveConnection) Err() error              { return nil }
+func (connection *facadeReceiveConnection) Close() error { connection.closed.Store(true); return nil }

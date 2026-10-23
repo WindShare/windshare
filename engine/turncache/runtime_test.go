@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/internal/turnruntime"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 )
 
@@ -25,7 +26,7 @@ type observedCache struct {
 	saved chan error
 }
 
-func (cache observedCache) Save(ctx context.Context, candidate senderrelay.Candidate, capability turn.Capability, at time.Time) error {
+func (cache observedCache) Save(ctx context.Context, candidate relayprofile.Candidate, capability turn.Capability, at time.Time) error {
 	err := cache.FileStore.Save(ctx, candidate, capability, at)
 	cache.saved <- err
 	return err
@@ -34,7 +35,7 @@ func (cache observedCache) Save(ctx context.Context, candidate senderrelay.Candi
 func TestRefreshCannotWriteUserSettingsOrBudget(t *testing.T) {
 	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
 	config := relayconfig.Config{
-		Profiles:     []senderrelay.Candidate{{PublicURL: "https://relay.example", AccessKey: "device-key"}},
+		Profiles:     []relayprofile.Candidate{{PublicURL: "https://relay.example", AccessKey: "device-key"}},
 		ActiveRelays: []string{"https://relay.example"}, FrontURL: "https://front.example",
 		ManagedTURNPolicies: []turn.ManagedPolicy{{RelayURL: "https://relay.example", LocalBudgetBytes: 1234}},
 	}
@@ -61,7 +62,7 @@ func TestRefreshCannotWriteUserSettingsOrBudget(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"turn":{"service_id":"cf-service","enabled":false}}`))}, nil
 	})
-	runtime, err := turn.New(config.TURNSettings(), turn.Dependencies{Client: client, Cache: cache})
+	runtime, err := turnruntime.New(config.TURNSettings(), turn.Dependencies{Client: client, Cache: cache})
 	if err != nil {
 		t.Fatal(err)
 	}

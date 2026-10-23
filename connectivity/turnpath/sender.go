@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -396,7 +397,7 @@ func (s *Sender) retire(ctx context.Context, value *delegation, reason turncontr
 		s.config.Retire(value.grant.PathID)
 	}
 	value.lease.Close()
-	s.observe(value, MilestonePathRetired, fmt.Sprint(reason))
+	s.observe(value, connectionpath.MilestonePathRetired, fmt.Sprint(reason))
 }
 func (s *Sender) close() {
 	s.controls.close()
@@ -461,7 +462,7 @@ func (s *Sender) advertise(ctx context.Context) {
 	}
 	s.advertisedAt = s.config.Now()
 }
-func (s *Sender) observe(value *delegation, milestone Milestone, reason string) {
+func (s *Sender) observe(value *delegation, milestone connectionpath.Milestone, reason string) {
 	slog.Debug("TURN path", "provider", value.grant.Provider, "account", value.grant.Account, "profile", value.grant.Profile,
 		"session_id", fmt.Sprintf("%x", s.config.SessionID), "path_id", fmt.Sprintf("%x", value.grant.PathID),
 		"milestone", milestone.String(), "reason", reason, "useful_bytes", value.useful)

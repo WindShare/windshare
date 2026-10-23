@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type senderObservationReclaimTarget struct{}
@@ -38,7 +39,7 @@ func TestProcessCapacityTraceRouterProjectsActiveShareDecisionCorrelation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawSession := make([]byte, clievent.IdentityBytes)
+	rawSession := make([]byte, appobs.IdentityBytes)
 	rawSession[0] = 0x51
 	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
 		SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(rawSession)), Limits: limits,
@@ -63,11 +64,11 @@ func TestProcessCapacityTraceRouterProjectsActiveShareDecisionCorrelation(t *tes
 	if !errors.As(busyErr, &busy) {
 		t.Fatalf("capacity denial = %v", busyErr)
 	}
-	wantDecision, _ := clievent.NewCapacityDecisionID(string(busy.DecisionID()))
+	wantDecision, _ := appobs.NewCapacityDecisionID(string(busy.DecisionID()))
 	var denied clievent.SenderCapacityObserved
 	for _, event := range emitter.events {
 		candidate, ok := event.(clievent.SenderCapacityObserved)
-		if ok && candidate.Stage() == clievent.SenderCapacityAdmissionDenied {
+		if ok && candidate.Stage() == appobs.SenderCapacityAdmissionDenied {
 			denied = candidate
 		}
 	}

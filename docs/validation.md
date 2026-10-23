@@ -50,7 +50,7 @@ short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
 
 ### Go packages
 
-The root `go.mod` owns all production Go packages. Core is `./core/...`; non-core is the remainder. Core packages cannot import non-core WindShare packages or concrete networking and transport implementations. Go gates run with `GOWORK=off` and `GOTOOLCHAIN=local`.
+The root `go.mod` owns all production Go packages. Core is `./core/...`; non-core is the remainder. Core packages cannot import non-core WindShare packages or concrete networking and transport implementations. Production `cmd/**` files cannot import `connectivity/**`, `transport/**`, or `relay/**`; the engine boundary gate follows exported aliases, fields, methods, and factory signatures in every public `engine/**` package to reject native types in the application API. Go gates run with `GOWORK=off` and `GOTOOLCHAIN=local`.
 
 Coverage is gated on the core and non-core totals and on each package, with no per-file floor. The thresholds live in `.testcoverage.yml` and `core/.testcoverage.yml`. `internal/perfevidence` and `spikes/webrtc` are separate evidence modules outside the production set.
 

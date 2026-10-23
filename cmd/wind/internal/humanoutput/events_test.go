@@ -7,25 +7,26 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSharingSubjectUsesOnlySelectedRootFacts(t *testing.T) {
 	t.Parallel()
-	file, err := clievent.NewFileSubject(clievent.NewDisplayName("photo.jpg"), 8_200_000)
+	file, err := appobs.NewFileSubject(appobs.NewDisplayName("photo.jpg"), 8_200_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, err := clievent.NewDirectorySubject(clievent.NewDisplayName("photos"))
+	directory, err := appobs.NewDirectorySubject(appobs.NewDisplayName("photos"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	multiple, err := clievent.NewMultipleSubject(3)
+	multiple, err := appobs.NewMultipleSubject(3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
 		name    string
-		subject clievent.SharingSubject
+		subject appobs.SharingSubject
 		want    string
 	}{
 		{"file", file, "Sharing: photo.jpg (file, 8.2 MB)"},
@@ -43,8 +44,8 @@ func TestSharingSubjectUsesOnlySelectedRootFacts(t *testing.T) {
 func TestFallbackUsesUserFacingPathNames(t *testing.T) {
 	t.Parallel()
 	event, err := clievent.NewFallback(
-		clievent.CommandGet, clievent.TransportWebRTC, clievent.TransportRelay,
-		mustFailure(t, clievent.FailurePeerNegotiation),
+		clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay,
+		mustFailure(t, appobs.FailurePeerNegotiation),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -55,13 +56,13 @@ func TestFallbackUsesUserFacingPathNames(t *testing.T) {
 }
 
 func TestFailedRelayRecoveryRemainsAWarningWhenRedirected(t *testing.T) {
-	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
+	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
 	event, err := clievent.NewRelayRecovering(
-		clievent.CommandGet, authority, 2, clievent.RelayRecoveryFailed,
-		mustFailure(t, clievent.FailureRelayTransport),
+		clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed,
+		mustFailure(t, appobs.FailureRelayTransport),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 	first := peerAttemptSpecForRender(t)
 	identity := base64.RawURLEncoding.EncodeToString(first.Attempt.Bytes())
 	other := peerAttemptSpecForRender(t)
-	other.Attempt, _ = clievent.NewPeerAttemptID(mustID(t, 6))
+	other.Attempt, _ = appobs.NewPeerAttemptID(mustID(t, 6))
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
 	for index, sequence := range []uint64{1, 1, 9, 10} {
 		spec := first
@@ -88,13 +89,13 @@ func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 		}
 		spec.Sequence = sequence
 		if sequence == 9 {
-			spec.Stage = clievent.PeerAnswerSent
+			spec.Stage = appobs.PeerAnswerSent
 		}
 		if sequence == 10 {
-			spec.Stage = clievent.PeerAttemptFailed
-			spec.FailedAtStage = clievent.PeerAttemptAdmitted
-			spec.FailureScope = clievent.PeerFailureAttempt
-			spec.Failure = mustFailure(t, clievent.FailurePeerCanceled)
+			spec.Stage = appobs.PeerAttemptFailed
+			spec.FailedAtStage = appobs.PeerAttemptAdmitted
+			spec.FailureScope = appobs.PeerFailureAttempt
+			spec.Failure = mustFailure(t, appobs.FailurePeerCanceled)
 		}
 		event, err := clievent.NewPeerAttemptObserved(spec)
 		if err != nil {
@@ -115,31 +116,31 @@ func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *testing.T) {
 	for _, test := range []struct {
 		name        string
-		disposition clievent.PeerAdmissionDisposition
-		delivery    clievent.PeerResponseDelivery
-		stage       clievent.PeerAttemptStage
+		disposition appobs.PeerAdmissionDisposition
+		delivery    appobs.PeerResponseDelivery
+		stage       appobs.PeerAttemptStage
 		want        string
 		warning     bool
 	}{
-		{"rejected", clievent.PeerAdmissionRejected, clievent.PeerResponseDelivered, clievent.PeerAdmissionResponseSettled, "admission rejected (admission limited). Retry after 1000 ms.", true},
-		{"rejection not delivered", clievent.PeerAdmissionRejected, clievent.PeerResponseDeliveryFailed, clievent.PeerAdmissionResponseSettled, "Admission response delivery failed.", true},
-		{"acceptance not delivered", clievent.PeerAdmissionAccepted, clievent.PeerResponseDeliveryFailed, clievent.PeerAdmissionResponseSettled, "Admission response delivery failed.", true},
-		{"accepted before installation", clievent.PeerAdmissionAccepted, clievent.PeerResponseDelivered, clievent.PeerAdmissionResponseSettled, "admission accepted.", false},
-		{"connected", clievent.PeerAdmissionAccepted, clievent.PeerResponseDelivered, clievent.PeerAttemptAdmitted, "connected.", false},
+		{"rejected", appobs.PeerAdmissionRejected, appobs.PeerResponseDelivered, appobs.PeerAdmissionResponseSettled, "admission rejected (admission limited). Retry after 1000 ms.", true},
+		{"rejection not delivered", appobs.PeerAdmissionRejected, appobs.PeerResponseDeliveryFailed, appobs.PeerAdmissionResponseSettled, "Admission response delivery failed.", true},
+		{"acceptance not delivered", appobs.PeerAdmissionAccepted, appobs.PeerResponseDeliveryFailed, appobs.PeerAdmissionResponseSettled, "Admission response delivery failed.", true},
+		{"accepted before installation", appobs.PeerAdmissionAccepted, appobs.PeerResponseDelivered, appobs.PeerAdmissionResponseSettled, "admission accepted.", false},
+		{"connected", appobs.PeerAdmissionAccepted, appobs.PeerResponseDelivered, appobs.PeerAttemptAdmitted, "connected.", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec := peerAttemptSpecForRender(t)
-			spec.Sequence, spec.Stage, spec.Phase = 9, test.stage, clievent.PeerPhaseAdmission
-			spec.GrantOperation, _ = clievent.NewProtocolOperationID(mustID(t, 7))
+			spec.Sequence, spec.Stage, spec.Phase = 9, test.stage, appobs.PeerPhaseAdmission
+			spec.GrantOperation, _ = appobs.NewProtocolOperationID(mustID(t, 7))
 			spec.HasGrantOperation = true
-			spec.Lane, _ = clievent.NewLaneIdentity(1, 2)
+			spec.Lane, _ = appobs.NewLaneIdentity(1, 2)
 			spec.HasLane = true
 			spec.AdmissionDisposition, spec.ResponseDelivery = test.disposition, test.delivery
-			if spec.Stage == clievent.PeerAttemptAdmitted {
-				spec.Route = clievent.LaneRouteDirect
+			if spec.Stage == appobs.PeerAttemptAdmitted {
+				spec.Route = appobs.LaneRouteDirect
 			}
-			if test.disposition == clievent.PeerAdmissionRejected {
-				spec.RejectionCode = clievent.PeerLaneRejectAdmissionLimited
+			if test.disposition == appobs.PeerAdmissionRejected {
+				spec.RejectionCode = appobs.PeerLaneRejectAdmissionLimited
 				spec.RejectionRetryAfterMillis = 1000
 			}
 			event, err := clievent.NewPeerAttemptObserved(spec)
@@ -151,7 +152,7 @@ func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *te
 			if !strings.Contains(text, test.want) || strings.Contains(text, "admission-response-settled") {
 				t.Fatalf("admission result = %q", text)
 			}
-			if test.stage != clievent.PeerAttemptAdmitted && strings.Contains(text, "connected.") {
+			if test.stage != appobs.PeerAttemptAdmitted && strings.Contains(text, "connected.") {
 				t.Fatalf("uninstalled admission claimed a connection: %q", text)
 			}
 			if test.warning && (!strings.HasPrefix(text, "! ") || line.Spans()[0].Style != terminalcanvas.StyleWarning) {
@@ -161,37 +162,37 @@ func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *te
 	}
 }
 
-func peerAttemptSpecForRender(t *testing.T) clievent.PeerAttemptSpec {
+func peerAttemptSpecForRender(t *testing.T) appobs.PeerAttemptSpec {
 	t.Helper()
-	session, _ := clievent.NewProtocolSessionID(mustID(t, 3))
-	path, _ := clievent.NewPeerPathID(mustID(t, 4))
-	attempt, _ := clievent.NewPeerAttemptID(mustID(t, 5))
-	return clievent.PeerAttemptSpec{
-		Command: clievent.CommandShare, Session: session, PeerPath: path, Attempt: attempt,
-		Sequence: 1, Stage: clievent.PeerAttemptStarted,
+	session, _ := appobs.NewProtocolSessionID(mustID(t, 3))
+	path, _ := appobs.NewPeerPathID(mustID(t, 4))
+	attempt, _ := appobs.NewPeerAttemptID(mustID(t, 5))
+	return appobs.PeerAttemptSpec{
+		Workflow: appobs.WorkflowShare, Session: session, PeerPath: path, Attempt: attempt,
+		Sequence: 1, Stage: appobs.PeerAttemptStarted,
 	}
 }
 
 func TestPeerAttemptNamesOnlyAnAdmittedRoute(t *testing.T) {
 	for _, test := range []struct {
-		route clievent.LaneRoute
+		route appobs.LaneRoute
 		want  string
-	}{{0, "Connection ["}, {clievent.LaneRouteDirect, "Direct connection ["}, {clievent.LaneRouteTURN, "TURN relay connection ["}} {
+	}{{0, "Connection ["}, {appobs.LaneRouteDirect, "Direct connection ["}, {appobs.LaneRouteTURN, "TURN relay connection ["}} {
 		spec := peerAttemptSpecForRender(t)
 		if test.route != 0 {
-			spec.Stage, spec.Phase, spec.Route = clievent.PeerAttemptAdmitted, clievent.PeerPhaseAdmission, test.route
-			spec.GrantOperation, _ = clievent.NewProtocolOperationID(mustID(t, 7))
+			spec.Stage, spec.Phase, spec.Route = appobs.PeerAttemptAdmitted, appobs.PeerPhaseAdmission, test.route
+			spec.GrantOperation, _ = appobs.NewProtocolOperationID(mustID(t, 7))
 			spec.HasGrantOperation = true
-			spec.Lane, _ = clievent.NewLaneIdentity(1, 2)
+			spec.Lane, _ = appobs.NewLaneIdentity(1, 2)
 			spec.HasLane = true
-			spec.AdmissionDisposition, spec.ResponseDelivery = clievent.PeerAdmissionAccepted, clievent.PeerResponseDelivered
+			spec.AdmissionDisposition, spec.ResponseDelivery = appobs.PeerAdmissionAccepted, appobs.PeerResponseDelivered
 		}
 		event, err := clievent.NewPeerAttemptObserved(spec)
 		if err != nil {
 			t.Fatal(err)
 		}
 		line := lineText(formatPeerAttempt(event, SelectSymbols(false)))
-		if !strings.Contains(line, test.want) || test.route != clievent.LaneRouteDirect && strings.Contains(line, "Direct") {
+		if !strings.Contains(line, test.want) || test.route != appobs.LaneRouteDirect && strings.Contains(line, "Direct") {
 			t.Fatalf("route %d misrepresented: %s", test.route, line)
 		}
 	}

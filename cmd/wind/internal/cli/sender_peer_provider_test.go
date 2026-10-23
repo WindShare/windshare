@@ -3,9 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -28,26 +26,15 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{processTrace: trace}
-	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
-		Stage: v2peer.SenderAttemptLaneHelloAuthenticated,
-		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
-	})
+	app.observeSenderPeerAttempt(peerFact(t, appobs.PeerLaneHelloAuthenticated, 0))
 	if sink.event.Milestone != "" {
 		t.Fatalf("pre-admission observation published milestone %q", sink.event.Milestone)
 	}
-	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
-		Stage: v2peer.SenderAttemptAdmitted,
-		Lane:  &sessionruntime.LaneIdentity{ID: 2, Epoch: 1},
-		Route: transfer.LaneRouteTURN,
-	})
+	app.observeSenderPeerAttempt(peerFact(t, appobs.PeerAttemptAdmitted, appobs.LaneRouteTURN))
 	if sink.event.Milestone != "" {
 		t.Fatal("TURN admission was reported as a direct connection")
 	}
-	app.observeSenderPeerAttempt(v2peer.SenderAttemptObservation{
-		Stage: v2peer.SenderAttemptAdmitted,
-		Lane:  &sessionruntime.LaneIdentity{ID: 1, Epoch: 1},
-		Route: transfer.LaneRouteDirect,
-	})
+	app.observeSenderPeerAttempt(peerFact(t, appobs.PeerAttemptAdmitted, appobs.LaneRouteDirect))
 	if err := trace.close(); err != nil {
 		t.Fatal(err)
 	}

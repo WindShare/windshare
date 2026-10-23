@@ -7,10 +7,10 @@ import (
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/connectivity/turnpath"
+	"github.com/windshare/windshare/core/connectionpath"
 )
 
-func (c *Connection) observeTURNCleanup(outcome turnpath.CleanupOutcome) {
+func (c *Connection) observeTURNCleanup(outcome connectionpath.CleanupOutcome) {
 	if c.request.Observe == nil {
 		return
 	}
