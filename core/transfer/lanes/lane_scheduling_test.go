@@ -11,6 +11,35 @@ import (
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
+func TestLaneAdmissionFreezesEstimateBeforeReservation(t *testing.T) {
+	now := time.Unix(100, 0)
+	set := &Set{now: func() time.Time { return now }}
+	state := &laneState{}
+	const blockBytes = uint64(1 << 20)
+	first, _, err := set.admitLaneLocked(state, blockBytes, nil)
+	if err != nil || first == nil {
+		t.Fatalf("first admission: %v", err)
+	}
+	defer first.permit.Close()
+	started := now
+	now = now.Add(10 * time.Millisecond)
+	// Receipt opens capacity before authentication finishes the first sample.
+	first.permit.Receive(blockBytes, now)
+	second, _, err := set.admitLaneLocked(state, blockBytes*64, nil)
+	if err != nil || second == nil {
+		t.Fatalf("second admission: %v", err)
+	}
+	defer second.permit.Close()
+	if first.started != started || first.expected != 250*time.Millisecond || second.expected != 500*time.Millisecond {
+		t.Fatalf("admission estimates were computed after reservation: first=%v second=%v", first.expected, second.expected)
+	}
+	state.performance.Complete(now, blockBytes, true)
+	state.performance.Complete(now, blockBytes*64, false)
+	if first.expected != 250*time.Millisecond || second.expected != 500*time.Millisecond {
+		t.Fatal("settlement changed an admitted attempt's original estimate")
+	}
+}
+
 func TestLaneSchedulingKeepsUnmeasuredRelayOutOfFastContent(t *testing.T) {
 	descriptor := transferDescriptor(t, 16)
 	var tick atomic.Int64

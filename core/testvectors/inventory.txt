@@ -1,4 +1,5 @@
 artifact-choice-v1.json
+content-scheduling-v1.json
 diagnostic-correlation-v1.json
 directory-admission-v2.json
 ed25519-acceptance.json

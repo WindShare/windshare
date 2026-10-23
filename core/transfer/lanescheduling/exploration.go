@@ -4,7 +4,7 @@ import "time"
 
 const (
 	ProbeInterval      = 5 * time.Second
-	HedgeCheckInterval = 100 * time.Millisecond
+	MinimumRescueDelay = 10 * time.Millisecond
 	HedgeDelayFactor   = 2
 	MaximumSupplements = 2
 )
@@ -53,5 +53,11 @@ func ProbeDue(p *Performance, now time.Time) bool {
 }
 
 func RescueDue(elapsed, primaryEstimate, alternativeEstimate time.Duration) bool {
-	return elapsed >= max(HedgeCheckInterval, HedgeDelayFactor*min(primaryEstimate, alternativeEstimate))
+	if elapsed < MinimumRescueDelay {
+		return false
+	}
+	remaining := max(0, primaryEstimate-elapsed)
+	// Expected queue residence is not a stall. Duplicate only when the other
+	// lane can beat the remaining work, or the original estimate is overdue.
+	return remaining > HedgeDelayFactor*alternativeEstimate || elapsed >= HedgeDelayFactor*primaryEstimate
 }

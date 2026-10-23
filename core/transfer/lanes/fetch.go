@@ -10,6 +10,9 @@ import (
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
+// The host's wake cadence is separate from the shared rescue eligibility rule.
+const rescuePollInterval = 100 * time.Millisecond
+
 type laneResult struct {
 	state        *laneState
 	record       records.BlockRecord
@@ -135,10 +138,7 @@ func (s *Set) runLaneRound(
 	for _, state := range candidates {
 		go s.fetchLane(raceContext, demand, validate, state, decision, results, lanescheduling.Content)
 	}
-	started := s.now()
-	s.mu.Lock()
-	estimate := candidates[0].performance.Estimate(0)
-	s.mu.Unlock()
+	started, estimate := candidates[0].started, candidates[0].expected
 	active := len(candidates)
 	startSupplement := func(purpose lanescheduling.Purpose) {
 		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
@@ -153,7 +153,7 @@ func (s *Set) runLaneRound(
 		go s.fetchLane(raceContext, demand, validate, state, decision, results, purpose)
 	}
 	startSupplement(lanescheduling.Probe)
-	ticker := time.NewTicker(lanescheduling.HedgeCheckInterval)
+	ticker := time.NewTicker(rescuePollInterval)
 	defer ticker.Stop()
 	failures := make([]laneResult, 0, active)
 	for active > 0 {
@@ -213,16 +213,16 @@ func (s *Set) fetchLane(
 	if purpose != lanescheduling.Content {
 		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
 	}
-	started := s.now()
+	started := admission.started
 	bytes := blockDemandBytes(demand)
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		s.mu.Lock()
-		expected, queued, rate := state.performance.Estimate(0), state.performance.PendingBytes, state.performance.BytesPerSecond
+		queued, rate := state.performance.PendingBytes, state.performance.BytesPerSecond
 		s.mu.Unlock()
 		slog.DebugContext(ctx, "content lane dispatched",
 			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID, "lane_epoch", state.identity.Epoch,
 			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
-			"purpose", purpose, "expected_ms", expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
+			"purpose", purpose, "expected_ms", admission.expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
 	}
 	record, fetchErr := state.lane.FetchBlock(ctx, demand, func(bytes uint64) {
 		s.mu.Lock()

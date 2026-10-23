@@ -157,9 +157,8 @@ export class ContentAdmissions {
   ): ContentAdmission {
     const started = this.#now()
     const bytes = demandBytes(work.demand)
-    const expectedMilliseconds = lane.performance.estimateCompletionMilliseconds(bytes)
+    const expectedMilliseconds = lane.performance.begin(started, bytes)
     lane.inflight++
-    lane.performance.begin(started, bytes)
     let closed = false
     return {
       lane, purpose, permit, started, expectedMilliseconds,

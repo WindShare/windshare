@@ -1,10 +1,7 @@
-export const INITIAL_BLOCK_MILLISECONDS = 250
-export const MINIMUM_SAMPLE_MILLISECONDS = 1
-export const RELAY_COST_FACTOR = 1.1
-export const USER_RELAY_COST_FACTOR = 1.05
+import { estimateQueueMilliseconds, estimateCompletionMilliseconds, MINIMUM_SAMPLE_MILLISECONDS } from './completion'
+
 const SAMPLE_WEIGHT = 0.25
 const MEASUREMENT_WINDOW_MILLISECONDS = 1000
-const MAXIMUM_ESTIMATE_MILLISECONDS = 60 * 60 * 1000
 
 /** Busy-interval payload throughput counts overlapping work only once. */
 export class LanePerformance {
@@ -18,7 +15,11 @@ export class LanePerformance {
   #activeSince = 0
   #busyMilliseconds = 0
 
-  begin(now: number, bytes: number): void {
+  get pendingBlocks(): number { return this.#pendingBlocks }
+
+  /** Freeze the estimate before reserving; later work cannot move this attempt's deadline. */
+  begin(now: number, bytes: number): number {
+    const expectedMilliseconds = this.estimateCompletionMilliseconds(bytes)
     if (this.pendingBytes === 0) {
       this.#busySince = now
       this.#activeSince = now
@@ -27,6 +28,7 @@ export class LanePerformance {
     this.#pendingBlocks += 1
     this.pendingBytes += bytes
     this.lastAttempt = now
+    return expectedMilliseconds
   }
 
   complete(now: number, bytes: number, successful: boolean): void {
@@ -69,24 +71,10 @@ export class LanePerformance {
   }
 
   estimateQueueMilliseconds(): number {
-    // Only complete blocks expose progress. Charge outstanding reservations until
-    // they settle; a new request's size must never redefine this existing work.
-    const milliseconds = this.bytesPerSecond > 0
-      ? this.pendingBytes * 1000 / this.bytesPerSecond
-      : this.#pendingBlocks * INITIAL_BLOCK_MILLISECONDS
-    return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS, milliseconds)
+    return estimateQueueMilliseconds(this)
   }
 
   estimateCompletionMilliseconds(bytes: number): number {
-    const service = this.bytesPerSecond > 0
-      ? Math.max(bytes, 1) * 1000 / this.bytesPerSecond
-      : INITIAL_BLOCK_MILLISECONDS
-    return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS,
-      Math.max(MINIMUM_SAMPLE_MILLISECONDS, this.estimateQueueMilliseconds() + service))
+    return estimateCompletionMilliseconds(this, bytes)
   }
-}
-
-export function completionCost(milliseconds: number, route: 'direct' | 'turn' | 'application-relay'): number {
-  if (route === 'direct') return milliseconds
-  return milliseconds * (route === 'turn' ? USER_RELAY_COST_FACTOR : RELAY_COST_FACTOR)
 }

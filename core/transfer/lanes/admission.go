@@ -11,8 +11,10 @@ import (
 
 type laneAdmission struct {
 	*laneState
-	permit  *lanescheduling.ReceivePermit
-	release func()
+	permit   *lanescheduling.ReceivePermit
+	release  func()
+	started  time.Time
+	expected time.Duration
 }
 
 type laneCandidate struct {
@@ -155,9 +157,10 @@ func (s *Set) admitLaneLocked(state *laneState, bytes uint64, claim CapacityClai
 		}
 		return nil, nil, nil
 	}
+	started := s.now()
+	expected := state.performance.Begin(started, bytes)
 	state.inflight++
-	state.performance.Begin(s.now(), bytes)
-	return &laneAdmission{laneState: state, permit: permit, release: release}, nil, nil
+	return &laneAdmission{laneState: state, permit: permit, release: release, started: started, expected: expected}, nil, nil
 }
 
 func laneCompletionCost(state *laneState, bytes uint64) float64 {
@@ -168,7 +171,7 @@ func laneCompletionCost(state *laneState, bytes uint64) float64 {
 	if state.route == RouteRelay {
 		factor = lanescheduling.RelayCostFactor
 	}
-	return lanescheduling.Cost(state.performance.Estimate(bytes), factor)
+	return lanescheduling.Cost(state.performance.EstimateCompletion(bytes), factor)
 }
 
 func blockDemandBytes(demand Demand) uint64 {
@@ -195,7 +198,7 @@ func (s *Set) supplement(
 	if best == nil {
 		return nil
 	}
-	if purpose == lanescheduling.Rescue && !lanescheduling.RescueDue(elapsed, estimate, best.performance.Estimate(bytes)) {
+	if purpose == lanescheduling.Rescue && !lanescheduling.RescueDue(elapsed, estimate, best.performance.EstimateCompletion(bytes)) {
 		return nil
 	}
 	if !s.exploration.Acquire(purpose, now) {

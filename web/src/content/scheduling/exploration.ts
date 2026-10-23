@@ -1,5 +1,5 @@
 export const PROBE_INTERVAL_MILLISECONDS = 5000
-export const HEDGE_CHECK_MILLISECONDS = 10
+export const MINIMUM_RESCUE_MILLISECONDS = 10
 const HEDGE_DELAY_FACTOR = 2
 export const MAXIMUM_SUPPLEMENTS = 2
 export type DispatchPurpose = 'content' | 'probe' | 'rescue'
@@ -16,7 +16,7 @@ export class LaneRescues {
 }
 
 export function rescueDue(elapsed: number, primaryEstimate: number, alternativeEstimate: number): boolean {
-  if (elapsed < HEDGE_CHECK_MILLISECONDS) return false
+  if (elapsed < MINIMUM_RESCUE_MILLISECONDS) return false
   const remaining = Math.max(0, primaryEstimate - elapsed)
   // Queue residence is expected work, not a stall. Rescue only when moving the
   // frontier can beat that remaining work, or the original estimate is overdue.

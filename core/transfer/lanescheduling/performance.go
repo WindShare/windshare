@@ -5,12 +5,8 @@ package lanescheduling
 import "time"
 
 const (
-	InitialBlockTime    = 250 * time.Millisecond
-	MinimumSampleTime   = time.Millisecond
-	MeasurementWindow   = time.Second
-	UserRelayCostFactor = 1.05
-	RelayCostFactor     = 1.1
-	sampleWeight        = 0.25
+	MeasurementWindow = time.Second
+	sampleWeight      = 0.25
 )
 
 // Performance measures authenticated payload over a lane's busy interval, so
@@ -20,20 +16,26 @@ type Performance struct {
 	BytesPerSecond      float64
 	HasSuccessfulSample bool
 	LastAttempt         time.Time
+	pendingBlocks       uint32
 	busySince           time.Time
 	completedBytes      uint64
 	activeSince         time.Time
 	busyTime            time.Duration
 }
 
-func (p *Performance) Begin(now time.Time, bytes uint64) {
+// Begin freezes this attempt's completion estimate before adding its reservation.
+// Later admissions and completions must not change the original rescue deadline.
+func (p *Performance) Begin(now time.Time, bytes uint64) time.Duration {
+	expected := p.EstimateCompletion(bytes)
 	if p.PendingBytes == 0 {
 		p.busySince = now
 		p.activeSince = now
 		p.completedBytes = 0
 	}
+	p.pendingBlocks++
 	p.PendingBytes += bytes
 	p.LastAttempt = now
+	return expected
 }
 
 func (p *Performance) Complete(now time.Time, bytes uint64, successful bool) {
@@ -41,6 +43,7 @@ func (p *Performance) Complete(now time.Time, bytes uint64, successful bool) {
 	if successful && bytes != 0 {
 		p.recordAuthenticated(now, bytes)
 	}
+	p.pendingBlocks--
 	p.PendingBytes -= min(p.PendingBytes, bytes)
 	if p.PendingBytes == 0 && wasBusy {
 		p.busyTime += max(now.Sub(p.activeSince), 0)
@@ -89,26 +92,14 @@ func (p *Performance) Superseded(bytes uint64, elapsed time.Duration) {
 	}
 }
 
-// EstimateQueue charges only work already reserved. A tiny control request must
-// not inflate an unmeasured content queue by dividing it by its own byte size.
-func (p *Performance) EstimateQueue(blocks uint32) time.Duration {
-	seconds := InitialBlockTime.Seconds() * float64(blocks)
-	if p.BytesPerSecond > 0 {
-		seconds = float64(p.PendingBytes) / p.BytesPerSecond
-	}
-	return time.Duration(min(max(seconds, 0), time.Hour.Seconds()) * float64(time.Second))
+func (p *Performance) Load() CompletionLoad {
+	return CompletionLoad{PendingBytes: p.PendingBytes, PendingBlocks: p.pendingBlocks, BytesPerSecond: p.BytesPerSecond}
 }
 
-func (p *Performance) Estimate(bytes uint64) time.Duration {
-	bytes = max(bytes, 1)
-	seconds := InitialBlockTime.Seconds() * float64(p.PendingBytes+bytes) / float64(bytes)
-	if p.BytesPerSecond > 0 {
-		seconds = float64(p.PendingBytes+bytes) / p.BytesPerSecond
-	}
-	// Bound both arithmetic and hedge timers when a path barely makes progress.
-	return time.Duration(min(max(seconds, MinimumSampleTime.Seconds()), time.Hour.Seconds()) * float64(time.Second))
+func (p *Performance) EstimateQueue() time.Duration {
+	return EstimateQueue(p.Load())
 }
 
-func Cost(estimate time.Duration, factor float64) float64 {
-	return float64(estimate) * factor
+func (p *Performance) EstimateCompletion(bytes uint64) time.Duration {
+	return EstimateCompletion(p.Load(), bytes)
 }

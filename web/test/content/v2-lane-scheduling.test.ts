@@ -4,7 +4,8 @@ import { V2BlockBroker, type V2BlockPriority } from '../../src/content/v2-broker
 import { V2LaneSet, type V2BlockDemand, type V2BlockLane, type V2BlockSchedulingObservation } from '../../src/content/v2-lane-set'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
-import { LanePerformance, completionCost } from '../../src/content/scheduling/performance'
+import { LanePerformance } from '../../src/content/scheduling/performance'
+import { completionCost } from '../../src/content/scheduling/completion'
 import { LaneRescues, PROBE_INTERVAL_MILLISECONDS, rescueDue } from '../../src/content/scheduling/exploration'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 

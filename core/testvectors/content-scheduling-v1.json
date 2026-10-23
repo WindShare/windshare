@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "kind": "content-scheduling-v1",
+  "description": "Reviewed event sequences for completion evidence, admission snapshots, and rescue decisions. Time is milliseconds; bytes are plaintext. Rescue events query eligibility without dispatching a duplicate. Hosts retain capacity, route, exploration, and wake ownership.",
+  "cases": [
+    {
+      "name": "cold-mixed-blocks-and-cancellation",
+      "events": [
+        {"event":"inspect","atMs":0,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":0}},
+        {"event":"admit","atMs":0,"lane":"a","attempt":"small","bytes":1048576,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"a","attempt":"large","bytes":67108864,"expectedMs":500},
+        {"event":"inspect","atMs":100,"lane":"a","bytes":1,"expected":{"pendingBytes":68157440,"pendingBlocks":2,"queueMs":500,"completionMs":750,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
+        {"event":"inspect","atMs":100,"lane":"a","bytes":67108864,"expected":{"pendingBytes":68157440,"pendingBlocks":2,"queueMs":500,"completionMs":750,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
+        {"event":"settle","atMs":100,"attempt":"large","outcome":"cancelled"},
+        {"event":"inspect","atMs":100,"lane":"a","bytes":1,"expected":{"pendingBytes":1048576,"pendingBlocks":1,"queueMs":250,"completionMs":500,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
+        {"event":"settle","atMs":100,"attempt":"small","outcome":"cancelled"},
+        {"event":"inspect","atMs":500,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}}
+      ]
+    },
+    {
+      "name": "overlapping-samples-idle-and-smoothed-growth",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"first","bytes":1000,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"a","attempt":"second","bytes":1000,"expectedMs":500},
+        {"event":"settle","atMs":1000,"attempt":"first","outcome":"success"},
+        {"event":"inspect","atMs":1000,"lane":"a","bytes":1000,"expected":{"pendingBytes":1000,"pendingBlocks":1,"queueMs":1000,"completionMs":2000,"bytesPerSecond":1000,"hasSuccessfulSample":true,"busyMs":1000}},
+        {"event":"settle","atMs":2000,"attempt":"second","outcome":"success"},
+        {"event":"inspect","atMs":5000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":1000,"bytesPerSecond":1000,"hasSuccessfulSample":true,"busyMs":2000}},
+        {"event":"admit","atMs":5000,"lane":"a","attempt":"third","bytes":1000,"expectedMs":1000},
+        {"event":"settle","atMs":5500,"attempt":"third","outcome":"success"},
+        {"event":"inspect","atMs":9000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":800,"bytesPerSecond":1250,"hasSuccessfulSample":true,"busyMs":2500}}
+      ]
+    },
+    {
+      "name": "congestion-reduces-rate-without-lifetime-averaging",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"first","bytes":1000,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"a","attempt":"second","bytes":1000,"expectedMs":500},
+        {"event":"settle","atMs":1000,"attempt":"first","outcome":"success"},
+        {"event":"admit","atMs":1000,"lane":"a","attempt":"third","bytes":1000,"expectedMs":2000},
+        {"event":"settle","atMs":11000,"attempt":"second","outcome":"success"},
+        {"event":"inspect","atMs":11000,"lane":"a","bytes":1000,"expected":{"pendingBytes":1000,"pendingBlocks":1,"queueMs":10000,"completionMs":20000,"bytesPerSecond":100,"hasSuccessfulSample":true,"busyMs":11000}},
+        {"event":"settle","atMs":11000,"attempt":"third","outcome":"cancelled"},
+        {"event":"inspect","atMs":12000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":10000,"bytesPerSecond":100,"hasSuccessfulSample":true,"busyMs":11000}}
+      ]
+    },
+    {
+      "name": "caller-cancellation-and-lost-race-have-different-evidence",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"cancelled","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":100,"attempt":"cancelled","outcome":"cancelled"},
+        {"event":"inspect","atMs":100,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
+        {"event":"admit","atMs":1000,"lane":"a","attempt":"lost","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":1100,"attempt":"lost","outcome":"superseded"},
+        {"event":"inspect","atMs":2000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100,"bytesPerSecond":10000,"hasSuccessfulSample":false,"busyMs":200}},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"cancel-again","bytes":1000,"expectedMs":100},
+        {"event":"settle","atMs":2010,"attempt":"cancel-again","outcome":"cancelled"},
+        {"event":"inspect","atMs":2010,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100,"bytesPerSecond":10000,"hasSuccessfulSample":false,"busyMs":210}},
+        {"event":"admit","atMs":3000,"lane":"a","attempt":"lost-slowly","bytes":1000,"expectedMs":100},
+        {"event":"settle","atMs":3500,"attempt":"lost-slowly","outcome":"superseded"},
+        {"event":"inspect","atMs":3500,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":500,"bytesPerSecond":2000,"hasSuccessfulSample":false,"busyMs":710}}
+      ]
+    },
+    {
+      "name": "very-slow-measured-work-remains-bounded",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"sample","bytes":1,"expectedMs":250},
+        {"event":"settle","atMs":100000,"attempt":"sample","outcome":"success"},
+        {"event":"admit","atMs":100000,"lane":"a","attempt":"large","bytes":1048576,"expectedMs":3600000},
+        {"event":"inspect","atMs":100010,"lane":"a","bytes":1,"expected":{"pendingBytes":1048576,"pendingBlocks":1,"queueMs":3600000,"completionMs":3600000,"bytesPerSecond":0.01,"hasSuccessfulSample":true,"busyMs":100010}},
+        {"event":"settle","atMs":100010,"attempt":"large","outcome":"cancelled"},
+        {"event":"inspect","atMs":100010,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100000,"bytesPerSecond":0.01,"hasSuccessfulSample":true,"busyMs":100010}}
+      ]
+    },
+    {
+      "name": "rescue-deadline-uses-admission-snapshot",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"b","attempt":"warm","bytes":1048576,"expectedMs":250},
+        {"event":"settle","atMs":1000,"attempt":"warm","outcome":"success"},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1048576,"expectedMs":250},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"later","bytes":1048576,"expectedMs":500},
+        {"event":"rescue","atMs":2499,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"rescue"},
+        {"event":"settle","atMs":2500,"attempt":"later","outcome":"cancelled"},
+        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"rescue"}
+      ]
+    },
+    {
+      "name": "faster-alternative-respects-minimum-delay",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":200,"attempt":"warm-b","outcome":"success"},
+        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":1000},
+        {"event":"rescue","atMs":2009,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":2010,"attempt":"primary","alternative":"b","decision":"rescue"}
+      ]
+    },
+    {
+      "name": "faster-alternative-must-be-strictly-better-than-remaining-work",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":200,"attempt":"warm-b","outcome":"success"},
+        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":1000},
+        {"event":"rescue","atMs":2599,"attempt":"primary","alternative":"b","decision":"rescue"},
+        {"event":"rescue","atMs":2600,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":3999,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":4000,"attempt":"primary","alternative":"b","decision":"rescue"}
+      ]
+    },
+    {
+      "name": "expected-queue-residence-is-not-a-stall",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
+        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
+        {"event":"settle","atMs":1000,"attempt":"warm-b","outcome":"success"},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"ahead","bytes":1000,"expectedMs":1000},
+        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":2000},
+        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":4000,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":5999,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":6000,"attempt":"primary","alternative":"b","decision":"rescue"}
+      ]
+    },
+    {
+      "name": "short-overdue-attempt-still-respects-minimum-delay",
+      "events": [
+        {"event":"admit","atMs":0,"lane":"a","attempt":"warm","bytes":1000,"expectedMs":250},
+        {"event":"settle","atMs":1,"attempt":"warm","outcome":"success"},
+        {"event":"admit","atMs":100,"lane":"a","attempt":"primary","bytes":1,"expectedMs":1},
+        {"event":"rescue","atMs":102,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":109,"attempt":"primary","alternative":"b","decision":"wait"},
+        {"event":"rescue","atMs":110,"attempt":"primary","alternative":"b","decision":"rescue"}
+      ]
+    }
+  ]
+}
