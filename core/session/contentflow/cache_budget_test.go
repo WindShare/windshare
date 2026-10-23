@@ -13,7 +13,16 @@ func TestCacheReservationsAggregateAndCloseWithoutRevokingEntries(t *testing.T) 
 		t.Fatal(err)
 	}
 	first, second := cacheReservation{budget: budget}, cacheReservation{budget: budget}
-	if !first.grow(2) || !first.grow(2) || !second.grow(4) || first.grow(1) {
+	if !first.grow(2) {
+		t.Fatal("initial cache reservation failed")
+	}
+	if !first.grow(2) {
+		t.Fatal("existing cache reservation did not grow")
+	}
+	if !second.grow(4) {
+		t.Fatal("second cache could not reserve remaining process capacity")
+	}
+	if first.grow(1) {
 		t.Fatal("aggregate cache admission bypassed process capacity")
 	}
 	var retained *capacityledger.UnreleasedError
