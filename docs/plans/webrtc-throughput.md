@@ -1,6 +1,6 @@
 # WebRTC Throughput Improvement
 
-2026-10-22
+2026-10-23
 
 ## Rationale
 
@@ -17,22 +17,22 @@ Higher resource peaks are acceptable when they improve completion without harmin
 ## Ownership
 
 - **Content scheduling** owns pending blocks, byte reservations, priorities, assignment, and cancellation. Capacity, observed completion cost, and output order guide allocation without fixed traffic shares.
-- **Connectivity** owns connection creation, recovery, retirement, and attempt budgets. Initial connectivity and recovery take priority over throughput exploration.
-- **Transport** owns send admission and platform I/O integration; `socketauthority` retains socket lifecycle ownership. Preserve datagram boundaries, deadlines, cancellation, and SCTP congestion control outside the network-free core.
-- **Engine and receiver resource owners** bound aggregate capacity across connections and jobs.
+- **Connectivity** owns connection creation, recovery, retirement, and attempt budgets. It consumes scheduling observations; initial connectivity and recovery take priority over throughput exploration.
+- **Transport** owns send admission, aggregate burst control, and platform I/O integration; `socketauthority` retains socket lifecycle ownership. Preserve datagram boundaries, deadlines, cancellation, and SCTP congestion control outside the network-free core.
+- **Engine and receiver resource owners** inject shared budgets across connections and jobs, including attempts, sockets, reassembly, plaintext, and send capacity.
 
 ## Execution
 
 1. **Re-establish the current bottleneck.** Measure source reading, sealing, send admission, SCTP, native writes, authentication, and output after the implemented changes. Separate starvation, transport delay, and consumer pressure. Compare physical LAN, same-host, reversed endpoints, and public routes; UDP wall time alone cannot identify a driver or CPU cause. Reuse bounded tracing with session/path identities.
 
-2. **Evaluate native send acceleration.** Compare bounded outstanding writes and batching against the current complete-product baseline. Integrate buffers, completion, cancellation, deadlines, and closure with the existing socket/mux lifecycle through a small injected interface. Preserve ordinary socket operation when unavailable. Do not ship the experimental fixed timeout, connect an ICE socket to one peer, or increase MTU globally. Adopt repeatable gains that justify maintenance cost; keep tuning out of user flows.
+2. **Establish shared capacity and refine receive windows.** Inject native reassembly and plaintext budgets from Engine instead of creating process accounts inside each receiver. Bound aggregate outstanding sends and bursts across connections. Adjust pipeline depth where measurements show starvation. Keep send queues, unfinished responses, authentication, and output holdings distinct; receipt replenishes supply without releasing still-owned buffers. Larger buffers remain diagnostic.
 
-3. **Refine existing byte ownership and receive windows.** Adjust pipeline depth where measurements show starvation. Keep local send queues, unfinished responses, authentication, and output holdings distinct. Receipt replenishes supply without releasing still-owned buffers. Larger buffers remain a diagnostic tool.
+3. **Complete shared allocation.** Refactor Go's per-demand probe races into shared pending-work allocation, following the browser's distinct-block model. Choose route-eligible work and capacity together using expected completion, preview and output-frontier priorities. Compare waiting for a fast lane with using a slower idle lane; reserve duplicate racing for stalled-block rescue. Cancellation withdraws queued work immediately; admitted attempts release resources after physical settlement. Avoid preliminary speed tests, fixed partitions, and private backlogs.
 
-4. **Refine shared allocation.** Extend existing admission to choose route-eligible work and available capacity together, balancing expected completion with preview and output-frontier priorities. Avoid parking work behind a busy preferred lane or handing urgent blocks to a slower idle lane. Align Go/browser exploration around unique blocks; keep stalled-block rescue separate. Cancellation withdraws queued work immediately; admitted attempts release their resources after physical settlement. Avoid preliminary speed tests, fixed partitions, and private backlogs.
+4. **Add demand-driven independent connections.** First expose scheduling observations of dispatchable work, output pressure, and known or unknown remaining work; progressive discovery never waits for a full scan. Keep relay and WebRTC startup immediate. On both peers, distinguish initial connectivity, recovery, and throughput exploration in admission; protect essential attempt budgets and reclaim optional slots within existing session/provider limits. Grow from sustained demand under shared capacity, fairly across jobs and receivers. Judge added paths by aggregate unique authenticated progress and output completion over stable observation windows, not traffic on the added path alone. Retire unhelpful paths without discarding verified progress; gains need not scale linearly.
 
-5. **Add demand-driven independent connections.** Keep relay and WebRTC startup immediate. Use sustained dispatchable work, output pressure, and remaining work to explore extra PeerConnections without a full directory scan. Share capacity across jobs; reserve attempt budget and reclaim optional connection slots for initial connectivity and recovery. Retain connections that improve aggregate authenticated progress and completion time; retire unhelpful ones without discarding verified progress. Use stable observation windows to avoid churn; gains need not scale linearly.
+5. **Compare complete workflows.** Measure click-to-first-output, completion, recovery, and useful throughput for short and large transfers over LAN and public direct/TURN routes, including output pressure and competing jobs/receivers. Cover changing lane speeds, stalled tails, and cancellation with focused scenarios and injected clocks; keep expensive cross-host experiments separate.
 
-6. **Compare complete workflows.** Measure click-to-first-output, completion, recovery, and useful throughput for short and large transfers over LAN and public direct/TURN routes, including output pressure and competing jobs. Cover changing lane speeds, stalled tails, and cancellation with focused scenarios and injected clocks; keep expensive cross-host experiments separate.
+6. **Reopen send acceleration only on new evidence.** [Workflow controls](../../testdata/connectivity/webrtc/slowdown-20261022/README.md) found no stable portable-batching gain; complete-workflow native gains remain unmeasured. Skip further experiments unless current profiling identifies a local send bottleneck and a specific change worth testing; multi-connection work proceeds independently. Compare candidates against the current complete-product baseline. Integrate buffers, completion, cancellation, deadlines, and closure with the existing socket/mux lifecycle through a small injected interface. Preserve ordinary socket operation when unavailable. Do not ship the experimental fixed timeout, connect an ICE socket to one peer, or increase MTU globally. Adopt repeatable gains that justify maintenance cost; keep tuning out of user flows.
 
 Ordinary failure of an additional connection reduces parallelism; authentication failures retain their protocol meaning. Users keep one download task and continuous progress. LAN HTTP remains independently optional. Reuse existing block, lease, and output mechanisms rather than the experiment's whole-file memory assembly.
