@@ -147,26 +147,10 @@ func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
 	}
 	slices.SortFunc(records, compareRecordID)
 	retiredObjects := make(map[checkpointmodel.ObjectID]struct{})
-	for _, record := range records {
-		if _, retired := retiredObjects[record.OwnedObjectID()]; !retired {
-			for _, step := range []fileexecution.RetirementStep{
-				fileexecution.RetirementRemoveStage,
-				fileexecution.RetirementSyncStageNamespace,
-				fileexecution.RetirementRemoveAnchor,
-				fileexecution.RetirementSyncAnchorNamespace,
-			} {
-				observation, err := store.applyRetirementLocked(record.OwnedObjectID(), step)
-				if err != nil || !observation.ValidForCleanup(record.OwnedObjectID()) {
-					return errors.Join(err, checkpointmodel.ErrRecordRecovery)
-				}
-			}
-			retiredObjects[record.OwnedObjectID()] = struct{}{}
-		}
-		if err := store.repository.Remove(record); err != nil {
-			return err
-		}
-		if err := store.authority.remove(record); err != nil {
-			return codedError(ErrorCorruptRecord, "remove file checkpoint authority", err)
+	for start := 0; start < len(records); start += maximumCleanupBatchRecords {
+		end := min(start+maximumCleanupBatchRecords, len(records))
+		if err := store.cleanupBatch(ctx, records[start:end], retiredObjects); err != nil {
+			return repositoryError("cleanup ordinary file state", err)
 		}
 	}
 	return nil
@@ -277,9 +261,9 @@ func (store *FileExecutionStore) installInitial(
 		return fileexecution.InitialCheckpointObservation{}, initialAuthorityError(err)
 	}
 
-	operationErr := store.repository.Create(candidate)
-	observed, observationErr := store.repository.Reopen(candidate.RecordID())
+	observed, operationErr := store.repository.Create(candidate)
 	if operationErr != nil {
+		observed, observationErr := store.repository.Reopen(candidate.RecordID())
 		// An exact reread diagnoses an ambiguous create, but only a successful
 		// installation operation proves directory durability. Freeze this lease's
 		// authority until reconciliation establishes the physical reality.
@@ -289,12 +273,6 @@ func (store *FileExecutionStore) installInitial(
 		}
 		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
 			ctx, operationErr, observationErr,
-		)
-	}
-	if observationErr != nil {
-		store.authority.markUnsettled()
-		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
-			ctx, observationErr,
 		)
 	}
 	if !bytes.Equal(observed.CanonicalBytes(), candidate.CanonicalBytes()) {
@@ -374,9 +352,9 @@ func (store *FileExecutionStore) Replace(
 		)
 	}
 
-	operationErr := store.repository.Replace(previous, next)
-	observed, observationErr := store.repository.Reopen(next.RecordID())
+	observed, operationErr := store.repository.Replace(previous, next)
 	if operationErr != nil {
+		observed, observationErr := store.repository.Reopen(next.RecordID())
 		store.authority.markUnsettled()
 		if observationErr == nil &&
 			!bytes.Equal(observed.CanonicalBytes(), next.CanonicalBytes()) &&
@@ -385,12 +363,6 @@ func (store *FileExecutionStore) Replace(
 		}
 		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(
 			ctx, operationErr, observationErr,
-		)
-	}
-	if observationErr != nil {
-		store.authority.markUnsettled()
-		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(
-			ctx, observationErr,
 		)
 	}
 	if bytes.Equal(observed.CanonicalBytes(), next.CanonicalBytes()) {

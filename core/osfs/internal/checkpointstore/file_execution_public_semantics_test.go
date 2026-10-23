@@ -83,14 +83,14 @@ func TestFileExecutionStoreRejectsConflictedAndUnsettledReplacementAuthority(t *
 	candidate := replacementRecordFixture(
 		t, operation.intent, ownership, file, objectIDFixture(t, publicCheckpointObjectFill),
 	)
-	if err := repository.Create(candidate); err != nil {
+	if _, err := repository.Create(candidate); err != nil {
 		t.Fatal(err)
 	}
 	previous, err := checkpointmodel.PromoteInitialCandidate(candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(candidate, previous); err != nil {
+	if _, err := repository.Replace(candidate, previous); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileExecutionStore(&repository)

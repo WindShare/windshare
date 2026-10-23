@@ -62,7 +62,7 @@ func TestNativeResumeRestartProjectsRevisionConflictWithoutMovingRanges(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lease.repository.Create(conflict); err != nil {
+	if _, err := lease.repository.Create(conflict); err != nil {
 		t.Fatal(err)
 	}
 	if err := lease.Close(); err != nil {

@@ -49,23 +49,19 @@ func (nativeWindowsV3VolumeInspector) InspectVolume(handle windows.Handle) (wind
 	}, nil
 }
 
-// Object facts are read from the current handle on every inspection. Volume
-// capabilities belong to root admission and cannot accidentally enter this path.
+// Object evidence is handle-bound. Names are separate placement evidence and
+// must be queried only at namespace boundaries, never as an identity side effect.
+// Mutable attributes are still observed afresh; no path or attribute cache grants
+// authority to a later operation.
 type windowsV3ObjectFacts struct {
-	path          string
 	attributes    uint32
 	caseSensitive bool
 	object        windowsV3ObjectIdentity
 }
 
 type windowsV3ObjectInspector interface {
+	Identify(windows.Handle) (windowsV3ObjectIdentity, error)
 	Inspect(windows.Handle) (windowsV3ObjectFacts, error)
-}
-
-type windowsV3ObjectInspectorFunc func(windows.Handle) (windowsV3ObjectFacts, error)
-
-func (inspect windowsV3ObjectInspectorFunc) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
-	return inspect(handle)
 }
 
 type nativeWindowsV3ObjectInspector struct{}
@@ -75,26 +71,33 @@ type windowsV3FileIDInfo struct {
 	FileID             [16]byte
 }
 
-func (nativeWindowsV3ObjectInspector) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
-	path, err := windowsV3FinalPath(handle, 0)
-	if err != nil {
-		return windowsV3ObjectFacts{}, err
-	}
+func (nativeWindowsV3ObjectInspector) Identify(handle windows.Handle) (windowsV3ObjectIdentity, error) {
 	// Resolve the actual volume GUID as well as the serial from this handle.
 	// An expected volume or a drive-letter cache is not evidence of membership.
 	volumeGUIDPath, err := windowsV3FinalPath(handle, windowsV3OutputVolumeNameGUID)
 	if err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsV3ObjectIdentity{}, err
 	}
 	volumeGUID := strings.ToLower(filepath.VolumeName(volumeGUIDPath))
 	if volumeGUID == "" {
-		return windowsV3ObjectFacts{}, errors.New("windows volume GUID path has no volume name")
+		return windowsV3ObjectIdentity{}, errors.New("windows volume GUID path has no volume name")
 	}
 
 	var fileID windowsV3FileIDInfo
 	if err := windows.GetFileInformationByHandleEx(
 		handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&fileID)), uint32(unsafe.Sizeof(fileID)),
 	); err != nil {
+		return windowsV3ObjectIdentity{}, err
+	}
+	return windowsV3ObjectIdentity{
+		volume: windowsV3VolumeIdentity{guid: volumeGUID, serial: fileID.VolumeSerialNumber},
+		fileID: fileID.FileID,
+	}, nil
+}
+
+func (inspector nativeWindowsV3ObjectInspector) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
+	identity, err := inspector.Identify(handle)
+	if err != nil {
 		return windowsV3ObjectFacts{}, err
 	}
 	var information windows.ByHandleFileInformation
@@ -115,13 +118,9 @@ func (nativeWindowsV3ObjectInspector) Inspect(handle windows.Handle) (windowsV3O
 		caseSensitive = sensitivity.Flags&windows.FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0
 	}
 	return windowsV3ObjectFacts{
-		path:          path,
 		attributes:    information.FileAttributes,
 		caseSensitive: caseSensitive,
-		object: windowsV3ObjectIdentity{
-			volume: windowsV3VolumeIdentity{guid: volumeGUID, serial: fileID.VolumeSerialNumber},
-			fileID: fileID.FileID,
-		},
+		object:        identity,
 	}, nil
 }
 
@@ -156,7 +155,7 @@ func validateWindowsV3RootShape(facts windowsV3ObjectFacts) error {
 		return err
 	}
 	if facts.caseSensitive {
-		return windowsV3Failure("certify output root", facts.path, errWindowsV3OutputUnsupported,
+		return windowsV3Failure("certify output root", "", errWindowsV3OutputUnsupported,
 			errors.New("case-sensitive NTFS output directories are not certified"))
 	}
 	return nil
@@ -169,7 +168,7 @@ func validateWindowsV3ExternalPlacement(
 	// The retained root already certified the volume. Each ancestry handle must
 	// independently prove that same GUID and serial before reusing its capabilities.
 	if facts.object.volume != expected {
-		return windowsV3Failure("certify external output placement", facts.path, errWindowsV3OutputUnsafe,
+		return windowsV3Failure("certify external output placement", "", errWindowsV3OutputUnsafe,
 			errors.New("external placement crossed the certified NTFS volume boundary"))
 	}
 	// External components are spelling/placement authorities, not output lookup
@@ -212,13 +211,13 @@ func validateWindowsV3DirectoryShape(
 ) error {
 	switch {
 	case facts.attributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0:
-		return windowsV3Failure(operation, facts.path, errWindowsV3OutputUnsupported,
+		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
 			errors.New(role+" is not a directory"))
 	case facts.attributes&windowsV3CloudAttributeMask != 0:
-		return windowsV3Failure(operation, facts.path, errWindowsV3OutputUnsupported,
+		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
 			errors.New("reparse, offline, and cloud-placeholder directories are not certified"))
 	case !facts.object.valid():
-		return windowsV3Failure(operation, facts.path, errWindowsV3OutputUnsupported,
+		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
 			errors.New("volume or File ID identity is unavailable"))
 	default:
 		return nil

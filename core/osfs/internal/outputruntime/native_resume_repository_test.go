@@ -714,7 +714,7 @@ func retainUnobservableCheckpointCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(stable, active); err != nil {
+	if _, err := repository.Replace(stable, active); err != nil {
 		t.Fatal(err)
 	}
 	candidate, err := checkpointmodel.AdvanceGeneration(
@@ -726,7 +726,7 @@ func retainUnobservableCheckpointCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(active, candidate); err != nil {
+	if _, err := repository.Replace(active, candidate); err != nil {
 		t.Fatal(err)
 	}
 	if err := errors.Join(

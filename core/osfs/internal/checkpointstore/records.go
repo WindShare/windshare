@@ -184,7 +184,9 @@ func InstallCreate(directory outputcap.Directory, name string, encoded []byte) e
 	installed, err := ReadFile(directory, name)
 	switch {
 	case err == nil && bytes.Equal(installed, encoded):
-		return reconcileExactCandidates(directory, name, encoded)
+		// A retry can observe the rename from a failed namespace sync. Exact
+		// bytes alone do not make this invocation a durability receipt.
+		return errors.Join(directory.Sync(), reconcileExactCandidates(directory, name, encoded))
 	case err == nil:
 		return checkpointmodel.ErrRecordBinding
 	case errors.Is(err, fs.ErrNotExist):
@@ -327,7 +329,7 @@ func InstallReplace(directory outputcap.Directory, name string, previous, next [
 		return err
 	}
 	if bytes.Equal(current, next) {
-		return reconcileExactCandidates(directory, name, next)
+		return errors.Join(directory.Sync(), reconcileExactCandidates(directory, name, next))
 	}
 	if !bytes.Equal(current, previous) {
 		return checkpointmodel.ErrRecordBinding

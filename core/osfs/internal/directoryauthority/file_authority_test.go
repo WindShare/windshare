@@ -716,7 +716,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 		fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
 		fixture.objects.publishMutates = true
 		owned := &fileAuthorityOwnedFile{object: fixture.object}
-		observed, err := fixture.destination.PublishNoReplace(context.Background(), owned, fixture.expectation)
+		observed, err := publishForTest(fixture.destination, context.Background(), owned, fixture.expectation)
 		if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
 			t.Fatalf("published condition=%v error=%v", observed.Condition(), err)
 		}
@@ -732,7 +732,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 		fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
 		fixture.platform.addFile(fixture.parent, fixture.leaf, fileAuthorityExactSize)
 		fixture.objects.match = false
-		observed, err := fixture.destination.PublishNoReplace(
+		observed, err := publishForTest(fixture.destination,
 			context.Background(),
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
@@ -751,7 +751,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 	t.Run("nil publication outcome is unsafe", func(t *testing.T) {
 		fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
 		fixture.objects.publishNil = true
-		observed, err := fixture.destination.PublishNoReplace(
+		observed, err := publishForTest(fixture.destination,
 			context.Background(),
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
@@ -765,7 +765,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 		fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
 		fixture.objects.publishMutates = true
 		fixture.objects.publishErr = errors.New("link completion was not reported")
-		observed, err := fixture.destination.PublishNoReplace(
+		observed, err := publishForTest(fixture.destination,
 			context.Background(),
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
@@ -781,7 +781,7 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 		fixture.objects.publishMutates = true
 		errClose := errors.New("linked handle close failed")
 		fixture.objects.linkedPolicy.closeErr = errClose
-		observed, err := fixture.destination.PublishNoReplace(
+		observed, err := publishForTest(fixture.destination,
 			context.Background(),
 			&fileAuthorityOwnedFile{object: fixture.object},
 			fixture.expectation,
@@ -792,11 +792,11 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 	})
 
 	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{})
-	if _, err := fixture.destination.PublishNoReplace(context.Background(), nil, fixture.expectation); !errors.Is(err, ErrInvalidClaim) {
+	if _, err := publishForTest(fixture.destination, context.Background(), nil, fixture.expectation); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("nil owned file error = %v", err)
 	}
 	otherObject, _ := fileAuthorityObject(t, 0x92)
-	if _, err := fixture.destination.PublishNoReplace(
+	if _, err := publishForTest(fixture.destination,
 		context.Background(),
 		&fileAuthorityOwnedFile{object: otherObject},
 		fixture.expectation,
@@ -807,7 +807,9 @@ func TestFileAuthorityPublishesNoReplaceAndReconcilesTheLiveFinal(t *testing.T) 
 
 func TestFileAuthoritySyncAndCloseRetainParentGuardSemantics(t *testing.T) {
 	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{nested: true, preexisting: true})
-	if err := fixture.destination.SyncFinalParent(context.Background()); err != nil {
+	if err := fixture.destination.WithPublication(context.Background(),
+		&fileAuthorityOwnedFile{object: fixture.object}, fixture.expectation,
+		func(publication fileexecution.FilePublication) error { return publication.Sync(context.Background()) }); err != nil {
 		t.Fatal(err)
 	}
 	fixture.platform.mu.Lock()
@@ -821,7 +823,9 @@ func TestFileAuthoritySyncAndCloseRetainParentGuardSemantics(t *testing.T) {
 	fixture.platform.mu.Lock()
 	fixture.parent.syncErr = errSync
 	fixture.platform.mu.Unlock()
-	if err := fixture.destination.SyncFinalParent(context.Background()); !errors.Is(err, errSync) {
+	if err := fixture.destination.WithPublication(context.Background(),
+		&fileAuthorityOwnedFile{object: fixture.object}, fixture.expectation,
+		func(publication fileexecution.FilePublication) error { return publication.Sync(context.Background()) }); !errors.Is(err, errSync) {
 		t.Fatalf("final parent sync error = %v", err)
 	}
 
@@ -891,23 +895,23 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: fixture.object},
 		native:                 &fakeFile{node: stageNode},
 	}
-	if observed, err := destination.ObserveOwnedFinal(
+	if observed, err := observePublicationForTest(destination,
 		context.Background(), owned, fixture.expectation,
 	); err != nil || observed.Condition() != fileexecution.FinalAbsent {
 		t.Fatalf("pre-publish owned final = (%v, %v)", observed.Condition(), err)
 	}
-	observed, err := fixture.destination.PublishNoReplace(
+	observed, err := publishForTest(fixture.destination,
 		context.Background(), owned, fixture.expectation,
 	)
 	if err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
 		t.Fatalf("live publish = (%v, %v)", observed.Condition(), err)
 	}
-	if observed, err = destination.ObserveOwnedFinal(
+	if observed, err = observePublicationForTest(destination,
 		context.Background(), owned, fixture.expectation,
 	); err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
 		t.Fatalf("published owned final = (%v, %v)", observed.Condition(), err)
 	}
-	if observed, err = fixture.destination.PublishNoReplace(
+	if observed, err = publishForTest(fixture.destination,
 		context.Background(), owned, fixture.expectation,
 	); err != nil || observed.Condition() != fileexecution.FinalOwnedAtExpectedSize {
 		t.Fatalf("idempotent live publish = (%v, %v)", observed.Condition(), err)
@@ -917,7 +921,7 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		t.Fatalf("presence-only final = (%v, %v)", observed.Condition(), err)
 	}
 
-	if _, err := destination.ObserveOwnedFinal(
+	if _, err := observePublicationForTest(destination,
 		context.Background(),
 		&fileAuthorityOwnedFile{object: fixture.object},
 		fixture.expectation,
@@ -925,7 +929,7 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		t.Fatalf("non-native live object error = %v", err)
 	}
 	otherObject, _ := fileAuthorityObject(t, 0x92)
-	if _, err := fixture.destination.PublishNoReplace(
+	if _, err := publishForTest(fixture.destination,
 		context.Background(),
 		&liveFileAuthorityOwned{
 			fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: otherObject},
@@ -942,7 +946,7 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		node: &fakeNode{id: 901, size: fileAuthorityExactSize},
 	}
 	fixture.platform.mu.Unlock()
-	if observed, err = destination.ObserveOwnedFinal(
+	if observed, err = observePublicationForTest(destination,
 		context.Background(), owned, fixture.expectation,
 	); err != nil || observed.Condition() != fileexecution.FinalCollision {
 		t.Fatalf("replaced live final = (%v, %v)", observed.Condition(), err)
@@ -1031,4 +1035,32 @@ func TestAuthorityOwnedDirectoryID(t *testing.T) {
 	if err != nil || ownedID.IsZero() {
 		t.Fatalf("OwnedDirectoryID on captured claim = (%x, %v)", ownedID.Bytes(), err)
 	}
+}
+
+func publishForTest(
+	destination fileexecution.FileDestination,
+	ctx context.Context,
+	owned fileexecution.OwnedFile,
+	expectation fileexecution.FinalExpectation,
+) (observed fileexecution.FinalObservation, err error) {
+	err = destination.WithPublication(ctx, owned, expectation, func(publication fileexecution.FilePublication) error {
+		var publishErr error
+		observed, publishErr = publication.PublishNoReplace(ctx)
+		return publishErr
+	})
+	return observed, err
+}
+
+func observePublicationForTest(
+	destination fileexecution.FileDestination,
+	ctx context.Context,
+	owned fileexecution.OwnedFile,
+	expectation fileexecution.FinalExpectation,
+) (observed fileexecution.FinalObservation, err error) {
+	err = destination.WithPublication(ctx, owned, expectation, func(publication fileexecution.FilePublication) error {
+		var observeErr error
+		observed, observeErr = publication.Observe(ctx)
+		return observeErr
+	})
+	return observed, err
 }

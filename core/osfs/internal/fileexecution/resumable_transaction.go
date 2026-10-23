@@ -116,26 +116,12 @@ func (transaction *resumablePartialFileTransaction) checkpointLocked(ctx context
 	if err != nil {
 		return transfer.VerifiedDurableRanges{}, fileContractError(err)
 	}
-	candidate, err := checkpointmodel.AdvanceGeneration(
-		transaction.record, checkpointRanges(merged), checkpointmodel.PhaseActive,
-		checkpointmodel.CommitCandidate,
-	)
-	if err != nil {
-		return transfer.VerifiedDurableRanges{}, fileContractError(err)
-	}
-	next, err := checkpointmodel.Promote(candidate, checkpointmodel.PhaseActive, checkpointmodel.CommitVerified)
+	next, err := checkpointmodel.AdvanceDurableRanges(transaction.record, checkpointRanges(merged))
 	if err != nil {
 		return transfer.VerifiedDurableRanges{}, fileContractError(err)
 	}
 	previous := transaction.record
-	if _, err := transaction.engine.storeRecord(ctx, &previous, candidate); err != nil {
-		return transfer.VerifiedDurableRanges{}, err
-	}
-	// The candidate is the crash image between byte durability and verified
-	// checkpoint promotion; persisting only the promoted image would erase
-	// the recovery cut that distinguishes a completed sync from an unknown one.
-	transaction.record = candidate
-	if _, err := transaction.engine.storeRecord(ctx, &candidate, next); err != nil {
+	if _, err := transaction.engine.storeRecord(ctx, &previous, next); err != nil {
 		return transfer.VerifiedDurableRanges{}, err
 	}
 	transaction.record = next
@@ -209,18 +195,9 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 	if err != nil {
 		return transfer.FileSettlement{}, fileContractError(err)
 	}
-	final, err := transaction.destination.ObserveFinal(ctx, expectation)
-	if observer, ok := transaction.destination.(OwnedFinalObserver); ok {
-		final, err = observer.ObserveOwnedFinal(ctx, transaction.file, expectation)
-	}
+	final, err := settlePublication(ctx, transaction.destination, transaction.file, expectation, retry)
 	if err != nil || !final.valid() {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
-	}
-	if final.Condition() == FinalAbsent && retry {
-		final, err = transaction.destination.PublishNoReplace(ctx, transaction.file, expectation)
-		if err != nil || !final.valid() {
-			return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
-		}
 	}
 	if final.Condition() == FinalCollision {
 		paused, transitionErr := pauseRecord(transaction.record)
@@ -239,9 +216,6 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantineFinalUnsafe)
 	}
 	if final.Condition() != FinalOwnedAtExpectedSize {
-		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
-	}
-	if err := transaction.destination.SyncFinalParent(ctx); err != nil {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
 	}
 	published, err := publishedRecord(transaction.record)

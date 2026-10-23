@@ -292,7 +292,7 @@ func retainSemanticCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(stable, active); err != nil {
+	if _, err := repository.Replace(stable, active); err != nil {
 		t.Fatal(err)
 	}
 	owned, _, err := store.OpenOwnedFile(
@@ -319,7 +319,7 @@ func retainSemanticCandidate(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(active, candidate); err != nil {
+	if _, err := repository.Replace(active, candidate); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := repository.Reopen(candidate.RecordID())

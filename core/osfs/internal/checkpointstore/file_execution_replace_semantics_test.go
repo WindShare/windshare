@@ -38,10 +38,10 @@ func TestFileExecutionStoreReplaceDurablyAdvancesExactLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Create(initial); err != nil {
+	if _, err := repository.Create(initial); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(initial, previous); err != nil {
+	if _, err := repository.Replace(initial, previous); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileExecutionStore(&repository)
@@ -344,15 +344,12 @@ func (checkpointKeyDestination) ObserveFinalPresence(
 	return fileexecution.FinalObservation{}, errCheckpointKeyCaptured
 }
 
-func (checkpointKeyDestination) PublishNoReplace(
+func (checkpointKeyDestination) WithPublication(
 	context.Context,
 	fileexecution.OwnedFile,
 	fileexecution.FinalExpectation,
-) (fileexecution.FinalObservation, error) {
-	return fileexecution.FinalObservation{}, errCheckpointKeyCaptured
-}
-
-func (checkpointKeyDestination) SyncFinalParent(context.Context) error {
+	func(fileexecution.FilePublication) error,
+) error {
 	return errCheckpointKeyCaptured
 }
 

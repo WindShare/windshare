@@ -18,7 +18,7 @@ func TestOrdinaryRepositoryRejectsPredecessorSubstitutionAndRetriesExactCuts(t *
 		_ = namespace.Close()
 	})
 	initial := checkpointRecordFixture(t, ownership, intent, 0xe3)
-	if err := repository.Create(initial); err != nil {
+	if _, err := repository.Create(initial); err != nil {
 		t.Fatal(err)
 	}
 	active, err := checkpointmodel.Promote(
@@ -29,21 +29,21 @@ func TestOrdinaryRepositoryRejectsPredecessorSubstitutionAndRetriesExactCuts(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Create(active); ErrorCodeFor(err) != ErrorUnsafeInstall {
+	if _, err := repository.Create(active); ErrorCodeFor(err) != ErrorUnsafeInstall {
 		t.Fatalf("noninitial create without predecessor = %v", err)
 	}
-	if err := repository.Replace(initial, active); err != nil {
+	if _, err := repository.Replace(initial, active); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Create(active); err != nil {
+	if _, err := repository.Create(active); err != nil {
 		t.Fatalf("exact completed create retry = %v", err)
 	}
 
 	foreign := checkpointRecordFixture(t, ownership, intent, 0xe4)
-	if err := repository.Replace(active, foreign); ErrorCodeFor(err) != ErrorUnsafeInstall {
+	if _, err := repository.Replace(active, foreign); ErrorCodeFor(err) != ErrorUnsafeInstall {
 		t.Fatalf("foreign record replacement = %v", err)
 	}
-	if err := repository.Replace(active, initial); ErrorCodeFor(err) != ErrorUnsafeInstall {
+	if _, err := repository.Replace(active, initial); ErrorCodeFor(err) != ErrorUnsafeInstall {
 		t.Fatalf("generation rollback = %v", err)
 	}
 	if err := repository.Remove(active); err != nil {
@@ -57,10 +57,10 @@ func TestOrdinaryRepositoryRejectsPredecessorSubstitutionAndRetriesExactCuts(t *
 	}
 
 	var nilRepository *Repository
-	if err := nilRepository.Create(initial); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := nilRepository.Create(initial); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil create error = %v", err)
 	}
-	if err := nilRepository.Replace(initial, active); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+	if _, err := nilRepository.Replace(initial, active); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("nil replace error = %v", err)
 	}
 	if err := nilRepository.Remove(initial); !errors.Is(err, transfer.ErrInvalidOutputBinding) {

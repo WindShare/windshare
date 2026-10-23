@@ -341,24 +341,24 @@ func sameWindowsV3OpenedObject(left, right *windowsV3File) (bool, error) {
 	if left == nil || right == nil || left.file == nil || right.file == nil || left.inspector == nil || right.inspector == nil {
 		return false, windowsV3Failure("compare output objects", "", errWindowsV3OutputUnsafe, errors.New("missing open file handle"))
 	}
-	leftFacts, leftErr := left.inspector.Inspect(left.handle())
-	rightFacts, rightErr := right.inspector.Inspect(right.handle())
+	leftFacts, leftErr := left.inspector.Identify(left.handle())
+	rightFacts, rightErr := right.inspector.Identify(right.handle())
 	if leftErr != nil || rightErr != nil {
 		return false, windowsV3Failure("compare output objects", "", errWindowsV3OutputUnsafe, errors.Join(leftErr, rightErr))
 	}
-	return leftFacts.object.same(rightFacts.object), nil
+	return leftFacts.same(rightFacts), nil
 }
 
 func sameWindowsV3OpenedDirectory(left, right *windowsV3Directory) (bool, error) {
 	if left == nil || right == nil || left.file == nil || right.file == nil || left.inspector == nil || right.inspector == nil {
 		return false, windowsV3Failure("compare output directories", "", errWindowsV3OutputUnsafe, errors.New("missing open directory handle"))
 	}
-	leftFacts, leftErr := left.inspector.Inspect(left.handle())
-	rightFacts, rightErr := right.inspector.Inspect(right.handle())
+	leftFacts, leftErr := left.inspector.Identify(left.handle())
+	rightFacts, rightErr := right.inspector.Identify(right.handle())
 	if leftErr != nil || rightErr != nil {
 		return false, windowsV3Failure("compare output directories", "", errWindowsV3OutputUnsafe, errors.Join(leftErr, rightErr))
 	}
-	return leftFacts.object.same(rightFacts.object), nil
+	return leftFacts.same(rightFacts), nil
 }
 
 type windowsV3PublishMutationError struct {
