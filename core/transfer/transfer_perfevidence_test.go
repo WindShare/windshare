@@ -77,11 +77,17 @@ func (lane *immediateBenchmarkLane) FetchBlock(ctx context.Context, demand Block
 }
 
 func BenchmarkFileLocalMultiLane(b *testing.B) {
-	descriptor, recordSet := benchmarkTransferData(b, laneBenchmarkBlockBytes, laneBenchmarkBlocks)
+	for _, blockBytes := range []uint32{laneBenchmarkBlockBytes, catalog.DefaultChunkSize} {
+		benchmarkFileLocalMultiLane(b, blockBytes)
+	}
+}
+
+func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
+	descriptor, recordSet := benchmarkTransferData(b, blockBytes, laneBenchmarkBlocks)
 	exactBytes := descriptor.ExactSize()
 	lease := benchmarkTransferIdentity[content.LeaseID](83)
 	for _, laneCount := range laneCounts {
-		b.Run(fmt.Sprintf("lanes=%02d/window=%02d/block_bytes=%07d", laneCount, laneCount, laneBenchmarkBlockBytes), func(b *testing.B) {
+		b.Run(fmt.Sprintf("lanes=%02d/window=%02d/block_bytes=%07d", laneCount, laneCount, blockBytes), func(b *testing.B) {
 			lanes, err := NewLaneSet(LaneSetConfig{
 				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101),
 				RaceWidth:         1,
@@ -108,7 +114,13 @@ func BenchmarkFileLocalMultiLane(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			b.Cleanup(broker.Close)
+			b.Cleanup(func() {
+				broker.Stop()
+				lanes.Close()
+				if err := broker.Close(); err != nil {
+					b.Error(err)
+				}
+			})
 
 			b.ReportAllocs()
 			b.SetBytes(int64(exactBytes))
@@ -128,6 +140,10 @@ func BenchmarkFileLocalMultiLane(b *testing.B) {
 				if written != exactBytes {
 					b.Fatalf("file-local range wrote %d bytes, want %d", written, exactBytes)
 				}
+				// Output completion may precede a canceled probe's physical exit.
+				// Settle all attempts before checking capacity or starting a new batch.
+				broker.loads.Wait()
+				lanes.attempts.Wait()
 				broker.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
 				if broker.UsedBytes() != 0 || process.Used() != 0 {
 					b.Fatalf("invalidation retained plaintext: broker=%d process=%d", broker.UsedBytes(), process.Used())
@@ -139,20 +155,22 @@ func BenchmarkFileLocalMultiLane(b *testing.B) {
 				calls += probe.calls.Load()
 			}
 			wantCalls := uint64(laneBenchmarkBlocks * b.N)
-			if calls != wantCalls {
-				b.Fatalf("lane fetches = %d, want %d", calls, wantCalls)
+			if calls < wantCalls {
+				b.Fatalf("lane fetches = %d, want at least %d", calls, wantCalls)
 			}
 			for blockIndex := range laneBenchmarkBlocks {
 				var fetches uint64
 				for _, probe := range probes {
 					fetches += probe.seen[blockIndex].Load()
 				}
-				if fetches != uint64(b.N) {
-					b.Fatalf("block %d fetched %d times, want %d", blockIndex, fetches, b.N)
+				if fetches < uint64(b.N) {
+					b.Fatalf("block %d fetched %d times, want at least %d", blockIndex, fetches, b.N)
 				}
 			}
+			b.ReportMetric(float64(process.Used()), "retained-plaintext-B")
 			b.ReportMetric(float64(calls)/float64(b.N), "lane-fetches/op")
-			b.ReportMetric(0, "duplicate-fetches/op")
+			// Adaptive probing is allowed even with an initial race width of one.
+			b.ReportMetric(float64(calls-wantCalls)/float64(b.N), "duplicate-fetches/op")
 			b.ReportMetric(float64(laneCount), "window-blocks")
 		})
 	}

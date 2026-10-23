@@ -39,6 +39,9 @@ func (g *receiveOperation) close() error {
 	execution.Close()
 	session.Close()
 	cleanupErr := g.observation.cleanupFailure()
+	if session != nil && session.runtime != nil {
+		cleanupErr = errors.Join(cleanupErr, session.runtime.CleanupError())
+	}
 	if g.options.native != nil {
 		cleanupCtx, cancel := g.runner.control.CleanupContext()
 		cleanupErr = errors.Join(cleanupErr, g.options.native.Close(cleanupCtx))
@@ -57,6 +60,10 @@ func (g *receiveOperation) replace(ctx context.Context, _ *sessionruntime.Receiv
 	g.mu.Unlock()
 	oldExecution.CloseWithReason(ReceiverLocalStopRuntimeSessionFailure)
 	oldSession.Close()
+	if err := oldSession.runtime.CleanupError(); err != nil {
+		g.observation.recordCleanup(err)
+		return nil, err
+	}
 	g.options.native.CloseSession([16]byte(oldSession.runtime.ProtocolSessionID()))
 	g.observation.completeGeneration()
 	next, err := oldSession.recovery.replace(ctx)

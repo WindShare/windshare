@@ -35,13 +35,24 @@ func BenchmarkBlockBrokerCacheInsertion(b *testing.B) {
 					account: bufferbudget.NewAccount[blockKey](process, DefaultSessionPlaintextBytes),
 					entries: make(map[blockKey]*cachedBlock),
 				}
-				if !broker.account.Reserve(uint64(count * entryBytes)) {
+				reservation, ok := broker.account.Reserve(uint64(count * entryBytes))
+				if !ok {
 					b.Fatal("reservation failed")
+				}
+				// Production claims each block before fetching it. Keep preparation
+				// outside insertion timing, just like the aggregate reservation.
+				parts := make([]bufferbudget.Reservation, count)
+				for i := range parts {
+					var ok bool
+					parts[i], ok = reservation.Split(entryBytes)
+					if !ok {
+						b.Fatal("split failed")
+					}
 				}
 				b.StartTimer()
 				for i, key := range keys {
 					broker.mu.Lock()
-					broker.storeReservedLocked(key, data[i], route)
+					broker.storeReservedLocked(key, data[i], route, parts[i])
 					broker.mu.Unlock()
 				}
 				b.StopTimer()

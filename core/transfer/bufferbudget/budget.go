@@ -1,182 +1,147 @@
 package bufferbudget
 
 import (
-	"container/list"
 	"errors"
-	"slices"
+	"fmt"
 	"sync"
+
+	"github.com/windshare/windshare/core/capacityledger"
 )
+
+var ErrReservation = errors.New("buffer does not own a matching live reservation")
 
 // Budget owns both retained copies and immediately reclaimable cache across
 // receivers. Cache eviction never calls another receiver while holding a lock.
 type Budget struct {
-	mu          sync.Mutex
-	limit, used uint64
-	changed     chan struct{}
-	cache       list.List
+	mu      sync.Mutex
+	ledger  *capacityledger.Ledger
+	changed chan struct{}
+	cache   cacheList
 }
 
-// The shared LRU can reclaim entries from accounts with different key types.
 // Implementations only mutate budget-owned state while the budget lock is held.
-type evictionCandidate interface {
-	evictLocked()
-}
+type evictionCandidate interface{ evictLocked() }
 
 type Account[K comparable] struct {
-	budget      *Budget
-	limit, used uint64
-	cache       list.List
-	evicted     []*Cached[K]
-}
-
-type Cached[K comparable] struct {
-	account       *Account[K]
-	key           K
-	data          []byte
-	global, local *list.Element
+	budget  *Budget
+	ledger  *capacityledger.Ledger
+	cache   cacheList
+	evicted []*Cached[K]
 }
 
 func New(limit uint64) (*Budget, error) {
 	if limit == 0 {
 		return nil, errors.New("receiver plaintext budget must be positive")
 	}
-	return &Budget{limit: limit, changed: make(chan struct{})}, nil
+	return &Budget{ledger: capacityledger.New(limit)}, nil
 }
 
 func NewAccount[K comparable](budget *Budget, limit uint64) *Account[K] {
-	return &Account[K]{budget: budget, limit: min(limit, budget.limit)}
+	return &Account[K]{budget: budget, ledger: budget.ledger.Child(limit)}
 }
-func (b *Budget) Limit() uint64 { return b.limit }
+
+func (b *Budget) Limit() uint64 { return b.ledger.Limit() }
 func (b *Budget) Used() uint64 {
 	if b == nil {
 		return 0
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.used
+	return b.ledger.Snapshot().Used
 }
-func (b *Budget) Changes() <-chan struct{} { b.mu.Lock(); defer b.mu.Unlock(); return b.changed }
-func (b *Budget) Wake()                    { b.mu.Lock(); b.wakeLocked(); b.mu.Unlock() }
-func (b *Budget) wakeLocked()              { close(b.changed); b.changed = make(chan struct{}) }
-func (a *Account[K]) Used() uint64         { a.budget.mu.Lock(); defer a.budget.mu.Unlock(); return a.used }
 
-func (a *Account[K]) Reserve(bytes uint64) bool {
+// Changes must be observed before checking capacity so a release between the
+// check and the wait cannot be missed.
+func (b *Budget) Changes() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed == nil {
+		b.changed = make(chan struct{})
+	}
+	return b.changed
+}
+
+func (b *Budget) Wake() { b.mu.Lock(); b.wakeLocked(); b.mu.Unlock() }
+
+func (b *Budget) wakeLocked() {
+	// Only observers need a generation channel. Repeated changes with no new
+	// observer carry no extra information and must not allocate per buffer.
+	if b.changed != nil {
+		close(b.changed)
+		b.changed = nil
+	}
+}
+
+func (b *Budget) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	err := b.ledger.Close()
+	b.wakeLocked()
+	if err != nil {
+		return fmt.Errorf("receiver plaintext process: %w", err)
+	}
+	return nil
+}
+
+func (a *Account[K]) Used() uint64 {
+	a.budget.mu.Lock()
+	defer a.budget.mu.Unlock()
+	return a.ledger.Snapshot().Used
+}
+
+func (a *Account[K]) Reserve(bytes uint64) (Reservation, bool) {
 	a.budget.mu.Lock()
 	defer a.budget.mu.Unlock()
 	return a.reserveLocked(bytes)
 }
 
-func (a *Account[K]) reserveLocked(bytes uint64) bool {
+func (a *Account[K]) reserveLocked(bytes uint64) (Reservation, bool) {
 	b := a.budget
-	if bytes == 0 || bytes > a.limit {
-		return false
+	if bytes == 0 || bytes > a.ledger.Limit() || a.ledger.Snapshot().Closed || b.ledger.Snapshot().Closed {
+		return Reservation{}, false
 	}
-	for bytes > a.limit-a.used {
-		oldest := a.cache.Back()
+	for bytes > a.ledger.Limit()-a.ledger.Snapshot().Used {
+		oldest := a.cache.last
 		if oldest == nil {
-			return false
+			return Reservation{}, false
 		}
-		oldest.Value.(evictionCandidate).evictLocked()
+		oldest.entry.evictLocked()
 	}
-	for bytes > b.limit-b.used {
-		oldest := b.cache.Back()
+	for bytes > b.ledger.Available() {
+		oldest := b.cache.last
 		if oldest == nil {
-			return false
+			return Reservation{}, false
 		}
-		oldest.Value.(evictionCandidate).evictLocked()
+		oldest.entry.evictLocked()
 	}
-	a.used += bytes
-	b.used += bytes
-	return true
+	hold, ok := a.ledger.Reserve(bytes)
+	return Reservation{budget: b, hold: hold}, ok
 }
 
-func (a *Account[K]) Release(bytes uint64) {
-	b := a.budget
-	b.mu.Lock()
-	a.used -= bytes
-	b.used -= bytes
-	b.wakeLocked()
-	b.mu.Unlock()
-}
-
-// Store transfers an existing reservation, so a completed shared load is charged
-// once when its last subscriber leaves and it becomes reclaimable cache.
-func (a *Account[K]) Store(key K, data []byte) *Cached[K] {
+// Close retires the account's cache after its workers have joined. Independently
+// delivered buffers stay charged and are reported instead of being revoked.
+func (a *Account[K]) Close() error {
 	b := a.budget
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	cached := &Cached[K]{account: a, key: key, data: data}
-	cached.global = b.cache.PushFront(cached)
-	cached.local = a.cache.PushFront(cached)
+	for oldest := a.cache.last; oldest != nil; oldest = a.cache.last {
+		oldest.entry.(*Cached[K]).dropLocked()
+	}
+	a.evicted = nil
+	err := a.ledger.Close()
 	b.wakeLocked()
-	return cached
+	if err != nil {
+		return fmt.Errorf("receiver plaintext account: %w", err)
+	}
+	return nil
 }
 
 // TakeEvicted transfers pressure-eviction records to the account owner, so index
 // cleanup follows actual evictions instead of scanning live cache entries.
-// A record identifies the evicted instance, not a later replacement with its key.
 func (a *Account[K]) TakeEvicted() []*Cached[K] {
 	a.budget.mu.Lock()
 	defer a.budget.mu.Unlock()
 	evicted := a.evicted
 	a.evicted = nil
 	return evicted
-}
-
-func (c *Cached[K]) Key() K { return c.key }
-
-func (c *Cached[K]) Live() bool {
-	c.account.budget.mu.Lock()
-	defer c.account.budget.mu.Unlock()
-	return c.data != nil
-}
-
-// Copy reserves an independent consumer buffer atomically with pinning the
-// cache source. A nil copy with live=true means capacity, not content, is absent.
-func (c *Cached[K]) Copy() (data []byte, live bool) {
-	b, a := c.account.budget, c.account
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if c.data == nil {
-		return nil, false
-	}
-	b.cache.Remove(c.global)
-	a.cache.Remove(c.local)
-	reserved := a.reserveLocked(uint64(len(c.data)))
-	c.global = b.cache.PushFront(c)
-	c.local = a.cache.PushFront(c)
-	if !reserved {
-		return nil, true
-	}
-	return slices.Clone(c.data), true
-}
-
-func (c *Cached[K]) Drop() {
-	b := c.account.budget
-	b.mu.Lock()
-	c.dropLocked()
-	b.mu.Unlock()
-}
-
-func (c *Cached[K]) evictLocked() {
-	// Explicit Drop already belongs to the index owner and needs no notification.
-	if c.dropLocked() {
-		c.account.evicted = append(c.account.evicted, c)
-	}
-}
-
-func (c *Cached[K]) dropLocked() bool {
-	if c.data == nil {
-		return false
-	}
-	a, b := c.account, c.account.budget
-	bytes := uint64(len(c.data))
-	a.used -= bytes
-	b.used -= bytes
-	a.cache.Remove(c.local)
-	b.cache.Remove(c.global)
-	c.global, c.local = nil, nil
-	c.data = nil
-	b.wakeLocked()
-	return true
 }

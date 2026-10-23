@@ -116,18 +116,22 @@ func contentWorkload() Workload {
 }
 
 func multiLaneWorkload() Workload {
-	contracts := make([]BenchmarkContract, 0, 4)
-	for _, lanes := range []int{1, 2, 4, 8} {
-		contracts = append(contracts, contract(
-			fmt.Sprintf("BenchmarkFileLocalMultiLane/lanes=%02d/window=%02d/block_bytes=0065536", lanes, lanes),
-			"MB/s", "lane-fetches/op", "duplicate-fetches/op", "window-blocks",
-		))
+	blockSizes, laneCounts := []int{64 << 10, 1 << 20}, []int{1, 2, 4, 8}
+	contracts := make([]BenchmarkContract, 0, len(blockSizes)*len(laneCounts))
+	for _, blockBytes := range blockSizes {
+		for _, lanes := range laneCounts {
+			contracts = append(contracts, contract(
+				fmt.Sprintf("BenchmarkFileLocalMultiLane/lanes=%02d/window=%02d/block_bytes=%07d", lanes, lanes, blockBytes),
+				"MB/s", "lane-fetches/op", "duplicate-fetches/op", "window-blocks", "retained-plaintext-B",
+			))
+		}
 	}
 	return Workload{
 		ID: "multi-lane", ModuleDir: "core", Package: "./transfer",
 		Benchmark: "BenchmarkFileLocalMultiLane", BenchTime: fixedTransferIterations, Contracts: contracts,
 		HardOracles: []MetricOracle{{
-			ID: "multi-lane-does-not-fetch-duplicates", Metric: "duplicate-fetches/op", Comparison: Equal, Limit: 0,
+			// Adaptive probes may duplicate a fetch; every attempt must still settle.
+			ID: "multi-lane-settles-plaintext", Metric: "retained-plaintext-B", Comparison: Equal, Limit: 0,
 		}},
 	}
 }

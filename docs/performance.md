@@ -27,6 +27,12 @@ The workloads cover liveshare ready scaling and real-disk readiness, file-local 
 transfer, extreme-width catalog spill, relay registration wire cost, and Pion chunk transfer. Exact
 benchmark rows, metrics, and behavioral oracles are versioned with the runner.
 
+Cache insertion timing excludes prior capacity admission and partitioning.
+Multi-lane timing includes those costs and attempt settlement, at 64 KiB and the
+default 1 MiB block size. Adaptive duplicate fetches are reported; retained
+plaintext must reach zero after all attempts settle. These memory-only workloads
+do not measure network or disk throughput.
+
 ## Native relay throughput
 
 Build the release relay and run the opt-in real-socket benchmark with both Go

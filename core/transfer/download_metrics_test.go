@@ -22,7 +22,11 @@ func metricsBroker(t *testing.T, lanes *LaneSet, descriptor content.FileRevision
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(broker.Close)
+	t.Cleanup(func() {
+		if err := broker.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return broker
 }
 func metricRead(broker *BlockBroker, descriptor content.FileRevisionDescriptor, start, end uint64) error {

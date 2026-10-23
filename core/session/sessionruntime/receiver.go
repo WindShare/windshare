@@ -164,7 +164,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	}, nil
 }
 
-func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transfer.LaneRoute) (*ReceiverRuntime, error) {
+func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transfer.LaneRoute) (result *ReceiverRuntime, resultErr error) {
 	if factory == nil || channel == nil || ctx == nil {
 		return nil, ErrRuntimeConfig
 	}
@@ -280,7 +280,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	brokerTransferred := false
 	defer func() {
 		if !brokerTransferred {
-			broker.Close()
+			resultErr = errors.Join(resultErr, broker.Close())
 		}
 	}()
 	receiver := &ReceiverRuntime{
@@ -393,6 +393,7 @@ type ReceiverRuntime struct {
 	semantic      protocolsession.SenderControlSemanticValidator
 	resourceLease ReceiverRuntimeResourceLease
 	cleanupOnce   sync.Once
+	cleanupErr    error
 }
 
 func (runtime *ReceiverRuntime) startReceiver() {
@@ -439,6 +440,17 @@ func (runtime *ReceiverRuntime) Close() {
 	runtime.WaitClosed()
 }
 
+// CleanupError is final after Done closes. It preserves resource-settlement
+// failures independently of the protocol cause that originally stopped a session.
+func (runtime *ReceiverRuntime) CleanupError() error {
+	if runtime == nil {
+		return nil
+	}
+	runtime.errMu.Lock()
+	defer runtime.errMu.Unlock()
+	return runtime.cleanupErr
+}
+
 func (runtime *ReceiverRuntime) BeginClose() {
 	if runtime != nil {
 		// Receiver callbacks may request shutdown themselves. Component Stop methods
@@ -470,8 +482,16 @@ func (runtime *ReceiverRuntime) releaseOwnedResources() {
 		}
 		runtime.catalog.Close()
 		runtime.revisions.close()
-		runtime.broker.Close()
+		// A winning fetch may leave canceled hedges owned by LaneSet. Join those
+		// workers before interpreting the broker's remaining capacity as a leak.
+		runtime.broker.Stop()
 		runtime.laneSet.Close()
+		brokerErr := runtime.broker.Close()
+		runtime.errMu.Lock()
+		if brokerErr != nil {
+			runtime.cleanupErr = fmt.Errorf("receiver session %v plaintext settlement: %w", runtime.ProtocolSessionID(), brokerErr)
+		}
+		runtime.errMu.Unlock()
 		runtime.assembler.Close()
 		// Every callback that can use these aliases has joined. Shed them before the
 		// resource lease is released so this closed runtime cannot pin shared crypto.

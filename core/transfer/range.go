@@ -213,6 +213,10 @@ func (b *BlockBroker) ReadRange(
 	requested content.Range,
 	sink RangeSink,
 ) error {
+	if !b.beginRead() {
+		return ErrBrokerClosed
+	}
+	defer b.readers.Done()
 	if sink == nil {
 		return errors.New("range read requires a sink")
 	}
@@ -226,7 +230,8 @@ func (b *BlockBroker) ReadRange(
 	first := requested.Offset / chunkSize
 	last := (requested.End - 1) / chunkSize
 	readContext, cancel := context.WithCancel(ctx)
-	defer cancel()
+	stopLifecycle := context.AfterFunc(b.lifecycle, cancel)
+	defer func() { stopLifecycle(); cancel() }()
 	results := make(chan rangeBlockResult, b.maxConcurrentBlocks)
 	var nextAdmission atomic.Uint64
 	nextAdmission.Store(first)
@@ -266,7 +271,7 @@ func (b *BlockBroker) ReadRange(
 			if !ready {
 				break
 			}
-			if err := b.writeRangeBlock(ctx, descriptor, requested, sink, nextWrite*chunkSize, block); err != nil {
+			if err := b.writeRangeBlock(readContext, descriptor, requested, sink, nextWrite*chunkSize, block); err != nil {
 				return err
 			}
 			block.close()
@@ -299,9 +304,7 @@ func (b *BlockBroker) rangeConsumer(index uint64, next *atomic.Uint64) *blockCon
 }
 
 func (block deliveredBlock) close() {
-	if block.release != nil {
-		block.release()
-	}
+	block.reservation.Release()
 }
 
 func releaseRangeBlocks(pending map[uint64]deliveredBlock, results <-chan rangeBlockResult, inflight int) {

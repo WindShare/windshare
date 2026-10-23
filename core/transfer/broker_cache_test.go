@@ -13,7 +13,11 @@ func newBrokerCacheFixture(t *testing.T, limit uint64) *BlockBroker {
 	t.Helper()
 	broker, lanes, _, _, _ := newBrokerFixture(t, 1, &countingLane{}, limit, limit)
 	t.Cleanup(lanes.Close)
-	t.Cleanup(broker.Close)
+	t.Cleanup(func() {
+		if err := broker.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return broker
 }
 
@@ -21,11 +25,12 @@ func storeBrokerCache(t *testing.T, broker *BlockBroker, key blockKey, data []by
 	t.Helper()
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
-	if err := broker.reserveLocked(uint64(len(data))); err != nil {
+	reservation, err := broker.reserveLocked(uint64(len(data)))
+	if err != nil {
 		t.Fatal(err)
 	}
 	var route downloadmetrics.Route
-	broker.storeReservedLocked(key, data, route)
+	broker.storeReservedLocked(key, data, route, reservation)
 	return broker.entries[key]
 }
 
@@ -35,13 +40,14 @@ func TestBlockBrokerPrunesProcessEvictionsWithoutDroppingLiveCache(t *testing.T)
 	old := storeBrokerCache(t, broker, oldKey, []byte{1, 2})
 	live := storeBrokerCache(t, broker, liveKey, []byte{3, 4})
 	requester := bufferbudget.NewAccount[string](broker.process, 6)
-	if !requester.Reserve(4) {
+	held, ok := requester.Reserve(4)
+	if !ok {
 		t.Fatal("process could not reclaim the oldest entry")
 	}
 	if old.buffer.Live() || !live.buffer.Live() {
 		t.Fatal("process pressure reclaimed the wrong entry")
 	}
-	requester.Release(4)
+	held.Release()
 	added := storeBrokerCache(t, broker, newKey, []byte{5, 6})
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
@@ -59,10 +65,11 @@ func TestBlockBrokerEvictionCleanupPreservesReplacementInstances(t *testing.T) {
 	storeBrokerCache(t, broker, missingKey, []byte{1})
 	storeBrokerCache(t, broker, replacedKey, []byte{2})
 	requester := bufferbudget.NewAccount[int](broker.process, 4)
-	if !requester.Reserve(4) {
+	held, ok := requester.Reserve(4)
+	if !ok {
 		t.Fatal("process could not reclaim both entries")
 	}
-	requester.Release(4)
+	held.Release()
 
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
@@ -71,10 +78,15 @@ func TestBlockBrokerEvictionCleanupPreservesReplacementInstances(t *testing.T) {
 		t.Fatal("an evicted entry remained readable")
 	}
 	// The index may already describe a replacement when a pending record is consumed.
-	if !broker.account.Reserve(1) {
+	replacementHeld, ok := broker.account.Reserve(1)
+	if !ok {
 		t.Fatal("replacement reservation failed")
 	}
-	replacement := &cachedBlock{buffer: broker.account.Store(replacedKey, []byte{3})}
+	buffer, err := broker.account.Store(replacedKey, []byte{3}, replacementHeld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := &cachedBlock{buffer: buffer}
 	broker.entries[replacedKey] = replacement
 	broker.pruneEvictedLocked()
 	if len(broker.entries) != 1 || broker.entries[replacedKey] != replacement || !replacement.buffer.Live() {
@@ -95,10 +107,11 @@ func TestBlockBrokerInvalidationSettlesPendingEvictions(t *testing.T) {
 	retained := storeBrokerCache(t, broker, other, []byte{2})
 	storeBrokerCache(t, broker, last, []byte{3})
 	requester := bufferbudget.NewAccount[int](broker.process, 6)
-	if !requester.Reserve(4) {
+	held, ok := requester.Reserve(4)
+	if !ok {
 		t.Fatal("process could not reclaim the first entry")
 	}
-	requester.Release(4)
+	held.Release()
 
 	broker.InvalidateRevision(first.file, first.revision)
 	broker.mu.Lock()
@@ -116,7 +129,8 @@ func TestBlockBrokerStopReleasesPendingEvictionRecords(t *testing.T) {
 	storeBrokerCache(t, broker, blockKey{index: 1}, []byte{1})
 	storeBrokerCache(t, broker, blockKey{index: 2}, []byte{2})
 	requester := bufferbudget.NewAccount[int](broker.process, 4)
-	if !requester.Reserve(3) {
+	held, ok := requester.Reserve(3)
+	if !ok {
 		t.Fatal("process could not reclaim one entry")
 	}
 	broker.Stop()
@@ -128,5 +142,5 @@ func TestBlockBrokerStopReleasesPendingEvictionRecords(t *testing.T) {
 	if requester.Used() != 3 || broker.process.Used() != 3 {
 		t.Fatal("stopping a broker changed another account's reservation")
 	}
-	requester.Release(3)
+	held.Release()
 }
