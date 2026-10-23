@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 const importedConfiguration = `{"front_url":"https://front.example/app","profiles":[{"url":"https://private.example?route=one","access_key":"secret-canary"}]}`
@@ -36,7 +36,7 @@ func TestImportFromFileAndStdin(t *testing.T) {
 			if result := runner.Run(context.Background(), []string{"import", source, "--verbose"}); result != ResultOK {
 				t.Fatal("import failed:", result, output.String())
 			}
-			want := []senderrelay.Candidate{{PublicURL: "https://private.example?route=one", AccessKey: "secret-canary"}}
+			want := []relayprofile.Candidate{{PublicURL: "https://private.example?route=one", AccessKey: "secret-canary"}}
 			if !reflect.DeepEqual(saved.Profiles, want) || saved.FrontURL != "https://front.example/app" {
 				t.Fatal("import lost address-bound credentials")
 			}

@@ -153,8 +153,8 @@ CLI traces associate route decisions, binding failures, issuance, replacement, r
 socket counters with their service, session, path and available attempt IDs.
 Cleanup distinguishes local protocol completion from a forced deadline; neither
 claims remote deallocation acknowledgment.
-The `engine/turn` module owns validation, budgets and discovery; provider implementations
-are internal. Engine callers inspect `TURNStatus()` and subscribe through
+`engine/turn` exposes settings and observations; account budgets, discovery and provider
+assembly live in `engine/internal/turnruntime`. Engine callers inspect `TURNStatus()` and subscribe through
 `TURNDependencies.Observe`; `TURNDependencies.Cache` supplies optional discovery persistence.
 Local shutdown and provider-confirmed revocation are
 separate events. Cloudflare supports credential revocation; static and coturn

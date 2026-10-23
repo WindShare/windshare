@@ -20,6 +20,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -85,9 +86,9 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 		return true
 	}
 	endpoint := &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}
-	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", AccessKey: "private-deployment-token"}
+	candidate := relayprofile.Candidate{PublicURL: "https://relay.example", AccessKey: "private-deployment-token"}
 	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
-		if config.Candidate != candidate {
+		if config.Candidate != (senderrelay.Candidate{PublicURL: candidate.PublicURL, AccessKey: candidate.AccessKey}) {
 			t.Error("relay assembly lost candidate registration authority")
 		}
 		if config.Fresh.ShareID == (v2.ShareID{}) || len(config.Descriptor) == 0 {
@@ -100,7 +101,7 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan task.Completion[Result], 1)
 	go func() {
-		done <- Run(ctx, Request{Source: nativeSource([]string{root}), Relays: []senderrelay.Candidate{candidate}, Diagnostics: true, TraceLifecycle: true}, dependencies)
+		done <- Run(ctx, Request{Source: nativeSource([]string{root}), Relays: []relayprofile.Candidate{candidate}, Diagnostics: true, TraceLifecycle: true}, dependencies)
 	}()
 	ready, err := dependencies.Controller.Ready(context.Background())
 	if err != nil || ready.SelectedRootSummary.SelectedCount() != 1 {
@@ -145,7 +146,7 @@ func TestNativeSourceAcquisitionFailureKeepsCorrelatedTypedEvidence(t *testing.T
 		acquired = value.ShareInstance
 		return nil, failure
 	})
-	result := Run(context.Background(), Request{Source: source, Relays: []senderrelay.Candidate{{PublicURL: "https://relay.example"}}}, dependencies)
+	result := Run(context.Background(), Request{Source: source, Relays: []relayprofile.Candidate{{PublicURL: "https://relay.example"}}}, dependencies)
 	if !errors.Is(result.Err, failure) || result.CleanupError != nil || acquired.IsZero() {
 		t.Fatalf("result=%+v", result)
 	}
@@ -179,7 +180,7 @@ func TestRelayAssemblyRetainsNativeAuthorityAndRejectsInvalidMaterial(t *testing
 	if err := prepared.AuthorizeRegistration(); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "https://relay.example"}, dependencies, o)
+	relay, err := prepareRelay(prepared, relayprofile.Candidate{PublicURL: "https://relay.example"}, dependencies, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,11 +197,11 @@ func TestRelayAssemblyRetainsNativeAuthorityAndRejectsInvalidMaterial(t *testing
 		}
 	}
 	dependencies.Control.Random = exhaustedRandom{}
-	if _, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "https://relay.example"}, dependencies, o); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := prepareRelay(prepared, relayprofile.Candidate{PublicURL: "https://relay.example"}, dependencies, o); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("entropy error=%v", err)
 	}
 	dependencies.Control.Random = rand.Reader
-	if _, err := prepareRelay(prepared, senderrelay.Candidate{PublicURL: "invalid-endpoint"}, dependencies, o); err == nil {
+	if _, err := prepareRelay(prepared, relayprofile.Candidate{PublicURL: "invalid-endpoint"}, dependencies, o); err == nil {
 		t.Fatal("invalid endpoint accepted")
 	}
 }
@@ -238,4 +239,9 @@ func TestActivationCancellationNeverStartsDescendantWork(t *testing.T) {
 	if err := controller.activate(canceled, func() { t.Error("canceled activation prefetched") }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}
+}
+
+func (endpoint *readyEndpoint) Accept(ctx context.Context) (*relayv2.Channel, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testing.T) {
@@ -41,10 +42,10 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 			if terminal {
 				t.Fatal("loss followed terminal result")
 			}
-			if event.Category() == clievent.ObserverLossProtocolOperation {
+			if event.Category() == appobs.ObserverLossProtocolOperation {
 				protocol += event.Count()
 			}
-			if event.Category() == clievent.ObserverLossCommandAdapter {
+			if event.Category() == appobs.ObserverLossEngineObservation {
 				taskLoss += event.Count()
 			}
 		case clievent.CommandFailed:

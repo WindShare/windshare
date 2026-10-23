@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/link"
@@ -13,7 +14,6 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 const getProgressInterval = 500 * time.Millisecond
@@ -141,7 +141,7 @@ func (a *runner) runTransferJob(ctx context.Context, job *transfer.TransferJob, 
 		}
 	}
 }
-func receiverTerminationErrors(runtime *sessionruntime.ReceiverRuntime, connection *relayv2.ReceiverConnection) (runtimeErr, connectionErr error) {
+func receiverTerminationErrors(runtime *sessionruntime.ReceiverRuntime, connection relayset.ReceiverConnection) (runtimeErr, connectionErr error) {
 	if runtime != nil {
 		runtimeErr = runtime.Err()
 	}

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
-	"testing"
-	"time"
 )
 
 type opaqueCanaryError struct{ value string }

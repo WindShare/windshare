@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -142,7 +143,7 @@ func TestEvaluationFailureDoesNotBackOffWorkingServiceRecovery(t *testing.T) {
 				result.err = errors.New("provider temporarily unavailable")
 				h.sender.install(t.Context(), result)
 				event := h.events[len(h.events)-1]
-				if event.Milestone != MilestoneEvaluationUnavailable || event.Reason != result.err.Error() ||
+				if event.Milestone != connectionpath.MilestoneEvaluationUnavailable || event.Reason != result.err.Error() ||
 					event.Subject.PathID != result.path {
 					t.Fatalf("evaluation failure lost its lifecycle evidence: %+v", event)
 				}
@@ -166,7 +167,7 @@ func TestEvaluationFailureDoesNotBackOffWorkingServiceRecovery(t *testing.T) {
 func TestTCPFirstDelegatesIdenticalTransportToBothPeersAndFallsBack(t *testing.T) {
 	h := newSelectionHarness(t)
 	delegated, selected := h.events[len(h.events)-2], h.events[len(h.events)-1]
-	if delegated.Milestone != MilestoneCredentialsDelegated || selected.Milestone != MilestoneTransportSelection ||
+	if delegated.Milestone != connectionpath.MilestoneCredentialsDelegated || selected.Milestone != connectionpath.MilestoneTransportSelection ||
 		selected.Subject != delegated.Subject || selected.Subject.PathID == ([16]byte{}) ||
 		selected.Reason != string(initialPath) {
 		t.Fatalf("credential delegation lost transport-selection evidence: %+v", h.events)

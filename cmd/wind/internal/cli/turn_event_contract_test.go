@@ -10,9 +10,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turnpath"
-	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/core/connectionpath"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestEveryTURNMilestoneReachesCommandTrace(t *testing.T) {
@@ -28,18 +27,25 @@ func TestEveryTURNMilestoneReachesCommandTrace(t *testing.T) {
 			}
 			t.Cleanup(runtime.Close)
 			share, receive := newShareProjection(runtime), newGetObservation(runtime)
-			observe := func(value nativepeer.Observation) {
+			observe := func(value appobs.NativeConnectivitySpec) {
+				value.Workflow = appobs.Workflow(command)
+				if command == clievent.CommandGet {
+					value.Side = "receiver"
+				}
+				event, err := appobs.NewNativeConnectivityObserved(value)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if command == clievent.CommandShare {
-					app.observeEngineShare(share, engine.ShareObservation{Native: &value})
+					app.observeEngineShare(share, event)
 				} else {
-					value.Subject.Side = nativepeer.SideReceiver
-					app.projectReceiveObservation(receive, engine.ReceiveNativeObserved{Value: value})
+					app.projectReceiveObservation(receive, event)
 				}
 			}
-			for _, milestone := range turnpath.Milestones() {
+			for _, milestone := range connectionpath.Milestones() {
 				observe(turnContractObservation(milestone))
 			}
-			unavailable := turnContractObservation(turnpath.MilestoneUnavailable)
+			unavailable := turnContractObservation(connectionpath.MilestoneUnavailable)
 			unavailable.TURN.Provider, unavailable.TURN.Account = "", ""
 			observe(unavailable)
 			runtime.Close()
@@ -78,7 +84,7 @@ func TestEveryTURNMilestoneReachesCommandTrace(t *testing.T) {
 					summarySeen = true
 				}
 			}
-			for _, milestone := range turnpath.Milestones() {
+			for _, milestone := range connectionpath.Milestones() {
 				if !seen[milestone.String()] {
 					t.Errorf("milestone missing from trace: %s", milestone)
 				}
@@ -100,10 +106,17 @@ func TestTURNRejectionKeepsEvidenceAndDoesNotBecomeCapacityLoss(t *testing.T) {
 	}
 	t.Cleanup(runtime.Close)
 	share := newShareProjection(runtime)
-	invalid := turnContractObservation(turnpath.Milestone(255))
-	app.observeEngineShare(share, engine.ShareObservation{Native: &invalid})
-	valid := turnContractObservation(turnpath.MilestoneTransportSelection)
-	app.observeEngineShare(share, engine.ShareObservation{Native: &valid})
+	rejection := appobs.CaptureObservationRejection(appobs.ObservationRejection{Event: "native_connectivity", Source: "eventproject.ProjectNativeObservation", Stage: "turn_path", Field: "turn.milestone", Rule: "known_enum"}, appobs.RejectedEnum("turn.milestone", 255), appobs.RejectedString("peer_path_id", "02000000000000000000000000000000"), appobs.RejectedString("turn.profile", "primary"))
+	loss, err := appobs.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossNativeConnectivity, Reason: appobs.ObserverLossEventContract, Count: 1, Rejection: rejection})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.observeEngineShare(share, loss)
+	valid, err := appobs.NewNativeConnectivityObserved(turnContractObservation(connectionpath.MilestoneTransportSelection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.observeEngineShare(share, valid)
 	runtime.Close()
 
 	var rejectionSeen, validSeen, summarySeen bool
@@ -117,7 +130,7 @@ func TestTURNRejectionKeepsEvidenceAndDoesNotBecomeCapacityLoss(t *testing.T) {
 					Source      string `json:"source_location"`
 					Stage       string `json:"source_stage"`
 					Field, Rule string
-					Evidence    []clievent.RejectionField
+					Evidence    []appobs.RejectionField
 				}
 			}
 			if err := json.Unmarshal(row.Payload, &payload); err != nil {
@@ -129,7 +142,7 @@ func TestTURNRejectionKeepsEvidenceAndDoesNotBecomeCapacityLoss(t *testing.T) {
 				evidence[field.Field] = field.Value
 			}
 			if payload.Reason != "event_contract_rejection" || payload.Count != "1" ||
-				rejection.Event != "native_connectivity" || rejection.Source != "commandprojection.ProjectNativeObservation" ||
+				rejection.Event != "native_connectivity" || rejection.Source != "eventproject.ProjectNativeObservation" ||
 				rejection.Stage != "turn_path" || rejection.Field != "turn.milestone" || rejection.Rule != "known_enum" ||
 				evidence["turn.milestone"] != "255" || evidence["peer_path_id"] == "" ||
 				evidence["turn.profile"] != "primary" {
@@ -159,13 +172,11 @@ func TestTURNRejectionKeepsEvidenceAndDoesNotBecomeCapacityLoss(t *testing.T) {
 	}
 }
 
-func turnContractObservation(milestone turnpath.Milestone) nativepeer.Observation {
-	subject := turnpath.Subject{SessionID: [16]byte{1}, PathID: [16]byte{2}}
-	return nativepeer.Observation{
-		Subject: nativepeer.Subject{ProtocolSessionID: subject.SessionID, PeerPathID: subject.PathID, Side: nativepeer.SideSender},
-		TURN: &turnpath.Event{At: time.Unix(1, 0), Subject: subject, Provider: "test", Account: "owner",
-			Profile: "primary", Milestone: milestone, Reason: "contract evidence"},
-	}
+func turnContractObservation(milestone connectionpath.Milestone) appobs.NativeConnectivitySpec {
+	value := nativeFactSpec(appobs.WorkflowShare, "turn_path")
+	value.At = time.Unix(1, 0)
+	value.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Milestone: milestone, Reason: "contract evidence"}
+	return value
 }
 
 type turnContractRow struct {

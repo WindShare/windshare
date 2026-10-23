@@ -8,28 +8,29 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func formatSharingSubject(subject clievent.SharingSubject, symbols Symbols) terminalcanvas.Line {
+func formatSharingSubject(subject appobs.SharingSubject, symbols Symbols) terminalcanvas.Line {
 	var description string
 	switch subject.Kind() {
-	case clievent.SharingFile:
+	case appobs.SharingFile:
 		description = escapedDisplay(subject.Name().Text()) + " (file, " + FormatBytes(subject.FileBytes()) + ")"
-	case clievent.SharingDirectory:
+	case appobs.SharingDirectory:
 		name := escapedDisplay(subject.Name().Text())
 		if !strings.HasSuffix(name, "/") && !strings.HasSuffix(name, `\`) {
 			name += "/"
 		}
 		description = name + " (directory)"
-	case clievent.SharingMultiple:
+	case appobs.SharingMultiple:
 		description = formatCount(subject.SelectedItems()) + " selected items"
 	}
 	return statusLine(symbols.Arrow, "Sharing: "+description, terminalcanvas.StyleAccent)
 }
 
-func formatContentPath(path clievent.ContentPath, symbols Symbols) terminalcanvas.Line {
+func formatContentPath(path appobs.ContentPath, symbols Symbols) terminalcanvas.Line {
 	name := titleName(path)
-	if path == clievent.ContentPathDirectAndRelay {
+	if path == appobs.ContentPathDirectAndRelay {
 		name = "Direct + Relay"
 	}
 	return statusLine(symbols.Path, "Content path: "+name, terminalcanvas.StyleAccent)
@@ -46,14 +47,14 @@ func formatRelayRecovery(event clievent.RelayRecovering, symbols Symbols) termin
 	if details, ok := event.Details(); ok {
 		relay := event.Authority().Host() + ":" + strconv.FormatUint(uint64(event.Authority().Port()), 10)
 		switch event.State() {
-		case clievent.RelayRecoverySucceeded:
+		case appobs.RelayRecoverySucceeded:
 			message = "Relay connection restored: " + relay + "."
 			if details.Generation == 1 && !details.Resume {
 				message = "Relay connected: " + relay + "."
 			}
-		case clievent.RelayRecoveryWaiting:
+		case appobs.RelayRecoveryWaiting:
 			message = "Waiting for relay " + relay + "; retrying automatically."
-		case clievent.RelayRecoveryFailed:
+		case appobs.RelayRecoveryFailed:
 			if details.Terminal {
 				message = "Relay recovery needs attention: " + relay + "."
 			}
@@ -89,8 +90,8 @@ func formatLaneAdopted(event clievent.LaneAdopted, symbols Symbols) terminalcanv
 	return statusLine(symbols.Path, message, terminalcanvas.StyleMuted)
 }
 
-func transportName(transport clievent.Transport) string {
-	if transport == clievent.TransportWebRTC {
+func transportName(transport appobs.Transport) string {
+	if transport == appobs.TransportWebRTC {
 		return "WebRTC"
 	}
 	return "Relay"
@@ -104,15 +105,15 @@ func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) term
 	name := "Connection"
 	if route, known := event.Route(); known {
 		switch route {
-		case clievent.LaneRouteDirect:
+		case appobs.LaneRouteDirect:
 			name = "Direct connection"
-		case clievent.LaneRouteTURN:
+		case appobs.LaneRouteTURN:
 			name = "TURN relay connection"
 		}
 	}
 	message := name + " [" + identity + "]: " + status
 	style, symbol := terminalcanvas.StyleMuted, symbols.Path
-	if event.Stage() == clievent.PeerAttemptAdmitted {
+	if event.Stage() == appobs.PeerAttemptAdmitted {
 		style, symbol = terminalcanvas.StyleSuccess, symbols.Success
 	}
 	if warning {
@@ -126,19 +127,19 @@ func peerAttemptStatus(event clievent.PeerAttemptObserved) (string, bool) {
 		return "failed. " + failureMessage(failure), true
 	}
 	switch event.Stage() {
-	case clievent.PeerNegotiationDeadlineArmed:
+	case appobs.PeerNegotiationDeadlineArmed:
 		return "negotiating.", false
-	case clievent.PeerNegotiationDeadlineExpired:
+	case appobs.PeerNegotiationDeadlineExpired:
 		return "negotiation timed out.", true
-	case clievent.PeerDataChannelOpen:
+	case appobs.PeerDataChannelOpen:
 		return "transport connected; awaiting admission.", false
-	case clievent.PeerAdmissionDeadlineArmed:
+	case appobs.PeerAdmissionDeadlineArmed:
 		return "waiting for admission.", false
-	case clievent.PeerAdmissionDeadlineExpired:
+	case appobs.PeerAdmissionDeadlineExpired:
 		return "admission timed out.", true
-	case clievent.PeerAdmissionResponseSettled:
+	case appobs.PeerAdmissionResponseSettled:
 		return peerAdmissionStatus(event)
-	case clievent.PeerAttemptAdmitted:
+	case appobs.PeerAttemptAdmitted:
 		return "connected.", false
 	default:
 		return strings.ReplaceAll(eventName(event.Stage()), "-", " ") + ".", false
@@ -148,7 +149,7 @@ func peerAttemptStatus(event clievent.PeerAttemptObserved) (string, bool) {
 func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
 	disposition, delivery, _ := event.Admission()
 	message := "admission accepted."
-	warning := disposition == clievent.PeerAdmissionRejected
+	warning := disposition == appobs.PeerAdmissionRejected
 	if warning {
 		code, retryMillis, _ := event.Rejection()
 		message = "admission rejected (" + strings.ReplaceAll(eventName(code), "-", " ") + ")."
@@ -156,7 +157,7 @@ func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
 			message += " Retry after " + strconv.FormatUint(retryMillis, 10) + " ms."
 		}
 	}
-	if delivery == clievent.PeerResponseDeliveryFailed {
+	if delivery == appobs.PeerResponseDeliveryFailed {
 		message += " Admission response delivery failed."
 		warning = true
 	}
@@ -165,7 +166,7 @@ func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
 
 func formatProtocolOperationFailure(
 	event clievent.ProtocolObservationObserved,
-	fact clievent.ProtocolOperationFact,
+	fact appobs.ProtocolOperationFact,
 	symbols Symbols,
 ) terminalcanvas.Line {
 	operation := strings.ReplaceAll(eventName(event.RequestKind()), "_", " ")
@@ -182,13 +183,13 @@ func formatProtocolOperationFailure(
 	return statusLine(symbols.Warning, message, terminalcanvas.StyleWarning)
 }
 
-func formatDiscoveryMilestone(snapshot clievent.ProgressSnapshot, symbols Symbols) terminalcanvas.Line {
+func formatDiscoveryMilestone(snapshot appobs.ProgressSnapshot, symbols Symbols) terminalcanvas.Line {
 	switch snapshot.Discovery() {
-	case clievent.DiscoveryComplete:
+	case appobs.DiscoveryComplete:
 		return statusLine(symbols.Discovery,
 			"Discovery complete: "+formatFiles(snapshot.DiscoveredFiles())+symbols.Separator+FormatBytes(snapshot.DiscoveredBytes()),
 			terminalcanvas.StyleDefault)
-	case clievent.DiscoveryFailed:
+	case appobs.DiscoveryFailed:
 		return statusLine(symbols.Failure, "Discovery failed.", terminalcanvas.StyleError)
 	default:
 		return statusLine(symbols.Discovery, "Discovering content"+symbols.Ellipsis, terminalcanvas.StyleDefault)

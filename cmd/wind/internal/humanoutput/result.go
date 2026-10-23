@@ -5,6 +5,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func formatTransferResult(result clievent.TransferResult, symbols Symbols) []terminalcanvas.Line {
@@ -96,7 +97,7 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 	return strings.Join(parts, separator)
 }
 
-func residualItemBlockedFiles(outcomes clievent.FileOutcomes) uint64 {
+func residualItemBlockedFiles(outcomes appobs.FileOutcomes) uint64 {
 	classified := outcomes.RevisionConflictFiles
 	for _, count := range []uint64{outcomes.CheckpointInvalidFiles, outcomes.OwnedObjectUnknownFiles} {
 		if count > ^uint64(0)-classified {

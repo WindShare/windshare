@@ -6,20 +6,21 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestEngineTaskTraceConnectsTaskGenerationAndCleanupAttribution(t *testing.T) {
-	id, _ := clievent.NewEngineTaskID("application:42")
+	id, _ := appobs.NewEngineTaskID("application:42")
 	identity := func(value byte) []byte { raw := make([]byte, 16); raw[0] = value; return raw }
-	share, _ := clievent.NewSharingInstanceID(identity(1))
-	operation, _ := clievent.NewReceiveOperationID(identity(2))
-	job, _ := clievent.NewTransferJobID(identity(3))
-	session, _ := clievent.NewProtocolSessionID(identity(4))
-	previous, _ := clievent.NewProtocolSessionID(identity(5))
-	failure, _ := clievent.NewFailure(clievent.FailureUnexpected)
-	spec := clievent.EngineTaskSpec{
-		Command: clievent.CommandGet, Task: id, At: time.Unix(10, 123),
-		Stage: clievent.EngineAdmissionDecision, StopReason: clievent.EngineApplicationClosed,
+	share, _ := appobs.NewSharingInstanceID(identity(1))
+	operation, _ := appobs.NewReceiveOperationID(identity(2))
+	job, _ := appobs.NewTransferJobID(identity(3))
+	session, _ := appobs.NewProtocolSessionID(identity(4))
+	previous, _ := appobs.NewProtocolSessionID(identity(5))
+	failure, _ := appobs.NewFailure(appobs.FailureUnexpected)
+	spec := appobs.EngineTaskSpec{
+		Workflow: appobs.WorkflowReceive, Task: id, At: time.Unix(10, 123),
+		Stage: appobs.EngineAdmissionDecision, StopReason: appobs.EngineApplicationClosed,
 		ShareInstance: share, Operation: operation, Job: job, Session: session, PreviousSession: previous,
 		AdmissionTrigger: "relay_only_policy", AdmissionTerminalOwner: "runtime_terminal",
 		Failure: failure, CleanupFailure: failure,
@@ -51,7 +52,7 @@ func TestEngineTaskTraceConnectsTaskGenerationAndCleanupAttribution(t *testing.T
 	if err := json.Unmarshal(raw, &decoded); err != nil || decoded["payload"] == nil {
 		t.Fatalf("trace is not serializable: %v", err)
 	}
-	started, _ := clievent.NewEngineTaskObserved(clievent.EngineTaskSpec{Command: clievent.CommandShare, Task: id, Stage: clievent.EngineTaskStarted})
+	started, _ := clievent.NewEngineTaskObserved(appobs.EngineTaskSpec{Workflow: appobs.WorkflowShare, Task: id, Stage: appobs.EngineTaskStarted})
 	beforeSession, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 2}, started)
 	if err != nil || beforeSession.Correlation != nil {
 		t.Fatalf("invented session: %+v, %v", beforeSession.Correlation, err)
@@ -59,12 +60,12 @@ func TestEngineTaskTraceConnectsTaskGenerationAndCleanupAttribution(t *testing.T
 }
 
 func TestEngineTaskTraceExportsExplicitOutcomeAndFailureClass(t *testing.T) {
-	id, _ := clievent.NewEngineTaskID("application:42")
-	failure, _ := clievent.NewFailure(clievent.FailureInvalidInput)
-	for _, spec := range []clievent.EngineTaskSpec{
-		{Command: clievent.CommandGet, Task: id, Stage: clievent.EngineTaskSettled, Outcome: clievent.EngineOutcomeFailed, FailureClass: clievent.EngineFailureUsage, Failure: failure},
-		{Command: clievent.CommandGet, Task: id, Stage: clievent.EngineTaskSettled, Outcome: clievent.EngineOutcomeSuccess, FailureClass: clievent.EngineFailureNone},
-		{Command: clievent.CommandShare, Task: id, Stage: clievent.EngineTaskSettled, Outcome: clievent.EngineOutcomeStopped, FailureClass: clievent.EngineFailureNone},
+	id, _ := appobs.NewEngineTaskID("application:42")
+	failure, _ := appobs.NewFailure(appobs.FailureInvalidInput)
+	for _, spec := range []appobs.EngineTaskSpec{
+		{Workflow: appobs.WorkflowReceive, Task: id, Stage: appobs.EngineTaskSettled, Outcome: appobs.EngineOutcomeFailed, FailureClass: appobs.EngineFailureUsage, Failure: failure},
+		{Workflow: appobs.WorkflowReceive, Task: id, Stage: appobs.EngineTaskSettled, Outcome: appobs.EngineOutcomeSuccess, FailureClass: appobs.EngineFailureNone},
+		{Workflow: appobs.WorkflowShare, Task: id, Stage: appobs.EngineTaskSettled, Outcome: appobs.EngineOutcomeStopped, FailureClass: appobs.EngineFailureNone},
 	} {
 		event, err := clievent.NewEngineTaskObserved(spec)
 		if err != nil {

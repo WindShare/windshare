@@ -13,11 +13,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/framechannel"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
@@ -250,7 +247,7 @@ func TestCommandRuntimeReportsPreRecorderObserverLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runtime.ReportObserverLoss(clievent.ObserverLossRelayLifecycle, clievent.ObserverLossTraceQueue, 3) {
+	if !runtime.ReportObserverLoss(appobs.ObserverLossRelayLifecycle, appobs.ObserverLossTraceQueue, 3) {
 		t.Fatal("observer loss was not retained")
 	}
 	runtime.Close()
@@ -259,7 +256,7 @@ func TestCommandRuntimeReportsPreRecorderObserverLoss(t *testing.T) {
 		t.Fatalf("observer loss trace events=%#v", recorded)
 	}
 	loss, ok := recorded[0].(clievent.ObserverLossObserved)
-	if !ok || loss.Category() != clievent.ObserverLossRelayLifecycle || loss.Reason() != clievent.ObserverLossTraceQueue || loss.Count() != 3 {
+	if !ok || loss.Category() != appobs.ObserverLossRelayLifecycle || loss.Reason() != appobs.ObserverLossTraceQueue || loss.Count() != 3 {
 		t.Fatalf("observer loss event=%#v", recorded[0])
 	}
 	recorder.mu.Lock()
@@ -272,16 +269,16 @@ func TestCommandRuntimeReportsPreRecorderObserverLoss(t *testing.T) {
 func TestCommandRuntimeObserverLossCoalescesByClassAndSaturates(t *testing.T) {
 	runtime, writer, recorder := newSaturatedCommandRuntime(t, clievent.CommandGet, false)
 	if !runtime.ReportObserverLoss(
-		clievent.ObserverLossCommandAdapter,
-		clievent.ObserverLossAdapterCapacityTimeout,
+		appobs.ObserverLossCommandAdapter,
+		appobs.ObserverLossAdapterCapacityTimeout,
 		^uint64(0)-1,
 	) || !runtime.ReportObserverLoss(
-		clievent.ObserverLossCommandAdapter,
-		clievent.ObserverLossAdapterCapacityTimeout,
+		appobs.ObserverLossCommandAdapter,
+		appobs.ObserverLossAdapterCapacityTimeout,
 		10,
 	) || !runtime.ReportObserverLoss(
-		clievent.ObserverLossRelayLifecycle,
-		clievent.ObserverLossTraceQueue,
+		appobs.ObserverLossRelayLifecycle,
+		appobs.ObserverLossTraceQueue,
 		2,
 	) {
 		t.Fatal("valid observer loss was rejected")
@@ -296,10 +293,10 @@ func TestCommandRuntimeObserverLossCoalescesByClassAndSaturates(t *testing.T) {
 		}
 		got[[2]uint8{uint8(loss.Category()), uint8(loss.Reason())}] = loss.Count()
 	}
-	if count := got[[2]uint8{uint8(clievent.ObserverLossCommandAdapter), uint8(clievent.ObserverLossAdapterCapacityTimeout)}]; count != ^uint64(0) {
+	if count := got[[2]uint8{uint8(appobs.ObserverLossCommandAdapter), uint8(appobs.ObserverLossAdapterCapacityTimeout)}]; count != ^uint64(0) {
 		t.Fatalf("coalesced adapter loss=%d, want saturation", count)
 	}
-	if count := got[[2]uint8{uint8(clievent.ObserverLossRelayLifecycle), uint8(clievent.ObserverLossTraceQueue)}]; count != 2 {
+	if count := got[[2]uint8{uint8(appobs.ObserverLossRelayLifecycle), uint8(appobs.ObserverLossTraceQueue)}]; count != 2 {
 		t.Fatalf("relay trace-queue loss=%d, want 2", count)
 	}
 }
@@ -317,8 +314,8 @@ func TestCommandRuntimeCumulativeLossCountsEachDeltaOnce(t *testing.T) {
 	}
 	for _, cumulative := range []uint64{3, 3, 2, 7} {
 		if !runtime.ReportCumulativeObserverLoss(
-			clievent.ObserverLossSenderAttempt,
-			clievent.ObserverLossAdapterCapacityTimeout,
+			appobs.ObserverLossSenderAttempt,
+			appobs.ObserverLossAdapterCapacityTimeout,
 			cumulative,
 		) {
 			t.Fatalf("cumulative %d was rejected", cumulative)
@@ -339,9 +336,9 @@ func TestCommandRuntimeCumulativeLossCountsEachDeltaOnce(t *testing.T) {
 			continue
 		}
 		switch loss.Reason() {
-		case clievent.ObserverLossAdapterCapacityTimeout:
+		case appobs.ObserverLossAdapterCapacityTimeout:
 			capacity = saturatingAdd(capacity, loss.Count())
-		case clievent.ObserverLossRecorderClosed:
+		case appobs.ObserverLossRecorderClosed:
 			closed = saturatingAdd(closed, loss.Count())
 		}
 	}
@@ -365,15 +362,13 @@ func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T)
 	}
 	observation := newGetObservation(runtime)
 
-	observation.TraceRelayLifecycle(relayv2.LifecycleTrace{
-		LinkID: 1, Stage: relayv2.LifecycleTraceDropped,
-		RetirementSource: relayv2.LifecycleRetirementNone,
-		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
-		Dropped: 4,
-	})
-	observation.reportRelayCompletion(relayv2.LifecycleObservationCompletion{
-		Loss: relayv2.LifecycleObservationLoss{CapacityDropped: 4},
-	})
+	fact, err := appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{Workflow: appobs.WorkflowReceive, LinkID: 1, Stage: appobs.RelayTraceDropped, Dropped: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.projectReceiveObservation(observation, fact)
+	app.projectReceiveObservation(observation, appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: 4})
+	app.projectReceiveObservation(observation, appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossStreamCapacity, Count: 4})
 	runtime.Close()
 
 	var lifecycleSeen bool
@@ -381,12 +376,12 @@ func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T)
 	for _, event := range recorder.recorded() {
 		switch value := event.(type) {
 		case clievent.RelayLifecycleObserved:
-			lifecycleSeen = value.Stage() == clievent.RelayTraceDropped && value.Dropped() == 4
+			lifecycleSeen = value.Stage() == appobs.RelayTraceDropped && value.Dropped() == 4
 		case clievent.ObserverLossObserved:
-			if value.Category() == clievent.ObserverLossRelayLifecycle && value.Reason() == clievent.ObserverLossTraceQueue {
+			if value.Category() == appobs.ObserverLossRelayLifecycle && value.Reason() == appobs.ObserverLossTraceQueue {
 				queueLoss = saturatingAdd(queueLoss, value.Count())
 			}
-			if value.Category() == clievent.ObserverLossRelayLifecycle && value.Reason() == clievent.ObserverLossStreamCapacity {
+			if value.Category() == appobs.ObserverLossRelayLifecycle && value.Reason() == appobs.ObserverLossStreamCapacity {
 				streamLoss = saturatingAdd(streamLoss, value.Count())
 			}
 		}
@@ -475,51 +470,9 @@ func TestObservationPublicationGateSerializesRevocationWithRuntimeEnqueue(t *tes
 	}
 }
 
-func TestGetContextObserversCannotCommitAfterCompletionRevocation(t *testing.T) {
-	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
-	runtime, err := (&App{
-		Stderr: bytes.NewBuffer(nil),
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
-			return recorder, nil
-		},
-	}).newCommandRuntime(clievent.CommandGet, testExactTraceOptions("trace.ndjson"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	observation := newGetObservation(runtime)
-
-	relayGate := &observationbridge.PublicationGate{}
-	receiverGate := &observationbridge.PublicationGate{}
-	relayGate.Revoke()
-	receiverGate.Revoke()
-
-	observation.relayLifecycleContext(context.Background(), relayGate, relayv2.LifecycleTrace{
-		LinkID: 7, OperationID: 9, Stage: relayv2.LifecycleLinkClosed,
-		RetirementSource: relayv2.LifecycleRetirementLocalClose,
-		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
-	})
-	observation.peerDiagnosticContext(context.Background(), receiverGate, v2peer.PeerDiagnosticObservation{
-		Category: v2peer.PeerDiagnosticReceiverTermination,
-		Reason:   v2peer.PeerDiagnosticStreamCapacity,
-		Count:    1,
-	})
-	if !runtime.Finalize(newRuntimeTestCommandFailure(t, clievent.CommandGet, clievent.FailureCanceled)) {
-		t.Fatal("terminal event was rejected")
-	}
-	runtime.Close()
-
-	events := recorder.recorded()
-	if len(events) != 1 {
-		t.Fatalf("revoked producer callbacks committed events=%#v", events)
-	}
-	if _, ok := events[0].(clievent.CommandFailed); !ok {
-		t.Fatalf("terminal event=%T", events[0])
-	}
-}
-
-func newRuntimeTestCommandFailure(t *testing.T, command clievent.Command, code clievent.FailureCode) clievent.CommandFailed {
+func newRuntimeTestCommandFailure(t *testing.T, command clievent.Command, code appobs.FailureCode) clievent.CommandFailed {
 	t.Helper()
-	failure, err := clievent.NewFailure(code)
+	failure, err := appobs.NewFailure(code)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,17 +499,11 @@ func TestMalformedRelayLifecycleProducesTypedLossAndSingleIncompleteWarning(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	(getObservation{runtime: runtime}).relayLifecycle(relayv2.LifecycleTrace{
-		LinkID: 1, RelaySessionID: v2.RelaySessionID{1},
-		Stage: relayv2.LifecycleSendAdmitted, Terminal: true,
-		Disposition:      framechannel.SendAccepted,
-		RetirementSource: relayv2.LifecycleRetirementNone,
-		Cause:            relayv2.LifecycleCauseNone,
-		DrainCause:       relayv2.LifecycleCauseNone,
-		// A send-stage lifecycle fact without its operation correlation must be
-		// counted as observation loss, never promoted into a generic warning.
-		OperationID: 0,
-	})
+	normalizedLoss, err := appobs.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowReceive, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossInvalidIdentity, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.projectReceiveObservation(newGetObservation(runtime), normalizedLoss)
 	runtime.Close()
 
 	recorded := recorder.recorded()
@@ -564,8 +511,8 @@ func TestMalformedRelayLifecycleProducesTypedLossAndSingleIncompleteWarning(t *t
 		t.Fatalf("trace events=%#v", recorded)
 	}
 	loss, ok := recorded[0].(clievent.ObserverLossObserved)
-	if !ok || loss.Category() != clievent.ObserverLossRelayLifecycle ||
-		loss.Reason() != clievent.ObserverLossInvalidIdentity || loss.Count() != 1 {
+	if !ok || loss.Category() != appobs.ObserverLossRelayLifecycle ||
+		loss.Reason() != appobs.ObserverLossInvalidIdentity || loss.Count() != 1 {
 		t.Fatalf("observer loss=%#v", recorded[0])
 	}
 	output := stderr.String()
@@ -604,7 +551,7 @@ func TestCommandRuntimeGetFinalizationSurvivesObserverSaturation(t *testing.T) {
 func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) {
 	runtime, writer, recorder := newSaturatedCommandRuntime(t, clievent.CommandShare, true)
 
-	subject, err := clievent.NewDirectorySubject(clievent.NewDisplayName("selected-root"))
+	subject, err := appobs.NewDirectorySubject(appobs.NewDisplayName("selected-root"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +559,7 @@ func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
+	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +602,7 @@ func TestCommandRuntimeObserverIngestionStaysLossyAndNonblockingWhileFailureIsGu
 	}
 	if code := (getObservation{runtime: runtime}).commandFailureCode(
 		ExitNetwork,
-		clievent.FailureRelayTransport,
+		appobs.FailureRelayTransport,
 	); code != ExitNetwork {
 		t.Fatalf("failure exit=%d", code)
 	}
@@ -740,7 +687,7 @@ func assertRuntimeEventTypes(t *testing.T, events []clievent.Event, want ...clie
 
 func newRuntimeTestWarning(t *testing.T, command clievent.Command) clievent.Warning {
 	t.Helper()
-	failure, err := clievent.NewFailure(clievent.FailureTraceWrite)
+	failure, err := appobs.NewFailure(appobs.FailureTraceWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,20 +700,20 @@ func newRuntimeTestWarning(t *testing.T, command clievent.Command) clievent.Warn
 
 func newRuntimeTestProgress(t *testing.T) clievent.TransferProgress {
 	t.Helper()
-	receiveID, err := clievent.NewReceiveOperationID(bytes.Repeat([]byte{1}, clievent.IdentityBytes))
+	receiveID, err := appobs.NewReceiveOperationID(bytes.Repeat([]byte{1}, appobs.IdentityBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := clievent.NewTransferJobID(bytes.Repeat([]byte{2}, clievent.IdentityBytes))
+	jobID, err := appobs.NewTransferJobID(bytes.Repeat([]byte{2}, appobs.IdentityBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := clievent.NewProgressSnapshot(clievent.ProgressSpec{
+	snapshot, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
 		DiscoveredFiles: 1, DiscoveredBytes: 10,
 		PublishedFiles: 1, PublishedBytes: 10,
 		VerifiedBytes: 10, NewlyVerifiedBytes: 10,
-		FileOutcomes:  clievent.FileOutcomes{DownloadedFiles: 1},
-		Discovery:     clievent.DiscoveryComplete,
+		FileOutcomes:  appobs.FileOutcomes{DownloadedFiles: 1},
+		Discovery:     appobs.DiscoveryComplete,
 		CountersExact: true,
 	})
 	if err != nil {
@@ -784,8 +731,8 @@ func newRuntimeTestSettlement(t *testing.T) clievent.TransferSettled {
 	result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 		Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
 		Drift: clievent.DriftNone, Elapsed: time.Second,
-		Destination:    clievent.NewDisplayPath("destination"),
-		Files:          clievent.FileOutcomes{DownloadedFiles: 1},
+		Destination:    appobs.NewDisplayPath("destination"),
+		Files:          appobs.FileOutcomes{DownloadedFiles: 1},
 		PublishedBytes: 10, CountersExact: true,
 	})
 	if err != nil {

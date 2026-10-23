@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -43,8 +43,8 @@ func TestGetFirstJoinWaitTimeoutAndCancellation(t *testing.T) {
 			errorsOutput := &lockedTestBuffer{}
 			app := &App{
 				Stdout: &lockedTestBuffer{}, Stderr: errorsOutput, Stdin: strings.NewReader(""),
-				receiverRecoveryOptions: relayset.ReceiverRecoveryOptions{Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay }},
-				receiverDial: func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+				receiverRecoveryOptions: engine.ReceiveRecoverySettings{Clock: clock, Jitter: func(delay time.Duration) time.Duration { return delay }},
+				receiverDial: func(context.Context, engine.ReceiveDialRequest) (engine.ReceiveConnection, error) {
 					dials.Add(1)
 					return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
 				},

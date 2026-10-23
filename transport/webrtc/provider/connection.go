@@ -16,7 +16,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turnpath"
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -62,7 +62,7 @@ type Event struct {
 	Pair                *PairFacts
 	TURN                *TURNResourceSnapshot
 	TURNService         *iceconfig.Identity
-	TURNCleanup         turnpath.CleanupOutcome
+	TURNCleanup         connectionpath.CleanupOutcome
 	TURNBinding         *turn.BindingEvent
 	TURNRoute           *TURNRouteEvent
 }
@@ -267,9 +267,9 @@ func (c *Connection) Close() error {
 			// allocations first while TURN control sockets can still write.
 			c.closeErr, forced = c.turn.shutdown(c.SCTP().Transport().ICETransport().Stop)
 			c.closeErr = errors.Join(c.closeErr, c.PeerConnection.Close())
-			outcome := turnpath.CleanupProtocol
+			outcome := connectionpath.CleanupProtocol
 			if forced {
-				outcome = turnpath.CleanupDeadline
+				outcome = connectionpath.CleanupDeadline
 			}
 			c.observeTURNCleanup(outcome)
 		} else {

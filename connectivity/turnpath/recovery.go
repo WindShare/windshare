@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -161,7 +162,7 @@ func (r *Receiver) requestRecoveries(ctx context.Context) {
 			continue
 		}
 		if r.send(ctx, turncontrol.Recover{Authority: path.grant.Authority, PathID: id, Reason: reason}) {
-			r.observe(path.grant, MilestoneRecoveryRequested, "")
+			r.observe(path.grant, connectionpath.MilestoneRecoveryRequested, "")
 		} else {
 			r.mu.Lock()
 			r.recoveries[id] = reason

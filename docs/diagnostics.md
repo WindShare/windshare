@@ -15,6 +15,7 @@ wind share <path> --verbose --trace-dir ./traces
 ```
 
 Traces are recorded in line-delimited JSON (NDJSON). Sensitive secrets (link keys, credentials, payload content) are excluded.
+The engine translates native events and failures into `engine/observation` facts once; the CLI owns formatting and exit codes. TURN, ICE and cleanup details remain available in the shared facts.
 
 ### Event Correlation
 

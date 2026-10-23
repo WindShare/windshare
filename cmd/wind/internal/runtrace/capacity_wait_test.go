@@ -5,12 +5,13 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestProgressPayloadRecordsRawCapacityWaitIndependentOfPresentation(t *testing.T) {
 	for _, visible := range []bool{false, true} {
-		snapshot, err := clievent.NewProgressSnapshot(clievent.ProgressSpec{
-			Discovery: clievent.DiscoveryComplete, CountersExact: true,
+		snapshot, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
+			Discovery: appobs.DiscoveryComplete, CountersExact: true,
 			CapacityActiveWaiters: 2, CapacityAccumulatedWait: 1250 * time.Millisecond,
 			CapacityWaitAttempts: 3, CapacityWaitVisible: visible,
 		})
@@ -30,23 +31,23 @@ func TestProgressPayloadRecordsRawCapacityWaitIndependentOfPresentation(t *testi
 }
 
 func TestTransferCapacityLifecyclePayloadKeepsWaitAndProtocolCorrelation(t *testing.T) {
-	receive, _ := clievent.NewReceiveOperationID(identityBytes(0x11))
-	session, _ := clievent.NewProtocolSessionID(identityBytes(0x12))
-	job, _ := clievent.NewTransferJobID(identityBytes(0x13))
-	wait, _ := clievent.NewCapacityWaitID(identityBytes(0x14))
-	generation, _ := clievent.NewCapacityGenerationID(identityBytes(0x15))
-	operation, _ := clievent.NewProtocolOperationID(identityBytes(0x16))
-	progress, err := clievent.NewProgressSnapshot(clievent.ProgressSpec{
-		Discovery: clievent.DiscoveryOpen, CountersExact: true,
+	receive, _ := appobs.NewReceiveOperationID(identityBytes(0x11))
+	session, _ := appobs.NewProtocolSessionID(identityBytes(0x12))
+	job, _ := appobs.NewTransferJobID(identityBytes(0x13))
+	wait, _ := appobs.NewCapacityWaitID(identityBytes(0x14))
+	generation, _ := appobs.NewCapacityGenerationID(identityBytes(0x15))
+	operation, _ := appobs.NewProtocolOperationID(identityBytes(0x16))
+	progress, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := clievent.NewTransferLifecycleObserved(clievent.TransferLifecycleSpec{
+	event, err := clievent.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
 		ReceiveOperation: receive, ProtocolSession: session, TransferJob: job,
-		Stage: clievent.TransferCapacityRetryScheduled, Progress: progress,
-		FileSelection: clievent.FileSelectionNone, FileSettlement: clievent.FileSettlementNone,
-		ItemBlockReason: clievent.ItemBlockNone, TreeSettlement: clievent.TreeSettlementNone,
+		Stage: appobs.TransferCapacityRetryScheduled, Progress: progress,
+		FileSelection: appobs.FileSelectionNone, FileSettlement: appobs.FileSettlementNone,
+		ItemBlockReason: appobs.ItemBlockNone, TreeSettlement: appobs.TreeSettlementNone,
 		CapacityWait: wait, CapacityGeneration: generation, CapacityOperation: operation,
 		CapacityAttempt: 2, CapacityHint: 250 * time.Millisecond,
 		CapacityJitter: 9 * time.Millisecond, CapacityDelay: 259 * time.Millisecond,

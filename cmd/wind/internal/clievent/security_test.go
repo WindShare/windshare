@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnosticerror"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T) {
@@ -41,8 +42,8 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 	if value == reflect.TypeFor[time.Time]() {
 		return
 	}
-	if value == reflect.TypeFor[ProtocolFact]() {
-		for _, fact := range []reflect.Type{reflect.TypeFor[ProtocolOperationFact](), reflect.TypeFor[SenderContentDecisionFact](), reflect.TypeFor[ResponseSendNotStartedFact](), reflect.TypeFor[ResponseSendReturnedFact](), reflect.TypeFor[SendAttemptSettledFact](), reflect.TypeFor[ReceivedProtocolErrorFact]()} {
+	if value == reflect.TypeFor[appobs.ProtocolFact]() {
+		for _, fact := range []reflect.Type{reflect.TypeFor[appobs.ProtocolOperationFact](), reflect.TypeFor[appobs.SenderContentDecisionFact](), reflect.TypeFor[appobs.ResponseSendNotStartedFact](), reflect.TypeFor[appobs.ResponseSendReturnedFact](), reflect.TypeFor[appobs.SendAttemptSettledFact](), reflect.TypeFor[appobs.ReceivedProtocolErrorFact]()} {
 			assertSafePayloadType(t, fact, seen)
 		}
 		return
@@ -74,8 +75,8 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 					value == reflect.TypeFor[diagnosticerror.Node]() || value == reflect.TypeFor[diagnosticerror.Frame]()
 				// Rejection evidence has fixed field storage and explicit
 				// aggregate/per-value byte bounds; raw errors are never retained.
-				diagnostic = diagnostic || value == reflect.TypeFor[ObservationRejection]() ||
-					value == reflect.TypeFor[RejectionField]() || value == reflect.TypeFor[SendAttemptCause]()
+				diagnostic = diagnostic || value == reflect.TypeFor[appobs.ObservationRejection]() ||
+					value == reflect.TypeFor[appobs.RejectionField]() || value == reflect.TypeFor[appobs.SendAttemptCause]()
 				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}

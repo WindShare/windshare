@@ -2,11 +2,12 @@ package receive
 
 import (
 	"errors"
-	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 type cliReceiverPeerAttempt struct {

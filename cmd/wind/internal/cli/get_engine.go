@@ -1,12 +1,12 @@
 package cli
 
 import (
-	"context"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type receiveCommandClock struct{ commandClock }
@@ -35,69 +35,12 @@ func (a *App) receiveDependencies() engine.ReceiveDependencies {
 
 func (a *App) projectReceiveObservation(o getObservation, event engine.Event) {
 	switch value := event.(type) {
-	case engine.ReceiveWarning:
-		if code, ok := commandprojection.ReceiveFailureCode(value.Code); ok {
-			o.warningCode(code)
-		} else {
-			o.warning(value.Cause)
-		}
-	case engine.ReceiveRelayConnected:
-		o.relayConnected(value.Endpoint)
-	case engine.ReceiveRecoveryObserved:
-		o.receiverRecovery(value.Value)
-	case engine.ReceiveRelayObserved:
-		o.relayLifecycle(value.Value)
-	case engine.ReceiveWebRTCObserved:
-		o.webRTCLifecycle(value.Value)
-	case engine.ReceiveFilesystemObserved:
-		o.filesystemOutput(value.Value)
-	case engine.ReceiveTransferObserved:
-		o.transferLifecycle(value.Value)
-	case engine.ReceiveProtocolObserved:
-		o.protocolObservationContext(context.Background(), nil, value.Value)
-	case engine.ReceiveLaneObserved:
-		o.TraceLaneSettlement(value.Value)
-	case engine.ReceiveNativeObserved:
-		projected, err := commandprojection.ProjectNativeObservation(clievent.CommandGet, value.Value)
-		if err != nil {
-			o.lose(clievent.ObserverLossNativeConnectivity, err)
-		} else {
-			o.observe(projected)
-		}
-	case engine.ReceivePeerDiagnosticObserved:
-		o.ObservePeerDiagnostic(value.Value)
-	case engine.ReceivePeerTerminated:
-		o.receiverTermination(value.Value, receiveLocalStop(value.LocalStop))
-	case engine.ReceiveProgressObserved:
-		o.progress(value.Operation, value.Job, value.Value)
-	case engine.ReceiveContentPathObserved:
-		paths := map[engine.ReceiveContentPath]clievent.ContentPath{engine.ReceiveContentPathRelay: clievent.ContentPathRelay, engine.ReceiveContentPathDirect: clievent.ContentPathDirect, engine.ReceiveContentPathDirectAndRelay: clievent.ContentPathDirectAndRelay}
-		o.contentPath(paths[value.Path])
-	case engine.ReceiveFallbackObserved:
-		if code, ok := commandprojection.ReceiveFailureCode(value.Code); ok {
-			o.fallback(code)
-		}
-	case engine.ReceiveLaneAdopted:
-		o.laneAdopted(value.Session, value.Lane)
+	case appobs.Event:
+		observeEngineFact(o.runtime, value)
+	case appobs.LossSnapshot:
+		o.reportCumulativeLoss(value.Source, value.Category, value.Reason, value.Count)
 	case engine.ReceiveMilestone:
 		a.recordProcessTrace(value.Component, value.Name, value.Outcome)
-	case engine.ReceiveObservationLoss:
-		o.reportEngineLoss(value)
-
-	}
-}
-func receiveLocalStop(value engine.ReceiveLocalStopReason) clievent.ReceiverLocalStopReason {
-	switch value {
-	case engine.ReceiveLocalStopCaller:
-		return clievent.ReceiverLocalStopCaller
-	case engine.ReceiveLocalStopOutputAdmission:
-		return clievent.ReceiverLocalStopOutputAdmission
-	case engine.ReceiveLocalStopRuntimeSessionFailure:
-		return clievent.ReceiverLocalStopRuntimeSessionFailure
-	case engine.ReceiveLocalStopNormalCompletion:
-		return clievent.ReceiverLocalStopNormalCompletion
-	default:
-		return clievent.ReceiverLocalStopNone
 	}
 }
 func receiveExit(class engine.FailureClass) int {
@@ -117,7 +60,7 @@ func receiveExit(class engine.FailureClass) int {
 func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], observation getObservation) int {
 	code := receiveExit(result.FailureClass)
 	if result.Value.Job.IsZero() {
-		failure, _ := commandprojection.ClassifyError(result.Err)
+		failure := result.Failure
 		exit, _ := getEventExit(code)
 		event, err := clievent.NewCommandFailed(clievent.CommandGet, exit, failure)
 		if err != nil {
@@ -147,25 +90,11 @@ func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveRes
 }
 
 func (o getObservation) reportEngineLoss(value engine.ReceiveObservationLoss) {
-	source, category := observerLossProtocolQueue, clievent.ObserverLossProtocolOperation
-	switch value.Source {
-	case engine.ReceiveObservationRelay:
-		source, category = observerLossRelayQueue, clievent.ObserverLossRelayLifecycle
-	case engine.ReceiveObservationWebRTC:
-		source, category = observerLossWebRTCQueue, clievent.ObserverLossWebRTCLifecycle
-	case engine.ReceiveObservationLane:
-		source, category = observerLossLaneQueue, clievent.ObserverLossLaneSettlement
-	case engine.ReceiveObservationNative:
-		source, category = observerLossNativeQueue, clievent.ObserverLossNativeConnectivity
-	case engine.ReceiveObservationPeerTermination:
-		source, category = observerLossReceiverTerminationCapacity, clievent.ObserverLossReceiverTermination
-	case engine.ReceiveObservationPeerDiagnostic:
-		source, category = observerLossReceiverDiagnosticDrain, clievent.ObserverLossReceiverTermination
-	}
-	o.reportCumulativeLoss(source, category, clievent.ObserverLossStreamCapacity, value.Count)
+	loss := engine.ReceiveLossSnapshot(value)
+	o.reportCumulativeLoss(loss.Source, loss.Category, loss.Reason, loss.Count)
 }
 func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], observation getObservation) int {
-	observation.runtime.ReportObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
+	observation.runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
 	for _, loss := range result.Value.ObservationLosses {
 		observation.reportEngineLoss(loss)
 	}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestCorrelationV1ProjectsTypedIdentitiesAsUnpaddedBase64URL(t *testing.T) {
@@ -137,34 +137,34 @@ func TestCorrelationV1RetainsLaneUint32Boundaries(t *testing.T) {
 }
 
 func correlationSequence(start byte) []byte {
-	raw := make([]byte, clievent.IdentityBytes)
+	raw := make([]byte, appobs.IdentityBytes)
 	for index := range raw {
 		raw[index] = start + byte(index)
 	}
 	return raw
 }
 
-func mustCorrelationProtocolSessionID(t *testing.T, raw []byte) clievent.ProtocolSessionID {
+func mustCorrelationProtocolSessionID(t *testing.T, raw []byte) appobs.ProtocolSessionID {
 	t.Helper()
-	value, err := clievent.NewProtocolSessionID(raw)
+	value, err := appobs.NewProtocolSessionID(raw)
 	return mustCorrelationValue(t, value, err)
 }
 
-func mustCorrelationProtocolOperationID(t *testing.T, raw []byte) clievent.ProtocolOperationID {
+func mustCorrelationProtocolOperationID(t *testing.T, raw []byte) appobs.ProtocolOperationID {
 	t.Helper()
-	value, err := clievent.NewProtocolOperationID(raw)
+	value, err := appobs.NewProtocolOperationID(raw)
 	return mustCorrelationValue(t, value, err)
 }
 
-func mustCorrelationPeerPathID(t *testing.T, raw []byte) clievent.PeerPathID {
+func mustCorrelationPeerPathID(t *testing.T, raw []byte) appobs.PeerPathID {
 	t.Helper()
-	value, err := clievent.NewPeerPathID(raw)
+	value, err := appobs.NewPeerPathID(raw)
 	return mustCorrelationValue(t, value, err)
 }
 
-func mustCorrelationPeerAttemptID(t *testing.T, raw []byte) clievent.PeerAttemptID {
+func mustCorrelationPeerAttemptID(t *testing.T, raw []byte) appobs.PeerAttemptID {
 	t.Helper()
-	value, err := clievent.NewPeerAttemptID(raw)
+	value, err := appobs.NewPeerAttemptID(raw)
 	return mustCorrelationValue(t, value, err)
 }
 

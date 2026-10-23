@@ -1,11 +1,12 @@
 package receive
 
 import (
-	"github.com/windshare/windshare/engine/internal/task"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/engine/internal/task"
 )
 
 func newTestObservation(t *testing.T) (getObservation, *[]task.Event) {

@@ -18,6 +18,7 @@ type Config[T any] struct {
 	ObservationCapacity observationstream.Capacity
 	Run                 func(context.Context, Control) Completion[T]
 	Completed           func(error)
+	Project             func(Observation, func(Observation) bool) bool
 }
 
 type Task[T any] struct {
@@ -31,6 +32,8 @@ type Task[T any] struct {
 	observations observationstream.Consumer[Observation]
 	now          func() time.Time
 	result       Result[T]
+	project      func(Observation, func(Observation) bool) bool
+	publish      func(Observation) bool
 }
 
 func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
@@ -47,7 +50,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 	current := &Task[T]{
 		id: config.ID, state: Running, cancel: cancel, done: make(chan struct{}),
 		producer: producer, observations: observations, now: config.Now,
-		result: Result[T]{StartedAt: started},
+		result: Result[T]{StartedAt: started}, project: config.Project, publish: producer.TryPublish,
 	}
 	current.emit(Lifecycle{State: Running})
 	stopParent := context.AfterFunc(parent, func() { current.Stop(Cancelled) })
@@ -61,7 +64,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 	}
 	go func() {
 		completion := config.Run(ctx, control)
-		completion.Settlement = completion.checked()
+		completion.Settlement = completion.Checked()
 		stopParent()
 		current.mu.Lock()
 		current.state = Finished
@@ -138,5 +141,11 @@ func (current *Task[T]) emit(event Event) bool {
 	if event == nil {
 		return false
 	}
-	return current.producer.TryPublish(Observation{TaskID: current.id, At: current.now(), Event: event})
+	envelope := Observation{TaskID: current.id, At: current.now(), Event: event}
+	if current.project == nil {
+		return current.producer.TryPublish(envelope)
+	}
+	// Bind the queue publisher once; capturing each envelope here would allocate
+	// even when a slow observer has already filled the bounded queue.
+	return current.project(envelope, current.publish)
 }

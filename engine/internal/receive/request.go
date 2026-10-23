@@ -50,7 +50,7 @@ func (t systemTicker) Stop()               { t.ticker.Stop() }
 type Dependencies struct {
 	Control      task.Control
 	Clock        Clock
-	ReceiverDial func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
+	ReceiverDial func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)
 	Recovery     relayset.ReceiverRecoveryOptions
 	PeerFactory  func() (PeerStarter, error)
 }
@@ -84,7 +84,7 @@ type getRequest struct {
 type runner struct {
 	receiverRecoveryOptions relayset.ReceiverRecoveryOptions
 	receiverPeerFactory     func() (receiverPeerStarter, error)
-	receiverDial            func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
+	receiverDial            func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)
 	getOutputFactory        getOutputAuthorityFactory
 	control                 task.Control
 	clock                   Clock

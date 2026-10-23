@@ -24,7 +24,7 @@ func receiverUnavailableConfig(endpoints ...string) ReceiverConfig {
 	raw[0] = 1
 	return ReceiverConfig{Receiver: liveshare.ReceiverConfig{
 		Capability: link.Link{ShareID: base64.RawURLEncoding.EncodeToString(raw), Relays: endpoints},
-	}, Dial: func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	}, Dial: func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
 	}}
 }
@@ -48,7 +48,7 @@ func TestReceiverRecoveryLongOutagePreservesEndpointDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := receiverUnavailableConfig("available", "stopped")
-	config.Dial = func(_ context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	config.Dial = func(_ context.Context, config relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		if config.RelayBaseURL == "stopped" {
 			stoppedCalls.Add(1)
 			return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
@@ -155,7 +155,7 @@ func TestReceiverRecoveryTerminalErrorsNeverWait(t *testing.T) {
 				}
 			}})
 			config := receiverUnavailableConfig("one")
-			config.Dial = func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+			config.Dial = func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 				return nil, rejected
 			}
 			set, err := recovery.Replace(context.Background(), config)
@@ -183,7 +183,7 @@ func TestReceiverRecoveryAttemptDeadlineAndCancellationJoin(t *testing.T) {
 		},
 	})
 	config := receiverUnavailableConfig("one")
-	config.Dial = func(ctx context.Context, _ relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	config.Dial = func(ctx context.Context, _ relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		defer close(finished)
 		close(dialEntered)
 		<-ctx.Done()
@@ -240,7 +240,7 @@ func TestReceiverRecoveryWaitingDeadlineClosesActiveAttempt(t *testing.T) {
 		},
 	})
 	config := receiverUnavailableConfig("one")
-	config.Dial = func(ctx context.Context, _ relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	config.Dial = func(ctx context.Context, _ relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		close(entered)
 		<-ctx.Done()
 		close(finished)
@@ -351,7 +351,7 @@ func TestReceiverRecoveryRejectsInvalidCallerLifetimes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{})
 			config := receiverUnavailableConfig("one")
-			config.Dial = func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+			config.Dial = func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 				t.Error("invalid caller lifetime reached dial")
 				return nil, relayv2.ErrProtocol
 			}

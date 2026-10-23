@@ -21,12 +21,12 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 	release := make(chan struct{})
 	secondaryStarted := make(chan struct{})
 	retrying := make(chan chan struct{}, relaysetEventCapacity)
-	connected := make(chan *relayv2.ReceiverConnection, relaysetEventCapacity)
+	connected := make(chan relayset.ReceiverConnection, relaysetEventCapacity)
 	var primaryDials, secondaryDials atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Clock:    &relaysetClock{now: time.Unix(1, 0)},
 		Receiver: liveshare.ReceiverConfig{Capability: share.Capability()},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == urls[0] {
 				primaryDials.Add(1)
 			} else {
@@ -47,9 +47,9 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 				case <-resume:
 				}
 			}
-			return relayv2.DialReceiver(ctx, config)
+			return relayset.DialReceiver(ctx, config)
 		},
-		Connected: func(connection *relayv2.ReceiverConnection) { connected <- connection },
+		Connected: func(connection relayset.ReceiverConnection) { connected <- connection },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			contender, err := relayv2.DialReceiver(ctx, relayv2.ReceiverConfig{RelayBaseURL: urls[0], ShareID: shareID})
+			contender, err := relayset.DialReceiver(ctx, relayv2.ReceiverConfig{RelayBaseURL: urls[0], ShareID: shareID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,7 +145,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 		if index == 1 && attached.Lane.ID == oldLane.ID {
 			t.Fatalf("recovery displaced the competing channel: %+v", attached)
 		}
-		if additional == previous || attached.Session == previous.Channel().RelaySessionID() {
+		if additional == previous || attached.Session == previous.Channel().(interface{ RelaySessionID() v2.RelaySessionID }).RelaySessionID() {
 			t.Fatal("recovery reused the retired relay connection")
 		}
 		if _, live := runtime.LaneDone(oldLane); live {
@@ -170,7 +170,7 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 	started := time.Unix(1, 0)
 	clock := &relaysetClock{now: started}
 	failed := make(chan struct{})
-	connected := make(chan *relayv2.ReceiverConnection, relaysetEventCapacity)
+	connected := make(chan relayset.ReceiverConnection, relaysetEventCapacity)
 	var primaryDials, secondaryDials atomic.Int32
 	var waiting atomic.Bool
 	recovery, err := relayset.NewReceiverRecovery(relayset.ReceiverRecoveryOptions{
@@ -186,7 +186,7 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 	}
 	set, err := recovery.Join(ctx, relayset.ReceiverConfig{
 		Receiver: liveshare.ReceiverConfig{Capability: share.Capability()},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == urls[1] {
 				if secondaryDials.Add(1) == 1 {
 					close(failed)
@@ -202,9 +202,9 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 					return nil, ctx.Err()
 				}
 			}
-			return relayv2.DialReceiver(ctx, config)
+			return relayset.DialReceiver(ctx, config)
 		},
-		Connected: func(connection *relayv2.ReceiverConnection) { connected <- connection },
+		Connected: func(connection relayset.ReceiverConnection) { connected <- connection },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
 	}
 	config := relayset.ReceiverConfig{
 		Receiver: liveshare.ReceiverConfig{Capability: capability},
-		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == stoppedEndpoint {
 				stoppedCalls.Add(1)
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
@@ -258,7 +258,7 @@ func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
 			if clock.Now().Before(started.Add(initialOutage)) {
 				return nil, &relayv2.RelayError{Code: v2.ErrorNotFound}
 			}
-			return relayv2.DialReceiver(ctx, config)
+			return relayset.DialReceiver(ctx, config)
 		},
 	}
 	set, err := recovery.Join(ctx, config)

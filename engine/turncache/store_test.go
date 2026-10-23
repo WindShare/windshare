@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestCacheIsScopedToAuthorityAndRejectsOlderObservations(t *testing.T) {
 	store := FileStore{Settings: relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}}
-	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", AccessKey: "first-key"}
+	candidate := relayprofile.Candidate{PublicURL: "https://relay.example", AccessKey: "first-key"}
 	at := time.Unix(100, 0)
 	enabled := turn.Capability{ServiceID: "cf-service", Enabled: true}
 	if cached, err := store.Load(candidate); err != nil || cached != nil {
@@ -50,8 +50,8 @@ func TestCacheIsScopedToAuthorityAndRejectsOlderObservations(t *testing.T) {
 
 func TestCorruptCacheCanBeRebuiltWithoutChangingSettings(t *testing.T) {
 	settings := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
-	candidate := senderrelay.Candidate{PublicURL: "https://relay.example", AccessKey: "key"}
-	config := relayconfig.Config{Profiles: []senderrelay.Candidate{candidate}}
+	candidate := relayprofile.Candidate{PublicURL: "https://relay.example", AccessKey: "key"}
+	config := relayconfig.Config{Profiles: []relayprofile.Candidate{candidate}}
 	if err := settings.Save(config); err != nil {
 		t.Fatal(err)
 	}

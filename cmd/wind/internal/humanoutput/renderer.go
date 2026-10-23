@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var ErrInvalidConfig = errors.New("human output configuration is invalid")
@@ -33,12 +34,12 @@ type Renderer struct {
 	verbose      bool
 
 	rate                   rateWindow
-	receiveOperation       clievent.ReceiveOperationID
-	transferJob            clievent.TransferJobID
+	receiveOperation       appobs.ReceiveOperationID
+	transferJob            appobs.TransferJobID
 	hasProgressIdentity    bool
-	redirectedDiscovery    clievent.DiscoveryStatus
+	redirectedDiscovery    appobs.DiscoveryStatus
 	hasRedirectedDiscovery bool
-	lastProgress           clievent.ProgressSnapshot
+	lastProgress           appobs.ProgressSnapshot
 	hasLastProgress        bool
 }
 
@@ -161,7 +162,7 @@ func (visitor eventVisitor) VisitRelayConnected(event clievent.RelayConnected) e
 func (visitor eventVisitor) VisitRelayRecovering(event clievent.RelayRecovering) error {
 	if !visitor.verboseVisible() {
 		details, detailed := event.Details()
-		if event.State() == clievent.RelayRecoveryStarted || (event.State() == clievent.RelayRecoveryFailed && detailed && !details.Terminal) {
+		if event.State() == appobs.RelayRecoveryStarted || (event.State() == appobs.RelayRecoveryFailed && detailed && !details.Terminal) {
 			return nil
 		}
 	}
@@ -236,7 +237,7 @@ func (visitor eventVisitor) VisitCommandFailed(event clievent.CommandFailed) err
 func (visitor eventVisitor) VisitTransferSettled(event clievent.TransferSettled) error {
 	last := visitor.renderer.lastProgress
 	if visitor.capabilities.Interactive && event.Result().Status() == clievent.ResultSuccess &&
-		visitor.renderer.hasLastProgress && last.Discovery() == clievent.DiscoveryComplete &&
+		visitor.renderer.hasLastProgress && last.Discovery() == appobs.DiscoveryComplete &&
 		last.CountersExact() && last.DiscoveredBytes() == 0 &&
 		terminalFileOutcomes(last.FileOutcomes()) >= last.DiscoveredFiles() {
 		visitor.renderer.canvas.ReplaceProgress(FormatProgress(
@@ -316,7 +317,7 @@ func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) err
 func (eventVisitor) VisitSenderCapacityObserved(clievent.SenderCapacityObserved) error { return nil }
 func (eventVisitor) VisitSenderRevisionObserved(clievent.SenderRevisionObserved) error { return nil }
 func (visitor eventVisitor) VisitProtocolObservationObserved(event clievent.ProtocolObservationObserved) error {
-	if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Stage() == clievent.ProtocolOperationReceiverFailed {
+	if fact, ok := event.Fact().(appobs.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Stage() == appobs.ProtocolOperationReceiverFailed {
 		visitor.renderer.insert(formatProtocolOperationFailure(event, fact, visitor.symbols()))
 	}
 	return nil

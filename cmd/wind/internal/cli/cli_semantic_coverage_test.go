@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"io"
 	"math"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
@@ -101,7 +101,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			t.Fatalf("parse=%d", parse)
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
-			!reflect.DeepEqual(request.relays, []senderrelay.Candidate{{PublicURL: "wss://relay.example"}}) ||
+			!reflect.DeepEqual(request.relays, []relayprofile.Candidate{{PublicURL: "wss://relay.example"}}) ||
 			request.link.frontURL != "https://app.example" ||
 			request.chunkSize != 65536 ||
 			!request.link.splitKey {

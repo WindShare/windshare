@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func traceProtocolContext() sessionruntime.ProtocolObservationContext {
@@ -19,7 +19,7 @@ func traceProtocolContext() sessionruntime.ProtocolObservationContext {
 }
 func encodeProtocolFact(t *testing.T, command clievent.Command, fact sessionruntime.ProtocolObservation) RunTraceRecordV4 {
 	t.Helper()
-	event, err := commandprojection.ProjectProtocolObservation(command, fact)
+	event, err := traceProtocolObservation(command, fact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +95,8 @@ func TestSchema4LateSettlementCanPrecedeImmutableReturnedSnapshot(t *testing.T) 
 }
 func rejectionTraceEvent(t *testing.T, count uint64) clievent.ObserverLossObserved {
 	t.Helper()
-	sample := clievent.CaptureObservationRejection(clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "unknown", Field: "role", Rule: "known_enum", Session: strings.Repeat("0", 32)}, clievent.RejectedEnum("role", 255))
-	event, err := clievent.NewObserverLossObserved(clievent.ObserverLossSpec{Command: clievent.CommandShare, Category: clievent.ObserverLossProtocolOperation, Reason: clievent.ObserverLossUnknownEnum, Count: count, Rejection: sample})
+	sample := appobs.CaptureObservationRejection(appobs.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "unknown", Field: "role", Rule: "known_enum", Session: strings.Repeat("0", 32)}, appobs.RejectedEnum("role", 255))
+	event, err := clievent.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossProtocolOperation, Reason: appobs.ObserverLossUnknownEnum, Count: count, Rejection: sample})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 // installation is shared by preflight and commit so the acknowledgement cannot
 // bypass a constraint discovered only when publishing settings.
 func installation(saved relayconfig.Config, address, accessKey, frontend string, operation Operation) (relayconfig.Config, error) {
 	firstProfile := len(saved.Profiles) == 0
-	candidate := senderrelay.Candidate{PublicURL: address, AccessKey: accessKey}
+	candidate := relayprofile.Candidate{PublicURL: address, AccessKey: accessKey}
 	if err := candidate.Validate(); err != nil {
 		return relayconfig.Config{}, err
 	}
 	saved.Profiles = slices.Clone(saved.Profiles)
-	index := slices.IndexFunc(saved.Profiles, func(profile senderrelay.Candidate) bool { return sameRelay(profile.PublicURL, address) })
+	index := slices.IndexFunc(saved.Profiles, func(profile relayprofile.Candidate) bool { return sameRelay(profile.PublicURL, address) })
 	if index < 0 {
 		if len(saved.Profiles) >= relayconfig.MaximumProfiles {
 			return relayconfig.Config{}, fmt.Errorf("%w: limit of %d relay profiles reached; import fewer profiles before adding another relay",

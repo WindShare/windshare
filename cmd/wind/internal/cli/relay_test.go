@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
@@ -56,7 +56,7 @@ func TestRelayCommandsInstallThroughEngineWithoutAdministratorAuthority(t *testi
 			relayURL = server.URL
 			store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
 			initial := relayconfig.Config{FrontURL: "https://chosen.example",
-				Profiles:     []senderrelay.Candidate{{PublicURL: "https://public.example"}},
+				Profiles:     []relayprofile.Candidate{{PublicURL: "https://public.example"}},
 				ActiveRelays: []string{"https://public.example"}}
 			if err := store.Save(initial); err != nil {
 				t.Fatal(err)

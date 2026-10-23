@@ -6,22 +6,23 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/transport/relayv2"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T) {
 	prepared := &preparedFacadeShare{}
 	relays := &facadeRelays{}
+	peers := &facadePeers{}
 	application := newTestEngine(t, Config{
 		ObservationCapacity: 1,
 		Share: ShareDependencies{
+			Peers:       func() (SharePeers, error) { return peers, nil },
 			Prepare:     func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return prepared, nil },
-			Relays:      func(context.Context, []string, relayset.SenderFactory) (ShareRelays, error) { return relays, nil },
+			Relays:      func(context.Context, []relayprofile.Candidate) (ShareRelays, error) { return relays, nil },
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		},
 	})
@@ -30,7 +31,7 @@ func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T
 		t.Fatal(err)
 	}
 	ready, err := current.Ready(context.Background())
-	if err != nil || ready.RelayEndpoint.DialURL == "" {
+	if err != nil || !ready.RelayAuthority.Valid() {
 		t.Fatalf("ready = %+v, %v", ready, err)
 	}
 	if prepared.prefetched.Load() {
@@ -46,14 +47,14 @@ func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T
 		result.Err != nil || result.CleanupError != nil || result.StopReason != ShareStopped {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
-	if !prepared.closed.Load() || !prepared.sessionClosed.Load() {
+	if !prepared.closed.Load() || !prepared.sessionClosed.Load() || !peers.closed.Load() {
 		t.Fatal("final result preceded resource shutdown")
 	}
 	if result.Observations.CapacityDropped == 0 {
 		t.Fatal("test did not exercise an undrained stream")
 	}
 	// The ready value outlives the observation queue and task shutdown.
-	if again, err := current.Ready(context.Background()); err != nil || again.RelayEndpoint != ready.RelayEndpoint {
+	if again, err := current.Ready(context.Background()); err != nil || again.RelayAuthority != ready.RelayAuthority {
 		t.Fatalf("durable ready = %+v, %v", again, err)
 	}
 }
@@ -61,8 +62,9 @@ func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T
 func TestSharePublicationFailureCompletesReadinessAndRetainsCause(t *testing.T) {
 	prepared := &preparedFacadeShare{}
 	application := newTestEngine(t, Config{Share: ShareDependencies{
+		Peers:   func() (SharePeers, error) { return &facadePeers{}, nil },
 		Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return prepared, nil },
-		Relays: func(context.Context, []string, relayset.SenderFactory) (ShareRelays, error) {
+		Relays: func(context.Context, []relayprofile.Candidate) (ShareRelays, error) {
 			return &facadeRelays{}, nil
 		},
 		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
@@ -120,13 +122,39 @@ func (factory facadeSessionFactory) Stop(context.Context, string) error {
 
 type facadeRelays struct{}
 
-func (*facadeRelays) Accept(ctx context.Context) (*relayv2.Channel, error) {
+func (*facadeRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
-func (*facadeRelays) WaitReady(context.Context) error                       { return nil }
-func (*facadeRelays) ReadyRelayURL() string                                 { return "ws://relay.example:8080" }
-func (*facadeRelays) ObserveAvailability(func(relayset.SenderAvailability)) {}
-func (*facadeRelays) Wake()                                                 {}
-func (*facadeRelays) StopRecovery()                                         {}
-func (*facadeRelays) Cleanup(context.Context) error                         { return nil }
+func (*facadeRelays) WaitReady(context.Context) error { return nil }
+func (*facadeRelays) ReadyRelayURL() string           { return "ws://relay.example:8080" }
+func (*facadeRelays) Wake()                           {}
+func (*facadeRelays) StopRecovery()                   {}
+func (*facadeRelays) Cleanup(context.Context) error   { return nil }
+
+type facadePeers struct {
+	sessionruntime.SenderPeerHandlerFactoryFunc
+	closed atomic.Bool
+}
+
+func (peers *facadePeers) Close(context.Context) error { peers.closed.Store(true); return nil }
+func TestShareReleasesInjectedPeerAuthorityAfterPartialConstruction(t *testing.T) {
+	peers := &facadePeers{}
+	failure := errors.New("peer construction failed")
+	application := newTestEngine(t, Config{Share: ShareDependencies{
+		Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) {
+			return &preparedFacadeShare{}, nil
+		},
+		Relays:      func(context.Context, []relayprofile.Candidate) (ShareRelays, error) { return &facadeRelays{}, nil },
+		Peers:       func() (SharePeers, error) { return peers, failure },
+		PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
+	}})
+	current, err := application.StartShare(t.Context(), ShareRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := current.Wait(t.Context())
+	if err != nil || !errors.Is(result.Err, failure) || !result.Failure.Valid() || !peers.closed.Load() {
+		t.Fatalf("partial construction retained authority: %+v %v closed=%v", result, err, peers.closed.Load())
+	}
+}

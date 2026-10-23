@@ -9,10 +9,15 @@
 // tasks and closes the instance's capacity owner.
 //
 // TaskResult and the finished LifecycleObservation share one Settlement containing
-// Outcome, FailureClass, Err, and CleanupError. Value contains workflow details;
+// Outcome, FailureClass, normalized Failure/CleanupFailure, and diagnostic causes.
+// Value contains workflow details;
 // errors.As can recover a structured ReceiveFailure from Err even without a
 // low-level cause. A nil Wait error means the result was retrieved, not that the
 // operation succeeded. StopReason records intent independently of the outcome.
+//
+// Observations use engine/observation facts. Native traces are normalized before
+// publication; clients own formatting and exit codes. Constructors accept small
+// capabilities so tests can supply connections and peers without native objects.
 //
 // Sharing exposes a durable Ready/Activate handshake. Clients publish the
 // capability returned by Ready, acknowledge publication through Activate, and

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 const (
@@ -117,7 +117,7 @@ func (pending *PendingSetup) validate() error {
 	if console.Scheme != "https" && console.Hostname() != "localhost" && !net.ParseIP(console.Hostname()).IsLoopback() {
 		return invalid
 	}
-	candidate := senderrelay.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
+	candidate := relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
 	if candidate.Validate() != nil {
 		return invalid
 	}

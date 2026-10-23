@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/internal/testprocess"
 	"github.com/windshare/windshare/internal/testrun"
 )
@@ -20,7 +20,7 @@ const transactionProbePath = "WINDSHARE_CONFIG_TRANSACTION_PROBE"
 
 func TestTransactionsReadLatestSettingsAcrossIndependentStores(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := (FileStore{Path: path}).Save(Config{Profiles: []senderrelay.Candidate{}}); err != nil {
+	if err := (FileStore{Path: path}).Save(Config{Profiles: []relayprofile.Candidate{}}); err != nil {
 		t.Fatal(err)
 	}
 	const writers = 12
@@ -29,7 +29,7 @@ func TestTransactionsReadLatestSettingsAcrossIndependentStores(t *testing.T) {
 		group.Go(func() {
 			_, err := (FileStore{Path: path}).Update(t.Context(), func(current *Config) error {
 				runtime.Gosched()
-				current.Profiles = append(current.Profiles, senderrelay.Candidate{PublicURL: fmt.Sprintf("https://relay-%d.example", index)})
+				current.Profiles = append(current.Profiles, relayprofile.Candidate{PublicURL: fmt.Sprintf("https://relay-%d.example", index)})
 				return nil
 			})
 			if err != nil {
@@ -80,7 +80,7 @@ func TestTransactionExcludesASeparateProcess(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "config.json")
 	store := FileStore{Path: path}
-	if err := store.Save(Config{Profiles: []senderrelay.Candidate{}}); err != nil {
+	if err := store.Save(Config{Profiles: []relayprofile.Candidate{}}); err != nil {
 		t.Fatal(err)
 	}
 	environment, err := testprocess.InheritEnvironment(map[string]string{transactionProbePath: path})

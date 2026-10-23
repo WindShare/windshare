@@ -14,9 +14,11 @@ import (
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/engine/internal/eventproject"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/internal/turnruntime"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 const (
@@ -47,7 +49,7 @@ type managedTask interface {
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
 	relaySetup    *relaysetup.Service
-	turn          *turn.Runtime
+	turn          *turnruntime.Runtime
 	mu            sync.Mutex
 	config        Config
 	random        *lockedReader
@@ -114,7 +116,7 @@ func New(config Config) (*Engine, error) {
 	if turnDependencies.Now == nil {
 		turnDependencies.Now = config.Now
 	}
-	turn, err := turn.New(config.TURN, turnDependencies)
+	turn, err := turnruntime.New(config.TURN, turnDependencies)
 	if err != nil {
 		_ = revisions.Close()
 		return nil, err
@@ -132,6 +134,9 @@ func New(config Config) (*Engine, error) {
 }
 
 func start[T any](engine *Engine, ctx context.Context, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
+	return startWorkflow(engine, ctx, 0, run)
+}
+func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.Workflow, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
 	if ctx == nil {
 		return nil, errors.New("task context is nil")
 	}
@@ -145,11 +150,22 @@ func start[T any](engine *Engine, ctx context.Context, run func(context.Context,
 	}
 	engine.sequence++
 	id := task.ID(fmt.Sprintf("%s:%d", engine.identity, engine.sequence))
+	var project func(task.Observation, func(task.Observation) bool) bool
+	if workflow.Valid() {
+		project = func(value task.Observation, emit func(task.Observation) bool) bool {
+			return eventproject.Workflow(workflow, value, emit)
+		}
+	}
 	current, err := task.Start(ctx, task.Config[T]{
 		ID: id, Now: engine.config.Now, Random: engine.random,
 		CleanupTimeout:      engine.config.CleanupTimeout,
 		ObservationCapacity: engine.config.ObservationCapacity,
-		Run:                 run,
+		Project:             project,
+		Run: func(ctx context.Context, control task.Control) task.Completion[T] {
+			result := run(ctx, control)
+			result.Settlement = describeSettlement(result.Settlement)
+			return result
+		},
 		Completed: func(cleanupErr error) {
 			engine.mu.Lock()
 			delete(engine.tasks, id)

@@ -425,6 +425,8 @@ try {
     Invoke-Step 'GOWORK=off go list ./... (extracted module)' { & $goExecutable list ./... }
     Invoke-Step 'core production dependency boundary (extracted module)' {
         & $goExecutable run ./scripts/ci/_coreboundary
+        if ($LASTEXITCODE -ne 0) { throw "Core dependency boundary failed" }
+        & $goExecutable run ./scripts/ci/_engineboundary
     }
     Invoke-Step 'GOWORK=off go vet ./... (extracted module)' { & $goExecutable vet ./... }
     Invoke-Step 'GOWORK=off go build ./... (extracted module)' { & $goExecutable build ./... }

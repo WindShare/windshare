@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func pendingCredential(now time.Time) Snapshot {
@@ -42,7 +42,7 @@ func TestImportDuringApprovalCannotBeOverwrittenByCheckpointsOrInstallation(t *t
 				t.Fatal(err)
 			}
 			imported := relayconfig.Config{FrontURL: "https://new-front.example",
-				Profiles:     []senderrelay.Candidate{{PublicURL: "https://only-private.example"}},
+				Profiles:     []relayprofile.Candidate{{PublicURL: "https://only-private.example"}},
 				ActiveRelays: []string{"https://only-private.example"}}
 			confirmations := 0
 			service := New(Dependencies{Store: store, Now: func() time.Time { return now },
@@ -89,7 +89,7 @@ func TestProfileCapacityIsCheckedBeforeEnrollmentAndAcknowledgement(t *testing.T
 	now := time.Unix(100, 0)
 	full := prior()
 	for i := len(full.Profiles); i < relayconfig.MaximumProfiles; i++ {
-		full.Profiles = append(full.Profiles, senderrelay.Candidate{PublicURL: fmt.Sprintf("https://relay-%d.example", i)})
+		full.Profiles = append(full.Profiles, relayprofile.Candidate{PublicURL: fmt.Sprintf("https://relay-%d.example", i)})
 	}
 	for _, claimed := range []bool{false, true} {
 		t.Run(fmt.Sprint(claimed), func(t *testing.T) {

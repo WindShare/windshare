@@ -3,10 +3,11 @@ package receive
 import (
 	"context"
 	"errors"
+	"path/filepath"
+
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"path/filepath"
 )
 
 // FilesystemOutput adapts one caller-selected container to receive authority.

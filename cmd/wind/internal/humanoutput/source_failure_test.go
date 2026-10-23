@@ -6,15 +6,16 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSourceFailuresRenderTheirSelectedPathWithoutTerminalControls(t *testing.T) {
 	const path = "selected/文件\x1b[2J\nfile.bin"
-	unexpected, _ := clievent.NewFailure(clievent.FailureUnexpected)
-	for _, code := range []clievent.FailureCode{clievent.FailureSourceMissing,
-		clievent.FailureSourceAccessDenied, clievent.FailureSourceUnsupported,
-		clievent.FailureSourceUnavailable, clievent.FailureSourceRevisionChanged} {
-		failure, err := clievent.NewSourcePathFailure(code, clievent.NewDisplayPath(path))
+	unexpected, _ := appobs.NewFailure(appobs.FailureUnexpected)
+	for _, code := range []appobs.FailureCode{appobs.FailureSourceMissing,
+		appobs.FailureSourceAccessDenied, appobs.FailureSourceUnsupported,
+		appobs.FailureSourceUnavailable, appobs.FailureSourceRevisionChanged} {
+		failure, err := appobs.NewSourcePathFailure(code, appobs.NewDisplayPath(path))
 		if err != nil {
 			t.Fatal(err)
 		}

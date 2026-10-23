@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
@@ -221,7 +222,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 	return relaysetShare{PreparedSender: sender, admitted: admitted}
 }
 
-func (share relaysetShare) waitAdmission(t *testing.T, ctx context.Context, connection *relayv2.ReceiverConnection) relaysetAdmission {
+func (share relaysetShare) waitAdmission(t *testing.T, ctx context.Context, connection relayset.ReceiverConnection) relaysetAdmission {
 	t.Helper()
 	for {
 		event := waitRelaysetEvent(t, ctx, share.admitted)
@@ -229,7 +230,7 @@ func (share relaysetShare) waitAdmission(t *testing.T, ctx context.Context, conn
 		if err != nil {
 			t.Fatal(err)
 		}
-		if endpoint.Identity != connection.Endpoint().Identity || event.Session != connection.Channel().RelaySessionID() {
+		if endpoint.Identity != connection.Endpoint().Identity || event.Session != connection.Channel().(interface{ RelaySessionID() v2.RelaySessionID }).RelaySessionID() {
 			continue
 		}
 		if event.Err != nil {
@@ -272,7 +273,7 @@ func (clock *relaysetClock) Wait(ctx context.Context, delay time.Duration) error
 	return nil
 }
 
-func requireRelaysetLive(t *testing.T, runtime *sessionruntime.ReceiverRuntime, connection *relayv2.ReceiverConnection, lane sessionruntime.LaneIdentity) {
+func requireRelaysetLive(t *testing.T, runtime *sessionruntime.ReceiverRuntime, connection relayset.ReceiverConnection, lane sessionruntime.LaneIdentity) {
 	t.Helper()
 	done, live := runtime.LaneDone(lane)
 	if !live {

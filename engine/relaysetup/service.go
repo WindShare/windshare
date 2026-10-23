@@ -5,13 +5,14 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/turn"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 type Operation string
@@ -35,7 +36,7 @@ type Store interface {
 	Update(context.Context, func(*Snapshot) error) (Snapshot, error)
 }
 type DiscoveryCache interface {
-	Save(context.Context, senderrelay.Candidate, turn.Capability, time.Time) error
+	Save(context.Context, relayprofile.Candidate, turn.Capability, time.Time) error
 }
 
 type HTTPClient interface {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -56,10 +57,10 @@ func TestCanceledIssuerImmediatelyServesNextDemandWithoutFailureObservation(t *t
 	}
 	discarded := false
 	for _, event := range events {
-		if event.Milestone == MilestoneIssuanceFailed {
+		if event.Milestone == connectionpath.MilestoneIssuanceFailed {
 			t.Fatal("cancellation reported as provider failure")
 		}
-		discarded = discarded || event.Milestone == MilestoneIssuanceDiscarded && event.Reason == "demand_superseded"
+		discarded = discarded || event.Milestone == connectionpath.MilestoneIssuanceDiscarded && event.Reason == "demand_superseded"
 	}
 	if !discarded {
 		t.Fatal("missing discarded-request diagnostic")

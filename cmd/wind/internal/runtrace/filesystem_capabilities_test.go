@@ -4,21 +4,22 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestFilesystemCapabilitiesKeepSafeOutputSeparateFromRecovery(t *testing.T) {
-	supported := clievent.FilesystemCapability{Supported: true, Reason: clievent.FilesystemCapabilityNone}
-	capabilities := clievent.FilesystemDestinationCapabilities{
-		Mode: clievent.FilesystemExecutionLiveOnly, SafePublish: supported,
-		OperationRecovery: clievent.FilesystemCapability{Reason: clievent.FilesystemCapabilityOperationRecovery},
-		RangeRecovery:     clievent.FilesystemCapability{Reason: clievent.FilesystemCapabilityRangeRecovery},
-		CrashCleanup:      clievent.FilesystemCapability{Reason: clievent.FilesystemCapabilityCrashCleanup},
+	supported := appobs.FilesystemCapability{Supported: true, Reason: appobs.FilesystemCapabilityNone}
+	capabilities := appobs.FilesystemDestinationCapabilities{
+		Mode: appobs.FilesystemExecutionLiveOnly, SafePublish: supported,
+		OperationRecovery: appobs.FilesystemCapability{Reason: appobs.FilesystemCapabilityOperationRecovery},
+		RangeRecovery:     appobs.FilesystemCapability{Reason: appobs.FilesystemCapabilityRangeRecovery},
+		CrashCleanup:      appobs.FilesystemCapability{Reason: appobs.FilesystemCapabilityCrashCleanup},
 	}
-	event, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		Operation: clievent.FilesystemRuntimeDecision, Capabilities: capabilities,
-		RuntimeComponent: clievent.FilesystemRuntimeSession,
-		RuntimeOperation: clievent.FilesystemRuntimeAdmitDestination,
-		RuntimeDecision:  clievent.FilesystemRuntimeAdmitted,
+	event, err := clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
+		Operation: appobs.FilesystemRuntimeDecision, Capabilities: capabilities,
+		RuntimeComponent: appobs.FilesystemRuntimeSession,
+		RuntimeOperation: appobs.FilesystemRuntimeAdmitDestination,
+		RuntimeDecision:  appobs.FilesystemRuntimeAdmitted,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,24 +41,24 @@ func TestFilesystemCapabilitiesKeepSafeOutputSeparateFromRecovery(t *testing.T) 
 		payload.Failure != nil || payload.Certification != nil {
 		t.Fatalf("capability degradation changed authority or became failure: %+v", payload)
 	}
-	capabilities.Mode = clievent.FilesystemExecutionResumable
-	if _, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		Operation: clievent.FilesystemRuntimeDecision, Capabilities: capabilities,
+	capabilities.Mode = appobs.FilesystemExecutionResumable
+	if _, err := clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
+		Operation: appobs.FilesystemRuntimeDecision, Capabilities: capabilities,
 	}); err == nil {
 		t.Fatal("trace accepted unproven resumability")
 	}
 	capabilities.OperationRecovery, capabilities.RangeRecovery, capabilities.CrashCleanup = supported, supported, supported
-	if _, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		Operation: clievent.FilesystemRuntimeDecision, Capabilities: capabilities,
+	if _, err := clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
+		Operation: appobs.FilesystemRuntimeDecision, Capabilities: capabilities,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	capabilities.Mode = clievent.FilesystemExecutionMode(255)
+	capabilities.Mode = appobs.FilesystemExecutionMode(255)
 	if capabilities.Valid() {
 		t.Fatal("unknown execution mode accepted")
 	}
-	capabilities.Mode = clievent.FilesystemExecutionLiveOnly
-	capabilities.SafePublish.Reason = clievent.FilesystemCapabilityReason(255)
+	capabilities.Mode = appobs.FilesystemExecutionLiveOnly
+	capabilities.SafePublish.Reason = appobs.FilesystemCapabilityReason(255)
 	if capabilities.Valid() {
 		t.Fatal("unknown capability reason accepted")
 	}

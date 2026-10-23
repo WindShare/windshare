@@ -7,16 +7,15 @@ import (
 	"math"
 	"slices"
 
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 type shareRequest struct {
 	sharing     relayconfig.Config
 	paths       []string
-	relays      []senderrelay.Candidate
+	relays      []relayprofile.Candidate
 	link        shareLinkPresentation
 	chunkSize   uint32
 	observation observationOptions
@@ -32,7 +31,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		if slices.Contains(relayURLs, value) {
 			return nil
 		}
-		if len(relayURLs) >= relayset.MaximumEndpoints {
+		if len(relayURLs) >= relayprofile.MaximumEndpoints {
 			return errors.New("too many relay endpoints")
 		}
 		relayURLs = append(relayURLs, value)

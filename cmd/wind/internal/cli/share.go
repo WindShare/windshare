@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -57,9 +58,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	reader := observationbridge.Start(current.Observations(), gate, func(readContext context.Context, value engine.Observation) {
 		gate.Commit(readContext, func() bool {
 			observeEngineTask(runtime, clievent.CommandShare, value)
-			if event, ok := value.Event.(engine.ShareObservation); ok {
-				a.observeEngineShare(observations, event)
-			}
+			a.observeEngineShare(observations, value.Event)
 			return true
 		})
 	})
@@ -71,13 +70,13 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	}
 	result, waitErr := current.Wait(context.Background())
 	completionContext, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
-	observations.reportReaderStatus(clievent.ObserverLossCommandAdapter, reader.Join(completionContext))
+	observations.reportReaderStatus(appobs.ObserverLossCommandAdapter, reader.Join(completionContext))
 	cancel()
 	for _, loss := range result.Value.ObservationLosses {
-		a.observeEngineShare(observations, engine.ShareObservation{Loss: &loss})
+		a.observeEngineShare(observations, engine.ShareLossSnapshot(loss))
 	}
 	if result.Observations.CapacityDropped > 0 {
-		runtime.ReportObserverLoss(clievent.ObserverLossCommandAdapter, clievent.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
+		runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
 	}
 	if waitErr != nil {
 		emitShareCommandFailure(runtime, ExitFailure, waitErr)
@@ -124,11 +123,7 @@ func (a *App) publishEngineShare(current *engine.ShareTask, ready engine.ShareRe
 		current.StopShare()
 		return &engine.SharePublicationError{Stage: engine.SharePublicationReadiness, Cause: err}
 	}
-	authority, err := commandprojection.RelayAuthority(ready.RelayEndpoint)
-	if err != nil {
-		current.StopShare()
-		return err
-	}
+	authority := ready.RelayAuthority
 	observations.SetRelayAuthority(authority)
 	subject, err := commandprojection.ProjectSharingSubject(ready.SelectedRootSummary)
 	if err != nil {

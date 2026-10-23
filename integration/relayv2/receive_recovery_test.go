@@ -16,10 +16,10 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -75,12 +75,12 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err := os.WriteFile(filename, payload, 0600); err != nil {
 		t.Fatal(err)
 	}
-	connections := make(chan *relayv2.ReceiverConnection, 8)
+	connections := make(chan engine.ReceiveConnection, 8)
 	clock := &recoveryClock{}
 	var dials, primaryAttempts, stoppedAttempts, lookups, creates, authorities atomic.Int32
 	application, err := engine.New(engine.Config{Receive: engine.ReceiveDependencies{
-		Recovery: relayset.ReceiverRecoveryOptions{Clock: clock, Jitter: func(d time.Duration) time.Duration { return d }},
-		ReceiverDial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+		Recovery: engine.ReceiveRecoverySettings{Clock: clock, Jitter: func(d time.Duration) time.Duration { return d }},
+		ReceiverDial: func(ctx context.Context, config engine.ReceiveDialRequest) (engine.ReceiveConnection, error) {
 			if config.RelayBaseURL == stoppedRelayURL {
 				stoppedAttempts.Add(1)
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
@@ -88,7 +88,11 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 			if primaryAttempts.Add(1) > 1 && clock.Now().Before(time.Unix(181, 0)) {
 				return nil, errors.New("injected endpoint outage")
 			}
-			connection, err := relayv2.DialReceiver(ctx, config)
+			shareID, err := v2.ShareIDFromBytes(config.ShareID)
+			if err != nil {
+				return nil, err
+			}
+			connection, err := relayset.DialReceiver(ctx, relayv2.ReceiverConfig{RelayBaseURL: config.RelayBaseURL, ShareID: shareID})
 			if err == nil {
 				dials.Add(1)
 				connections <- connection
@@ -154,9 +158,9 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	for value := range receiver.Observations() {
 		events = append(events, value.Event)
 		switch event := value.Event.(type) {
-		case engine.ReceiveRecoveryObserved:
+		case appobs.RelayRecovering:
 			trace.RequireRecord(t, "receiver_recovery_observed", testrun.OutcomeSucceeded, event)
-		case engine.ReceiveGenerationChanged:
+		case appobs.EngineTaskObserved:
 			trace.RequireRecord(t, "receiver_generation_changed", testrun.OutcomeSucceeded, event)
 		}
 	}
@@ -164,14 +168,12 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err != nil || result.Outcome != engine.OutcomeSuccess {
 		for _, event := range events {
 			switch value := event.(type) {
-			case engine.ReceiveRecoveryObserved, engine.ReceiveGenerationChanged, engine.ReceiveAdmissionObserved:
+			case appobs.RelayRecovering, appobs.EngineTaskObserved:
 				t.Logf("%T: %+v", value, value)
-			case engine.ReceiveProtocolObserved:
-				t.Logf("protocol at=%s %T: %+v", value.Value.ObservedAt().Format(time.RFC3339Nano), value.Value, value.Value)
-			case engine.ReceiveTransferObserved:
-				trace := value.Value
-				t.Logf("transfer session=%x job=%x stage=%v verified=%d published=%d",
-					trace.ProtocolSessionID, trace.TransferJobID, trace.Stage, trace.Progress.VerifiedBytes, trace.Progress.PublishedBytes)
+			case appobs.ProtocolObservationObserved:
+				t.Logf("protocol at=%s %T: %+v", value.ObservedAt().Format(time.RFC3339Nano), value.Fact(), value.Fact())
+			case appobs.TransferLifecycleObserved:
+				t.Logf("transfer session=%x job=%x stage=%v verified=%d published=%d", value.ProtocolSessionID().Bytes(), value.TransferJobID().Bytes(), value.Stage(), value.Progress().VerifiedBytes(), value.Progress().PublishedBytes())
 			}
 		}
 		t.Fatalf("outcome=%v failure=%v cause=%v test_context=%v progress=%+v wait=%v",
@@ -188,16 +190,16 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 		t.Fatalf("output bytes=%d err=%v", len(actual), err)
 	}
 	waited, restored := false, false
-	jobs := map[transfer.TransferJobID]bool{}
-	sessions := map[protocolsession.ProtocolSessionID]bool{}
+	jobs := map[appobs.TransferJobID]bool{}
+	sessions := map[appobs.ProtocolSessionID]bool{}
 	for _, event := range events {
 		switch value := event.(type) {
-		case engine.ReceiveRecoveryObserved:
-			waited = waited || value.Value.Phase == relayset.ReceiverRecoveryWaiting
-			restored = restored || (value.Value.Phase == relayset.ReceiverRecoveryConnected && value.Value.Attempt > 1)
-		case engine.ReceiveTransferObserved:
-			jobs[value.Value.TransferJobID] = true
-			sessions[value.Value.ProtocolSessionID] = true
+		case appobs.RelayRecovering:
+			waited = waited || value.State() == appobs.RelayRecoveryWaiting
+			restored = restored || (value.State() == appobs.RelayRecoverySucceeded && value.Attempt() > 1)
+		case appobs.TransferLifecycleObserved:
+			jobs[value.TransferJobID()] = true
+			sessions[value.ProtocolSessionID()] = true
 		}
 	}
 	if !waited || !restored || len(jobs) != 1 || len(sessions) != 2 {

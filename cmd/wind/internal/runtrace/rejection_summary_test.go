@@ -8,16 +8,17 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestObserverRejectionAndPeerFailureSummarySurviveEncoding(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(bytes.Repeat([]byte{1}, clievent.IdentityBytes))
-	operation, _ := clievent.NewProtocolOperationID(bytes.Repeat([]byte{2}, clievent.IdentityBytes))
-	revision, _ := clievent.NewSenderRevisionID([]byte("revision"))
-	loss, err := clievent.NewObserverLossObserved(clievent.ObserverLossSpec{
-		Command: clievent.CommandShare, Category: clievent.ObserverLossProtocolOperation,
-		Reason: clievent.ObserverLossInvalidStageFields, Count: 17,
-		Rejection: clievent.ObservationRejection{
+	session, _ := appobs.NewProtocolSessionID(bytes.Repeat([]byte{1}, appobs.IdentityBytes))
+	operation, _ := appobs.NewProtocolOperationID(bytes.Repeat([]byte{2}, appobs.IdentityBytes))
+	revision, _ := appobs.NewSenderRevisionID([]byte("revision"))
+	loss, err := clievent.NewObserverLossObserved(appobs.ObserverLossSpec{
+		Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossProtocolOperation,
+		Reason: appobs.ObserverLossInvalidStageFields, Count: 17,
+		Rejection: appobs.ObservationRejection{
 			Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received", Field: "send", Rule: "settlement_requires_presence",
 			Session: session.Hex(), Operation: operation.Hex(), Revision: revision.Hex(),
 		},
@@ -44,16 +45,16 @@ func TestObserverRejectionAndPeerFailureSummarySurviveEncoding(t *testing.T) {
 		}
 	}
 
-	path, _ := clievent.NewPeerPathID(bytes.Repeat([]byte{3}, clievent.IdentityBytes))
-	attempt, _ := clievent.NewPeerAttemptID(bytes.Repeat([]byte{4}, clievent.IdentityBytes))
-	failure, _ := clievent.NewFailure(clievent.FailurePeerAdmission)
-	peer, err := clievent.NewPeerAttemptObserved(clievent.PeerAttemptSpec{
-		Command: clievent.CommandShare, Session: session, PeerPath: path, Attempt: attempt, Sequence: 8,
-		Stage: clievent.PeerAttemptFailed, FailedAtStage: clievent.PeerLaneHelloAuthenticated,
-		FailureScope: clievent.PeerFailureAttempt, Failure: failure,
-		FailureSummary: clievent.PeerAttemptFailureSummary{
-			LastCompletedStage: clievent.PeerAdmissionDeadlineArmed, StageElapsedMillis: 18716,
-			Initiator: clievent.PeerCloseRemote, Cause: clievent.PeerTerminationRemoteClosed,
+	path, _ := appobs.NewPeerPathID(bytes.Repeat([]byte{3}, appobs.IdentityBytes))
+	attempt, _ := appobs.NewPeerAttemptID(bytes.Repeat([]byte{4}, appobs.IdentityBytes))
+	failure, _ := appobs.NewFailure(appobs.FailurePeerAdmission)
+	peer, err := clievent.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+		Workflow: appobs.WorkflowShare, Session: session, PeerPath: path, Attempt: attempt, Sequence: 8,
+		Stage: appobs.PeerAttemptFailed, FailedAtStage: appobs.PeerLaneHelloAuthenticated,
+		FailureScope: appobs.PeerFailureAttempt, Failure: failure,
+		FailureSummary: appobs.PeerAttemptFailureSummary{
+			LastCompletedStage: appobs.PeerAdmissionDeadlineArmed, StageElapsedMillis: 18716,
+			Initiator: appobs.PeerCloseRemote, Cause: appobs.PeerTerminationRemoteClosed,
 		},
 	})
 	if err != nil {

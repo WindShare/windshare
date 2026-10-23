@@ -45,7 +45,7 @@ func TestReceiverInitialStartingUsesBoundedClockAndAllFailuresSettle(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := recovery.Join(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability}, Dial: func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	set, err := recovery.Join(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability}, Dial: func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		if calls.Add(1) <= 2 {
 			return nil, &relayv2.RelayError{Code: v2.ErrorStarting}
 		}
@@ -70,7 +70,7 @@ func TestReceiverCancellationJoinsPendingDial(t *testing.T) {
 	raw := make([]byte, v2.ShareIDBytes)
 	raw[0] = 1
 	entered := make(chan struct{})
-	set, err := NewReceiver(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: link.Link{ShareID: base64.RawURLEncoding.EncodeToString(raw), Relays: []string{"one"}}}, Dial: func(ctx context.Context, _ relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	set, err := NewReceiver(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: link.Link{ShareID: base64.RawURLEncoding.EncodeToString(raw), Relays: []string{"one"}}}, Dial: func(ctx context.Context, _ relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, ctx.Err()

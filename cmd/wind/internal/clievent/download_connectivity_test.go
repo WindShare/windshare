@@ -1,10 +1,11 @@
 package clievent
 
 import (
-	"github.com/windshare/windshare/core/downloadmetrics"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/downloadmetrics"
 )
 
 func TestDownloadConnectivitySealsSnapshotValues(t *testing.T) {

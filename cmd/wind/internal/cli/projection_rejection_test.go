@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func rejectionRuntime() (*commandRuntime, *fakeCommandClock) {
@@ -20,14 +21,14 @@ func rejectionRuntime() (*commandRuntime, *fakeCommandClock) {
 
 func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T) {
 	runtime, clock := rejectionRuntime()
-	input := clievent.CaptureObservationRejection(clievent.ObservationRejection{
+	input := appobs.CaptureObservationRejection(appobs.ObservationRejection{
 		Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation",
 		Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes",
 		Session: "01000000000000000000000000000000", Operation: "00000000000000000000000000000000",
-	}, clievent.RejectedEnum("request_kind", 3))
+	}, appobs.RejectedEnum("request_kind", 3))
 	report := func() {
 		t.Helper()
-		if !runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossInvalidIdentity, input) {
+		if !runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossInvalidIdentity, input) {
 			t.Fatal("rejection not accounted")
 		}
 	}
@@ -49,7 +50,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	for i := range 100 {
 		input.Session = fmt.Sprintf("session-%d", i)
 		input.ResponseSequence = fmt.Sprintf("%d", i)
-		input = clievent.CaptureObservationRejection(input, clievent.RejectedEnum("request_kind", uint64(i)))
+		input = appobs.CaptureObservationRejection(input, appobs.RejectedEnum("request_kind", uint64(i)))
 		report()
 		if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 1 {
 			t.Fatalf("loss = %+v", loss)
@@ -69,7 +70,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	}
 	report()
 	report()
-	terminal := newRuntimeTestCommandFailure(t, clievent.CommandShare, clievent.FailureCanceled)
+	terminal := newRuntimeTestCommandFailure(t, clievent.CommandShare, appobs.FailureCanceled)
 	if !runtime.Finalize(terminal) {
 		t.Fatal("finalize failed")
 	}
@@ -86,8 +87,8 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 	runtime, _ := rejectionRuntime()
 	const count = 100
 	for i := range count {
-		sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: fmt.Sprintf("stage_%d", i), Field: "field", Rule: "rule"}
-		if !runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample) {
+		sample := appobs.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: fmt.Sprintf("stage_%d", i), Field: "field", Rule: "rule"}
+		if !runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossEventContract, sample) {
 			t.Fatal("rejection not accounted")
 		}
 	}
@@ -112,9 +113,9 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 func TestProjectionRejectionDisabledTraceRetainsNoSamples(t *testing.T) {
 	runtime, _ := rejectionRuntime()
 	runtime.trace = nil
-	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
+	sample := appobs.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
 	for range 100 {
-		runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample)
+		runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossEventContract, sample)
 	}
 	if len(runtime.projectionRejections) != 0 {
 		t.Fatal("disabled trace retained rejection samples")
@@ -123,29 +124,29 @@ func TestProjectionRejectionDisabledTraceRetainsNoSamples(t *testing.T) {
 		t.Fatalf("loss=%+v", loss)
 	}
 	runtime.closed = true
-	if runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample) {
+	if runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossEventContract, sample) {
 		t.Fatal("closed runtime accepted a rejection")
 	}
 }
 
 func BenchmarkObservationRejectionRepeated(b *testing.B) {
 	runtime, _ := rejectionRuntime()
-	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
-	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossInvalidIdentity, sample)
+	sample := appobs.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
+	runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossInvalidIdentity, sample)
 	b.ReportAllocs()
 	for b.Loop() {
-		runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossInvalidIdentity, sample)
+		runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossInvalidIdentity, sample)
 	}
 }
 
 func TestObservationRejectionConcurrentAccounting(t *testing.T) {
 	runtime, _ := rejectionRuntime()
-	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
+	sample := appobs.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
 	var workers sync.WaitGroup
 	for range 8 {
 		workers.Go(func() {
 			for range 32 {
-				runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample)
+				runtime.ReportObservationRejection(appobs.ObserverLossProtocolOperation, appobs.ObserverLossEventContract, sample)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 // RunTraceRecordV4 is the stable NDJSON envelope. Event-specific data is
@@ -34,7 +35,7 @@ func baseRecordV4(
 	runID runIdentity,
 	metadata entryMetadata,
 	command clievent.Command,
-	level clievent.Level,
+	level appobs.Level,
 	event string,
 ) (RunTraceRecordV4, error) {
 	commandName, commandOK := command.Name()
@@ -62,9 +63,9 @@ func summaryV4(
 	metadata entryMetadata,
 	status Status,
 ) RunTraceRecordV4 {
-	level := clievent.LevelInfo
+	level := appobs.LevelInfo
 	if !status.Complete {
-		level = clievent.LevelWarning
+		level = appobs.LevelWarning
 	}
 	record, _ := baseRecordV4(runID, metadata, command, level, "trace_summary")
 	record.Payload = traceSummaryPayloadV4{
@@ -81,15 +82,15 @@ func summaryV4(
 	return record
 }
 
-func runTraceLevelName(level clievent.Level) (string, bool) {
+func runTraceLevelName(level appobs.Level) (string, bool) {
 	switch level {
-	case clievent.LevelDebug:
+	case appobs.LevelDebug:
 		return "debug", true
-	case clievent.LevelInfo:
+	case appobs.LevelInfo:
 		return "info", true
-	case clievent.LevelWarning:
+	case appobs.LevelWarning:
 		return "warn", true
-	case clievent.LevelError:
+	case appobs.LevelError:
 		return "error", true
 	default:
 		return "", false

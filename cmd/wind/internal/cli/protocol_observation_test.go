@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +10,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func protocolAssemblyFact(role protocolsession.Role) sessionruntime.ProtocolObservation {
@@ -56,18 +57,18 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 				observations := newShareProjection(runtime)
 				role = protocolsession.RoleSender
 				project = func(fact sessionruntime.ProtocolObservation) {
-					observations.protocolObservationContext(context.Background(), nil, fact)
+					projectProtocolFixture(t, app, runtime, command, fact)
 				}
 				loss = func() {
-					observations.reportCumulativeLoss(observerLossProtocolQueue, clievent.ObserverLossProtocolOperation, clievent.ObserverLossStreamCapacity, 3)
+					observations.reportCumulativeLoss(appobs.LossProtocolQueue, appobs.ObserverLossProtocolOperation, appobs.ObserverLossStreamCapacity, 3)
 				}
 			} else {
 				observations := newGetObservation(runtime)
 				project = func(fact sessionruntime.ProtocolObservation) {
-					observations.protocolObservationContext(context.Background(), nil, fact)
+					projectProtocolFixture(t, app, runtime, command, fact)
 				}
 				loss = func() {
-					observations.reportCumulativeLoss(observerLossProtocolQueue, clievent.ObserverLossProtocolOperation, clievent.ObserverLossStreamCapacity, 3)
+					observations.reportCumulativeLoss(appobs.LossProtocolQueue, appobs.ObserverLossProtocolOperation, appobs.ObserverLossStreamCapacity, 3)
 				}
 			}
 			fact := protocolAssemblyFact(role)
@@ -85,7 +86,7 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 						t.Fatalf("projection changed source context: %+v", event)
 					}
 				case clievent.ObserverLossObserved:
-					if event.Category() == clievent.ObserverLossProtocolOperation && event.Reason() == clievent.ObserverLossStreamCapacity {
+					if event.Category() == appobs.ObserverLossProtocolOperation && event.Reason() == appobs.ObserverLossStreamCapacity {
 						lost += event.Count()
 					}
 				}
@@ -112,7 +113,6 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	observations := newGetObservation(runtime)
 	for index, outcome := range []struct {
 		stage sessionruntime.ProtocolOperationStage
 		cause sessionruntime.ProtocolOperationCause
@@ -127,18 +127,18 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 				OperationID: protocolsession.OperationID{byte(index + 2)}, RequestKind: protocolsession.MessageRequestBlocks,
 			},
 		}, sessionruntime.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
-		observations.protocolObservationContext(context.Background(), nil, fact)
+		projectProtocolFixture(t, app, runtime, clievent.CommandGet, fact)
 	}
 	runtime.Close()
-	var causes []clievent.ProtocolOperationCause
+	var causes []appobs.ProtocolOperationCause
 	for _, event := range recorder.recorded() {
 		if event, ok := event.(clievent.ProtocolObservationObserved); ok {
-			if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok {
+			if fact, ok := event.Fact().(appobs.ProtocolOperationFact); ok {
 				causes = append(causes, fact.Cause())
 			}
 		}
 	}
-	if len(causes) != 2 || causes[0] != clievent.ProtocolOperationCauseSuperseded || causes[1] != clievent.ProtocolOperationCauseProtocolFailure {
+	if len(causes) != 2 || causes[0] != appobs.ProtocolOperationCauseSuperseded || causes[1] != appobs.ProtocolOperationCauseProtocolFailure {
 		t.Fatalf("trace lost terminal reasons: %v", causes)
 	}
 	if output := stderr.String(); strings.Count(output, "Protocol operation request blocks failed") != 1 ||
@@ -147,18 +147,26 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 	}
 }
 
-func TestProtocolAssemblyReportsRejectedFactsAndSkipsRevokedProjection(t *testing.T) {
+func TestProtocolAssemblyReportsRejectedFacts(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
-	observations := newShareProjection(emitter)
-	observations.protocolObservationContext(context.Background(), nil, sessionruntime.ProtocolOperationObservation{})
-	if emitter.lifecycleLoss != 1 {
-		t.Fatalf("invalid source fact loss=%d", emitter.lifecycleLoss)
+	loss, err := appobs.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossProtocolOperation, Reason: appobs.ObserverLossEventContract, Count: 1})
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	observations.protocolObservationContext(ctx, nil, sessionruntime.ProtocolOperationObservation{})
-	(getObservation{}).protocolObservationContext(ctx, nil, sessionruntime.ProtocolOperationObservation{})
+	(&App{}).observeEngineShare(newShareProjection(emitter), loss)
 	if emitter.lifecycleLoss != 1 {
-		t.Fatal("revoked reader attempted another projection")
+		t.Fatalf("rejected facts=%d", emitter.lifecycleLoss)
+	}
+}
+func projectProtocolFixture(t *testing.T, app *App, runtime *commandRuntime, command clievent.Command, fact sessionruntime.ProtocolObservation) {
+	t.Helper()
+	event, err := engine.DescribeProtocolObservation(appobs.Workflow(command), fact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command == clievent.CommandShare {
+		app.observeEngineShare(newShareProjection(runtime), event)
+	} else {
+		app.projectReceiveObservation(newGetObservation(runtime), event)
 	}
 }

@@ -5,17 +5,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestCapacityWaitOverridesOrdinaryProgressOnlyWhileVisible(t *testing.T) {
-	spec := clievent.ProgressSpec{
+	spec := appobs.ProgressSpec{
 		DiscoveredFiles: 2, DiscoveredBytes: 100,
 		PublishedFiles: 1, PublishedBytes: 20,
 		VerifiedBytes: 40, NewlyVerifiedBytes: 40,
-		FileOutcomes:          clievent.FileOutcomes{DownloadedFiles: 1},
+		FileOutcomes:          appobs.FileOutcomes{DownloadedFiles: 1},
 		CapacityActiveWaiters: 1, CapacityAccumulatedWait: time.Second, CapacityWaitAttempts: 2,
-		Discovery: clievent.DiscoveryComplete, CountersExact: true,
+		Discovery: appobs.DiscoveryComplete, CountersExact: true,
 	}
 	metrics := ProgressMetrics{RateBytesPerSecond: 10, RateValid: true, RateStable: true}
 
@@ -44,12 +44,12 @@ func TestCapacityWaitOverridesOrdinaryProgressOnlyWhileVisible(t *testing.T) {
 }
 
 func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *testing.T) {
-	spec := clievent.ProgressSpec{
+	spec := appobs.ProgressSpec{
 		DiscoveredFiles: 2, DiscoveredBytes: 100,
 		PublishedFiles: 1, PublishedBytes: 60, PreviouslyPublishedBytes: 60,
 		VerifiedBytes: 20, NewlyVerifiedBytes: 20,
-		FileOutcomes: clievent.FileOutcomes{PreviouslyPublishedFiles: 1},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{PreviouslyPublishedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	}
 	text := lineText(FormatProgress(mustSnapshot(t, spec), ProgressMetrics{
 		RateBytesPerSecond: 10, RateValid: true, RateStable: true,
@@ -70,10 +70,10 @@ func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *t
 
 func TestProgressTruthEligibility(t *testing.T) {
 	t.Parallel()
-	open := mustSnapshot(t, clievent.ProgressSpec{
+	open := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 14, DiscoveredBytes: 8_200_000,
 		VerifiedBytes: 2_000_000, NewlyVerifiedBytes: 2_000_000,
-		Discovery: clievent.DiscoveryOpen, CountersExact: true,
+		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	})
 	text := lineText(FormatProgress(open, ProgressMetrics{
 		RateBytesPerSecond: 2_400_000, RateValid: true, RateStable: true,
@@ -87,12 +87,12 @@ func TestProgressTruthEligibility(t *testing.T) {
 		t.Errorf("open discovery exposed deterministic progress: %q", text)
 	}
 
-	complete := mustSnapshot(t, clievent.ProgressSpec{
+	complete := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 34, DiscoveredBytes: 142_500_000,
 		PublishedFiles: 27, PublishedBytes: 111_200_000,
 		VerifiedBytes: 111_200_000, NewlyVerifiedBytes: 30_000_000,
-		FileOutcomes: clievent.FileOutcomes{DownloadedFiles: 27},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 27},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	text = lineText(FormatProgress(complete, ProgressMetrics{
 		RateBytesPerSecond: 14_800_000, RateValid: true, RateStable: true,
@@ -103,12 +103,12 @@ func TestProgressTruthEligibility(t *testing.T) {
 		}
 	}
 
-	blocked := mustSnapshot(t, clievent.ProgressSpec{
+	blocked := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 34, DiscoveredBytes: 142_500_000,
 		PublishedFiles: 27, PublishedBytes: 111_200_000,
 		VerifiedBytes: 111_200_000, NewlyVerifiedBytes: 30_000_000,
-		FileOutcomes: clievent.FileOutcomes{DownloadedFiles: 27, ItemBlockedFiles: 1},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 27, ItemBlockedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	text = lineText(FormatProgress(blocked, ProgressMetrics{
 		RateBytesPerSecond: 14_800_000, RateValid: true, RateStable: true,
@@ -120,12 +120,12 @@ func TestProgressTruthEligibility(t *testing.T) {
 
 func TestProgressFinalizingAndInexactSemantics(t *testing.T) {
 	t.Parallel()
-	finalizing := mustSnapshot(t, clievent.ProgressSpec{
+	finalizing := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 2, DiscoveredBytes: 10_000,
 		PublishedFiles: 1, PublishedBytes: 6_000,
 		VerifiedBytes: 10_000, NewlyVerifiedBytes: 10_000,
-		FileOutcomes: clievent.FileOutcomes{DownloadedFiles: 1},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	text := lineText(FormatProgress(finalizing, ProgressMetrics{
 		RateBytesPerSecond: 1_000, RateValid: true, RateStable: true,
@@ -134,10 +134,10 @@ func TestProgressFinalizingAndInexactSemantics(t *testing.T) {
 		t.Fatalf("finalizing progress = %q", text)
 	}
 
-	inexact := mustSnapshot(t, clievent.ProgressSpec{
+	inexact := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 5, DiscoveredBytes: 10_000, PublishedFiles: 2,
 		PublishedBytes: 4_000, VerifiedBytes: 4_000, NewlyVerifiedBytes: 4_000,
-		Discovery: clievent.DiscoveryComplete, CountersExact: false,
+		Discovery: appobs.DiscoveryComplete, CountersExact: false,
 	})
 	text = lineText(FormatProgress(inexact, ProgressMetrics{
 		RateBytesPerSecond: 1_000, RateValid: true, RateStable: true,
@@ -159,7 +159,7 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 		name                 string
 		files                uint64
 		published            uint64
-		outcomes             clievent.FileOutcomes
+		outcomes             appobs.FileOutcomes
 		successfulSettlement bool
 		wantPhase            string
 		wantPrimary          string
@@ -167,25 +167,25 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 		{
 			name:  "one of two terminal outcomes",
 			files: 2, published: 1,
-			outcomes:  clievent.FileOutcomes{DownloadedFiles: 1},
+			outcomes:  appobs.FileOutcomes{DownloadedFiles: 1},
 			wantPhase: "50%", wantPrimary: "1/2 files settled",
 		},
 		{
 			name:  "all outcomes before settlement",
 			files: 2, published: 2,
-			outcomes:  clievent.FileOutcomes{DownloadedFiles: 2},
+			outcomes:  appobs.FileOutcomes{DownloadedFiles: 2},
 			wantPhase: "99%", wantPrimary: "2/2 files settled",
 		},
 		{
 			name:  "all outcomes after successful settlement",
 			files: 2, published: 2,
-			outcomes: clievent.FileOutcomes{DownloadedFiles: 2}, successfulSettlement: true,
+			outcomes: appobs.FileOutcomes{DownloadedFiles: 2}, successfulSettlement: true,
 			wantPhase: "100%", wantPrimary: "2/2 files settled",
 		},
 		{
 			name:  "non-success outcome cannot close progress",
 			files: 2, published: 1,
-			outcomes: clievent.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1}, successfulSettlement: true,
+			outcomes: appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1}, successfulSettlement: true,
 			wantPhase: "99%", wantPrimary: "2/2 files settled",
 		},
 		{
@@ -199,11 +199,11 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := mustSnapshot(t, clievent.ProgressSpec{
+			snapshot := mustSnapshot(t, appobs.ProgressSpec{
 				DiscoveredFiles: test.files,
 				PublishedFiles:  test.published,
 				FileOutcomes:    test.outcomes,
-				Discovery:       clievent.DiscoveryComplete,
+				Discovery:       appobs.DiscoveryComplete,
 				CountersExact:   true,
 			})
 			components := progressView(snapshot, ProgressMetrics{SuccessfulSettlement: test.successfulSettlement}, false)
@@ -219,12 +219,12 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 
 func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, clievent.ProgressSpec{
+	snapshot := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 100, DiscoveredBytes: 100_000_000,
 		PublishedFiles: 50, PublishedBytes: 50_000_000,
 		VerifiedBytes: 50_000_000, NewlyVerifiedBytes: 50_000_000,
-		FileOutcomes: clievent.FileOutcomes{DownloadedFiles: 50},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 50},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	metrics := ProgressMetrics{RateBytesPerSecond: 10_000_000, RateValid: true, RateStable: true}
 	components := progressView(snapshot, metrics, false)
@@ -264,7 +264,7 @@ func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 
 func TestProgressSymbolsFallbackToASCII(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, clievent.ProgressSpec{Discovery: clievent.DiscoveryOpen, CountersExact: true})
+	snapshot := mustSnapshot(t, appobs.ProgressSpec{Discovery: appobs.DiscoveryOpen, CountersExact: true})
 	ascii := lineText(FormatProgress(snapshot, ProgressMetrics{}, ProgressLayout{Unicode: false}))
 	unicode := lineText(FormatProgress(snapshot, ProgressMetrics{}, ProgressLayout{Unicode: true}))
 	if !strings.HasPrefix(ascii, "? ") || !strings.HasPrefix(unicode, "🔍 ") {
@@ -277,12 +277,12 @@ func TestProgressSymbolsFallbackToASCII(t *testing.T) {
 
 func TestProgressWidthUsesInjectedDisplayCells(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, clievent.ProgressSpec{
+	snapshot := mustSnapshot(t, appobs.ProgressSpec{
 		DiscoveredFiles: 2, DiscoveredBytes: 10_000,
 		PublishedFiles: 1, PublishedBytes: 5_000,
 		VerifiedBytes: 5_000, NewlyVerifiedBytes: 5_000,
-		FileOutcomes: clievent.FileOutcomes{DownloadedFiles: 1},
-		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
 	})
 	metrics := ProgressMetrics{RateBytesPerSecond: 1_000, RateValid: true, RateStable: true}
 	line := FormatProgress(snapshot, metrics, ProgressLayout{

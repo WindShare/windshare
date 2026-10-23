@@ -5,41 +5,35 @@ import (
 	"io"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/share"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turn"
-	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type PreparedShare = share.Prepared
 type ShareSessionFactory = share.SessionFactory
 type ShareRelays = share.Relays
-type ShareRelay = share.Relay
-type SenderPeerConfig = nativeconnectivity.SenderConfig
+type SharePeers = share.Peers
 
 // Dependencies expose construction seams; task control and aggregate budgets
 // are assigned by the Engine so an injected constructor cannot replace another
 // task's ownership.
 type ShareDependencies struct {
 	Prepare     func(context.Context, liveshare.SenderConfig) (PreparedShare, error)
-	Relays      func(context.Context, []string, relayset.SenderFactory) (ShareRelays, error)
-	Relay       func(senderrelay.Config) (ShareRelay, error)
-	Peers       func(SenderPeerConfig) (*v2peer.Factory, error)
+	Relays      func(context.Context, []relayprofile.Candidate) (ShareRelays, error)
+	Peers       func() (SharePeers, error)
 	PollNetwork func(context.Context, func())
 }
 
 type ReceiveDependencies struct {
 	Clock        ReceiveClock
-	ReceiverDial func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
-	Recovery     relayset.ReceiverRecoveryOptions
+	ReceiverDial func(context.Context, ReceiveDialRequest) (ReceiveConnection, error)
+	Recovery     ReceiveRecoverySettings
 	PeerFactory  func() (ReceivePeerStarter, error)
 }
 

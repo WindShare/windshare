@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var errInjected = errors.New("injected failure")
@@ -139,7 +140,7 @@ func TestRecorderAssignsEntryMetadataUnderConcurrency(t *testing.T) {
 	file := &memoryTraceFile{}
 	ticker := newManualTicker()
 	recorder := openTestRecorder(t, clievent.CommandShare, Config{LifecycleCapacity: eventCount + 1}, clock, file, ticker)
-	failure := mustValue(clievent.NewFailure(clievent.FailureUnexpected))
+	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
 	event := mustValue(clievent.NewWarning(clievent.CommandShare, failure))
 
 	var wait sync.WaitGroup
@@ -190,7 +191,7 @@ func TestRecorderLifecycleQueueIsBoundedAndIndependentFromProgress(t *testing.T)
 	}
 	ticker := newManualTicker()
 	recorder := openTestRecorder(t, clievent.CommandGet, Config{LifecycleCapacity: 1}, fixedClock(), file, ticker)
-	failure := mustValue(clievent.NewFailure(clievent.FailureUnexpected))
+	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
 	warning := mustValue(clievent.NewWarning(clievent.CommandGet, failure))
 	if !recorder.Record(warning) {
 		t.Fatal("first lifecycle event was not accepted")
@@ -203,10 +204,10 @@ func TestRecorderLifecycleQueueIsBoundedAndIndependentFromProgress(t *testing.T)
 		t.Fatal("full lifecycle queue unexpectedly accepted another event")
 	}
 
-	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0x61)))
-	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0x71)))
-	progress := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
-		Discovery:     clievent.DiscoveryOpen,
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0x61)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0x71)))
+	progress := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		Discovery:     appobs.DiscoveryOpen,
 		CountersExact: true,
 	}))
 	progressEvent := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, progress))
@@ -229,15 +230,15 @@ func TestRecorderCoalescesProgressWithoutMakingTraceIncomplete(t *testing.T) {
 	file := &memoryTraceFile{}
 	ticker := newManualTicker()
 	recorder := openTestRecorder(t, clievent.CommandGet, Config{LifecycleCapacity: 1}, fixedClock(), file, ticker)
-	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0x81)))
-	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0x91)))
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0x81)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0x91)))
 
 	for _, verified := range []uint64{10, 20, 30} {
-		snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
+		snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
 			DiscoveredBytes:    30,
 			VerifiedBytes:      verified,
 			NewlyVerifiedBytes: verified,
-			Discovery:          clievent.DiscoveryOpen,
+			Discovery:          appobs.DiscoveryOpen,
 			CountersExact:      true,
 		}))
 		event := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
@@ -258,13 +259,13 @@ func TestRecorderCoalescesProgressWithoutMakingTraceIncomplete(t *testing.T) {
 func TestRecorderNeverWritesSampledProgressAfterNewerLifecycle(t *testing.T) {
 	file := &memoryTraceFile{}
 	recorder := openTestRecorder(t, clievent.CommandGet, Config{}, fixedClock(), file, newManualTicker())
-	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0xc1)))
-	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0xc2)))
-	snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
-		Discovery: clievent.DiscoveryOpen, CountersExact: true,
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0xc1)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0xc2)))
+	snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	}))
 	progress := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
-	failure := mustValue(clievent.NewFailure(clievent.FailureUnexpected))
+	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
 	warning := mustValue(clievent.NewWarning(clievent.CommandGet, failure))
 	if !recorder.Record(progress) || !recorder.Record(warning) {
 		t.Fatal("ordered events were not retained")
@@ -285,14 +286,14 @@ func TestRecorderSamplesProgressOnlyOnInjectedSchedule(t *testing.T) {
 	file := &memoryTraceFile{writeObserved: make(chan struct{}, 2)}
 	ticker := newManualTicker()
 	recorder := openTestRecorder(t, clievent.CommandGet, Config{}, fixedClock(), file, ticker)
-	receiveOperation := mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0xa2)))
-	transferJob := mustValue(clievent.NewTransferJobID(testIdentity(t, 0xb3)))
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0xa2)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0xb3)))
 	recordProgress := func(verified uint64) {
-		snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
+		snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
 			DiscoveredBytes:    20,
 			VerifiedBytes:      verified,
 			NewlyVerifiedBytes: verified,
-			Discovery:          clievent.DiscoveryOpen,
+			Discovery:          appobs.DiscoveryOpen,
 			CountersExact:      true,
 		}))
 		if !recorder.Record(mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))) {
@@ -492,7 +493,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 	t.Run("cross-command context", func(t *testing.T) {
 		file := &memoryTraceFile{}
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
-		contentPath := mustValue(clievent.NewContentPathSelected(clievent.ContentPathDirect))
+		contentPath := mustValue(clievent.NewContentPathSelected(appobs.ContentPathDirect))
 		if recorder.Record(contentPath) {
 			t.Fatal("cross-command event unexpectedly accepted")
 		}
@@ -579,7 +580,7 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 		t.Fatalf("open failure = %v", err)
 	}
 	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
-		Random: bytes.NewReader(make([]byte, clievent.IdentityBytes)),
+		Random: bytes.NewReader(make([]byte, appobs.IdentityBytes)),
 	}); !errors.Is(err, ErrRunIDUnavailable) {
 		t.Fatalf("zero run ID error = %v", err)
 	}
@@ -591,7 +592,7 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 	invalidTickerFile := &memoryTraceFile{}
 	openCalled := false
 	if _, err := OpenWithDependencies(exactTarget, clievent.CommandShare, Config{}, Dependencies{
-		Random:    bytes.NewReader(bytes.Repeat([]byte{1}, clievent.IdentityBytes)),
+		Random:    bytes.NewReader(bytes.Repeat([]byte{1}, appobs.IdentityBytes)),
 		OpenFile:  func(string) (TraceFile, error) { openCalled = true; return invalidTickerFile, nil },
 		NewTicker: func(time.Duration) Ticker { return nil },
 	}); !errors.Is(err, ErrInvalidConfig) {
@@ -696,7 +697,7 @@ func openTestRecorder(
 	t.Helper()
 	recorder, err := OpenWithDependencies(mustExactTarget(t, "trace.ndjson"), command, config, Dependencies{
 		Clock:     clock,
-		Random:    bytes.NewReader(bytes.Repeat([]byte{0x5a}, clievent.IdentityBytes)),
+		Random:    bytes.NewReader(bytes.Repeat([]byte{0x5a}, appobs.IdentityBytes)),
 		OpenFile:  func(string) (TraceFile, error) { return file, nil },
 		NewTicker: func(time.Duration) Ticker { return ticker },
 	})

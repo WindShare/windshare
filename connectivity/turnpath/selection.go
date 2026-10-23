@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
+	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
@@ -213,5 +214,5 @@ func (s *Sender) selectionEvent(service *service, path *delegation, reason strin
 		"path_id", fmt.Sprintf("%x", path.grant.PathID), "profile", path.grant.Profile, "reason", reason,
 		"previous_transport", previous, "candidate_transport", path.transport, "previous_bytes_per_second", previousRate,
 		"candidate_bytes_per_second", candidateRate, "network_generation", s.networkGeneration)
-	s.observe(path, MilestoneTransportSelection, reason)
+	s.observe(path, connectionpath.MilestoneTransportSelection, reason)
 }

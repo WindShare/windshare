@@ -2,7 +2,6 @@ package humanoutput
 
 import (
 	"errors"
-	"github.com/windshare/windshare/core/diagnosticerror"
 	"io"
 	"strings"
 	"sync"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	"github.com/windshare/windshare/core/diagnosticerror"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type visibilityExpectation struct {
@@ -73,24 +74,24 @@ func TestVerboseProtocolFailureNamesWaitLaneAndCause(t *testing.T) {
 }
 
 func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(mustID(t, 5))
-	operation, _ := clievent.NewProtocolOperationID(mustID(t, 6))
+	session, _ := appobs.NewProtocolSessionID(mustID(t, 5))
+	operation, _ := appobs.NewProtocolOperationID(mustID(t, 6))
 	for _, testCase := range []struct {
 		name  string
-		stage clievent.ProtocolOperationStage
-		cause clievent.ProtocolOperationCause
+		stage appobs.ProtocolOperationStage
+		cause appobs.ProtocolOperationCause
 		warn  bool
 	}{
-		{"normal cancellation", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseCanceled, false},
-		{"superseded block attempt", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseSuperseded, false},
-		{"normal receive wakeup", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseOperationClosed, false},
-		{"unexpected cancellation", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseCanceled, true},
-		{"protocol failure", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseProtocolFailure, true},
+		{"normal cancellation", appobs.ProtocolOperationReceiverEnded, appobs.ProtocolOperationCauseCanceled, false},
+		{"superseded block attempt", appobs.ProtocolOperationReceiverEnded, appobs.ProtocolOperationCauseSuperseded, false},
+		{"normal receive wakeup", appobs.ProtocolOperationReceiverEnded, appobs.ProtocolOperationCauseOperationClosed, false},
+		{"unexpected cancellation", appobs.ProtocolOperationReceiverFailed, appobs.ProtocolOperationCauseCanceled, true},
+		{"protocol failure", appobs.ProtocolOperationReceiverFailed, appobs.ProtocolOperationCauseProtocolFailure, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-				ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
-				ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessagePeerOffer,
+			event, err := clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+				ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+				ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessagePeerOffer,
 				Stage: testCase.stage, Cause: testCase.cause,
 			})
 			if err != nil {
@@ -110,11 +111,11 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 
 func rendererEvents(t *testing.T) []visibilityExpectation {
 	t.Helper()
-	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
+	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := clievent.NewDirectorySubject(clievent.NewDisplayName("photos"))
+	subject, err := appobs.NewDirectorySubject(appobs.NewDisplayName("photos"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,42 +128,42 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		t.Fatal(err)
 	}
 	relayRecovering, err := clievent.NewRelayRecovering(
-		clievent.CommandGet, authority, 1, clievent.RelayRecoveryStarted, clievent.Failure{},
+		clievent.CommandGet, authority, 1, appobs.RelayRecoveryStarted, appobs.Failure{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	contentPath, err := clievent.NewContentPathSelected(clievent.ContentPathDirect)
+	contentPath, err := clievent.NewContentPathSelected(appobs.ContentPathDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fallback, err := clievent.NewFallback(
-		clievent.CommandGet, clievent.TransportWebRTC, clievent.TransportRelay,
-		mustFailure(t, clievent.FailurePeerNegotiation),
+		clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay,
+		mustFailure(t, appobs.FailurePeerNegotiation),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	progressSnapshot := mustSnapshot(t, clievent.ProgressSpec{
-		Discovery: clievent.DiscoveryOpen, CountersExact: true,
+	progressSnapshot := mustSnapshot(t, appobs.ProgressSpec{
+		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	})
 	progress, err := clievent.NewTransferProgress(mustReceiveID(t), mustJobID(t), progressSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, clievent.FailureTraceWrite))
+	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, appobs.FailureTraceWrite))
 	if err != nil {
 		t.Fatal(err)
 	}
 	commandFailed, err := clievent.NewCommandFailed(
-		clievent.CommandGet, clievent.ExitNetwork, mustFailure(t, clievent.FailureRelayTransport),
+		clievent.CommandGet, clievent.ExitNetwork, mustFailure(t, appobs.FailureRelayTransport),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transferResult, err := clievent.NewTransferResult(clievent.TransferResultSpec{
 		Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
-		Destination: clievent.NewDisplayPath("output"), CountersExact: true,
+		Destination: appobs.NewDisplayPath("output"), CountersExact: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -185,105 +186,105 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionID, err := clievent.NewProtocolSessionID(mustID(t, 3))
+	sessionID, err := appobs.NewProtocolSessionID(mustID(t, 3))
 	if err != nil {
 		t.Fatal(err)
 	}
-	lane, err := clievent.NewLaneIdentity(2, 1)
+	lane, err := appobs.NewLaneIdentity(2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	laneAdopted, err := clievent.NewLaneAdopted(clievent.CommandGet, sessionID, lane, clievent.TransportWebRTC)
+	laneAdopted, err := clievent.NewLaneAdopted(clievent.CommandGet, sessionID, lane, appobs.TransportWebRTC)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayLifecycle, err := clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
-		Command: clievent.CommandShare, LinkID: 1, RelaySession: mustRelaySessionID(t), SendOperationID: 1,
-		Stage: clievent.RelayTerminalReserved, Terminal: true,
-		RetirementSource: clievent.RelayRetirementNone,
-		Cause:            clievent.RelayCauseNone, DrainCause: clievent.RelayCauseNone,
+	relayLifecycle, err := clievent.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
+		Workflow: appobs.WorkflowShare, LinkID: 1, RelaySession: mustRelaySessionID(t), SendOperationID: 1,
+		Stage: appobs.RelayTerminalReserved, Terminal: true,
+		RetirementSource: appobs.RelayRetirementNone,
+		Cause:            appobs.RelayCauseNone, DrainCause: appobs.RelayCauseNone,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	webRTC, err := clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
-		Command: clievent.CommandGet, ChannelID: 1, Operation: clievent.WebRTCChannel,
-		Transition: clievent.WebRTCClosedClean, State: clievent.ChannelClosed,
-		Terminal: clievent.WebRTCTerminalNone, Cause: clievent.WebRTCCauseNone,
+	webRTC, err := clievent.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
+		Workflow: appobs.WorkflowReceive, ChannelID: 1, Operation: appobs.WebRTCChannel,
+		Transition: appobs.WebRTCClosedClean, State: appobs.ChannelClosed,
+		Terminal: appobs.WebRTCTerminalNone, Cause: appobs.WebRTCCauseNone,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerPath, err := clievent.NewPeerPathID(mustID(t, 4))
+	peerPath, err := appobs.NewPeerPathID(mustID(t, 4))
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerAttemptID, err := clievent.NewPeerAttemptID(mustID(t, 5))
+	peerAttemptID, err := appobs.NewPeerAttemptID(mustID(t, 5))
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerAttempt, err := clievent.NewPeerAttemptObserved(clievent.PeerAttemptSpec{
-		Command: clievent.CommandGet, Session: sessionID, PeerPath: peerPath,
-		Attempt: peerAttemptID, Sequence: 1, Stage: clievent.PeerAttemptStarted,
+	peerAttempt, err := clievent.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+		Workflow: appobs.WorkflowReceive, Session: sessionID, PeerPath: peerPath,
+		Attempt: peerAttemptID, Sequence: 1, Stage: appobs.PeerAttemptStarted,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	transferLifecycle, err := clievent.NewTransferLifecycleObserved(clievent.TransferLifecycleSpec{
+	transferLifecycle, err := clievent.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
 		ReceiveOperation: mustReceiveID(t), ProtocolSession: sessionID, TransferJob: mustJobID(t),
-		Stage: clievent.TransferDiscoveryStarted, Progress: progressSnapshot,
-		FileSelection: clievent.FileSelectionNone, FileSettlement: clievent.FileSettlementNone,
-		TreeSettlement: clievent.TreeSettlementNone,
+		Stage: appobs.TransferDiscoveryStarted, Progress: progressSnapshot,
+		FileSelection: appobs.FileSelectionNone, FileSettlement: appobs.FileSettlementNone,
+		TreeSettlement: appobs.TreeSettlementNone,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystem, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		ReceiveOperation: mustReceiveID(t), Operation: clievent.FilesystemCertified,
+	filesystem, err := clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
+		ReceiveOperation: mustReceiveID(t), Operation: appobs.FilesystemCertified,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	senderTerminalSend, err := clievent.NewSenderTerminalSendObserved(
-		sessionID, lane, true, clievent.SenderTerminalSendAccepted,
-		clievent.SenderTerminalSendDelivered, clievent.SenderTerminalSendDecisionDelivered,
+		sessionID, lane, true, appobs.SenderTerminalSendAccepted,
+		appobs.SenderTerminalSendDelivered, appobs.SenderTerminalSendDecisionDelivered,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	senderSessionTerminated, err := clievent.NewSenderSessionTerminated(
 		sessionID,
-		clievent.SenderSessionTerminalGracefulStop,
-		clievent.SenderSessionTerminalNormalStop,
+		appobs.SenderSessionTerminalGracefulStop,
+		appobs.SenderSessionTerminalNormalStop,
 		diagnosticerror.Snapshot{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalogStorage, err := clievent.NewCatalogStorageObserved(
-		clievent.CatalogStorageCreated, clievent.CatalogStorageCauseNone, clievent.CatalogUsage{}, 0,
+		appobs.CatalogStorageCreated, appobs.CatalogStorageCauseNone, appobs.CatalogUsage{}, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootPrefetch, err := clievent.NewRootPrefetchObserved(clievent.RootPrefetchCommitted, 1, 2, 0)
+	rootPrefetch, err := clievent.NewRootPrefetchObserved(appobs.RootPrefetchCommitted, 1, 2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolOperationID, err := clievent.NewProtocolOperationID(mustID(t, 6))
+	protocolOperationID, err := appobs.NewProtocolOperationID(mustID(t, 6))
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolOperation, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
-		Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
-		Stage:           clievent.ProtocolOperationReceiverFailed,
+	protocolOperation, err := clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+		Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+		Stage:           appobs.ProtocolOperationReceiverFailed,
 		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
-		RequestKind: clievent.ProtocolMessageReleaseLease,
+		RequestKind: appobs.ProtocolMessageReleaseLease,
 		Lane:        lane, HasLane: true,
 		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome:            clievent.ProtocolSendTransportConfirmed,
+		SendOutcome:            appobs.ProtocolSendTransportConfirmed,
 		OperationElapsedMillis: 30_000,
-		Cause:                  clievent.ProtocolOperationCauseDeadline,
+		Cause:                  appobs.ProtocolOperationCauseDeadline,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -316,9 +317,9 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	}
 }
 
-func mustRelaySessionID(t *testing.T) clievent.RelaySessionID {
+func mustRelaySessionID(t *testing.T) appobs.RelaySessionID {
 	t.Helper()
-	value, err := clievent.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	value, err := appobs.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,10 +329,10 @@ func mustRelaySessionID(t *testing.T) clievent.RelaySessionID {
 func TestRedirectedVerboseProgressEmitsOnlyPhaseMilestones(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
 	receive, job := mustReceiveID(t), mustJobID(t)
-	for _, snapshot := range []clievent.ProgressSnapshot{
-		mustSnapshot(t, clievent.ProgressSpec{DiscoveredFiles: 1, Discovery: clievent.DiscoveryOpen, CountersExact: true}),
-		mustSnapshot(t, clievent.ProgressSpec{DiscoveredFiles: 2, Discovery: clievent.DiscoveryOpen, CountersExact: true}),
-		mustSnapshot(t, clievent.ProgressSpec{DiscoveredFiles: 2, Discovery: clievent.DiscoveryComplete, CountersExact: true}),
+	for _, snapshot := range []appobs.ProgressSnapshot{
+		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 1, Discovery: appobs.DiscoveryOpen, CountersExact: true}),
+		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryOpen, CountersExact: true}),
+		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryComplete, CountersExact: true}),
 	} {
 		event, err := clievent.NewTransferProgress(receive, job, snapshot)
 		if err != nil {
@@ -350,12 +351,12 @@ func TestRedirectedMilestonesResetForANewOperation(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
 	job := mustJobID(t)
 	for discriminator := byte(1); discriminator <= 2; discriminator++ {
-		receive, err := clievent.NewReceiveOperationID(mustID(t, discriminator))
+		receive, err := appobs.NewReceiveOperationID(mustID(t, discriminator))
 		if err != nil {
 			t.Fatal(err)
 		}
-		event, err := clievent.NewTransferProgress(receive, job, mustSnapshot(t, clievent.ProgressSpec{
-			Discovery: clievent.DiscoveryOpen, CountersExact: true,
+		event, err := clievent.NewTransferProgress(receive, job, mustSnapshot(t, appobs.ProgressSpec{
+			Discovery: appobs.DiscoveryOpen, CountersExact: true,
 		}))
 		if err != nil {
 			t.Fatal(err)
@@ -373,10 +374,10 @@ func TestRendererRateUsesInjectedClockWithoutWaiting(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: true}, false)
 	receive, job := mustReceiveID(t), mustJobID(t)
 	for index := range uint64(3) {
-		snapshot := mustSnapshot(t, clievent.ProgressSpec{
+		snapshot := mustSnapshot(t, appobs.ProgressSpec{
 			DiscoveredFiles: 1, DiscoveredBytes: 10_000_000,
 			VerifiedBytes: index * 1_000_000, NewlyVerifiedBytes: index * 1_000_000,
-			Discovery: clievent.DiscoveryComplete, CountersExact: true,
+			Discovery: appobs.DiscoveryComplete, CountersExact: true,
 		})
 		event, err := clievent.NewTransferProgress(receive, job, snapshot)
 		if err != nil {
@@ -398,20 +399,20 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 		name        string
 		status      clievent.ResultStatus
 		exitCode    clievent.ExitCode
-		failure     clievent.Failure
+		failure     appobs.Failure
 		wantHundred bool
 		wantResult  string
 	}{
-		{"success", clievent.ResultSuccess, clievent.ExitSuccess, clievent.Failure{}, true, "Download completed"},
-		{"partial", clievent.ResultPartial, clievent.ExitFailure, mustFailure(t, clievent.FailureUnexpected), false, "Download finished partially"},
-		{"paused", clievent.ResultPaused, clievent.ExitFailure, mustFailure(t, clievent.FailureCanceled), false, "Download paused"},
-		{"failed", clievent.ResultFailed, clievent.ExitFailure, mustFailure(t, clievent.FailureUnexpected), false, "Download failed"},
+		{"success", clievent.ResultSuccess, clievent.ExitSuccess, appobs.Failure{}, true, "Download completed"},
+		{"partial", clievent.ResultPartial, clievent.ExitFailure, mustFailure(t, appobs.FailureUnexpected), false, "Download finished partially"},
+		{"paused", clievent.ResultPaused, clievent.ExitFailure, mustFailure(t, appobs.FailureCanceled), false, "Download paused"},
+		{"failed", clievent.ResultFailed, clievent.ExitFailure, mustFailure(t, appobs.FailureUnexpected), false, "Download failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: true}, false)
-			snapshot := mustSnapshot(t, clievent.ProgressSpec{
-				Discovery: clievent.DiscoveryComplete, CountersExact: true,
+			snapshot := mustSnapshot(t, appobs.ProgressSpec{
+				Discovery: appobs.DiscoveryComplete, CountersExact: true,
 			})
 			progress, err := clievent.NewTransferProgress(mustReceiveID(t), mustJobID(t), snapshot)
 			if err != nil {
@@ -427,7 +428,7 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 
 			resultSpec := clievent.TransferResultSpec{
 				Status: test.status, ExitCode: test.exitCode,
-				Destination: clievent.NewDisplayPath("output"), CountersExact: true,
+				Destination: appobs.NewDisplayPath("output"), CountersExact: true,
 			}
 			if test.failure.Valid() {
 				resultSpec.Failure = test.failure
@@ -517,7 +518,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write fa
 
 func TestRendererSerializesConcurrentEvents(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, clievent.FailureTraceWrite))
+	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, appobs.FailureTraceWrite))
 	if err != nil {
 		t.Fatal(err)
 	}

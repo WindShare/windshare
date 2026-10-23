@@ -6,25 +6,22 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSenderAdmissionRouteSurvivesProjectionAndEncoding(t *testing.T) {
-	session, _ := protocolsession.ProtocolSessionIDFromBytes(bytes.Repeat([]byte{1}, 16))
-	grant, _ := protocolsession.OperationIDFromBytes(bytes.Repeat([]byte{2}, 16))
-	lane := sessionruntime.LaneIdentity{ID: 2, Epoch: 1}
-	source := v2peer.SenderAttemptObservation{
-		SessionID: session, PeerPathID: v2signal.PeerPathID{3}, AttemptID: v2signal.AttemptID{4},
-		SideSequence: 1, Stage: v2peer.SenderAttemptStarted,
+	session, _ := appobs.NewProtocolSessionID(bytes.Repeat([]byte{1}, 16))
+	grant, _ := appobs.NewProtocolOperationID(bytes.Repeat([]byte{2}, 16))
+	lane, _ := appobs.NewLaneIdentity(2, 1)
+	path, _ := appobs.NewPeerPathID(bytes.Repeat([]byte{3}, 16))
+	attempt, _ := appobs.NewPeerAttemptID(bytes.Repeat([]byte{4}, 16))
+	source := appobs.PeerAttemptSpec{
+		Workflow: appobs.WorkflowShare, Session: session, PeerPath: path, Attempt: attempt,
+		Sequence: 1, Stage: appobs.PeerAttemptStarted,
 	}
-	assertRoute := func(source v2peer.SenderAttemptObservation, want string) {
+	assertRoute := func(source appobs.PeerAttemptSpec, want string) {
 		t.Helper()
-		event, err := commandprojection.ProjectSenderAttempt(clievent.CommandShare, source)
+		event, err := clievent.NewPeerAttemptObserved(source)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,36 +34,37 @@ func TestSenderAdmissionRouteSurvivesProjectionAndEncoding(t *testing.T) {
 		}
 	}
 	assertRoute(source, "")
-	source.Route = transfer.LaneRouteDirect
-	if _, err := commandprojection.ProjectSenderAttempt(clievent.CommandShare, source); err == nil {
+	source.Route = appobs.LaneRouteDirect
+	if _, err := clievent.NewPeerAttemptObserved(source); err == nil {
 		t.Fatal("unadmitted attempt claimed a selected route")
 	}
-	source.Stage, source.Phase = v2peer.SenderAttemptAdmitted, v2peer.SenderAttemptPhaseAdmission
-	source.GrantOperationID, source.Lane = grant, &lane
-	source.AdmissionDisposition, source.ResponseDelivery = v2peer.SenderAdmissionAccepted, v2peer.SenderResponseDelivered
+	source.Stage, source.Phase = appobs.PeerAttemptAdmitted, appobs.PeerPhaseAdmission
+	source.GrantOperation, source.Lane = grant, lane
+	source.HasGrantOperation, source.HasLane = true, true
+	source.AdmissionDisposition, source.ResponseDelivery = appobs.PeerAdmissionAccepted, appobs.PeerResponseDelivered
 	for _, test := range []struct {
-		route transfer.LaneRoute
+		route appobs.LaneRoute
 		name  string
-	}{{transfer.LaneRouteDirect, "direct"}, {transfer.LaneRouteTURN, "turn"}} {
+	}{{appobs.LaneRouteDirect, "direct"}, {appobs.LaneRouteTURN, "turn"}} {
 		source.Route = test.route
 		assertRoute(source, test.name)
 	}
-	for _, invalid := range []transfer.LaneRoute{0, transfer.LaneRouteRelay, 255} {
+	for _, invalid := range []appobs.LaneRoute{0, appobs.LaneRouteRelay, 255} {
 		source.Route = invalid
-		if _, err := commandprojection.ProjectSenderAttempt(clievent.CommandShare, source); err == nil {
+		if _, err := clievent.NewPeerAttemptObserved(source); err == nil {
 			t.Fatalf("invalid WebRTC admission route accepted: %d", invalid)
 		}
 	}
 }
 
 func TestLaneSettlementPreservesAllRouteKinds(t *testing.T) {
-	session, _ := protocolsession.ProtocolSessionIDFromBytes(bytes.Repeat([]byte{1}, 16))
+	session, _ := appobs.NewProtocolSessionID(bytes.Repeat([]byte{1}, 16))
 	for _, test := range []struct {
-		route transfer.LaneRoute
+		route appobs.LaneRoute
 		name  string
-	}{{transfer.LaneRouteRelay, "relay"}, {transfer.LaneRouteDirect, "direct"}, {transfer.LaneRouteTURN, "turn"}} {
-		event, err := commandprojection.ProjectLaneSettlement(transfer.LaneSettlementSummary{
-			ProtocolSessionID: session, Lane: transfer.LaneIdentity{ID: 2, Epoch: 1},
+	}{{appobs.LaneRouteRelay, "relay"}, {appobs.LaneRouteDirect, "direct"}, {appobs.LaneRouteTURN, "turn"}} {
+		event, err := clievent.NewLaneSettlementObserved(appobs.LaneSettlementSpec{
+			Session: session, Lane: func() appobs.LaneIdentity { v, _ := appobs.NewLaneIdentity(2, 1); return v }(),
 			Route: test.route, DeliveredBlocks: 3, DeliveredBytes: 1024,
 		})
 		if err != nil {

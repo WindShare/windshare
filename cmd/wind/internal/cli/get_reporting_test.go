@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRuntime, *bytes.Buffer) {
@@ -370,7 +371,7 @@ func TestGetFailureProjectionDoesNotRenderProviderText(t *testing.T) {
 
 func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	(getObservation{runtime: runtime}).warningCode(clievent.FailureOutputRecoveryUnavailable)
+	(getObservation{runtime: runtime}).warningCode(appobs.FailureOutputRecoveryUnavailable)
 	runtime.Close()
 	output := stderr.String()
 	if !strings.Contains(output, "without restart recovery") || !strings.Contains(output, "unfinished files") ||
@@ -381,7 +382,7 @@ func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testi
 
 func TestGetWarningUsesClosedFailureVocabulary(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	(getObservation{runtime: runtime}).warningCode(clievent.FailureOutputUnsupportedFilesystem)
+	(getObservation{runtime: runtime}).warningCode(appobs.FailureOutputUnsupportedFilesystem)
 	runtime.Close()
 	if output := stderr.String(); !strings.Contains(output, "Warning") || !strings.Contains(output, "destination") {
 		t.Fatalf("warning=%q", output)

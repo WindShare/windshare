@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestNativeConnectivityExactPayloadAndCorrelation(t *testing.T) {
-	session, _ := clievent.NewProtocolSessionID(append([]byte{1}, make([]byte, 15)...))
-	path, _ := clievent.NewPeerPathID(append([]byte{2}, make([]byte, 15)...))
-	attempt, _ := clievent.NewPeerAttemptID(append([]byte{3}, make([]byte, 15)...))
-	spec := clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Session: session, Path: path, Attempt: attempt, AttemptSequence: 9007199254740993, NetworkGeneration: 9007199254740994, Profile: "ice-0123abcd", Side: "receiver", Kind: "candidate", State: "unknown", At: time.Unix(0, 0), Candidate: &clievent.NativeCandidateFacts{Priority: 1224736767, TCPType: "passive", Type: "srflx", Protocol: "tcp", Address: "8.8.8.8", Port: 123, Family: "ipv4", Origin: "ordinary"}}
+	session, _ := appobs.NewProtocolSessionID(append([]byte{1}, make([]byte, 15)...))
+	path, _ := appobs.NewPeerPathID(append([]byte{2}, make([]byte, 15)...))
+	attempt, _ := appobs.NewPeerAttemptID(append([]byte{3}, make([]byte, 15)...))
+	spec := appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Session: session, Path: path, Attempt: attempt, AttemptSequence: 9007199254740993, NetworkGeneration: 9007199254740994, Profile: "ice-0123abcd", Side: "receiver", Kind: "candidate", State: "unknown", At: time.Unix(0, 0), Candidate: &appobs.NativeCandidateFacts{Priority: 1224736767, TCPType: "passive", Type: "srflx", Protocol: "tcp", Address: "8.8.8.8", Port: 123, Family: "ipv4", Origin: "ordinary"}}
 	event, err := clievent.NewNativeConnectivityObserved(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +39,7 @@ func TestNativeConnectivityExactPayloadAndCorrelation(t *testing.T) {
 
 func TestNativeConnectivityUnknownsRemainDistinctFromPairMeasurements(t *testing.T) {
 	for _, rtt := range []time.Duration{0, 12500 * time.Microsecond} {
-		spec := clievent.NativeConnectivitySpec{Command: clievent.CommandShare, Side: "sender", Kind: "selected_pair", State: "unknown", Pair: &clievent.NativePairFacts{LocalType: "host", RemoteType: "relay", Protocol: "tcp", LocalAddress: "::1", RemoteAddress: "unknown", PairRTT: rtt}}
+		spec := appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowShare, Side: "sender", Kind: "selected_pair", State: "unknown", Pair: &appobs.NativePairFacts{LocalType: "host", RemoteType: "relay", Protocol: "tcp", LocalAddress: "::1", RemoteAddress: "unknown", PairRTT: rtt}}
 		event, err := clievent.NewNativeConnectivityObserved(spec)
 		if err != nil {
 			t.Fatal(err)
@@ -63,9 +64,9 @@ func TestNativeConnectivityUnknownsRemainDistinctFromPairMeasurements(t *testing
 			t.Fatal("pair RTT became a STUN measurement")
 		}
 	}
-	for _, spec := range []clievent.NativeConnectivitySpec{
-		{Command: clievent.CommandGet, Side: "unknown", Kind: "lease-ready", State: "unknown", Reachability: &clievent.NativeReachabilityFacts{Protocol: "udp", Reason: "none", Local: netip.MustParseAddrPort("127.0.0.1:123"), ServerEpoch: 42, ServerRestarted: true}},
-		{Command: clievent.CommandGet, Side: "receiver", Kind: "network_changed", State: "unknown", Lifecycle: &clievent.NativeLifecycleFacts{Content: true, Direct: false, PreviousGeneration: 99}},
+	for _, spec := range []appobs.NativeConnectivitySpec{
+		{Workflow: appobs.WorkflowReceive, Side: "unknown", Kind: "lease-ready", State: "unknown", Reachability: &appobs.NativeReachabilityFacts{Protocol: "udp", Reason: "none", Local: netip.MustParseAddrPort("127.0.0.1:123"), ServerEpoch: 42, ServerRestarted: true}},
+		{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "network_changed", State: "unknown", Lifecycle: &appobs.NativeLifecycleFacts{Content: true, Direct: false, PreviousGeneration: 99}},
 	} {
 		event, err := clievent.NewNativeConnectivityObserved(spec)
 		if err != nil {
@@ -86,7 +87,7 @@ func TestNativeConnectivityUnknownsRemainDistinctFromPairMeasurements(t *testing
 }
 
 func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
-	event, err := clievent.NewNativeConnectivityObserved(clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Side: "receiver", Kind: "admission_granted", State: "unknown", Admission: &clievent.NativeAdmissionFacts{Wait: 12500 * time.Microsecond, Active: 2, Queued: 0, StartsRemaining: 1.25, STUNRemaining: 0.5, ActiveTimeRemaining: 85 * time.Second}})
+	event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "admission_granted", State: "unknown", Admission: &appobs.NativeAdmissionFacts{Wait: 12500 * time.Microsecond, Active: 2, Queued: 0, StartsRemaining: 1.25, STUNRemaining: 0.5, ActiveTimeRemaining: 85 * time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 		t.Fatal("mutable admission facts escaped")
 	}
 	facts.Kind = "admission_queued"
-	facts.Admission.SocketCapacity = clievent.NativeSocketCapacityFacts{Used: 58, Requested: 13, Limit: 64}
+	facts.Admission.SocketCapacity = appobs.NativeSocketCapacityFacts{Used: 58, Requested: 13, Limit: 64}
 	blocked, err := clievent.NewNativeConnectivityObserved(facts)
 	if err != nil {
 		t.Fatal(err)
@@ -129,10 +130,10 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 }
 
 func TestNativeTURNTraceSeparatesSocketCountersFromUsefulBytes(t *testing.T) {
-	event, err := clievent.NewNativeConnectivityObserved(clievent.NativeConnectivitySpec{
-		Command: clievent.CommandShare, Side: "sender", Kind: "provider_closed", State: "unknown",
-		TURN: &clievent.NativeTURNFacts{Provider: "cloudflare", Account: "owner", Profile: "primary",
-			Resources: &clievent.NativeTURNResources{OpenedSockets: 2, TransportSent: 9007199254740993, TransportReceived: 300}},
+	event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{
+		Workflow: appobs.WorkflowShare, Side: "sender", Kind: "provider_closed", State: "unknown",
+		TURN: &appobs.NativeTURNFacts{Provider: "cloudflare", Account: "owner", Profile: "primary",
+			Resources: &appobs.NativeTURNResources{OpenedSockets: 2, TransportSent: 9007199254740993, TransportReceived: 300}},
 	})
 	if err != nil {
 		t.Fatal(err)

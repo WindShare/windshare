@@ -1,6 +1,9 @@
 package runtrace
 
-import "github.com/windshare/windshare/cmd/wind/internal/clievent"
+import (
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
+)
 
 func (visitor *encodeVisitorV4) VisitRelayLifecycleObserved(event clievent.RelayLifecycleObserved) error {
 	stage, err := nameOf(event.Stage())
@@ -104,7 +107,7 @@ func (visitor *encodeVisitorV4) VisitPeerAttemptObserved(event clievent.PeerAtte
 	}
 	lane, hasLane := event.Lane()
 	correlation, err := projectEventCorrelation(
-		event.ProtocolSessionID(), clievent.ProtocolOperationID{},
+		event.ProtocolSessionID(), appobs.ProtocolOperationID{},
 		event.PeerPathID(), event.PeerAttemptID(), lane, hasLane,
 	)
 	if err != nil {

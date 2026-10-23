@@ -1,13 +1,16 @@
 package cli
 
 import (
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/transfer"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
-func (a *App) observeSenderPeerAttempt(observation v2peer.SenderAttemptObservation) {
-	if observation.Stage != v2peer.SenderAttemptAdmitted || observation.Lane == nil || observation.Route != transfer.LaneRouteDirect {
+func (a *App) observeSenderPeerAttempt(observation appobs.PeerAttemptObserved) {
+	if observation.Stage() != appobs.PeerAttemptAdmitted {
+		return
+	}
+	route, ok := observation.Route()
+	if !ok || route != appobs.LaneRouteDirect {
 		return
 	}
 	// SenderAttemptAdmitted is emitted only after authenticated runtime ownership,

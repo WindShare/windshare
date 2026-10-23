@@ -8,17 +8,18 @@ import (
 
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/relayprofile"
 )
 
 func TestEveryRelayReceivesOnlyItsOwnRegistrationCredential(t *testing.T) {
-	candidates := []senderrelay.Candidate{
+	candidates := []relayprofile.Candidate{
 		{PublicURL: "https://one.example", AccessKey: "private-one"},
 		{PublicURL: "https://two.example", AccessKey: "private-two"},
 	}
 	dependencies := nativeDependencies(t)
-	assembled := make(chan senderrelay.Candidate, len(candidates))
+	assembled := make(chan relayprofile.Candidate, len(candidates))
 	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
-		assembled <- config.Candidate
+		assembled <- relayprofile.Candidate{PublicURL: config.Candidate.PublicURL, AccessKey: config.Candidate.AccessKey}
 		return &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}, nil
 	}
 	ctx, stop := context.WithCancelCause(t.Context())

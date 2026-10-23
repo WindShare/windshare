@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type nativeConnectivityPayloadV4 struct {
@@ -176,7 +177,7 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	return nil
 }
 
-func encodeNativeTURN(turn *clievent.NativeTURNFacts) *nativeTURNPayloadV4 {
+func encodeNativeTURN(turn *appobs.NativeTURNFacts) *nativeTURNPayloadV4 {
 	if turn == nil {
 		return nil
 	}

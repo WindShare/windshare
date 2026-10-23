@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -123,72 +123,72 @@ func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.
 	)
 }
 
-func failureMessage(failure clievent.Failure) string {
+func failureMessage(failure appobs.Failure) string {
 	key, _ := failure.MessageKey()
 	var message string
 	switch key {
-	case clievent.MessageInterrupted:
+	case appobs.MessageInterrupted:
 		message = "The operation was interrupted."
-	case clievent.MessageTimedOut:
+	case appobs.MessageTimedOut:
 		message = "The operation timed out."
-	case clievent.MessageInvalidRequest:
+	case appobs.MessageInvalidRequest:
 		message = "The request is invalid."
-	case clievent.MessageCapabilityInvalid:
+	case appobs.MessageCapabilityInvalid:
 		message = "The share link or key is invalid."
-	case clievent.MessageSelectionMissing:
+	case appobs.MessageSelectionMissing:
 		message = "The selected content was not found."
-	case clievent.MessageRelayRejected:
+	case appobs.MessageRelayRejected:
 		message = "The relay rejected the request."
-	case clievent.MessageRelayUnavailable:
+	case appobs.MessageRelayUnavailable:
 		message = "The relay is unavailable."
-	case clievent.MessageShareUnavailable:
+	case appobs.MessageShareUnavailable:
 		message = "The share is not currently available. Retry the original link."
-	case clievent.MessageDirectUnavailable:
+	case appobs.MessageDirectUnavailable:
 		message = "The direct connection is unavailable."
-	case clievent.MessageDirectPolicy:
+	case appobs.MessageDirectPolicy:
 		message = "The direct path was rejected by connection policy."
-	case clievent.MessageDirectBusy:
+	case appobs.MessageDirectBusy:
 		message = "A previous direct connection attempt is still finishing."
-	case clievent.MessageDirectAdmission:
+	case appobs.MessageDirectAdmission:
 		message = "The direct channel could not be admitted."
-	case clievent.MessageSourceUnavailable:
+	case appobs.MessageSourceUnavailable:
 		message = "The source content is unavailable."
-	case clievent.MessageSourceMissing:
+	case appobs.MessageSourceMissing:
 		message = "Source path not found. Check the path and try again."
-	case clievent.MessageSourceAccessDenied:
+	case appobs.MessageSourceAccessDenied:
 		message = "Permission denied while opening the source. Check read access to the source and its parent directory."
-	case clievent.MessageSourceUnsupported:
+	case appobs.MessageSourceUnsupported:
 		message = "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
-	case clievent.MessageSourceChanged:
+	case appobs.MessageSourceChanged:
 		message = "The source content changed during transfer."
 		if _, selected := failure.SourcePath(); selected {
 			message = "The source changed while it was being opened. Retry the share."
 		}
-	case clievent.MessageCatalogUnavailable:
+	case appobs.MessageCatalogUnavailable:
 		message = "The content catalog is unavailable."
-	case clievent.MessageSessionFailed:
+	case appobs.MessageSessionFailed:
 		message = "The transfer session failed."
-	case clievent.MessageOutputFailed:
+	case appobs.MessageOutputFailed:
 		message = "The destination could not be updated safely."
-	case clievent.MessageOutputRecoveryUnavailable:
+	case appobs.MessageOutputRecoveryUnavailable:
 		message = "Downloading without restart recovery. Keep WindShare running; an unexpected exit may leave unfinished files."
-	case clievent.MessageCheckpointFailed:
+	case appobs.MessageCheckpointFailed:
 		message = "The recovery checkpoint could not be updated safely."
-	case clievent.MessagePublicationFailed:
+	case appobs.MessagePublicationFailed:
 		message = "The share link could not be published."
-	case clievent.MessageTraceIncomplete:
+	case appobs.MessageTraceIncomplete:
 		message = "The trace is incomplete."
-	case clievent.MessageTraceExists:
+	case appobs.MessageTraceExists:
 		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
-	case clievent.MessageOutputNeedsAttention:
+	case appobs.MessageOutputNeedsAttention:
 		message = "The destination needs attention before the transfer can continue."
-	case clievent.MessageDestinationCollision:
+	case appobs.MessageDestinationCollision:
 		message = "Existing destinations prevented one or more files from completing."
-	case clievent.MessageCheckpointRevisionConflict:
+	case appobs.MessageCheckpointRevisionConflict:
 		message = "Local resume data belongs to another source revision; no destination was replaced."
-	case clievent.MessageCheckpointInvalid:
+	case appobs.MessageCheckpointInvalid:
 		message = "Local resume data has an invalid checkpoint binding; existing evidence was preserved."
-	case clievent.MessageOwnedObjectUnknown:
+	case appobs.MessageOwnedObjectUnknown:
 		message = "Local resume data disagrees about which destination object it owns; no automatic change was made."
 	default:
 		message = "An unexpected error occurred."
@@ -203,6 +203,6 @@ func failureMessage(failure clievent.Failure) string {
 	return message
 }
 
-func failureLine(label string, failure clievent.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {
+func failureLine(label string, failure appobs.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {
 	return statusLine(symbol, label+": "+failureMessage(failure), style)
 }

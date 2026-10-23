@@ -5,7 +5,7 @@ import (
 	"math/bits"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const (
@@ -34,9 +34,9 @@ func (window *rateWindow) reset() {
 	window.samples = nil
 }
 
-func (window *rateWindow) observe(now time.Time, snapshot clievent.ProgressSnapshot) rateEstimate {
+func (window *rateWindow) observe(now time.Time, snapshot appobs.ProgressSnapshot) rateEstimate {
 	current := timedCounter{at: now, bytes: snapshot.NewlyVerifiedBytes()}
-	if !snapshot.CountersExact() || snapshot.Discovery() == clievent.DiscoveryFailed {
+	if !snapshot.CountersExact() || snapshot.Discovery() == appobs.DiscoveryFailed {
 		window.samples = []timedCounter{current}
 		return rateEstimate{}
 	}

@@ -1,12 +1,16 @@
 package clievent
 
-import "testing"
+import (
+	"testing"
+
+	appobs "github.com/windshare/windshare/engine/observation"
+)
 
 func TestPlatformSetupFactsAreClosedAndDispatchable(t *testing.T) {
 	for _, state := range platformSetupStates[1:] {
 		for _, reason := range platformSetupReasons[1:] {
 			event, err := NewPlatformSetupObserved(CommandShare, state, reason)
-			if err != nil || event.State() != state || event.Reason() != reason || event.Command() != CommandShare || event.Level() != LevelDebug {
+			if err != nil || event.State() != state || event.Reason() != reason || event.Command() != CommandShare || event.Level() != appobs.LevelDebug {
 				t.Fatalf("%+v: %v", event, err)
 			}
 			visitor := &exhaustiveVisitor{}

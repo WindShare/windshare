@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/statefile"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -29,7 +29,7 @@ type Config struct {
 	ManagedTURNPolicies []turn.ManagedPolicy
 	TURN                turn.ManualSettings
 	FrontURL            string
-	Profiles            []senderrelay.Candidate
+	Profiles            []relayprofile.Candidate
 	ActiveRelays        []string
 }
 
@@ -99,10 +99,10 @@ func Decode(reader io.Reader) (Config, error) {
 		result.TURN = *disk.TURN
 	}
 	if disk.Profiles != nil {
-		result.Profiles = make([]senderrelay.Candidate, 0, len(disk.Profiles))
+		result.Profiles = make([]relayprofile.Candidate, 0, len(disk.Profiles))
 	}
 	for _, profile := range disk.Profiles {
-		result.Profiles = append(result.Profiles, senderrelay.Candidate{PublicURL: profile.URL, AccessKey: profile.AccessKey})
+		result.Profiles = append(result.Profiles, relayprofile.Candidate{PublicURL: profile.URL, AccessKey: profile.AccessKey})
 	}
 	if err := result.Validate(); err != nil {
 		return Config{}, err
@@ -125,7 +125,7 @@ func (config Config) validateFields() error {
 		len(config.ActiveRelays) > relayset.MaximumEndpoints {
 		return ErrConfig
 	}
-	if _, err := senderrelay.PublicURLs(config.Profiles); err != nil {
+	if _, err := relayprofile.PublicURLs(config.Profiles); err != nil {
 		return ErrConfig
 	}
 	saved := map[string]bool{}

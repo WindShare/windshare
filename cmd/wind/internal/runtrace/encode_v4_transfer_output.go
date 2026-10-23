@@ -1,6 +1,9 @@
 package runtrace
 
-import "github.com/windshare/windshare/cmd/wind/internal/clievent"
+import (
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
+)
 
 func (visitor *encodeVisitorV4) VisitTransferLifecycleObserved(event clievent.TransferLifecycleObserved) error {
 	stage, err := nameOf(event.Stage())
@@ -69,10 +72,10 @@ func (visitor *encodeVisitorV4) VisitTransferLifecycleObserved(event clievent.Tr
 func transferLifecycleCorrelation(event clievent.TransferLifecycleObserved) (*CorrelationV1, error) {
 	if capacity, ok := event.CapacityLifecycle(); ok {
 		return projectProtocolCorrelation(
-			event.ProtocolSessionID(), capacity.OperationID(), clievent.LaneIdentity{}, false,
+			event.ProtocolSessionID(), capacity.OperationID(), appobs.LaneIdentity{}, false,
 		)
 	}
-	return projectSessionCorrelation(event.ProtocolSessionID(), clievent.LaneIdentity{}, false)
+	return projectSessionCorrelation(event.ProtocolSessionID(), appobs.LaneIdentity{}, false)
 }
 
 func (visitor *encodeVisitorV4) VisitFilesystemOutputObserved(event clievent.FilesystemOutputObserved) error {
@@ -146,7 +149,7 @@ func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *fil
 	if !present {
 		return nil
 	}
-	project := func(value clievent.FilesystemCapability) filesystemCapabilityV4 {
+	project := func(value appobs.FilesystemCapability) filesystemCapabilityV4 {
 		reason, _ := value.Reason.Name()
 		return filesystemCapabilityV4{Supported: value.Supported, Reason: reason}
 	}
@@ -308,7 +311,7 @@ func optionalClosedName(value namedValue) *string {
 	return &name
 }
 
-func projectFilesystemCounters(counters clievent.FilesystemOutputCounters) filesystemCountersV4 {
+func projectFilesystemCounters(counters appobs.FilesystemOutputCounters) filesystemCountersV4 {
 	return filesystemCountersV4{
 		NodeClaims:             decimal(counters.NodeClaims),
 		DirectoryClaims:        decimal(counters.DirectoryClaims),
