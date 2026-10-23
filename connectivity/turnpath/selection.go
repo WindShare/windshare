@@ -140,8 +140,8 @@ func (s *Sender) maintainSelection(ctx context.Context, service *service, now ti
 	// The shared overlap slot belongs to continuity first, including while a
 	// speculative credential request is still waiting on its provider.
 	continuity := s.continuityDue(now)
-	if continuity && service.issuance != nil && service.issuance.intent == evaluationPath {
-		service.issuance.cancel()
+	if continuity && service.preparation.issuance() != nil && service.preparation.issuance().intent == evaluationPath {
+		service.preparation.issuance().cancel()
 	}
 	if current := service.current; current != nil {
 		quality := s.measureQuality(current, now)
@@ -149,7 +149,7 @@ func (s *Sender) maintainSelection(ctx context.Context, service *service, now ti
 			service.selection = transportSelection{available: service.selection.available, remoteNetwork: quality.latest.NetworkGeneration}
 		}
 	}
-	pending := service.pending
+	pending := service.preparation.pending()
 	if pending == nil || pending.trial == nil {
 		return
 	}
@@ -171,7 +171,7 @@ func (s *Sender) maintainSelection(ctx context.Context, service *service, now ti
 	if reason != "" {
 		s.selectionEvent(service, pending, reason, trial.baselineRate, candidate.rate)
 		s.retire(ctx, pending, turncontrol.Unhelpful)
-		service.pending = nil
+		service.preparation.detach(pending)
 		service.selection.nextEvaluation = now.Add(TransportEvaluationCooldown)
 	}
 }

@@ -17,14 +17,14 @@ func replacementSender(t *testing.T) (*Sender, *delegation, *delegation) {
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: time.Minute})
 	issueNext(t, s)
-	old := s.services[0].pending
+	old := s.services[0].preparation.pending()
 	lane := turncontrol.Lane{ID: 1, Epoch: 1}
 	s.Admit(t.Context(), old.grant.PathID, lane, make(chan struct{}))
 	s.apply(t.Context(), turncontrol.Ready{Authority: old.grant.Authority, PathID: old.grant.PathID, Lane: lane})
 	now = now.Add(8 * time.Minute)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 2), HoldFor: time.Minute})
 	issueNext(t, s)
-	next := s.services[0].pending
+	next := s.services[0].preparation.pending()
 	if next == nil || next.grant.Replaces != old.grant.PathID {
 		t.Fatal("fixture did not create a renewal with a live predecessor")
 	}

@@ -32,7 +32,7 @@ func recoverySender(t *testing.T) (*Sender, *fixedRecoveryAccounts, *time.Time) 
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: turncontrol.MaximumDemandLifetime})
 	issueNext(t, s)
-	pending := s.services[0].pending
+	pending := s.services[0].preparation.pending()
 	s.Admit(t.Context(), pending.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
 	s.apply(t.Context(), turncontrol.Ready{Authority: pending.grant.Authority, PathID: pending.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})
 	return s, accounts, &now
@@ -47,7 +47,7 @@ func TestFixedCredentialsRecoverWithoutRenewalOrBreakingCurrentPath(t *testing.T
 	s.Recover(old.grant.PathID, turncontrol.AllocationStateMismatch)
 	s.maintain(t.Context())
 	issueNext(t, s)
-	next := s.services[0].pending
+	next := s.services[0].preparation.pending()
 	if next == nil || next.grant.Replaces != old.grant.PathID || s.services[0].current != old {
 		t.Fatal("fixed recovery did not preserve predecessor")
 	}
@@ -222,7 +222,7 @@ func TestFaultyReplacementCannotRetireWorkingPredecessor(t *testing.T) {
 	s.Recover(old.grant.PathID, turncontrol.ChannelUnavailable)
 	s.maintain(t.Context())
 	issueNext(t, s)
-	next := s.services[0].pending
+	next := s.services[0].preparation.pending()
 	s.Recover(next.grant.PathID, turncontrol.AllocationStateMismatch)
 	s.Admit(t.Context(), next.grant.PathID, turncontrol.Lane{ID: 1, Epoch: 1}, make(chan struct{}))
 	s.apply(t.Context(), turncontrol.Ready{Authority: next.grant.Authority, PathID: next.grant.PathID, Lane: turncontrol.Lane{ID: 1, Epoch: 1}})

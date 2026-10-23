@@ -39,8 +39,8 @@ type SenderConfig struct {
 }
 type service struct {
 	profile          Profile
-	current, pending *delegation
-	issuance         *credentialRequest
+	current          *delegation
+	preparation      pathPreparation
 	retryAt          time.Time
 	recoveryAttempts int
 	selection        transportSelection
@@ -229,7 +229,7 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 		s.applyDemand(ctx, value)
 	case turncontrol.Ready:
 		for _, service := range s.services {
-			pending := service.pending
+			pending := service.preparation.pending()
 			if pending == nil || pending.grant.PathID != value.PathID || pending.grant.Authority != header {
 				continue
 			}
@@ -256,10 +256,10 @@ func (s *Sender) apply(ctx context.Context, message turncontrol.Message) {
 				service.current = nil
 				service.retryAt = retryAt
 			}
-			if pending := service.pending; pending != nil && pending.grant.PathID == value.PathID && pending.grant.Authority == header {
+			if pending := service.preparation.pending(); pending != nil && pending.grant.PathID == value.PathID && pending.grant.Authority == header {
 				s.countInitialRecoveryFailure(service, pending)
 				s.retire(ctx, pending, value.Reason)
-				service.pending = nil
+				service.preparation.detach(pending)
 				if pending.trial == nil {
 					service.retryAt = retryAt
 				}
@@ -282,8 +282,8 @@ func (s *Sender) maintain(ctx context.Context) {
 		s.maintainSelection(ctx, service, now)
 		s.promote(ctx, service)
 		s.retireUnusable(ctx, service, now, demand)
-		if !demand && service.issuance != nil {
-			service.issuance.cancel()
+		if !demand && service.preparation.issuance() != nil {
+			service.preparation.issuance().cancel()
 		}
 	}
 	if !demand {
@@ -291,10 +291,10 @@ func (s *Sender) maintain(ctx context.Context) {
 	}
 	active, overlap := 0, 0
 	for _, service := range s.services {
-		if service.current != nil || service.pending != nil || service.issuance != nil {
+		if service.current != nil || service.preparation.phase() != preparationIdle {
 			active++
 		}
-		if service.current != nil && (service.pending != nil || service.issuance != nil) {
+		if service.current != nil && service.preparation.phase() != preparationIdle {
 			overlap++
 		}
 	}
@@ -344,12 +344,12 @@ func (value *delegation) retirementReason(now time.Time, demand, pending bool) t
 }
 
 func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.Time, demand bool) {
-	for _, value := range []*delegation{service.current, service.pending} {
+	for _, value := range []*delegation{service.current, service.preparation.pending()} {
 		if value == nil {
 			continue
 		}
-		reason := value.retirementReason(now, demand, value == service.pending)
-		if reason == 0 && value == service.pending && !value.readyLane.Valid() && len(service.selection.available) > 1 && now.Sub(value.created) >= TransportConnectBudget {
+		reason := value.retirementReason(now, demand, value == service.preparation.pending())
+		if reason == 0 && value == service.preparation.pending() && !value.readyLane.Valid() && len(service.selection.available) > 1 && now.Sub(value.created) >= TransportConnectBudget {
 			reason = turncontrol.Unhelpful
 		}
 		s.mu.Lock()
@@ -365,7 +365,7 @@ func (s *Sender) retireUnusable(ctx context.Context, service *service, now time.
 		if service.current == value {
 			service.current = nil
 		} else {
-			service.pending = nil
+			service.preparation.detach(value)
 		}
 		if value.trial == nil && (reason == turncontrol.Unhelpful || reason == turncontrol.Expired) {
 			service.retryAt = now.Add(ServiceCooldown)
@@ -405,8 +405,8 @@ func (s *Sender) close() {
 	clear(s.paths)
 	s.mu.Unlock()
 	for _, service := range s.services {
-		if service.issuance != nil {
-			service.issuance.cancel()
+		if service.preparation.issuance() != nil {
+			service.preparation.issuance().cancel()
 		}
 	}
 	s.work.Wait()
@@ -418,7 +418,7 @@ func (s *Sender) close() {
 			}
 		default:
 			for _, service := range s.services {
-				for _, value := range []*delegation{service.current, service.pending} {
+				for _, value := range []*delegation{service.current, service.preparation.pending()} {
 					if value != nil {
 						if s.config.Retire != nil {
 							s.config.Retire(value.grant.PathID)

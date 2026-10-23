@@ -37,7 +37,7 @@ func TestReportBurstCannotDisplaceReadinessOrRetirement(t *testing.T) {
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: time.Minute})
 	issueNext(t, s)
-	path := s.services[0].pending
+	path := s.services[0].preparation.pending()
 	lane := turncontrol.Lane{ID: 2, Epoch: 1}
 	s.Admit(t.Context(), path.grant.PathID, lane, make(chan struct{}))
 	for useful := uint64(1); useful <= controlCommandCapacity*4; useful++ {
@@ -134,7 +134,7 @@ func TestDemandCancellationIsNotCoalescedAcrossReactivation(t *testing.T) {
 		t.Fatal("new demand erased the preceding cancellation")
 	}
 	issueNext(t, s)
-	if s.services[0].pending.grant.Authority.Sequence != 3 {
+	if s.services[0].preparation.pending().grant.Authority.Sequence != 3 {
 		t.Fatal("reactivation reused previous demand authority")
 	}
 }

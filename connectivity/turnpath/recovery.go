@@ -71,7 +71,7 @@ func (s *Sender) refreshRecoveryNetwork() {
 	for _, service := range s.services {
 		service.selection = transportSelection{available: service.selection.available}
 		s.mu.Lock()
-		for _, path := range []*delegation{service.current, service.pending} {
+		for _, path := range []*delegation{service.current, service.preparation.pending()} {
 			if path != nil {
 				path.quality.points = nil
 			}
@@ -101,7 +101,7 @@ func (s *Sender) recoverBudgetAfterProgress(path *delegation) {
 }
 
 func (s *Sender) canAcquire(service *service, now time.Time, active, overlap int) bool {
-	if service.pending != nil || service.issuance != nil || now.Before(service.retryAt) {
+	if service.preparation.phase() != preparationIdle || now.Before(service.retryAt) {
 		return false
 	}
 	if service.current == nil {
@@ -115,7 +115,7 @@ func (s *Sender) canAcquire(service *service, now time.Time, active, overlap int
 }
 
 func (s *Sender) countInitialRecoveryFailure(service *service, value *delegation) {
-	if value != service.pending || value.grant.Replaces != ([16]byte{}) {
+	if value != service.preparation.pending() || value.grant.Replaces != ([16]byte{}) {
 		return
 	}
 	s.mu.Lock()

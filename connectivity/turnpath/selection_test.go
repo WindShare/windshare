@@ -63,7 +63,7 @@ func (h *selectionHarness) sample(path *delegation, seconds, bytes, pending uint
 
 func (h *selectionHarness) startEvaluation(t *testing.T) *delegation {
 	t.Helper()
-	old := h.sender.services[0].pending
+	old := h.sender.services[0].preparation.pending()
 	h.admit(t, old, 1)
 	for second := uint64(0); second <= 10; second += 2 {
 		h.now = old.created.Add(time.Duration(second) * time.Second)
@@ -77,7 +77,7 @@ func (h *selectionHarness) startTrial(t *testing.T) (*delegation, *delegation) {
 	t.Helper()
 	old := h.startEvaluation(t)
 	issueNext(t, h.sender)
-	trial := h.sender.services[0].pending
+	trial := h.sender.services[0].preparation.pending()
 	if trial == nil || trial.trial == nil || trial.transport != iceconfig.RelayTLS {
 		t.Fatalf("missing bounded TLS contender: %+v", trial)
 	}
@@ -106,12 +106,12 @@ func TestEvaluationYieldsToContinuity(t *testing.T) {
 			}
 			h.sender.maintain(t.Context())
 			service := h.sender.services[0]
-			if service.current != old || service.pending != nil || h.accounts.closed != 1 ||
-				service.issuance == nil || service.issuance.intent != want {
+			if service.current != old || service.preparation.pending() != nil || h.accounts.closed != 1 ||
+				service.preparation.issuance() == nil || service.preparation.issuance().intent != want {
 				t.Fatal("performance evaluation blocked continuity or released the working path")
 			}
 			issueNext(t, h.sender)
-			if service.pending.intent != want || service.pending.transport != iceconfig.RelayTCP {
+			if service.preparation.pending().intent != want || service.preparation.pending().transport != iceconfig.RelayTCP {
 				t.Fatal("continuity inherited the speculative transport")
 			}
 		})
@@ -126,8 +126,8 @@ func TestCanceledEvaluationCannotInstallAnAlreadyIssuedCredential(t *testing.T) 
 	h.sender.maintain(t.Context())
 	h.sender.install(t.Context(), result)
 	service := h.sender.services[0]
-	if service.current != old || service.pending != nil || h.accounts.closed != 1 ||
-		service.issuance == nil || service.issuance.intent != recoveryPath {
+	if service.current != old || service.preparation.pending() != nil || h.accounts.closed != 1 ||
+		service.preparation.issuance() == nil || service.preparation.issuance().intent != recoveryPath {
 		t.Fatal("completed speculative issuance escaped cancellation")
 	}
 	issueNext(t, h.sender)
@@ -149,14 +149,14 @@ func TestEvaluationFailureDoesNotBackOffWorkingServiceRecovery(t *testing.T) {
 				}
 			} else {
 				issueNext(t, h.sender)
-				trial := h.sender.services[0].pending
+				trial := h.sender.services[0].preparation.pending()
 				h.sender.apply(t.Context(), turncontrol.Retire{Authority: trial.grant.Authority,
 					PathID: trial.grant.PathID, Reason: turncontrol.Unhelpful})
 			}
 			h.sender.Recover(old.grant.PathID, turncontrol.ChannelUnavailable)
 			h.sender.maintain(t.Context())
 			service := h.sender.services[0]
-			if service.current != old || service.issuance == nil || service.issuance.intent != recoveryPath {
+			if service.current != old || service.preparation.issuance() == nil || service.preparation.issuance().intent != recoveryPath {
 				t.Fatal("failed optimization delayed recovery of a previously working service")
 			}
 			issueNext(t, h.sender)
@@ -174,7 +174,7 @@ func TestTCPFirstDelegatesIdenticalTransportToBothPeersAndFallsBack(t *testing.T
 	}
 	service := h.sender.services[0]
 	for index, transport := range []iceconfig.RelayTransport{iceconfig.RelayTCP, iceconfig.RelayTLS, iceconfig.RelayUDP} {
-		pending := service.pending
+		pending := service.preparation.pending()
 		if pending.transport != transport {
 			t.Fatalf("attempt %d selected %s instead of %s", index, pending.transport, transport)
 		}
@@ -188,7 +188,7 @@ func TestTCPFirstDelegatesIdenticalTransportToBothPeersAndFallsBack(t *testing.T
 			issueNext(t, h.sender)
 		}
 	}
-	h.admit(t, service.pending, 1)
+	h.admit(t, service.preparation.pending(), 1)
 	if service.current == nil || h.accounts.closed != 2 {
 		t.Fatal("fallback failed to retire unsuccessful allocations")
 	}
@@ -211,13 +211,13 @@ func TestTransportTrialRequiresSustainedUsefulImprovement(t *testing.T) {
 			}
 			service := h.sender.services[0]
 			if test.winner {
-				if service.current != trial || service.pending != nil || h.accounts.closed != 1 || service.selection.preferred != iceconfig.RelayTLS {
+				if service.current != trial || service.preparation.pending() != nil || h.accounts.closed != 1 || service.selection.preferred != iceconfig.RelayTLS {
 					t.Fatal("measured winner did not replace exactly its authenticated predecessor")
 				}
 			} else {
 				h.now = trial.created.Add(TransportEvaluationBudget)
 				h.sender.maintain(t.Context())
-				if service.current != old || service.pending != nil || h.accounts.closed != 1 {
+				if service.current != old || service.preparation.pending() != nil || h.accounts.closed != 1 {
 					t.Fatal("unhelpful evaluation damaged the working path or leaked its allocation")
 				}
 			}
@@ -227,7 +227,7 @@ func TestTransportTrialRequiresSustainedUsefulImprovement(t *testing.T) {
 
 func TestTransportExplorationSkipsShortIdleAndDrainedDemand(t *testing.T) {
 	h := newSelectionHarness(t)
-	old := h.sender.services[0].pending
+	old := h.sender.services[0].preparation.pending()
 	h.admit(t, old, 1)
 	for second := uint64(0); second <= 10; second += 2 {
 		h.now = old.created.Add(time.Duration(second) * time.Second)
@@ -262,7 +262,7 @@ func TestTrialScopeAndBudgetCannotRetireWorkingPredecessor(t *testing.T) {
 				h.now = h.now.Add(TransportEvaluationBudget)
 			}
 			h.sender.maintain(t.Context())
-			if h.sender.services[0].current != old || h.sender.services[0].pending != nil || h.accounts.closed != 1 {
+			if h.sender.services[0].current != old || h.sender.services[0].preparation.pending() != nil || h.accounts.closed != 1 {
 				t.Fatal("evaluation crossed its resource or authentication boundary")
 			}
 		})

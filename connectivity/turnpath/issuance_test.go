@@ -47,7 +47,7 @@ func TestCanceledIssuerImmediatelyServesNextDemandWithoutFailureObservation(t *t
 		t.Fatal("caller cancellation imposed a provider cooldown")
 	}
 	issueNext(t, s)
-	if accounts.requests.Load() != 2 || s.services[0].pending == nil {
+	if accounts.requests.Load() != 2 || s.services[0].preparation.pending() == nil {
 		t.Fatal("new demand did not start immediately")
 	}
 	for _, message := range messages {
@@ -80,7 +80,7 @@ func TestProviderCancellationWithoutCallerCancellationStillBacksOff(t *testing.T
 	t.Cleanup(s.close)
 	s.apply(t.Context(), turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: time.Minute})
 	issueNext(t, s)
-	if s.services[0].retryAt.Sub(now) != ServiceCooldown || s.services[0].issuance != nil {
+	if s.services[0].retryAt.Sub(now) != ServiceCooldown || s.services[0].preparation.issuance() != nil {
 		t.Fatal("provider-local cancellation caused an immediate retry loop")
 	}
 }

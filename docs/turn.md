@@ -154,7 +154,12 @@ socket counters with their service, session, path and available attempt IDs.
 Cleanup distinguishes local protocol completion from a forced deadline; neither
 claims remote deallocation acknowledgment.
 `engine/turn` exposes settings and observations; account budgets, discovery and provider
-assembly live in `engine/internal/turnruntime`. Engine callers inspect `TURNStatus()` and subscribe through
+assembly live in `engine/internal/turnruntime`. `connectivity/turnpath` owns session
+path replacement, with one preparing successor alongside a serving path.
+`connectivity/turnroute` owns egress planning and fallback scheduling;
+`connectivity/turncapacity` owns process admission and handoff reservations.
+The native provider executes these plans through resource capabilities and adapts
+Pion events; TURN protocol state remains in Pion. Engine callers inspect `TURNStatus()` and subscribe through
 `TURNDependencies.Observe`; `TURNDependencies.Cache` supplies optional discovery persistence.
 Local shutdown and provider-confirmed revocation are
 separate events. Cloudflare supports credential revocation; static and coturn

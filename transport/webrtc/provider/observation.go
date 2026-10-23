@@ -66,7 +66,9 @@ func (c *Connection) OnICECandidate(callback func(*pion.ICECandidate)) {
 }
 func (c *Connection) observeSelectedPair(pair *pion.ICECandidatePair) {
 	if pair != nil && c.turnGathering != nil {
-		c.turnGathering.selectPath(net.JoinHostPort(pair.Local.Address, strconv.Itoa(int(pair.Local.Port))))
+		if address, err := netip.ParseAddrPort(net.JoinHostPort(pair.Local.Address, strconv.Itoa(int(pair.Local.Port)))); err == nil {
+			c.turnGathering.Select(address)
+		}
 		c.selectTURNPair(pair)
 	}
 	if c.request.Observe == nil || pair == nil {

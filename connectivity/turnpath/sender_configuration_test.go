@@ -57,7 +57,7 @@ func TestInventoryPublicationPreservesUnchangedPendingIssuance(t *testing.T) {
 	}
 	unblock()
 	issueNext(t, sender)
-	if sender.services[0].pending == nil {
+	if sender.services[0].preparation.pending() == nil {
 		t.Fatal("unchanged profile's result was discarded")
 	}
 	if calls, _ := accounts.counts(); calls != 1 {
@@ -79,11 +79,11 @@ func TestProfileChangeRejectsAlreadyCompletedIssuance(t *testing.T) {
 	accounts.inventory.Revision += 2
 	accounts.inventory.Profiles[0].Revision += 2
 	sender.install(t.Context(), result)
-	if sender.services[0].pending != nil {
+	if sender.services[0].preparation.pending() != nil {
 		t.Fatal("completed result from an earlier profile incarnation was installed")
 	}
 	issueNext(t, sender)
-	if calls, closed := accounts.counts(); calls != 2 || closed != 1 || sender.services[0].pending == nil {
+	if calls, closed := accounts.counts(); calls != 2 || closed != 1 || sender.services[0].preparation.pending() == nil {
 		t.Fatalf("changed profile did not retry cleanly: calls=%d closed=%d", calls, closed)
 	}
 }
