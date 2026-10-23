@@ -373,11 +373,24 @@ func (destination *memoryDestination) ObserveFinalPresence(context.Context) (Fin
 	observation, _ := ObserveFinal(destination.final)
 	return observation, destination.observeErr
 }
-func (destination *memoryDestination) PublishNoReplace(
-	context.Context,
-	OwnedFile,
-	FinalExpectation,
-) (FinalObservation, error) {
+
+type memoryPublication struct{ destination *memoryDestination }
+
+func (destination *memoryDestination) WithPublication(
+	_ context.Context, _ OwnedFile, _ FinalExpectation, operation func(FilePublication) error,
+) error {
+	return operation(memoryPublication{destination: destination})
+}
+
+func (publication memoryPublication) Observe(ctx context.Context) (FinalObservation, error) {
+	return publication.destination.ObserveFinal(ctx, FinalExpectation{})
+}
+
+func (publication memoryPublication) PublishNoReplace(ctx context.Context) (FinalObservation, error) {
+	destination := publication.destination
+	if destination.observeErr != nil || destination.final.valid() && destination.final != FinalAbsent {
+		return publication.Observe(ctx)
+	}
 	condition := destination.publish
 	if condition == 0 {
 		condition = FinalOwnedAtExpectedSize
@@ -386,8 +399,8 @@ func (destination *memoryDestination) PublishNoReplace(
 	observation, _ := ObserveFinal(condition)
 	return observation, destination.publishErr
 }
-func (destination *memoryDestination) SyncFinalParent(context.Context) error {
-	return destination.syncErr
+func (publication memoryPublication) Sync(context.Context) error {
+	return publication.destination.syncErr
 }
 func (destination *memoryDestination) Close() error {
 	destination.closed = true
@@ -465,7 +478,7 @@ func TestDirectTreeFileCheckpointIsTheOnlyRangeAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !transfer.RangesCoverFile(8, checkpoint.Ranges()) || len(repository.stores) != 4 {
+	if !transfer.RangesCoverFile(8, checkpoint.Ranges()) || len(repository.stores) != 3 {
 		t.Fatalf("checkpoint = %#v, store cuts = %d", checkpoint.Ranges().Ranges(), len(repository.stores))
 	}
 	settlement, err := transaction.Commit(context.Background())

@@ -90,7 +90,9 @@ func openWindowsV3OutputPlatformWithAuthority(
 	if err != nil {
 		err = windowsV3Failure("inspect output root", absolute, errWindowsV3OutputUnsupported, err)
 	} else {
-		err = validateWindowsV3RootShape(facts)
+		if shapeErr := validateWindowsV3RootShape(facts); shapeErr != nil {
+			err = windowsV3Failure("inspect output root", absolute, errWindowsV3OutputUnsupported, shapeErr)
+		}
 	}
 	if err == nil {
 		// This handle anchors the certification lifetime. Descendants and guards
@@ -304,9 +306,9 @@ func (directory *windowsV3Directory) openDirectoryMetadataHandle(
 			"open output directory metadata authority", expected.path, err,
 		)
 	}
-	expectedFacts, expectedErr := expected.inspector.Inspect(expected.handle())
+	expectedIdentity, expectedErr := expected.inspector.Identify(expected.handle())
 	metadataFacts, metadataErr := expected.inspector.Inspect(handle)
-	same := expectedErr == nil && metadataErr == nil && expectedFacts.object.same(metadataFacts.object)
+	same := expectedErr == nil && metadataErr == nil && expectedIdentity.same(metadataFacts.object)
 	if !same {
 		_ = windows.CloseHandle(handle)
 		return windows.InvalidHandle, errors.Join(

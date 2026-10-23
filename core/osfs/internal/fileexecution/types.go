@@ -251,13 +251,17 @@ type FileDestination interface {
 	Target() transfer.FileMaterializationTarget
 	ObserveFinal(context.Context, FinalExpectation) (FinalObservation, error)
 	ObserveFinalPresence(context.Context) (FinalObservation, error)
-	PublishNoReplace(context.Context, OwnedFile, FinalExpectation) (FinalObservation, error)
-	SyncFinalParent(context.Context) error
+	WithPublication(context.Context, OwnedFile, FinalExpectation, func(FilePublication) error) error
 	Close() error
 }
 
-type OwnedFinalObserver interface {
-	ObserveOwnedFinal(context.Context, OwnedFile, FinalExpectation) (FinalObservation, error)
+// FilePublication is borrowed for one synchronous local namespace transaction.
+// Its parent placement and owned-object binding remain valid until the callback
+// returns. Network work and checkpoint persistence must stay outside this scope.
+type FilePublication interface {
+	Observe(context.Context) (FinalObservation, error)
+	PublishNoReplace(context.Context) (FinalObservation, error)
+	Sync(context.Context) error
 }
 
 type DirectoryAuthority interface {

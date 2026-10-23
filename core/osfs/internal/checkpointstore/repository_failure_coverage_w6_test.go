@@ -732,7 +732,13 @@ func TestCandidateRecoverySeparatesOrphansConflictsAndInitialCrashCuts(t *testin
 		stable := map[string]storedRecord{
 			targetName: {record: initial, encoded: encoded},
 		}
-		result, _ := run(t, nextVerified, stable, map[string]struct{}{targetName: {}})
+		// A directly verified successor is valid once the writer has synced data.
+		// Skipping a generation still cannot displace the exact predecessor.
+		skipped, advanceErr := checkpointmodel.AdvanceDurableRanges(nextVerified, nextVerified.VerifiedRanges())
+		if advanceErr != nil {
+			t.Fatal(advanceErr)
+		}
+		result, _ := run(t, skipped, stable, map[string]struct{}{targetName: {}})
 		if len(result.Attention()) != 1 ||
 			result.Attention()[0].Code() != AttentionConflictingCandidate {
 			t.Fatalf("divergent candidate attention = %+v", result.Attention())

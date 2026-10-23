@@ -125,13 +125,16 @@ func (repository *Repository) Close() error {
 	return repositoryError("close operation repository", err)
 }
 
-func (repository *Repository) Create(record checkpointmodel.Record) error {
+// Create returns the exact installed record only after content and namespace
+// durability have both succeeded. Readability following an error is not a commit
+// receipt; callers must freeze authority until recovery reconciles that case.
+func (repository *Repository) Create(record checkpointmodel.Record) (checkpointmodel.Record, error) {
 	if err := repository.validateRecord(record); err != nil {
-		return err
+		return checkpointmodel.Record{}, err
 	}
 	encoded, err := checkpointmodel.EncodeRecord(record)
 	if err != nil {
-		return codedError(ErrorCorruptRecord, "encode created record", err)
+		return checkpointmodel.Record{}, codedError(ErrorCorruptRecord, "encode created record", err)
 	}
 	if !checkpointmodel.InitialCandidate(record) {
 		// Only the empty generation-zero candidate can establish a new file
@@ -139,57 +142,62 @@ func (repository *Repository) Create(record checkpointmodel.Record) error {
 		// image is accepted solely to make a completed create retry idempotent.
 		existing, reopenErr := repository.Reopen(record.RecordID())
 		if reopenErr != nil {
-			return codedError(
+			return checkpointmodel.Record{}, codedError(
 				ErrorUnsafeInstall, "create checkpoint without predecessor",
 				errors.Join(checkpointmodel.ErrRecordGeneration, reopenErr),
 			)
 		}
 		existingEncoded, encodeErr := checkpointmodel.EncodeRecord(existing)
 		if encodeErr != nil || !bytes.Equal(existingEncoded, encoded) {
-			return codedError(
+			return checkpointmodel.Record{}, codedError(
 				ErrorUnsafeInstall, "create checkpoint without predecessor",
 				errors.Join(checkpointmodel.ErrRecordGeneration, encodeErr),
 			)
 		}
-		return nil
 	}
 	shardName, recordName := recordLocation(record.RecordID())
 	shard, err := OpenShard(repository.records, shardName, true)
 	if err != nil {
-		return repositoryError("open created record shard", err)
+		return checkpointmodel.Record{}, repositoryError("open created record shard", err)
 	}
 	installErr := InstallCreate(shard, recordName, encoded)
-	return repositoryError("create checkpoint record", errors.Join(installErr, shard.Close()))
+	if err := repositoryError("create checkpoint record", errors.Join(installErr, shard.Close())); err != nil {
+		return checkpointmodel.Record{}, err
+	}
+	return record, nil
 }
 
-func (repository *Repository) Replace(previous, next checkpointmodel.Record) error {
+func (repository *Repository) Replace(previous, next checkpointmodel.Record) (checkpointmodel.Record, error) {
 	if err := repository.validateRecord(previous); err != nil {
-		return err
+		return checkpointmodel.Record{}, err
 	}
 	if err := repository.validateRecord(next); err != nil {
-		return err
+		return checkpointmodel.Record{}, err
 	}
 	if previous.RecordID() != next.RecordID() {
-		return codedError(ErrorUnsafeInstall, "replace checkpoint record", checkpointmodel.ErrRecordBinding)
+		return checkpointmodel.Record{}, codedError(ErrorUnsafeInstall, "replace checkpoint record", checkpointmodel.ErrRecordBinding)
 	}
 	if err := checkpointmodel.ValidateTransition(previous, next); err != nil {
-		return codedError(ErrorUnsafeInstall, "validate checkpoint replacement", err)
+		return checkpointmodel.Record{}, codedError(ErrorUnsafeInstall, "validate checkpoint replacement", err)
 	}
 	previousEncoded, err := checkpointmodel.EncodeRecord(previous)
 	if err != nil {
-		return codedError(ErrorCorruptRecord, "encode previous record", err)
+		return checkpointmodel.Record{}, codedError(ErrorCorruptRecord, "encode previous record", err)
 	}
 	nextEncoded, err := checkpointmodel.EncodeRecord(next)
 	if err != nil {
-		return codedError(ErrorCorruptRecord, "encode next record", err)
+		return checkpointmodel.Record{}, codedError(ErrorCorruptRecord, "encode next record", err)
 	}
 	shardName, recordName := recordLocation(next.RecordID())
 	shard, err := OpenShard(repository.records, shardName, false)
 	if err != nil {
-		return repositoryError("open replacement record shard", err)
+		return checkpointmodel.Record{}, repositoryError("open replacement record shard", err)
 	}
 	installErr := InstallReplace(shard, recordName, previousEncoded, nextEncoded)
-	return repositoryError("replace checkpoint record", errors.Join(installErr, shard.Close()))
+	if err := repositoryError("replace checkpoint record", errors.Join(installErr, shard.Close())); err != nil {
+		return checkpointmodel.Record{}, err
+	}
+	return next, nil
 }
 
 func (repository *Repository) Reopen(recordID checkpointmodel.RecordID) (checkpointmodel.Record, error) {

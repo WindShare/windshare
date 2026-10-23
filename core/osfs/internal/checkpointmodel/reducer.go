@@ -86,9 +86,10 @@ func validateCheckpointCut(previous, next Record) error {
 	if previous.commitState != CommitVerified ||
 		next.checkpointGeneration != previous.checkpointGeneration+1 ||
 		next.stateGeneration != previous.stateGeneration+1 ||
-		next.commitState != CommitCandidate || next.phase != previous.phase {
-		// A new range generation is a write-ahead candidate at exactly one
-		// successor cut. Phase changes are separate committed state transitions.
+		(next.commitState != CommitCandidate && next.commitState != CommitVerified) || next.phase != previous.phase {
+		// A writer may prepare a candidate before proving data durability, or
+		// install a verified successor after that barrier. Both advance exactly
+		// one range generation; phase changes remain separate transitions.
 		return ErrRecordGeneration
 	}
 	return nil
@@ -219,6 +220,14 @@ func Recover(committed, candidate *Record) (Record, error) {
 		return *committed, nil
 	}
 	return *candidate, nil
+}
+
+// AdvanceDurableRanges constructs the next confirmed range image. The caller
+// must sync the owned data before installing it. Atomic record replacement keeps
+// the previous confirmed image authoritative until the successor is installed;
+// an intermediate durable candidate adds no recovery evidence after data sync.
+func AdvanceDurableRanges(previous Record, ranges []Range) (Record, error) {
+	return AdvanceGeneration(previous, ranges, previous.Phase(), CommitVerified)
 }
 
 func AdvanceGeneration(

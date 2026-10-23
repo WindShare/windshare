@@ -11,6 +11,17 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+type windowsV3ObjectInspectorFunc func(windows.Handle) (windowsV3ObjectFacts, error)
+
+func (inspect windowsV3ObjectInspectorFunc) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
+	return inspect(handle)
+}
+
+func (inspect windowsV3ObjectInspectorFunc) Identify(handle windows.Handle) (windowsV3ObjectIdentity, error) {
+	facts, err := inspect(handle)
+	return facts.object, err
+}
+
 type windowsV3VolumeInspectorFunc func(windows.Handle) (windowsV3VolumeFacts, error)
 
 func (inspect windowsV3VolumeInspectorFunc) InspectVolume(handle windows.Handle) (windowsV3VolumeFacts, error) {

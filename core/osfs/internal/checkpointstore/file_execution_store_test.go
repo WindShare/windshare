@@ -114,7 +114,7 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.Replace(promoted, checkpointCandidate); err != nil {
+	if _, err := repository.Replace(promoted, checkpointCandidate); err != nil {
 		t.Fatal(err)
 	}
 	// The candidate is a process-restart cut, so release every process-scoped

@@ -415,8 +415,12 @@ func TestRecordReducersOwnTransitionsSelectionAndCrashCuts(t *testing.T) {
 	committedGenerationSpec.CommitState = CommitVerified
 	committedGenerationSpec.VerifiedRanges = []Range{{Offset: 0, End: 16}, {Offset: 24, End: 64}}
 	committedGeneration := mustCanonicalRecord(t, committedGenerationSpec)
-	if !errors.Is(ValidateTransition(verified, committedGeneration), ErrRecordGeneration) {
-		t.Fatal("new checkpoint generation bypassed the candidate cut")
+	if err := ValidateTransition(verified, committedGeneration); err != nil {
+		t.Fatalf("durable successor = %v", err)
+	}
+	direct, err := AdvanceDurableRanges(verified, committedGeneration.VerifiedRanges())
+	if err != nil || !bytes.Equal(direct.CanonicalBytes(), committedGeneration.CanonicalBytes()) {
+		t.Fatalf("direct durable generation = (%+v, %v)", direct, err)
 	}
 	phaseChangingCandidateSpec := committedGenerationSpec
 	phaseChangingCandidateSpec.CommitState = CommitCandidate

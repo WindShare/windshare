@@ -264,7 +264,7 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 	if err != nil {
 		return transfer.FileSettlement{}, err
 	}
-	final, err := transaction.destination.PublishNoReplace(ctx, transaction.file, expectation)
+	final, err := settlePublication(ctx, transaction.destination, transaction.file, expectation, true)
 	if err != nil || !final.valid() {
 		return transaction.blockPublicationLocked()
 	}
@@ -280,9 +280,6 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 		return settlement, nil
 	}
 	if final.Condition() != FinalOwnedAtExpectedSize {
-		return transaction.blockPublicationLocked()
-	}
-	if err := transaction.destination.SyncFinalParent(ctx); err != nil {
 		return transaction.blockPublicationLocked()
 	}
 	settlement, err := transfer.NewTransientPublishedFileSettlement(transaction.binding)

@@ -20,7 +20,6 @@ func validWindowsV3ObjectFacts() windowsV3ObjectFacts {
 	var fileID [16]byte
 	fileID[0] = 1
 	return windowsV3ObjectFacts{
-		path:       `\\?\C:\output`,
 		attributes: windows.FILE_ATTRIBUTE_DIRECTORY,
 		object: windowsV3ObjectIdentity{
 			volume: windowsV3VolumeIdentity{guid: `\\?\volume{test}`, serial: 1},
