@@ -20,7 +20,7 @@ func TestBlockBrokerConstructorAppliesOnlyDocumentedDefaults(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		config  BlockBrokerConfig
-		fetcher blockFetcher
+		fetcher BlockFetcher
 	}{
 		{
 			name: "share identity",
@@ -44,20 +44,23 @@ func TestBlockBrokerConstructorAppliesOnlyDocumentedDefaults(t *testing.T) {
 		},
 	} {
 		t.Run("missing "+test.name, func(t *testing.T) {
-			if _, err := newBlockBroker(test.config, test.fetcher); err == nil {
+			test.config.Blocks = test.fetcher
+			if _, err := NewBlockBroker(test.config); err == nil {
 				t.Fatalf("broker accepted a missing %s", test.name)
 			}
 		})
 	}
-	if _, err := newBlockBroker(BlockBrokerConfig{
+	if _, err := NewBlockBroker(BlockBrokerConfig{
+		Blocks:        fetcher,
 		ShareInstance: share, ProcessBudget: budget, MaxConcurrentBlocks: MaximumConcurrentBlocks + 1,
-	}, fetcher); err == nil {
+	}); err == nil {
 		t.Fatal("broker accepted an out-of-contract concurrency limit")
 	}
 
-	broker, err := newBlockBroker(BlockBrokerConfig{
+	broker, err := NewBlockBroker(BlockBrokerConfig{
+		Blocks:        fetcher,
 		ShareInstance: share, ProcessBudget: budget,
-	}, fetcher)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

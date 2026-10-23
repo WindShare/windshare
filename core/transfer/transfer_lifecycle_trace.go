@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
@@ -131,7 +132,7 @@ func (r *jobRun) traceFileLifecycle(stage TransferLifecycleStage, plan plannedFi
 	r.job.trace(TransferLifecycleTrace{
 		Stage: stage, OutputSessionID: r.output.SessionID(),
 		FileSelection: plan.selectionDecision,
-		Fault:         closedFault(failure),
+		Fault:         failurestate.FaultOf(failure),
 		Interruption:  closedInterruption(failure),
 		Failed:        failure != nil,
 	})

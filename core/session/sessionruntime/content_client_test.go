@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestBlockFragmentInactivityIsALaneTransportBoundary(t *testing.T) {
@@ -81,10 +82,10 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 		assembler: assembler, revisions: revisions, fragmentInactivityTimeout: testInactivityTimeout,
 	}
 
-	_, fetchErr := lane.FetchBlock(t.Context(), transfer.BlockDemand{
+	_, fetchErr := lane.FetchBlock(t.Context(), transferlanes.Demand{
 		LeaseID: lease, Descriptor: descriptor, Index: 0,
 	}, nil)
-	capabilityType := reflect.TypeOf(transfer.NewDemandReassignableAfterRetirement(nil))
+	capabilityType := reflect.TypeOf(transferlanes.NewDemandReassignableAfterRetirement(nil))
 	var boundary *transferfault.BoundaryError
 	expected, buildErr := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
 	if buildErr != nil {
@@ -115,9 +116,9 @@ func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T)
 		rpc:       newRPCClient(runtime, &deterministicReader{next: 71}),
 		revisions: revisions,
 	}
-	demand := transfer.BlockDemand{LeaseID: lease}
+	demand := transferlanes.Demand{LeaseID: lease}
 	_, err := lane.FetchBlock(context.Background(), demand, nil)
-	capabilityType := reflect.TypeOf(transfer.NewDemandNotAdmitted(ErrLaneUnavailable))
+	capabilityType := reflect.TypeOf(transferlanes.NewDemandNotAdmitted(ErrLaneUnavailable))
 	if reflect.TypeOf(err) != capabilityType || !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("pre-admission error=%v", err)
 	}
@@ -154,21 +155,21 @@ type countingReceiverFallbackLane struct{ calls atomic.Int32 }
 
 func (lane *countingReceiverFallbackLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand, func(uint64),
+	transferlanes.Demand, func(uint64),
 ) (records.BlockRecord, error) {
 	lane.calls.Add(1)
 	return records.BlockRecord{}, errors.New("fallback was reached")
 }
 
 type signalingReceiverBlockLane struct {
-	inner transfer.BlockLane
+	inner transferlanes.BlockSource
 	done  chan struct{}
 	once  sync.Once
 }
 
 func (lane *signalingReceiverBlockLane) FetchBlock(
 	ctx context.Context,
-	demand transfer.BlockDemand, _ func(uint64),
+	demand transferlanes.Demand, _ func(uint64),
 ) (records.BlockRecord, error) {
 	record, err := lane.inner.FetchBlock(ctx, demand, nil)
 	lane.once.Do(func() { close(lane.done) })
@@ -224,16 +225,16 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 		assembler: assembler, revisions: revisions,
 	}
 	signalingLane := &signalingReceiverBlockLane{inner: blockLane, done: make(chan struct{})}
-	contentLanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{ProtocolSessionID: runtime.sessionID})
+	contentLanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: runtime.sessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer contentLanes.Close()
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, transfer.LaneRouteRelay, signalingLane); err != nil {
+	if err := contentLanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, signalingLane); err != nil {
 		t.Fatal(err)
 	}
 	fallback := &countingReceiverFallbackLane{}
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, transfer.LaneRouteRelay, fallback); err != nil {
+	if err := contentLanes.Add(transferlanes.Identity{ID: 2, Epoch: 1}, transferlanes.RouteRelay, fallback); err != nil {
 		t.Fatal(err)
 	}
 	processBudget, err := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
@@ -241,7 +242,7 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 		t.Fatal(err)
 	}
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
+		ShareInstance: share, Blocks: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
 		ProcessBudget: processBudget, MaxConcurrentBlocks: 1,
 	})
 	if err != nil {
@@ -254,7 +255,7 @@ func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
 	defer cancel()
 	_, fetchErr := broker.GetBlock(ctx, lease, descriptor, 0)
-	if fetchErr == nil || reflect.TypeOf(fetchErr) == reflect.TypeOf(transfer.NewDemandNotAdmitted(nil)) {
+	if fetchErr == nil || reflect.TypeOf(fetchErr) == reflect.TypeOf(transferlanes.NewDemandNotAdmitted(nil)) {
 		t.Fatalf("unknown transport result=%v", fetchErr)
 	}
 	select {
@@ -286,16 +287,16 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 		identity: LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1},
 		rpc:      newRPCClient(runtime, &deterministicReader{next: 78}), revisions: revisions,
 	}
-	contentLanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{ProtocolSessionID: runtime.sessionID})
+	contentLanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: runtime.sessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer contentLanes.Close()
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 1, Epoch: 1}, transfer.LaneRouteRelay, blockLane); err != nil {
+	if err := contentLanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, blockLane); err != nil {
 		t.Fatal(err)
 	}
 	fallback := &countingReceiverFallbackLane{}
-	if err := contentLanes.Add(transfer.LaneIdentity{ID: 2, Epoch: 1}, transfer.LaneRouteRelay, fallback); err != nil {
+	if err := contentLanes.Add(transferlanes.Identity{ID: 2, Epoch: 1}, transferlanes.RouteRelay, fallback); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,7 +307,7 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 	)
 	processBudget, _ := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-		ShareInstance: share, Lanes: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
+		ShareInstance: share, Blocks: contentLanes, MaxBytes: uint64(catalog.MinChunkSize) * 3,
 		ProcessBudget: processBudget, MaxConcurrentBlocks: 1,
 	})
 	if err != nil {

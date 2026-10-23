@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/session/contentflow"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/session/contentflow"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -22,7 +23,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 const (
@@ -201,7 +202,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 		runtime, acceptErr := runtimeFactory.Accept(handshakeContext, initialSenderLane)
 		accepted <- acceptedRuntime{runtime: runtime, err: acceptErr}
 	}()
-	receiverRuntime, err := preparedReceiver.Connect(handshakeContext, initialReceiverLane, transfer.LaneRouteRelay)
+	receiverRuntime, err := preparedReceiver.Connect(handshakeContext, initialReceiverLane, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 			err      error
 		}{identity: identity, err: attachErr}
 	}()
-	receiverAdmission, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane, transfer.LaneRouteDirect)
+	receiverAdmission, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane, transferlanes.RouteDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

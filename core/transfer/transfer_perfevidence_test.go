@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 const (
@@ -64,7 +65,7 @@ func newImmediateBenchmarkLane(recordsByIndex []records.BlockRecord) *immediateB
 	return &immediateBenchmarkLane{records: recordsByIndex, seen: make([]atomic.Uint64, len(recordsByIndex))}
 }
 
-func (lane *immediateBenchmarkLane) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
+func (lane *immediateBenchmarkLane) FetchBlock(ctx context.Context, demand transferlanes.Demand, _ func(uint64)) (records.BlockRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return records.BlockRecord{}, err
 	}
@@ -88,7 +89,7 @@ func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
 	lease := benchmarkTransferIdentity[content.LeaseID](83)
 	for _, laneCount := range laneCounts {
 		b.Run(fmt.Sprintf("lanes=%02d/window=%02d/block_bytes=%07d", laneCount, laneCount, blockBytes), func(b *testing.B) {
-			lanes, err := NewLaneSet(LaneSetConfig{
+			lanes, err := transferlanes.New(transferlanes.Config{
 				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101),
 				RaceWidth:         1,
 			})
@@ -99,7 +100,7 @@ func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
 			probes := make([]*immediateBenchmarkLane, laneCount)
 			for index := range probes {
 				probes[index] = newImmediateBenchmarkLane(recordSet)
-				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, LaneRouteRelay, probes[index]); err != nil {
+				if err := lanes.Add(transferlanes.Identity{ID: uint32(index + 1)}, transferlanes.RouteRelay, probes[index]); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -108,7 +109,7 @@ func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
 				b.Fatal(err)
 			}
 			broker, err := NewBlockBroker(BlockBrokerConfig{
-				ShareInstance: descriptor.ShareInstance(), Lanes: lanes, MaxBytes: exactBytes,
+				ShareInstance: descriptor.ShareInstance(), Blocks: lanes, MaxBytes: exactBytes,
 				ProcessBudget: process, MaxConcurrentBlocks: laneCount,
 			})
 			if err != nil {
@@ -141,10 +142,10 @@ func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
 					b.Fatalf("file-local range wrote %d bytes, want %d", written, exactBytes)
 				}
 				// Output completion may precede a canceled probe's physical exit.
-				// Settle all attempts before checking capacity or starting a new batch.
+				// Observe released capacity before checking ownership or starting a new batch.
 				broker.loads.Wait()
-				lanes.attempts.Wait()
 				broker.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
+				waitForRetainedBytes(b, broker, process, 0, 0)
 				if broker.UsedBytes() != 0 || process.Used() != 0 {
 					b.Fatalf("invalidation retained plaintext: broker=%d process=%d", broker.UsedBytes(), process.Used())
 				}
@@ -193,7 +194,7 @@ func newExactWindowProbe(recordSet []records.BlockRecord) *exactWindowProbe {
 	}
 }
 
-func (probe *exactWindowProbe) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
+func (probe *exactWindowProbe) FetchBlock(ctx context.Context, demand transferlanes.Demand, _ func(uint64)) (records.BlockRecord, error) {
 	if demand.Index >= uint64(len(probe.records)) {
 		return records.BlockRecord{}, ErrInvalidDemand
 	}

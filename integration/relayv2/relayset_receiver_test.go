@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -124,7 +124,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := runtime.AttachLane(ctx, grant, contender.Channel(), transfer.LaneRouteRelay); err != nil {
+			if _, err := runtime.AttachLane(ctx, grant, contender.Channel(), transferlanes.RouteRelay); err != nil {
 				t.Fatal(err)
 			}
 			occupied := share.waitAdmission(t, ctx, contender)

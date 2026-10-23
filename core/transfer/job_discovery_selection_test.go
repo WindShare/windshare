@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T) {
@@ -43,13 +44,13 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 		revisions.opened[file] = opened
 	}
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
-	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](50), RaceWidth: 1})
+	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](50), RaceWidth: 1})
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, lane); err != nil {
+	if err := lanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, lane); err != nil {
 		t.Fatal(err)
 	}
 	budget, _ := NewPlaintextBudget(8 * chunk)
-	broker, err := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Lanes: lanes, MaxBytes: 4 * chunk, ProcessBudget: budget})
+	broker, err := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Blocks: lanes, MaxBytes: 4 * chunk, ProcessBudget: budget})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,11 +285,11 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](byte(75+index)), descriptor)
 	}
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
-	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
+	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
 	defer lanes.Close()
-	_ = lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, lane)
+	_ = lanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, lane)
 	budget, _ := NewPlaintextBudget(4 * chunk)
-	broker, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Lanes: lanes, MaxBytes: 3 * chunk, ProcessBudget: budget})
+	broker, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: share, Blocks: lanes, MaxBytes: 3 * chunk, ProcessBudget: budget})
 	defer broker.Close()
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)

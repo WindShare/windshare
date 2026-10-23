@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -14,31 +14,31 @@ import (
 )
 
 type laneSettlementCollector struct {
-	observations <-chan LaneSettlementSummary
-	summaries    []LaneSettlementSummary
+	observations <-chan SettlementSummary
+	summaries    []SettlementSummary
 }
 
-func (collector *laneSettlementCollector) observe(lanes *LaneSet) {
+func (collector *laneSettlementCollector) observe(lanes *Set) {
 	collector.observations = lanes.SettlementObservations()
 }
 
-func (collector *laneSettlementCollector) snapshot() []LaneSettlementSummary {
+func (collector *laneSettlementCollector) snapshot() []SettlementSummary {
 	for {
 		select {
 		case summary, open := <-collector.observations:
 			if !open {
-				return append([]LaneSettlementSummary(nil), collector.summaries...)
+				return append([]SettlementSummary(nil), collector.summaries...)
 			}
 			collector.summaries = append(collector.summaries, summary)
 		default:
-			return append([]LaneSettlementSummary(nil), collector.summaries...)
+			return append([]SettlementSummary(nil), collector.summaries...)
 		}
 	}
 }
 
-func settlementByLane(t *testing.T, summaries []LaneSettlementSummary) map[LaneIdentity]LaneSettlementSummary {
+func settlementByLane(t *testing.T, summaries []SettlementSummary) map[Identity]SettlementSummary {
 	t.Helper()
-	result := make(map[LaneIdentity]LaneSettlementSummary, len(summaries))
+	result := make(map[Identity]SettlementSummary, len(summaries))
 	for _, summary := range summaries {
 		if _, duplicate := result[summary.Lane]; duplicate {
 			t.Fatalf("lane %v settled more than once", summary.Lane)
@@ -50,14 +50,14 @@ func settlementByLane(t *testing.T, summaries []LaneSettlementSummary) map[LaneI
 
 func TestUsefulContentActivityDoesNotRequireObservationQueue(t *testing.T) {
 	now := time.Unix(70, 0)
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](83), Now: func() time.Time { return now }, RaceWidth: 1})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](83), Now: func() time.Time { return now }, RaceWidth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lanes.Close()
 	descriptor := transferDescriptor(t, 1)
-	identity := LaneIdentity{ID: 1, Epoch: 1}
-	if err = lanes.Add(identity, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	identity := Identity{ID: 1, Epoch: 1}
+	if err = lanes.Add(identity, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestUsefulContentActivityDoesNotRequireObservationQueue(t *testing.T) {
 		t.Fatal(initial)
 	}
 	demand := validDemand(t, descriptor, 0)
-	if _, err = lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+	if _, err = lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.attempts.Wait()
@@ -86,38 +86,38 @@ func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 	descriptor := transferDescriptor(t, 2)
 	sessionID := transferID[protocolsession.ProtocolSessionID](81)
 	collector := &laneSettlementCollector{}
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             sessionID,
 		RaceWidth:                     1,
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	collector.observe(lanes)
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 3}, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 2, Epoch: 3}, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 1), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	suspension, err := lanes.SuspendContent(LaneIdentity{ID: 2, Epoch: 3})
+	suspension, err := lanes.SuspendContent(Identity{ID: 2, Epoch: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for index := range uint64(2) {
 		if index == 1 {
-			lanes.Remove(LaneIdentity{ID: 1, Epoch: 1})
+			lanes.Remove(Identity{ID: 1, Epoch: 1})
 			if err := suspension.Resume(); err != nil {
 				t.Fatal(err)
 			}
 		}
 		demand := validDemand(t, descriptor, index)
-		if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+		if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -127,9 +127,9 @@ func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 	if len(settled) != 2 {
 		t.Fatalf("settlements = %+v", settled)
 	}
-	for identity, route := range map[LaneIdentity]LaneRoute{
-		{ID: 1, Epoch: 1}: LaneRouteRelay,
-		{ID: 2, Epoch: 3}: LaneRouteDirect,
+	for identity, route := range map[Identity]Route{
+		{ID: 1, Epoch: 1}: RouteRelay,
+		{ID: 2, Epoch: 3}: RouteDirect,
 	} {
 		summary := settled[identity]
 		if summary.ProtocolSessionID != sessionID || summary.Route != route || summary.DeliveredBlocks != 1 ||
@@ -144,56 +144,56 @@ func TestLaneSettlementCreditsReassignmentOnlyAfterNextRoundAdmission(t *testing
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
 	collector := &laneSettlementCollector{}
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](82),
 		RaceWidth:                     1,
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	collector.observe(lanes)
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandNotAdmitted(errors.New("relay unavailable"))
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 2, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.Close()
 	settled := settlementByLane(t, collector.snapshot())
-	if origin := settled[LaneIdentity{ID: 1, Epoch: 1}]; origin.FailedBlockAttempts != 1 || origin.ReassignedBlocks != 1 || origin.DeliveredBlocks != 0 {
+	if origin := settled[Identity{ID: 1, Epoch: 1}]; origin.FailedBlockAttempts != 1 || origin.ReassignedBlocks != 1 || origin.DeliveredBlocks != 0 {
 		t.Fatalf("reassigned origin = %+v", origin)
 	}
-	if winner := settled[LaneIdentity{ID: 2, Epoch: 1}]; winner.DeliveredBlocks != 1 || winner.FailedBlockAttempts != 0 || winner.ReassignedBlocks != 0 {
+	if winner := settled[Identity{ID: 2, Epoch: 1}]; winner.DeliveredBlocks != 1 || winner.FailedBlockAttempts != 0 || winner.ReassignedBlocks != 0 {
 		t.Fatalf("retry winner = %+v", winner)
 	}
 
 	exhaustedCollector := &laneSettlementCollector{}
-	exhausted, err := NewLaneSet(LaneSetConfig{
+	exhausted, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](83),
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	exhaustedCollector.observe(exhausted)
-	if err := exhausted.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := exhausted.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandNotAdmitted(errors.New("no alternate lane"))
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exhausted.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err == nil {
+	if _, err := exhausted.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err == nil {
 		t.Fatal("exhausted fetch unexpectedly succeeded")
 	}
 	exhausted.Close()
-	terminal := settlementByLane(t, exhaustedCollector.snapshot())[LaneIdentity{ID: 1, Epoch: 1}]
+	terminal := settlementByLane(t, exhaustedCollector.snapshot())[Identity{ID: 1, Epoch: 1}]
 	if terminal.FailedBlockAttempts != 1 || terminal.ReassignedBlocks != 0 {
 		t.Fatalf("exhausted origin = %+v", terminal)
 	}
@@ -203,58 +203,58 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
 	collector := &laneSettlementCollector{}
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](84),
 		RaceWidth:                     2,
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	collector.observe(lanes)
 	slowStarted := make(chan struct{})
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
 		close(slowStarted)
 		<-ctx.Done()
-		if !BlockAttemptSuperseded(ctx) {
+		if !AttemptSuperseded(ctx) {
 			t.Error("race loser did not retain the demand owner's termination reason")
 		}
 		return records.BlockRecord{}, ctx.Err()
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 2, Epoch: 1}, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		<-slowStarted
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.Close()
 	settled := settlementByLane(t, collector.snapshot())
-	if loser := settled[LaneIdentity{ID: 1, Epoch: 1}]; loser.DeliveredBlocks != 0 || loser.FailedBlockAttempts != 0 || loser.ReassignedBlocks != 0 {
+	if loser := settled[Identity{ID: 1, Epoch: 1}]; loser.DeliveredBlocks != 0 || loser.FailedBlockAttempts != 0 || loser.ReassignedBlocks != 0 {
 		t.Fatalf("canceled hedge = %+v", loser)
 	}
-	if winner := settled[LaneIdentity{ID: 2, Epoch: 1}]; winner.DeliveredBlocks != 1 || winner.FailedBlockAttempts != 0 {
+	if winner := settled[Identity{ID: 2, Epoch: 1}]; winner.DeliveredBlocks != 1 || winner.FailedBlockAttempts != 0 {
 		t.Fatalf("selected winner = %+v", winner)
 	}
 
 	canceledCollector := &laneSettlementCollector{}
-	canceled, err := NewLaneSet(LaneSetConfig{
+	canceled, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](85),
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	canceledCollector.observe(canceled)
 	started := make(chan struct{})
-	if err := canceled.Add(LaneIdentity{ID: 3, Epoch: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	if err := canceled.Add(Identity{ID: 3, Epoch: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
 		close(started)
 		<-ctx.Done()
-		if BlockAttemptSuperseded(ctx) {
+		if AttemptSuperseded(ctx) {
 			t.Error("caller cancellation was misclassified as a winning race")
 		}
 		return records.BlockRecord{}, ctx.Err()
@@ -264,7 +264,7 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, fetchErr := canceled.fetch(ctx, blockRequest{demand: demand, validate: validateTransferRecord(demand)})
+		_, fetchErr := canceled.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
 		result <- fetchErr
 	}()
 	<-started
@@ -273,38 +273,38 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 		t.Fatalf("canceled fetch error = %v", err)
 	}
 	canceled.Close()
-	summary := settlementByLane(t, canceledCollector.snapshot())[LaneIdentity{ID: 3, Epoch: 1}]
+	summary := settlementByLane(t, canceledCollector.snapshot())[Identity{ID: 3, Epoch: 1}]
 	if summary.DeliveredBlocks != 0 || summary.FailedBlockAttempts != 0 || summary.ReassignedBlocks != 0 {
 		t.Fatalf("caller cancellation = %+v", summary)
 	}
 
 	wrappedCollector := &laneSettlementCollector{}
-	wrapped, err := NewLaneSet(LaneSetConfig{
+	wrapped, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](90),
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wrappedCollector.observe(wrapped)
-	if err := wrapped.Add(LaneIdentity{ID: 4, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := wrapped.Add(Identity{ID: 4, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandNotAdmitted(context.Canceled)
 	})); err != nil {
 		t.Fatal(err)
 	}
 	var alternateCalls uint64
-	if err := wrapped.Add(LaneIdentity{ID: 5, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := wrapped.Add(Identity{ID: 5, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		alternateCalls++
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wrapped.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); !errors.Is(err, context.Canceled) {
+	if _, err := wrapped.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("wrapped cancellation error = %v", err)
 	}
 	wrapped.Close()
 	wrappedSettled := settlementByLane(t, wrappedCollector.snapshot())
-	wrappedOrigin := wrappedSettled[LaneIdentity{ID: 4, Epoch: 1}]
+	wrappedOrigin := wrappedSettled[Identity{ID: 4, Epoch: 1}]
 	if alternateCalls != 0 || wrappedOrigin.FailedBlockAttempts != 0 || wrappedOrigin.ReassignedBlocks != 0 {
 		t.Fatalf("wrapped cancellation retried: alternate=%d origin=%+v", alternateCalls, wrappedOrigin)
 	}
@@ -314,9 +314,9 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
 	collector := &laneSettlementCollector{}
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](86),
-		SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -324,8 +324,8 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	collector.observe(lanes)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	initial := LaneIdentity{ID: 1, Epoch: 1}
-	if err := lanes.Add(initial, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	initial := Identity{ID: 1, Epoch: 1}
+	if err := lanes.Add(initial, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		close(started)
 		<-release
 		return transferRecord(t, descriptor, 0), nil
@@ -334,12 +334,12 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	}
 	fetched := make(chan error, 1)
 	go func() {
-		_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
+		_, fetchErr := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
 		fetched <- fetchErr
 	}()
 	<-started
-	replacement := LaneIdentity{ID: 1, Epoch: 2}
-	if err := lanes.Add(replacement, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	replacement := Identity{ID: 1, Epoch: 2}
+	if err := lanes.Add(replacement, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
@@ -356,8 +356,8 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	}
 	removedStarted := make(chan struct{})
 	removedRelease := make(chan struct{})
-	removed := LaneIdentity{ID: 2, Epoch: 1}
-	if err := lanes.Add(removed, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	removed := Identity{ID: 2, Epoch: 1}
+	if err := lanes.Add(removed, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		close(removedStarted)
 		<-removedRelease
 		return transferRecord(t, descriptor, 0), nil
@@ -366,7 +366,7 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	}
 	removedFetch := make(chan error, 1)
 	go func() {
-		_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
+		_, fetchErr := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
 		removedFetch <- fetchErr
 	}()
 	<-removedStarted
@@ -383,8 +383,8 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	final := LaneIdentity{ID: 3, Epoch: 1}
-	if err := lanes.Add(final, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	final := Identity{ID: 3, Epoch: 1}
+	if err := lanes.Add(final, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
@@ -394,16 +394,16 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 	if len(settled) != 4 {
 		t.Fatalf("settlements = %+v", settled)
 	}
-	if settled[initial].DeliveredBlocks != 1 || settled[initial].Route != LaneRouteRelay {
+	if settled[initial].DeliveredBlocks != 1 || settled[initial].Route != RouteRelay {
 		t.Fatalf("initial incarnation = %+v", settled[initial])
 	}
-	if settled[replacement].DeliveredBlocks != 0 || settled[replacement].Route != LaneRouteDirect {
+	if settled[replacement].DeliveredBlocks != 0 || settled[replacement].Route != RouteDirect {
 		t.Fatalf("replacement incarnation = %+v", settled[replacement])
 	}
-	if settled[removed].DeliveredBlocks != 1 || settled[removed].Route != LaneRouteDirect {
+	if settled[removed].DeliveredBlocks != 1 || settled[removed].Route != RouteDirect {
 		t.Fatalf("removed incarnation = %+v", settled[removed])
 	}
-	if settled[final].DeliveredBlocks != 0 || settled[final].Route != LaneRouteRelay {
+	if settled[final].DeliveredBlocks != 0 || settled[final].Route != RouteRelay {
 		t.Fatalf("final incarnation = %+v", settled[final])
 	}
 }
@@ -411,16 +411,16 @@ func TestLaneSettlementRetiresEachIncarnationAfterInflightWork(t *testing.T) {
 func TestLaneSettlementConcurrentRemovalAndCloseEmitsOnce(t *testing.T) {
 	for iteration := range 32 {
 		collector := &laneSettlementCollector{}
-		lanes, err := NewLaneSet(LaneSetConfig{
+		lanes, err := New(Config{
 			ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](byte(120 + iteration)),
-			SettlementObservationCapacity: DefaultLaneSettlementObservationCapacity,
+			SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		collector.observe(lanes)
-		identity := LaneIdentity{ID: 1, Epoch: uint32(iteration + 1)}
-		if err := lanes.Add(identity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		identity := Identity{ID: 1, Epoch: uint32(iteration + 1)}
+		if err := lanes.Add(identity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
@@ -464,7 +464,7 @@ func TestLaneSettlementSaturatesCounters(t *testing.T) {
 }
 
 func TestLaneSettlementNoConsumerSaturationCannotBlockClose(t *testing.T) {
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](87),
 		SettlementObservationCapacity: 1,
 	})
@@ -473,7 +473,7 @@ func TestLaneSettlementNoConsumerSaturationCannotBlockClose(t *testing.T) {
 	}
 	observations := lanes.SettlementObservations()
 	for laneID := uint32(1); laneID <= 2; laneID++ {
-		if err := lanes.Add(LaneIdentity{ID: laneID, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(Identity{ID: laneID, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
@@ -506,15 +506,15 @@ func TestLaneSettlementNoConsumerSaturationCannotBlockClose(t *testing.T) {
 }
 
 func TestLaneSettlementFinalSummaryPrecedesStreamClose(t *testing.T) {
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](88),
 		SettlementObservationCapacity: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := LaneIdentity{ID: 4, Epoch: 3}
-	if err := lanes.Add(identity, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	identity := Identity{ID: 4, Epoch: 3}
+	if err := lanes.Add(identity, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -523,7 +523,7 @@ func TestLaneSettlementFinalSummaryPrecedesStreamClose(t *testing.T) {
 	lanes.Close()
 	final, open := <-observations
 	if !open || final.Lane != identity || final.ProtocolSessionID != transferID[protocolsession.ProtocolSessionID](88) ||
-		final.Route != LaneRouteDirect {
+		final.Route != RouteDirect {
 		t.Fatalf("final summary = %+v, open=%t", final, open)
 	}
 	if _, open := <-observations; open {
@@ -536,19 +536,19 @@ func TestLaneSettlementFinalSummaryPrecedesStreamClose(t *testing.T) {
 
 func TestLaneSettlementConcurrentReplacementAndCloseOwnsEveryPublication(t *testing.T) {
 	for iteration := range 32 {
-		lanes, err := NewLaneSet(LaneSetConfig{
+		lanes, err := New(Config{
 			ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](byte(160 + iteration)),
 			SettlementObservationCapacity: 2,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		initial := LaneIdentity{ID: 1, Epoch: 1}
-		replacement := LaneIdentity{ID: 1, Epoch: 2}
-		lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		initial := Identity{ID: 1, Epoch: 1}
+		replacement := Identity{ID: 1, Epoch: 2}
+		lane := laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})
-		if err := lanes.Add(initial, LaneRouteRelay, lane); err != nil {
+		if err := lanes.Add(initial, RouteRelay, lane); err != nil {
 			t.Fatal(err)
 		}
 		observations := lanes.SettlementObservations()
@@ -557,7 +557,7 @@ func TestLaneSettlementConcurrentReplacementAndCloseOwnsEveryPublication(t *test
 		closed := make(chan struct{})
 		go func() {
 			<-start
-			added <- lanes.Add(replacement, LaneRouteDirect, lane)
+			added <- lanes.Add(replacement, RouteDirect, lane)
 		}()
 		go func() {
 			<-start
@@ -568,7 +568,7 @@ func TestLaneSettlementConcurrentReplacementAndCloseOwnsEveryPublication(t *test
 		addErr := <-added
 		<-closed
 
-		summaries := make([]LaneSettlementSummary, 0, 2)
+		summaries := make([]SettlementSummary, 0, 2)
 		for summary := range observations {
 			summaries = append(summaries, summary)
 		}
@@ -581,7 +581,7 @@ func TestLaneSettlementConcurrentReplacementAndCloseOwnsEveryPublication(t *test
 			if len(settled) != 2 || settled[replacement].Lane != replacement {
 				t.Fatalf("iteration %d replacement admitted without settlement: %+v", iteration, summaries)
 			}
-		case errors.Is(addErr, ErrLaneClosed):
+		case errors.Is(addErr, ErrClosed):
 			if len(settled) != 1 {
 				t.Fatalf("iteration %d closed replacement produced settlement: %+v", iteration, summaries)
 			}
@@ -592,17 +592,17 @@ func TestLaneSettlementConcurrentReplacementAndCloseOwnsEveryPublication(t *test
 }
 
 func TestLaneSettlementDisabledAllocatesNoObservationState(t *testing.T) {
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](89)})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](89)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := LaneIdentity{ID: 1, Epoch: 1}
-	if err := lanes.Add(identity, 0, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	identity := Identity{ID: 1, Epoch: 1}
+	if err := lanes.Add(identity, 0, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
-	})); !errors.Is(err, ErrInvalidLane) {
+	})); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("open lane route error = %v", err)
 	}
-	if err := lanes.Add(identity, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(identity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -615,17 +615,17 @@ func TestLaneSettlementDisabledAllocatesNoObservationState(t *testing.T) {
 	}
 	lanes.mu.Unlock()
 	lanes.Close()
-	if completion := lanes.CompleteObservations(); completion != (LaneSettlementObservationCompletion{}) {
+	if completion := lanes.CompleteObservations(); completion != (SettlementObservationCompletion{}) {
 		t.Fatalf("disabled completion = %+v", completion)
 	}
 }
 
 func TestLaneSettlementRejectsNegativeObservationCapacity(t *testing.T) {
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](91),
 		SettlementObservationCapacity: -1,
 	})
 	if lanes != nil || !errors.Is(err, observationstream.ErrInvalidCapacity) {
-		t.Fatalf("NewLaneSet() = (%v, %v), want invalid capacity", lanes, err)
+		t.Fatalf("New() = (%v, %v), want invalid capacity", lanes, err)
 	}
 }

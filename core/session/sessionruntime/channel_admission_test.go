@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type provisionalTestChannel struct {
@@ -41,7 +41,7 @@ func TestProvisionalTransportRequiresAuthenticatedSessionAdmission(t *testing.T)
 				admission, err := fixture.senderFactory.AdmitChannel(t.Context(), channel)
 				result <- admissionResult{admission: admission, err: err}
 			}()
-			receiver, err := fixture.receiverFactory.Connect(t.Context(), peer, transfer.LaneRouteRelay)
+			receiver, err := fixture.receiverFactory.Connect(t.Context(), peer, transferlanes.RouteRelay)
 			if receiver != nil {
 				defer receiver.Close()
 			}

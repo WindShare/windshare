@@ -3,12 +3,12 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"testing"
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestRuntimeCloseCancelsAndJoinsExternalLaneHandshakes(t *testing.T) {
@@ -123,7 +123,7 @@ func TestRuntimeCloseCancelsAndJoinsExternalLaneHandshakes(t *testing.T) {
 		defer peer.Close()
 		admissionResult := make(chan error, 1)
 		go func() {
-			_, err := receiver.AttachLane(context.Background(), grant, candidate, transfer.LaneRouteDirect)
+			_, err := receiver.AttachLane(context.Background(), grant, candidate, transferlanes.RouteDirect)
 			admissionResult <- err
 		}()
 		select {

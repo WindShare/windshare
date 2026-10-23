@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -21,25 +21,25 @@ func TestFailedLaneAttemptReleasesCapacityBeforePublishing(t *testing.T) {
 		want          error
 	}{
 		{name: "transport", fetchErr: transportErr, want: transportErr},
-		{name: "identity", validationErr: ErrBlockIdentity, want: ErrBlockIdentity},
+		{name: "identity", validationErr: errTestBlockIdentity, want: errTestBlockIdentity},
 		{name: "cancellation", fetchErr: context.Canceled, want: context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			descriptor := transferDescriptor(t, 1)
 			demand := validDemand(t, descriptor, 0)
 			record := transferRecord(t, descriptor, 0)
-			lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](62)})
+			lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](62)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer lanes.Close()
-			if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+			if err := lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 				return record, tc.fetchErr
 			})); err != nil {
 				t.Fatal(err)
 			}
 			var releases atomic.Int32
-			candidates, exhausted, err := lanes.candidates(context.Background(), make(map[LaneIdentity]struct{}), blockDemandBytes(demand), func() (func(), <-chan struct{}, error) {
+			candidates, exhausted, err := lanes.candidates(context.Background(), make(map[Identity]struct{}), blockDemandBytes(demand), func() (func(), <-chan struct{}, error) {
 				return func() { releases.Add(1) }, nil, nil
 			})
 			if err != nil || exhausted || len(candidates) != 1 {

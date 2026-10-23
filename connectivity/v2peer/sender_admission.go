@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/session/turncontrol"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
@@ -318,9 +318,9 @@ func (execution *attemptExecution) acceptAdmission(
 		}
 	}
 	execution.attempt.config.factory.native.SetAdmitted([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID, direct)
-	route := transfer.LaneRouteTURN
+	route := transferlanes.RouteTURN
 	if direct {
-		route = transfer.LaneRouteDirect
+		route = transferlanes.RouteDirect
 	}
 	execution.attempt.recorder.complete(
 		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{

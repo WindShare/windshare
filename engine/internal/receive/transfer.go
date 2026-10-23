@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/internal/testrun"
@@ -227,7 +228,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest,
 	}
 	laneID, laneEpoch := runtime.LaneIdentity()
 	relaySuspension, err := runtime.LaneSet().SuspendContent(
-		transfer.LaneIdentity{ID: laneID, Epoch: laneEpoch},
+		transferlanes.Identity{ID: laneID, Epoch: laneEpoch},
 	)
 	if err != nil {
 		return nil, observation.fail(stepLocalFailure, err)
@@ -475,13 +476,13 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) step
 		return observation.fail(stepLocalFailure, err)
 	}
 }
-func receiverRoutePolicy(policy ConnectivityPolicy) transfer.ContentRoutePolicy {
+func receiverRoutePolicy(policy ConnectivityPolicy) transferlanes.ContentRoutePolicy {
 	switch policy {
 	case ConnectivityP2POnly:
-		return transfer.ContentRouteDirectOnly
+		return transferlanes.ContentRouteDirectOnly
 	case ConnectivityRelayOnly:
-		return transfer.ContentRouteRelayOnly
+		return transferlanes.ContentRouteRelayOnly
 	default:
-		return transfer.ContentRouteAll
+		return transferlanes.ContentRouteAll
 	}
 }

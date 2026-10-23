@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/downloadmetrics"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/senderauth"
@@ -23,6 +24,7 @@ import (
 	"github.com/windshare/windshare/core/session/requestlane"
 	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type RecordOpener interface {
@@ -57,7 +59,7 @@ type ReceiverPeerSemantics interface {
 }
 
 type ReceiverFactoryConfig struct {
-	ContentRoutePolicy                transfer.ContentRoutePolicy
+	ContentRoutePolicy                transferlanes.ContentRoutePolicy
 	Descriptor                        catalog.ShareDescriptor
 	SessionAuthKey                    []byte
 	Sender                            *senderauth.Verifier
@@ -77,11 +79,11 @@ type ReceiverFactoryConfig struct {
 	Now                               func() time.Time
 	After                             func(time.Duration) <-chan time.Time
 	ProtocolObservations              observationstream.Producer[ProtocolObservation]
-	LaneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
+	LaneSettlementObservationCapacity transferlanes.SettlementObservationCapacity
 }
 
 type ReceiverFactory struct {
-	contentRoutePolicy                transfer.ContentRoutePolicy
+	contentRoutePolicy                transferlanes.ContentRoutePolicy
 	descriptor                        catalog.ShareDescriptor
 	authKey                           []byte
 	sender                            *senderauth.Verifier
@@ -104,7 +106,7 @@ type ReceiverFactory struct {
 	now                               func() time.Time
 	after                             func(time.Duration) <-chan time.Time
 	protocolObservations              observationstream.Producer[ProtocolObservation]
-	laneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
+	laneSettlementObservationCapacity transferlanes.SettlementObservationCapacity
 
 	mu         sync.Mutex
 	closing    bool
@@ -164,7 +166,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	}, nil
 }
 
-func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transfer.LaneRoute) (result *ReceiverRuntime, resultErr error) {
+func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transferlanes.Route) (result *ReceiverRuntime, resultErr error) {
 	if factory == nil || channel == nil || ctx == nil {
 		return nil, ErrRuntimeConfig
 	}
@@ -250,7 +252,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	blockLane := &receiverBlockLane{
 		identity: initialLane, rpc: rpc, assembler: assembler, opener: factory.opener, revisions: revisions,
 	}
-	lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{
+	lanes, err := transferlanes.New(transferlanes.Config{
 		ProtocolSessionID: keys.ProtocolSessionID(), RaceWidth: factory.raceWidth, Now: factory.now,
 		SettlementObservationCapacity: factory.laneSettlementObservationCapacity,
 		ContentRoutePolicy:            factory.contentRoutePolicy,
@@ -265,14 +267,14 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 		}
 	}()
 	if err := lanes.Add(
-		transfer.LaneIdentity{ID: initialLane.ID, Epoch: initialLane.Epoch},
+		transferlanes.Identity{ID: initialLane.ID, Epoch: initialLane.Epoch},
 		route,
 		blockLane,
 	); err != nil {
 		return nil, err
 	}
 	broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-		ShareInstance: factory.descriptor.ShareInstance(), Lanes: lanes, ProcessBudget: factory.plaintextProcess,
+		ShareInstance: factory.descriptor.ShareInstance(), Blocks: lanes, ProcessBudget: factory.plaintextProcess,
 	})
 	if err != nil {
 		return nil, err
@@ -388,7 +390,7 @@ type ReceiverRuntime struct {
 	revisions     *receiverRevisionClient
 	access        *revisionaccess.Reader
 	assembler     *contentflow.Assembler
-	laneSet       *transfer.LaneSet
+	laneSet       *transferlanes.Set
 	broker        *transfer.BlockBroker
 	semantic      protocolsession.SenderControlSemanticValidator
 	resourceLease ReceiverRuntimeResourceLease
@@ -399,17 +401,17 @@ type ReceiverRuntime struct {
 func (runtime *ReceiverRuntime) startReceiver() {
 	// Both registries acquire locks in runtime-lane then content-lane order.
 	runtime.lanes.queuedContent = func(identity LaneIdentity) time.Duration {
-		return runtime.laneSet.EstimateQueuedContent(transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch})
+		return runtime.laneSet.EstimateQueuedContent(transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch})
 	}
 	runtime.lanes.setDetachHook(func(identity LaneIdentity) {
-		runtime.laneSet.Remove(transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch})
+		runtime.laneSet.Remove(transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch})
 	})
 	runtime.start()
 }
 
 func (runtime *ReceiverRuntime) Descriptor() catalog.ShareDescriptor { return runtime.descriptor }
 func (runtime *ReceiverRuntime) Catalog() *catalogflow.Client        { return runtime.catalog }
-func (runtime *ReceiverRuntime) LaneSet() *transfer.LaneSet          { return runtime.laneSet }
+func (runtime *ReceiverRuntime) LaneSet() *transferlanes.Set         { return runtime.laneSet }
 func (runtime *ReceiverRuntime) BlockBroker() *transfer.BlockBroker  { return runtime.broker }
 func (runtime *ReceiverRuntime) OpenRevision(
 	ctx context.Context,
@@ -503,4 +505,11 @@ func (runtime *ReceiverRuntime) releaseOwnedResources() {
 			runtime.resourceLease = nil
 		}
 	})
+}
+
+// BindDownloadMetrics binds one generation's availability and delivery producers
+// to the same download observation without sharing their synchronization state.
+func (runtime *ReceiverRuntime) BindDownloadMetrics(metrics *downloadmetrics.Metrics) {
+	runtime.laneSet.BindDownloadMetrics(metrics)
+	runtime.broker.BindDownloadMetrics(metrics)
 }

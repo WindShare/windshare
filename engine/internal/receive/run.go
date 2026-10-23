@@ -77,7 +77,7 @@ func Run(ctx context.Context, request Request, deps Dependencies) (completed tas
 	}
 	active.options = receiverPeerOptions{budget: peerset.NewBudget(startedAt), capacity: deps.Connectivity.Attempts(), native: native}
 	observation.registerNative(active.options.native)
-	active.session.runtime.LaneSet().BindDownloadMetrics(metrics)
+	active.session.runtime.BindDownloadMetrics(metrics)
 	active.execution, step = a.prepareGetConnectivity(ctx, input, active.output, active.session.runtime, observation, active.options)
 	if step != stepReady {
 		return

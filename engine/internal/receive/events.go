@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -89,7 +90,7 @@ type ProtocolObserved struct {
 }
 type LaneObserved struct {
 	event
-	Value transfer.LaneSettlementSummary
+	Value transferlanes.SettlementSummary
 }
 type NativeObserved struct {
 	event

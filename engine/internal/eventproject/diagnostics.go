@@ -2,14 +2,14 @@ package eventproject
 
 import (
 	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/share"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func ProjectLaneSettlement(value transfer.LaneSettlementSummary) (appobs.LaneSettlementObserved, error) {
+func ProjectLaneSettlement(value transferlanes.SettlementSummary) (appobs.LaneSettlementObserved, error) {
 	session, err := ProtocolSessionID(value.ProtocolSessionID)
 	if err != nil {
 		return appobs.LaneSettlementObserved{}, invalidProjection(ProjectionInvalidIdentity)
@@ -34,13 +34,13 @@ func ProjectLaneSettlement(value transfer.LaneSettlementSummary) (appobs.LaneSet
 	return event, nil
 }
 
-func projectLaneRoute(value transfer.LaneRoute) (appobs.LaneRoute, bool) {
+func projectLaneRoute(value transferlanes.Route) (appobs.LaneRoute, bool) {
 	switch value {
-	case transfer.LaneRouteRelay:
+	case transferlanes.RouteRelay:
 		return appobs.LaneRouteRelay, true
-	case transfer.LaneRouteDirect:
+	case transferlanes.RouteDirect:
 		return appobs.LaneRouteDirect, true
-	case transfer.LaneRouteTURN:
+	case transferlanes.RouteTURN:
 		return appobs.LaneRouteTURN, true
 	default:
 		return 0, false

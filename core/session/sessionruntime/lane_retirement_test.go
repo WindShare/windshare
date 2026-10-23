@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) {
@@ -39,7 +39,7 @@ func TestSenderLaneReplacementDoesNotWaitForRetiredTransportDrain(t *testing.T) 
 		_, admitErr := sender.AdmitPeerChannel(ctx, channel, allowSenderPeerSettlement)
 		attached <- admitErr
 	}()
-	admission, err := receiver.AttachLane(ctx, grant, peer, transfer.LaneRouteDirect)
+	admission, err := receiver.AttachLane(ctx, grant, peer, transferlanes.RouteDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,19 +19,20 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 var errReceiverClosed = errors.New("live share receiver is closed")
 
 type ReceiverConfig struct {
-	ContentRoutePolicy                transfer.ContentRoutePolicy
+	ContentRoutePolicy                transferlanes.ContentRoutePolicy
 	Capability                        link.Link
 	DescriptorObject                  []byte
 	Random                            io.Reader
 	CatalogProgress                   sessionruntime.CatalogScanProgressObserver
 	PeerControls                      sessionruntime.ReceiverPeerSemantics
 	ProtocolObservations              observationstream.Producer[sessionruntime.ProtocolObservation]
-	LaneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
+	LaneSettlementObservationCapacity transferlanes.SettlementObservationCapacity
 }
 
 type PreparedReceiver struct {
@@ -151,7 +152,7 @@ func (receiver *PreparedReceiver) Descriptor() catalog.ShareDescriptor {
 	return receiver.descriptor
 }
 
-func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel, route transfer.LaneRoute) (*sessionruntime.ReceiverRuntime, error) {
+func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel, route transferlanes.Route) (*sessionruntime.ReceiverRuntime, error) {
 	receiver.mu.Lock()
 	if receiver.closed {
 		receiver.mu.Unlock()

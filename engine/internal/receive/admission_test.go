@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type fakeReceiverContentSuspension struct {
@@ -68,7 +68,7 @@ type inertReceiverBlockLane struct{}
 
 func (inertReceiverBlockLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand, func(uint64),
+	transferlanes.Demand, func(uint64),
 ) (records.BlockRecord, error) {
 	return records.BlockRecord{}, errors.New("admission race must not fetch content")
 }

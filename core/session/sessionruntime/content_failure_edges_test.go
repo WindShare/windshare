@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type invalidRevisionRecordOpener struct{}
@@ -74,7 +75,7 @@ func TestContentClientRejectsMissingAndZeroLeaseAuthorityLocally(t *testing.T) {
 	lane := &receiverBlockLane{
 		revisions: &receiverRevisionClient{leases: make(map[content.LeaseID]*remoteLeaseState)},
 	}
-	if _, err := lane.FetchBlock(context.Background(), transfer.BlockDemand{
+	if _, err := lane.FetchBlock(context.Background(), transferlanes.Demand{
 		LeaseID: id16[content.LeaseID](141),
 	}, nil); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("unknown local lease demand error=%v", err)

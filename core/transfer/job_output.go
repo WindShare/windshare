@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
 
 type lifecyclePolicy struct {
@@ -46,9 +47,9 @@ func (r *jobRun) settleFailedFile(
 		failure.SettlementFailure = settlementErr
 	}
 	r.recordFileFailure(failure)
-	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(settlementErr, releaseErr))
+	r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
 	if settlementErr != nil {
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, settlementErr)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
 		return cause
 	}
 	if isJobTerminalError(releaseErr) {
@@ -87,13 +88,13 @@ func (r *jobRun) pauseFailedFile(
 		Settlement: settlement, SettlementFailure: settlementErr,
 		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(settlementErr, releaseErr))
+	r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
 	if settlementErr != nil {
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, settlementErr)
-		return joinLifecycleFailures(cause, releaseErr, settlementErr)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
+		return failurestate.Join(cause, releaseErr, settlementErr)
 	}
 	if isJobTerminalError(releaseErr) {
-		return joinLifecycleFailures(cause, releaseErr)
+		return failurestate.Join(cause, releaseErr)
 	}
 	// A verified file-local pause restores the output session invariant. Keeping
 	// the original fault in JobResult is sufficient; returning it here would
@@ -101,7 +102,7 @@ func (r *jobRun) pauseFailedFile(
 	if isolatedOutputFailure || isolatedSourceFailure {
 		return nil
 	}
-	return joinLifecycleFailures(cause, releaseErr)
+	return failurestate.Join(cause, releaseErr)
 }
 
 func (r *jobRun) commitTransferredFile(
@@ -113,7 +114,7 @@ func (r *jobRun) commitTransferredFile(
 ) error {
 	if cause := context.Cause(ctx); cause != nil {
 		return r.pauseFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, cancellationFailure(ctx, cause), progress,
+			ctx, plan, opened, transaction, FailureFileOutput, failurestate.FromCancellation(ctx, cause), progress,
 		)
 	}
 	settleContext, cancel := r.job.newSettlementContext(ctx)
@@ -121,18 +122,18 @@ func (r *jobRun) commitTransferredFile(
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if settlementErr != nil {
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, settlementErr)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
 		releaseErr := r.releaseRevision(ctx, opened.Handle)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: settlementErr, Settlement: settlement, SettlementFailure: settlementErr,
 			LeaseReleaseFailure: releaseErr,
 		})
-		r.traceFileSettlement(plan, settlement, joinLifecycleFailures(settlementErr, releaseErr))
+		r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
 		// Commit is the transaction's terminal publication operation. Once its
 		// settlement cannot be proven, no sibling or directory finalization may
 		// advance the same job namespace before PauseTree takes ownership.
-		return joinLifecycleFailures(settlementErr, releaseErr)
+		return failurestate.Join(settlementErr, releaseErr)
 	}
 	if !settlement.matchesCommittedOutput(transaction.Binding(), r.output.Capabilities()) || settlement.Kind() != FilePublished &&
 		settlement.Kind() != FileCollision && settlement.Kind() != FileItemBlocked {
@@ -177,14 +178,14 @@ func (r *jobRun) rejectCommitSettlement(
 ) error {
 	contractFailure := outputContractFault(nil)
 	releaseErr := r.releaseRevision(ctx, opened.Handle)
-	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, contractFailure)
+	r.settlementFailure = failurestate.Merge(r.settlementFailure, contractFailure)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: contractFailure,
 		Settlement: settlement, SettlementFailure: contractFailure,
 		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(contractFailure, releaseErr))
-	return joinLifecycleFailures(contractFailure, releaseErr)
+	r.traceFileSettlement(plan, settlement, failurestate.Join(contractFailure, releaseErr))
+	return failurestate.Join(contractFailure, releaseErr)
 }
 
 func (r *jobRun) releaseRevision(ctx context.Context, lease RevisionHandle) error {
@@ -198,11 +199,11 @@ func (r *jobRun) releaseRevision(ctx context.Context, lease RevisionHandle) erro
 func (r *jobRun) finish(ctx context.Context) JobResult {
 	if r.terminationCause == nil && r.settlementFailure == nil {
 		if cause := context.Cause(ctx); cause != nil {
-			r.terminationCause = cancellationFailure(ctx, cause)
+			r.terminationCause = failurestate.FromCancellation(ctx, cause)
 		}
 	}
 	directories, files, omittedDirectories, omittedFiles, sourceDriftFailure := r.failureSnapshot()
-	if sourceDriftFailure == nil && r.terminationCause != nil && r.terminationCause.policy.sourceDrift() {
+	if sourceDriftFailure == nil && r.terminationCause != nil && lifecyclePolicyFor(r.terminationCause).sourceDrift() {
 		sourceDriftFailure = r.terminationCause
 	}
 	outcome := DirectTreeOutcomeSuccess
@@ -219,14 +220,14 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		Progress:             progress, Directories: directories, Files: files,
 		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
 		SelectionResolutionFailure: r.selectionResolutionFailure,
-		SourceDriftFailure:         lifecycleError(sourceDriftFailure),
-		SourceDriftFault:           closedLifecycleFault(sourceDriftFailure),
+		SourceDriftFailure:         failurestate.Err(sourceDriftFailure),
+		SourceDriftFault:           sourceDriftFailure.Fault(),
 		SucceededFiles:             progress.PublishedFiles,
-		TerminationCause:           lifecycleError(r.terminationCause),
-		TerminationFault:           closedLifecycleFault(r.terminationCause),
+		TerminationCause:           failurestate.Err(r.terminationCause),
+		TerminationFault:           r.terminationCause.Fault(),
 		TerminationInterruption:    closedLifecycleInterruption(r.terminationCause),
-		SettlementFailure:          lifecycleError(r.settlementFailure),
-		SettlementFault:            closedLifecycleFault(r.settlementFailure),
+		SettlementFailure:          failurestate.Err(r.settlementFailure),
+		SettlementFault:            r.settlementFailure.Fault(),
 		SettlementInterruption:     closedLifecycleInterruption(r.settlementFailure),
 	}
 }
@@ -280,7 +281,7 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 		}
 	}
 	if err != nil {
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, err)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, err)
 	} else {
 		r.settlement = settlement
 	}
@@ -288,7 +289,7 @@ func (r *jobRun) pauseJob(ctx context.Context) {
 		Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
 		DirectTreeSettlement: settlement.Kind(),
 		Fault: fault.Join(
-			closedLifecycleFault(r.terminationCause), closedLifecycleFault(r.settlementFailure),
+			r.terminationCause.Fault(), r.settlementFailure.Fault(),
 		),
 		Failed: err != nil,
 	})
@@ -311,11 +312,11 @@ func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 		}
 	}
 	if err != nil {
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, err)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, err)
 		r.job.trace(TransferLifecycleTrace{
 			Stage: TransferJobSettled, OutputSessionID: r.output.SessionID(),
 			DirectTreeSettlement: settlement.Kind(),
-			Fault:                closedFault(err),
+			Fault:                failurestate.FaultOf(err),
 			Interruption:         closedInterruption(err),
 			Failed:               true,
 		})
@@ -350,13 +351,13 @@ func filePauseReason(cause error) FilePauseReason {
 	}
 }
 
-func jobPauseReason(cause, settlementFailure *lifecycleFailure) JobPauseReason {
+func jobPauseReason(cause, settlementFailure *failurestate.Failure) JobPauseReason {
 	if settlementFailure != nil {
 		return JobPauseOutputFailure
 	}
 	policy := lifecyclePolicy{}
 	if cause != nil {
-		policy = cause.policy
+		policy = lifecyclePolicyFor(cause)
 	}
 	switch {
 	case policy.canceled:
@@ -382,8 +383,8 @@ func lifecyclePolicyFor(err error) lifecyclePolicy {
 	if err == nil {
 		return lifecyclePolicy{}
 	}
-	if failure, ok := admitLifecycleFailure(err); ok {
-		return failure.policy
+	if failure, ok := failurestate.Admit(err); ok {
+		return lifecyclePolicy{value: failure.Fault(), canceled: failure.Canceled()}
 	}
 	// A raw value reaching policy is itself a dependency-contract breach. This
 	// fail-closed projection never inspects its wrapping graph.
@@ -472,7 +473,7 @@ func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement
 		FileSelection:   plan.selectionDecision,
 		FileSettlement:  settlement.Kind(),
 		ItemBlockReason: itemBlockReason,
-		Fault:           closedFault(failure),
+		Fault:           failurestate.FaultOf(failure),
 		Interruption:    closedInterruption(failure),
 		Failed:          failure != nil,
 	})

@@ -22,7 +22,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 const (
@@ -110,7 +110,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	})
 	connected := make(chan receiverRuntimeScopeConnectResult, 1)
 	go func() {
-		runtime, connectErr := preparedReceiver.Connect(ctx, receiverLane, transfer.LaneRouteRelay)
+		runtime, connectErr := preparedReceiver.Connect(ctx, receiverLane, transferlanes.RouteRelay)
 		connected <- receiverRuntimeScopeConnectResult{runtime: runtime, err: connectErr}
 	}()
 

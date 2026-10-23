@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type countingLane struct {
@@ -23,7 +24,7 @@ type countingLane struct {
 	release chan struct{}
 }
 
-func (lane *countingLane) FetchBlock(ctx context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
+func (lane *countingLane) FetchBlock(ctx context.Context, demand transferlanes.Demand, _ func(uint64)) (records.BlockRecord, error) {
 	lane.mu.Lock()
 	lane.calls = append(lane.calls, demand.Index)
 	started, release := lane.started, lane.release
@@ -51,19 +52,19 @@ func (lane *countingLane) indices() []uint64 {
 	return slices.Clone(lane.calls)
 }
 
-func newBrokerFixture(t *testing.T, blocks uint64, lane BlockLane, maxBytes uint64, processBytes uint64) (*BlockBroker, *LaneSet, content.FileRevisionDescriptor, content.LeaseID, *PlaintextBudget) {
+func newBrokerFixture(t *testing.T, blocks uint64, lane transferlanes.BlockSource, maxBytes uint64, processBytes uint64) (*BlockBroker, *transferlanes.Set, content.FileRevisionDescriptor, content.LeaseID, *PlaintextBudget) {
 	t.Helper()
 	descriptor := transferDescriptor(t, blocks)
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](10), RaceWidth: 1})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](10), RaceWidth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, lane); err != nil {
+	if err := lanes.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, lane); err != nil {
 		t.Fatal(err)
 	}
 	process, _ := NewPlaintextBudget(processBytes)
 	broker, err := NewBlockBroker(BlockBrokerConfig{
-		ShareInstance: descriptor.ShareInstance(), Lanes: lanes, MaxBytes: maxBytes, ProcessBudget: process,
+		ShareInstance: descriptor.ShareInstance(), Blocks: lanes, MaxBytes: maxBytes, ProcessBudget: process,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestBlockBrokerSingleflightCancellationAndReceiverIsolation(t *testing.T) {
 	if data, err := broker.GetBlock(context.Background(), lease, descriptor, 0); err != nil || len(data) != catalog.MinChunkSize || len(lane.indices()) != 1 {
 		t.Fatalf("cache hit bytes=%d calls=%v err=%v", len(data), lane.indices(), err)
 	}
-	lanes.attempts.Wait()
+	waitForRetainedBytes(t, broker, process, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize))
 	if process.Used() != uint64(catalog.MinChunkSize) {
 		t.Fatalf("process cache usage=%d", process.Used())
 	}
@@ -176,8 +177,8 @@ func TestBlockBrokerReadRangeDispatchesDistinctBlocksAcrossDefaultLanes(t *testi
 	}
 	started := make(chan dispatch, 2)
 	release := make(chan struct{})
-	newLane := func(laneID uint32) BlockLane {
-		return laneFunction(func(ctx context.Context, demand BlockDemand) (records.BlockRecord, error) {
+	newLane := func(laneID uint32) transferlanes.BlockSource {
+		return laneFunction(func(ctx context.Context, demand transferlanes.Demand) (records.BlockRecord, error) {
 			started <- dispatch{lane: laneID, index: demand.Index}
 			select {
 			case <-ctx.Done():
@@ -187,20 +188,20 @@ func TestBlockBrokerReadRangeDispatchesDistinctBlocksAcrossDefaultLanes(t *testi
 			}
 		})
 	}
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](42)})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](42)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, newLane(1)); err != nil {
+	if err := lanes.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, newLane(1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, newLane(2)); err != nil {
+	if err := lanes.Add(transferlanes.Identity{ID: 2}, transferlanes.RouteRelay, newLane(2)); err != nil {
 		t.Fatal(err)
 	}
 	process, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 6)
 	broker, err := NewBlockBroker(BlockBrokerConfig{
-		ShareInstance: descriptor.ShareInstance(), Lanes: lanes,
+		ShareInstance: descriptor.ShareInstance(), Blocks: lanes,
 		MaxBytes: uint64(catalog.MinChunkSize) * 6, ProcessBudget: process, MaxConcurrentBlocks: 2,
 	})
 	if err != nil {
@@ -228,7 +229,7 @@ func TestBlockBrokerReadRangeDispatchesDistinctBlocksAcrossDefaultLanes(t *testi
 func TestBlockBrokerRejectsIdentityAndEnforcesSessionProcessBudgets(t *testing.T) {
 	descriptor := transferDescriptor(t, 2)
 	wrong := transferRecord(t, descriptor, 1)
-	lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) { return wrong, nil })
+	lane := laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) { return wrong, nil })
 	broker, lanes, _, lease, process := newBrokerFixture(t, 2, lane, uint64(catalog.MinChunkSize)*3, uint64(catalog.MinChunkSize)*3)
 	defer broker.Close()
 	defer lanes.Close()
@@ -272,7 +273,7 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	if _, err := broker.GetBlock(context.Background(), lease, descriptor, 1); err != nil {
 		t.Fatal(err)
 	}
-	lanes.attempts.Wait()
+	waitForRetainedBytes(t, broker, process, uint64(catalog.MinChunkSize), uint64(catalog.MinChunkSize))
 	if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
 		t.Fatalf("eviction usage broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
@@ -283,21 +284,21 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 		t.Fatalf("eviction calls=%v", lane.indices())
 	}
 	broker.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
-	lanes.attempts.Wait()
+	waitForRetainedBytes(t, broker, process, 0, 0)
 	if broker.UsedBytes() != 0 || process.Used() != 0 {
 		t.Fatalf("invalidation usage broker=%d process=%d", broker.UsedBytes(), process.Used())
 	}
 
 	sharedProcess, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
-	setA, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](31), RaceWidth: 1})
-	setB, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](32), RaceWidth: 1})
-	validLane := laneFunction(func(_ context.Context, demand BlockDemand) (records.BlockRecord, error) {
+	setA, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](31), RaceWidth: 1})
+	setB, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](32), RaceWidth: 1})
+	validLane := laneFunction(func(_ context.Context, demand transferlanes.Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, demand.Index), nil
 	})
-	_ = setA.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
-	_ = setB.Add(LaneIdentity{ID: 1}, LaneRouteRelay, validLane)
-	brokerA, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setA, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
-	brokerB, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Lanes: setB, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
+	_ = setA.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, validLane)
+	_ = setB.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, validLane)
+	brokerA, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Blocks: setA, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
+	brokerB, _ := NewBlockBroker(BlockBrokerConfig{ShareInstance: descriptor.ShareInstance(), Blocks: setB, MaxBytes: uint64(catalog.MinChunkSize) * 3, ProcessBudget: sharedProcess})
 	defer brokerA.Close()
 	defer brokerB.Close()
 	defer setA.Close()
@@ -308,8 +309,7 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	if _, err := brokerB.GetBlock(context.Background(), lease, descriptor, 1); err != nil {
 		t.Fatalf("shared process could not reclaim idle cache: %v", err)
 	}
-	setA.attempts.Wait()
-	setB.attempts.Wait()
+	waitForRetainedBytes(t, brokerA, sharedProcess, 0, uint64(catalog.MinChunkSize))
 	if brokerA.UsedBytes() != 0 || sharedProcess.Used() != uint64(catalog.MinChunkSize) {
 		t.Fatal("cross-receiver cache reclamation changed retained ownership")
 	}
@@ -319,7 +319,7 @@ func TestBlockBrokerInvalidationRejectsLateIgnoringLaneResult(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	lane := laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 		close(started)
 		<-release
 		return transferRecord(t, descriptor, 0), nil
@@ -357,7 +357,7 @@ func TestBlockBrokerCloseUnblocksAnIgnoringLaneAndReleasesAdmission(t *testing.T
 	descriptor := transferDescriptor(t, 1)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	lane := laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 		close(started)
 		<-release
 		return transferRecord(t, descriptor, 0), nil
@@ -408,26 +408,26 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 		t.Fatalf("sink failure escaped bounded prefetch: %v", indices)
 	}
 
-	blockingSet, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](33), RaceWidth: 1})
+	blockingSet, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](33), RaceWidth: 1})
 	started := make(chan struct{})
-	_ = blockingSet.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	_ = blockingSet.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, laneFunction(func(ctx context.Context, _ transferlanes.Demand) (records.BlockRecord, error) {
 		close(started)
 		<-ctx.Done()
 		return records.BlockRecord{}, ctx.Err()
 	}))
 	result := make(chan error, 1)
 	go func() {
-		_, err := blockingSet.fetch(context.Background(), blockRequest{demand: validDemand(t, descriptor, 0), validate: validateTransferRecord(validDemand(t, descriptor, 0))})
+		_, err := blockingSet.Fetch(context.Background(), transferlanes.Request{Demand: validDemand(t, descriptor, 0), Validate: validateTransferRecord(validDemand(t, descriptor, 0))})
 		result <- err
 	}()
 	<-started
 	blockingSet.Close()
-	if err := <-result; !errors.Is(err, ErrLaneClosed) {
+	if err := <-result; !errors.Is(err, transferlanes.ErrClosed) {
 		t.Fatalf("closed lane fetch error=%v", err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := lanes.fetch(cancelled, blockRequest{demand: validDemand(t, descriptor, 0), validate: validateTransferRecord(validDemand(t, descriptor, 0))}); !errors.Is(err, context.Canceled) {
+	if _, err := lanes.Fetch(cancelled, transferlanes.Request{Demand: validDemand(t, descriptor, 0), Validate: validateTransferRecord(validDemand(t, descriptor, 0))}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancelled fetch error=%v", err)
 	}
 }
@@ -436,18 +436,18 @@ func TestConstructorsAndLaneFailuresAreTyped(t *testing.T) {
 	if _, err := NewPlaintextBudget(0); err == nil {
 		t.Fatal("zero plaintext budget accepted")
 	}
-	if _, err := NewLaneSet(LaneSetConfig{}); err == nil {
+	if _, err := transferlanes.New(transferlanes.Config{}); err == nil {
 		t.Fatal("zero session lane set accepted")
 	}
-	if _, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](20), RaceWidth: MaxLogicalLanes + 1}); err == nil {
+	if _, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](20), RaceWidth: transferlanes.MaxLogicalLanes + 1}); err == nil {
 		t.Fatal("oversized race width accepted")
 	}
-	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](21)})
+	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](21)})
 	defer lanes.Close()
-	if err := lanes.Add(LaneIdentity{}, LaneRouteRelay, nil); !errors.Is(err, ErrInvalidLane) {
+	if err := lanes.Add(transferlanes.Identity{}, transferlanes.RouteRelay, nil); !errors.Is(err, transferlanes.ErrInvalid) {
 		t.Fatalf("invalid lane error=%v", err)
 	}
-	if lanes.Remove(LaneIdentity{}) {
+	if lanes.Remove(transferlanes.Identity{}) {
 		t.Fatal("zero lane identity was removed")
 	}
 	if _, err := NewBlockBroker(BlockBrokerConfig{}); err == nil {

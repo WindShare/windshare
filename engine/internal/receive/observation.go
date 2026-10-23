@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/internal/testrun"
@@ -161,9 +162,9 @@ func (o getObservation) relayObservationCapacity() int {
 	}
 	return 0
 }
-func (o getObservation) laneSettlementObservationCapacity() transfer.LaneSettlementObservationCapacity {
+func (o getObservation) laneSettlementObservationCapacity() transferlanes.SettlementObservationCapacity {
 	if o.detailed {
-		return transfer.DefaultLaneSettlementObservationCapacity
+		return transferlanes.DefaultSettlementObservationCapacity
 	}
 	return 0
 }
@@ -210,11 +211,11 @@ func (o getObservation) registerRelayConnection(c relayObservationSource) {
 		o.recordLoss(ObservationRelay, loss)
 	}
 }
-func (o getObservation) registerLaneSet(lanes *transfer.LaneSet) {
+func (o getObservation) registerLaneSet(lanes *transferlanes.Set) {
 	if !o.detailed {
 		return
 	}
-	o.register(ObservationLane, func() uint64 { return lanes.CompleteObservations().Loss.CapacityDropped }, drain(lanes.SettlementObservations(), func(v transfer.LaneSettlementSummary) { o.emit(LaneObserved{Value: v}) }))
+	o.register(ObservationLane, func() uint64 { return lanes.CompleteObservations().Loss.CapacityDropped }, drain(lanes.SettlementObservations(), func(v transferlanes.SettlementSummary) { o.emit(LaneObserved{Value: v}) }))
 }
 func (o getObservation) registerWebRTC(channel *wsrtc.Channel) {
 	if !o.detailed {

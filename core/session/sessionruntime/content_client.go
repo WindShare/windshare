@@ -12,8 +12,8 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/revisionaccess"
-	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 const remoteLeaseCleanupTimeout = 5 * time.Second
@@ -426,7 +426,7 @@ type receiverBlockOperation struct {
 
 func (lane *receiverBlockLane) FetchBlock(
 	ctx context.Context,
-	demand transfer.BlockDemand, received func(uint64),
+	demand transferlanes.Demand, received func(uint64),
 ) (record records.BlockRecord, err error) {
 	operation, err := lane.beginBlockOperation(ctx, demand)
 	if err != nil {
@@ -438,7 +438,7 @@ func (lane *receiverBlockLane) FetchBlock(
 
 func (lane *receiverBlockLane) beginBlockOperation(
 	ctx context.Context,
-	demand transfer.BlockDemand,
+	demand transferlanes.Demand,
 ) (*receiverBlockOperation, error) {
 	if err := lane.revisions.leaseError(demand.LeaseID); err != nil {
 		return nil, err
@@ -459,7 +459,7 @@ func (lane *receiverBlockLane) beginBlockOperation(
 	if err := lane.rpc.beginCall(ctx, &lane.identity, call, message); err != nil {
 		operation.finishProtocolTrace(ctx, ProtocolOperationReceiverFailed)
 		if ctx.Err() == nil && lane.rpc.runtime.ctx.Err() == nil && requestProvenNotDelivered(err) {
-			return nil, transfer.NewDemandNotAdmitted(err)
+			return nil, transferlanes.NewDemandNotAdmitted(err)
 		}
 		return nil, err
 	}
@@ -469,7 +469,7 @@ func (lane *receiverBlockLane) beginBlockOperation(
 func (operation *receiverBlockOperation) finish(ctx context.Context, receiveErr error) error {
 	operation.call.recordProtocolTraceFailure(receiveErr)
 	reason := contentflow.CancelReasonOutputAbort
-	if transfer.BlockAttemptSuperseded(ctx) {
+	if transferlanes.AttemptSuperseded(ctx) {
 		reason = contentflow.CancelReasonSuperseded
 	}
 	cleanupErr := operation.retire(reason)
@@ -486,7 +486,7 @@ func (operation *receiverBlockOperation) finish(ctx context.Context, receiveErr 
 
 func (operation *receiverBlockOperation) finishProtocolTrace(ctx context.Context, stage ProtocolOperationStage) {
 	outcome := protocolOperationOutcome{stage: stage}
-	if stage != ProtocolOperationReceiverCompleted && transfer.BlockAttemptSuperseded(ctx) {
+	if stage != ProtocolOperationReceiverCompleted && transferlanes.AttemptSuperseded(ctx) {
 		outcome = protocolOperationOutcome{ProtocolOperationReceiverEnded, ProtocolOperationCauseSuperseded}
 	}
 	operation.terminal.finish(operation.lane.rpc.runtime, outcome)
@@ -506,7 +506,7 @@ func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason)
 
 func (operation *receiverBlockOperation) receive(
 	ctx context.Context,
-	demand transfer.BlockDemand,
+	demand transferlanes.Demand,
 	received func(uint64),
 ) (records.BlockRecord, error) {
 	wait := operation.lane.responses.Begin(ctx, operation.lane.blockFragmentInactivityTimeout())
@@ -555,11 +555,11 @@ func (operation *receiverBlockOperation) receiveFailure(cause error) (records.Bl
 	if retireErr := operation.retire(contentflow.CancelReasonTimeout); retireErr != nil {
 		return records.BlockRecord{}, errors.Join(boundaryErr, retireErr)
 	}
-	return records.BlockRecord{}, transfer.NewDemandReassignableAfterRetirement(boundaryErr)
+	return records.BlockRecord{}, transferlanes.NewDemandReassignableAfterRetirement(boundaryErr)
 }
 
 func (lane *receiverBlockLane) acceptBlockFragment(
-	demand transfer.BlockDemand,
+	demand transferlanes.Demand,
 	message protocolsession.Message,
 	current records.BlockRecord,
 	received func(uint64),

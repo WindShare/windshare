@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing.T) {
 	for _, policy := range []ContentRoutePolicy{ContentRouteAll, ContentRouteDirectOnly, ContentRouteRelayOnly} {
 		t.Run(fmt.Sprintf("policy=%d", policy), func(t *testing.T) {
-			lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: policy, RaceWidth: 1})
+			lanes, err := New(Config{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: policy, RaceWidth: 1})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -26,25 +26,25 @@ func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing
 			demand := validDemand(t, descriptor, 0)
 			record := transferRecord(t, descriptor, 0)
 			var callsMu sync.Mutex
-			called := make(map[LaneRoute]int)
-			routes := []LaneRoute{LaneRouteRelay, LaneRouteDirect, LaneRouteTURN}
+			called := make(map[Route]int)
+			routes := []Route{RouteRelay, RouteDirect, RouteTURN}
 			addRoutes := func(firstID, epoch uint32) {
 				t.Helper()
 				for index, route := range routes {
-					lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+					lane := laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 						callsMu.Lock()
 						called[route]++
 						callsMu.Unlock()
 						return record, nil
 					})
-					if err := lanes.Add(LaneIdentity{ID: firstID + uint32(index), Epoch: epoch}, route, lane); err != nil {
+					if err := lanes.Add(Identity{ID: firstID + uint32(index), Epoch: epoch}, route, lane); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
 			fetch := func(stage string) {
 				t.Helper()
-				if _, err := lanes.fetch(ctx, blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+				if _, err := lanes.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 					t.Fatalf("%s lanes: %v", stage, err)
 				}
 			}
@@ -76,10 +76,10 @@ func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing
 			t.Fatal("invalid route accepted")
 		}
 	}
-	if _, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: 99}); err == nil {
+	if _, err := New(Config{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: 99}); err == nil {
 		t.Fatal("invalid policy accepted")
 	}
-	if ContentRoutePolicy(99).Allows(LaneRouteDirect) {
+	if ContentRoutePolicy(99).Allows(RouteDirect) {
 		t.Fatal("invalid policy allowed direct")
 	}
 }

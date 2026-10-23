@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t *testing.T) {
@@ -124,7 +125,7 @@ func TestCompositeRuntimeTransfersAfterInFlightCandidateOutlivesPeerRejection(t 
 			accepted <- sender
 			acceptErrors <- err
 		}()
-		receiver, err := receiverFactory.Connect(context.Background(), delayed, transfer.LaneRouteRelay)
+		receiver, err := receiverFactory.Connect(context.Background(), delayed, transferlanes.RouteRelay)
 		if err != nil {
 			t.Fatal(err)
 		}

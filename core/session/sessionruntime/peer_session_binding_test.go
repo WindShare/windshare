@@ -3,9 +3,10 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"testing"
 	"time"
+
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestAdmitPeerChannelCannotRouteAProofIntoSiblingProtocolSession(t *testing.T) {
@@ -29,7 +30,7 @@ func TestAdmitPeerChannelCannotRouteAProofIntoSiblingProtocolSession(t *testing.
 		_, admitErr := secondSender.AdmitPeerChannel(wrongContext, wrongSenderChannel, allowSenderPeerSettlement)
 		wrongResult <- admitErr
 	}()
-	if _, err := firstReceiver.AttachLane(wrongContext, grant, wrongReceiverChannel, transfer.LaneRouteDirect); err == nil {
+	if _, err := firstReceiver.AttachLane(wrongContext, grant, wrongReceiverChannel, transferlanes.RouteDirect); err == nil {
 		t.Fatal("receiver attached a peer lane through a sibling ProtocolSession")
 	}
 	if err := <-wrongResult; !errors.Is(err, ErrHandshake) {
@@ -50,7 +51,7 @@ func TestAdmitPeerChannelCannotRouteAProofIntoSiblingProtocolSession(t *testing.
 			err       error
 		}{admission: admission, err: admitErr}
 	}()
-	receiverAdmission, err := firstReceiver.AttachLane(context.Background(), grant, rightReceiverChannel, transfer.LaneRouteDirect)
+	receiverAdmission, err := firstReceiver.AttachLane(context.Background(), grant, rightReceiverChannel, transferlanes.RouteDirect)
 	if err != nil {
 		t.Fatalf("attach exact-session peer lane after sibling rejection: %v", err)
 	}

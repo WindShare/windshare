@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/session/contentflow"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/windshare/windshare/core/session/contentflow"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -22,6 +23,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
@@ -88,7 +90,7 @@ func (f *fixture) connectChannels(senderChannel framechannel.Channel, receiverCh
 		receiverChannel.sender = senderRuntime
 		accepted <- err
 	}()
-	runtime, err := prepared.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	runtime, err := prepared.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		f.t.Fatal(err)
 	}

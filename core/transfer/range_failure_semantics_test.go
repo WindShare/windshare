@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestBlockBrokerReadRangeRejectsForeignSelectionBeforeFetching(t *testing.T) {
@@ -15,7 +16,7 @@ func TestBlockBrokerReadRangeRejectsForeignSelectionBeforeFetching(t *testing.T)
 	broker, lanes, descriptor, lease, _ := newBrokerFixture(
 		t,
 		1,
-		laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 			fetched = true
 			return records.BlockRecord{}, nil
 		}),
@@ -52,7 +53,7 @@ func TestBlockBrokerReadRangePreservesAsynchronousBlockFailure(t *testing.T) {
 	broker, lanes, descriptor, lease, _ := newBrokerFixture(
 		t,
 		1,
-		laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, want
 		}),
 		uint64(catalog.MinChunkSize)*3,
@@ -81,7 +82,7 @@ func TestBlockBrokerReadRangeRejectsAlreadyCancelledWork(t *testing.T) {
 	broker, lanes, descriptor, lease, _ := newBrokerFixture(
 		t,
 		1,
-		laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, errors.New("cancelled read unexpectedly fetched content")
 		}),
 		uint64(catalog.MinChunkSize)*3,

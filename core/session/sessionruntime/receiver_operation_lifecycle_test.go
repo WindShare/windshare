@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
@@ -147,7 +148,7 @@ type receiverOperationBlockLane struct{}
 
 func (receiverOperationBlockLane) FetchBlock(
 	context.Context,
-	transfer.BlockDemand, func(uint64),
+	transferlanes.Demand, func(uint64),
 ) (records.BlockRecord, error) {
 	return records.BlockRecord{}, errors.New("unexpected receiver operation block fetch")
 }
@@ -224,8 +225,8 @@ func TestReceiverBeginCloseFreezesCachedBlocksAndLaneMutationBeforeJoin(t *testi
 			t.Fatalf("BeginClose retained %d plaintext bytes", receiver.BlockBroker().UsedBytes())
 		}
 		if err := receiver.LaneSet().Add(
-			transfer.LaneIdentity{ID: 99, Epoch: 1}, transfer.LaneRouteRelay, receiverOperationBlockLane{},
-		); !errors.Is(err, transfer.ErrLaneClosed) {
+			transferlanes.Identity{ID: 99, Epoch: 1}, transferlanes.RouteRelay, receiverOperationBlockLane{},
+		); !errors.Is(err, transferlanes.ErrClosed) {
 			t.Fatalf("lane mutation admitted after BeginClose: %v", err)
 		}
 

@@ -15,13 +15,14 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type blockProtocolFixture struct {
 	runtime  *runtimeCore
 	recorder *protocolTraceRecorder
 	lane     *receiverBlockLane
-	demand   transfer.BlockDemand
+	demand   transferlanes.Demand
 }
 
 func newBlockProtocolFixture(t *testing.T, runWriter bool) blockProtocolFixture {
@@ -67,12 +68,12 @@ func newBlockProtocolFixture(t *testing.T, runWriter bool) blockProtocolFixture 
 		},
 	}
 	t.Cleanup(lane.rpc.Close)
-	return blockProtocolFixture{runtime, recorder, lane, transfer.BlockDemand{LeaseID: lease, Descriptor: descriptor}}
+	return blockProtocolFixture{runtime, recorder, lane, transferlanes.Demand{LeaseID: lease, Descriptor: descriptor}}
 }
 
 type gatedBlockProtocolWinner struct{ ready <-chan struct{} }
 
-func (lane gatedBlockProtocolWinner) FetchBlock(ctx context.Context, demand transfer.BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
+func (lane gatedBlockProtocolWinner) FetchBlock(ctx context.Context, demand transferlanes.Demand, _ func(uint64)) (records.BlockRecord, error) {
 	select {
 	case <-lane.ready:
 		return records.NewBlockRecord(demand.Descriptor, demand.Index, []byte{42})
@@ -101,24 +102,24 @@ func TestBlockProtocolTraceRaceLoserEndsNormally(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				fixture := newBlockProtocolFixture(t, test.runWriter)
-				lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{
+				lanes, err := transferlanes.New(transferlanes.Config{
 					ProtocolSessionID: fixture.runtime.sessionID, RaceWidth: 2,
-					SettlementObservationCapacity: transfer.DefaultLaneSettlementObservationCapacity,
+					SettlementObservationCapacity: transferlanes.DefaultSettlementObservationCapacity,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Cleanup(lanes.Close)
 				winnerReady := make(chan struct{})
-				if err := lanes.Add(transfer.LaneIdentity{ID: 1}, transfer.LaneRouteRelay, fixture.lane); err != nil {
+				if err := lanes.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, fixture.lane); err != nil {
 					t.Fatal(err)
 				}
-				if err := lanes.Add(transfer.LaneIdentity{ID: 2}, transfer.LaneRouteDirect, gatedBlockProtocolWinner{winnerReady}); err != nil {
+				if err := lanes.Add(transferlanes.Identity{ID: 2}, transferlanes.RouteDirect, gatedBlockProtocolWinner{winnerReady}); err != nil {
 					t.Fatal(err)
 				}
 				budget, _ := transfer.NewPlaintextBudget(uint64(catalog.MinChunkSize))
 				broker, err := transfer.NewBlockBroker(transfer.BlockBrokerConfig{
-					ShareInstance: fixture.demand.Descriptor.ShareInstance(), Lanes: lanes,
+					ShareInstance: fixture.demand.Descriptor.ShareInstance(), Blocks: lanes,
 					MaxBytes: uint64(catalog.MinChunkSize), ProcessBudget: budget, MaxConcurrentBlocks: 1,
 				})
 				if err != nil {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestReceiverPeerDispositionOwnsSessionClosure(t *testing.T) {
@@ -92,11 +92,11 @@ func TestReceiverContentPathsDescribeUsefulDeliveryAndRealFallback(t *testing.T)
 	observation, events := newTestObservation(t)
 	paths := newReceiverContentPaths(observation)
 	now := time.Unix(100, 0)
-	direct := transfer.LaneContentActivity{Route: transfer.LaneRouteDirect, AdmittedLanes: 1, UsefulBytes: 10, LastUsefulAt: now}
-	relay := transfer.LaneContentActivity{Route: transfer.LaneRouteRelay, AdmittedLanes: 1, UsefulBytes: 10, LastUsefulAt: now}
-	paths.observeContent([]transfer.LaneContentActivity{direct}, now)
-	paths.observeContent([]transfer.LaneContentActivity{direct, relay}, now)
-	paths.observeContent([]transfer.LaneContentActivity{relay}, now)
+	direct := transferlanes.ContentActivity{Route: transferlanes.RouteDirect, AdmittedLanes: 1, UsefulBytes: 10, LastUsefulAt: now}
+	relay := transferlanes.ContentActivity{Route: transferlanes.RouteRelay, AdmittedLanes: 1, UsefulBytes: 10, LastUsefulAt: now}
+	paths.observeContent([]transferlanes.ContentActivity{direct}, now)
+	paths.observeContent([]transferlanes.ContentActivity{direct, relay}, now)
+	paths.observeContent([]transferlanes.ContentActivity{relay}, now)
 	var selected []ContentPath
 	fallbacks := 0
 	for _, event := range *events {
@@ -115,8 +115,8 @@ func TestReceiverContentPathsDescribeUsefulDeliveryAndRealFallback(t *testing.T)
 	paths = newReceiverContentPaths(observation)
 	direct.UsefulBytes = 0
 	direct.LastUsefulAt = time.Time{}
-	paths.observeContent([]transfer.LaneContentActivity{direct, relay}, now)
-	paths.observeContent([]transfer.LaneContentActivity{relay}, now)
+	paths.observeContent([]transferlanes.ContentActivity{direct, relay}, now)
+	paths.observeContent([]transferlanes.ContentActivity{relay}, now)
 	for _, event := range *events {
 		if _, ok := event.(FallbackObserved); ok {
 			t.Fatal("idle peer invented fallback")
