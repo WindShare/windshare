@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/session/turncontrol"
 	"net/netip"
 	"sync"
 	"time"
@@ -19,8 +18,11 @@ import (
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/reachability/gateway"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turncapacity"
+	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/session/turncontrol"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
@@ -43,7 +45,7 @@ type NetworkMonitor interface {
 }
 type Config struct {
 	Admission           *ProcessAdmission
-	TURNCapacity        *provider.TURNCapacity
+	TURNCapacity        *turncapacity.Pool
 	Connect             func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error)
 	Monitor             NetworkMonitor
 	Sockets             *socketauthority.Authority
@@ -97,8 +99,8 @@ type NativePeerConnectivity struct {
 	prewarmed             map[[16]byte]bool
 	poll                  sync.Mutex
 	config                Config
-	turnResources         *provider.TURNResourceOwner
-	turnRoutes            provider.TURNRoutePlanner
+	turnResources         *turncapacity.Owner
+	turnRoutes            turnroute.Planner
 	paths                 map[pathKey]*pathResources
 	facts                 *icepolicy.FactStore
 	generation            uint64
@@ -108,7 +110,7 @@ type NativePeerConnectivity struct {
 
 func New(config Config) *NativePeerConnectivity {
 	if config.TURNCapacity == nil {
-		config.TURNCapacity = provider.ProcessTURNCapacity()
+		config.TURNCapacity = turncapacity.ProcessPool()
 	}
 	if config.Admission == nil {
 		config.Admission = processAdmission

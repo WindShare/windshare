@@ -1,4 +1,4 @@
-package provider
+package turncapacity
 
 import (
 	"context"
@@ -10,16 +10,16 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 )
 
-func turnRequest(path, replaces byte, sockets int) TURNRequest {
+func turnRequest(path, replaces byte, sockets int) Request {
 	var old [16]byte
 	if replaces != 0 {
 		old = [16]byte{replaces}
 	}
-	return TURNRequest{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{path},
+	return Request{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{path},
 		ReplacesPeerPathID: old, Service: iceconfig.Identity{Provider: "test", Account: "a", Profile: "p"}, Sockets: sockets}
 }
 
-func reserveTURN(t *testing.T, owner *TURNResourceOwner, request TURNRequest) *TURNReservation {
+func reserveTURN(t *testing.T, owner *Owner, request Request) *Reservation {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -28,13 +28,13 @@ func reserveTURN(t *testing.T, owner *TURNResourceOwner, request TURNRequest) *T
 		t.Fatal(err)
 	}
 	t.Cleanup(reservation.Close)
-	if err := reservation.claim(request.ProtocolSessionID, request.PeerPathID, request.Service); err != nil {
+	if err := reservation.Claim(request.ProtocolSessionID, request.PeerPathID, request.Service); err != nil {
 		t.Fatal(err)
 	}
 	return reservation
 }
 
-func awaitTURNQueue(t *testing.T, capacity *TURNCapacity, count int) {
+func awaitTURNQueue(t *testing.T, capacity *Pool, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -52,39 +52,23 @@ func awaitTURNQueue(t *testing.T, capacity *TURNCapacity, count int) {
 }
 
 func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing.T) {
-	capacity := NewTURNCapacity()
+	capacity := NewPool()
 	owner := capacity.NewOwner()
-	var ordinary []*TURNReservation
-	for i := range MaximumTURNConnections {
-		ordinary = append(ordinary, reserveTURN(t, owner, turnRequest(byte(i+1), 0, MaximumTURNSockets/MaximumTURNConnections)))
+	var ordinary []*Reservation
+	for i := range MaximumConnections {
+		ordinary = append(ordinary, reserveTURN(t, owner, turnRequest(byte(i+1), 0, MaximumSockets/MaximumConnections)))
 	}
 	replacement := reserveTURN(t, owner, turnRequest(40, 1, ordinary[0].request.Sockets))
-	if capacity.connections != MaximumTURNConnections || capacity.sockets != MaximumTURNSockets ||
-		capacity.replacements != 1 || len(capacity.paths) != MaximumTURNConnections+1 {
+	if capacity.connections != MaximumConnections || capacity.sockets != MaximumSockets ||
+		capacity.replacements != 1 || len(capacity.paths) != MaximumConnections+1 {
 		t.Fatalf("capacity lost or unbounded: %+v", capacity)
 	}
-	// The socket envelope is real: an overlap still gathers while every
-	// ordinary socket reservation is in use.
-	networks := make([]*turnNetwork, 0, len(ordinary)+1)
-	for _, reservation := range append(ordinary, replacement) {
-		network, err := newTURNNetwork(reservation)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(network.close)
-		networks = append(networks, network)
-		for range reservation.request.Sockets {
-			if _, err := network.ListenPacket("udp4", "127.0.0.1:0"); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	pending := make(chan *TURNReservation, 1)
+	pending := make(chan *Reservation, 1)
 	failures := make(chan error, 1)
 	go func() { lease, err := owner.Acquire(ctx, turnRequest(41, 2, 4)); pending <- lease; failures <- err }()
 	awaitTURNQueue(t, capacity, 1)
-	networks[0].close()
+	ordinary[0].Close()
 	next := await(t, pending)
 	if err := await(t, failures); err != nil {
 		t.Fatal(err)
@@ -94,15 +78,15 @@ func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing
 	if replacement.predecessor != nil || next.predecessor != ordinary[1] {
 		t.Fatal("handoff did not promote its successor and release the shared overlap")
 	}
-	if capacity.connections != MaximumTURNConnections || capacity.sockets != MaximumTURNSockets || capacity.replacements != 1 {
+	if capacity.connections != MaximumConnections || capacity.sockets != MaximumSockets || capacity.replacements != 1 {
 		t.Fatal("promotion changed steady capacity")
 	}
 	next.Close()
 	if capacity.replacements != 0 || ordinary[1].successor != nil {
 		t.Fatal("failed replacement retained capacity")
 	}
-	for _, network := range networks {
-		network.close()
+	for _, reservation := range append(ordinary, replacement) {
+		reservation.Close()
 	}
 	if capacity.connections != 0 || capacity.sockets != 0 || capacity.replacements != 0 || len(capacity.paths) != 0 {
 		t.Fatal("capacity retained after cleanup")
@@ -110,12 +94,12 @@ func TestTURNCapacityFullProcessReplacesWithoutTakingOrdinaryCapacity(t *testing
 }
 
 func TestTURNCapacityQueuedCancellationAndPredecessorValidation(t *testing.T) {
-	capacity := NewTURNCapacity()
+	capacity := NewPool()
 	owner := capacity.NewOwner()
-	for i := range MaximumTURNConnections {
+	for i := range MaximumConnections {
 		reserveTURN(t, owner, turnRequest(byte(i+1), 0, 1))
 	}
-	for _, request := range []TURNRequest{
+	for _, request := range []Request{
 		turnRequest(40, 0, 1),
 		{ProtocolSessionID: [16]byte{2}, PeerPathID: [16]byte{40}, ReplacesPeerPathID: [16]byte{1},
 			Service: turnRequest(1, 0, 1).Service, Sockets: 1},
@@ -132,42 +116,42 @@ func TestTURNCapacityQueuedCancellationAndPredecessorValidation(t *testing.T) {
 	}
 	wrongService := turnRequest(40, 1, 1)
 	wrongService.Service.Profile = "other"
-	if _, err := owner.Acquire(context.Background(), wrongService); !errors.Is(err, ErrTURNReservation) {
+	if _, err := owner.Acquire(context.Background(), wrongService); !errors.Is(err, ErrReservation) {
 		t.Fatalf("unrelated service borrowed renewal capacity: %v", err)
 	}
 	reserveTURN(t, owner, turnRequest(40, 1, 1))
-	if capacity.connections != MaximumTURNConnections || capacity.replacements != 1 {
+	if capacity.connections != MaximumConnections || capacity.replacements != 1 {
 		t.Fatal("cancelled queue leaked capacity")
 	}
 }
 
 func TestTURNCapacitySeparatesLocalOwnersOfTheSameSession(t *testing.T) {
-	capacity := NewTURNCapacity()
+	capacity := NewPool()
 	left, right := capacity.NewOwner(), capacity.NewOwner()
 	old := reserveTURN(t, left, turnRequest(1, 0, 1))
 	other := reserveTURN(t, right, turnRequest(1, 0, 1))
 	next := reserveTURN(t, left, turnRequest(2, 1, 1))
 	old.Close()
-	if next.predecessor != nil || other.closed || other.successor != nil || capacity.connections != 2 {
+	if next.predecessor != nil || other.state == reservationClosed || other.successor != nil || capacity.connections != 2 {
 		t.Fatal("handoff crossed local endpoint ownership")
 	}
 }
 
 func TestTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T) {
-	capacity := NewTURNCapacity()
+	capacity := NewPool()
 	left, right := capacity.NewOwner(), capacity.NewOwner()
 	leftOld := reserveTURN(t, left, turnRequest(1, 0, 4))
 	rightOld := reserveTURN(t, right, turnRequest(1, 0, 4))
-	for i := range MaximumTURNConnections - 2 {
+	for i := range MaximumConnections - 2 {
 		reserveTURN(t, left, turnRequest(byte(i+2), 0, 4))
 	}
 	leftNext := reserveTURN(t, left, turnRequest(40, 1, 4))
 	rightNext := reserveTURN(t, right, turnRequest(40, 1, 4))
-	if capacity.connections != MaximumTURNConnections || capacity.sockets != MaximumTURNSockets || capacity.replacements != 2 {
+	if capacity.connections != MaximumConnections || capacity.sockets != MaximumSockets || capacity.replacements != 2 {
 		t.Fatal("colocated endpoints cannot complete the same handoff")
 	}
 	ctx := t.Context()
-	pending := make(chan *TURNReservation, 1)
+	pending := make(chan *Reservation, 1)
 	failures := make(chan error, 1)
 	go func() { lease, err := left.Acquire(ctx, turnRequest(41, 2, 4)); pending <- lease; failures <- err }()
 	awaitTURNQueue(t, capacity, 1)
@@ -182,13 +166,13 @@ func TestTURNCapacityHandoffAdmitsBothLocalEndpointsAtFullCapacity(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(next.Close)
-	if capacity.connections != MaximumTURNConnections || capacity.sockets != MaximumTURNSockets || capacity.replacements != 1 {
+	if capacity.connections != MaximumConnections || capacity.sockets != MaximumSockets || capacity.replacements != 1 {
 		t.Fatal("completed handoff did not wake the next renewal")
 	}
 }
 
 func TestTURNCapacityHandoffReservesSocketGrowthAndRollsBack(t *testing.T) {
-	capacity := NewTURNCapacity()
+	capacity := NewPool()
 	owner := capacity.NewOwner()
 	old := reserveTURN(t, owner, turnRequest(1, 0, 2))
 	next := reserveTURN(t, owner, turnRequest(2, 1, 5))
@@ -210,36 +194,66 @@ func TestTURNCapacityHandoffReservesSocketGrowthAndRollsBack(t *testing.T) {
 	}
 }
 
-func TestTURNNetworkShutdownLeavesProtocolWritableAndBoundsStalledCleanup(t *testing.T) {
-	for _, stalled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "protocol", true: "forced"}[stalled], func(t *testing.T) {
-			reservation := reserveTURN(t, NewTURNCapacity().NewOwner(), turnRequest(1, 0, 1))
-			network, err := newTURNNetwork(reservation)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(network.close)
-			socket, err := network.ListenPacket("udp4", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			err, forced := network.shutdown(func() error {
-				if _, err := network.ListenPacket("udp4", "127.0.0.1:0"); err == nil {
-					t.Fatal("shutdown admitted a new socket")
-				}
-				if !stalled {
-					_, err := socket.WriteTo([]byte("release"), socket.LocalAddr())
-					return err
-				}
-				_, _, err := socket.ReadFrom(make([]byte, 32))
-				return err
-			})
-			if forced != stalled || (!stalled && err != nil) {
-				t.Fatalf("shutdown: forced=%v err=%v", forced, err)
-			}
-			if network.snapshot().ActiveSockets != 0 || !reservation.closed {
-				t.Fatal("shutdown retained resources")
-			}
-		})
+func TestTURNExplorationCannotExceedSharedCapacity(t *testing.T) {
+	capacity := NewPool()
+	reservation := reserveTURN(t, capacity.NewOwner(), turnRequest(1, 0, 1))
+	release, ok := reservation.StartInitialRoute()
+	if !ok {
+		t.Fatal("initial reservation unavailable")
+	}
+	capacity.mu.Lock()
+	capacity.sockets = MaximumSockets
+	capacity.mu.Unlock()
+	if _, ok = reservation.TryBackupRoute(); ok {
+		t.Fatal("optional exploration exceeded process capacity")
+	}
+	capacity.mu.Lock()
+	capacity.sockets = 1
+	capacity.mu.Unlock()
+	release()
+	release()
+	if capacity.sockets != 0 {
+		t.Fatal("route release is not idempotent")
+	}
+}
+
+func TestTURNRouteCapacityTracksHandoffEnvelope(t *testing.T) {
+	capacity := NewPool()
+	owner := capacity.NewOwner()
+	old := reserveTURN(t, owner, turnRequest(1, 0, 2))
+	oldFirst, _ := old.StartInitialRoute()
+	oldSecond, _ := old.StartInitialRoute()
+	next := reserveTURN(t, owner, turnRequest(2, 1, 1))
+	nextInitial, _ := next.StartInitialRoute()
+	nextBackup, ok := next.TryBackupRoute()
+	if !ok || capacity.sockets != 2 {
+		t.Fatal("backup double-counted the handoff envelope")
+	}
+	oldFirst()
+	oldSecond()
+	if capacity.sockets != 2 {
+		t.Fatal("predecessor release stole successor capacity")
+	}
+	old.Close()
+	nextBackup()
+	if capacity.sockets != 1 || capacity.replacements != 0 {
+		t.Fatal("handoff did not transfer dynamic socket ownership")
+	}
+	nextInitial()
+	next.Close()
+	if capacity.sockets != 0 || capacity.connections != 0 {
+		t.Fatal("handoff leaked capacity")
+	}
+}
+
+func await[T any](t *testing.T, values <-chan T) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("capacity transition timed out")
+		var zero T
+		return zero
 	}
 }

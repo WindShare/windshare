@@ -7,13 +7,13 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
-	"github.com/windshare/windshare/transport/webrtc/provider"
+	"github.com/windshare/windshare/connectivity/turncapacity"
 )
 
 func TestTURNPreparedReplacementKeepsLivePredecessorAtProcessCapacity(t *testing.T) {
 	_, _, makeNative := newAdmissionFixture(t, 0)
 	native := makeNative()
-	capacity := provider.NewTURNCapacity()
+	capacity := turncapacity.NewPool()
 	native.turnResources = capacity.NewOwner()
 	credential, _ := iceconfig.Fixed("u", "p")
 	relay, _ := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "a", Profile: "p"},
@@ -29,8 +29,8 @@ func TestTURNPreparedReplacementKeepsLivePredecessorAtProcessCapacity(t *testing
 	}
 	defer old.Close()
 	native.SetAdmitted(request.ProtocolSessionID, request.Binding.PeerPathID, false)
-	for i := 1; i < provider.MaximumTURNConnections; i++ {
-		reservation, err := native.turnResources.Acquire(ctx, provider.TURNRequest{
+	for i := 1; i < turncapacity.MaximumConnections; i++ {
+		reservation, err := native.turnResources.Acquire(ctx, turncapacity.Request{
 			ProtocolSessionID: [16]byte{byte(i + 1)}, PeerPathID: [16]byte{1},
 			Service: relay.Identity(), Sockets: 1,
 		})

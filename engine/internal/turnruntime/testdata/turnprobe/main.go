@@ -19,7 +19,9 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turncapacity"
 	"github.com/windshare/windshare/connectivity/turnpath"
+	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
@@ -36,7 +38,7 @@ type probe struct {
 	source       *trialTURN
 	issued       map[byte]*turnpath.Lease
 	sockets      *socketauthority.Authority
-	turn         *provider.TURNResourceOwner
+	turn         *turncapacity.Owner
 	address      netip.Addr
 	next         byte
 	paths        map[byte]*provider.Connection
@@ -68,7 +70,7 @@ func run() error {
 	address := route.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 	_ = route.Close()
 	owner := &probe{source: source, sockets: socketauthority.New(socketauthority.Config{}),
-		turn: provider.ProcessTURNCapacity().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease), payloadBytes: *payloadBytes}
+		turn: turncapacity.ProcessPool().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease), payloadBytes: *payloadBytes}
 	defer owner.sockets.Close()
 	defer func() {
 		for _, connection := range owner.paths {
@@ -160,7 +162,7 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lease.Close()
-	reservation, err := p.turn.Acquire(ctx, provider.TURNRequest{
+	reservation, err := p.turn.Acquire(ctx, turncapacity.Request{
 		ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{id}, ReplacesPeerPathID: replaces,
 		Service: relay.Identity(), Sockets: len(relay.URLs()),
 	})
@@ -168,9 +170,15 @@ func (p *probe) start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	plan, err := turnroute.NewPlan(relay, nil)
+	if err != nil {
+		reservation.Close()
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	connection, err := provider.NewPeerConnection(pion.Configuration{}, provider.AttemptConfig{
 		ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{id}, AttemptID: [16]byte{id}, NetworkGenerationID: 1,
-		ICE: ice, TURNReservation: reservation, SocketLease: lease,
+		ICE: ice, TURN: &provider.TURNConfig{Plan: plan, Reservation: reservation}, SocketLease: lease,
 	})
 	if err != nil {
 		reservation.Close()

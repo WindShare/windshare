@@ -1,14 +1,15 @@
 package provider
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"testing"
 
-	"github.com/pion/ice/v4"
 	"github.com/pion/transport/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnroute"
 )
 
 type turnTestInterfaceNet struct {
@@ -16,22 +17,39 @@ type turnTestInterfaceNet struct {
 	interfaces []*transport.Interface
 }
 
-func TestTURNFailedEgressUsesSourceBoundBackupOverUDPAndTCP(t *testing.T) {
+func TestTURNRouteAdapterReleasesFailedEgressAndBindsBackupOverUDPAndTCP(t *testing.T) {
 	for _, protocol := range []string{"udp", "tcp"} {
 		t.Run(protocol, func(t *testing.T) {
 			endpoint, server := localTURN(t, protocol)
 			authority := socketauthority.New(socketauthority.Config{})
 			t.Cleanup(func() { _ = authority.Close() })
 			connection := turnConnection(t, testLease(t, authority, 1, "127.0.0.1"), endpoint)
-			plan := connection.turnGathering.plan
-			// An unassigned source fails immediately on both transports, without
-			// an external blackhole or a real transaction timeout in this test.
-			plan.initial[0].LocalAddress = netip.MustParseAddr("192.0.2.99")
-			backup := plan.initial[0]
-			backup.LocalAddress = netip.MustParseAddr("127.0.0.1")
-			plan.backup = []ice.TURNRoute{backup}
-			success := make(chan ice.TURNRoute, 1)
-			plan.succeeded = func(route ice.TURNRoute) { success <- route }
+			// Policy tests own fallback selection. This script checks that the Pion
+			// adapter honors source binding and transfers/releases the actual reservation.
+			backup := turnroute.Route{Server: endpoint, LocalAddress: netip.MustParseAddr("127.0.0.1")}
+			success := make(chan turnroute.Route, 1)
+			connection.turnGathering = scriptedTURNGatherer{run: func(ctx context.Context, attempt turnroute.Attempt) {
+				reservation := connection.request.TURN.Reservation
+				release, ok := reservation.StartInitialRoute()
+				if !ok {
+					t.Error("initial route not admitted")
+					return
+				}
+				failed := turnroute.Route{Server: endpoint, LocalAddress: netip.MustParseAddr("192.0.2.99")}
+				if allocation := attempt(ctx, failed, release); allocation != nil {
+					allocation.Discard()
+					t.Error("unassigned source unexpectedly worked")
+					return
+				}
+				release, ok = reservation.TryBackupRoute()
+				if !ok {
+					t.Error("backup route not admitted")
+					return
+				}
+				if allocation := attempt(ctx, backup, release); allocation != nil {
+					success <- backup
+				}
+			}}
 			if _, err := connection.CreateDataChannel("backup", nil); err != nil {
 				t.Fatal(err)
 			}
@@ -49,7 +67,7 @@ func TestTURNFailedEgressUsesSourceBoundBackupOverUDPAndTCP(t *testing.T) {
 			}
 			awaitTURNAllocations(t, server, 1)
 			stats, _ := connection.TURNResources()
-			if stats.ActiveSockets != 1 || connection.request.TURNReservation.socketLimit() != 1 {
+			if stats.ActiveSockets != 1 || connection.request.TURN.Reservation.SocketLimit() != 1 {
 				t.Fatal("failed egress retained capacity")
 			}
 			if err = connection.Close(); err != nil {
@@ -124,3 +142,12 @@ func TestTURNRoutesEachServerWithoutBindingDirectInterfaces(t *testing.T) {
 	awaitTURNAllocations(t, udpServer, 0)
 	awaitTURNAllocations(t, tcpServer, 0)
 }
+
+type scriptedTURNGatherer struct {
+	run func(context.Context, turnroute.Attempt)
+}
+
+func (g scriptedTURNGatherer) Run(ctx context.Context, attempt turnroute.Attempt) {
+	g.run(ctx, attempt)
+}
+func (scriptedTURNGatherer) Select(netip.AddrPort) {}

@@ -59,7 +59,10 @@ func (s *Sender) acquire(ctx context.Context, service *service) {
 	}
 	child, cancel := context.WithTimeout(ctx, issuanceBudget)
 	request := &credentialRequest{ctx: child, cancel: cancel, intent: intent}
-	service.issuance = request
+	if !service.preparation.begin(request) {
+		cancel()
+		return
+	}
 	s.observe(&delegation{grant: turncontrol.Grant{PathID: path, Provider: service.profile.Identity.Provider,
 		Account: service.profile.Identity.Account, Profile: service.profile.Identity.Profile}}, connectionpath.MilestoneIssuanceStarted, "")
 	s.work.Go(func() {
@@ -92,7 +95,7 @@ func (s *Sender) install(ctx context.Context, result issued) {
 	}
 	reason := s.discardReason(result)
 	result.request.cancel()
-	service.issuance = nil
+	service.preparation.complete(result.request)
 	if reason != "" {
 		if result.lease != nil {
 			result.lease.Close()
@@ -147,10 +150,13 @@ func (s *Sender) install(ctx context.Context, result issued) {
 	s.mu.Lock()
 	s.paths[grant.PathID] = value
 	s.mu.Unlock()
-	service.pending = value
+	if !service.preparation.connect(value) {
+		s.retire(ctx, value, turncontrol.Unhelpful)
+		return
+	}
 	if !s.send(ctx, grant) {
 		s.retire(ctx, value, turncontrol.Unhelpful)
-		service.pending = nil
+		service.preparation.detach(value)
 		service.deferIssuance(result.intent, s.config.Now())
 		return
 	}
@@ -167,7 +173,7 @@ func (service *service) deferIssuance(intent pathIntent, now time.Time) {
 }
 
 func (s *Sender) promote(ctx context.Context, service *service) {
-	pending := service.pending
+	pending := service.preparation.pending()
 	if pending == nil || !pending.readyLane.Valid() {
 		return
 	}
@@ -198,7 +204,8 @@ func (s *Sender) promote(ctx context.Context, service *service) {
 		return
 	}
 	old := service.current
-	service.current, service.pending = pending, nil
+	service.current = pending
+	service.preparation.detach(pending)
 	s.mu.Unlock()
 	service.selection.preferred = pending.transport
 	pending.trial = nil

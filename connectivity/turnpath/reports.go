@@ -22,7 +22,7 @@ func (s *Sender) retainReport(report turncontrol.Report) {
 
 func (s *Sender) applyReports() {
 	for _, service := range s.services {
-		for _, path := range []*delegation{service.current, service.pending} {
+		for _, path := range []*delegation{service.current, service.preparation.pending()} {
 			if path != nil {
 				s.applyReport(path)
 			}

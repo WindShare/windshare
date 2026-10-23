@@ -74,7 +74,7 @@ func TestDemandReplacementRequiresBothAdmissionsAndRetainsValidOldOnFailure(t *t
 	}
 	s.apply(ctx, turncontrol.Demand{Authority: fixtureHeader(s, 1), HoldFor: time.Minute})
 	issueNext(t, s)
-	pending := s.services[0].pending
+	pending := s.services[0].preparation.pending()
 	if pending == nil {
 		t.Fatal("grant missing")
 	}
@@ -91,7 +91,7 @@ func TestDemandReplacementRequiresBothAdmissionsAndRetainsValidOldOnFailure(t *t
 	now = now.Add(8 * time.Minute)
 	s.apply(ctx, turncontrol.Demand{Authority: fixtureHeader(s, 2), HoldFor: time.Minute})
 	issueNext(t, s)
-	replacement := s.services[0].pending
+	replacement := s.services[0].preparation.pending()
 	if replacement == nil || replacement.grant.Replaces != old.grant.PathID || len(retired) != 0 {
 		t.Fatal("replacement broke current lane")
 	}
@@ -146,7 +146,7 @@ func TestCanceledDemandCannotPublishLateAuthority(t *testing.T) {
 		t.Fatal("canceled demand started a failure cooldown")
 	}
 	issueNext(t, s)
-	if s.services[0].pending == nil || s.services[0].pending.grant.Authority.Sequence != 3 {
+	if s.services[0].preparation.pending() == nil || s.services[0].preparation.pending().grant.Authority.Sequence != 3 {
 		t.Fatal("new demand did not immediately acquire its own credentials")
 	}
 }

@@ -36,7 +36,7 @@ type turnNetwork struct {
 	stopping       bool
 	closeOnce      sync.Once
 	opening        sync.WaitGroup
-	capacity       *TURNReservation
+	capacity       socketReservation
 	sockets        map[netCloser]struct{}
 	opened         uint64
 	reserved       int
@@ -45,18 +45,33 @@ type turnNetwork struct {
 
 type netCloser interface{ Close() error }
 
+// Socket ownership ends only after protocol shutdown has finished or timed out.
+type socketReservation interface {
+	SocketLimit() int
+	Close()
+}
+
+var errTURNSocketLimit = errors.New("TURN socket reservation exhausted")
+
 func claimTURNNetwork(request AttemptConfig) (*turnNetwork, error) {
 	relay, relayed := request.ICE.Relay()
 	if !relayed {
+		if request.TURN != nil {
+			return nil, errTURNConfiguration
+		}
 		return nil, nil
 	}
-	if err := request.TURNReservation.claim(request.ProtocolSessionID, request.PeerPathID, relay.Identity()); err != nil {
+	if request.TURN == nil || request.TURN.Reservation == nil || !request.TURN.Plan.Matches(relay) ||
+		request.TURN.Plan.InitialSockets() != request.TURN.Reservation.SocketLimit() {
+		return nil, errTURNConfiguration
+	}
+	if err := request.TURN.Reservation.Claim(request.ProtocolSessionID, request.PeerPathID, relay.Identity()); err != nil {
 		return nil, err
 	}
-	return newTURNNetwork(request.TURNReservation)
+	return newTURNNetwork(request.TURN.Reservation)
 }
 
-func newTURNNetwork(capacity *TURNReservation) (*turnNetwork, error) {
+func newTURNNetwork(capacity socketReservation) (*turnNetwork, error) {
 	base, err := stdnet.NewNet()
 	if err != nil {
 		return nil, err
@@ -71,8 +86,8 @@ func (n *turnNetwork) reserve() error {
 	if n.stopping {
 		return net.ErrClosed
 	}
-	if n.reserved >= n.capacity.socketLimit() {
-		return ErrTURNCapacity
+	if n.reserved >= n.capacity.SocketLimit() {
+		return errTURNSocketLimit
 	}
 	// The reservation also covers sockets whose OS dial has not completed.
 	n.reserved++

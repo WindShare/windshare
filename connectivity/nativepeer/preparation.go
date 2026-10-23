@@ -8,6 +8,8 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/turncapacity"
+	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
@@ -26,8 +28,8 @@ type PreparedAttempt struct {
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
 	permit                *attemptPermit
-	turn                  *provider.TURNReservation
-	turnPlan              *provider.TURNPlan
+	turn                  *turncapacity.Reservation
+	turnPlan              *turnroute.Plan
 	transferred, released bool
 	stop                  func()
 	done                  chan struct{}
@@ -44,7 +46,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	}
 	if request.ReplacesPeerPathID != ([16]byte{}) {
 		if _, relayed := request.ICE.Relay(); !relayed || request.ReplacesPeerPathID == [16]byte(request.Binding.PeerPathID) {
-			return nil, provider.ErrTURNReservation
+			return nil, turncapacity.ErrReservation
 		}
 	}
 	n.mu.Lock()
@@ -131,7 +133,7 @@ func (p *PreparedAttempt) reserveTURN(ctx context.Context) error {
 		return err
 	}
 	p.turnPlan = plan
-	reservation, err := p.native.turnResources.Acquire(ctx, provider.TURNRequest{
+	reservation, err := p.native.turnResources.Acquire(ctx, turncapacity.Request{
 		ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path),
 		ReplacesPeerPathID: p.request.ReplacesPeerPathID, Service: relay.Identity(), Sockets: plan.InitialSockets(),
 	})
@@ -262,8 +264,11 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 		return nil, err
 	}
 	config := provider.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
-		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, TURNReservation: p.turn, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
-		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile, TURNPlan: p.turnPlan, OnTURNRecovery: p.request.OnTURNRecovery}
+		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
+		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile, OnTURNRecovery: p.request.OnTURNRecovery}
+	if p.turn != nil {
+		config.TURN = &provider.TURNConfig{Plan: p.turnPlan, Reservation: p.turn}
+	}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding, now)
 	config.Observe = func(event provider.Event) {
 		observer(event)

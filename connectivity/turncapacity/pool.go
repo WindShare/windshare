@@ -1,4 +1,6 @@
-package provider
+// Package turncapacity owns process-wide TURN admission and bounded handoff capacity.
+// It accounts for reservations, independently of socket or protocol implementations.
+package turncapacity
 
 import (
 	"context"
@@ -11,22 +13,22 @@ import (
 )
 
 const (
-	MaximumTURNConnections      = 16
-	MaximumTURNSockets          = 64
-	MaximumTURNPathSockets      = 8
-	MaximumTURNHandoffEndpoints = 2
-	MaximumTURNQueuedRequests   = 64
+	MaximumConnections      = 16
+	MaximumSockets          = 64
+	MaximumPathSockets      = 8
+	MaximumHandoffEndpoints = 2
+	MaximumQueuedRequests   = 64
 )
 
 var (
-	ErrTURNCapacity    = errors.New("TURN capacity exhausted")
-	ErrTURNReservation = errors.New("invalid TURN reservation")
+	ErrCapacity    = errors.New("TURN capacity exhausted")
+	ErrReservation = errors.New("invalid TURN reservation")
 )
 
-// TURNRequest reserves initial routes before signaling. Backup routes acquire
+// Request reserves initial routes before signaling. Backup routes acquire
 // additional slots without queueing; each closed route returns its own slot.
 // Replaces identifies actual predecessor ownership, never an unbounded bypass.
-type TURNRequest struct {
+type Request struct {
 	ProtocolSessionID  [16]byte
 	PeerPathID         [16]byte
 	ReplacesPeerPathID [16]byte
@@ -34,86 +36,94 @@ type TURNRequest struct {
 	Sockets            int
 }
 
-type turnPathKey struct {
-	owner         *TURNResourceOwner
+type pathKey struct {
+	owner         *Owner
 	session, path [16]byte
 }
 
-func (r TURNRequest) key(owner *TURNResourceOwner) turnPathKey {
-	return turnPathKey{owner, r.ProtocolSessionID, r.PeerPathID}
+func (r Request) key(owner *Owner) pathKey {
+	return pathKey{owner, r.ProtocolSessionID, r.PeerPathID}
 }
 
-// TURNResourceOwner distinguishes local endpoints of the same protocol session,
+// Owner distinguishes local endpoints of the same protocol session,
 // including a sender and receiver hosted by different Engines in one process.
-type TURNResourceOwner struct {
-	capacity *TURNCapacity
+type Owner struct {
+	capacity *Pool
 	id       uint64
 }
 
-func (c *TURNCapacity) NewOwner() *TURNResourceOwner {
+func (c *Pool) NewOwner() *Owner {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextOwner++
-	return &TURNResourceOwner{capacity: c, id: c.nextOwner}
+	return &Owner{capacity: c, id: c.nextOwner}
 }
 
-func (o *TURNResourceOwner) Acquire(ctx context.Context, request TURNRequest) (*TURNReservation, error) {
+func (o *Owner) Acquire(ctx context.Context, request Request) (*Reservation, error) {
 	return o.capacity.acquire(ctx, request, o)
 }
 
-// TURNCapacity is shared by the process; an injected instance isolates tests.
+// Pool is shared by the process; an injected instance isolates tests.
 // Ordinary capacity is preserved during one bounded make-before-break handoff,
 // including both endpoints when the sender and receiver share a process.
-type TURNCapacity struct {
+type Pool struct {
 	mu                                 sync.Mutex
-	paths                              map[turnPathKey]*TURNReservation
-	queue                              []*turnWaiter
+	paths                              map[pathKey]*Reservation
+	queue                              []*waiter
 	connections, sockets, replacements int
 	nextOwner                          uint64
 }
 
-type turnWaiter struct {
-	owner   *TURNResourceOwner
-	request TURNRequest
+type waiter struct {
+	owner   *Owner
+	request Request
 	ready   chan struct{}
-	lease   *TURNReservation
+	lease   *Reservation
 	err     error
 }
 
-// TURNReservation owns capacity through preparation, gathering and final close.
+// Reservation owns capacity through preparation, gathering and final close.
 // Its predecessor/successor relationship transfers ordinary capacity atomically.
-type TURNReservation struct {
-	owner                  *TURNCapacity
-	scope                  *TURNResourceOwner
-	request                TURNRequest
-	predecessor, successor *TURNReservation
-	claimed, closed        bool
+type Reservation struct {
+	owner                  *Pool
+	scope                  *Owner
+	request                Request
+	predecessor, successor *Reservation
+	state                  reservationState
 	unstarted              int
 }
 
-var processTURNCapacity = NewTURNCapacity()
+type reservationState uint8
 
-func NewTURNCapacity() *TURNCapacity {
-	return &TURNCapacity{paths: make(map[turnPathKey]*TURNReservation)}
+const (
+	reservationReserved reservationState = iota
+	reservationClaimed
+	reservationClosed
+)
+
+var processPool = NewPool()
+
+func NewPool() *Pool {
+	return &Pool{paths: make(map[pathKey]*Reservation)}
 }
 
-func ProcessTURNCapacity() *TURNCapacity { return processTURNCapacity }
+func ProcessPool() *Pool { return processPool }
 
-func (c *TURNCapacity) acquire(ctx context.Context, request TURNRequest, owner *TURNResourceOwner) (*TURNReservation, error) {
+func (c *Pool) acquire(ctx context.Context, request Request, owner *Owner) (*Reservation, error) {
 	if ctx == nil || request.ProtocolSessionID == ([16]byte{}) || request.PeerPathID == ([16]byte{}) ||
 		request.PeerPathID == request.ReplacesPeerPathID || request.Service.Validate() != nil ||
-		request.Sockets < 1 || request.Sockets > MaximumTURNPathSockets {
-		return nil, ErrTURNReservation
+		request.Sockets < 1 || request.Sockets > MaximumPathSockets {
+		return nil, ErrReservation
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
-	if len(c.queue) >= MaximumTURNQueuedRequests {
+	if len(c.queue) >= MaximumQueuedRequests {
 		c.mu.Unlock()
-		return nil, ErrTURNCapacity
+		return nil, ErrCapacity
 	}
-	waiter := &turnWaiter{owner: owner, request: request, ready: make(chan struct{})}
+	waiter := &waiter{owner: owner, request: request, ready: make(chan struct{})}
 	c.queue = append(c.queue, waiter)
 	c.traceLocked("queued", owner, request)
 	c.drainLocked()
@@ -137,11 +147,11 @@ func (c *TURNCapacity) acquire(ctx context.Context, request TURNRequest, owner *
 		c.traceLocked("cancelled", owner, request)
 		c.mu.Unlock()
 		lease.Close()
-		return nil, errors.Join(ErrTURNCapacity, ctx.Err())
+		return nil, errors.Join(ErrCapacity, ctx.Err())
 	}
 }
 
-func (c *TURNCapacity) drainLocked() {
+func (c *Pool) drainLocked() {
 	for i := 0; i < len(c.queue); {
 		waiter := c.queue[i]
 		lease, err := c.tryAcquireLocked(waiter.owner, waiter.request)
@@ -155,21 +165,21 @@ func (c *TURNCapacity) drainLocked() {
 	}
 }
 
-func (c *TURNCapacity) tryAcquireLocked(owner *TURNResourceOwner, request TURNRequest) (*TURNReservation, error) {
+func (c *Pool) tryAcquireLocked(owner *Owner, request Request) (*Reservation, error) {
 	if c.paths[request.key(owner)] != nil {
-		return nil, ErrTURNReservation
+		return nil, ErrReservation
 	}
-	var predecessor *TURNReservation
+	var predecessor *Reservation
 	if request.ReplacesPeerPathID != ([16]byte{}) {
-		predecessor = c.paths[turnPathKey{owner, request.ProtocolSessionID, request.ReplacesPeerPathID}]
+		predecessor = c.paths[pathKey{owner, request.ProtocolSessionID, request.ReplacesPeerPathID}]
 	}
-	lease := &TURNReservation{owner: c, scope: owner, request: request, unstarted: request.Sockets}
+	lease := &Reservation{owner: c, scope: owner, request: request, unstarted: request.Sockets}
 	if predecessor != nil {
 		if admitted, err := c.reserveReplacementLocked(lease, predecessor); !admitted {
 			return nil, err
 		}
 	} else {
-		if c.connections >= MaximumTURNConnections || c.sockets+request.Sockets > MaximumTURNSockets {
+		if c.connections >= MaximumConnections || c.sockets+request.Sockets > MaximumSockets {
 			return nil, nil
 		}
 		c.connections++
@@ -180,18 +190,18 @@ func (c *TURNCapacity) tryAcquireLocked(owner *TURNResourceOwner, request TURNRe
 	return lease, nil
 }
 
-func (c *TURNCapacity) reserveReplacementLocked(lease, predecessor *TURNReservation) (bool, error) {
+func (c *Pool) reserveReplacementLocked(lease, predecessor *Reservation) (bool, error) {
 	if predecessor.request.Service != lease.request.Service {
-		return false, ErrTURNReservation
+		return false, ErrReservation
 	}
 	// A pending handoff cannot recursively borrow another handoff. A failed
 	// predecessor that already closed instead takes the ordinary admission path.
-	if !predecessor.claimed || predecessor.predecessor != nil || predecessor.successor != nil ||
+	if predecessor.state != reservationClaimed || predecessor.predecessor != nil || predecessor.successor != nil ||
 		!c.handoffAvailableLocked(lease.request) {
 		return false, nil
 	}
 	growth := max(0, lease.request.Sockets-predecessor.request.Sockets)
-	if c.sockets+growth > MaximumTURNSockets {
+	if c.sockets+growth > MaximumSockets {
 		return false, nil
 	}
 	c.sockets += growth
@@ -201,11 +211,11 @@ func (c *TURNCapacity) reserveReplacementLocked(lease, predecessor *TURNReservat
 	return true, nil
 }
 
-func (c *TURNCapacity) handoffAvailableLocked(request TURNRequest) bool {
+func (c *Pool) handoffAvailableLocked(request Request) bool {
 	if c.replacements == 0 {
 		return true
 	}
-	if c.replacements >= MaximumTURNHandoffEndpoints {
+	if c.replacements >= MaximumHandoffEndpoints {
 		return false
 	}
 	// Both local endpoints must gather before either can authenticate the new
@@ -221,32 +231,33 @@ func (c *TURNCapacity) handoffAvailableLocked(request TURNRequest) bool {
 	return false
 }
 
-func (r *TURNReservation) claim(session, path [16]byte, service iceconfig.Identity) error {
+func (r *Reservation) Claim(session, path [16]byte, service iceconfig.Identity) error {
 	if r == nil {
-		return ErrTURNReservation
+		return ErrReservation
 	}
 	r.owner.mu.Lock()
 	defer r.owner.mu.Unlock()
-	if r.closed || r.claimed || r.request.ProtocolSessionID != session ||
+	if r.state != reservationReserved || r.request.ProtocolSessionID != session ||
 		r.request.PeerPathID != path || r.request.Service != service {
-		return ErrTURNReservation
+		return ErrReservation
 	}
-	r.claimed = true
+	r.state = reservationClaimed
+	r.owner.traceLocked("claimed", r.scope, r.request)
 	r.owner.drainLocked()
 	return nil
 }
 
-func (r *TURNReservation) Close() {
+func (r *Reservation) Close() {
 	if r == nil {
 		return
 	}
 	c := r.owner
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if r.closed {
+	if r.state == reservationClosed {
 		return
 	}
-	r.closed = true
+	r.state = reservationClosed
 	delete(c.paths, r.request.key(r.scope))
 	switch {
 	case r.predecessor != nil:
@@ -269,7 +280,7 @@ func (r *TURNReservation) Close() {
 	c.drainLocked()
 }
 
-func (c *TURNCapacity) traceLocked(transition string, owner *TURNResourceOwner, request TURNRequest) {
+func (c *Pool) traceLocked(transition string, owner *Owner, request Request) {
 	slog.Debug("TURN capacity transition", "transition", transition, "owner_id", owner.id,
 		"protocol_session_id", hex.EncodeToString(request.ProtocolSessionID[:]),
 		"peer_path_id", hex.EncodeToString(request.PeerPathID[:]),

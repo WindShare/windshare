@@ -12,6 +12,8 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turncapacity"
+	"github.com/windshare/windshare/connectivity/turnroute"
 )
 
 func localTURN(t *testing.T, protocol string) (string, *turn.Server) {
@@ -51,14 +53,18 @@ func turnConnection(t *testing.T, lease *socketauthority.Lease, endpoints ...str
 		t.Fatal(err)
 	}
 	config, _ := iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
-	reservation, err := ProcessTURNCapacity().NewOwner().Acquire(context.Background(), TURNRequest{
+	reservation, err := turncapacity.ProcessPool().NewOwner().Acquire(context.Background(), turncapacity.Request{
 		ProtocolSessionID: lease.SessionID(), PeerPathID: lease.PathID(), Service: relay.Identity(), Sockets: len(endpoints),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(reservation.Close)
-	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{TURNReservation: reservation, ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: config})
+	plan, err := turnroute.NewPlan(relay, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{TURN: &TURNConfig{Plan: plan, Reservation: reservation}, ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: config})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,19 +191,19 @@ func TestTURNCloseCancelsTLSHandshakeAndDNS(t *testing.T) {
 	}
 }
 func TestTURNPerPathSocketCapacityIsReclaimed(t *testing.T) {
-	capacity := NewTURNCapacity()
-	reservation := reserveTURN(t, capacity.NewOwner(), turnRequest(1, 0, MaximumTURNPathSockets))
+	capacity := turncapacity.NewPool()
+	reservation := reserveTURN(t, capacity.NewOwner(), turnRequest(1, 0, turncapacity.MaximumPathSockets))
 	network, err := newTURNNetwork(reservation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer network.close()
-	for range MaximumTURNPathSockets {
+	for range turncapacity.MaximumPathSockets {
 		if _, err := network.ListenPacket("udp4", "127.0.0.1:0"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := network.ListenPacket("udp4", "127.0.0.1:0"); !errors.Is(err, ErrTURNCapacity) {
+	if _, err := network.ListenPacket("udp4", "127.0.0.1:0"); !errors.Is(err, errTURNSocketLimit) {
 		t.Fatal(err)
 	}
 	network.close()

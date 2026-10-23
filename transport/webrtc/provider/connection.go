@@ -16,6 +16,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/core/connectionpath"
 	"github.com/windshare/windshare/core/session/turncontrol"
 )
@@ -38,14 +39,23 @@ type AttemptConfig struct {
 	NetworkGenerationID    uint64
 	ICEProfileID           string
 	ICE                    iceconfig.Connection
-	TURNReservation        *TURNReservation
-	TURNPlan               *TURNPlan
+	TURN                   *TURNConfig
 	OnTURNRecovery         func(turncontrol.RecoveryReason)
 	InitialCheckingTimeout time.Duration
 	TCPProfile             TCPProfile
 	SocketLease            *socketauthority.Lease
 	MappedEndpoints        []MappedEndpoint
 	Observe                func(Event)
+}
+
+// The caller may reuse its configuration while this attempt is gathering.
+func (request AttemptConfig) snapshot() AttemptConfig {
+	request.MappedEndpoints = slices.Clone(request.MappedEndpoints)
+	if request.TURN != nil {
+		turn := *request.TURN
+		request.TURN = &turn
+	}
+	return request
 }
 
 type Event struct {
@@ -64,7 +74,7 @@ type Event struct {
 	TURNService         *iceconfig.Identity
 	TURNCleanup         connectionpath.CleanupOutcome
 	TURNBinding         *turn.BindingEvent
-	TURNRoute           *TURNRouteEvent
+	TURNRoute           *turnroute.Event
 }
 
 type Connection struct {
@@ -73,7 +83,7 @@ type Connection struct {
 	release       func()
 	request       AttemptConfig
 	turn          *turnNetwork
-	turnGathering *turnGathering
+	turnGathering turnGatherer
 	turnRecovery  turnRecovery
 	closeOnce     sync.Once
 	closeErr      error
@@ -85,7 +95,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	if request.SocketLease == nil || request.ProtocolSessionID != request.SocketLease.SessionID() || request.NetworkGenerationID != request.SocketLease.GenerationID() || request.PeerPathID != request.SocketLease.PathID() {
 		return nil, errors.New("provider socket identity mismatch")
 	}
-	request.MappedEndpoints = slices.Clone(request.MappedEndpoints)
+	request = request.snapshot()
 	if relay, ok := request.ICE.Relay(); ok && !relay.Credentials().ValidAt(time.Now()) {
 		return nil, errors.New("TURN credentials expired before gathering")
 	}
@@ -166,9 +176,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	settings.SetNetworkTypes(networks)
 	configureICE(&configuration, request.ICE)
 	connection := &Connection{lease: lease, release: release, request: request, turn: turn}
-	if err = connection.configureTURN(&providerConfig); err != nil {
-		return fail(err)
-	}
+	connection.configureTURN(&providerConfig)
 	settings.SetICEProviderConfig(providerConfig)
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
