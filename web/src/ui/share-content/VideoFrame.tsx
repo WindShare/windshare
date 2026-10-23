@@ -1,6 +1,7 @@
-import { useRef, useState, type CSSProperties } from 'react'
+import { useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import type { V2PreviewSnapshot } from '../v2-model'
 import type { PreviewActions } from './MediaPreview'
+import { observeVideoFrame } from './video-frame-presentation'
 
 const MINIMUM_SEEK_STEP_SECONDS = 0.1
 const SEEK_STEP_COUNT = 1_000
@@ -18,6 +19,7 @@ export function VideoFrame({ preview, actions }: {
   readonly actions: PreviewActions
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
+  const decoder = useRef<HTMLVideoElement>(null)
   const [presentedId, setPresentedId] = useState<number | null>(null)
   const [position, setPosition] = useState(preview.positionSeconds)
   const requested = useRef(preview.positionSeconds)
@@ -33,8 +35,7 @@ export function VideoFrame({ preview, actions }: {
     setPosition(drag.current.origin)
     drag.current = null
   }
-  const present = (video: HTMLVideoElement) => {
-    if (video.seeking || video.readyState < video.HAVE_CURRENT_DATA) return
+  const present = useEffectEvent((video: HTMLVideoElement) => {
     try {
       const context = canvas.current?.getContext('2d')
       if (context === undefined || context === null) throw new Error('Frame presentation is unavailable')
@@ -46,18 +47,22 @@ export function VideoFrame({ preview, actions }: {
     } catch {
       actions.failed(preview.presentationId)
     }
-  }
+  })
+  const fail = useEffectEvent(() => actions.failed(preview.presentationId))
+  useLayoutEffect(() => {
+    const video = decoder.current
+    if (video === null) return
+    // The decoder's lifetime owns its callback, so replacement or closure cannot
+    // let an obsolete frame overwrite the retained canvas or settle a new attempt.
+    return observeVideoFrame(video, preview.positionSeconds, () => present(video), fail)
+  }, [preview.presentationId, preview.positionSeconds, preview.url])
 
   return <div className="video-frame-preview">
     <div className="preview-frame-stage" style={{ '--preview-ratio': preview.width / preview.height } as CSSProperties}
       aria-busy={pending}>
       <canvas ref={canvas} className="preview-frame" width={preview.width} height={preview.height}
         role="img" aria-label={`Video preview of ${preview.name}`} />
-      <video key={preview.presentationId} src={preview.url} hidden muted playsInline preload="auto"
-        onLoadedMetadata={event => { event.currentTarget.currentTime = preview.positionSeconds }}
-        onLoadedData={event => present(event.currentTarget)}
-        onSeeked={event => present(event.currentTarget)}
-        onError={() => actions.failed(preview.presentationId)} />
+      <video ref={decoder} key={preview.presentationId} src={preview.url} hidden muted playsInline preload="auto" />
       <span className="preview-frame-status" role="status">{pending ? 'Loading frame…' : ''}</span>
     </div>
     <div className="preview-seek">
