@@ -61,9 +61,10 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
 │   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
+│   ├── observation/              Application observation and diagnostic contracts
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
-│   ├── turn/                     TURN settings, shared budgets, service discovery, and credential issuance
-│   └── internal/                 Share/receive/recovery workflows and native connectivity
+│   ├── turn/                     TURN settings, status, and observation contracts
+│   └── internal/                 Share/receive/recovery workflows, native connectivity, and TURN runtime
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
 │   └── testprocessowner/         Test-only bounded process supervisor
@@ -106,7 +107,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
-├── third_party/pion/              Pinned ICE/WebRTC/TURN sources, patches, and reproducibility manifest
+├── third_party/pion/              Pinned ICE/WebRTC/TURN/SCTP sources, patches, and reproducibility manifest
 └── scripts/
     ├── ci/                       CI gates, validation tooling, and release certification
     └── deploy/                   Native relay and Cloudflare deployment, managed TURN provisioning
