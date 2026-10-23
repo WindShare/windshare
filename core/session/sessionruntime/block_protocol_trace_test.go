@@ -124,7 +124,11 @@ func TestBlockProtocolTraceRaceLoserEndsNormally(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(broker.Close)
+				t.Cleanup(func() {
+					if err := broker.Close(); err != nil {
+						t.Error(err)
+					}
+				})
 				done := make(chan error, 1)
 				go func() {
 					data, err := broker.GetBlock(context.Background(), fixture.demand.LeaseID, fixture.demand.Descriptor, 0)

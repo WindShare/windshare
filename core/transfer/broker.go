@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -41,9 +42,9 @@ type authenticatedBlock struct {
 	route downloadmetrics.Route
 }
 type deliveredBlock struct {
-	data    []byte
-	route   downloadmetrics.Route
-	release func()
+	data        []byte
+	route       downloadmetrics.Route
+	reservation bufferbudget.Reservation
 }
 type blockClaim func() (release func(), changed <-chan struct{}, err error)
 
@@ -82,16 +83,18 @@ type blockConsumer struct {
 }
 
 type blockCall struct {
-	route            downloadmetrics.Route
-	ctx              context.Context
-	cancel           context.CancelFunc
-	done             chan struct{}
-	waiters          int
-	consumers        map[*blockConsumer]struct{}
-	completed        bool
-	workerDone       bool
-	reserved         uint64
-	deliveryReserved uint64
+	route      downloadmetrics.Route
+	ctx        context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	waiters    int
+	consumers  map[*blockConsumer]struct{}
+	completed  bool
+	workerDone bool
+	// Only the broker owns these slots. Clear them on handoff or settlement so
+	// admission need not lock the process budget to inspect a moved receipt.
+	reserved         bufferbudget.Reservation
+	deliveryReserved bufferbudget.Reservation
 	expected         uint64
 	activeAttempts   int
 	data             []byte
@@ -114,6 +117,8 @@ type BlockBroker struct {
 
 	mu             sync.Mutex
 	loads          sync.WaitGroup
+	readers        sync.WaitGroup
+	cleanupErr     error
 	closed         bool
 	activeAttempts int
 	entries        map[blockKey]*cachedBlock
@@ -150,10 +155,12 @@ func newBlockBroker(config BlockBrokerConfig, blocks blockFetcher) (*BlockBroker
 }
 
 func (b *BlockBroker) GetBlock(ctx context.Context, leaseID content.LeaseID, descriptor content.FileRevisionDescriptor, index uint64) ([]byte, error) {
-	block, err := b.getBlock(ctx, leaseID, descriptor, index, nil)
-	if block.release != nil {
-		defer block.release()
+	if !b.beginRead() {
+		return nil, ErrBrokerClosed
 	}
+	defer b.readers.Done()
+	block, err := b.getBlock(ctx, leaseID, descriptor, index, nil)
+	defer block.close()
 	return block.data, err
 }
 func (b *BlockBroker) getBlock(
@@ -226,7 +233,7 @@ func (b *BlockBroker) copyCachedLocked(key blockKey, consumer *blockConsumer) (d
 	if !consumer.ready() {
 		return deliveredBlock{}, true
 	}
-	data, live := cached.buffer.Copy()
+	data, reservation, live := cached.buffer.Copy()
 	if !live {
 		delete(b.entries, key)
 		return deliveredBlock{}, false
@@ -235,7 +242,7 @@ func (b *BlockBroker) copyCachedLocked(key blockKey, consumer *blockConsumer) (d
 		return deliveredBlock{}, true
 	}
 	consumer.admitted()
-	return deliveredBlock{data: data, route: cached.route, release: b.releaseDelivery(uint64(len(data)))}, false
+	return deliveredBlock{data: data, route: cached.route, reservation: reservation}, false
 }
 
 func validateDemand(share catalog.ShareInstance, leaseID content.LeaseID, descriptor content.FileRevisionDescriptor, index uint64) (uint32, error) {
@@ -249,11 +256,12 @@ func validateDemand(share catalog.ShareInstance, leaseID content.LeaseID, descri
 	return length, nil
 }
 
-func (b *BlockBroker) reserveLocked(bytes uint64) error {
-	if !b.account.Reserve(bytes) {
-		return ErrPlaintextBudget
+func (b *BlockBroker) reserveLocked(bytes uint64) (bufferbudget.Reservation, error) {
+	reservation, ok := b.account.Reserve(bytes)
+	if !ok {
+		return bufferbudget.Reservation{}, ErrPlaintextBudget
 	}
-	return nil
+	return reservation, nil
 }
 
 func (b *BlockBroker) waitCapacity(ctx context.Context, changed <-chan struct{}) error {
@@ -297,15 +305,15 @@ func (b *BlockBroker) deliverCall(ctx context.Context, call *blockCall, consumer
 			continue
 		}
 		bytes := uint64(len(call.data))
-		reserved := call.deliveryReserved > 0
+		reservation, reserved := call.deliveryReserved.Transfer()
 		if reserved {
-			call.deliveryReserved = 0
+			call.deliveryReserved = bufferbudget.Reservation{}
 		} else {
-			reserved = b.reserveLocked(bytes) == nil
+			reservation, reserved = b.account.Reserve(bytes)
 		}
 		if reserved {
 			consumer.admitted()
-			block := deliveredBlock{data: slices.Clone(call.data), route: call.route, release: b.releaseDelivery(bytes)}
+			block := deliveredBlock{data: slices.Clone(call.data), route: call.route, reservation: reservation}
 			b.mu.Unlock()
 			return block, nil
 		}
@@ -318,14 +326,6 @@ func (b *BlockBroker) deliverCall(ctx context.Context, call *blockCall, consumer
 		case <-changed:
 		}
 	}
-}
-
-func (b *BlockBroker) releaseDelivery(bytes uint64) func() {
-	return sync.OnceFunc(func() {
-		b.mu.Lock()
-		b.account.Release(bytes)
-		b.mu.Unlock()
-	})
 }
 
 func (b *BlockBroker) leaveCall(key blockKey, call *blockCall, consumer *blockConsumer) {
@@ -347,9 +347,9 @@ func (b *BlockBroker) leaveCall(key blockKey, call *blockCall, consumer *blockCo
 	if !call.workerDone {
 		return
 	}
-	if active && !b.closed && call.err == nil && call.reserved > 0 {
-		call.reserved = 0
-		b.storeReservedLocked(key, call.data, call.route)
+	if active && !b.closed && call.err == nil && call.reserved != (bufferbudget.Reservation{}) {
+		b.storeReservedLocked(key, call.data, call.route, call.reserved)
+		call.reserved = bufferbudget.Reservation{}
 	}
 	b.releaseCallReservationLocked(call)
 }
@@ -373,7 +373,7 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 	}
 	bytes := call.expected
 	var consumer *blockConsumer
-	if call.reserved == 0 {
+	if call.reserved == (bufferbudget.Reservation{}) {
 		for candidate := range call.consumers {
 			if candidate.ready() {
 				consumer = candidate
@@ -387,11 +387,14 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 		// separate lifetimes. A canceled hedge cannot lend its pending buffers.
 		bytes += 2 * call.expected
 	}
-	if err := b.reserveLocked(bytes); err != nil {
+	reservation, err := b.reserveLocked(bytes)
+	if err != nil {
 		return nil, changed, nil
 	}
 	if consumer != nil {
-		call.reserved, call.deliveryReserved = call.expected, call.expected
+		// These exact partitions are guaranteed by the single aggregate admission.
+		call.reserved, _ = reservation.Split(call.expected)
+		call.deliveryReserved, _ = reservation.Split(call.expected)
 		consumer.admitted()
 	}
 	b.activeAttempts++
@@ -400,7 +403,7 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 		b.mu.Lock()
 		b.activeAttempts--
 		call.activeAttempts--
-		b.account.Release(call.expected)
+		reservation.Release()
 		b.mu.Unlock()
 	}), nil, nil
 }
@@ -436,12 +439,9 @@ func (b *BlockBroker) runLoad(call *blockCall, demand BlockDemand) {
 }
 
 func (b *BlockBroker) releaseCallReservationLocked(call *blockCall) {
-	bytes := call.reserved + call.deliveryReserved
-	if bytes == 0 {
-		return
-	}
-	b.account.Release(bytes)
-	call.reserved, call.deliveryReserved = 0, 0
+	call.reserved.Release()
+	call.deliveryReserved.Release()
+	call.reserved, call.deliveryReserved = bufferbudget.Reservation{}, bufferbudget.Reservation{}
 }
 
 func (b *BlockBroker) completeAbandonedCallLocked(call *blockCall, err error) {
@@ -461,9 +461,16 @@ func (b *BlockBroker) completeAbandonedCallLocked(call *blockCall, err error) {
 	}
 }
 
-func (b *BlockBroker) storeReservedLocked(key blockKey, data []byte, route downloadmetrics.Route) {
+func (b *BlockBroker) storeReservedLocked(key blockKey, data []byte, route downloadmetrics.Route, reservation bufferbudget.Reservation) {
 	b.pruneEvictedLocked()
-	b.entries[key] = &cachedBlock{route: route, buffer: b.account.Store(key, data)}
+	cached, err := b.account.Store(key, data, reservation)
+	if err != nil {
+		// A rejected handoff settles its owner but remains visible at shutdown.
+		b.cleanupErr = errors.Join(b.cleanupErr, fmt.Errorf("cache handoff for file %v block %d: %w", key.file, key.index, err))
+		reservation.Release()
+		return
+	}
+	b.entries[key] = &cachedBlock{route: route, buffer: cached}
 }
 
 func (b *BlockBroker) pruneEvictedLocked() {
@@ -521,8 +528,24 @@ func (b *BlockBroker) Stop() {
 
 // Close is the external ownership boundary. Callbacks terminate through Stop
 // because a synchronous join from owned work cannot complete itself.
-func (b *BlockBroker) Close() {
+func (b *BlockBroker) Close() error {
 	b.Stop()
 	// Consumers unblock on Stop; admitted buffers remain charged until their workers exit.
+	b.readers.Wait()
 	b.loads.Wait()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return errors.Join(b.cleanupErr, b.account.Close())
+}
+
+// Registration shares the stop boundary so Close cannot miss a reader that is
+// still delivering a charged buffer to an external sink.
+func (b *BlockBroker) beginRead() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.readers.Add(1)
+	return true
 }

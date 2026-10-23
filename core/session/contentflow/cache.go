@@ -51,41 +51,6 @@ func NewBlockCacheKey(descriptor content.FileRevisionDescriptor, index uint64) (
 	}, nil
 }
 
-type ProcessCacheBudget struct {
-	mu    sync.Mutex
-	limit uint64
-	used  uint64
-}
-
-func NewProcessCacheBudget(limit uint64) (*ProcessCacheBudget, error) {
-	if limit == 0 {
-		return nil, errors.New("process cache budget must be positive")
-	}
-	return &ProcessCacheBudget{limit: limit}, nil
-}
-
-func (b *ProcessCacheBudget) tryReserve(bytes uint64) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if bytes > b.limit-b.used {
-		return false
-	}
-	b.used += bytes
-	return true
-}
-
-func (b *ProcessCacheBudget) release(bytes uint64) {
-	b.mu.Lock()
-	b.used -= bytes
-	b.mu.Unlock()
-}
-
-func (b *ProcessCacheBudget) Used() uint64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.used
-}
-
 type cacheEntry struct {
 	key    BlockCacheKey
 	object []byte
@@ -103,9 +68,9 @@ type cacheCall struct {
 }
 
 type SharedBlockCache struct {
-	share    catalog.ShareInstance
-	maxBytes uint64
-	process  *ProcessCacheBudget
+	share       catalog.ShareInstance
+	maxBytes    uint64
+	reservation cacheReservation
 
 	mu       sync.Mutex
 	loads    sync.WaitGroup
@@ -126,7 +91,7 @@ func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *
 		maxBytes = DefaultShareSealedCacheBytes
 	}
 	return &SharedBlockCache{
-		share: share, maxBytes: maxBytes, process: process,
+		share: share, maxBytes: maxBytes, reservation: cacheReservation{budget: process},
 		entries: make(map[BlockCacheKey]*list.Element), lru: list.New(), inflight: make(map[BlockCacheKey]*cacheCall),
 		invalid: make(map[revisionCacheIdentity]struct{}), watches: make(map[revisionCacheIdentity]map[*revisionWatch]struct{}),
 	}, nil
@@ -273,7 +238,7 @@ func (c *SharedBlockCache) storeLocked(key BlockCacheKey, object []byte) {
 			return
 		}
 	}
-	if !c.process.tryReserve(bytes) {
+	if !c.reservation.grow(bytes) {
 		return
 	}
 	entry := &cacheEntry{key: key, object: slices.Clone(object), bytes: bytes}
@@ -291,7 +256,7 @@ func (c *SharedBlockCache) evictOldestLocked() bool {
 	delete(c.entries, entry.key)
 	c.lru.Remove(element)
 	c.used -= entry.bytes
-	c.process.release(entry.bytes)
+	c.reservation.shrink(entry.bytes)
 	return true
 }
 
@@ -305,7 +270,7 @@ func (c *SharedBlockCache) InvalidateRevision(file catalog.FileID, revision cont
 			delete(c.entries, key)
 			c.lru.Remove(element)
 			c.used -= entry.bytes
-			c.process.release(entry.bytes)
+			c.reservation.shrink(entry.bytes)
 		}
 	}
 	for key, call := range c.inflight {

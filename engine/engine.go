@@ -34,11 +34,14 @@ var ErrClosed = errors.New("engine is closed")
 type UnreleasedResourcesError struct {
 	CatalogUsage catalog.ResourceUsage
 	CacheBytes   uint64
+	cause        error
 }
 
 func (failure *UnreleasedResourcesError) Error() string {
 	return fmt.Sprintf("engine shutdown retained catalog usage %+v and %d cached bytes", failure.CatalogUsage, failure.CacheBytes)
 }
+
+func (failure *UnreleasedResourcesError) Unwrap() error { return failure.cause }
 
 type managedTask interface {
 	Stop(task.StopReason)
@@ -217,8 +220,9 @@ func (engine *Engine) shutdown(active []managedTask) {
 	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()
-	if catalogUsage != (catalog.ResourceUsage{}) || cacheBytes != 0 {
-		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes}
+	cacheErr := engine.cache.Close()
+	if catalogUsage != (catalog.ResourceUsage{}) || cacheErr != nil {
+		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes, cause: cacheErr}
 	}
 	engine.mu.Lock()
 	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, turnErr, retainedErr)...)

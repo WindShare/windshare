@@ -73,12 +73,13 @@ func TestBlockBrokerReservationCannotEvictAnInflightOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	broker := &BlockBroker{maxBytes: 2, process: budget, account: bufferbudget.NewAccount[blockKey](budget, 2)}
-	if err := broker.reserveLocked(2); err != nil {
+	reservation, err := broker.reserveLocked(2)
+	if err != nil {
 		t.Fatalf("initial inflight reservation: %v", err)
 	}
-	defer broker.releaseCallReservationLocked(&blockCall{reserved: 2})
+	defer broker.releaseCallReservationLocked(&blockCall{reserved: reservation})
 
-	if err := broker.reserveLocked(1); !errors.Is(err, ErrPlaintextBudget) {
+	if _, err := broker.reserveLocked(1); !errors.Is(err, ErrPlaintextBudget) {
 		t.Fatalf("reservation behind inflight owner error = %v", err)
 	}
 }

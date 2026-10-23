@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/core/capacityledger"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 )
@@ -31,8 +32,11 @@ func TestApplicationShutdownReportsUnreleasedAggregateResources(t *testing.T) {
 			if resource == "catalog" && retained.CatalogUsage == (catalog.ResourceUsage{}) {
 				t.Fatal("catalog ownership was lost")
 			}
-			if resource == "cache" && retained.CacheBytes == 0 {
-				t.Fatal("cache ownership was lost")
+			if resource == "cache" {
+				var ledger *capacityledger.UnreleasedError
+				if retained.CacheBytes == 0 || !errors.As(err, &ledger) || ledger.Holds != 1 {
+					t.Fatal("cache ownership and its ledger diagnostic were lost")
+				}
 			}
 		})
 	}
