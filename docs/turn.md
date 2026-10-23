@@ -5,6 +5,11 @@ relays. Recipients still open the link normally. Initial discovery, authenticati
 and signaling require an application relay; existing authenticated lanes can
 carry subsequent credential replacement after that relay disconnects.
 
+Each native Engine owns its TURN connection/socket capacity and peer-attempt
+admission budgets. All its shares, receives and reconnects share those limits;
+other Engines in the same process have independent capacity. These resource
+limits are separate from account byte budgets.
+
 ## Managed Cloudflare service
 
 The Cloudflare deployment workflow provisions TURN in both deployment modes.

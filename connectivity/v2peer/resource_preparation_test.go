@@ -16,14 +16,14 @@ func TestSenderResourceWaitExpiresBeforeRemotePreparation(t *testing.T) {
 		t.Run(constraint, func(t *testing.T) {
 			var sockets *socketauthority.Authority
 			if constraint == "sockets" {
-				sockets = socketauthority.New(socketauthority.Config{Capacity: nativepeer.ProcessConcurrentAttempts})
+				sockets = socketauthority.New(socketauthority.Config{Capacity: nativepeer.ConcurrentAttempts})
 			}
 			h := newResourceQueuedHandshake(t, sockets)
 			code, typed, reason := protocolsession.PeerOperationCodeTimeout, TypedPeerErrorTimeout, "resource_preparation_timeout"
 			if sockets != nil {
 				// Admitted lanes release attempt permits while retaining physical
 				// sockets, isolating socket pressure from the process-start limit.
-				for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
+				for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 					h.native.SetAdmitted([16]byte{i}, testBinding(i).PeerPathID, true)
 				}
 				for {
@@ -43,7 +43,7 @@ func TestSenderResourceWaitExpiresBeforeRemotePreparation(t *testing.T) {
 			if h.receiver.phaseContext.Err() != nil {
 				t.Fatal("resource wait consumed the receiver's failure delivery margin")
 			}
-			if h.started.Load() != nativepeer.ProcessConcurrentAttempts {
+			if h.started.Load() != nativepeer.ConcurrentAttempts {
 				t.Fatal("resource timeout started a provider")
 			}
 			expirationObserved := false

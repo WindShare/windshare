@@ -560,7 +560,7 @@ func newReceiverHarnessWithContext(
 	if configure != nil {
 		configure(&config, signaling)
 	}
-	factory, err := NewReceiverFactory(config)
+	factory, err := newTestReceiverFactory(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}

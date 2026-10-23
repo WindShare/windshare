@@ -44,7 +44,7 @@ type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
 }
 type Config struct {
-	Admission           *ProcessAdmission
+	Admission           *Admission
 	TURNCapacity        *turncapacity.Pool
 	Connect             func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error)
 	Monitor             NetworkMonitor
@@ -108,12 +108,11 @@ type NativePeerConnectivity struct {
 	snapshotState         networkstate.Snapshot
 }
 
-func New(config Config) *NativePeerConnectivity {
-	if config.TURNCapacity == nil {
-		config.TURNCapacity = turncapacity.ProcessPool()
-	}
-	if config.Admission == nil {
-		config.Admission = processAdmission
+var ErrCapacityRequired = errors.New("native connectivity requires admission and TURN capacity")
+
+func New(config Config) (*NativePeerConnectivity, error) {
+	if config.TURNCapacity == nil || config.Admission == nil {
+		return nil, ErrCapacityRequired
 	}
 	if config.Monitor == nil {
 		config.Monitor = networkstate.NewMonitor(nil, networkstate.DefaultDebounce)
@@ -139,7 +138,7 @@ func New(config Config) *NativePeerConnectivity {
 		}
 		owner.config.Sockets = socketauthority.New(sockets)
 	}
-	return owner
+	return owner, nil
 }
 func (n *NativePeerConnectivity) pathLocked(key pathKey) (*pathResources, error) {
 	if n.closed {

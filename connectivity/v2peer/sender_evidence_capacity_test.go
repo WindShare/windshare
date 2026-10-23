@@ -64,11 +64,11 @@ func TestSenderPathCapacityRejectsOnlyNewPath(t *testing.T) {
 }
 func TestSenderPathMembershipConfiguration(t *testing.T) {
 	for _, limit := range []int{-1, SenderMaxPeerPaths + 1} {
-		if _, err := NewFactory(Config{MaxPeerPaths: limit}); err == nil {
+		if _, err := newTestSenderFactory(t, Config{MaxPeerPaths: limit}); err == nil {
 			t.Fatal(limit)
 		}
 	}
-	if _, err := NewFactory(Config{MaxPeerPaths: 1}); err != nil {
+	if _, err := newTestSenderFactory(t, Config{MaxPeerPaths: 1}); err != nil {
 		t.Fatal(err)
 	}
 	var authority *senderEvidenceAuthority

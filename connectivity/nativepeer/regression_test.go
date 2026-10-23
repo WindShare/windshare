@@ -107,7 +107,7 @@ func TestMappedCandidateCannotClaimSTUNSuccessOrHostDelay(t *testing.T) {
 	}
 }
 func TestObservationQueueFreezesProviderFactsAndReportsExactLossCut(t *testing.T) {
-	n := New(Config{ObservationCapacity: 1, Side: SideReceiver})
+	n := newTestConnectivity(t, Config{ObservationCapacity: 1, Side: SideReceiver})
 	defer n.Close(context.Background())
 	subject := Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "profile", Side: SideReceiver}
 	candidate := &provider.CandidateFacts{Type: "host"}

@@ -53,7 +53,7 @@ func turnConnection(t *testing.T, lease *socketauthority.Lease, endpoints ...str
 		t.Fatal(err)
 	}
 	config, _ := iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
-	reservation, err := turncapacity.ProcessPool().NewOwner().Acquire(context.Background(), turncapacity.Request{
+	reservation, err := turncapacity.NewPool().NewOwner().Acquire(context.Background(), turncapacity.Request{
 		ProtocolSessionID: lease.SessionID(), PeerPathID: lease.PathID(), Service: relay.Identity(), Sockets: len(endpoints),
 	})
 	if err != nil {

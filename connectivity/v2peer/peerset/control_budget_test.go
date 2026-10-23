@@ -13,8 +13,8 @@ import (
 
 func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
-	native := nativepeer.New(nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
+	native := newTestNative(t, nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
 	defer native.Close(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,7 +58,7 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 }
 func TestExpiredPrewarmDormantOwnerTakesContentWithoutAnotherSpeculativeAttempt(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	attempts := make(chan *fakeAttempt, 3)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: BrowseDemand, Start: func(context.Context, v2signal.Binding) (Attempt, error) {
 		a := newAttempt()

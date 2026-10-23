@@ -317,7 +317,7 @@ func startReceiverPreOperationAttempt(
 		PhaseTimers:       timers,
 		Random:            bytes.NewReader(bytes.Repeat([]byte{0x6b}, v2signal.IdentityBytes*2)),
 	}
-	factory, err := NewReceiverFactory(config)
+	factory, err := newTestReceiverFactory(t, config)
 	if err != nil {
 		t.Fatal(err)
 	}

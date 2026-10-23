@@ -55,10 +55,10 @@ func (c *admissionTestClock) advance(d time.Duration) {
 		run()
 	}
 }
-func newAdmissionFixture(t *testing.T, endpoints int) (*ProcessAdmission, *admissionTestClock, func() *NativePeerConnectivity) {
+func newAdmissionFixture(t *testing.T, endpoints int) (*Admission, *admissionTestClock, func() *NativePeerConnectivity) {
 	t.Helper()
 	clock := &admissionTestClock{now: time.Unix(100, 0)}
-	gate := NewProcessAdmission(AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
+	gate := NewAdmission(AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
 	var entries []icepolicy.Endpoint
 	for i := range endpoints {
 		entries = append(entries, icepolicy.Endpoint{ID: fmt.Sprint(i), URL: fmt.Sprintf("stun:127.0.0.1:%d", 30000+i), Family: "any", Trust: "local", Enabled: true, FailureDomain: fmt.Sprint(i)})
@@ -69,7 +69,7 @@ func newAdmissionFixture(t *testing.T, endpoints int) (*ProcessAdmission, *admis
 	}
 	makeNative := func() *NativePeerConnectivity {
 		monitor := &testMonitor{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}
-		n := New(Config{Admission: gate, Now: clock.Now, Monitor: monitor, Pool: &pool, Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 256})
+		n := newTestConnectivity(t, Config{Admission: gate, Now: clock.Now, Monitor: monitor, Pool: &pool, Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 256})
 		t.Cleanup(func() {
 			if err := n.Close(context.Background()); err != nil {
 				t.Error(err)
@@ -201,7 +201,7 @@ func TestProcessProviderAdmissionFairAcrossManagersAndIndependentCancellation(t 
 }
 func TestProcessProviderChurnCannotResetStartOrSTUNBudget(t *testing.T) {
 	gate, clock, makeNative := newAdmissionFixture(t, 2)
-	for i := byte(1); i <= ProcessStartsPerWindow; i++ {
+	for i := byte(1); i <= StartsPerWindow; i++ {
 		n := makeNative()
 		pc := startActual(t, n, i)
 		if err := pc.Close(); err != nil {
@@ -217,7 +217,7 @@ func TestProcessProviderChurnCannotResetStartOrSTUNBudget(t *testing.T) {
 	if starts != 0 || endpoints != 0 || active != 0 {
 		t.Fatal(starts, endpoints, active)
 	}
-	clock.advance(ProcessAdmissionWindow/ProcessStartsPerWindow - time.Nanosecond)
+	clock.advance(AdmissionWindow/StartsPerWindow - time.Nanosecond)
 	select {
 	case <-pending:
 		t.Fatal("rate refilled early")
@@ -246,7 +246,7 @@ func TestProcessQueueCloseAndActiveDeadlineReleaseRealProvider(t *testing.T) {
 	if actualResult(t, waiting).err == nil {
 		t.Fatal("closed session reached provider")
 	}
-	clock.advance(ProcessAttemptBudget)
+	clock.advance(AttemptBudget)
 	released := make(map[[16]byte]bool)
 	for len(released) < 4 {
 		select {
@@ -274,7 +274,7 @@ func TestPreparationAbandonAndStaleGenerationNeverCreateProvider(t *testing.T) {
 	n.mu.Lock()
 	n.generation++
 	n.mu.Unlock()
-	if _, err = prepared.Start(context.Background()); !errors.Is(err, ErrProcessAdmission) {
+	if _, err = prepared.Start(context.Background()); !errors.Is(err, ErrAdmission) {
 		t.Fatal(err)
 	}
 	prepared.Close()

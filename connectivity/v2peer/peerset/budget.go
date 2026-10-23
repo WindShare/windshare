@@ -16,11 +16,11 @@ const (
 	RefillWindow              = 600 * time.Second
 	AttemptsPerWave           = 3
 	WaveBudget                = 120 * time.Second
-	AttemptBudget             = nativepeer.ProcessAttemptBudget
+	AttemptBudget             = nativepeer.AttemptBudget
 	MinimumAttemptOpportunity = nativepeer.MinimumPreparationOpportunity
 	PrewarmRetention          = 30 * time.Second
 	MaximumPaths              = 8
-	ProcessAttemptCapacity    = 8
+	DefaultAttemptCapacity    = 8
 	ResourceRetryDelay        = time.Second
 )
 
@@ -78,7 +78,8 @@ func (b *Budget) reserve(now time.Time) (func(time.Duration), time.Duration) {
 	}, 0
 }
 
-// Capacity is FIFO across paths and receivers. An admitted lane releases its
+// Capacity is injected by the application and is FIFO across paths and receivers.
+// An admitted lane releases its
 // attempt slot while retaining its separate provider/socket ownership.
 type Capacity struct {
 	mu            sync.Mutex
@@ -96,8 +97,6 @@ func NewCapacity(limit int) (*Capacity, error) {
 	}
 	return &Capacity{limit: limit}, nil
 }
-
-var processCapacity = &Capacity{limit: ProcessAttemptCapacity}
 
 func (c *Capacity) acquire(ctx context.Context) (func(), error) {
 	waiter := &capacityWaiter{ready: make(chan struct{})}

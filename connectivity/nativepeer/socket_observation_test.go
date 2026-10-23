@@ -10,7 +10,7 @@ import (
 )
 
 func TestOwnedSocketHandoffObservationsPreservePathAttribution(t *testing.T) {
-	n := New(Config{Side: SideSender, ObservationCapacity: DefaultObservationCapacity})
+	n := newTestConnectivity(t, Config{Side: SideSender, ObservationCapacity: DefaultObservationCapacity})
 	t.Cleanup(func() { _ = n.Close(context.Background()) })
 	lease, err := n.config.Sockets.Acquire([16]byte{1}, 3, [16]byte{2}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
 	if err != nil {

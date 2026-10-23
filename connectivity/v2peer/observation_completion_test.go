@@ -72,14 +72,14 @@ func TestEnabledFactoriesCreateNoObservationWorkers(t *testing.T) {
 	senders := make([]*Factory, 0, factories)
 	receivers := make([]*ReceiverFactory, 0, factories)
 	for range factories {
-		sender, err := NewFactory(Config{
+		sender, err := newTestSenderFactory(t, Config{
 			SenderAttemptObservationCapacity:  1,
 			PeerDiagnosticObservationCapacity: 1,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		receiver, err := NewReceiverFactory(ReceiverFactoryConfig{
+		receiver, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 			ReceiverTerminationObservationCapacity: 1,
 			PeerDiagnosticObservationCapacity:      1,
 		})
@@ -102,7 +102,7 @@ func TestEnabledFactoriesCreateNoObservationWorkers(t *testing.T) {
 }
 
 func TestDisabledFactoriesExposeNoStreams(t *testing.T) {
-	sender, err := NewFactory(Config{})
+	sender, err := newTestSenderFactory(t, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestDisabledFactoriesExposeNoStreams(t *testing.T) {
 		t.Fatalf("disabled sender completion = %#v", completion)
 	}
 
-	receiver, err := NewReceiverFactory(ReceiverFactoryConfig{})
+	receiver, err := newTestReceiverFactory(t, ReceiverFactoryConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestFactoriesRejectInvalidObservationCapacities(t *testing.T) {
 		"large peer":      {PeerDiagnosticObservationCapacity: maximumPeerDiagnosticObservationCapacity + 1},
 	} {
 		t.Run("sender "+name, func(t *testing.T) {
-			if _, err := NewFactory(config); !errors.Is(err, ErrConfig) {
+			if _, err := newTestSenderFactory(t, config); !errors.Is(err, ErrConfig) {
 				t.Fatalf("NewFactory error = %v", err)
 			}
 		})
@@ -150,7 +150,7 @@ func TestFactoriesRejectInvalidObservationCapacities(t *testing.T) {
 		"large peer":    {PeerDiagnosticObservationCapacity: maximumPeerDiagnosticObservationCapacity + 1},
 	} {
 		t.Run("receiver "+name, func(t *testing.T) {
-			if _, err := NewReceiverFactory(config); !errors.Is(err, ErrConfig) {
+			if _, err := newTestReceiverFactory(t, config); !errors.Is(err, ErrConfig) {
 				t.Fatalf("NewReceiverFactory error = %v", err)
 			}
 		})
@@ -158,7 +158,7 @@ func TestFactoriesRejectInvalidObservationCapacities(t *testing.T) {
 }
 
 func TestSenderAttemptShutdownConcurrentWithCompletionHasStableCut(t *testing.T) {
-	factory, err := NewFactory(Config{
+	factory, err := newTestSenderFactory(t, Config{
 		SenderAttemptObservationCapacity:  8,
 		PeerDiagnosticObservationCapacity: 8,
 	})
@@ -195,7 +195,7 @@ func TestSenderAttemptShutdownConcurrentWithCompletionHasStableCut(t *testing.T)
 }
 
 func TestSenderCompletionPublishesFinalStreamCapacityDiagnostic(t *testing.T) {
-	factory, err := NewFactory(Config{
+	factory, err := newTestSenderFactory(t, Config{
 		SenderAttemptObservationCapacity:  1,
 		PeerDiagnosticObservationCapacity: 2,
 	})
@@ -229,7 +229,7 @@ func TestSenderCompletionPublishesFinalStreamCapacityDiagnostic(t *testing.T) {
 }
 
 func TestReceiverCompletionPublishesFinalStreamCapacityDiagnostic(t *testing.T) {
-	factory, err := NewReceiverFactory(ReceiverFactoryConfig{
+	factory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 		ReceiverTerminationObservationCapacity: 1,
 		PeerDiagnosticObservationCapacity:      2,
 	})

@@ -66,18 +66,22 @@ func Run(ctx context.Context, request Request, deps Dependencies) (completed tas
 		return
 	}
 	observation.emit(GenerationChanged{Current: active.session.runtime.ProtocolSessionID()})
-	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver}
+	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver, Now: a.clock.Now}
 	if request.Diagnostics {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
 	}
-	active.options = receiverPeerOptions{budget: peerset.NewBudget(startedAt), native: nativepeer.New(nativeConfig)}
+	native, err := deps.Connectivity.NewNative(nativeConfig)
+	if err != nil {
+		step = observation.fail(stepLocalFailure, err)
+		return
+	}
+	active.options = receiverPeerOptions{budget: peerset.NewBudget(startedAt), capacity: deps.Connectivity.Attempts(), native: native}
 	observation.registerNative(active.options.native)
 	active.session.runtime.LaneSet().BindDownloadMetrics(metrics)
 	active.execution, step = a.prepareGetConnectivity(ctx, input, active.output, active.session.runtime, observation, active.options)
 	if step != stepReady {
 		return
 	}
-	var err error
 	active.continuation, err = receivercontinuation.New(ctx, active.session.runtime, active.replace)
 	if err != nil {
 		step = observation.fail(stepLocalFailure, err)

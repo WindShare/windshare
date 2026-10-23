@@ -120,7 +120,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		config.PhaseTimers = systemPeerPhaseTimerSource{}
 	}
 	if config.Native == nil {
-		config.Native = nativepeer.New(nativepeer.Config{})
+		return nil, ErrConfig
 	}
 	if config.DataChannels == nil {
 		config.DataChannels = DataChannelAdapterFunc(func(channel *pion.DataChannel) (PeerDataChannel, error) {

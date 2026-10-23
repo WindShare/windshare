@@ -28,13 +28,13 @@ func (processPhaseNetwork) Snapshot(context.Context) (networkstate.State, error)
 	return networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}, nil
 }
 func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *testing.T) {
-	gate := nativepeer.NewProcessAdmission(nativepeer.AdmissionClock{})
+	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{})
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
-	native := nativepeer.New(nativepeer.Config{Admission: gate, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), ObservationCapacity: 64})
+	native := newTestNative(t, nativepeer.Config{Admission: gate, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), ObservationCapacity: 64})
 	defer native.Close(context.Background())
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
 	var blockers []*provider.Connection
-	for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
+	for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 		pc, err := native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: binding})
 		if err != nil {
 			t.Fatal(err)
@@ -42,7 +42,7 @@ func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *te
 		blockers = append(blockers, pc)
 	}
 	timers := newRecordingReceiverPhaseTimerSource()
-	factory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: native, PhaseTimers: timers})
+	factory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{Native: native, PhaseTimers: timers})
 	if err != nil {
 		t.Fatal(err)
 	}

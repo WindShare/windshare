@@ -43,7 +43,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{now: time.Unix(100, 0), monitor: &testMonitor{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}}
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
 	sockets := socketauthority.New(socketauthority.Config{})
-	h.native = New(Config{Admission: NewProcessAdmission(AdmissionClock{}), Monitor: h.monitor, Sockets: sockets, Pool: &pool, Now: func() time.Time { return h.now },
+	h.native = newTestConnectivity(t, Config{Admission: NewAdmission(AdmissionClock{}), Monitor: h.monitor, Sockets: sockets, Pool: &pool, Now: func() time.Time { return h.now },
 		Reachability: reachability.New(reachability.Config{Now: func() time.Time { return h.now }}),
 		Connect: func(_ pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
 			h.requests = append(h.requests, request)

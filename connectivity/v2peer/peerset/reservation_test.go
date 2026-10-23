@@ -38,7 +38,7 @@ func TestDeferredMappingReservationReturnsBothBucketsOnlyIfUnused(t *testing.T) 
 }
 func TestAttemptCapCancelsSynchronousProviderStartup(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	entered := make(chan struct{})
 	path, err := owner.Open(context.Background(), PathConfig{Demand: ContentDemand, StopAfterWave: true, Start: func(ctx context.Context, _ v2signal.Binding) (Attempt, error) {
 		close(entered)
@@ -62,7 +62,7 @@ func TestAttemptCapCancelsSynchronousProviderStartup(t *testing.T) {
 }
 func TestLateFreshAttemptKeepsFortySecondICEWindowUnderNonresettingWaveCap(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	attempts := make(chan *fakeAttempt, 3)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: ContentDemand, StopAfterWave: true, Start: func(context.Context, v2signal.Binding) (Attempt, error) {
 		a := newAttempt()

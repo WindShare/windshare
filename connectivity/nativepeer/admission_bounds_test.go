@@ -11,14 +11,14 @@ import (
 func TestProcessProviderQueueHasFiniteCapacityAndManagerCloseDetachesWaiters(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	active, waiting, overflow := makeNative(), makeNative(), makeNative()
-	for i := byte(1); i <= ProcessConcurrentAttempts; i++ {
+	for i := byte(1); i <= ConcurrentAttempts; i++ {
 		startActual(t, active, i)
 	}
 	var results []<-chan admissionResult
-	for i := byte(1); i <= ProcessQueuedAttempts; i++ {
+	for i := byte(1); i <= MaximumQueuedAttempts; i++ {
 		results = append(results, queuedActual(t, waiting, i, context.Background()))
 	}
-	if _, err := overflow.NewPeerConnection(context.Background(), attemptFor(1)); !errors.Is(err, ErrProcessAdmission) {
+	if _, err := overflow.NewPeerConnection(context.Background(), attemptFor(1)); !errors.Is(err, ErrAdmission) {
 		t.Fatal("queue overflow allocated resources", err)
 	}
 	if err := waiting.Close(context.Background()); err != nil {
@@ -31,7 +31,7 @@ func TestProcessProviderQueueHasFiniteCapacityAndManagerCloseDetachesWaiters(t *
 	}
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	if len(gate.queue) != 0 || gate.active != ProcessConcurrentAttempts || gate.starts != ProcessStartsPerWindow-ProcessConcurrentAttempts {
+	if len(gate.queue) != 0 || gate.active != ConcurrentAttempts || gate.starts != StartsPerWindow-ConcurrentAttempts {
 		t.Fatal("canceled queue consumed sibling allowance")
 	}
 }
@@ -43,7 +43,7 @@ func TestProcessAdmissionDoesNotMintTimeWhenClockMovesBackwards(t *testing.T) {
 	_ = pc.Close()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	if gate.starts != ProcessStartsPerWindow-1 || gate.activeTime != float64(ProcessActiveTimePerWindow) {
+	if gate.starts != StartsPerWindow-1 || gate.activeTime != float64(ActiveTimePerWindow) {
 		t.Fatal("backwards clock minted allowance")
 	}
 }
@@ -58,11 +58,11 @@ func TestUnstartedPreparationExpiresAndCannotBeReused(t *testing.T) {
 		t.Fatal("preparation lost immutable identity")
 	}
 	var missingContext context.Context // Exercise rejection before a preparation can acquire resources.
-	if _, err := prepared.Start(missingContext); !errors.Is(err, ErrProcessAdmission) {
+	if _, err := prepared.Start(missingContext); !errors.Is(err, ErrAdmission) {
 		t.Fatal(err)
 	}
-	clock.advance(ProcessAttemptBudget)
-	if _, err := prepared.Start(context.Background()); !errors.Is(err, ErrProcessAdmission) {
+	clock.advance(AttemptBudget)
+	if _, err := prepared.Start(context.Background()); !errors.Is(err, ErrAdmission) {
 		t.Fatal("expired preparation revived", err)
 	}
 	gate.mu.Lock()
@@ -77,7 +77,7 @@ func TestRetiredPathOrNetworkCancelsQueuedAdmissionWithoutChargingStart(t *testi
 		t.Run(kind, func(t *testing.T) {
 			gate, _, makeNative := newAdmissionFixture(t, 0)
 			blockers, waiting := makeNative(), makeNative()
-			for i := byte(1); i <= ProcessConcurrentAttempts; i++ {
+			for i := byte(1); i <= ConcurrentAttempts; i++ {
 				startActual(t, blockers, i)
 			}
 			result := queuedActual(t, waiting, 9, context.Background())
@@ -95,7 +95,7 @@ func TestRetiredPathOrNetworkCancelsQueuedAdmissionWithoutChargingStart(t *testi
 			}
 			gate.mu.Lock()
 			defer gate.mu.Unlock()
-			if gate.starts != ProcessStartsPerWindow-ProcessConcurrentAttempts || len(gate.queue) != 0 {
+			if gate.starts != StartsPerWindow-ConcurrentAttempts || len(gate.queue) != 0 {
 				t.Fatal("retirement charged a new start")
 			}
 		})

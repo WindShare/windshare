@@ -589,6 +589,7 @@ func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) 
 		channels: make(chan protocolsession.FrameChannel, 1),
 	}
 	senderFactory, err := v2peer.NewFactory(v2peer.Config{
+		Native:        newCapacityNative(t),
 		Configuration: pion.Configuration{}, NegotiationBudget: v2PeerIntegrationTimeout, AdmissionBudget: v2PeerIntegrationTimeout,
 		MaxCandidates: v2PeerIntegrationMaxCandidates,
 		PeerConnections: v2peer.PeerConnectionFactoryFunc(
@@ -628,6 +629,7 @@ func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) 
 	})
 
 	receiverFactory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
+		Native:        newCapacityNative(t),
 		Configuration: pion.Configuration{}, NegotiationBudget: v2PeerIntegrationTimeout, AdmissionBudget: v2PeerIntegrationTimeout,
 		MaxCandidates: v2PeerIntegrationMaxCandidates,
 		PeerConnections: v2peer.ReceiverPeerConnectionFactoryFunc(
@@ -798,6 +800,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 	}
 
 	senderFactory, err := v2peer.NewFactory(v2peer.Config{
+		Native:            newCapacityNative(t),
 		Configuration:     pion.Configuration{},
 		NegotiationBudget: v2PeerIntegrationTimeout,
 		AdmissionBudget:   v2PeerIntegrationTimeout,
@@ -847,6 +850,7 @@ func TestV2PeerRealPionPhaseGatesPreserveExpiryAndReplacement(t *testing.T) {
 	})
 
 	receiverFactory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
+		Native:            newCapacityNative(t),
 		Configuration:     pion.Configuration{},
 		NegotiationBudget: v2PeerIntegrationTimeout,
 		AdmissionBudget:   v2PeerIntegrationTimeout,

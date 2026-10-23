@@ -111,7 +111,7 @@ func New(config Config) (*PeerSet, error) {
 		config.Budget = NewBudget(config.Clock.Now())
 	}
 	if config.Capacity == nil {
-		config.Capacity = processCapacity
+		return nil, ErrConfig
 	}
 	if config.Random == nil {
 		config.Random = rand.Reader

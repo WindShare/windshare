@@ -43,10 +43,10 @@ func (c *fakePathControls) receive(body []byte) error {
 }
 func TestAuthenticatedPathControlsWakeOnlyTheExistingOwnerAndRevokeRetires(t *testing.T) {
 	clock := newClock()
-	native := nativepeer.New(nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
+	native := newTestNative(t, nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
 	defer native.Close(context.Background())
 	controls := &fakePathControls{sent: make(chan []byte, 32)}
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	ctx, cancel := context.WithCancel(context.Background())
 	path := &Path{owner: owner, config: PathConfig{Native: native, Controls: controls}, key: pathKey{path: v2signal.PeerPathID{1}}, ctx: ctx, cancel: cancel, demand: ContentDemand, resourceActive: true,
 		wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
@@ -104,8 +104,8 @@ func TestAuthenticatedPathControlsWakeOnlyTheExistingOwnerAndRevokeRetires(t *te
 }
 func TestNativeMappingReservationFeedsFreshAttemptWithoutResettingUnitBudget(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
-	native := nativepeer.New(nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
+	native := newTestNative(t, nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
 	defer native.Close(context.Background())
 	attempts := make(chan *fakeAttempt, 4)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: ContentDemand, Native: native, StopAfterWave: true, Start: func(context.Context, v2signal.Binding) (Attempt, error) {

@@ -70,7 +70,7 @@ func run() error {
 	address := route.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 	_ = route.Close()
 	owner := &probe{source: source, sockets: socketauthority.New(socketauthority.Config{}),
-		turn: turncapacity.ProcessPool().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease), payloadBytes: *payloadBytes}
+		turn: turncapacity.NewPool().NewOwner(), address: address, paths: make(map[byte]*provider.Connection), issued: make(map[byte]*turnpath.Lease), payloadBytes: *payloadBytes}
 	defer owner.sockets.Close()
 	defer func() {
 		for _, connection := range owner.paths {

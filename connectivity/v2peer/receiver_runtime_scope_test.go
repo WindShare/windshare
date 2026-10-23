@@ -196,7 +196,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 
 	receiverPeer := newReceiverTestPeerConnection()
 	receiverDataChannel := newReceiverTestChannel()
-	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
+	receiverFactory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 		MaxCandidates:     receiverRuntimeScopeCandidateLimit,
 		NegotiationBudget: receiverRuntimeScopePhaseBudget,
 		AdmissionBudget:   receiverRuntimeScopePhaseBudget,

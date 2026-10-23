@@ -134,7 +134,7 @@ func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGeneratio
 	if err := h.native.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	automatic := New(Config{Monitor: h.monitor, Now: func() time.Time { return h.now }, Pool: h.native.config.Pool, Connect: func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error) {
+	automatic := newTestConnectivity(t, Config{Monitor: h.monitor, Now: func() time.Time { return h.now }, Pool: h.native.config.Pool, Connect: func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error) {
 		return nil, context.Canceled
 	}})
 	_, _ = automatic.NewPeerConnection(context.Background(), request(1))
@@ -143,7 +143,7 @@ func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGeneratio
 	if err := automatic.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defaults := New(Config{})
+	defaults := newTestConnectivity(t, Config{})
 	if err := defaults.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}

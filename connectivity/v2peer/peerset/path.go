@@ -129,7 +129,7 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 		return nil, &Result{Stopped: true}
 	}
 	release := func() {}
-	// Native preparation owns the single bounded process queue. Custom providers
+	// Native preparation owns the single bounded application queue. Custom providers
 	// retain their injectable receiver capacity without adding a hidden native queue.
 	if p.config.Native == nil {
 		var err error
@@ -214,7 +214,7 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *R
 		return nil
 	}
 	// Capacity deferral proves the remote did not start ICE. Preserve the finite
-	// wall-clock wave and process rate limits, but return its negotiation allowance.
+	// wall-clock wave and application rate limits, but return its negotiation allowance.
 	if result.Scope == protocolsession.PeerFailureResourceDeferred || errors.Is(result.Cause, socketauthority.ErrCapacity) {
 		wave.attempts--
 		p.budget().refundUnstartedAttempt()

@@ -21,7 +21,7 @@ func testPeerSlot(t *testing.T) *peerslot.Lease {
 
 func TestPhysicalPathReplacementPreservesSessionContinuationAuthority(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	table, err := protocolsession.NewOperationTableWithContinuations(
 		protocolsession.OperationLimits{MaxActive: 8, MaxTracked: 64}, clock.Now, v2signal.ReceiverControlValidator{})
 	if err != nil {

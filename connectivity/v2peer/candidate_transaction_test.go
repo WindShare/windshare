@@ -224,7 +224,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 
 	receiverPeer := newReceiverTestPeerConnection()
 	receiverDataChannel := newReceiverTestChannel()
-	receiverPeerFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
+	receiverPeerFactory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 		MaxCandidates:     2,
 		NegotiationBudget: 5 * time.Second,
 		AdmissionBudget:   5 * time.Second,

@@ -17,10 +17,10 @@ import (
 
 func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t *testing.T) {
 	clock := newClock()
-	gate := nativepeer.NewProcessAdmission(nativepeer.AdmissionClock{Now: clock.Now})
+	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{Now: clock.Now})
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
 	captured := make(chan provider.AttemptConfig, 8)
-	native := nativepeer.New(nativepeer.Config{Admission: gate, Now: clock.Now, Pool: &pool, Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
+	native := newTestNative(t, nativepeer.Config{Admission: gate, Now: clock.Now, Pool: &pool, Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
 		Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 64,
 		Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
 			captured <- request
@@ -30,7 +30,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 	t.Cleanup(func() { _ = native.Close(context.Background()) })
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
 	var blockers []*provider.Connection
-	for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
+	for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 		pc, err := native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: binding})
 		if err != nil {
 			t.Fatal(err)
@@ -38,7 +38,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 		blockers = append(blockers, pc)
 		receive(t, captured)
 	}
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	ctx := t.Context()
 	path := &Path{owner: owner, ctx: ctx}
 	var activeUsed time.Duration
@@ -64,7 +64,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 	go func() {
 		opportunities <- path.prepareProvider(wave, binding, func(used time.Duration) { activeUsed = used }, func() {})
 	}()
-	nextTimer(t, clock, nativepeer.ProcessQueueBudget)
+	nextTimer(t, clock, nativepeer.QueueBudget)
 	for {
 		event := receive(t, native.Observations())
 		if event.Admission != nil && event.Admission.Kind == nativepeer.AdmissionQueued && event.Subject.ProtocolSessionID == [16]byte{9} {
