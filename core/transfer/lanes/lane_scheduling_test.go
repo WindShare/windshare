@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -15,23 +15,23 @@ func TestLaneSchedulingKeepsUnmeasuredRelayOutOfFastContent(t *testing.T) {
 	descriptor := transferDescriptor(t, 16)
 	var tick atomic.Int64
 	now := func() time.Time { return time.Unix(100, tick.Load()) }
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](120), Now: now})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](120), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lanes.Close()
 	var directCalls, relayCalls, cancellations atomic.Int32
-	_ = lanes.Add(LaneIdentity{ID: 1}, LaneRouteDirect, laneFunction(func(_ context.Context, input BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(Identity{ID: 1}, RouteDirect, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
 		directCalls.Add(1)
 		tick.Add(int64(time.Millisecond))
 		return transferRecord(t, descriptor, input.Index), nil
 	}))
 	first := validDemand(t, descriptor, 0)
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: first, validate: validateTransferRecord(first)}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: first, Validate: validateTransferRecord(first)}); err != nil {
 		t.Fatal(err)
 	}
 	lanes.attempts.Wait()
-	_ = lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(Identity{ID: 2}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
 		relayCalls.Add(1)
 		<-ctx.Done()
 		cancellations.Add(1)
@@ -39,7 +39,7 @@ func TestLaneSchedulingKeepsUnmeasuredRelayOutOfFastContent(t *testing.T) {
 	}))
 	for index := uint64(1); index < 16; index++ {
 		input := validDemand(t, descriptor, index)
-		if _, err := lanes.fetch(context.Background(), blockRequest{demand: input, validate: validateTransferRecord(input)}); err != nil {
+		if _, err := lanes.Fetch(context.Background(), Request{Demand: input, Validate: validateTransferRecord(input)}); err != nil {
 			t.Fatal(err)
 		}
 		lanes.attempts.Wait()
@@ -57,7 +57,7 @@ func TestLaneSchedulingRescuesAlreadyDispatchedPrefix(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 121)
 	relayStarted := make(chan struct{})
 	relayCancelled := make(chan struct{})
-	_ = lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(ctx context.Context, _ Demand) (records.BlockRecord, error) {
 		close(relayStarted)
 		<-ctx.Done()
 		close(relayCancelled)
@@ -66,20 +66,20 @@ func TestLaneSchedulingRescuesAlreadyDispatchedPrefix(t *testing.T) {
 	input := validDemand(t, descriptor, 0)
 	result := make(chan error, 1)
 	go func() {
-		_, err := lanes.fetch(context.Background(), blockRequest{demand: input, validate: validateTransferRecord(input)})
+		_, err := lanes.Fetch(context.Background(), Request{Demand: input, Validate: validateTransferRecord(input)})
 		result <- err
 	}()
 	<-relayStarted
 	// Suspension fences only new content; the old prefix remains on the relay.
-	suspension, err := lanes.SuspendContent(LaneIdentity{ID: 1})
+	suspension, err := lanes.SuspendContent(Identity{ID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = lanes.Add(LaneIdentity{ID: 2}, LaneRouteDirect, laneFunction(func(_ context.Context, input BlockDemand) (records.BlockRecord, error) {
+	_ = lanes.Add(Identity{ID: 2}, RouteDirect, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, input.Index), nil
 	}))
 	warm := validDemand(t, descriptor, 1)
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: warm, validate: validateTransferRecord(warm)}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: warm, Validate: validateTransferRecord(warm)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := suspension.Resume(); err != nil {
@@ -107,11 +107,11 @@ func TestLaneSchedulingUsesMeasuredCompletionAndMarginalRelayCost(t *testing.T) 
 	input := validDemand(t, descriptor, 0)
 	bytes := blockDemandBytes(input)
 	for _, id := range []uint32{1, 2} {
-		route := LaneRouteDirect
+		route := RouteDirect
 		if id == 2 {
-			route = LaneRouteRelay
+			route = RouteRelay
 		}
-		_ = lanes.Add(LaneIdentity{ID: id}, route, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
+		_ = lanes.Add(Identity{ID: id}, route, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
 	}
 	// Selection tests use measured capacity without adding wall-clock delays.
 	lanes.lanes[1].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 100}
@@ -141,24 +141,24 @@ func TestLaneSchedulingSupplementRespectsAuthorityAndOldestProbe(t *testing.T) {
 	input := validDemand(t, descriptor, 0)
 	lanes := newBoundaryLaneSet(t, 123)
 	for _, id := range []uint32{1, 2, 3} {
-		route := LaneRouteRelay
+		route := RouteRelay
 		if id == 1 {
-			route = LaneRouteDirect
+			route = RouteDirect
 		}
-		_ = lanes.Add(LaneIdentity{ID: id}, route, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
+		_ = lanes.Add(Identity{ID: id}, route, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
 	}
 	primary := lanes.lanes[1]
 	primary.performance.HasSuccessfulSample = true
 	primary.performance.BytesPerSecond = float64(blockDemandBytes(input)) * 100
 	lanes.lanes[2].performance.LastAttempt = time.Now().Add(-time.Hour)
-	attempted := map[LaneIdentity]struct{}{{ID: 1}: {}}
+	attempted := map[Identity]struct{}{{ID: 1}: {}}
 	lanes.contentRoutePolicy = ContentRouteDirectOnly
 	if lanes.supplement(input, attempted, primary, time.Hour, time.Second, lanescheduling.Probe, nil) != nil ||
 		lanes.supplement(input, attempted, primary, time.Hour, time.Second, lanescheduling.Rescue, nil) != nil {
 		t.Fatal("route permission bypassed")
 	}
 	lanes.contentRoutePolicy = ContentRouteAll
-	suspension, err := lanes.SuspendContent(LaneIdentity{ID: 3})
+	suspension, err := lanes.SuspendContent(Identity{ID: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,13 +175,13 @@ func TestLaneSchedulingSupplementRespectsAuthorityAndOldestProbe(t *testing.T) {
 
 func TestLaneMeasurementRequiresAnIdleSampleAndUsefulAlternative(t *testing.T) {
 	now := time.Unix(100, 0)
-	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](124), Now: func() time.Time { return now }})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](124), Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lanes.Close()
 	for _, id := range []uint32{1, 2} {
-		if err := lanes.Add(LaneIdentity{ID: id}, LaneRouteTURN, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(Identity{ID: id}, RouteTURN, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)

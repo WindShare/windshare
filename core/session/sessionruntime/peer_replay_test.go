@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/transfer"
 	"sync"
 	"testing"
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestAmbiguousPeerOfferReplayPrecedesCandidateAcrossLaneMigration(t *testing.T) {
@@ -447,7 +447,7 @@ func connectPeerReplayPair(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func attachAmbiguousPeerReplayLane(
 			err      error
 		}{identity: identity, err: attachErr}
 	}()
-	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transfer.LaneRouteDirect)
+	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transferlanes.RouteDirect)
 	senderAttached := <-senderResult
 	if receiverErr != nil || senderAttached.err != nil {
 		t.Fatalf("attach ambiguous replay lane: receiver=%v sender=%v", receiverErr, senderAttached.err)

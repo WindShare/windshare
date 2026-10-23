@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -11,21 +11,21 @@ import (
 
 func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 	notAdmitted := NewDemandNotAdmitted(nil)
-	if !errors.Is(notAdmitted, ErrInvalidLane) || !isDemandNotAdmitted(notAdmitted) {
+	if !errors.Is(notAdmitted, ErrInvalid) || !isDemandNotAdmitted(notAdmitted) {
 		t.Fatalf("nil demand rejection = %v", notAdmitted)
 	}
 	retired := NewDemandReassignableAfterRetirement(nil)
-	if !errors.Is(retired, ErrInvalidLane) || !isDemandReassignableAfterRetirement(retired) {
+	if !errors.Is(retired, ErrInvalid) || !isDemandReassignableAfterRetirement(retired) {
 		t.Fatalf("nil retired demand = %v", retired)
 	}
-	var nilSuspension *ContentLaneSuspension
-	if err := nilSuspension.Resume(); !errors.Is(err, ErrInvalidLane) {
+	var nilSuspension *ContentSuspension
+	if err := nilSuspension.Resume(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil suspension resume = %v", err)
 	}
 
 	lanes := newBoundaryLaneSet(t, 1)
-	identity := LaneIdentity{ID: 1, Epoch: 1}
-	if err := lanes.Add(identity, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	identity := Identity{ID: 1, Epoch: 1}
+	if err := lanes.Add(identity, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 	lanes.mu.Lock()
 	lanes.contentSuspensions[identity.ID] = &contentLaneSuspensionPolicy{laneID: identity.ID}
 	lanes.mu.Unlock()
-	if err := suspension.Resume(); !errors.Is(err, ErrStaleLane) {
+	if err := suspension.Resume(); !errors.Is(err, ErrStale) {
 		t.Fatalf("replaced suspension resume = %v", err)
 	}
 }
@@ -45,17 +45,17 @@ func TestLaneCapabilitiesRejectNilAndStaleAuthorities(t *testing.T) {
 func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 9)
 	retiredCause := errors.New("authenticated fragment progress stopped")
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandReassignableAfterRetirement(retiredCause)
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 2, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: BlockDemand{}, validate: func(records.BlockRecord) error { return nil }}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: Demand{}, Validate: func(records.BlockRecord) error { return nil }}); err != nil {
 		t.Fatalf("retired block operation did not reach replacement lane: %v", err)
 	}
 }
@@ -63,9 +63,9 @@ func TestLaneFetchReassignsOnlyWithRetiredOperationAuthority(t *testing.T) {
 func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 	t.Run("attempt budget", func(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 2)
-		attempted := make(map[LaneIdentity]struct{}, MaxDemandLaneAttempts)
-		for index := 1; index <= MaxDemandLaneAttempts; index++ {
-			attempted[LaneIdentity{ID: uint32(index), Epoch: 1}] = struct{}{}
+		attempted := make(map[Identity]struct{}, MaxDemandAttempts)
+		for index := 1; index <= MaxDemandAttempts; index++ {
+			attempted[Identity{ID: uint32(index), Epoch: 1}] = struct{}{}
 		}
 		selected, exhausted, err := lanes.candidates(context.Background(), attempted, 1, nil)
 		if err != nil || !exhausted || len(selected) != 0 {
@@ -75,13 +75,13 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 
 	t.Run("all current identities attempted", func(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 3)
-		identity := LaneIdentity{ID: 1, Epoch: 1}
-		if err := lanes.Add(identity, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		identity := Identity{ID: 1, Epoch: 1}
+		if err := lanes.Add(identity, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), map[LaneIdentity]struct{}{identity: {}}, 1, nil)
+		selected, exhausted, err := lanes.candidates(context.Background(), map[Identity]struct{}{identity: {}}, 1, nil)
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempted identities = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -104,7 +104,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 			done <- err
 		}()
 		lanes.stop()
-		if err := <-done; !errors.Is(err, ErrLaneClosed) {
+		if err := <-done; !errors.Is(err, ErrClosed) {
 			t.Fatalf("stopped candidate wait = %v", err)
 		}
 	})
@@ -120,7 +120,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 			selected, _, err := lanes.candidates(context.Background(), nil, 1, nil)
 			done <- laneCandidatesResult{selected: selected, err: err}
 		}()
-		if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 			return records.BlockRecord{}, nil
 		})); err != nil {
 			t.Fatal(err)
@@ -136,28 +136,28 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 	lanes := newBoundaryLaneSet(t, 7)
 	rejection := errors.New("transport not reached")
-	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, NewDemandNotAdmitted(rejection)
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: BlockDemand{}, validate: func(records.BlockRecord) error { return nil }}); !errors.Is(err, rejection) {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: Demand{}, Validate: func(records.BlockRecord) error { return nil }}); !errors.Is(err, rejection) {
 		t.Fatalf("exhausted lane fetch = %v", err)
 	}
 }
 
-type boundaryBlockLaneFunc func(context.Context, BlockDemand) (records.BlockRecord, error)
+type boundaryBlockLaneFunc func(context.Context, Demand) (records.BlockRecord, error)
 
 func (function boundaryBlockLaneFunc) FetchBlock(
 	ctx context.Context,
-	demand BlockDemand, _ func(uint64),
+	demand Demand, _ func(uint64),
 ) (records.BlockRecord, error) {
 	return function(ctx, demand)
 }
 
-func newBoundaryLaneSet(t *testing.T, seed byte) *LaneSet {
+func newBoundaryLaneSet(t *testing.T, seed byte) *Set {
 	t.Helper()
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](seed),
 		RaceWidth:         1,
 	})

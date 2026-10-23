@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -77,8 +78,8 @@ func TestSelectedAnchorDriftFinalizesAsTypedPartialAndLeavesNoArtifactAuthority(
 			if result.SourceDriftFault != mustCatalogFault(fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale) {
 				t.Fatalf("anchor drift fault = %v", result.SourceDriftFault)
 			}
-			drift, admitted := admitLifecycleFailure(result.SourceDriftFailure)
-			if !admitted || !errors.Is(drift.diagnostic, ErrFrozenSourceDrift) {
+			drift, admitted := failurestate.Admit(result.SourceDriftFailure)
+			if !admitted || !errors.Is(drift.Diagnostic(), ErrFrozenSourceDrift) {
 				t.Fatalf("anchor drift diagnostic = %v", result.SourceDriftFailure)
 			}
 			if result.Progress.Discovery != DiscoveryFailed ||
@@ -159,8 +160,8 @@ func TestSelectedDirectoryAnchorDriftIsRejectedBeforeOutputAdmission(t *testing.
 	if result.SourceDriftFault != mustCatalogFault(fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale) {
 		t.Fatalf("directory anchor drift fault = %v", result.SourceDriftFault)
 	}
-	drift, admitted := admitLifecycleFailure(result.SourceDriftFailure)
-	if !admitted || !errors.Is(drift.diagnostic, ErrFrozenSourceDrift) {
+	drift, admitted := failurestate.Admit(result.SourceDriftFailure)
+	if !admitted || !errors.Is(drift.Diagnostic(), ErrFrozenSourceDrift) {
 		t.Fatalf("directory anchor drift diagnostic = %v", result.SourceDriftFailure)
 	}
 	if result.Progress.Discovery != DiscoveryFailed || len(result.Directories) != 0 || len(result.Files) != 0 {

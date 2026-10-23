@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -324,11 +325,11 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
 	if j.started {
 		j.mu.Unlock()
-		failure := dependencyContractFailure(ErrTransferJobRun)
+		failure := failurestate.DependencyContract(ErrTransferJobRun)
 		return JobResult{Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Progress: j.Progress(), TerminationCause: failure,
-			TerminationFault: closedLifecycleFault(failure)}
+			TerminationFault: failure.Fault()}
 	}
 	j.started = true
 	j.mu.Unlock()
@@ -337,17 +338,17 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	defer cancel(nil)
 	state, err := newJobRun(j)
 	if err != nil {
-		failure := dependencyContractFailure(err)
+		failure := failurestate.DependencyContract(err)
 		j.failUnstartedDiscovery()
 		return JobResult{
 			Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Progress: j.Progress(), TerminationCause: failure,
-			TerminationFault: closedLifecycleFault(failure),
+			TerminationFault: failure.Fault(),
 		}
 	}
 	if cause := context.Cause(runContext); cause != nil {
-		state.terminationCause = cancellationFailure(runContext, cause)
+		state.terminationCause = failurestate.FromCancellation(runContext, cause)
 		j.failUnstartedDiscovery()
 		return state.finish(ctx)
 	}
@@ -358,25 +359,25 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	}
 
 	fileQueue := make(chan transferQueueItem, j.queueCapacity)
-	workerErr := make(chan *lifecycleFailure, 1)
+	workerErr := make(chan *failurestate.Failure, 1)
 	workerDone := make(chan struct{})
 	go state.transferQueueWorker(runContext, fileQueue, cancel, workerErr, workerDone)
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
 		Discovery: DiscoveryOpen,
 	})
-	discoveryFailure := admitInternalFailure(state.discoverIncremental(runContext, fileQueue))
+	discoveryFailure := failurestate.Require(state.discoverIncremental(runContext, fileQueue))
 	return state.completeDiscovery(ctx, runContext, cancel, fileQueue, workerErr, workerDone, discoveryFailure)
 }
 
-func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecycleFailure {
+func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *failurestate.Failure {
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
 	})
 	output, rawOutputErr := j.outputAuthority.OpenDirectTree(ctx, j.intent)
-	failure := admitInternalFailure(normalizeOutputBoundary(ctx, rawOutputErr))
+	failure := failurestate.Require(normalizeOutputBoundary(ctx, rawOutputErr))
 	if output != nil {
-		bindingFailure := admitInternalFailure(validateDirectTreeSession(j.intent, output))
+		bindingFailure := failurestate.Require(validateDirectTreeSession(j.intent, output))
 		if bindingFailure != nil {
 			// A foreign session is not authority to mutate, even for cleanup or pause.
 			// Prefer the binding failure over a simultaneous adapter error because the
@@ -390,14 +391,14 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecy
 			state.admitted = true
 		}
 	} else if failure == nil {
-		failure = admitInternalFailure(validateDirectTreeSession(j.intent, nil))
+		failure = failurestate.Require(validateDirectTreeSession(j.intent, nil))
 	}
 	if failure == nil {
 		admissionScope := j.coordinates.scope
 		if !admissionScope.valid() {
 			// Intent validation precedes OpenDirectTree, so failure to project its receipt
 			// scope is an internal boundary violation rather than backend authority.
-			failure = dependencyContractFailure(ErrInvalidDirectoryAdmission)
+			failure = failurestate.DependencyContract(ErrInvalidDirectoryAdmission)
 		} else {
 			state.directoryAdmissionScope = admissionScope
 		}
@@ -405,7 +406,7 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecy
 	if failure != nil {
 		j.trace(TransferLifecycleTrace{
 			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,
-			ReceiveIntentDigest: j.intent.Digest(), Fault: closedLifecycleFault(failure), Failed: true,
+			ReceiveIntentDigest: j.intent.Digest(), Fault: failure.Fault(), Failed: true,
 		})
 		return failure
 	}
@@ -429,13 +430,11 @@ func (r *jobRun) completeDiscovery(
 	runContext context.Context,
 	cancel context.CancelCauseFunc,
 	fileQueue chan transferQueueItem,
-	workerErr <-chan *lifecycleFailure,
-	workerDone <-chan struct{},
-	discoveryFailure *lifecycleFailure,
-) JobResult {
-	workerCause := closedContextCause(runContext)
-	workerInterruptedDiscovery := (workerCause != nil && (workerCause == discoveryFailure || (discoveryFailure != nil && discoveryFailure.policy.canceled))) ||
-		(discoveryFailure != nil && discoveryFailure.policy.canceled)
+	workerErr <-chan *failurestate.Failure, workerDone <-chan struct{},
+	discoveryFailure *failurestate.Failure) JobResult {
+	workerCause := failurestate.ContextCause(runContext)
+	workerInterruptedDiscovery := (workerCause != nil && (workerCause == discoveryFailure || (discoveryFailure != nil && discoveryFailure.Canceled()))) ||
+		(discoveryFailure != nil && discoveryFailure.Canceled())
 	discoveryIncomplete := discoveryFailure != nil &&
 		(!workerInterruptedDiscovery || !r.catalogTraversalComplete)
 	if discoveryFailure != nil {
@@ -473,11 +472,11 @@ func (r *jobRun) completeDiscovery(
 	// concrete failure as the primary root cause instead of keeping the cancellation symptom.
 	select {
 	case workerFailure := <-workerErr:
-		if r.terminationCause == nil || r.terminationCause.policy.canceled || workerInterruptedDiscovery {
+		if r.terminationCause == nil || r.terminationCause.Canceled() || workerInterruptedDiscovery {
 			r.terminationCause = workerFailure
 			cancel(workerFailure)
 		} else {
-			r.terminationCause = mergeLifecycleFailures(r.terminationCause, workerFailure)
+			r.terminationCause = failurestate.Merge(r.terminationCause, workerFailure)
 		}
 	default:
 	}
@@ -486,13 +485,12 @@ func (r *jobRun) completeDiscovery(
 }
 
 func discoveryCompletionFault(
-	failure *lifecycleFailure,
-	incomplete bool,
+	failure *failurestate.Failure, incomplete bool,
 ) fault.Fault {
 	if !incomplete {
 		return fault.Fault{}
 	}
-	return closedLifecycleFault(failure)
+	return failure.Fault()
 }
 
 func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
@@ -505,7 +503,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		opened.Descriptor, r.output.SessionID(), plan.parent,
 	)
 	if err != nil || file.ArtifactPath() != plan.artifactPath || file.ExpectedSize() != plan.expectedSize {
-		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(errors.Join(ErrOutputContract, err)))
+		return r.rejectUnstartedFile(ctx, plan, opened, failurestate.DependencyContract(errors.Join(ErrOutputContract, err)))
 	}
 	target := file.Target()
 	start, err := r.output.BeginFile(ctx, file)
@@ -521,7 +519,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		if policy.jobTerminal() || isJobTerminalError(releaseErr) ||
 			policy.outputRequiresJobPause(r.output.Capabilities()) {
 			r.recordFileFailure(failure)
-			return joinLifecycleFailures(err, releaseErr)
+			return failurestate.Join(err, releaseErr)
 		}
 		r.recordFileFailure(failure)
 		return nil
@@ -584,7 +582,7 @@ func (r *jobRun) rejectUnstartedFile(
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: cause,
 		LeaseReleaseFailure: releaseErr,
 	})
-	return joinLifecycleFailures(cause, releaseErr)
+	return failurestate.Join(cause, releaseErr)
 }
 
 func (r *jobRun) rejectImmediateSettlement(
@@ -596,12 +594,12 @@ func (r *jobRun) rejectImmediateSettlement(
 ) error {
 	fault := cause
 	releaseErr := r.releaseRevision(ctx, opened.Handle)
-	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, fault)
+	r.settlementFailure = failurestate.Merge(r.settlementFailure, fault)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: fault,
 		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(fault, releaseErr))
+	r.traceFileSettlement(plan, settlement, failurestate.Join(fault, releaseErr))
 	return fault
 }
 
@@ -649,7 +647,7 @@ func (r *jobRun) handleImmediateSettlement(
 		})
 	default:
 		contractFailure := outputContractFault(nil)
-		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, contractFailure)
+		r.settlementFailure = failurestate.Merge(r.settlementFailure, contractFailure)
 		return contractFailure
 	}
 	if isJobTerminalError(releaseErr) {

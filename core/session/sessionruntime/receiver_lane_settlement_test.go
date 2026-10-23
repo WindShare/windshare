@@ -3,13 +3,13 @@ package sessionruntime
 import (
 	"testing"
 
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	config := fixture.receiverConfig
-	config.LaneSettlementObservationCapacity = transfer.DefaultLaneSettlementObservationCapacity
+	config.LaneSettlementObservationCapacity = transferlanes.DefaultSettlementObservationCapacity
 	receiverFactory, err := NewReceiverFactory(config)
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T)
 	receiver.Close()
 	sender.Close()
 
-	routes := make(map[LaneIdentity]transfer.LaneRoute)
+	routes := make(map[LaneIdentity]transferlanes.Route)
 	for summary := range observations {
 		identity := LaneIdentity{ID: summary.Lane.ID, Epoch: summary.Lane.Epoch}
 		if _, duplicate := routes[identity]; duplicate {
@@ -35,7 +35,7 @@ func TestReceiverLaneSettlementLabelsInitialRelayAndAttachedDirect(t *testing.T)
 		}
 		routes[identity] = summary.Route
 	}
-	if len(routes) != 2 || routes[initial] != transfer.LaneRouteRelay || routes[attached] != transfer.LaneRouteDirect {
+	if len(routes) != 2 || routes[initial] != transferlanes.RouteRelay || routes[attached] != transferlanes.RouteDirect {
 		t.Fatalf("receiver lane routes = %+v; initial=%v attached=%v", routes, initial, attached)
 	}
 }

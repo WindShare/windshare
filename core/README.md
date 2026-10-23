@@ -36,6 +36,15 @@ The application supplies the revision coordinator, process catalog account, and
 process content-cache budget. Shares retain their own quotas and release their
 own reservations; the native engine owns the aggregate budgets across tasks.
 
+## Transfer ownership
+
+`transfer` owns receive jobs, block brokering, and output settlement.
+`transfer/lanes` owns lane admission, block attempts, cancellation, and lane
+settlement under one lifecycle. Brokers consume `BlockFetcher`; they cannot
+access lane state or locks. The receiver runtime binds availability and delivery
+metrics to their respective producers. Both layers share closed failure
+normalization in `transfer/internal/failurestate`.
+
 ## Validate
 
 From the repository root:

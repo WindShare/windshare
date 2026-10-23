@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestReceiverHandshakeValidationUsesTerminalProtocolBoundary(t *testing.T) {
@@ -58,7 +59,7 @@ func TestReceiverHandshakeValidationUsesTerminalProtocolBoundary(t *testing.T) {
 				}
 				served <- serve()
 			}()
-			_, err := fixture.receiverFactory.Connect(t.Context(), client, transfer.LaneRouteRelay)
+			_, err := fixture.receiverFactory.Connect(t.Context(), client, transferlanes.RouteRelay)
 			if serveErr := <-served; serveErr != nil {
 				t.Fatal(serveErr)
 			}
@@ -94,7 +95,7 @@ func TestReceiverIdentityRejectionPreservesProtocolFailureThroughCleanup(t *test
 		func() error { return dependencies.classifySource(context.Background(), transfer.ErrBrokerClosed) },
 		func() error { return dependencies.classifyCatalog(context.Background(), ErrRuntimeClosed) },
 		func() error {
-			return dependencies.classifySource(context.Background(), sessionTransportBoundaryError(transfer.ErrLaneClosed))
+			return dependencies.classifySource(context.Background(), sessionTransportBoundaryError(transferlanes.ErrClosed))
 		},
 	} {
 		err := operation()

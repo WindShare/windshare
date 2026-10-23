@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/internal/testrun"
 )
@@ -173,7 +174,7 @@ type receiverContentPaths struct {
 func newReceiverContentPaths(observation getObservation) *receiverContentPaths {
 	return &receiverContentPaths{observation: observation}
 }
-func (paths *receiverContentPaths) observeContent(activity []transfer.LaneContentActivity, now time.Time) {
+func (paths *receiverContentPaths) observeContent(activity []transferlanes.ContentActivity, now time.Time) {
 	if paths == nil {
 		return
 	}
@@ -184,7 +185,7 @@ func (paths *receiverContentPaths) observeContent(activity []transfer.LaneConten
 	paths.direct = false
 	paths.relay = false
 	for _, entry := range activity {
-		if entry.Route == transfer.LaneRouteDirect {
+		if entry.Route == transferlanes.RouteDirect {
 			paths.directAdmitted = entry.AdmittedLanes > 0
 			paths.hadDirectTraffic = paths.hadDirectTraffic || entry.UsefulBytes > 0
 		}
@@ -192,9 +193,9 @@ func (paths *receiverContentPaths) observeContent(activity []transfer.LaneConten
 			continue
 		}
 		switch entry.Route {
-		case transfer.LaneRouteDirect:
+		case transferlanes.RouteDirect:
 			paths.direct = true
-		case transfer.LaneRouteRelay, transfer.LaneRouteTURN:
+		case transferlanes.RouteRelay, transferlanes.RouteTURN:
 			paths.relay = true
 		}
 	}

@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/session/peerslot"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/session/peerslot"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -16,7 +17,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testrun"
 )
@@ -438,7 +439,7 @@ func (lanes receiverIntegrationLanes) AttachLane(
 	ctx context.Context,
 	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-	_ transfer.LaneRoute,
+	_ transferlanes.Route,
 ) (sessionruntime.ReceiverLaneAdmissionResult, error) {
 	select {
 	case <-ctx.Done():
@@ -485,7 +486,7 @@ func (lanes receiverControlledLanes) AttachLane(
 	ctx context.Context,
 	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-	_ transfer.LaneRoute,
+	_ transferlanes.Route,
 ) (admission sessionruntime.ReceiverLaneAdmissionResult, err error) {
 	transferred := false
 	defer func() {

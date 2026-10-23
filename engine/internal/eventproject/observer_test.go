@@ -22,6 +22,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -281,7 +282,7 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
 		OfferOperationID: offerOperation, GrantOperationID: grantOperation,
 		SideSequence: 4, AttemptElapsedMillis: 120, Stage: v2peer.SenderAttemptAdmitted,
-		Route:                transfer.LaneRouteDirect,
+		Route:                transferlanes.RouteDirect,
 		Phase:                v2peer.SenderAttemptPhaseAdmission,
 		CandidateCounts:      &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
 		Lane:                 &lane,

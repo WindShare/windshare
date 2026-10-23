@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/transfer/bufferbudget"
+	"github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
@@ -37,30 +40,20 @@ func NewPlaintextBudget(limit uint64) (*PlaintextBudget, error) {
 	return bufferbudget.New(limit)
 }
 
-type authenticatedBlock struct {
-	records.BlockRecord
-	route downloadmetrics.Route
-}
 type deliveredBlock struct {
 	data        []byte
 	route       downloadmetrics.Route
 	reservation bufferbudget.Reservation
 }
-type blockClaim func() (release func(), changed <-chan struct{}, err error)
 
-type blockRequest struct {
-	demand   BlockDemand
-	validate func(records.BlockRecord) error
-	claim    blockClaim
-}
-
-type blockFetcher interface {
-	fetch(context.Context, blockRequest) (authenticatedBlock, error)
+// BlockFetcher provides authenticated blocks without exposing lane state or locks.
+type BlockFetcher interface {
+	Fetch(context.Context, transferlanes.Request) (transferlanes.Block, error)
 }
 
 type BlockBrokerConfig struct {
 	ShareInstance       catalog.ShareInstance
-	Lanes               *LaneSet
+	Blocks              BlockFetcher
 	MaxBytes            uint64
 	ProcessBudget       *PlaintextBudget
 	MaxConcurrentBlocks int
@@ -105,9 +98,9 @@ type blockCall struct {
 // shared across receivers. Only the sender's independently authenticated object
 // cache may collapse their upstream source reads.
 type BlockBroker struct {
-	lanes               *LaneSet
+	downloadMetrics     atomic.Pointer[downloadmetrics.Metrics]
 	share               catalog.ShareInstance
-	blocks              blockFetcher
+	blocks              BlockFetcher
 	maxBytes            uint64
 	maxConcurrentBlocks int
 	process             *PlaintextBudget
@@ -126,13 +119,7 @@ type BlockBroker struct {
 }
 
 func NewBlockBroker(config BlockBrokerConfig) (*BlockBroker, error) {
-	if config.Lanes == nil {
-		return nil, errors.New("block broker requires a lane set")
-	}
-	return newBlockBroker(config, config.Lanes)
-}
-
-func newBlockBroker(config BlockBrokerConfig, blocks blockFetcher) (*BlockBroker, error) {
+	blocks := config.Blocks
 	if config.ShareInstance.IsZero() || blocks == nil || config.ProcessBudget == nil {
 		return nil, errors.New("block broker requires share identity, block fetcher, and process budget")
 	}
@@ -147,7 +134,7 @@ func newBlockBroker(config BlockBrokerConfig, blocks blockFetcher) (*BlockBroker
 	}
 	lifecycle, stop := context.WithCancel(context.Background())
 	return &BlockBroker{
-		share: config.ShareInstance, blocks: blocks, lanes: config.Lanes, maxBytes: config.MaxBytes,
+		share: config.ShareInstance, blocks: blocks, maxBytes: config.MaxBytes,
 		maxConcurrentBlocks: config.MaxConcurrentBlocks, process: config.ProcessBudget,
 		lifecycle: lifecycle, stop: stop, entries: make(map[blockKey]*cachedBlock), account: bufferbudget.NewAccount[blockKey](config.ProcessBudget, config.MaxBytes),
 		inflight: make(map[blockKey]*blockCall),
@@ -215,7 +202,7 @@ func (b *BlockBroker) getBlock(
 			// The broker's closed-state lock also gates worker registration, making
 			// the Add/Wait boundary a lifecycle invariant instead of a timing race.
 			b.loads.Add(1)
-			go b.runLoad(call, BlockDemand{LeaseID: leaseID, Descriptor: descriptor, Index: index})
+			go b.runLoad(call, transferlanes.Demand{LeaseID: leaseID, Descriptor: descriptor, Index: index})
 		} else {
 			call.waiters++
 			call.consumers[consumer] = struct{}{}
@@ -359,7 +346,7 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return nil, nil, ErrBrokerClosed
+		return nil, nil, fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), ErrBrokerClosed)
 	}
 	if err := call.ctx.Err(); err != nil {
 		return nil, nil, err
@@ -408,15 +395,15 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 	}), nil, nil
 }
 
-func (b *BlockBroker) runLoad(call *blockCall, demand BlockDemand) {
+func (b *BlockBroker) runLoad(call *blockCall, demand transferlanes.Demand) {
 	defer b.loads.Done()
-	record, err := b.blocks.fetch(call.ctx, blockRequest{demand: demand, claim: func() (func(), <-chan struct{}, error) { return b.claimCall(call) }, validate: func(candidate records.BlockRecord) error {
+	record, err := b.blocks.Fetch(call.ctx, transferlanes.Request{Demand: demand, Claim: func() (func(), <-chan struct{}, error) { return b.claimCall(call) }, Validate: func(candidate records.BlockRecord) error {
 		if candidate.Descriptor() != demand.Descriptor || candidate.LocalBlockIndex() != demand.Index {
-			return ErrBlockIdentity
+			return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
 		}
 		expected, lengthErr := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
 		if lengthErr != nil || uint64(candidate.DataLength()) != uint64(expected) {
-			return ErrBlockIdentity
+			return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
 		}
 		return nil
 	}})
@@ -432,7 +419,7 @@ func (b *BlockBroker) runLoad(call *blockCall, demand BlockDemand) {
 		return
 	}
 	call.completed = true
-	call.data, call.err, call.route = data, err, record.route
+	call.data, call.err, call.route = data, err, record.Route()
 	close(call.done)
 	call.cancel()
 	b.mu.Unlock()
@@ -548,4 +535,12 @@ func (b *BlockBroker) beginRead() bool {
 	}
 	b.readers.Add(1)
 	return true
+}
+
+// BindDownloadMetrics binds this broker's delivery observations before content
+// activation. Availability is reported independently by the admitted lane set.
+func (b *BlockBroker) BindDownloadMetrics(metrics *downloadmetrics.Metrics) {
+	// Observations must not contend with admission or cache ownership just to
+	// acquire their generation's metrics sink.
+	b.downloadMetrics.Store(metrics)
 }

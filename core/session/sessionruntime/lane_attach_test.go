@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestAttachedFrameChannelsRunDistinctBlocksInParallelAndFanOutTerminal(t *testing.T) {
@@ -107,7 +108,7 @@ func TestSuspendedInitialContentLanePreservesCatalogAndRoutesBlocksPeerFirst(t *
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestSuspendedInitialContentLanePreservesCatalogAndRoutesBlocksPeerFirst(t *
 	if initialEpoch != 0 {
 		t.Fatalf("initial transcript lane epoch=%d", initialEpoch)
 	}
-	if _, err := receiver.LaneSet().SuspendContent(transfer.LaneIdentity{ID: initialID, Epoch: initialEpoch}); err != nil {
+	if _, err := receiver.LaneSet().SuspendContent(transferlanes.Identity{ID: initialID, Epoch: initialEpoch}); err != nil {
 		t.Fatal(err)
 	}
 	if receiver.AttachedLanes() != 1 || receiver.LaneSet().Len() != 1 {
@@ -565,7 +566,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +599,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	receiverAdmission, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel, transfer.LaneRouteDirect)
+	receiverAdmission, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel, transferlanes.RouteDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +693,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	freshReceiver, err := fixture.receiverFactory.Connect(context.Background(), freshReceiverChannel, transfer.LaneRouteRelay)
+	freshReceiver, err := fixture.receiverFactory.Connect(context.Background(), freshReceiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1066,7 +1067,7 @@ func connectObservedVerticalPair(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1133,7 +1134,7 @@ func attachGrantedLaneWithChannels(
 			err      error
 		}{identity: identity, err: err}
 	}()
-	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transfer.LaneRouteDirect)
+	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transferlanes.RouteDirect)
 	senderAttached := <-senderResult
 	if receiverErr == nil && senderAttached.err == nil && receiverAdmission.Lane != senderAttached.identity {
 		return LaneIdentity{}, errors.New("lane identities differ"), nil

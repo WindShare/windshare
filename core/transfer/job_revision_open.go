@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
@@ -40,7 +41,7 @@ func (attempt *revisionOpenAttempt) waitForCapacity(
 		return false, err
 	}
 	if err := attempt.ensureWait(); err != nil {
-		return false, dependencyContractFailure(err)
+		return false, failurestate.DependencyContract(err)
 	}
 	outcome, err := attempt.wait.Wait(ctx, signal)
 	return attempt.classifyWaitOutcome(ctx, outcome, err)
@@ -54,18 +55,18 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	run := attempt.run
 	sessionID := run.job.protocolSessionID()
 	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
-		return dependencyContractFailure(ErrRevisionIdentity)
+		return failurestate.DependencyContract(ErrRevisionIdentity)
 	}
 	if !opened.Handle.IsZero() {
 		// A capacity denial cannot grant a capability. Retiring it first keeps a
 		// broken adapter from leaking sender capacity while the job fails closed.
 		releaseErr := run.releaseRevision(ctx, opened.Handle)
-		return joinClosedLifecycleFailures(
-			dependencyContractFailure(ErrRevisionIdentity), admitInternalFailure(releaseErr),
+		return failurestate.JoinClosed(
+			failurestate.DependencyContract(ErrRevisionIdentity), failurestate.Require(releaseErr),
 		)
 	}
 	if run.job.revisionWait == nil {
-		return dependencyContractFailure(ErrRevisionWaitUnavailable)
+		return failurestate.DependencyContract(ErrRevisionWaitUnavailable)
 	}
 	return nil
 }
@@ -97,18 +98,18 @@ func (attempt *revisionOpenAttempt) classifyWaitOutcome(
 	case revisionwait.WaitBudgetPaused:
 		return false, resourceBudgetFailure(err)
 	case revisionwait.WaitCanceled:
-		return false, cancellationFailure(ctx, err)
+		return false, failurestate.FromCancellation(ctx, err)
 	case revisionwait.WaitGenerationEnded:
-		if cancellation := boundaryCancellation(ctx, err); cancellation != cancellationNone {
-			return false, cancellationFailure(ctx, err)
+		if failurestate.IsCancellation(ctx, err) {
+			return false, failurestate.FromCancellation(ctx, err)
 		}
 		if errors.Is(err, revisionwait.ErrGenerationContract) {
-			return false, dependencyContractFailure(err)
+			return false, failurestate.DependencyContract(err)
 		}
 		return false, sessionTransportFailure(err)
 	default:
 		attempt.stopWait()
-		return false, dependencyContractFailure(err)
+		return false, failurestate.DependencyContract(err)
 	}
 }
 
@@ -150,7 +151,7 @@ func (r *jobRun) finishRevisionOpen(
 		releaseErr = r.releaseRevision(ctx, opened.Handle)
 	}
 	if isJobTerminalError(err) {
-		return OpenedRevision{}, false, joinLifecycleFailures(err, releaseErr)
+		return OpenedRevision{}, false, failurestate.Join(err, releaseErr)
 	}
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionOpen, Cause: err,

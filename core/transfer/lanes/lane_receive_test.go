@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -11,13 +11,13 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type receiptLaneFunction func(context.Context, BlockDemand, func(uint64)) (records.BlockRecord, error)
+type receiptLaneFunction func(context.Context, Demand, func(uint64)) (records.BlockRecord, error)
 
-func (f receiptLaneFunction) FetchBlock(ctx context.Context, demand BlockDemand, received func(uint64)) (records.BlockRecord, error) {
+func (f receiptLaneFunction) FetchBlock(ctx context.Context, demand Demand, received func(uint64)) (records.BlockRecord, error) {
 	return f(ctx, demand, received)
 }
 
-func admissionSignal(lanes *LaneSet) <-chan struct{} {
+func admissionSignal(lanes *Set) <-chan struct{} {
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
 	return lanes.admissionChanged
@@ -29,7 +29,7 @@ func TestLaneFragmentsAnnounceOnlyNewReceiveCapacity(t *testing.T) {
 	descriptor, blocks := benchmarkTransferData(t, blockBytes, 1)
 	var elapsed atomic.Int64
 	now := func() time.Time { return time.Unix(100, elapsed.Load()) }
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](115),
 		Now:               now,
 	})
@@ -38,8 +38,8 @@ func TestLaneFragmentsAnnounceOnlyNewReceiveCapacity(t *testing.T) {
 	}
 	defer lanes.Close()
 	var wakeFragments []int
-	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteDirect,
-		receiptLaneFunction(func(_ context.Context, _ BlockDemand, received func(uint64)) (records.BlockRecord, error) {
+	if err := lanes.Add(Identity{ID: 1}, RouteDirect,
+		receiptLaneFunction(func(_ context.Context, _ Demand, received func(uint64)) (records.BlockRecord, error) {
 			for fragment := 1; fragment <= blockBytes/fragmentBytes; fragment++ {
 				before := admissionSignal(lanes)
 				elapsed.Add(int64(500 * time.Millisecond))
@@ -53,7 +53,7 @@ func TestLaneFragmentsAnnounceOnlyNewReceiveCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	demand := validDemand(t, descriptor, 0)
-	if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); err != nil {
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(wakeFragments) != 1 || wakeFragments[0] != 15 {
@@ -72,8 +72,8 @@ func TestLaneWaiterResumesOnReceiptOrCancellation(t *testing.T) {
 				firstReceipt := make(chan func(uint64), 1)
 				finishFirst := make(chan struct{})
 				defer close(finishFirst)
-				if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteDirect,
-					receiptLaneFunction(func(ctx context.Context, input BlockDemand, received func(uint64)) (records.BlockRecord, error) {
+				if err := lanes.Add(Identity{ID: 1}, RouteDirect,
+					receiptLaneFunction(func(ctx context.Context, input Demand, received func(uint64)) (records.BlockRecord, error) {
 						if input.Index == 0 {
 							firstReceipt <- received
 							select {
@@ -89,14 +89,14 @@ func TestLaneWaiterResumesOnReceiptOrCancellation(t *testing.T) {
 				firstDone := make(chan error, 1)
 				first := validDemand(t, descriptor, 0)
 				go func() {
-					_, err := lanes.fetch(firstContext, blockRequest{demand: first, validate: validateTransferRecord(first)})
+					_, err := lanes.Fetch(firstContext, Request{Demand: first, Validate: validateTransferRecord(first)})
 					firstDone <- err
 				}()
 				received := <-firstReceipt
 				nextDone := make(chan error, 1)
 				next := validDemand(t, descriptor, 1)
 				go func() {
-					_, err := lanes.fetch(context.Background(), blockRequest{demand: next, validate: validateTransferRecord(next)})
+					_, err := lanes.Fetch(context.Background(), Request{Demand: next, Validate: validateTransferRecord(next)})
 					nextDone <- err
 				}()
 				synctest.Wait()

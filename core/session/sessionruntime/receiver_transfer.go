@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
@@ -293,7 +294,7 @@ func (dependencies receiverTransferDependencies) classifySource(ctx context.Cont
 			return sourceBoundaryError(transferfault.SourceUnavailable, cause)
 		case errors.Is(cause, transfer.ErrBlockIdentity):
 			return sessionProtocolBoundaryError(cause)
-		case errors.Is(cause, transfer.ErrBrokerClosed), errors.Is(cause, transfer.ErrLaneClosed):
+		case errors.Is(cause, transfer.ErrBrokerClosed), errors.Is(cause, transferlanes.ErrClosed):
 			return sessionTransportBoundaryError(cause)
 		case receiverSessionTerminal(cause):
 			return sessionTransportBoundaryError(cause)

@@ -7,7 +7,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type ReceiverLaneAdmissionDisposition uint8
@@ -74,7 +74,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 	ctx context.Context,
 	grant LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-	route transfer.LaneRoute,
+	route transferlanes.Route,
 ) (ReceiverLaneAdmissionResult, error) {
 	unverified := unverifiedReceiverLaneAdmission()
 	if runtime == nil || channel == nil || ctx == nil || grant.LaneID == 0 ||
@@ -144,7 +144,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 	_, err = runtime.lanes.addWithAdmission(identity, handOff, authenticator, false, func(lane *runtimeLane) error {
 		lane.requests = requestlane.New(responseTime)
 		return runtime.laneSet.Add(
-			transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch},
+			transferlanes.Identity{ID: identity.ID, Epoch: identity.Epoch},
 			route,
 			blockLane,
 		)

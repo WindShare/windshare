@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
@@ -177,25 +178,21 @@ func (sink *atomicRequestedRangeSink) failContractLocked(cause error) error {
 }
 
 func rangeReaderContractError(cause error) error {
-	return dependencyContractFailure(errors.Join(errRangeReaderContract, cause))
+	return failurestate.DependencyContract(errors.Join(errRangeReaderContract, cause))
 }
 
 func (b *BlockBroker) beginDownloadWait() func() {
-	if b.lanes == nil {
+	metrics := b.downloadMetrics.Load()
+	if metrics == nil {
 		return func() {}
 	}
-	return b.lanes.beginDownloadWait()
+	return metrics.Pending()
 }
 
 // The consumer receives only requested bytes; authenticated alignment over-read
 // stays in the broker and cannot inflate per-download route fractions.
 func (b *BlockBroker) observeDownloadSlice(descriptor content.FileRevisionDescriptor, start, end uint64, route downloadmetrics.Route) {
-	if b.lanes == nil {
-		return
-	}
-	b.lanes.mu.Lock()
-	metrics := b.lanes.downloadMetrics
-	b.lanes.mu.Unlock()
+	metrics := b.downloadMetrics.Load()
 	if metrics == nil {
 		return
 	}
@@ -360,7 +357,7 @@ func (r *jobRun) transferMissingRanges(
 			if cause := context.Cause(ctx); cause != nil {
 				return false, r.settleFailedFile(
 					ctx, plan, opened, transaction, FailureBlockTransfer,
-					cancellationFailure(ctx, cause), 0, progress,
+					failurestate.FromCancellation(ctx, cause), 0, progress,
 				)
 			}
 			// RangeReader owns the bounded block pipeline. Passing one chunk at a

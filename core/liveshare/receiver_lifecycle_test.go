@@ -3,7 +3,6 @@ package liveshare
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type beginReceiverCloseOnSendChannel struct {
@@ -43,7 +43,7 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 	})
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+		_, connectErr := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 		connectResult <- connectErr
 	}()
 	select {
@@ -74,10 +74,10 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 	if retainedFactory != nil || retainedResources != nil {
 		t.Fatal("closed facade retained its factory or secret-resource graph")
 	}
-	if _, err := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay); !errors.Is(err, errReceiverClosed) {
+	if _, err := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, errReceiverClosed) {
 		t.Fatalf("facade Connect after Close error=%v", err)
 	}
-	if _, err := factory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
+	if _, err := factory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
 		t.Fatalf("factory Connect after facade Close error=%v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestPreparedReceiverBeginCloseIsSafeFromConnectSendCallback(t *testing.T) {
 	}}
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := receiver.Connect(context.Background(), channel, transfer.LaneRouteRelay)
+		_, connectErr := receiver.Connect(context.Background(), channel, transferlanes.RouteRelay)
 		connectResult <- connectErr
 	}()
 	select {

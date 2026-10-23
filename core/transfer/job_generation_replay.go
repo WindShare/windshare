@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
@@ -77,14 +78,14 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 		return false, discovery.handleReplayFailure(ctx, err)
 	}
 	if cursor == nil {
-		return false, dependencyContractFailure(ErrCatalogCursorContract)
+		return false, failurestate.DependencyContract(ErrCatalogCursorContract)
 	}
 	defer func() {
 		closeErr := normalizeCatalogBoundary(context.Background(), cursor.Close())
 		if closeErr != nil {
 			closeErr = discovery.handleReplayFailure(context.Background(), closeErr)
 		}
-		resultErr = joinLifecycleFailures(resultErr, closeErr)
+		resultErr = failurestate.Join(resultErr, closeErr)
 	}()
 
 	selectedSubtree := false
@@ -135,7 +136,7 @@ func (discovery *incrementalDirectoryDiscovery) replayPage(
 	selectedSubtree := false
 	for entryIndex := 0; entryIndex < page.EntryCount(); entryIndex++ {
 		if err := context.Cause(ctx); err != nil {
-			return false, cancellationFailure(ctx, err)
+			return false, failurestate.FromCancellation(ctx, err)
 		}
 		entry, exists := page.Entry(uint32(entryIndex))
 		if !exists {
@@ -230,11 +231,11 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 ) error {
 	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
-		return dependencyContractFailure(err)
+		return failurestate.DependencyContract(err)
 	}
 	parentSourcePath, err := sourceCatalogPath(discovery.request.path)
 	if err != nil {
-		return dependencyContractFailure(err)
+		return failurestate.DependencyContract(err)
 	}
 	var parent MaterializationFileParent
 	if admission.IsZero() {
@@ -248,7 +249,7 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 		)
 	}
 	if err != nil {
-		return dependencyContractFailure(err)
+		return failurestate.DependencyContract(err)
 	}
 	artifactPath, materializationRelativePath, projectionErr :=
 		discovery.run.job.coordinates.projectFile(sourcePath, file, parent)
@@ -262,7 +263,7 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 				return discovery.run.recordSelectedProjectionRejection(projection)
 			}
 		}
-		return dependencyContractFailure(projectionErr)
+		return failurestate.DependencyContract(projectionErr)
 	}
 	plan := plannedFile{
 		file: file, sourcePath: sourcePath, artifactPath: artifactPath,
@@ -279,13 +280,13 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 		close(enqueued)
 		return nil
 	case <-ctx.Done():
-		return cancellationFailure(ctx, context.Cause(ctx))
+		return failurestate.FromCancellation(ctx, context.Cause(ctx))
 	}
 }
 
 func (discovery *incrementalDirectoryDiscovery) handleReplayFailure(ctx context.Context, err error) error {
-	propagated, _ := admitLifecycleFailure(err)
-	if cause := closedContextCause(ctx); cause != nil && cause == propagated {
+	propagated, _ := failurestate.Admit(err)
+	if cause := failurestate.ContextCause(ctx); cause != nil && cause == propagated {
 		// Root replay can observe a worker's stop before its own next catalog call.
 		// Preserve that cause instead of treating its local scope as catalog damage.
 		return cause

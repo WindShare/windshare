@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type adversarialRangeReaderMode uint8
@@ -156,10 +157,11 @@ type attributedWindowLane struct {
 
 func (lane attributedWindowLane) FetchBlock(
 	ctx context.Context,
-	demand BlockDemand, received func(uint64),
+	demand transferlanes.Demand, received func(uint64),
 ) (records.BlockRecord, error) {
 	if received != nil {
-		received(blockDemandBytes(demand))
+		length, _ := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
+		received(uint64(length))
 	}
 	select {
 	case lane.assignments <- lane.id:
@@ -185,7 +187,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	}
 	probe := newExactWindowProbe(recordSet)
 	assignments := make(chan uint32, defaultFileReadWindowBlocks)
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := transferlanes.New(transferlanes.Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](215),
 	})
 	if err != nil {
@@ -194,7 +196,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	defer lanes.Close()
 	for laneID := uint32(1); laneID <= 2; laneID++ {
 		if err := lanes.Add(
-			LaneIdentity{ID: laneID}, LaneRouteRelay, attributedWindowLane{id: laneID, probe: probe, assignments: assignments},
+			transferlanes.Identity{ID: laneID}, transferlanes.RouteRelay, attributedWindowLane{id: laneID, probe: probe, assignments: assignments},
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -205,7 +207,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	}
 	broker, err := NewBlockBroker(BlockBrokerConfig{
 		ShareInstance: descriptor.ShareInstance(),
-		Lanes:         lanes,
+		Blocks:        lanes,
 		MaxBytes:      exactSize * 3,
 		ProcessBudget: process,
 	})

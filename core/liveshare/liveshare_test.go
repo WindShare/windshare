@@ -26,6 +26,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -165,7 +166,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiverRuntime, err := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiverRuntime, err := receiver.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func (channel *facadeChannel) Close() error {
 
 func TestPreparedReceiverRejectsConnectAfterClose(t *testing.T) {
 	receiver := &PreparedReceiver{closed: true}
-	if _, err := receiver.Connect(context.Background(), nil, transfer.LaneRouteRelay); err == nil {
+	if _, err := receiver.Connect(context.Background(), nil, transferlanes.RouteRelay); err == nil {
 		t.Fatal("closed receiver accepted a channel")
 	}
 	receiver.Close()

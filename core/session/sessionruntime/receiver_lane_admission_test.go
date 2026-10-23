@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestAttachLaneRetainsAuthenticatedAcceptanceWhenInstallationFails(t *testing.T) {
@@ -34,8 +34,8 @@ func TestAttachLaneRetainsAuthenticatedAcceptanceWhenInstallationFails(t *testin
 		}{identity: identity, err: err}
 	}()
 
-	admission, err := receiver.AttachLane(ctx, grant, receiverChannel, transfer.LaneRouteDirect)
-	if !errors.Is(err, transfer.ErrLaneClosed) {
+	admission, err := receiver.AttachLane(ctx, grant, receiverChannel, transferlanes.RouteDirect)
+	if !errors.Is(err, transferlanes.ErrClosed) {
 		t.Fatalf("receiver installation error = %v", err)
 	}
 	if admission.GrantOperationID != grant.OperationID ||

@@ -10,8 +10,8 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -301,7 +301,7 @@ func (receiver *Receiver) admit(ctx context.Context, connection ReceiverConnecti
 	if err != nil {
 		return err
 	}
-	_, err = runtime.AttachLane(ctx, grant, connection.Channel(), transfer.LaneRouteRelay)
+	_, err = runtime.AttachLane(ctx, grant, connection.Channel(), transferlanes.RouteRelay)
 	if err == nil {
 		lane.ID = grant.LaneID
 		lane.Epoch = grant.LaneEpoch
@@ -346,7 +346,7 @@ func (receiver *Receiver) dial(ctx context.Context, url string) (ReceiverConnect
 }
 
 func (receiver *Receiver) connectInitial(ctx context.Context, prepared *liveshare.PreparedReceiver, connection ReceiverConnection, lane *sessionruntime.LaneIdentity) error {
-	candidate, connectErr := prepared.Connect(ctx, connection.Channel(), transfer.LaneRouteRelay)
+	candidate, connectErr := prepared.Connect(ctx, connection.Channel(), transferlanes.RouteRelay)
 	if connectErr != nil {
 		prepared.Close()
 		return connectErr

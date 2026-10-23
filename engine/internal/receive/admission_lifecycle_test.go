@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestRelayContentAdmissionReportsAsynchronousResumeFailure(t *testing.T) {
@@ -605,12 +605,12 @@ func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testin
 	for attempt := range 100 {
 		var sessionID protocolsession.ProtocolSessionID
 		sessionID[0] = byte(attempt + 1)
-		lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{ProtocolSessionID: sessionID})
+		lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: sessionID})
 		if err != nil {
 			t.Fatal(err)
 		}
-		initial := transfer.LaneIdentity{ID: 1, Epoch: 1}
-		if err := lanes.Add(initial, transfer.LaneRouteRelay, inertReceiverBlockLane{}); err != nil {
+		initial := transferlanes.Identity{ID: 1, Epoch: 1}
+		if err := lanes.Add(initial, transferlanes.RouteRelay, inertReceiverBlockLane{}); err != nil {
 			lanes.Close()
 			t.Fatal(err)
 		}
@@ -630,7 +630,7 @@ func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testin
 		admitted := make(chan error, 1)
 		go func() {
 			<-start
-			replaced <- lanes.Add(transfer.LaneIdentity{ID: initial.ID, Epoch: initial.Epoch + 1}, transfer.LaneRouteRelay, inertReceiverBlockLane{})
+			replaced <- lanes.Add(transferlanes.Identity{ID: initial.ID, Epoch: initial.Epoch + 1}, transferlanes.RouteRelay, inertReceiverBlockLane{})
 		}()
 		go func() {
 			<-start

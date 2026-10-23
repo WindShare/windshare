@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
 	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type responseDelayChannel struct {
@@ -42,12 +43,12 @@ func TestControlRequestsUseMeasuredPathsWithoutRelayRTTPerFile(t *testing.T) {
 		for _, test := range []struct {
 			name                        string
 			initialDelay, attachedDelay time.Duration
-			route                       transfer.LaneRoute
+			route                       transferlanes.Route
 		}{
-			{"fast_direct", 500 * time.Millisecond, time.Millisecond, transfer.LaneRouteDirect},
-			{"sub_clock_direct", 10 * time.Millisecond, 0, transfer.LaneRouteDirect},
-			{"slow_direct", time.Millisecond, 500 * time.Millisecond, transfer.LaneRouteDirect},
-			{"fast_attached_relay", 500 * time.Millisecond, time.Millisecond, transfer.LaneRouteRelay},
+			{"fast_direct", 500 * time.Millisecond, time.Millisecond, transferlanes.RouteDirect},
+			{"sub_clock_direct", 10 * time.Millisecond, 0, transferlanes.RouteDirect},
+			{"slow_direct", time.Millisecond, 500 * time.Millisecond, transferlanes.RouteDirect},
+			{"fast_attached_relay", 500 * time.Millisecond, time.Millisecond, transferlanes.RouteRelay},
 		} {
 			name := test.name
 			if trace {
@@ -81,7 +82,7 @@ func TestControlRequestsUseMeasuredPathsWithoutRelayRTTPerFile(t *testing.T) {
 						}
 						accepted <- sender
 					}()
-					receiver, err := factory.Connect(context.Background(), initialChannel, transfer.LaneRouteRelay)
+					receiver, err := factory.Connect(context.Background(), initialChannel, transferlanes.RouteRelay)
 					if err != nil {
 						t.Fatal(err)
 					}

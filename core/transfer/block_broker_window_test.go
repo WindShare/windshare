@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
@@ -19,7 +20,7 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 	lease := benchmarkTransferIdentity[content.LeaseID](83)
 	for _, laneCount := range laneCounts {
 		t.Run(fmt.Sprintf("lanes=%02d/window=%02d", laneCount, laneCount), func(t *testing.T) {
-			lanes, err := NewLaneSet(LaneSetConfig{
+			lanes, err := transferlanes.New(transferlanes.Config{
 				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101), RaceWidth: 1,
 			})
 			if err != nil {
@@ -28,13 +29,13 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 			defer lanes.Close()
 			probe := newExactWindowProbe(recordSet)
 			for index := range laneCount {
-				if err := lanes.Add(LaneIdentity{ID: uint32(index + 1)}, LaneRouteRelay, probe); err != nil {
+				if err := lanes.Add(transferlanes.Identity{ID: uint32(index + 1)}, transferlanes.RouteRelay, probe); err != nil {
 					t.Fatal(err)
 				}
 			}
 			process, _ := NewPlaintextBudget(exactBytes * 3)
 			broker, err := NewBlockBroker(BlockBrokerConfig{
-				ShareInstance: descriptor.ShareInstance(), Lanes: lanes, MaxBytes: exactBytes * 3,
+				ShareInstance: descriptor.ShareInstance(), Blocks: lanes, MaxBytes: exactBytes * 3,
 				ProcessBudget: process, MaxConcurrentBlocks: laneCount,
 			})
 			if err != nil {
@@ -92,7 +93,7 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 					t.Fatalf("block %d fetched %d times", index, probe.seen[index].Load())
 				}
 			}
-			lanes.attempts.Wait()
+			waitForRetainedBytes(t, broker, process, exactBytes, exactBytes)
 			if broker.UsedBytes() != exactBytes || process.Used() != exactBytes {
 				t.Fatalf("successful range budget broker=%d process=%d", broker.UsedBytes(), process.Used())
 			}

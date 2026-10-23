@@ -14,7 +14,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -300,8 +300,8 @@ type receiverTestPeerConnection struct {
 	channelInit    *pion.DataChannelInit
 }
 
-func (*receiverTestPeerConnection) SelectedPeerRoute() (transfer.LaneRoute, bool) {
-	return transfer.LaneRouteDirect, true
+func (*receiverTestPeerConnection) SelectedPeerRoute() (transferlanes.Route, bool) {
+	return transferlanes.RouteDirect, true
 }
 
 func newReceiverTestPeerConnection() *receiverTestPeerConnection {
@@ -489,7 +489,7 @@ func (lanes *receiverTestLanes) AttachLane(
 	ctx context.Context,
 	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
-	_ transfer.LaneRoute,
+	_ transferlanes.Route,
 ) (sessionruntime.ReceiverLaneAdmissionResult, error) {
 	if lanes.attach != nil {
 		return lanes.attach(ctx, grant, channel)

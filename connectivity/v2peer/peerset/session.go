@@ -12,7 +12,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/session/turncontrol"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type turnControlSession interface {
@@ -118,11 +118,11 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 		},
 		Admitted: func(_ turncontrol.Grant, path turnpath.ReceiverPath) { s.admitted(path.(receiverTURNPath).Path) },
 		Measure: func(lane turncontrol.Lane) turnpath.Measurement {
-			lanes, ok := receiver.Lanes.(interface{ LaneSet() *transfer.LaneSet })
+			lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set })
 			if !ok {
 				return turnpath.Measurement{}
 			}
-			measurement := lanes.LaneSet().MeasureLane(transfer.LaneIdentity{ID: lane.ID, Epoch: lane.Epoch})
+			measurement := lanes.LaneSet().MeasureLane(transferlanes.Identity{ID: lane.ID, Epoch: lane.Epoch})
 			return turnpath.Measurement{UsefulBytes: measurement.UsefulBytes, Unhelpful: measurement.Unhelpful,
 				BusyTime: measurement.BusyTime, PendingBytes: measurement.PendingBytes}
 		},

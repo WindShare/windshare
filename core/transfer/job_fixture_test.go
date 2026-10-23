@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -199,7 +200,7 @@ type jobLane struct {
 	failErr  error
 }
 
-func (l *jobLane) FetchBlock(_ context.Context, demand BlockDemand, _ func(uint64)) (records.BlockRecord, error) {
+func (l *jobLane) FetchBlock(_ context.Context, demand transferlanes.Demand, _ func(uint64)) (records.BlockRecord, error) {
 	file := demand.Descriptor.FileID()
 	l.mu.Lock()
 	l.indices[file] = append(l.indices[file], demand.Index)

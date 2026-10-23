@@ -70,7 +70,7 @@ func (g *receiveOperation) replace(ctx context.Context, _ *sessionruntime.Receiv
 	if err != nil {
 		return nil, err
 	}
-	next.runtime.LaneSet().BindDownloadMetrics(g.metrics)
+	next.runtime.BindDownloadMetrics(g.metrics)
 	nextExecution, step := g.runner.prepareGetConnectivity(ctx, g.input, g.output, next.runtime, g.observation, g.options)
 	if step != stepReady {
 		next.Close()

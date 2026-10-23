@@ -3,7 +3,6 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/contentflow"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestDuplicateAuthenticatedLeaseIDFailClosesWithoutCompensatingSibling(t *testing.T) {
@@ -28,7 +28,7 @@ func TestDuplicateAuthenticatedLeaseIDFailClosesWithoutCompensatingSibling(t *te
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}

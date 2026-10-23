@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/transfer"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -17,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type receiverResourceSourceFunc func() (ReceiverRuntimeResourceLease, error)
@@ -77,7 +77,7 @@ func TestReceiverRuntimeResourceLeaseCoversFailureAndSuccessLifecycles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connectFactory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, wantAcquireErr) {
+	if _, err := connectFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, wantAcquireErr) {
 		t.Fatalf("Connect resource acquisition error = %v", err)
 	}
 	if connectSourceCalls.Load() != 1 {
@@ -94,7 +94,7 @@ func TestReceiverRuntimeResourceLeaseCoversFailureAndSuccessLifecycles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := failureFactory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
+	if _, err := failureFactory.Connect(context.Background(), newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("handshake failure with resource lease = %v", err)
 	}
 	if failedLease.releases.Load() != 1 {
@@ -185,7 +185,7 @@ func TestReceiverConnectPropagatesDefaultIdentityEntropyAndHandshakeCancellation
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if _, err := factory.Connect(ctx, newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, io.ErrUnexpectedEOF) {
+		if _, err := factory.Connect(ctx, newMemoryChannel(t), transferlanes.RouteRelay); !errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatalf("default receiver identity entropy error = %v", err)
 		}
 		if random.failures.Load() != 1 {
@@ -203,7 +203,7 @@ func TestReceiverConnectPropagatesDefaultIdentityEntropyAndHandshakeCancellation
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
-			_, err := fixture.receiverFactory.Connect(ctx, receiverChannel, transfer.LaneRouteRelay)
+			_, err := fixture.receiverFactory.Connect(ctx, receiverChannel, transferlanes.RouteRelay)
 			result <- err
 		}()
 		select {

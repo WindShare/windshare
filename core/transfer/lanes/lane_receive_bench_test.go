@@ -1,4 +1,4 @@
-package transfer
+package lanes
 
 import (
 	"context"
@@ -19,7 +19,7 @@ type fragmentedReceiptLane struct {
 	record records.BlockRecord
 }
 
-func (lane fragmentedReceiptLane) FetchBlock(ctx context.Context, _ BlockDemand, received func(uint64)) (records.BlockRecord, error) {
+func (lane fragmentedReceiptLane) FetchBlock(ctx context.Context, _ Demand, received func(uint64)) (records.BlockRecord, error) {
 	for remaining := uint64(lane.record.DataLength()); remaining != 0; {
 		if err := ctx.Err(); err != nil {
 			return records.BlockRecord{}, err
@@ -35,7 +35,7 @@ func (lane fragmentedReceiptLane) FetchBlock(ctx context.Context, _ BlockDemand,
 // Payloads are prebuilt: the result is not network, decryption, or disk throughput.
 func BenchmarkLaneFragmentReceipt(b *testing.B) {
 	descriptor, blocks := benchmarkTransferData(b, receiptBenchmarkBlockBytes, 1)
-	lanes, err := NewLaneSet(LaneSetConfig{
+	lanes, err := New(Config{
 		ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](113),
 		RaceWidth:         1,
 	})
@@ -44,19 +44,19 @@ func BenchmarkLaneFragmentReceipt(b *testing.B) {
 	}
 	b.Cleanup(lanes.Close)
 	lanes.BindDownloadMetrics(downloadmetrics.New("receipt-benchmark", nil, false))
-	if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteDirect, fragmentedReceiptLane{record: blocks[0]}); err != nil {
+	if err := lanes.Add(Identity{ID: 1}, RouteDirect, fragmentedReceiptLane{record: blocks[0]}); err != nil {
 		b.Fatal(err)
 	}
-	demand := BlockDemand{
+	demand := Demand{
 		Descriptor: descriptor,
 		LeaseID:    benchmarkTransferIdentity[content.LeaseID](114),
 	}
-	request := blockRequest{demand: demand, validate: validateTransferRecord(demand)}
+	request := Request{Demand: demand, Validate: validateTransferRecord(demand)}
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := lanes.fetch(context.Background(), request); err != nil {
+			if _, err := lanes.Fetch(context.Background(), request); err != nil {
 				b.Error(err)
 				return
 			}

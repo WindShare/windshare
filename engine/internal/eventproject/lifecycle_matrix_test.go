@@ -8,7 +8,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	appobs "github.com/windshare/windshare/engine/observation"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -97,8 +97,8 @@ func TestLaneSettlementProjectionPreservesRouteAndSaturatingCounters(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := ProjectLaneSettlement(transfer.LaneSettlementSummary{
-		ProtocolSessionID: session, Route: transfer.LaneRouteDirect, Lane: transfer.LaneIdentity{ID: 4, Epoch: 2},
+	event, err := ProjectLaneSettlement(transferlanes.SettlementSummary{
+		ProtocolSessionID: session, Route: transferlanes.RouteDirect, Lane: transferlanes.Identity{ID: 4, Epoch: 2},
 		DeliveredBlocks: ^uint64(0), DeliveredBytes: ^uint64(0), FailedBlockAttempts: 3, ReassignedBlocks: 2, Incomplete: true,
 	})
 	if err != nil || event.Route() != appobs.LaneRouteDirect || event.DeliveredBlocks() != ^uint64(0) || !event.Incomplete() {

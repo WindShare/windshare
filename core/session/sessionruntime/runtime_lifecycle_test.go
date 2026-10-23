@@ -6,7 +6,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"io"
 	"strings"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func TestRuntimeStoppingPrecedesFinalDonePublication(t *testing.T) {
@@ -469,7 +469,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	if _, err := (*ReceiverRuntime)(nil).RequestLane(context.Background(), 0); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("nil lane request error = %v", err)
 	}
-	if _, err := receiver.AttachLane(context.Background(), LaneAttachmentGrant{}, newMemoryChannel(t), transfer.LaneRouteDirect); !errors.Is(err, ErrRuntimeConfig) {
+	if _, err := receiver.AttachLane(context.Background(), LaneAttachmentGrant{}, newMemoryChannel(t), transferlanes.RouteDirect); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("invalid lane grant error = %v", err)
 	}
 
@@ -490,7 +490,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	sendFailure, sendFailurePeer := newMemoryChannelPair()
 	_ = sendFailure.Close()
 	t.Cleanup(func() { _ = sendFailurePeer.Close() })
-	if _, err := receiver.AttachLane(context.Background(), sendFailureGrant, sendFailure, transfer.LaneRouteDirect); !errors.Is(err, io.ErrClosedPipe) {
+	if _, err := receiver.AttachLane(context.Background(), sendFailureGrant, sendFailure, transferlanes.RouteDirect); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("lane hello send error = %v", err)
 	}
 
@@ -498,7 +498,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	receiveFailure, receiveFailurePeer := newMemoryChannelPair()
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := receiver.AttachLane(cancelled, receiveFailureGrant, receiveFailure, transfer.LaneRouteDirect); !errors.Is(err, context.Canceled) {
+	if _, err := receiver.AttachLane(cancelled, receiveFailureGrant, receiveFailure, transferlanes.RouteDirect); !errors.Is(err, context.Canceled) {
 		t.Fatalf("lane response cancellation = %v", err)
 	}
 	_ = receiveFailurePeer.Close()
@@ -506,7 +506,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	badRejectGrant := mustRequestLane(t, receiver)
 	badReject, badRejectPeer := newMemoryChannelPair()
 	go respondToLaneHello(badRejectPeer, make([]byte, protocolsession.LaneRejectBytes))
-	if _, err := receiver.AttachLane(context.Background(), badRejectGrant, badReject, transfer.LaneRouteDirect); err == nil {
+	if _, err := receiver.AttachLane(context.Background(), badRejectGrant, badReject, transferlanes.RouteDirect); err == nil {
 		t.Fatal("unsigned lane rejection was accepted")
 	}
 	_ = badRejectPeer.Close()
@@ -514,7 +514,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	badAcceptGrant := mustRequestLane(t, receiver)
 	badAccept, badAcceptPeer := newMemoryChannelPair()
 	go respondToLaneHello(badAcceptPeer, []byte{1})
-	if _, err := receiver.AttachLane(context.Background(), badAcceptGrant, badAccept, transfer.LaneRouteDirect); err == nil {
+	if _, err := receiver.AttachLane(context.Background(), badAcceptGrant, badAccept, transferlanes.RouteDirect); err == nil {
 		t.Fatal("malformed lane acceptance was accepted")
 	}
 	_ = badAcceptPeer.Close()

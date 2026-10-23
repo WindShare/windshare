@@ -3,7 +3,6 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/transfer"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type admissionBarrierChannel struct {
@@ -168,7 +168,7 @@ func TestTerminalCallbacksCanReenterNonblockingStopInitiation(t *testing.T) {
 				err     error
 			}{runtime: runtime, err: err}
 		}()
-		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +419,7 @@ func TestSenderFactoryStopWaitsForContextIgnoringTerminalTransport(t *testing.T)
 				err     error
 			}{runtime: runtime, err: err}
 		}()
-		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -490,7 +490,7 @@ func TestSenderFactoryStopTreatsTransportRetirementBeforePhysicalAdmissionAsNatu
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +567,7 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +658,7 @@ func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transferlanes.RouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}

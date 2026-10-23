@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/session/protocolsession"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type blockingBlockFetcher struct {
@@ -19,14 +19,13 @@ type blockingBlockFetcher struct {
 	release   chan struct{}
 }
 
-func (fetcher *blockingBlockFetcher) fetch(
+func (fetcher *blockingBlockFetcher) Fetch(
 	ctx context.Context,
-	request blockRequest,
-) (authenticatedBlock, error) {
-	if request.claim != nil {
-		release, _, err := request.claim()
+	request transferlanes.Request) (transferlanes.Block, error) {
+	if request.Claim != nil {
+		release, _, err := request.Claim()
 		if err != nil {
-			return authenticatedBlock{}, err
+			return transferlanes.Block{}, err
 		}
 		if release != nil {
 			defer release()
@@ -36,7 +35,7 @@ func (fetcher *blockingBlockFetcher) fetch(
 	<-ctx.Done()
 	close(fetcher.cancelled)
 	<-fetcher.release
-	return authenticatedBlock{}, ctx.Err()
+	return transferlanes.Block{}, ctx.Err()
 }
 
 func TestBlockBrokerConcurrentCloseJoinsLoadAndReleasesBudget(t *testing.T) {
@@ -51,11 +50,12 @@ func TestBlockBrokerConcurrentCloseJoinsLoadAndReleasesBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		broker, err := newBlockBroker(BlockBrokerConfig{
+		broker, err := NewBlockBroker(BlockBrokerConfig{
+			Blocks:        fetcher,
 			ShareInstance: descriptor.ShareInstance(),
 			MaxBytes:      uint64(catalog.MinChunkSize) * 4,
 			ProcessBudget: process,
-		}, fetcher)
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,192 +109,12 @@ func TestBlockBrokerConcurrentCloseJoinsLoadAndReleasesBudget(t *testing.T) {
 	})
 }
 
-func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		descriptor := transferDescriptor(t, 1)
-		demand := validDemand(t, descriptor, 0)
-		winnerRecord := transferRecord(t, descriptor, 0)
-		winnerStarted := make(chan struct{})
-		loserStarted := make(chan struct{})
-		allowWinner := make(chan struct{})
-		loserCancelled := make(chan struct{})
-		allowLoserExit := make(chan struct{})
-
-		lanes, err := NewLaneSet(LaneSetConfig{
-			ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](91),
-			RaceWidth:         2,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
-			close(winnerStarted)
-			<-allowWinner
-			return winnerRecord, nil
-		})); err != nil {
-			t.Fatal(err)
-		}
-		if err := lanes.Add(LaneIdentity{ID: 2}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
-			close(loserStarted)
-			<-ctx.Done()
-			close(loserCancelled)
-			<-allowLoserExit
-			return records.BlockRecord{}, ctx.Err()
-		})); err != nil {
-			t.Fatal(err)
-		}
-		suspendedIdentity := LaneIdentity{ID: 3}
-		if err := lanes.Add(suspendedIdentity, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
-			<-ctx.Done()
-			return records.BlockRecord{}, ctx.Err()
-		})); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := lanes.SuspendContent(suspendedIdentity); err != nil {
-			t.Fatal(err)
-		}
-		lanes.mu.Lock()
-		winnerState := lanes.lanes[1]
-		loserState := lanes.lanes[2]
-		lanes.mu.Unlock()
-
-		process, err := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 4)
-		if err != nil {
-			t.Fatal(err)
-		}
-		broker, err := NewBlockBroker(BlockBrokerConfig{
-			ShareInstance: descriptor.ShareInstance(),
-			Lanes:         lanes,
-			MaxBytes:      uint64(catalog.MinChunkSize) * 4,
-			ProcessBudget: process,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		lease := transferID[content.LeaseID](12)
-		fetchDone := make(chan error, 1)
-		go func() {
-			_, fetchErr := broker.GetBlock(context.Background(), lease, descriptor, 0)
-			fetchDone <- fetchErr
-		}()
-		<-winnerStarted
-		<-loserStarted
-		close(allowWinner)
-		if err := <-fetchDone; err != nil {
-			t.Fatalf("fast winner failed: %v", err)
-		}
-		<-loserCancelled
-		brokerCloseDone := make(chan struct{})
-		go func() {
-			broker.Close()
-			close(brokerCloseDone)
-		}()
-		select {
-		case <-brokerCloseDone:
-		case <-time.After(time.Second):
-			close(allowLoserExit)
-			t.Fatal("broker close tried to join a LaneSet-owned hedge")
-		}
-		synctest.Wait()
-		if broker.UsedBytes() != uint64(catalog.MinChunkSize) || process.Used() != uint64(catalog.MinChunkSize) {
-			t.Fatalf("pending hedge lost ownership: broker=%d process=%d", broker.UsedBytes(), process.Used())
-		}
-		lanes.mu.Lock()
-		closedSignal := lanes.admissionChanged
-		lanes.mu.Unlock()
-
-		firstCloseDone := make(chan struct{})
-		secondCloseDone := make(chan struct{})
-		go func() {
-			lanes.Close()
-			close(firstCloseDone)
-		}()
-		go func() {
-			lanes.Close()
-			close(secondCloseDone)
-		}()
-		<-closedSignal
-		synctest.Wait()
-		select {
-		case <-firstCloseDone:
-			t.Fatal("lane close returned while its cancelled hedge was still running")
-		default:
-		}
-		select {
-		case <-secondCloseDone:
-			t.Fatal("concurrent lane close returned before the shared join completed")
-		default:
-		}
-
-		close(allowLoserExit)
-		<-firstCloseDone
-		<-secondCloseDone
-		lanes.mu.Lock()
-		winnerInflight := winnerState.inflight
-		loserInflight := loserState.inflight
-		remainingLanes := len(lanes.lanes)
-		remainingSuspensions := len(lanes.contentSuspensions)
-		lanes.mu.Unlock()
-		if winnerInflight != 0 || loserInflight != 0 || remainingLanes != 0 || remainingSuspensions != 0 {
-			t.Fatalf(
-				"closed lane state survived: winner=%d loser=%d lanes=%d suspensions=%d",
-				winnerInflight,
-				loserInflight,
-				remainingLanes,
-				remainingSuspensions,
-			)
-		}
-		if _, err := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)}); !errors.Is(err, ErrLaneClosed) {
-			t.Fatalf("closed lane set admitted a demand: %v", err)
-		}
-	})
-}
-
-func TestLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		descriptor := transferDescriptor(t, 1)
-		demand := validDemand(t, descriptor, 0)
-		var lanes *LaneSet
-		stopReturned := make(chan struct{})
-		lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
-			lanes.Stop()
-			close(stopReturned)
-			return records.BlockRecord{}, ErrLaneClosed
-		})
-		var err error
-		lanes, err = NewLaneSet(LaneSetConfig{
-			ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](92),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := lanes.Add(LaneIdentity{ID: 1}, LaneRouteRelay, lane); err != nil {
-			t.Fatal(err)
-		}
-
-		fetchDone := make(chan error, 1)
-		go func() {
-			_, fetchErr := lanes.fetch(context.Background(), blockRequest{demand: demand, validate: validateTransferRecord(demand)})
-			fetchDone <- fetchErr
-		}()
-		select {
-		case <-stopReturned:
-		case <-time.After(time.Second):
-			t.Fatal("callback Stop did not return")
-		}
-		lanes.Close()
-		if err := <-fetchDone; !errors.Is(err, ErrLaneClosed) {
-			t.Fatalf("self-stopped lane set error = %v", err)
-		}
-	})
-}
-
 func TestBrokerLaneCallbackCanStopWithoutSelfJoin(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		descriptor := transferDescriptor(t, 1)
 		var broker *BlockBroker
 		stopReturned := make(chan struct{})
-		lane := laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		lane := laneFunction(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
 			broker.Stop()
 			close(stopReturned)
 			return records.BlockRecord{}, ErrBrokerClosed

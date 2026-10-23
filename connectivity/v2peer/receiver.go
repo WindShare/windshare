@@ -4,10 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"io"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/connectivity/iceconfig"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -16,7 +17,7 @@ import (
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -54,7 +55,7 @@ type ReceiverLaneSession interface {
 		context.Context,
 		sessionruntime.LaneAttachmentGrant,
 		protocolsession.FrameChannel,
-		transfer.LaneRoute,
+		transferlanes.Route,
 	) (sessionruntime.ReceiverLaneAdmissionResult, error)
 }
 
