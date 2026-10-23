@@ -8,9 +8,9 @@ Improve useful throughput while keeping link creation, first content, browsing, 
 
 Go and browser allocation/capacity ownership are implemented, along with bounded browser Direct ZIP prefetch. Receipt feedback releases unfinished network supply independently of retained output; shared consumers and canceled attempts keep explicit buffer ownership. Regression coverage includes blocked routes, preview fairness, cached/shared output frontiers, retries and lane replacement.
 
-[Implementation evidence](../../testdata/connectivity/webrtc/allocation-20261022/README.md) records complete-file, Direct ZIP, small-file, slow-output, preview/cancellation and reserve-cost measurements, plus browser resume and process-crash recovery. Complete-file throughput improved neither consistently nor conclusively (1 MiB block medians: 19.26 to 18.71 MB/s). Batching and native acceleration are not adopted.
+[Implementation evidence](../../../testdata/connectivity/webrtc/allocation-20261022/README.md) records complete-file, Direct ZIP, small-file, slow-output, preview/cancellation and reserve-cost measurements, plus browser resume and process-crash recovery. Complete-file throughput improved neither consistently nor conclusively (1 MiB block medians: 19.26 to 18.71 MB/s). Batching and native acceleration are not adopted.
 
-The [readiness follow-up](../../testdata/connectivity/webrtc/readiness-20261022/README.md) adopts browser capacity-transition notifications and demand-owned probe deadlines. Admission scans fall 75%; complete-file throughput remains inconclusive, with no consistent first-output or preview delay established. Transport loss and the earlier retransmission stalls remain under investigation.
+The [readiness follow-up](../../../testdata/connectivity/webrtc/readiness-20261022/README.md) adopts browser capacity-transition notifications and demand-owned probe deadlines. Admission scans fall 75%; complete-file throughput remains inconclusive, with no consistent first-output or preview delay established. Transport loss and the earlier retransmission stalls remain under investigation.
 
 ## Findings before implementation
 
@@ -39,4 +39,4 @@ The [readiness follow-up](../../testdata/connectivity/webrtc/readiness-20261022/
 
 Deliver allocation/capacity changes independently; batching and native acceleration are optional. Count SCTP/DTLS patch maintenance and platform lifecycle complexity even after removing the experimental transport fork.
 
-[Mechanism](../../testdata/connectivity/webrtc/single-connection-design-2026-10-22.json), [workflow/lifecycle](../../testdata/connectivity/webrtc/plan-revision-20261022/results.json), and [throughput investigation](../../testdata/connectivity/webrtc/slowdown-20261022/results.json) retain measurements and reproducible probes. The implementation evidence adds UI/recovery and crash tests separately from LAN throughput; WAN and integrated native-acceleration gains remain unmeasured.
+[Mechanism](../../../testdata/connectivity/webrtc/single-connection-design-2026-10-22.json), [workflow/lifecycle](../../../testdata/connectivity/webrtc/plan-revision-20261022/results.json), and [throughput investigation](../../../testdata/connectivity/webrtc/slowdown-20261022/results.json) retain measurements and reproducible probes. The implementation evidence adds UI/recovery and crash tests separately from LAN throughput; WAN and integrated native-acceleration gains remain unmeasured.
