@@ -14,7 +14,7 @@ func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, ref
 	if p.config.Prepare != nil {
 		// Queue time belongs to the absolute wave, not to the active attempt. Keep
 		// enough time for a complete preparation/checking opportunity after admission.
-		wait := min(nativepeer.ProcessQueueBudget, remaining()-MinimumAttemptOpportunity)
+		wait := min(nativepeer.QueueBudget, remaining()-MinimumAttemptOpportunity)
 		prepared, err := p.waitPreparation(binding, max(wait, 0))
 		if err == nil && remaining() < MinimumAttemptOpportunity {
 			prepared.Close()

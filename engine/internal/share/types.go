@@ -110,6 +110,7 @@ type Dependencies struct {
 	RevisionCapacity *revisioncapacity.Coordinator
 	CatalogBudget    *catalog.BudgetAccount
 	CacheBudget      *contentflow.ProcessCacheBudget
+	Connectivity     *nativeconnectivity.Capacity
 	Prepare          func(context.Context, liveshare.SenderConfig) (Prepared, error)
 	Relays           func(context.Context, []string, relayset.SenderFactory) (Relays, error)
 	Relay            func(senderrelay.Config) (Relay, error)

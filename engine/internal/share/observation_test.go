@@ -21,7 +21,7 @@ func TestShareProtocolAndTerminalObservationAuthorityFollowsRequest(t *testing.T
 		{"trace", Request{Diagnostics: true, TraceLifecycle: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			f := newShareFixture()
+			f := newShareFixture(t)
 			o := newObservations(f.dependencies.Control, test.request)
 			config := o.runtimeConfig(f.relays, nil)
 			if !config.ProtocolObservations.IsZero() != test.request.Diagnostics {
@@ -36,7 +36,7 @@ func TestShareProtocolAndTerminalObservationAuthorityFollowsRequest(t *testing.T
 }
 
 func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	f.factory.entered, f.factory.release = make(chan struct{}), make(chan struct{})
 	var producer observationstream.Producer[sessionruntime.ProtocolObservation]
 	f.prepared.observeRuntime = func(config liveshare.RuntimeFactoryConfig) { producer = config.ProtocolObservations }
@@ -85,7 +85,7 @@ func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *test
 }
 
 func TestShareDefaultDiagnosticsDoesNotRetainRetiredChannelGraphs(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	o := newObservations(f.dependencies.Control, Request{})
 	o.attachChannel(&wsrtc.Channel{})
 	if len(o.completers) != 0 {
@@ -95,7 +95,7 @@ func TestShareDefaultDiagnosticsDoesNotRetainRetiredChannelGraphs(t *testing.T) 
 }
 
 func TestShareLossCompletionAggregatesIndependentProducerQueues(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	o := newObservations(f.dependencies.Control, Request{})
 	o.loss(RelayObservations, 3)
 	o.loss(RelayObservations, 4)

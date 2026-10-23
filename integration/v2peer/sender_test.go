@@ -618,6 +618,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 		answer: make(chan struct{}), admit: make(chan sessionruntime.LaneIdentity, 1),
 	}
 	factory, err := v2peer.NewFactory(v2peer.Config{
+		Native:        newCapacityNative(t),
 		Configuration: pion.Configuration{}, NegotiationBudget: v2PeerIntegrationTimeout, AdmissionBudget: v2PeerIntegrationTimeout,
 		MaxCandidates: v2PeerIntegrationMaxCandidates,
 		PeerConnections: v2peer.PeerConnectionFactoryFunc(

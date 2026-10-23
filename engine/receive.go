@@ -72,6 +72,7 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 	dependencies := receive.Dependencies{
 		Clock: injected.Clock, ReceiverDial: receiveDial(injected.ReceiverDial),
 		Recovery: injected.Recovery.native(), PeerFactory: injected.PeerFactory,
+		Connectivity: engine.connectivity,
 	}
 	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control

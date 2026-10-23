@@ -57,11 +57,11 @@ func newTestPeerSession(seed byte) *testPeerSession {
 }
 
 func TestPeerFactoriesValidateIndependentPhaseBudgets(t *testing.T) {
-	sender, err := NewFactory(Config{})
+	sender, err := newTestSenderFactory(t, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiver, err := NewReceiverFactory(ReceiverFactoryConfig{})
+	receiver, err := newTestReceiverFactory(t, ReceiverFactoryConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,13 +91,13 @@ func TestPeerFactoriesValidateIndependentPhaseBudgets(t *testing.T) {
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewFactory(Config{
+			if _, err := newTestSenderFactory(t, Config{
 				NegotiationBudget: test.negotiation,
 				AdmissionBudget:   test.admission,
 			}); !errors.Is(err, ErrConfig) {
 				t.Fatalf("sender phase configuration error = %v", err)
 			}
-			if _, err := NewReceiverFactory(ReceiverFactoryConfig{
+			if _, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 				NegotiationBudget: test.negotiation,
 				AdmissionBudget:   test.admission,
 			}); !errors.Is(err, ErrConfig) {
@@ -109,10 +109,10 @@ func TestPeerFactoriesValidateIndependentPhaseBudgets(t *testing.T) {
 
 func TestPeerFactoriesRejectCandidateLimitAboveProtocol(t *testing.T) {
 	invalid := v2signal.MaximumCandidates + 1
-	if _, err := NewFactory(Config{MaxCandidates: invalid}); !errors.Is(err, ErrConfig) {
+	if _, err := newTestSenderFactory(t, Config{MaxCandidates: invalid}); !errors.Is(err, ErrConfig) {
 		t.Fatalf("sender candidate limit error = %v", err)
 	}
-	if _, err := NewReceiverFactory(ReceiverFactoryConfig{MaxCandidates: invalid}); !errors.Is(err, ErrConfig) {
+	if _, err := newTestReceiverFactory(t, ReceiverFactoryConfig{MaxCandidates: invalid}); !errors.Is(err, ErrConfig) {
 		t.Fatalf("receiver candidate limit error = %v", err)
 	}
 }
@@ -894,7 +894,7 @@ func TestSenderHandlerStopClosesUnattachedPeerWithoutOperationFailure(t *testing
 
 func mustTestFactory(t *testing.T, config Config) *Factory {
 	t.Helper()
-	factory, err := NewFactory(config)
+	factory, err := newTestSenderFactory(t, config)
 	if err != nil {
 		t.Fatalf("create factory: %v", err)
 	}

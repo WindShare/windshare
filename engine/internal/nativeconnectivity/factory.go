@@ -15,6 +15,7 @@ import (
 )
 
 type SenderConfig struct {
+	Capacity       *Capacity
 	TURN           turnpath.Accounts
 	Now            func() time.Time
 	Diagnostics    bool
@@ -23,18 +24,26 @@ type SenderConfig struct {
 }
 
 func NewSender(config SenderConfig) (*v2peer.Factory, error) {
-	return v2peer.NewFactory(senderConfig(config))
+	prepared, err := senderConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return v2peer.NewFactory(prepared)
 }
 
-func senderConfig(config SenderConfig) v2peer.Config {
-	nativeConfig := nativepeer.Config{Side: nativepeer.SideSender}
+func senderConfig(config SenderConfig) (v2peer.Config, error) {
+	nativeConfig := nativepeer.Config{Side: nativepeer.SideSender, Now: config.Now}
 	if config.Diagnostics {
 		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
+	}
+	native, err := config.Capacity.NewNative(nativeConfig)
+	if err != nil {
+		return v2peer.Config{}, err
 	}
 	result := v2peer.Config{
 		TURN:          config.TURN,
 		Configuration: v2peer.DefaultConfiguration(),
-		Native:        nativepeer.New(nativeConfig),
+		Native:        native,
 		Now:           config.Now,
 		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel),
 	}
@@ -44,7 +53,7 @@ func senderConfig(config SenderConfig) v2peer.Config {
 	if config.Diagnostics {
 		result.PeerDiagnosticObservationCapacity = v2peer.DefaultPeerDiagnosticObservationCapacity
 	}
-	return result
+	return result, nil
 }
 
 type ReceiverConfig struct {
@@ -59,13 +68,6 @@ func NewReceiver(config ReceiverConfig) (*v2peer.ReceiverFactory, error) {
 }
 
 func receiverConfig(config ReceiverConfig) v2peer.ReceiverFactoryConfig {
-	if config.Native == nil {
-		nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver}
-		if config.Diagnostics {
-			nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
-		}
-		config.Native = nativepeer.New(nativeConfig)
-	}
 	result := v2peer.ReceiverFactoryConfig{
 		Random:        config.Random,
 		Native:        config.Native,

@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
-// PreparedAttempt owns an admitted process opportunity. Separation from Start
+// PreparedAttempt owns an admitted application opportunity. Separation from Start
 // lets receivers queue before signaling; an incoming sender offer instead queues
 // within its already-running preparation deadline. Neither spends ICE time.
 type PreparedAttempt struct {
@@ -52,7 +52,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	n.mu.Lock()
 	if n.closed {
 		n.mu.Unlock()
-		return nil, ErrProcessAdmission
+		return nil, ErrAdmission
 	}
 	n.operations.Add(1)
 	n.mu.Unlock()
@@ -90,7 +90,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	path.attempts[prepared] = struct{}{}
 	context.AfterFunc(lifetime, prepared.Close)
 	n.mu.Unlock()
-	wait, cancelWait := context.WithTimeout(ctx, ProcessQueueBudget)
+	wait, cancelWait := context.WithTimeout(ctx, QueueBudget)
 	stop := context.AfterFunc(lifetime, cancelWait)
 	defer func() { stop(); cancelWait() }()
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(request.Binding.AttemptID), AttemptSequence: request.Binding.AttemptSequence, NetworkGenerationID: snapshot.GenerationID(), ICEProfileID: profile.ID(), Side: n.config.Side}
@@ -111,7 +111,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	prepared.mu.Lock()
 	prepared.permit = permit
 	if !prepared.released {
-		prepared.stop = n.config.Admission.clock.AfterFunc(ProcessAttemptBudget, func() { prepared.cancel(); prepared.Close() })
+		prepared.stop = n.config.Admission.clock.AfterFunc(AttemptBudget, func() { prepared.cancel(); prepared.Close() })
 	}
 	if prepared.released {
 		permit.release()
@@ -198,12 +198,12 @@ func (p *PreparedAttempt) abort() {
 }
 func (p *PreparedAttempt) Start(ctx context.Context) (*provider.Connection, error) {
 	if p == nil || ctx == nil {
-		return nil, ErrProcessAdmission
+		return nil, ErrAdmission
 	}
 	p.mu.Lock()
 	if p.transferred || p.released {
 		p.mu.Unlock()
-		return nil, ErrProcessAdmission
+		return nil, ErrAdmission
 	}
 	p.transferred = true
 	p.mu.Unlock()
@@ -221,7 +221,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 	path := p.path
 	if ctx.Err() != nil || p.ctx.Err() != nil || n.paths[p.key] != path || path.retired || n.generation != p.snapshot.GenerationID() {
 		n.mu.Unlock()
-		return nil, errors.Join(ErrProcessAdmission, ctx.Err(), p.ctx.Err())
+		return nil, errors.Join(ErrAdmission, ctx.Err(), p.ctx.Err())
 	}
 	lease, err := p.permit.sockets.Activate()
 	if err != nil {
@@ -293,7 +293,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 	}
 	if ctx.Err() != nil || p.ctx.Err() != nil {
 		_ = connection.Close()
-		return nil, errors.Join(ErrProcessAdmission, ctx.Err(), p.ctx.Err())
+		return nil, errors.Join(ErrAdmission, ctx.Err(), p.ctx.Err())
 	}
 	return connection, nil
 }

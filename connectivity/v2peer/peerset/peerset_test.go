@@ -99,7 +99,7 @@ func TestBudgetReplenishesAcrossGenerationsWithoutReset(t *testing.T) {
 		t.Fatal("active-time debt not enforced")
 	}
 	// A new protocol/network owner shares the same receive budget.
-	fresh, _ := New(Config{Budget: budget})
+	fresh, _ := newTestPeerSet(t, Config{Budget: budget})
 	if fresh.config.Budget != budget {
 		t.Fatal("generation replaced the receive budget")
 	}
@@ -183,7 +183,7 @@ func waitQueue(t *testing.T, c *Capacity, n int) {
 func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testing.T) {
 	clock := newClock()
 	capacity, _ := NewCapacity(1)
-	owner, _ := New(Config{Clock: clock, Capacity: capacity})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock, Capacity: capacity})
 	attempts := make(chan *fakeAttempt, 2)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: BrowseDemand, Start: func(context.Context, v2signal.Binding) (Attempt, error) {
 		attempt := newAttempt()
@@ -236,7 +236,7 @@ func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testi
 
 func TestPrewarmHasOneAttemptAndBoundedRetention(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	attempt := newAttempt()
 	path, err := owner.Open(context.Background(), PathConfig{Demand: BrowseDemand, Start: func(context.Context, v2signal.Binding) (Attempt, error) { return attempt, nil }})
 	if err != nil {
@@ -258,7 +258,7 @@ func TestPrewarmHasOneAttemptAndBoundedRetention(t *testing.T) {
 
 func TestRetryAdvancesIdentityAndWaveCannotTruncateICEOpportunity(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	bindings := make(chan v2signal.Binding, 4)
 	attempts := make(chan *fakeAttempt, 4)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: ContentDemand, StopAfterWave: true, Start: func(_ context.Context, binding v2signal.Binding) (Attempt, error) {
@@ -296,7 +296,7 @@ func TestRetryAdvancesIdentityAndWaveCannotTruncateICEOpportunity(t *testing.T) 
 
 func TestPathIdentityAndCapacityAreIndependent(t *testing.T) {
 	clock := newClock()
-	owner, _ := New(Config{Clock: clock})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	var session protocolsession.ProtocolSessionID
 	started := make(chan struct{}, MaximumPaths)
 	start := func(context.Context, v2signal.Binding) (Attempt, error) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -48,6 +49,7 @@ func (t systemTicker) C() <-chan time.Time { return t.ticker.C }
 func (t systemTicker) Stop()               { t.ticker.Stop() }
 
 type Dependencies struct {
+	Connectivity *nativeconnectivity.Capacity
 	Control      task.Control
 	Clock        Clock
 	ReceiverDial func(context.Context, relayv2.ReceiverConfig) (relayset.ReceiverConnection, error)

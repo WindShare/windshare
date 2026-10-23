@@ -1,4 +1,4 @@
-// Package turncapacity owns process-wide TURN admission and bounded handoff capacity.
+// Package turncapacity owns shared TURN admission and bounded handoff capacity.
 // It accounts for reservations, independently of socket or protocol implementations.
 package turncapacity
 
@@ -45,8 +45,7 @@ func (r Request) key(owner *Owner) pathKey {
 	return pathKey{owner, r.ProtocolSessionID, r.PeerPathID}
 }
 
-// Owner distinguishes local endpoints of the same protocol session,
-// including a sender and receiver hosted by different Engines in one process.
+// Owner distinguishes local endpoints of the same protocol session sharing a pool.
 type Owner struct {
 	capacity *Pool
 	id       uint64
@@ -63,9 +62,9 @@ func (o *Owner) Acquire(ctx context.Context, request Request) (*Reservation, err
 	return o.capacity.acquire(ctx, request, o)
 }
 
-// Pool is shared by the process; an injected instance isolates tests.
+// Pool belongs to the application that injects it into its connectivity owners.
 // Ordinary capacity is preserved during one bounded make-before-break handoff,
-// including both endpoints when the sender and receiver share a process.
+// including both endpoints when the sender and receiver share this pool.
 type Pool struct {
 	mu                                 sync.Mutex
 	paths                              map[pathKey]*Reservation
@@ -101,13 +100,9 @@ const (
 	reservationClosed
 )
 
-var processPool = NewPool()
-
 func NewPool() *Pool {
 	return &Pool{paths: make(map[pathKey]*Reservation)}
 }
-
-func ProcessPool() *Pool { return processPool }
 
 func (c *Pool) acquire(ctx context.Context, request Request, owner *Owner) (*Reservation, error) {
 	if ctx == nil || request.ProtocolSessionID == ([16]byte{}) || request.PeerPathID == ([16]byte{}) ||

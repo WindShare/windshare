@@ -10,11 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/eventproject"
+	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/internal/turnruntime"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -48,7 +50,8 @@ type managedTask interface {
 	Done() <-chan struct{}
 }
 
-// Engine owns aggregate capacity across native operations. Once Close begins,
+// Engine owns aggregate capacity across its native operations, independently of
+// other Engines in the process. Once Close begins,
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
 	relaySetup    *relaysetup.Service
@@ -61,6 +64,7 @@ type Engine struct {
 	revisions     *revisioncapacity.ProcessOwner
 	catalog       *catalog.BudgetAccount
 	cache         *contentflow.ProcessCacheBudget
+	connectivity  *nativeconnectivity.Capacity
 	tasks         map[task.ID]managedTask
 	closing       bool
 	closed        chan struct{}
@@ -97,6 +101,10 @@ func New(config Config) (*Engine, error) {
 	if config.CacheBytes == 0 {
 		config.CacheBytes = contentflow.DefaultProcessSealedCacheBytes
 	}
+	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Now})
+	if err != nil {
+		return nil, err
+	}
 	catalogBudget, err := catalog.NewBudgetAccount("engine-process", config.CatalogLimits)
 	if err != nil {
 		return nil, err
@@ -131,7 +139,7 @@ func New(config Config) (*Engine, error) {
 		turn:       turn,
 		relaySetup: relaysetup.New(config.RelaySetup),
 		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
-		revisions: revisions, catalog: catalogBudget, cache: cacheBudget,
+		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
 		tasks: make(map[task.ID]managedTask), closed: make(chan struct{}),
 	}, nil
 }

@@ -28,7 +28,7 @@ func TestSocketAdmissionWaitsWithoutSpendingAttemptsAndWakesOnPhysicalRelease(t 
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
 	pending := queuedActual(t, n, 2, t.Context())
 	facts := awaitSocketWait(t, n, 2)
-	if facts.SocketCapacity.Used != 1 || facts.SocketCapacity.Requested != 1 || facts.Active != 0 || facts.StartsRemaining != ProcessStartsPerWindow-1 {
+	if facts.SocketCapacity.Used != 1 || facts.SocketCapacity.Requested != 1 || facts.Active != 0 || facts.StartsRemaining != StartsPerWindow-1 {
 		t.Fatal("socket waiting spent a process attempt", facts)
 	}
 	facts.SocketCapacity.Limit = 99
@@ -54,7 +54,7 @@ func TestSocketAdmissionWaitsWithoutSpendingAttemptsAndWakesOnPhysicalRelease(t 
 	defer second.peer.Close()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	if gate.starts != ProcessStartsPerWindow-3 {
+	if gate.starts != StartsPerWindow-3 {
 		t.Fatal("wait consumed starts", gate.starts)
 	}
 }
@@ -92,7 +92,7 @@ func TestSocketWaitCancellationDeadlineAndRetirementDoNotLeakReservations(t *tes
 			}
 			gate.mu.Lock()
 			defer gate.mu.Unlock()
-			if len(gate.queue) != 0 || gate.starts != ProcessStartsPerWindow-1 {
+			if len(gate.queue) != 0 || gate.starts != StartsPerWindow-1 {
 				t.Fatal("canceled wait charged a start")
 			}
 		})

@@ -131,8 +131,8 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 		return task.FailureLocal, err
 	}
 	s.peers, err = d.Peers(nativeconnectivity.SenderConfig{
-		TURN: d.TURN,
-		Now:  d.Control.Now, Diagnostics: request.Diagnostics, TraceLifecycle: request.TraceLifecycle, ObserveChannel: o.attachChannel,
+		TURN: d.TURN, Capacity: d.Connectivity,
+		Now: d.Control.Now, Diagnostics: request.Diagnostics, TraceLifecycle: request.TraceLifecycle, ObserveChannel: o.attachChannel,
 	})
 	if native, ok := s.peers.(nativePeers); ok {
 		o.attachPeers(native.Factory)

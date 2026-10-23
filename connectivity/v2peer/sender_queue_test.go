@@ -104,8 +104,8 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 	h := &queuedHandshake{clock: clock, senderTimers: makeTimers(), receiverTimers: makeTimers(), session: newTestPeerSession(90), started: &atomic.Int32{}}
 	newNative := func(count *atomic.Int32, sockets *socketauthority.Authority) *nativepeer.NativePeerConnectivity {
 		pool, _ := icepolicy.NewICEEndpointPool(nil)
-		gate := nativepeer.NewProcessAdmission(nativepeer.AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
-		native := nativepeer.New(nativepeer.Config{Admission: gate, Sockets: sockets, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
+		gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
+		native := newTestNative(t, nativepeer.Config{Admission: gate, Sockets: sockets, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
 			if count != nil {
 				count.Add(1)
 			}
@@ -115,7 +115,7 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 		return native
 	}
 	h.native = newNative(h.started, sockets)
-	for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
+	for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 		connection, err := h.native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: testBinding(i)})
 		if err != nil {
 			t.Fatal(err)
@@ -125,11 +125,11 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 	// No TURN servers are configured: relay-only ICE keeps both real providers
 	// checking until this test advances their clocks, regardless of host speed.
 	configuration := pion.Configuration{ICETransportPolicy: pion.ICETransportPolicyRelay}
-	senderFactory, err := NewFactory(Config{Native: h.native, Configuration: configuration, PhaseTimers: h.senderTimers, Now: clock.Now, SenderAttemptObservationCapacity: 64})
+	senderFactory, err := newTestSenderFactory(t, Config{Native: h.native, Configuration: configuration, PhaseTimers: h.senderTimers, Now: clock.Now, SenderAttemptObservationCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{Native: newNative(nil, nil), Configuration: configuration, PhaseTimers: h.receiverTimers})
+	receiverFactory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{Native: newNative(nil, nil), Configuration: configuration, PhaseTimers: h.receiverTimers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestSenderCapacityWaitSharesPreparationAndBothPeersKeepFullChecking(t *test
 	}
 	// Retired resource and signaling deadlines cannot cancel the checking
 	// phase, whose full window begins only after resources become available.
-	if h.started.Load() != nativepeer.ProcessConcurrentAttempts+1 {
+	if h.started.Load() != nativepeer.ConcurrentAttempts+1 {
 		t.Fatal("unexpected provider start count", h.started.Load())
 	}
 	h.clock.Advance(time.Second)
@@ -223,7 +223,7 @@ func TestRemoteReceiverExpiryCancelsQueuedSenderBeforeProviderStartup(t *testing
 	receiveTest(t, h.operation.cancelled)
 	receiveTest(t, h.sender.done)
 	_ = h.blockers[0].Close()
-	if h.started.Load() != nativepeer.ProcessConcurrentAttempts {
+	if h.started.Load() != nativepeer.ConcurrentAttempts {
 		t.Fatal("expired remote operation started a provider", h.started.Load())
 	}
 	for _, blocker := range h.blockers[1:] {
@@ -249,7 +249,7 @@ func TestSenderPreparationExpiresWhileProcessCapacityRemainsQueued(t *testing.T)
 	if failure.code != protocolsession.PeerOperationCodeTimeout {
 		t.Fatalf("queue timeout lost attempt-scoped phase cause: %+v", failure)
 	}
-	if h.started.Load() != nativepeer.ProcessConcurrentAttempts {
+	if h.started.Load() != nativepeer.ConcurrentAttempts {
 		t.Fatal("expired preparation started a provider")
 	}
 }

@@ -9,23 +9,23 @@ import (
 	"time"
 )
 
-// These process limits mirror browser tab admission. They survive manager,
-// authenticated-session and network-generation replacement.
+// These application limits mirror browser tab admission. The injected authority
+// survives manager, authenticated-session and network-generation replacement.
 const (
-	ProcessConcurrentAttempts             = 4
-	DirectAttemptReserve                  = 1
-	ProcessStartsPerWindow                = 16
-	ProcessSTUNEndpointsPerWindow         = 32
-	ProcessQueuedAttempts                 = 64
-	ProcessAdmissionWindow                = time.Minute
-	ProcessAttemptBudget                  = 85 * time.Second
-	ProcessActiveTimePerWindow            = ProcessConcurrentAttempts * ProcessAttemptBudget
-	ProcessQueueBudget                    = time.Minute
-	MinimumPreparationOpportunity         = 50 * time.Second
-	ProcessMaximumSTUNEndpointsPerAttempt = icepolicy.EndpointsPerProfile
+	ConcurrentAttempts             = 4
+	DirectAttemptReserve           = 1
+	StartsPerWindow                = 16
+	STUNEndpointsPerWindow         = 32
+	MaximumQueuedAttempts          = 64
+	AdmissionWindow                = time.Minute
+	AttemptBudget                  = 85 * time.Second
+	ActiveTimePerWindow            = ConcurrentAttempts * AttemptBudget
+	QueueBudget                    = time.Minute
+	MinimumPreparationOpportunity  = 50 * time.Second
+	MaximumSTUNEndpointsPerAttempt = icepolicy.EndpointsPerProfile
 )
 
-var ErrProcessAdmission = errors.New("native process attempt admission unavailable")
+var ErrAdmission = errors.New("native attempt admission unavailable")
 
 type AdmissionKind string
 
@@ -51,7 +51,10 @@ type AdmissionClock struct {
 	Now       func() time.Time
 	AfterFunc func(time.Duration, func()) func()
 }
-type ProcessAdmission struct {
+
+// Admission belongs to the application; every native owner shares its allowances.
+// Replacing a connection manager must not replenish the application's rate budget.
+type Admission struct {
 	mu                            sync.Mutex
 	clock                         AdmissionClock
 	updated                       time.Time
@@ -73,38 +76,36 @@ type admissionWaiter struct {
 	err       error
 }
 type attemptPermit struct {
-	gate    *ProcessAdmission
+	gate    *Admission
 	started time.Time
 	waiter  *admissionWaiter
 	once    sync.Once
 	sockets *socketauthority.Reservation
 }
 
-func NewProcessAdmission(clock AdmissionClock) *ProcessAdmission {
+func NewAdmission(clock AdmissionClock) *Admission {
 	if clock.Now == nil {
 		clock.Now = time.Now
 	}
 	if clock.AfterFunc == nil {
 		clock.AfterFunc = func(d time.Duration, f func()) func() { timer := time.AfterFunc(d, f); return func() { timer.Stop() } }
 	}
-	return &ProcessAdmission{clock: clock, updated: clock.Now(), starts: ProcessStartsPerWindow, endpoints: ProcessSTUNEndpointsPerWindow, activeTime: float64(ProcessActiveTimePerWindow)}
+	return &Admission{clock: clock, updated: clock.Now(), starts: StartsPerWindow, endpoints: STUNEndpointsPerWindow, activeTime: float64(ActiveTimePerWindow)}
 }
 
-var processAdmission = NewProcessAdmission(AdmissionClock{})
-
-func (g *ProcessAdmission) acquireRoute(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool) (*attemptPermit, error) {
+func (g *Admission) acquireRoute(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool) (*attemptPermit, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if endpoints < 0 || endpoints > ProcessMaximumSTUNEndpointsPerAttempt {
-		return nil, ErrProcessAdmission
+	if endpoints < 0 || endpoints > MaximumSTUNEndpointsPerAttempt {
+		return nil, ErrAdmission
 	}
 	w := &admissionWaiter{owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe, relayed: relayed}
 	g.mu.Lock()
-	if len(g.queue) >= ProcessQueuedAttempts {
+	if len(g.queue) >= MaximumQueuedAttempts {
 		g.emitLocked(w, AdmissionRejected)
 		g.mu.Unlock()
-		return nil, ErrProcessAdmission
+		return nil, ErrAdmission
 	}
 	g.queue = append(g.queue, w)
 	g.emitLocked(w, AdmissionQueued)
@@ -150,17 +151,17 @@ func (g *ProcessAdmission) acquireRoute(ctx context.Context, owner *NativePeerCo
 		}
 	}
 }
-func (g *ProcessAdmission) refillLocked() {
+func (g *Admission) refillLocked() {
 	now := g.clock.Now()
 	elapsed := max(now.Sub(g.updated), 0)
-	g.starts = min(ProcessStartsPerWindow, g.starts+float64(elapsed)*ProcessStartsPerWindow/float64(ProcessAdmissionWindow))
-	g.endpoints = min(ProcessSTUNEndpointsPerWindow, g.endpoints+float64(elapsed)*ProcessSTUNEndpointsPerWindow/float64(ProcessAdmissionWindow))
-	g.activeTime = min(float64(ProcessActiveTimePerWindow), g.activeTime+float64(elapsed)*float64(ProcessActiveTimePerWindow)/float64(ProcessAdmissionWindow))
+	g.starts = min(StartsPerWindow, g.starts+float64(elapsed)*StartsPerWindow/float64(AdmissionWindow))
+	g.endpoints = min(STUNEndpointsPerWindow, g.endpoints+float64(elapsed)*STUNEndpointsPerWindow/float64(AdmissionWindow))
+	g.activeTime = min(float64(ActiveTimePerWindow), g.activeTime+float64(elapsed)*float64(ActiveTimePerWindow)/float64(AdmissionWindow))
 	if now.After(g.updated) {
 		g.updated = now
 	}
 }
-func (g *ProcessAdmission) drainLocked() {
+func (g *Admission) drainLocked() {
 	if g.timer != nil {
 		g.timer()
 		g.timer = nil
@@ -172,21 +173,21 @@ func (g *ProcessAdmission) drainLocked() {
 			g.timer = g.clock.AfterFunc(nextRefill, func() { g.mu.Lock(); g.drainLocked(); g.mu.Unlock() })
 		}
 	}()
-	for index := 0; index < len(g.queue) && g.active < ProcessConcurrentAttempts; {
+	for index := 0; index < len(g.queue) && g.active < ConcurrentAttempts; {
 		w := g.queue[index]
 		reserve := 0
 		if w.relayed {
 			// Leave one whole opportunity for ordinary direct recovery, including
 			// its start token and time budget, even during TURN replacement.
 			reserve = DirectAttemptReserve
-			if g.active >= ProcessConcurrentAttempts-reserve {
+			if g.active >= ConcurrentAttempts-reserve {
 				index++
 				continue
 			}
 		}
-		wait := max((float64(1+reserve)-g.starts)*float64(ProcessAdmissionWindow)/ProcessStartsPerWindow,
-			(float64(w.endpoints)-g.endpoints)*float64(ProcessAdmissionWindow)/ProcessSTUNEndpointsPerWindow,
-			(float64(ProcessAttemptBudget)*float64(1+reserve)-g.activeTime)*float64(ProcessAdmissionWindow)/float64(ProcessActiveTimePerWindow))
+		wait := max((float64(1+reserve)-g.starts)*float64(AdmissionWindow)/StartsPerWindow,
+			(float64(w.endpoints)-g.endpoints)*float64(AdmissionWindow)/STUNEndpointsPerWindow,
+			(float64(AttemptBudget)*float64(1+reserve)-g.activeTime)*float64(AdmissionWindow)/float64(ActiveTimePerWindow))
 		if wait > 0 {
 			delay := max(time.Duration(wait), time.Nanosecond)
 			if nextRefill == 0 || delay < nextRefill {
@@ -220,14 +221,14 @@ func (g *ProcessAdmission) drainLocked() {
 		g.active++
 		g.starts--
 		g.endpoints -= float64(w.endpoints)
-		g.activeTime -= float64(ProcessAttemptBudget)
+		g.activeTime -= float64(AttemptBudget)
 		w.permit = &attemptPermit{gate: g, started: g.clock.Now(), waiter: w, sockets: reservation}
 		g.emitLocked(w, AdmissionGranted)
 		close(w.ready)
 		index = 0
 	}
 }
-func (g *ProcessAdmission) rotateOwnerLocked(owner *NativePeerConnectivity) {
+func (g *Admission) rotateOwnerLocked(owner *NativePeerConnectivity) {
 	// Rotate all remaining requests from this owner behind the other owners.
 	var same, other []*admissionWaiter
 	for _, pending := range g.queue {
@@ -249,15 +250,15 @@ func (p *attemptPermit) release() {
 		g := p.gate
 		g.mu.Lock()
 		g.refillLocked()
-		used := min(max(g.clock.Now().Sub(p.started), 0), ProcessAttemptBudget)
+		used := min(max(g.clock.Now().Sub(p.started), 0), AttemptBudget)
 		g.active--
-		g.activeTime = min(float64(ProcessActiveTimePerWindow), g.activeTime+float64(ProcessAttemptBudget-used))
+		g.activeTime = min(float64(ActiveTimePerWindow), g.activeTime+float64(AttemptBudget-used))
 		g.emitLocked(p.waiter, AdmissionReleased)
 		g.drainLocked()
 		g.mu.Unlock()
 	})
 }
-func (g *ProcessAdmission) emitLocked(w *admissionWaiter, kind AdmissionKind) {
+func (g *Admission) emitLocked(w *admissionWaiter, kind AdmissionKind) {
 	if w.observe != nil {
 		wait := max(g.clock.Now().Sub(w.started), 0)
 		if w.permit != nil {

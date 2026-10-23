@@ -59,7 +59,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	injected := engine.config.Share
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),
-		CatalogBudget: engine.catalog, CacheBudget: engine.cache,
+		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: injected.PollNetwork,
 	}
 	if injected.Relays != nil {

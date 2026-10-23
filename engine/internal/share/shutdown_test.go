@@ -46,7 +46,7 @@ func (f *boundedCleanupFactory) Stop(context.Context, string) error {
 }
 
 func TestShareJoinsRelayCleanupEvenAfterFactoryTerminalWorkerReturned(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	relays := &delayedCleanupRelays{testRelays: f.relays, release: make(chan struct{}), done: make(chan struct{})}
 	factory := &boundedCleanupFactory{testSessionFactory: f.factory, relays: relays, returned: make(chan struct{})}
 	f.prepared.factory = factory

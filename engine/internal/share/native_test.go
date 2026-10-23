@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -55,7 +57,12 @@ func nativeDependencies(t *testing.T) Dependencies {
 	if err != nil {
 		t.Fatal(err)
 	}
+	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return Dependencies{
+		Connectivity: capacity,
 		Control: task.Control{ID: "native-share", Now: time.Now, Random: rand.Reader, CleanupContext: func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), testWaitTimeout)
 		}},

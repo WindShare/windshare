@@ -14,7 +14,7 @@ func TestTURNReservationsLeaveACompleteDirectOpportunity(t *testing.T) {
 	credential, _ := iceconfig.Fixed("u", "p")
 	relay, _ := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "a", Profile: "p"}, []string{"turn:127.0.0.1:3478"}, credential)
 	configuration, _ := iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
-	for id := byte(1); id < ProcessConcurrentAttempts; id++ {
+	for id := byte(1); id < ConcurrentAttempts; id++ {
 		request := attemptFor(id)
 		request.ICE = configuration
 		prepared, err := native.PrepareAttempt(context.Background(), request)
@@ -48,7 +48,7 @@ func TestTURNReservationsLeaveACompleteDirectOpportunity(t *testing.T) {
 	gate.mu.Lock()
 	active := gate.active
 	gate.mu.Unlock()
-	if active != ProcessConcurrentAttempts-1 {
+	if active != ConcurrentAttempts-1 {
 		t.Fatal("TURN consumed direct capacity", active)
 	}
 }

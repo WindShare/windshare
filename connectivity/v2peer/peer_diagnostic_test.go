@@ -126,7 +126,7 @@ func TestSenderAttemptStreamSaturationCannotBlockSettlement(t *testing.T) {
 }
 
 func TestReceiverTerminationStreamSaturationCannotBlockPublication(t *testing.T) {
-	factory, err := NewReceiverFactory(ReceiverFactoryConfig{
+	factory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
 		ReceiverTerminationObservationCapacity: 1,
 		PeerDiagnosticObservationCapacity:      2,
 	})

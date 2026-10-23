@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -30,13 +31,18 @@ type shareFixture struct {
 	dependencies Dependencies
 }
 
-func newShareFixture() *shareFixture {
+func newShareFixture(t *testing.T) *shareFixture {
+	t.Helper()
+	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := &shareFixture{}
 	f.relays = &testRelays{step: f.step, stopped: make(chan struct{})}
 	f.factory = &testSessionFactory{relays: f.relays, step: f.step}
 	f.prepared = &testPrepared{factory: f.factory, step: f.step}
 	f.dependencies = Dependencies{
-		Controller: NewController(),
+		Controller: NewController(), Connectivity: capacity,
 		Control: task.Control{
 			ID: "share-test", Now: time.Now, Random: rand.Reader,
 			CleanupContext: func() (context.Context, context.CancelFunc) {
@@ -187,7 +193,7 @@ func awaitResult(t *testing.T, result <-chan task.Completion[Result]) task.Compl
 }
 
 func TestShareActivationPublishesBeforePrefetchAndJoinsBeforeSourceRelease(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	f.factory.entered, f.factory.release = make(chan struct{}), make(chan struct{})
 	ctx, stop := context.WithCancelCause(context.Background())
 	done := fixtureRun(f, ctx, Request{Diagnostics: true, TraceLifecycle: true})
@@ -228,7 +234,7 @@ func TestShareActivationPublishesBeforePrefetchAndJoinsBeforeSourceRelease(t *te
 func TestSharePublicationFailureSettlesWithoutStartingDescendants(t *testing.T) {
 	for _, stage := range []PublicationStage{PublicationEncoding, PublicationOutput} {
 		t.Run(stageName(stage), func(t *testing.T) {
-			f := newShareFixture()
+			f := newShareFixture(t)
 			done := fixtureRun(f, context.Background(), Request{})
 			if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
 				t.Fatal(err)
@@ -293,7 +299,7 @@ func TestSharePreparationFailuresReturnCleanupAndResolveReadiness(t *testing.T) 
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			f := newShareFixture()
+			f := newShareFixture(t)
 			f.prepared.closeErr = cleanup
 			test.configure(f)
 			result := Run(context.Background(), Request{}, f.dependencies)
@@ -313,7 +319,7 @@ func TestSharePreparationFailuresReturnCleanupAndResolveReadiness(t *testing.T) 
 func TestShareCallerCancellationKeepsIndependentStopAndSourceFailures(t *testing.T) {
 	for _, failureOwner := range []string{"factory", "source", "none"} {
 		t.Run(failureOwner, func(t *testing.T) {
-			f := newShareFixture()
+			f := newShareFixture(t)
 			failure := errors.New("cleanup failed")
 			want := task.FailureNone
 			if failureOwner == "factory" {
@@ -350,7 +356,7 @@ func TestShareCallerCancellationKeepsIndependentStopAndSourceFailures(t *testing
 }
 
 func TestShareCancelWhileWaitingForRelayNeverActivates(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	waiting := make(chan struct{})
 	f.relays.wait = func(ctx context.Context) error { close(waiting); <-ctx.Done(); return context.Cause(ctx) }
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -370,7 +376,7 @@ func TestShareCancelWhileWaitingForRelayNeverActivates(t *testing.T) {
 }
 
 func TestShareServeFailureRetainsPrimaryFailureWithoutMislabelingCleanup(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	failure := errors.New("relay accept failed")
 	f.relays.acceptErr = failure
 	done := fixtureRun(f, context.Background(), Request{})
@@ -385,7 +391,7 @@ func TestShareServeFailureRetainsPrimaryFailureWithoutMislabelingCleanup(t *test
 }
 
 func TestStopFactoryDeadlineDoesNotReleaseRuntimeOwnership(t *testing.T) {
-	f := newShareFixture()
+	f := newShareFixture(t)
 	f.factory.entered, f.factory.release = make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

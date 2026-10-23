@@ -18,6 +18,7 @@ func TestSenderObservationModesKeepOrdinaryTransfersQuiet(t *testing.T) {
 		{Diagnostics: true},
 		{TraceLifecycle: true, Diagnostics: true},
 	} {
+		config.Capacity = newTestCapacity(t)
 		factory, err := NewSender(config)
 		if err != nil {
 			t.Fatal(err)
@@ -34,7 +35,10 @@ func TestSenderObservationModesKeepOrdinaryTransfersQuiet(t *testing.T) {
 		factory.NativeConnectivity().CompleteObservations()
 	}
 	at := time.Unix(42, 0)
-	config := senderConfig(SenderConfig{Now: func() time.Time { return at }})
+	config, err := senderConfig(SenderConfig{Capacity: newTestCapacity(t), Now: func() time.Time { return at }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer config.Native.Close(context.Background())
 	if config.Now() != at {
 		t.Fatal("sender replaced the injected clock")
@@ -43,7 +47,15 @@ func TestSenderObservationModesKeepOrdinaryTransfersQuiet(t *testing.T) {
 
 func TestReceiverObservationModesAndInjectedNativeAuthority(t *testing.T) {
 	for _, diagnostics := range []bool{false, true} {
-		factory, err := NewReceiver(ReceiverConfig{Diagnostics: diagnostics})
+		config := nativepeer.Config{Side: nativepeer.SideReceiver}
+		if diagnostics {
+			config.ObservationCapacity = nativepeer.DefaultObservationCapacity
+		}
+		native, err := newTestCapacity(t).NewNative(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		factory, err := NewReceiver(ReceiverConfig{Native: native, Diagnostics: diagnostics})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +70,10 @@ func TestReceiverObservationModesAndInjectedNativeAuthority(t *testing.T) {
 		factory.CompleteObservations()
 		factory.NativeConnectivity().CompleteObservations()
 	}
-	native := nativepeer.New(nativepeer.Config{Side: nativepeer.SideReceiver})
+	native, err := newTestCapacity(t).NewNative(nativepeer.Config{Side: nativepeer.SideReceiver})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer native.Close(context.Background())
 	random := bytes.NewReader([]byte{1})
 	config := receiverConfig(ReceiverConfig{Native: native, Random: random})
