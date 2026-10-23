@@ -1,6 +1,6 @@
-# Cross-runtime protocol vectors
+# Cross-runtime contracts
 
-This directory freezes byte-level contracts shared by Go and TypeScript, with the Rust
+This directory freezes protocol and behavior contracts shared by Go and TypeScript, with the Rust
 relay also consuming the sender-signature acceptance and relay control contracts. Go is the generation authority
 for generated protocol vectors; Web tests reconstruct them through public TypeScript codecs.
 
@@ -28,7 +28,14 @@ Cross-runtime diagnostic contracts:
 - `diagnostic-correlation-v1.json`: typed protocol/session/path/lane identities,
   canonical unpadded base64url projection, and safe numeric/text boundaries.
 
-Receiver-local canonical contracts:
+Receiver-local contracts:
+
+- `content-scheduling-v1.json`: reviewed event sequences for completion estimates,
+  admission snapshots, sampling/cancellation, and rescue decisions. Millisecond
+  timestamps advance explicitly; expectations are authored independently of either
+  implementation and are not regenerated. `make vectors` runs Go; `make web` runs
+  TypeScript. Host wake cadence, route authority, capacity and work allocation remain
+  runtime-owned; these vectors freeze the shared estimation and rescue policy.
 
 - `name-collision-v1.json`: deterministic collision suffixes, extension preservation,
   and UTF-8 truncation for names at the component limit.

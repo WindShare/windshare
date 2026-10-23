@@ -50,6 +50,25 @@ class Lane {
 }
 
 describe('receiver allocation ownership', () => {
+  it('reports the cold attempt estimate captured before reserving its bytes', async () => {
+    const expected: number[] = []
+    const lanes = new V2LaneSet({ now: () => 1,
+      onBlockScheduled: observation => expected.push(observation.expectedMilliseconds) })
+    const lane = new Lane()
+    lanes.add(lane, 'direct')
+    const broker = new V2BlockBroker(lanes)
+    try {
+      const read = broker.readBlock(demand(descriptor('cold')), { routes: direct })
+      await flush()
+      expect(expected).toEqual([250])
+      lane.complete('cold:0')
+      await read
+      expect(expected.every(milliseconds => milliseconds === 250)).toBe(true)
+    } finally {
+      broker.close(); lanes.close()
+    }
+  })
+
   it('does not attach a new consumer to an abandoned attempt that is still settling', async () => {
     const lanes = new V2LaneSet()
     const replies: Array<() => void> = []

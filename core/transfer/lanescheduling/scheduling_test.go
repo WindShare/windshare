@@ -9,7 +9,7 @@ func TestBusyThroughputAndCompletionEstimate(t *testing.T) {
 	const block = uint64(1024)
 	now := time.Unix(100, 0)
 	var p Performance
-	if p.Estimate(block) != InitialBlockTime {
+	if p.EstimateCompletion(block) != InitialBlockTime {
 		t.Fatal("cold estimate")
 	}
 	p.Begin(now, block)
@@ -18,7 +18,7 @@ func TestBusyThroughputAndCompletionEstimate(t *testing.T) {
 	if p.PendingBytes != block || p.BytesPerSecond != 1024 || !p.HasSuccessfulSample {
 		t.Fatal(p)
 	}
-	if p.Estimate(block) != 2*time.Second {
+	if p.EstimateCompletion(block) != 2*time.Second {
 		t.Fatal("queued bytes were omitted")
 	}
 	p.Complete(now.Add(2*time.Second), block, true)
@@ -57,26 +57,31 @@ func TestCensoredAndCancelledSamples(t *testing.T) {
 	}
 	p.Begin(now, 100)
 	p.Complete(now.Add(-time.Second), 100, true)
-	if p.Estimate(0) < MinimumSampleTime {
+	if p.EstimateCompletion(0) < MinimumSampleTime {
 		t.Fatal("clock regression")
 	}
 	p.BytesPerSecond = 0.000001
-	if p.Estimate(100) != time.Hour {
+	if p.EstimateCompletion(100) != time.Hour {
 		t.Fatal("unbounded estimate")
 	}
 }
 
 func TestControlQueueEstimateCountsOnlyOutstandingContent(t *testing.T) {
 	var p Performance
-	if p.EstimateQueue(0) != 0 || p.EstimateQueue(2) != 2*InitialBlockTime {
+	if p.EstimateQueue() != 0 {
+		t.Fatal("empty queue")
+	}
+	p.Begin(time.Unix(100, 0), 1024)
+	p.Begin(time.Unix(100, 0), 3072)
+	if p.EstimateQueue() != 2*InitialBlockTime {
 		t.Fatal("unmeasured queue does not count outstanding blocks")
 	}
 	p.PendingBytes, p.BytesPerSecond = 4096, 8192
-	if p.EstimateQueue(2) != 500*time.Millisecond {
+	if p.EstimateQueue() != 500*time.Millisecond {
 		t.Fatal("measured queue does not count outstanding bytes")
 	}
 	p.BytesPerSecond = 0.000001
-	if p.EstimateQueue(2) != time.Hour {
+	if p.EstimateQueue() != time.Hour {
 		t.Fatal("queue estimate overflow")
 	}
 }
@@ -108,8 +113,8 @@ func TestIndependentExplorationBudgets(t *testing.T) {
 	if ProbeDue(&p, now.Add(time.Second)) || !ProbeDue(&p, now.Add(ProbeInterval)) {
 		t.Fatal("sample aging")
 	}
-	if RescueDue(99*time.Millisecond, time.Second, time.Millisecond) ||
-		!RescueDue(100*time.Millisecond, time.Second, time.Millisecond) ||
+	if RescueDue(9*time.Millisecond, time.Second, time.Millisecond) ||
+		!RescueDue(10*time.Millisecond, time.Second, time.Millisecond) ||
 		RescueDue(time.Second, time.Second, time.Second) {
 		t.Fatal("straggler threshold")
 	}

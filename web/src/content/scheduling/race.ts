@@ -1,5 +1,6 @@
 import { V2OperationCancellationError, V2_OPERATION_CANCEL_REASON } from '../../session/v2-runtime-types'
-import { HEDGE_CHECK_MILLISECONDS } from './exploration'
+// Host wake cadence is independent of the shared rescue eligibility rule.
+const RESCUE_POLL_MILLISECONDS = 10
 
 export class ContentRaceWon extends V2OperationCancellationError {
   constructor() { super(V2_OPERATION_CANCEL_REASON.laneRace, 'Another authenticated content attempt won') }
@@ -69,7 +70,7 @@ export function raceContent<T>(
           clearInterval(timer)
           start(promise)
         } catch (error) { fail(error) }
-      }, HEDGE_CHECK_MILLISECONDS)
+      }, RESCUE_POLL_MILLISECONDS)
     } catch (error) { fail(error) }
   })
 }

@@ -1,7 +1,8 @@
 import type { V2BlockDemand, V2BlockLane } from '../v2-lane-set'
 import type { BlockReceiveWindow } from './receive-window'
 import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
-import { completionCost, LanePerformance } from './performance'
+import { LanePerformance } from './performance'
+import { completionCost } from './completion'
 import { PROBE_INTERVAL_MILLISECONDS, type DispatchPurpose } from './exploration'
 
 export interface ContentLane {

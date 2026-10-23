@@ -24,6 +24,9 @@ Invoke-Step 'verify TURN control vectors' {
 Invoke-Step 'verify protocol-contract vectors' {
     go test -count=1 ./core/internal/protocolcontract
 }
+Invoke-Step 'verify content-scheduling behavior vectors' {
+    go test -count=1 ./core/transfer/lanescheduling -run '^TestSchedulingBehaviorVectors$'
+}
 Invoke-Step 'verify peer-signaling vectors' {
     go test -count=1 ./connectivity/v2signal
 }
