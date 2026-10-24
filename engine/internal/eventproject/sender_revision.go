@@ -26,6 +26,15 @@ func ProjectSenderCapacity(value revisioncapacity.TraceEvent) (appobs.SenderCapa
 			return appobs.SenderCapacityObserved{}, ErrInvalidProjection
 		}
 		spec.HasShare = true
+		var err error
+		spec.ShareID, err = appobs.NewCapacityShareID(string(value.ShareID()))
+		if err != nil {
+			return appobs.SenderCapacityObserved{}, err
+		}
+		spec.StoreID, err = appobs.NewCapacityStoreID(string(value.StoreID()))
+		if err != nil {
+			return appobs.SenderCapacityObserved{}, err
+		}
 	}
 	if value.DecisionID() != "" {
 		spec.Decision, _ = appobs.NewCapacityDecisionID(string(value.DecisionID()))

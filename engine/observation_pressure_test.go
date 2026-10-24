@@ -79,7 +79,6 @@ func TestProjectedObservationPressurePreservesCancellationAndSettlement(t *testi
 	for envelope := range current.Observations() {
 		retained++
 		switch event := envelope.Event.(type) {
-		case task.Lifecycle:
 		case appobs.Event:
 			if err := event.Validate(); err != nil {
 				t.Fatalf("invalid application fact: %T: %v", event, err)

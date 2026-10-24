@@ -10,8 +10,10 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/engine/internal/task"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -57,10 +59,12 @@ type ObservationLoss struct {
 type Observation struct {
 	Milestone         Milestone
 	ShareInstance     catalog.ShareInstance
+	Session           protocolsession.ProtocolSessionID
 	Failure           error
 	Catalog           *liveshare.CatalogStorageTrace
 	Prefetch          *liveshare.RootPrefetchTrace
 	Revision          *content.RevisionTrace
+	Capacity          *revisioncapacity.TraceEvent
 	RelayRecovery     *RelayRecovery
 	RelayAvailability *relayset.SenderAvailability
 	RelayLifecycle    *relayv2.LifecycleTrace
@@ -247,4 +251,8 @@ func readObservations[T any](o *observations, stream <-chan T, emit func(T)) fun
 		}
 	})
 	return func() { <-done }
+}
+
+func (o *observations) TraceCapacity(value revisioncapacity.TraceEvent) {
+	o.emit(Observation{Capacity: &value})
 }

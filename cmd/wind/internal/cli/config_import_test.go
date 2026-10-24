@@ -28,7 +28,7 @@ func TestConfigImportFeedsOrdinaryShareWithoutStartingAnEngine(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"config", "import", "-", "--front-url", "https://private.example"}); code != ExitOK {
 		t.Fatal("import failed:", code, stderr.String())
 	}
-	if app.application != nil || app.revisionCapacityTrace != nil {
+	if app.application != nil {
 		t.Fatal("local configuration import constructed a transfer engine")
 	}
 	if stdout.Len() != 0 || strings.Contains(stderr.String(), "private-import-canary") {

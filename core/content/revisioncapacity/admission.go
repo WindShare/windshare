@@ -416,7 +416,7 @@ func (c *Coordinator) busyLocked(decision CapacityDecisionID, resource CapacityR
 	}
 }
 
-func (c *Coordinator) traceForLocked(stage TraceStage, decision CapacityDecisionID, claim *reclaimState, store *storeState, session *sessionState, revision RevisionID, candidate CandidateToken, diagnostic error) TraceEvent {
+func (c *Coordinator) traceForLocked(stage TraceStage, decision CapacityDecisionID, claim *reclaimState, store *storeState, session *sessionState, revision RevisionID, candidate CandidateToken, diagnostic error) tracePublication {
 	event := TraceEvent{
 		stage: stage, decision: decision, storeID: store.storeID, shareID: store.shareID,
 		sessionID: session.sessionID, revision: revision, candidate: candidate,
@@ -425,5 +425,5 @@ func (c *Coordinator) traceForLocked(stage TraceStage, decision CapacityDecision
 	if claim != nil {
 		event.claim = claim.id
 	}
-	return event
+	return tracePublication{event: event, owner: store.tracer}
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/adapters/filesystem"
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -40,11 +39,11 @@ func SealFilesystemOutputFailure(value osfs.FilesystemOutputDiagnostic) (error, 
 func ProjectProgress(value transfer.ReceiveProgressSnapshot, visible bool) (appobs.ProgressSnapshot, error) {
 	return engine.DescribeProgressSnapshot(value, visible)
 }
-func ProjectTransferProgress(operation receivecontract.OperationID, job transfer.TransferJobID, value transfer.ReceiveProgressSnapshot, visible bool) (clievent.TransferProgress, error) {
+func ProjectTransferProgress(operation receivecontract.OperationID, job transfer.TransferJobID, value transfer.ReceiveProgressSnapshot, visible bool) (appobs.TransferProgress, error) {
 	fact, err := engine.DescribeProgress(operation, job, value, visible)
-	return clievent.TransferProgress{TransferProgress: fact}, err
+	return fact, err
 }
-func ProjectSharingSubject(value liveshare.SelectedRootSummary) (clievent.SharingSubjectSelected, error) {
+func ProjectSharingSubject(value liveshare.SelectedRootSummary) (appobs.SharingSubjectSelected, error) {
 	fact, err := engine.DescribeSharingSubject(value)
-	return clievent.SharingSubjectSelected{SharingSubjectSelected: fact}, err
+	return fact, err
 }

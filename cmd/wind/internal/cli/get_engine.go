@@ -35,12 +35,10 @@ func (a *App) receiveDependencies() engine.ReceiveDependencies {
 
 func (a *App) projectReceiveObservation(o getObservation, event engine.Event) {
 	switch value := event.(type) {
-	case appobs.Event:
-		observeEngineFact(o.runtime, value)
 	case appobs.LossSnapshot:
 		o.reportCumulativeLoss(value.Source, value.Category, value.Reason, value.Count)
-	case engine.ReceiveMilestone:
-		a.recordProcessTrace(value.Component, value.Name, value.Outcome)
+	case appobs.Event:
+		observeEngineFact(o.runtime, value)
 	}
 }
 func receiveExit(class engine.FailureClass) int {

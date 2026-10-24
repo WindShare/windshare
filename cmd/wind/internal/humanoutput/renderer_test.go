@@ -90,7 +90,7 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 		{"protocol failure", appobs.ProtocolOperationReceiverFailed, appobs.ProtocolOperationCauseProtocolFailure, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			event, err := clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+			event, err := appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
 				ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
 				ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessagePeerOffer,
 				Stage: testCase.stage, Cause: testCase.cause,
@@ -120,7 +120,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjectEvent, err := clievent.NewSharingSubjectSelected(subject)
+	subjectEvent, err := appobs.NewSharingSubjectSelected(subject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contentPath, err := clievent.NewContentPathSelected(appobs.ContentPathDirect)
+	contentPath, err := appobs.NewContentPathSelected(appobs.ContentPathDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	progressSnapshot := mustSnapshot(t, appobs.ProgressSpec{
 		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	})
-	progress, err := clievent.NewTransferProgress(mustReceiveID(t), mustJobID(t), progressSnapshot)
+	progress, err := appobs.NewTransferProgress(mustReceiveID(t), mustJobID(t), progressSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayLifecycle, err := clievent.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
+	relayLifecycle, err := appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
 		Workflow: appobs.WorkflowShare, LinkID: 1, RelaySession: mustRelaySessionID(t), SendOperationID: 1,
 		Stage: appobs.RelayTerminalReserved, Terminal: true,
 		RetirementSource: appobs.RelayRetirementNone,
@@ -208,7 +208,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	webRTC, err := clievent.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
+	webRTC, err := appobs.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
 		Workflow: appobs.WorkflowReceive, ChannelID: 1, Operation: appobs.WebRTCChannel,
 		Transition: appobs.WebRTCClosedClean, State: appobs.ChannelClosed,
 		Terminal: appobs.WebRTCTerminalNone, Cause: appobs.WebRTCCauseNone,
@@ -224,14 +224,14 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerAttempt, err := clievent.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+	peerAttempt, err := appobs.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
 		Workflow: appobs.WorkflowReceive, Session: sessionID, PeerPath: peerPath,
 		Attempt: peerAttemptID, Sequence: 1, Stage: appobs.PeerAttemptStarted,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	transferLifecycle, err := clievent.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
+	transferLifecycle, err := appobs.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
 		ReceiveOperation: mustReceiveID(t), ProtocolSession: sessionID, TransferJob: mustJobID(t),
 		Stage: appobs.TransferDiscoveryStarted, Progress: progressSnapshot,
 		FileSelection: appobs.FileSelectionNone, FileSettlement: appobs.FileSettlementNone,
@@ -240,20 +240,20 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystem, err := clievent.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+	filesystem, err := fsobs.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
 		ReceiveOperation: mustReceiveID(t), Operation: fsobs.FilesystemCertified,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	senderTerminalSend, err := clievent.NewSenderTerminalSendObserved(
+	senderTerminalSend, err := appobs.NewSenderTerminalSendObserved(
 		sessionID, lane, true, appobs.SenderTerminalSendAccepted,
 		appobs.SenderTerminalSendDelivered, appobs.SenderTerminalSendDecisionDelivered,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	senderSessionTerminated, err := clievent.NewSenderSessionTerminated(
+	senderSessionTerminated, err := appobs.NewSenderSessionTerminated(
 		sessionID,
 		appobs.SenderSessionTerminalGracefulStop,
 		appobs.SenderSessionTerminalNormalStop,
@@ -262,13 +262,13 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogStorage, err := clievent.NewCatalogStorageObserved(
+	catalogStorage, err := appobs.NewCatalogStorageObserved(
 		appobs.CatalogStorageCreated, appobs.CatalogStorageCauseNone, appobs.CatalogUsage{}, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootPrefetch, err := clievent.NewRootPrefetchObserved(appobs.RootPrefetchCommitted, 1, 2, 0)
+	rootPrefetch, err := appobs.NewRootPrefetchObserved(appobs.RootPrefetchCommitted, 1, 2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolOperation, err := clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+	protocolOperation, err := appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 		Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
 		Stage:           appobs.ProtocolOperationReceiverFailed,
 		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
@@ -292,7 +292,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	}
 
 	return []visibilityExpectation{
-		{"ready", clievent.NewReady(), true, false, false, false},
+		{"ready", appobs.NewReady(), true, false, false, false},
 		{"sharing subject", subjectEvent, true, false, false, false},
 		{"relay connected", relayConnected, true, false, false, false},
 		{"relay recovering", relayRecovering, false, true, false, false},
@@ -335,7 +335,7 @@ func TestRedirectedVerboseProgressEmitsOnlyPhaseMilestones(t *testing.T) {
 		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryOpen, CountersExact: true}),
 		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryComplete, CountersExact: true}),
 	} {
-		event, err := clievent.NewTransferProgress(receive, job, snapshot)
+		event, err := appobs.NewTransferProgress(receive, job, snapshot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,7 +356,7 @@ func TestRedirectedMilestonesResetForANewOperation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		event, err := clievent.NewTransferProgress(receive, job, mustSnapshot(t, appobs.ProgressSpec{
+		event, err := appobs.NewTransferProgress(receive, job, mustSnapshot(t, appobs.ProgressSpec{
 			Discovery: appobs.DiscoveryOpen, CountersExact: true,
 		}))
 		if err != nil {
@@ -380,7 +380,7 @@ func TestRendererRateUsesInjectedClockWithoutWaiting(t *testing.T) {
 			VerifiedBytes: index * 1_000_000, NewlyVerifiedBytes: index * 1_000_000,
 			Discovery: appobs.DiscoveryComplete, CountersExact: true,
 		})
-		event, err := clievent.NewTransferProgress(receive, job, snapshot)
+		event, err := appobs.NewTransferProgress(receive, job, snapshot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -415,7 +415,7 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 			snapshot := mustSnapshot(t, appobs.ProgressSpec{
 				Discovery: appobs.DiscoveryComplete, CountersExact: true,
 			})
-			progress, err := clievent.NewTransferProgress(mustReceiveID(t), mustJobID(t), snapshot)
+			progress, err := appobs.NewTransferProgress(mustReceiveID(t), mustJobID(t), snapshot)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -496,7 +496,7 @@ func TestRendererConfigurationValidationAndWriteFailureIsolation(t *testing.T) {
 			t.Fatalf("New(%+v) error = %v", config, err)
 		}
 	}
-	if err := (*Renderer)(nil).Render(clievent.NewReady()); !errors.Is(err, clievent.ErrInvalidEvent) {
+	if err := (*Renderer)(nil).Render(appobs.NewReady()); !errors.Is(err, clievent.ErrInvalidEvent) {
 		t.Fatalf("nil renderer error = %v", err)
 	}
 
@@ -505,7 +505,7 @@ func TestRendererConfigurationValidationAndWriteFailureIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := renderer.Render(clievent.NewReady()); err != nil {
+	if err := renderer.Render(appobs.NewReady()); err != nil {
 		t.Fatalf("human write changed render authority: %v", err)
 	}
 	if failingCanvas.Err() == nil {

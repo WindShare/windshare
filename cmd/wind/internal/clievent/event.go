@@ -10,10 +10,8 @@ import (
 )
 
 type Event interface {
-	event()
-	Command() Command
 	Level() appobs.Level
-	Accept(Visitor) error
+	Validate() error
 }
 
 // TerminalEvent is sealed to the three command-authoritative result shapes.
@@ -38,8 +36,6 @@ func NewCommandFailed(command Command, exit ExitCode, failure appobs.Failure) (C
 	return CommandFailed{command: command, exit: exit, failure: failure}, nil
 }
 
-func (CommandFailed) event() {}
-
 func (CommandFailed) terminalEvent() {}
 
 func (value CommandFailed) Command() Command { return value.command }
@@ -50,7 +46,7 @@ func (value CommandFailed) ExitCode() ExitCode { return value.exit }
 
 func (value CommandFailed) Failure() appobs.Failure { return value.failure }
 
-func (value CommandFailed) Accept(v Visitor) error { return acceptCommandFailed(v, value) }
+func (value CommandFailed) Validate() error { return validateCommandFailed(value) }
 
 type downloadConnectivity struct {
 	id                           appobs.TransferJobID
@@ -124,8 +120,6 @@ func NewTransferSettled(result TransferResult) (TransferSettled, error) {
 	return TransferSettled{result: result}, nil
 }
 
-func (TransferSettled) event() {}
-
 func (TransferSettled) terminalEvent() {}
 
 func (TransferSettled) Command() Command { return CommandGet }
@@ -139,7 +133,7 @@ func (value TransferSettled) Level() appobs.Level {
 
 func (value TransferSettled) Result() TransferResult { return value.result }
 
-func (value TransferSettled) Accept(v Visitor) error { return acceptTransferSettled(v, value) }
+func (value TransferSettled) Validate() error { return validateTransferSettled(value) }
 
 type SharingStopped struct{ result ShareResult }
 
@@ -149,8 +143,6 @@ func NewSharingStopped(result ShareResult) (SharingStopped, error) {
 	}
 	return SharingStopped{result: result}, nil
 }
-
-func (SharingStopped) event() {}
 
 func (SharingStopped) terminalEvent() {}
 
@@ -165,7 +157,7 @@ func (value SharingStopped) Level() appobs.Level {
 
 func (value SharingStopped) Result() ShareResult { return value.result }
 
-func (value SharingStopped) Accept(v Visitor) error { return acceptSharingStopped(v, value) }
+func (value SharingStopped) Validate() error { return validateSharingStopped(value) }
 
 type TraceIncompleteCause uint8
 
@@ -235,8 +227,6 @@ func NewTraceIncomplete(
 	}, nil
 }
 
-func (TraceIncomplete) event() {}
-
 func (value TraceIncomplete) Command() Command { return value.command }
 
 func (TraceIncomplete) Level() appobs.Level { return appobs.LevelWarning }
@@ -245,6 +235,6 @@ func (value TraceIncomplete) Cause() TraceIncompleteCause { return value.cause }
 
 func (value TraceIncomplete) Loss() TraceLoss { return value.loss }
 
-func (value TraceIncomplete) Accept(v Visitor) error { return acceptTraceIncomplete(v, value) }
+func (value TraceIncomplete) Validate() error { return validateTraceIncomplete(value) }
 
 var ErrInvalidEvent = appobs.ErrInvalidEvent

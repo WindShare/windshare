@@ -6,7 +6,6 @@ type ReceiveGenerationChanged = receive.GenerationChanged
 type ReceiveAdmissionObserved = receive.AdmissionObserved
 type ReceiveAdmissionTrigger = receive.AdmissionTrigger
 type ReceiveAdmissionTerminalOwner = receive.AdmissionTerminalOwner
-type ReceiveMilestone = receive.Milestone
 type ReceiveObservationLoss = receive.ObservationLoss
 type ReceiveObservationSource = receive.ObservationSource
 type ReceiveLocalStopReason = receive.ReceiverLocalStopReason

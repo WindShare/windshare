@@ -27,7 +27,7 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 	for _, outcome := range []connectionpath.CleanupOutcome{connectionpath.CleanupProtocol, connectionpath.CleanupDeadline} {
 		spec := nativeFactSpec(appobs.WorkflowShare, outcome.EventKind())
 		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Cleanup: outcome, Reason: outcome.Reason(), Resources: &appobs.NativeTURNResources{OpenedSockets: 2, TransportSent: 100, TransportReceived: 50}}
-		event, err := clievent.NewNativeConnectivityObserved(spec)
+		event, err := appobs.NewNativeConnectivityObserved(spec)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,12 +36,12 @@ func TestTURNCleanupProviderFactsReachCLITraceWithReasonAndResources(t *testing.
 		}
 		invalid := event.Facts()
 		invalid.TURN.Cleanup = 0
-		if _, err := clievent.NewNativeConnectivityObserved(invalid); err == nil {
+		if _, err := appobs.NewNativeConnectivityObserved(invalid); err == nil {
 			t.Fatal("untyped cleanup accepted")
 		}
 		invalid = event.Facts()
 		invalid.TURN.Reason = "invented"
-		if _, err := clievent.NewNativeConnectivityObserved(invalid); err == nil {
+		if _, err := appobs.NewNativeConnectivityObserved(invalid); err == nil {
 			t.Fatal("cleanup outcome/reason mismatch accepted")
 		}
 	}
@@ -109,7 +109,7 @@ func TestTURNRecoveryEvidenceReachesTrace(t *testing.T) {
 	} {
 		spec := nativeFactSpec(appobs.WorkflowShare, evidence.kind)
 		spec.TURN = &appobs.NativeTURNFacts{Provider: "test", Account: "owner", Profile: "primary", Resources: &appobs.NativeTURNResources{ActiveSockets: 1}, Binding: evidence.binding, Route: evidence.route}
-		event, err := clievent.NewNativeConnectivityObserved(spec)
+		event, err := appobs.NewNativeConnectivityObserved(spec)
 		if err != nil || !recorder.Record(event) {
 			t.Fatalf("recovery evidence rejected: %v", err)
 		}

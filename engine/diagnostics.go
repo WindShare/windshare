@@ -36,8 +36,6 @@ func ShareLossSnapshot(value ShareObservationLoss) appobs.LossSnapshot {
 	return eventproject.ShareLoss(value)
 }
 
-type ShareMilestoneObserved = eventproject.ShareMilestone
-
 func ObservationLossReason(cause error) appobs.ObserverLossReason {
 	return eventproject.ObserverLossReason(cause)
 }

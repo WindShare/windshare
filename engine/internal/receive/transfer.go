@@ -16,8 +16,6 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/internal/testrun"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -115,12 +113,6 @@ func (a *runner) connectGetReceiver(ctx context.Context, request getRequest, obs
 	}
 	session, err := recovery.open(ctx, owner.Join)
 	if err != nil {
-		var rejection *relayv2.RelayError
-		var joined *relayset.ReceiverJoinFailure
-		if errors.As(err, &joined) && len(joined.RetryEndpoints()) == 0 &&
-			errors.As(err, &rejection) && rejection.Code == v2.ErrorStopped {
-			a.recordProcessTrace(processTraceGetComponent, processTraceReceiverJoinStopped, testrun.OutcomeFailed)
-		}
 		return nil, observation.fail(stepNetworkFailure, err)
 	}
 	return session, stepReady
@@ -248,10 +240,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request getRequest,
 		relaySuspension,
 		receiverAdmissionExecution{
 			claimGate: contentReady,
-			onClaim: func(trigger receiverAdmissionTrigger) {
-				observation.admission(receiverAdmissionDecision{Trigger: trigger, TerminalOwner: receiverAdmissionTerminalNone})
-				a.observeRelayContentAdmission(trigger, paths)
-			},
+			onClaim:   observation.relayContentClaimed,
 		},
 	)
 	if err != nil {

@@ -36,7 +36,7 @@ func (observation getObservation) observe(event clievent.Event) bool {
 }
 
 func (observation getObservation) finalize(
-	progress clievent.TransferProgress,
+	progress appobs.TransferProgress,
 	settlement clievent.TransferSettled,
 ) bool {
 	return observation.stageTransferTerminal(progress, settlement)
@@ -53,7 +53,7 @@ func (observation getObservation) stageTerminal(terminal clievent.TerminalEvent)
 }
 
 func (observation getObservation) stageTransferTerminal(
-	progress clievent.TransferProgress,
+	progress appobs.TransferProgress,
 	terminal clievent.TransferSettled,
 ) bool {
 	if observation.runtime == nil {

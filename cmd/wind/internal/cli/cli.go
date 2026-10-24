@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -88,10 +87,8 @@ type App struct {
 	receiverRecoveryOptions engine.ReceiveRecoverySettings
 	receiverPeerFactory     func() (engine.ReceivePeerStarter, error)
 	receiverDial            func(context.Context, engine.ReceiveDialRequest) (engine.ReceiveConnection, error)
-	processTrace            *processTrace
 	application             *engine.Engine
 	engineConfig            engine.Config
-	revisionCapacityTrace   *capacitytrace.Router
 	getOutputFactory        engine.OutputFactory
 	platformSetupStatus     *platformsetup.Status
 	loadShareConfig         func() (relayconfig.Config, error)
@@ -108,30 +105,17 @@ func Main() int {
 		loadShareConfig:     relayconfig.Load,
 		saveShareConfig:     relayconfig.Save,
 	}
-	trace, err := newProcessTrace(os.LookupEnv)
-	if err != nil {
-		app.writeCompleteLine("%v", err)
-		app.closeTerminalOutput()
-		return ExitFailure
-	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.TURNDependencies.Cache = turncache.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
-	app.processTrace = trace
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
 		func(ctx context.Context) int { return app.Run(ctx, os.Args[1:]) },
 	)
-	if err := trace.close(); err != nil {
-		app.writeCompleteLine("%s: publish test trace: %v", commandmeta.Name, err)
-		if code == ExitOK {
-			code = ExitFailure
-		}
-	}
 	app.closeTerminalOutput()
 	return code
 }
@@ -198,16 +182,12 @@ func (a *App) newApplication() (*engine.Engine, error) {
 	if config.Now == nil && a.clock != nil {
 		config.Now = a.clock.Now
 	}
-	if a.revisionCapacityTrace == nil {
-		a.revisionCapacityTrace = &capacitytrace.Router{}
-	}
 	if config.RevisionCapacity.Limits == (revisioncapacity.CapacityLimits{}) {
 		config.RevisionCapacity.Limits = revisioncapacity.DefaultProcessLimits()
 	}
 	if config.RevisionCapacity.RetryAfter == 0 {
 		config.RevisionCapacity.RetryAfter = revisioncapacity.DefaultCapacityRetryAfter
 	}
-	config.RevisionCapacity.Tracer = a.revisionCapacityTrace
 	config.Receive = a.receiveDependencies()
 	return engine.New(config)
 }

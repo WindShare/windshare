@@ -13,6 +13,8 @@ type Outcome = task.Outcome
 type FailureClass = task.FailureClass
 type Observation = task.Observation
 type Event = task.Event
+
+// LifecycleObservation is retained for management tasks without a transfer workflow.
 type LifecycleObservation = task.Lifecycle
 type TaskSettlement = task.Settlement
 type TaskCompletion[T any] = task.Completion[T]

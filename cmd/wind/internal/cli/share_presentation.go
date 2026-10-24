@@ -92,11 +92,11 @@ func emitShareKnownFailure(emitter shareCommandPublisher, exit int, code appobs.
 
 func emitShareReady(
 	emitter shareCommandPublisher,
-	sharingSubject clievent.SharingSubjectSelected,
-	relayConnected clievent.RelayConnected,
+	sharingSubject appobs.SharingSubjectSelected,
+	relayConnected appobs.RelayConnected,
 ) {
 	if emitter == nil {
 		return
 	}
-	emitter.Publish(clievent.NewReady(), sharingSubject, relayConnected)
+	emitter.Publish(appobs.NewReady(), sharingSubject, relayConnected)
 }

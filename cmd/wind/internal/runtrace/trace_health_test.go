@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestContractRejectionsAndCapacityLossKeepIndependentCounts(t *testing.T) {
@@ -22,7 +23,7 @@ func TestContractRejectionsAndCapacityLossKeepIndependentCounts(t *testing.T) {
 	if !recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 4}) {
 		t.Fatal("later queue loss rejected")
 	}
-	if !recorder.Record(clievent.NewReady()) {
+	if !recorder.Record(appobs.NewReady()) {
 		t.Fatal("incomplete diagnostics stopped subsequent recording")
 	}
 	status := recorder.Close()

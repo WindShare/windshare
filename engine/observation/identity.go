@@ -14,6 +14,22 @@ const ReceiveIntentDigestBytes = 32
 
 var ErrInvalidIdentity = errors.New("engine observation identity is invalid")
 
+// Named identities originate in native ownership registries. Validate their
+// bounded spelling without pretending one registry's identity is another's.
+func validNamedIdentity(value string, maximumBytes int) bool {
+	if value == "" || len(value) > maximumBytes {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == ':' || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 type identity [IdentityBytes]byte
 
 type relaySessionIdentity [RelaySessionIdentityBytes]byte

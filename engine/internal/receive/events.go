@@ -11,7 +11,6 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -126,12 +125,6 @@ type LaneAdopted struct {
 	Session protocolsession.ProtocolSessionID
 	Lane    sessionruntime.LaneIdentity
 }
-type Milestone struct {
-	event
-	Component testrun.Component
-	Name      testrun.Milestone
-	Outcome   testrun.Outcome
-}
 type ObservationSource uint8
 
 const (
@@ -166,4 +159,14 @@ type AdmissionObserved struct {
 	Trigger       AdmissionTrigger
 	TerminalOwner AdmissionTerminalOwner
 	Cause         error
+}
+
+// RelayContentClaimed records ownership of an admission attempt, before resume.
+// Completion and useful byte delivery are independent observations.
+type RelayContentClaimed struct {
+	event
+	Operation receivecontract.OperationID
+	Job       transfer.TransferJobID
+	Session   protocolsession.ProtocolSessionID
+	Trigger   AdmissionTrigger
 }

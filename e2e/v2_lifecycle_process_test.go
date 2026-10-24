@@ -119,7 +119,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	if err := os.WriteFile(source, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	share := startV2Process(
+	share := startTracedV2Process(
 		t, scenario, v2ShareCommandComponent, binaries.wind,
 		"share", source, "--front-url", v2FrontendBaseURL, "--relay", relay.baseURL,
 	)
@@ -229,7 +229,7 @@ func waitV2ProcessEvent(
 	ctx, cancel := context.WithTimeout(context.Background(), v2ProcessTimeout)
 	defer cancel()
 	for {
-		event, err := process.owned.Events().Next(ctx)
+		event, err := process.nextObservationMilestone(ctx)
 		if err != nil {
 			t.Fatalf(
 				"wait for process event %s/%s: %v; stderr=%q",
@@ -255,7 +255,7 @@ func drainV2ProcessTraces(
 	defer cancel()
 	var events []testrun.Event
 	for {
-		event, err := process.owned.Events().Next(ctx)
+		event, err := process.nextObservationMilestone(ctx)
 		if errors.Is(err, io.EOF) {
 			process.scenario.succeedPhase(t, phase, phaseContext)
 			return events

@@ -50,7 +50,7 @@ func TestReceiveParameterFailuresReachGenericTaskTrace(t *testing.T) {
 			if request.Capability.Suite == 0 && spec.Failure.Code() != appobs.FailureInvalidInput {
 				t.Fatalf("coded failure was reclassified: %+v", spec)
 			}
-			if _, err := clievent.NewEngineTaskObserved(spec); err != nil {
+			if _, err := appobs.NewEngineTaskObserved(spec); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -78,7 +78,7 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 	stages := make(map[appobs.EngineTaskStage]appobs.EngineTaskSpec)
 	var taskID appobs.EngineTaskID
 	for _, event := range trace.events {
-		if typed, ok := event.(clievent.EngineTaskObserved); ok {
+		if typed, ok := event.(appobs.EngineTaskObserved); ok {
 			facts := typed.Facts()
 			if !taskID.Valid() {
 				taskID = facts.Task

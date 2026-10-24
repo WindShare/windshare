@@ -4,8 +4,10 @@ import (
 	"errors"
 	"sync"
 
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
+
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -53,7 +55,7 @@ func New(config Config) (*Renderer, error) {
 	}, nil
 }
 
-// Render validates through clievent's sealed visitor boundary before emitting.
+// Render consumes immutable application facts and command presentation results.
 // Calls are serialized because rate samples and redirected phase transitions are
 // command-scoped state even when producers happen to be concurrent.
 func (renderer *Renderer) Render(event clievent.Event) error {
@@ -67,7 +69,7 @@ func (renderer *Renderer) Render(event clievent.Event) error {
 	defer renderer.mu.Unlock()
 
 	capabilities := renderer.capabilities.Snapshot()
-	return event.Accept(eventVisitor{renderer: renderer, capabilities: capabilities})
+	return renderEvent(event, eventVisitor{renderer: renderer, capabilities: capabilities})
 }
 
 // RenderTerminal is intentionally separate from Render: a running command can
@@ -79,7 +81,7 @@ func (renderer *Renderer) RenderTerminal(event clievent.TerminalEvent) error {
 	}
 	renderer.mu.Lock()
 	defer renderer.mu.Unlock()
-	return event.Accept(eventVisitor{
+	return renderEvent(event, eventVisitor{
 		renderer:     renderer,
 		capabilities: renderer.capabilities.Snapshot(),
 	})
@@ -128,7 +130,7 @@ func (visitor eventVisitor) symbols() Symbols {
 	return SelectSymbols(visitor.capabilities.Unicode)
 }
 
-func (visitor eventVisitor) VisitReady(clievent.Ready) error {
+func (visitor eventVisitor) VisitReady(appobs.Ready) error {
 	if visitor.mainVisible() {
 		visitor.renderer.insert(
 			terminalcanvas.Plain(""),
@@ -139,27 +141,27 @@ func (visitor eventVisitor) VisitReady(clievent.Ready) error {
 	return nil
 }
 
-func (visitor eventVisitor) VisitSharingSubjectSelected(event clievent.SharingSubjectSelected) error {
+func (visitor eventVisitor) VisitSharingSubjectSelected(event appobs.SharingSubjectSelected) error {
 	if visitor.mainVisible() {
 		visitor.renderer.insert(formatSharingSubject(event.Subject(), visitor.symbols()))
 	}
 	return nil
 }
 
-func (visitor eventVisitor) VisitRelayConnected(event clievent.RelayConnected) error {
-	if event.Command() == clievent.CommandShare && visitor.mainVisible() {
+func (visitor eventVisitor) VisitRelayConnected(event appobs.RelayConnected) error {
+	if clievent.CommandOf(event) == clievent.CommandShare && visitor.mainVisible() {
 		visitor.renderer.insert(
 			statusLine(visitor.symbols().Arrow, "Relay: Connected", terminalcanvas.StyleAccent),
 			terminalcanvas.Plain(""),
 			statusLine("", "Waiting for receivers"+visitor.symbols().Separator+"Press Ctrl+C to stop", terminalcanvas.StyleMuted),
 		)
-	} else if event.Command() == clievent.CommandGet && visitor.verboseVisible() {
+	} else if clievent.CommandOf(event) == clievent.CommandGet && visitor.verboseVisible() {
 		visitor.renderer.insert(statusLine(visitor.symbols().Relay, "Relay connected", terminalcanvas.StyleAccent))
 	}
 	return nil
 }
 
-func (visitor eventVisitor) VisitRelayRecovering(event clievent.RelayRecovering) error {
+func (visitor eventVisitor) VisitRelayRecovering(event appobs.RelayRecovering) error {
 	if !visitor.verboseVisible() {
 		details, detailed := event.Details()
 		if event.State() == appobs.RelayRecoveryStarted || (event.State() == appobs.RelayRecoveryFailed && detailed && !details.Terminal) {
@@ -170,24 +172,24 @@ func (visitor eventVisitor) VisitRelayRecovering(event clievent.RelayRecovering)
 	return nil
 }
 
-func (visitor eventVisitor) VisitRelayAvailability(event clievent.RelayAvailability) error {
+func (visitor eventVisitor) VisitRelayAvailability(event appobs.RelayAvailability) error {
 	visitor.renderer.insert(formatRelayAvailability(event, visitor.symbols()))
 	return nil
 }
 
-func (visitor eventVisitor) VisitContentPathSelected(event clievent.ContentPathSelected) error {
+func (visitor eventVisitor) VisitContentPathSelected(event appobs.ContentPathSelected) error {
 	if visitor.mainVisible() {
 		visitor.renderer.insert(formatContentPath(event.Path(), visitor.symbols()))
 	}
 	return nil
 }
 
-func (visitor eventVisitor) VisitFallback(event clievent.Fallback) error {
+func (visitor eventVisitor) VisitFallback(event appobs.Fallback) error {
 	visitor.renderer.insert(formatFallback(event, visitor.symbols()))
 	return nil
 }
 
-func (visitor eventVisitor) VisitTransferProgress(event clievent.TransferProgress) error {
+func (visitor eventVisitor) VisitTransferProgress(event appobs.TransferProgress) error {
 	renderer := visitor.renderer
 	snapshot := event.Snapshot()
 	renderer.lastProgress = snapshot
@@ -224,7 +226,7 @@ func (visitor eventVisitor) VisitTransferProgress(event clievent.TransferProgres
 	return nil
 }
 
-func (visitor eventVisitor) VisitWarning(event clievent.Warning) error {
+func (visitor eventVisitor) VisitWarning(event appobs.Warning) error {
 	visitor.renderer.insert(failureLine("Warning", event.Failure(), visitor.symbols().Warning, terminalcanvas.StyleWarning))
 	return nil
 }
@@ -279,7 +281,7 @@ func (visitor eventVisitor) VisitTraceIncomplete(event clievent.TraceIncomplete)
 	return nil
 }
 
-func (visitor eventVisitor) VisitLaneAdopted(event clievent.LaneAdopted) error {
+func (visitor eventVisitor) VisitLaneAdopted(event appobs.LaneAdopted) error {
 	if visitor.verboseVisible() {
 		visitor.renderer.insert(formatLaneAdopted(event, visitor.symbols()))
 	}
@@ -290,47 +292,47 @@ func (visitor eventVisitor) VisitLaneAdopted(event clievent.LaneAdopted) error {
 // terminal root/send settlement, catalog storage, and root-prefetch records are stable trace decisions.
 // Rendering them in verbose mode would recreate the internal state-machine
 // ledger that this boundary is designed to remove.
-func (eventVisitor) VisitRelayLifecycleObserved(clievent.RelayLifecycleObserved) error   { return nil }
-func (eventVisitor) VisitWebRTCLifecycleObserved(clievent.WebRTCLifecycleObserved) error { return nil }
+func (eventVisitor) VisitRelayLifecycleObserved(appobs.RelayLifecycleObserved) error   { return nil }
+func (eventVisitor) VisitWebRTCLifecycleObserved(appobs.WebRTCLifecycleObserved) error { return nil }
 
-func (visitor eventVisitor) VisitPeerAttemptObserved(event clievent.PeerAttemptObserved) error {
+func (visitor eventVisitor) VisitPeerAttemptObserved(event appobs.PeerAttemptObserved) error {
 	if visitor.verboseVisible() {
 		visitor.renderer.insert(formatPeerAttempt(event, visitor.symbols()))
 	}
 	return nil
 }
 
-func (eventVisitor) VisitTransferLifecycleObserved(clievent.TransferLifecycleObserved) error {
+func (eventVisitor) VisitTransferLifecycleObserved(appobs.TransferLifecycleObserved) error {
 	return nil
 }
-func (eventVisitor) VisitFilesystemOutputObserved(clievent.FilesystemOutputObserved) error {
+func (eventVisitor) VisitFilesystemOutputObserved(fsobs.FilesystemOutputObserved) error {
 	return nil
 }
-func (eventVisitor) VisitSenderTerminalSendObserved(clievent.SenderTerminalSendObserved) error {
+func (eventVisitor) VisitSenderTerminalSendObserved(appobs.SenderTerminalSendObserved) error {
 	return nil
 }
-func (eventVisitor) VisitSenderSessionTerminated(clievent.SenderSessionTerminated) error {
+func (eventVisitor) VisitSenderSessionTerminated(appobs.SenderSessionTerminated) error {
 	return nil
 }
-func (eventVisitor) VisitCatalogStorageObserved(clievent.CatalogStorageObserved) error { return nil }
-func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) error     { return nil }
-func (eventVisitor) VisitSenderCapacityObserved(clievent.SenderCapacityObserved) error { return nil }
-func (eventVisitor) VisitSenderRevisionObserved(clievent.SenderRevisionObserved) error { return nil }
-func (visitor eventVisitor) VisitProtocolObservationObserved(event clievent.ProtocolObservationObserved) error {
+func (eventVisitor) VisitCatalogStorageObserved(appobs.CatalogStorageObserved) error { return nil }
+func (eventVisitor) VisitRootPrefetchObserved(appobs.RootPrefetchObserved) error     { return nil }
+func (eventVisitor) VisitSenderCapacityObserved(appobs.SenderCapacityObserved) error { return nil }
+func (eventVisitor) VisitSenderRevisionObserved(appobs.SenderRevisionObserved) error { return nil }
+func (visitor eventVisitor) VisitProtocolObservationObserved(event appobs.ProtocolObservationObserved) error {
 	if fact, ok := event.Fact().(appobs.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Stage() == appobs.ProtocolOperationReceiverFailed {
 		visitor.renderer.insert(formatProtocolOperationFailure(event, fact, visitor.symbols()))
 	}
 	return nil
 }
 
-func (eventVisitor) VisitEngineTaskObserved(clievent.EngineTaskObserved) error { return nil }
+func (eventVisitor) VisitEngineTaskObserved(appobs.EngineTaskObserved) error { return nil }
 
-func (eventVisitor) VisitNativeConnectivityObserved(clievent.NativeConnectivityObserved) error {
+func (eventVisitor) VisitNativeConnectivityObserved(appobs.NativeConnectivityObserved) error {
 	return nil
 }
 
-func (eventVisitor) VisitLaneSettlementObserved(clievent.LaneSettlementObserved) error { return nil }
-func (eventVisitor) VisitObserverLossObserved(clievent.ObserverLossObserved) error     { return nil }
+func (eventVisitor) VisitLaneSettlementObserved(appobs.LaneSettlementObserved) error { return nil }
+func (eventVisitor) VisitObserverLossObserved(appobs.ObserverLossObserved) error     { return nil }
 
 func (visitor eventVisitor) VisitPlatformSetupObserved(event clievent.PlatformSetupObserved) error {
 	if visitor.verboseVisible() {
@@ -338,6 +340,80 @@ func (visitor eventVisitor) VisitPlatformSetupObserved(event clievent.PlatformSe
 	}
 	return nil
 }
-func (eventVisitor) VisitReceiverTerminationObserved(clievent.ReceiverTerminationObserved) error {
+func (eventVisitor) VisitReceiverTerminationObserved(appobs.ReceiverTerminationObserved) error {
 	return nil
+}
+
+func renderEvent(event clievent.Event, visitor eventVisitor) error {
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	switch value := event.(type) {
+	case appobs.Ready:
+		return visitor.VisitReady(value)
+	case appobs.SharingSubjectSelected:
+		return visitor.VisitSharingSubjectSelected(value)
+	case appobs.RelayConnected:
+		return visitor.VisitRelayConnected(value)
+	case appobs.RelayRecovering:
+		return visitor.VisitRelayRecovering(value)
+	case appobs.RelayAvailability:
+		return visitor.VisitRelayAvailability(value)
+	case appobs.ContentPathSelected:
+		return visitor.VisitContentPathSelected(value)
+	case appobs.Fallback:
+		return visitor.VisitFallback(value)
+	case appobs.TransferProgress:
+		return visitor.VisitTransferProgress(value)
+	case appobs.Warning:
+		return visitor.VisitWarning(value)
+	case clievent.CommandFailed:
+		return visitor.VisitCommandFailed(value)
+	case clievent.TransferSettled:
+		return visitor.VisitTransferSettled(value)
+	case clievent.SharingStopped:
+		return visitor.VisitSharingStopped(value)
+	case clievent.TraceIncomplete:
+		return visitor.VisitTraceIncomplete(value)
+	case appobs.LaneAdopted:
+		return visitor.VisitLaneAdopted(value)
+	case appobs.RelayLifecycleObserved:
+		return visitor.VisitRelayLifecycleObserved(value)
+	case appobs.WebRTCLifecycleObserved:
+		return visitor.VisitWebRTCLifecycleObserved(value)
+	case appobs.PeerAttemptObserved:
+		return visitor.VisitPeerAttemptObserved(value)
+	case appobs.TransferLifecycleObserved:
+		return visitor.VisitTransferLifecycleObserved(value)
+	case fsobs.FilesystemOutputObserved:
+		return visitor.VisitFilesystemOutputObserved(value)
+	case appobs.SenderTerminalSendObserved:
+		return visitor.VisitSenderTerminalSendObserved(value)
+	case appobs.SenderSessionTerminated:
+		return visitor.VisitSenderSessionTerminated(value)
+	case appobs.CatalogStorageObserved:
+		return visitor.VisitCatalogStorageObserved(value)
+	case appobs.RootPrefetchObserved:
+		return visitor.VisitRootPrefetchObserved(value)
+	case appobs.SenderCapacityObserved:
+		return visitor.VisitSenderCapacityObserved(value)
+	case appobs.SenderRevisionObserved:
+		return visitor.VisitSenderRevisionObserved(value)
+	case appobs.ProtocolObservationObserved:
+		return visitor.VisitProtocolObservationObserved(value)
+	case appobs.EngineTaskObserved:
+		return visitor.VisitEngineTaskObserved(value)
+	case appobs.NativeConnectivityObserved:
+		return visitor.VisitNativeConnectivityObserved(value)
+	case appobs.LaneSettlementObserved:
+		return visitor.VisitLaneSettlementObserved(value)
+	case appobs.ObserverLossObserved:
+		return visitor.VisitObserverLossObserved(value)
+	case clievent.PlatformSetupObserved:
+		return visitor.VisitPlatformSetupObserved(value)
+	case appobs.ReceiverTerminationObserved:
+		return visitor.VisitReceiverTerminationObserved(value)
+	default:
+		return nil
+	}
 }

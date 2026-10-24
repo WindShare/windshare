@@ -28,7 +28,7 @@ func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
 	for _, scope := range []string{"ice", "turnc"} {
 		for _, severity := range []string{"warning", "error"} {
 			diagnostic := &appobs.NativeProviderDiagnosticFacts{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
-			event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Session: session, Path: path, Attempt: attempt, AttemptSequence: 4, NetworkGeneration: 5, Profile: "ice-0123abcd", Side: "receiver", Kind: "provider_diagnostic", State: "unknown", Diagnostic: diagnostic})
+			event, err := appobs.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Session: session, Path: path, Attempt: attempt, AttemptSequence: 4, NetworkGeneration: 5, Profile: "ice-0123abcd", Side: "receiver", Kind: "provider_diagnostic", State: "unknown", Diagnostic: diagnostic})
 			if err != nil {
 				t.Fatal(err)
 			}

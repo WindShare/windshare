@@ -18,38 +18,9 @@ func projectTaskSpec(workflow appobs.Workflow, envelope task.Observation) (appob
 	spec := appobs.EngineTaskSpec{Workflow: workflow, At: envelope.At}
 	switch value := envelope.Event.(type) {
 	case task.Lifecycle:
-		if value.State != task.Finished && value.Settlement != (task.Settlement{}) {
-			return spec, true, appobs.ErrInvalidEvent
+		if err := projectTaskLifecycle(&spec, value); err != nil {
+			return spec, true, err
 		}
-		switch value.State {
-		case task.Running:
-			spec.Stage = appobs.EngineTaskStarted
-		case task.Stopping:
-			spec.Stage = appobs.EngineTaskStopping
-		case task.Finished:
-			spec.Stage = appobs.EngineTaskSettled
-			if !value.Valid() {
-				return spec, true, appobs.ErrInvalidEvent
-			}
-			spec.Outcome = projectTaskOutcome(value.Outcome)
-			spec.FailureClass = projectTaskFailureClass(value.FailureClass)
-		default:
-			return spec, true, appobs.ErrInvalidEvent
-		}
-		switch value.StopReason {
-		case task.NoStop:
-			spec.StopReason = appobs.EngineNoStop
-		case task.Cancelled:
-			spec.StopReason = appobs.EngineCancelled
-		case task.ShareStopped:
-			spec.StopReason = appobs.EngineShareStopped
-		case task.ApplicationClosed:
-			spec.StopReason = appobs.EngineApplicationClosed
-		default:
-			return spec, true, appobs.ErrInvalidEvent
-		}
-		spec.Failure = value.Failure
-		spec.CleanupFailure = value.CleanupFailure
 	case share.Observation:
 		switch value.Milestone {
 		case share.SourceAcquiring:
@@ -58,6 +29,15 @@ func projectTaskSpec(workflow appobs.Workflow, envelope task.Observation) (appob
 			spec.Stage = appobs.EngineSourceAcquired
 		case share.SourceAcquisitionFailed:
 			spec.Stage = appobs.EngineSourceFailed
+		case share.ShareReady:
+			spec.Stage = appobs.EngineShareReady
+		case share.ShareStopping:
+			spec.Stage = appobs.EngineShareStopping
+		case share.ShareStopped:
+			spec.Stage = appobs.EngineShareClosed
+		case share.SessionRetired:
+			spec.Stage = appobs.EngineSessionRetired
+			spec.Session, _ = appobs.NewProtocolSessionID(value.Session[:])
 		default:
 			return spec, false, nil
 		}
@@ -69,6 +49,12 @@ func projectTaskSpec(workflow appobs.Workflow, envelope task.Observation) (appob
 		spec.Job, _ = appobs.NewTransferJobID(value.Job[:])
 		spec.Session, _ = appobs.NewProtocolSessionID(value.Current[:])
 		spec.PreviousSession, _ = appobs.NewProtocolSessionID(value.Previous[:])
+	case receive.RelayContentClaimed:
+		spec.Stage = appobs.EngineRelayContentClaimed
+		spec.Operation, _ = appobs.NewReceiveOperationID(value.Operation[:])
+		spec.Job, _ = appobs.NewTransferJobID(value.Job[:])
+		spec.Session, _ = appobs.NewProtocolSessionID(value.Session[:])
+		spec.AdmissionTrigger = appobs.EngineAdmissionTrigger(value.Trigger)
 	case receive.AdmissionObserved:
 		spec.Stage = appobs.EngineAdmissionDecision
 		spec.Operation, _ = appobs.NewReceiveOperationID(value.Operation[:])
@@ -115,4 +101,40 @@ func projectTaskFailureClass(class task.FailureClass) appobs.EngineFailureClass 
 	default:
 		return appobs.EngineFailureLocal
 	}
+}
+
+func projectTaskLifecycle(spec *appobs.EngineTaskSpec, value task.Lifecycle) error {
+	if value.State != task.Finished && value.Settlement != (task.Settlement{}) {
+		return appobs.ErrInvalidEvent
+	}
+	switch value.State {
+	case task.Running:
+		spec.Stage = appobs.EngineTaskStarted
+	case task.Stopping:
+		spec.Stage = appobs.EngineTaskStopping
+	case task.Finished:
+		spec.Stage = appobs.EngineTaskSettled
+		if !value.Valid() {
+			return appobs.ErrInvalidEvent
+		}
+		spec.Outcome = projectTaskOutcome(value.Outcome)
+		spec.FailureClass = projectTaskFailureClass(value.FailureClass)
+	default:
+		return appobs.ErrInvalidEvent
+	}
+	switch value.StopReason {
+	case task.NoStop:
+		spec.StopReason = appobs.EngineNoStop
+	case task.Cancelled:
+		spec.StopReason = appobs.EngineCancelled
+	case task.ShareStopped:
+		spec.StopReason = appobs.EngineShareStopped
+	case task.ApplicationClosed:
+		spec.StopReason = appobs.EngineApplicationClosed
+	default:
+		return appobs.ErrInvalidEvent
+	}
+	spec.Failure = value.Failure
+	spec.CleanupFailure = value.CleanupFailure
+	return nil
 }

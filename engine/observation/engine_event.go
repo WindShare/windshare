@@ -7,14 +7,7 @@ const maximumEngineTaskIDBytes = 128
 type EngineTaskID struct{ value string }
 
 func NewEngineTaskID(value string) (EngineTaskID, error) {
-	if value == "" || len(value) > maximumEngineTaskIDBytes {
-		return EngineTaskID{}, ErrInvalidIdentity
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == ':' || character == '-' || character == '_' || character == '.' {
-			continue
-		}
+	if !validNamedIdentity(value, maximumEngineTaskIDBytes) {
 		return EngineTaskID{}, ErrInvalidIdentity
 	}
 	return EngineTaskID{value: value}, nil
@@ -35,10 +28,15 @@ const (
 	EngineSourceFailed
 	EngineGenerationChanged
 	EngineAdmissionDecision
+	EngineRelayContentClaimed
+	EngineShareReady
+	EngineShareStopping
+	EngineShareClosed
+	EngineSessionRetired
 )
 
 func (stage EngineTaskStage) Name() (string, bool) {
-	names := [...]string{"", "task_started", "task_stopping", "task_settled", "source_acquiring", "source_acquired", "source_failed", "generation_changed", "admission_decision"}
+	names := [...]string{"", "task_started", "task_stopping", "task_settled", "source_acquiring", "source_acquired", "source_failed", "generation_changed", "admission_decision", "relay_content_claimed", "share_ready", "share_stopping", "share_closed", "session_retired"}
 	if stage == 0 || int(stage) >= len(names) {
 		return "", false
 	}
@@ -177,7 +175,11 @@ func (spec EngineTaskSpec) valid() bool {
 	switch spec.Stage {
 	case EngineSourceAcquiring, EngineSourceAcquired, EngineSourceFailed:
 		return spec.Workflow == WorkflowShare && spec.ShareInstance.Valid()
-	case EngineGenerationChanged, EngineAdmissionDecision:
+	case EngineShareReady, EngineShareStopping, EngineShareClosed:
+		return spec.Workflow == WorkflowShare
+	case EngineSessionRetired:
+		return spec.Workflow == WorkflowShare && spec.Session.Valid()
+	case EngineGenerationChanged, EngineAdmissionDecision, EngineRelayContentClaimed:
 		return spec.Workflow == WorkflowReceive && spec.Session.Valid()
 	default:
 		return true

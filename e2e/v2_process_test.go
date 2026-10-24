@@ -89,6 +89,7 @@ type v2Process struct {
 	closeDone chan struct{}
 	closeErr  error
 
+	milestones         *observationMilestones
 	userTracePath      string
 	userTraceCommand   string
 	traceForbidden     []string
@@ -184,6 +185,8 @@ func startTracedV2Process(
 	process := startV2Process(t, scenario, component, binary, arguments...)
 	process.userTracePath = tracePath
 	process.userTraceCommand = command
+	process.milestones = &observationMilestones{path: tracePath, command: command, done: process.done}
+	t.Cleanup(process.milestones.close)
 	return process
 }
 
@@ -425,7 +428,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share := startV2Process(
+	share := startTracedV2Process(
 		t,
 		scenario,
 		v2ShareCommandComponent,
@@ -443,9 +446,8 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	receiver.forbidStderr(capabilitySecrets...)
 	receiver.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source), output)...)
 	// A data channel becomes useful only after both runtimes own the attached lane.
-	// Waiting for both private milestones prevents relay loss from racing the
-	// sender-side adoption that the receiver cannot observe, without exposing a
-	// private correctness cut through user-facing output or trace.
+	// Deriving adoption from both observation streams prevents relay loss from
+	// racing sender-side ownership, which the receiver cannot observe.
 	waitV2ProcessTrace(t, receiver, v2ReceiverDirectLaneMilestone, testrun.OutcomeSucceeded)
 	waitV2ProcessTrace(t, share, v2SenderDirectLaneMilestone, testrun.OutcomeSucceeded)
 	select {

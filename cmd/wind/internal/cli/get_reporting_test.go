@@ -142,10 +142,10 @@ func TestGetFinalProgressAndSettlementUseOrderedFinalization(t *testing.T) {
 	closeBlockedRuntime(t, runtime, writer)
 
 	assertRuntimeEventTypes(t, recorder.recorded(),
-		clievent.Warning{},
-		clievent.Warning{},
-		clievent.ObserverLossObserved{},
-		clievent.TransferProgress{},
+		appobs.Warning{},
+		appobs.Warning{},
+		appobs.ObserverLossObserved{},
+		appobs.TransferProgress{},
 		clievent.TransferSettled{},
 	)
 }
@@ -457,7 +457,7 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 
 type getTransferCompletion struct {
 	result                  transfer.JobResult
-	finalProgress           clievent.TransferProgress
+	finalProgress           appobs.TransferProgress
 	finalProgressProjection error
 }
 

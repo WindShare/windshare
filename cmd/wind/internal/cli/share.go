@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/internal/testrun"
 	"github.com/windshare/windshare/osfs"
 )
 
@@ -37,8 +36,6 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		runtime.FinalizeStaged()
 		runtime.Close()
 	}()
-	releaseCapacityTrace := a.revisionCapacityTrace.Bind(observations.capacityTracer())
-	defer releaseCapacityTrace()
 
 	// Ctrl+C means explicitly stop publishing this share. Its cleanup lifetime
 	// belongs to the engine and therefore outlives this command's canceled wait.
@@ -57,7 +54,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	gate := &observationbridge.PublicationGate{}
 	reader := observationbridge.Start(current.Observations(), gate, func(readContext context.Context, value engine.Observation) {
 		gate.Commit(readContext, func() bool {
-			observeEngineTask(runtime, clievent.CommandShare, value)
+			observeEngineTask(runtime, value)
 			a.observeEngineShare(observations, value.Event)
 			return true
 		})
@@ -93,7 +90,7 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
 		Source: shareFileSource(request.paths), Relays: slices.Clone(request.relays), ChunkSize: request.chunkSize,
-		Diagnostics: runtime.detailedDiagnosticsEnabled(), TraceLifecycle: runtime.traceRecordingEnabled() || a.processTrace != nil,
+		Diagnostics: runtime.detailedDiagnosticsEnabled(), TraceLifecycle: runtime.traceRecordingEnabled(),
 	}
 }
 
@@ -114,10 +111,6 @@ func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLink
 	defer clear(payload)
 	if err := publishShareCapability(a.Stdout, payload); err != nil {
 		return errors.Join(errShareCapabilityOutput, err)
-	}
-	a.recordProcessTrace(processTraceShareComponent, processTraceSenderReady, testrun.OutcomeSucceeded)
-	if err := a.processTrace.err(); err != nil {
-		return err
 	}
 	authority := ready.RelayAuthority
 	observations.SetRelayAuthority(authority)

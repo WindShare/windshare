@@ -22,7 +22,7 @@ Invoke-Step 'update TURN control vectors' {
     go test -count=1 ./core/session/turncontrol -update
 }
 Invoke-Step 'update diagnostic-correlation vectors' {
-    go test -count=1 ./cmd/wind/internal/runtrace -run 'TestDiagnosticCorrelationVectors' -update
+    go test -count=1 ./engine/observation/wire -run 'TestDiagnosticCorrelationVectors' -update
 }
 Invoke-Step 'update protocol-contract vectors' {
     go test -count=1 ./core/internal/protocolcontract -update

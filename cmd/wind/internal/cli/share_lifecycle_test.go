@@ -116,7 +116,7 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 					if value.Failure().Code() != test.failure {
 						t.Fatalf("publication failure lost: %+v", value.Failure())
 					}
-				case clievent.EngineTaskObserved:
+				case appobs.EngineTaskObserved:
 					facts := value.Facts()
 					if facts.Stage != appobs.EngineTaskSettled {
 						continue

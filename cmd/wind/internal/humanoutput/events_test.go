@@ -97,7 +97,7 @@ func TestPeerAttemptIdentitySurvivesEventSequenceAndInterleaving(t *testing.T) {
 			spec.FailureScope = appobs.PeerFailureAttempt
 			spec.Failure = mustFailure(t, appobs.FailurePeerCanceled)
 		}
-		event, err := clievent.NewPeerAttemptObserved(spec)
+		event, err := appobs.NewPeerAttemptObserved(spec)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +143,7 @@ func TestPeerAdmissionReportsRejectionAndDeliveryWithoutClaimingConnection(t *te
 				spec.RejectionCode = appobs.PeerLaneRejectAdmissionLimited
 				spec.RejectionRetryAfterMillis = 1000
 			}
-			event, err := clievent.NewPeerAttemptObserved(spec)
+			event, err := appobs.NewPeerAttemptObserved(spec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,7 +187,7 @@ func TestPeerAttemptNamesOnlyAnAdmittedRoute(t *testing.T) {
 			spec.HasLane = true
 			spec.AdmissionDisposition, spec.ResponseDelivery = appobs.PeerAdmissionAccepted, appobs.PeerResponseDelivered
 		}
-		event, err := clievent.NewPeerAttemptObserved(spec)
+		event, err := appobs.NewPeerAttemptObserved(spec)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -43,10 +43,6 @@ func prohibitedAPI(path string) bool {
 	if !strings.HasPrefix(path, module+"/") {
 		return false
 	}
-	// Process-test milestones are value-only contracts, still traversed below.
-	if path == module+"/internal/testrun" {
-		return false
-	}
 	for _, contract := range []string{"/core", "/engine"} {
 		if path == module+contract || strings.HasPrefix(path, module+contract+"/") {
 			return false
@@ -79,7 +75,9 @@ func sourceFindings(root string) ([]string, error) {
 				relative, _ := filepath.Rel(root, path)
 				application := strings.HasPrefix(filepath.ToSlash(relative), "engine/")
 				observation := strings.HasPrefix(filepath.ToSlash(relative), "engine/observation/")
-				forbidden := storageImplementation(dependency) && application ||
+				testSupport := strings.HasPrefix(dependency, module+"/internal/test") &&
+					(application || strings.HasPrefix(filepath.ToSlash(relative), "cmd/wind/"))
+				forbidden := testSupport || storageImplementation(dependency) && application ||
 					prohibited(dependency) && (observation || !application && !storageImplementation(dependency))
 				if forbidden {
 					relative, _ := filepath.Rel(root, path)

@@ -44,7 +44,31 @@ func (snapshot CapacityScopeSnapshot) Valid() bool {
 		snapshot.ActiveLeases <= snapshot.ActiveLeaseLimit
 }
 
+const maximumCapacityIdentityBytes = 128
+
+type CapacityStoreID struct{ value string }
+type CapacityShareID struct{ value string }
+
+func NewCapacityStoreID(value string) (CapacityStoreID, error) {
+	if !validNamedIdentity(value, maximumCapacityIdentityBytes) {
+		return CapacityStoreID{}, ErrInvalidIdentity
+	}
+	return CapacityStoreID{value: value}, nil
+}
+func NewCapacityShareID(value string) (CapacityShareID, error) {
+	if !validNamedIdentity(value, maximumCapacityIdentityBytes) {
+		return CapacityShareID{}, ErrInvalidIdentity
+	}
+	return CapacityShareID{value: value}, nil
+}
+func (id CapacityStoreID) String() string { return id.value }
+func (id CapacityStoreID) Valid() bool    { return id.value != "" }
+func (id CapacityShareID) String() string { return id.value }
+func (id CapacityShareID) Valid() bool    { return id.value != "" }
+
 type SenderCapacitySpec struct {
+	StoreID         CapacityStoreID
+	ShareID         CapacityShareID
 	Stage           SenderCapacityStage
 	Decision        CapacityDecisionID
 	Session         ProtocolSessionID
@@ -69,7 +93,7 @@ func validSenderCapacitySpec(spec SenderCapacitySpec) bool {
 	if _, ok := spec.Stage.Name(); !ok || !spec.Process.Valid() {
 		return false
 	}
-	if spec.HasShare != spec.Share.Valid() || spec.HasSessionScope != spec.SessionScope.Valid() {
+	if spec.HasShare != spec.Share.Valid() || spec.HasShare != spec.ShareID.Valid() || spec.HasShare != spec.StoreID.Valid() || spec.HasSessionScope != spec.SessionScope.Valid() {
 		return false
 	}
 	if spec.Session.Valid() != spec.HasSessionScope || spec.Session.Valid() && !spec.HasShare {
@@ -240,3 +264,6 @@ func (event SenderRevisionObserved) ProtocolSessionID() (ProtocolSessionID, bool
 }
 
 func (event SenderRevisionObserved) Validate() error { return validateSenderRevisionEvent(event) }
+
+func (event SenderCapacityObserved) CapacityStoreID() CapacityStoreID { return event.spec.StoreID }
+func (event SenderCapacityObserved) CapacityShareID() CapacityShareID { return event.spec.ShareID }

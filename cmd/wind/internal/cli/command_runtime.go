@@ -63,7 +63,7 @@ type commandRuntime struct {
 	hasObserverProgress    bool
 	commandPublications    []queuedCommandEvent
 	commandPublicationHead int
-	stagedFinalProgress    *clievent.TransferProgress
+	stagedFinalProgress    *appobs.TransferProgress
 	stagedTerminal         clievent.TerminalEvent
 	presentationTerminal   clievent.TerminalEvent
 
@@ -219,7 +219,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		return false
 	}
 	if runtime.observerFinalized {
-		if _, progress := event.(clievent.TransferProgress); progress {
+		if _, progress := event.(appobs.TransferProgress); progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
 		} else {
 			runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossRecorderClosed, 1)
@@ -227,7 +227,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		runtime.signalReadyLocked()
 		return false
 	}
-	if event == nil || event.Command() != runtime.command {
+	if event == nil || clievent.CommandOf(event) != runtime.command {
 		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
 		runtime.signalReadyLocked()
 		return false
@@ -237,7 +237,7 @@ func (runtime *commandRuntime) Observe(event clievent.Event) bool {
 		runtime.signalReadyLocked()
 		return false
 	}
-	_, progress := event.(clievent.TransferProgress)
+	_, progress := event.(appobs.TransferProgress)
 	if runtime.entrySequence == ^uint64(0) {
 		if progress {
 			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
@@ -295,10 +295,10 @@ func (runtime *commandRuntime) Finalize(terminal clievent.TerminalEvent) bool {
 }
 
 func (runtime *commandRuntime) finalize(
-	progress *clievent.TransferProgress,
+	progress *appobs.TransferProgress,
 	terminal clievent.TerminalEvent,
 ) bool {
-	if runtime == nil || terminal == nil || terminal.Command() != runtime.command {
+	if runtime == nil || terminal == nil || clievent.CommandOf(terminal) != runtime.command {
 		return false
 	}
 	runtime.entryMu.Lock()
@@ -308,7 +308,7 @@ func (runtime *commandRuntime) finalize(
 	}
 	events := make([]clievent.Event, 0, 2)
 	if progress != nil {
-		if runtime.command != clievent.CommandGet || progress.Command() != runtime.command {
+		if runtime.command != clievent.CommandGet || clievent.CommandOf(progress) != runtime.command {
 			return false
 		}
 		events = append(events, *progress)
@@ -326,7 +326,7 @@ func (runtime *commandRuntime) finalize(
 // StageFinalization retains a decided terminal authority while product owners
 // stop and complete their streams. It accepts no ordinary events by design.
 func (runtime *commandRuntime) StageFinalization(terminal clievent.TerminalEvent) bool {
-	if runtime == nil || terminal == nil || terminal.Command() != runtime.command {
+	if runtime == nil || terminal == nil || clievent.CommandOf(terminal) != runtime.command {
 		return false
 	}
 	runtime.entryMu.Lock()
@@ -339,7 +339,7 @@ func (runtime *commandRuntime) StageFinalization(terminal clievent.TerminalEvent
 }
 
 func (runtime *commandRuntime) StageTransferFinalization(
-	progress clievent.TransferProgress,
+	progress appobs.TransferProgress,
 	terminal clievent.TransferSettled,
 ) bool {
 	if runtime == nil || runtime.command != clievent.CommandGet {
@@ -392,7 +392,7 @@ func (runtime *commandRuntime) publishLocked(events ...clievent.Event) bool {
 		return false
 	}
 	for _, event := range events {
-		if event == nil || event.Command() != runtime.command {
+		if event == nil || clievent.CommandOf(event) != runtime.command {
 			return false
 		}
 	}
@@ -410,7 +410,7 @@ func (runtime *commandRuntime) publishLocked(events ...clievent.Event) bool {
 // PublishTransferFinalization makes the frozen final progress and settlement
 // adjacent command publications after the command has quiesced its producers.
 func (runtime *commandRuntime) PublishTransferFinalization(
-	progress clievent.TransferProgress,
+	progress appobs.TransferProgress,
 	settlement clievent.TransferSettled,
 ) bool {
 	if runtime == nil || runtime.command != clievent.CommandGet {

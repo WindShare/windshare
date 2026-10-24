@@ -25,22 +25,14 @@ type ShareReady struct {
 }
 type ShareObservationLoss = share.ObservationLoss
 type ShareObservationSource = share.ObservationSource
-type ShareMilestone = share.Milestone
 
 const (
-	ShareLossProtocol                     = share.ProtocolObservations
-	ShareLossNative                       = share.NativeObservations
-	ShareLossRelay                        = share.RelayObservations
-	ShareLossWebRTC                       = share.WebRTCObservations
-	ShareLossSenderAttempt                = share.SenderAttempts
-	ShareLossPeerDiagnostic               = share.PeerDiagnostics
-	ShareMilestoneSourceAcquiring         = share.SourceAcquiring
-	ShareMilestoneSourceAcquired          = share.SourceAcquired
-	ShareMilestoneSourceAcquisitionFailed = share.SourceAcquisitionFailed
-	ShareMilestoneReady                   = share.ShareReady
-	ShareMilestoneStopping                = share.ShareStopping
-	ShareMilestoneStopped                 = share.ShareStopped
-	ShareMilestoneSessionRetired          = share.SessionRetired
+	ShareLossProtocol       = share.ProtocolObservations
+	ShareLossNative         = share.NativeObservations
+	ShareLossRelay          = share.RelayObservations
+	ShareLossWebRTC         = share.WebRTCObservations
+	ShareLossSenderAttempt  = share.SenderAttempts
+	ShareLossPeerDiagnostic = share.PeerDiagnostics
 )
 
 type ShareTask struct {

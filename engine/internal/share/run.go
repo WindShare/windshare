@@ -88,6 +88,7 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	}
 	if request.Diagnostics {
 		config.RevisionTracer = o
+		config.CapacityTracer = o
 	}
 	s.prepared, err = d.Prepare(ctx, config)
 	if err != nil {
@@ -266,7 +267,7 @@ func startSessionServer(ctx context.Context, factory SessionFactory, relays Rela
 				}
 				<-admission.Session.Done()
 				admission.Session.Close()
-				o.emit(Observation{Milestone: SessionRetired})
+				o.emit(Observation{Milestone: SessionRetired, Session: admission.Session.ProtocolSessionID()})
 			})
 		}
 	}()
