@@ -167,7 +167,7 @@ func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(
 	if len(events) != 2 {
 		t.Fatalf("recorded before close release = %#v", events)
 	}
-	if _, ok := events[0].(clievent.TransferProgress); !ok {
+	if _, ok := events[0].(appobs.TransferProgress); !ok {
 		t.Fatalf("first trace event = %T", events[0])
 	}
 	if _, ok := events[1].(clievent.TransferSettled); !ok {

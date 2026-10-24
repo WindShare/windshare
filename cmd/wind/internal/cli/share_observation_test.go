@@ -25,7 +25,7 @@ func TestShareReadyEventsPreserveHumanMilestoneOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := clievent.NewSharingSubjectSelected(subject)
+	selected, err := appobs.NewSharingSubjectSelected(subject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestShareReadyEventsPreserveHumanMilestoneOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	emitShareReady(emitter, selected, connected)
-	want := []any{clievent.Ready{}, clievent.SharingSubjectSelected{}, clievent.RelayConnected{}}
+	want := []any{appobs.Ready{}, appobs.SharingSubjectSelected{}, appobs.RelayConnected{}}
 	if len(emitter.published) != len(want) || len(emitter.events) != 0 {
 		t.Fatalf("published ready events = %#v, observed = %#v", emitter.published, emitter.events)
 	}

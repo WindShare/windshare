@@ -6,30 +6,23 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
-// RunTraceRecordV4 is the stable NDJSON envelope. Event-specific data is
-// package-sealed so adding one event cannot silently expand every other shape.
+// RunTraceRecordV4 adds CLI recording metadata to the application wire payload.
+// Command results belong to the CLI; shared observation shapes belong to wire.
 type RunTraceRecordV4 struct {
-	SchemaVersion int            `json:"schema_version"`
-	Sequence      string         `json:"sequence"`
-	Time          string         `json:"time"`
-	ElapsedMS     string         `json:"elapsed_ms"`
-	Level         string         `json:"level"`
-	Event         string         `json:"event"`
-	Command       string         `json:"command"`
-	RuntimeRunID  string         `json:"runtime_run_id"`
-	Correlation   *CorrelationV1 `json:"correlation,omitempty"`
-	Payload       payloadV4      `json:"payload"`
+	SchemaVersion int                 `json:"schema_version"`
+	Sequence      string              `json:"sequence"`
+	Time          string              `json:"time"`
+	ElapsedMS     string              `json:"elapsed_ms"`
+	Level         string              `json:"level"`
+	Event         string              `json:"event"`
+	Command       string              `json:"command"`
+	RuntimeRunID  string              `json:"runtime_run_id"`
+	Correlation   *wire.CorrelationV1 `json:"correlation,omitempty"`
+	Payload       wire.Payload        `json:"payload"`
 }
-
-type payloadV4 interface {
-	runTracePayloadV4()
-}
-
-type emptyPayloadV4 struct{}
-
-func (emptyPayloadV4) runTracePayloadV4() {}
 
 func baseRecordV4(
 	runID runIdentity,
@@ -53,7 +46,7 @@ func baseRecordV4(
 		Event:         event,
 		Command:       commandName,
 		RuntimeRunID:  runID.encoded(),
-		Payload:       emptyPayloadV4{},
+		Payload:       wire.EmptyPayload{},
 	}, nil
 }
 
@@ -103,9 +96,4 @@ func decimal(value uint64) string {
 
 func signedDecimal(value int64) string {
 	return strconv.FormatInt(value, 10)
-}
-
-func decimalPointer(value uint64) *string {
-	encoded := decimal(value)
-	return &encoded
 }

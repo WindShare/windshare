@@ -1,14 +1,13 @@
 package cli
 
 import (
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func observeEngineTask(runtime *commandRuntime, _ clievent.Command, value engine.Observation) {
+func observeEngineTask(runtime *commandRuntime, value engine.Observation) {
 	if event, ok := value.Event.(appobs.EngineTaskObserved); ok && runtime != nil {
-		runtime.Observe(clievent.EngineTaskObserved{EngineTaskObserved: event})
+		runtime.Observe(event)
 	}
 }
 func observeEngineFact(runtime *commandRuntime, fact appobs.Event) {
@@ -26,15 +25,14 @@ func observeEngineFact(runtime *commandRuntime, fact appobs.Event) {
 		}
 		return
 	}
-	event, err := clievent.FromObservation(fact)
-	if err != nil {
+	if err := fact.Validate(); err != nil {
 		runtime.ReportObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
 		return
 	}
 	switch fact.(type) {
 	case appobs.RelayConnected, appobs.RelayRecovering, appobs.ContentPathSelected, appobs.Fallback:
-		runtime.Publish(event)
+		runtime.Publish(fact)
 	default:
-		runtime.Observe(event)
+		runtime.Observe(fact)
 	}
 }

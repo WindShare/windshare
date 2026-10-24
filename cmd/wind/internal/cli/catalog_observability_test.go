@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -60,7 +60,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 
 	var operations []string
 	for _, event := range emitter.events {
-		catalogEvent, ok := event.(clievent.CatalogStorageObserved)
+		catalogEvent, ok := event.(appobs.CatalogStorageObserved)
 		if !ok {
 			continue
 		}

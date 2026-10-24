@@ -13,12 +13,8 @@ func TestPlatformSetupFactsAreClosedAndDispatchable(t *testing.T) {
 			if err != nil || event.State() != state || event.Reason() != reason || event.Command() != CommandShare || event.Level() != appobs.LevelDebug {
 				t.Fatalf("%+v: %v", event, err)
 			}
-			visitor := &exhaustiveVisitor{}
-			if event.Accept(visitor) != nil || visitor.visited != "platform_setup" {
-				t.Fatal(visitor)
-			}
-			if event.Accept(nil) == nil {
-				t.Fatal("nil visitor accepted")
+			if event.Validate() != nil {
+				t.Fatal("valid platform event rejected")
 			}
 		}
 	}
@@ -28,7 +24,7 @@ func TestPlatformSetupFactsAreClosedAndDispatchable(t *testing.T) {
 	if _, err := NewPlatformSetupObserved(0, "configured", "user-skipped"); err == nil {
 		t.Fatal("missing command accepted")
 	}
-	if (PlatformSetupObserved{}).Accept(&exhaustiveVisitor{}) == nil {
+	if (PlatformSetupObserved{}).Validate() == nil {
 		t.Fatal("zero event accepted")
 	}
 }

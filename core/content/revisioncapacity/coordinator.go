@@ -85,6 +85,7 @@ type Coordinator struct {
 }
 
 type storeState struct {
+	tracer      Tracer
 	target      ReclaimTarget
 	storeID     StoreID
 	shareID     ShareID
@@ -135,7 +136,7 @@ func (c *Coordinator) RegisterStore(config StoreConfig, target ReclaimTarget) (*
 		return nil, fmt.Errorf("revision capacity share identity %q is already registered", config.ShareID)
 	}
 	state := &storeState{
-		target: target, storeID: config.StoreID, shareID: config.ShareID,
+		target: target, storeID: config.StoreID, shareID: config.ShareID, tracer: config.Tracer,
 		limits: config.Limits, sessions: make(map[SessionID]*sessionState),
 	}
 	registration := &StoreRegistration{coordinator: c, state: state}
@@ -149,12 +150,26 @@ func (c *Coordinator) nextDecisionIDLocked() CapacityDecisionID {
 	return CapacityDecisionID(fmt.Sprintf("capacity-%d-%d", c.ownerID, c.nextDecision))
 }
 
-func (c *Coordinator) trace(event TraceEvent) {
-	if c == nil || c.tracer == nil {
+type tracePublication struct {
+	event TraceEvent
+	owner Tracer
+}
+
+// Capture the immutable owner before unlocking. Looking it up during delivery
+// could lose the final fact after a registration is retired or reused.
+func (c *Coordinator) trace(publication tracePublication) {
+	if c == nil {
+		return
+	}
+	deliverCapacityTrace(publication.owner, publication.event)
+	deliverCapacityTrace(c.tracer, publication.event)
+}
+func deliverCapacityTrace(tracer Tracer, event TraceEvent) {
+	if tracer == nil {
 		return
 	}
 	defer func() { _ = recover() }()
-	c.tracer.TraceCapacity(event)
+	tracer.TraceCapacity(event)
 }
 
 func (c *Coordinator) snapshotLocked(store *storeState) CapacitySnapshot {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *testing.T) {
@@ -18,7 +19,7 @@ func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *te
 	identity := make([]byte, appobs.IdentityBytes)
 	identity[0] = 1
 	share, _ := appobs.NewSharingInstanceID(identity)
-	sourceEvent, err := clievent.NewEngineTaskObserved(appobs.EngineTaskSpec{
+	sourceEvent, err := appobs.NewEngineTaskObserved(appobs.EngineTaskSpec{
 		Workflow: appobs.WorkflowShare, Task: task, Stage: appobs.EngineSourceFailed, ShareInstance: share, Failure: failure,
 	})
 	if err != nil {
@@ -38,7 +39,7 @@ func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *te
 			t.Fatal(err)
 		}
 		var decoded struct {
-			Failure failureV4 `json:"failure"`
+			Failure wire.Failure `json:"failure"`
 		}
 		if err := json.Unmarshal(raw, &decoded); err != nil {
 			t.Fatal(err)

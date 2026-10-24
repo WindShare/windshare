@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -36,12 +35,12 @@ func formatContentPath(path appobs.ContentPath, symbols Symbols) terminalcanvas.
 	return statusLine(symbols.Path, "Content path: "+name, terminalcanvas.StyleAccent)
 }
 
-func formatFallback(event clievent.Fallback, symbols Symbols) terminalcanvas.Line {
+func formatFallback(event appobs.Fallback, symbols Symbols) terminalcanvas.Line {
 	message := transportName(event.From()) + " path unavailable; using " + transportName(event.To()) + "."
 	return statusLine(symbols.Warning, "Warning: "+message, terminalcanvas.StyleWarning)
 }
 
-func formatRelayRecovery(event clievent.RelayRecovering, symbols Symbols) terminalcanvas.Line {
+func formatRelayRecovery(event appobs.RelayRecovering, symbols Symbols) terminalcanvas.Line {
 	state := eventName(event.State())
 	message := "Relay recovery attempt " + strconv.FormatUint(uint64(event.Attempt()), 10) + " " + state + "."
 	if details, ok := event.Details(); ok {
@@ -68,7 +67,7 @@ func formatRelayRecovery(event clievent.RelayRecovering, symbols Symbols) termin
 	return statusLine(symbol, message, style)
 }
 
-func formatRelayAvailability(event clievent.RelayAvailability, symbols Symbols) terminalcanvas.Line {
+func formatRelayAvailability(event appobs.RelayAvailability, symbols Symbols) terminalcanvas.Line {
 	if event.Available() > 0 {
 		return statusLine(symbols.Relay, "New receivers can join through "+strconv.FormatUint(uint64(event.Available()), 10)+" of "+strconv.FormatUint(uint64(event.Total()), 10)+" relays.", terminalcanvas.StyleAccent)
 	}
@@ -82,7 +81,7 @@ func formatRelayAvailability(event clievent.RelayAvailability, symbols Symbols) 
 	return statusLine(symbols.Warning, message, terminalcanvas.StyleWarning)
 }
 
-func formatLaneAdopted(event clievent.LaneAdopted, symbols Symbols) terminalcanvas.Line {
+func formatLaneAdopted(event appobs.LaneAdopted, symbols Symbols) terminalcanvas.Line {
 	lane := event.Lane()
 	message := "Lane " + strconv.FormatUint(uint64(lane.ID()), 10) +
 		" epoch " + strconv.FormatUint(uint64(lane.Epoch()), 10) +
@@ -97,7 +96,7 @@ func transportName(transport appobs.Transport) string {
 	return "Relay"
 }
 
-func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) terminalcanvas.Line {
+func formatPeerAttempt(event appobs.PeerAttemptObserved, symbols Symbols) terminalcanvas.Line {
 	// The event sequence advances within an attempt. Its immutable identity keeps
 	// interleaved attempts distinguishable and matches peer_attempt_id in the trace.
 	identity := base64.RawURLEncoding.EncodeToString(event.PeerAttemptID().Bytes())
@@ -122,7 +121,7 @@ func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) term
 	return statusLine(symbol, message, style)
 }
 
-func peerAttemptStatus(event clievent.PeerAttemptObserved) (string, bool) {
+func peerAttemptStatus(event appobs.PeerAttemptObserved) (string, bool) {
 	if _, failure, ok := event.Failure(); ok {
 		return "failed. " + failureMessage(failure), true
 	}
@@ -146,7 +145,7 @@ func peerAttemptStatus(event clievent.PeerAttemptObserved) (string, bool) {
 	}
 }
 
-func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
+func peerAdmissionStatus(event appobs.PeerAttemptObserved) (string, bool) {
 	disposition, delivery, _ := event.Admission()
 	message := "admission accepted."
 	warning := disposition == appobs.PeerAdmissionRejected
@@ -165,7 +164,7 @@ func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
 }
 
 func formatProtocolOperationFailure(
-	event clievent.ProtocolObservationObserved,
+	event appobs.ProtocolObservationObserved,
 	fact appobs.ProtocolOperationFact,
 	symbols Symbols,
 ) terminalcanvas.Line {

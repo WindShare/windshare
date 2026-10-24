@@ -17,7 +17,7 @@ func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *test
 		available, total, terminal uint32
 		ever                       bool
 	}{{0, 2, 0, false}, {1, 2, 0, true}, {0, 2, 0, true}, {0, 2, 2, true}} {
-		event, _ := clievent.NewRelayAvailability(state.available, state.total, state.terminal, state.ever)
+		event, _ := appobs.NewRelayAvailability(state.available, state.total, state.terminal, state.ever)
 		if err := harness.renderer.Render(event); err != nil {
 			t.Fatal(err)
 		}

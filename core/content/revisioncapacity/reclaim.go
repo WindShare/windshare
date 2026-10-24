@@ -50,7 +50,7 @@ func (s *StoreRegistration) PublishIdle(candidate IdleCandidate) error {
 	}
 	c := s.coordinator
 	c.mu.Lock()
-	var trace *TraceEvent
+	var trace *tracePublication
 	defer func() {
 		c.mu.Unlock()
 		if trace != nil {
@@ -93,7 +93,7 @@ func (s *StoreRegistration) PublishIdle(candidate IdleCandidate) error {
 		stage: TraceIdlePublished, storeID: store.storeID, shareID: store.shareID,
 		revision: candidate.RevisionID, candidate: candidate.Token, snapshot: c.decisionSnapshotLocked(store, nil),
 	}
-	trace = &event
+	trace = &tracePublication{event: event, owner: store.tracer}
 	return nil
 }
 
@@ -118,7 +118,7 @@ func (s *StoreRegistration) WithdrawIdle(token CandidateToken) bool {
 			revision: candidate.revisionID, candidate: candidate.token, snapshot: c.decisionSnapshotLocked(candidate.store, nil),
 		}
 		c.mu.Unlock()
-		c.trace(event)
+		c.trace(tracePublication{event: event, owner: candidate.store.tracer})
 		return true
 	}
 	c.removeAvailableCandidateLocked(candidate)
@@ -127,7 +127,7 @@ func (s *StoreRegistration) WithdrawIdle(token CandidateToken) bool {
 		revision: candidate.revisionID, candidate: candidate.token, snapshot: c.decisionSnapshotLocked(candidate.store, nil),
 	}
 	c.mu.Unlock()
-	c.trace(event)
+	c.trace(tracePublication{event: event, owner: candidate.store.tracer})
 	return true
 }
 

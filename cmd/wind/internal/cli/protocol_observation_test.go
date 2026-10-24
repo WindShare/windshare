@@ -80,12 +80,12 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 			var lost uint64
 			for _, event := range recorder.recorded() {
 				switch event := event.(type) {
-				case clievent.ProtocolObservationObserved:
+				case appobs.ProtocolObservationObserved:
 					projected++
-					if event.Command() != command || !event.ObservedAt().Equal(fact.ObservedAt()) {
+					if clievent.CommandOf(event) != command || !event.ObservedAt().Equal(fact.ObservedAt()) {
 						t.Fatalf("projection changed source context: %+v", event)
 					}
-				case clievent.ObserverLossObserved:
+				case appobs.ObserverLossObserved:
 					if event.Category() == appobs.ObserverLossProtocolOperation && event.Reason() == appobs.ObserverLossStreamCapacity {
 						lost += event.Count()
 					}
@@ -132,7 +132,7 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 	runtime.Close()
 	var causes []appobs.ProtocolOperationCause
 	for _, event := range recorder.recorded() {
-		if event, ok := event.(clievent.ProtocolObservationObserved); ok {
+		if event, ok := event.(appobs.ProtocolObservationObserved); ok {
 			if fact, ok := event.Fact().(appobs.ProtocolOperationFact); ok {
 				causes = append(causes, fact.Cause())
 			}

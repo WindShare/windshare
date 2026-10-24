@@ -9,7 +9,7 @@ echo "-- update TURN control vectors"
 go test -count=1 ./core/session/turncontrol -update
 
 echo "-- update diagnostic-correlation vectors"
-go test -count=1 ./cmd/wind/internal/runtrace -run 'TestDiagnosticCorrelationVectors' -update
+go test -count=1 ./engine/observation/wire -run 'TestDiagnosticCorrelationVectors' -update
 echo "-- update protocol-contract vectors"
 go test -count=1 ./core/internal/protocolcontract -update
 echo "-- update peer-signaling vectors"

@@ -114,7 +114,7 @@ func (runtime *commandRuntime) enqueueObserverLossLocked(spec appobs.ObserverLos
 		}
 		return
 	}
-	event, err := clievent.NewObserverLossObserved(spec)
+	event, err := appobs.NewObserverLossObserved(spec)
 	if err != nil {
 		if spec.Rejection != (appobs.ObservationRejection{}) {
 			runtime.loseRejectionEvidenceLocked(spec.Count)

@@ -5,6 +5,7 @@ import (
 	"io"
 
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 type runIdentity [appobs.IdentityBytes]byte
@@ -25,7 +26,7 @@ func (identity runIdentity) valid() bool {
 }
 
 func (identity runIdentity) encoded() string {
-	return encodeCorrelationIdentity(identity[:])
+	return wire.EncodeIdentity(identity[:])
 }
 
 // Filename correlation is deliberately shorter and visually filesystem-safe;

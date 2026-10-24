@@ -84,7 +84,7 @@ func (g AdmissionGrant) QuarantineStableHandle(cause error) error {
 	state := g.state
 	c := state.coordinator
 	c.mu.Lock()
-	var trace *TraceEvent
+	var trace *tracePublication
 	defer func() {
 		c.mu.Unlock()
 		if trace != nil {
@@ -122,7 +122,7 @@ func (g AdmissionGrant) QuarantineStableHandle(cause error) error {
 		storeID: state.store.storeID, shareID: state.store.shareID, sessionID: state.session.sessionID,
 		revision: state.revisionID, snapshot: c.decisionSnapshotLocked(state.store, state.session), diagnostic: cause,
 	}
-	trace = &event
+	trace = &tracePublication{event: event, owner: state.store.tracer}
 	return nil
 }
 
@@ -262,7 +262,7 @@ func (c StableHandleCharge) Quarantine(cause error) error {
 	state := c.state
 	coordinator := state.coordinator
 	coordinator.mu.Lock()
-	var trace *TraceEvent
+	var trace *tracePublication
 	defer func() {
 		coordinator.mu.Unlock()
 		if trace != nil {
@@ -299,6 +299,6 @@ func (c StableHandleCharge) Quarantine(cause error) error {
 		stage: TraceOwnershipQuarantined, storeID: state.store.storeID, shareID: state.store.shareID,
 		snapshot: coordinator.decisionSnapshotLocked(state.store, nil), diagnostic: cause,
 	}
-	trace = &event
+	trace = &tracePublication{event: event, owner: state.store.tracer}
 	return nil
 }

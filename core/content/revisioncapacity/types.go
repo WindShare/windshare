@@ -67,7 +67,11 @@ func DefaultProcessConfig() ProcessConfig {
 	return ProcessConfig{Limits: DefaultProcessLimits(), RetryAfter: DefaultCapacityRetryAfter}
 }
 
+// StoreConfig binds diagnostics to the registration that owns each fact.
+// Admission/reclaim decisions belong to the requester even when they reclaim
+// another store; idle-handle and ownership facts belong to the affected store.
 type StoreConfig struct {
+	Tracer  Tracer
 	StoreID StoreID
 	ShareID ShareID
 	Limits  CapacityLimits

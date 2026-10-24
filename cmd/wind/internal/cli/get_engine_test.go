@@ -38,7 +38,7 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 	terminal := false
 	for _, event := range recorder.recorded() {
 		switch event := event.(type) {
-		case clievent.ObserverLossObserved:
+		case appobs.ObserverLossObserved:
 			if terminal {
 				t.Fatal("loss followed terminal result")
 			}

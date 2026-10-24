@@ -36,14 +36,13 @@ func NewPlatformSetupObserved(command Command, state, reason string) (PlatformSe
 	return value, nil
 }
 
-func (PlatformSetupObserved) event()                 {}
 func (value PlatformSetupObserved) Command() Command { return value.command }
 func (PlatformSetupObserved) Level() appobs.Level    { return appobs.LevelDebug }
 func (value PlatformSetupObserved) State() string    { return platformSetupStates[value.state] }
 func (value PlatformSetupObserved) Reason() string   { return platformSetupReasons[value.reason] }
-func (value PlatformSetupObserved) Accept(visitor Visitor) error {
-	if visitor == nil || !value.command.Valid() || value.state == 0 || int(value.state) >= len(platformSetupStates) || value.reason == 0 || int(value.reason) >= len(platformSetupReasons) {
+func (value PlatformSetupObserved) Validate() error {
+	if !value.command.Valid() || value.state == 0 || int(value.state) >= len(platformSetupStates) || value.reason == 0 || int(value.reason) >= len(platformSetupReasons) {
 		return ErrInvalidEvent
 	}
-	return visitor.VisitPlatformSetupObserved(value)
+	return nil
 }

@@ -1,14 +1,10 @@
 package cli
 
 import (
-	"context"
 	"sync"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
-	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -60,53 +56,6 @@ func (observations *shareObservations) RelayAuthority() appobs.RelayAuthority {
 	observations.relayMu.RLock()
 	defer observations.relayMu.RUnlock()
 	return observations.relayAuthority
-}
-
-func (observations *shareObservations) TraceCapacity(value revisioncapacity.TraceEvent) {
-	event, err := engine.DescribeCapacity(value)
-	observations.emitProjected(appobs.ObserverLossSenderCapacity, event, err)
-}
-
-func (observations *shareObservations) capacityTracer() revisioncapacity.Tracer {
-	if !observations.detailedDiagnosticsEnabled() {
-		return nil
-	}
-	return observations
-}
-
-func (observations *shareObservations) emitProjected(category appobs.ObserverLossCategory, event appobs.Event, err error) {
-	observations.emitProjectedContext(context.Background(), nil, category, event, err)
-}
-
-func (observations *shareObservations) emitProjectedContext(
-	ctx context.Context,
-	gate *observationbridge.PublicationGate,
-	category appobs.ObserverLossCategory,
-	event appobs.Event,
-	err error,
-) bool {
-	if observations == nil || observations.observer == nil {
-		return false
-	}
-	return gate.Commit(ctx, func() bool {
-		if err != nil || event == nil {
-			observations.projectionFailed(category, err)
-			return false
-		}
-		wrapped, err := clievent.FromObservation(event)
-		if err != nil {
-			observations.projectionFailed(category, err)
-			return false
-		}
-		return observations.observer.Observe(wrapped)
-	})
-}
-
-func (observations *shareObservations) projectionFailed(category appobs.ObserverLossCategory, cause error) {
-	if observations == nil || observations.observer == nil {
-		return
-	}
-	observations.observer.ReportObservationRejection(category, commandprojection.ObserverLossReason(cause), commandprojection.ProjectionRejection(cause))
 }
 
 func (observations *shareObservations) detailedDiagnosticsEnabled() bool {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/engine/observation/wire"
+
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -38,6 +40,13 @@ func TestDiagnosticFailuresPreserveSuccessfulApplicationSettlement(t *testing.T)
 		if envelope.TaskID != current.ID() || envelope.At.IsZero() {
 			t.Fatalf("lost correlation: %+v", envelope)
 		}
+		fact, ok := envelope.Event.(appobs.Event)
+		if !ok {
+			t.Fatalf("non-application event escaped: %T", envelope.Event)
+		}
+		if _, err := wire.Encode(fact); err != nil {
+			t.Fatalf("unserializable application fact: %T: %v", fact, err)
+		}
 		switch event := envelope.Event.(type) {
 		case appobs.Warning:
 			warnings++
@@ -49,10 +58,10 @@ func TestDiagnosticFailuresPreserveSuccessfulApplicationSettlement(t *testing.T)
 			if event.Count() != 1 || event.Category() != appobs.ObserverLossEngineObservation {
 				t.Fatalf("diagnostic rejection was not accounted: %+v", event)
 			}
-		case task.Lifecycle:
-			if event.State == task.Finished {
+		case appobs.EngineTaskObserved:
+			if facts := event.Facts(); facts.Stage == appobs.EngineTaskSettled {
 				finished++
-				if event.Settlement != result.Settlement {
+				if facts.Outcome != appobs.EngineOutcomeSuccess || facts.Failure != result.Failure {
 					t.Fatal("Wait and lifecycle disagree")
 				}
 			}

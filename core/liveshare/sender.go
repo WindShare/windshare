@@ -41,6 +41,7 @@ type SenderConfig struct {
 	CatalogTracer      CatalogStorageTracer
 	RootPrefetchTracer RootPrefetchTracer
 	RevisionTracer     content.RevisionTracer
+	CapacityTracer     revisioncapacity.Tracer
 	RevisionCapacity   *revisioncapacity.Coordinator
 	CatalogBudget      *catalog.BudgetAccount
 	CacheBudget        *contentflow.ProcessCacheBudget
@@ -433,7 +434,7 @@ func prepareSenderContent(
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
 		Source: sender.source, CapacityCoordinator: config.RevisionCapacity,
-		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance),
+		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
 		RevisionDeriver: sender.revisionDeriver, MetadataBudget: metadataBudget,
 		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,
 	})
@@ -456,10 +457,11 @@ func prepareSenderContent(
 	return nil
 }
 
-func senderRevisionCapacityStoreConfig(share catalog.ShareInstance) revisioncapacity.StoreConfig {
+func senderRevisionCapacityStoreConfig(share catalog.ShareInstance, tracer revisioncapacity.Tracer) revisioncapacity.StoreConfig {
 	identity := base64.RawURLEncoding.EncodeToString(share.Bytes())
 	return revisioncapacity.StoreConfig{
 		StoreID: revisioncapacity.StoreID(revisionCapacityStoreIDPrefix + identity),
+		Tracer:  tracer,
 		ShareID: revisioncapacity.ShareID(revisionCapacityShareIDPrefix + identity),
 		Limits:  revisioncapacity.DefaultShareLimits(),
 	}

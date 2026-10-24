@@ -14,6 +14,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 var errInjected = errors.New("injected failure")
@@ -210,7 +211,7 @@ func TestRecorderLifecycleQueueIsBoundedAndIndependentFromProgress(t *testing.T)
 		Discovery:     appobs.DiscoveryOpen,
 		CountersExact: true,
 	}))
-	progressEvent := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, progress))
+	progressEvent := mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, progress))
 	if !recorder.Record(progressEvent) {
 		t.Fatal("progress slot should remain available while the lifecycle queue is full")
 	}
@@ -241,7 +242,7 @@ func TestRecorderCoalescesProgressWithoutMakingTraceIncomplete(t *testing.T) {
 			Discovery:          appobs.DiscoveryOpen,
 			CountersExact:      true,
 		}))
-		event := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
+		event := mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, snapshot))
 		if !recorder.Record(event) {
 			t.Fatal("progress event unexpectedly rejected")
 		}
@@ -264,7 +265,7 @@ func TestRecorderNeverWritesSampledProgressAfterNewerLifecycle(t *testing.T) {
 	snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
 		Discovery: appobs.DiscoveryOpen, CountersExact: true,
 	}))
-	progress := mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))
+	progress := mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, snapshot))
 	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
 	warning := mustValue(clievent.NewWarning(clievent.CommandGet, failure))
 	if !recorder.Record(progress) || !recorder.Record(warning) {
@@ -296,7 +297,7 @@ func TestRecorderSamplesProgressOnlyOnInjectedSchedule(t *testing.T) {
 			Discovery:          appobs.DiscoveryOpen,
 			CountersExact:      true,
 		}))
-		if !recorder.Record(mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, snapshot))) {
+		if !recorder.Record(mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, snapshot))) {
 			t.Fatal("progress event unexpectedly rejected")
 		}
 	}
@@ -320,14 +321,14 @@ func TestRecorderSamplesProgressOnlyOnInjectedSchedule(t *testing.T) {
 func TestRecorderWriterFailureDisablesNormalWritesButAttemptsSummary(t *testing.T) {
 	file := &memoryTraceFile{failWrites: 1}
 	recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
-	if !recorder.Record(clievent.NewReady()) {
+	if !recorder.Record(appobs.NewReady()) {
 		t.Fatal("ready event unexpectedly rejected")
 	}
 	health := awaitHealth(t, recorder.Health())
 	if health.Cause() != clievent.TraceIncompleteWriter {
 		t.Fatalf("health cause = %v, want writer", health.Cause())
 	}
-	if recorder.Record(clievent.NewReady()) {
+	if recorder.Record(appobs.NewReady()) {
 		t.Fatal("normal event accepted after writer failure")
 	}
 	status := recorder.Close()
@@ -343,7 +344,7 @@ func TestRecorderWriterFailureDisablesNormalWritesButAttemptsSummary(t *testing.
 func TestRecorderTreatsShortWriteAsRuntimeFailure(t *testing.T) {
 	file := &memoryTraceFile{shortWrites: 1}
 	recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
-	if !recorder.Record(clievent.NewReady()) {
+	if !recorder.Record(appobs.NewReady()) {
 		t.Fatal("ready event unexpectedly rejected")
 	}
 	health := awaitHealth(t, recorder.Health())
@@ -367,7 +368,7 @@ func TestRecorderFlushAndSummaryFailuresRetainTruthfulContent(t *testing.T) {
 		file := &memoryTraceFile{failFlushes: 1, writeObserved: make(chan struct{}, 1)}
 		ticker := newManualTicker()
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, ticker)
-		if !recorder.Record(clievent.NewReady()) {
+		if !recorder.Record(appobs.NewReady()) {
 			t.Fatal("ready event unexpectedly rejected")
 		}
 		awaitSignal(t, file.writeObserved, "normal record write")
@@ -441,7 +442,7 @@ func TestRecorderFlushAndSummaryFailuresRetainTruthfulContent(t *testing.T) {
 	t.Run("summary final sync", func(t *testing.T) {
 		file := &memoryTraceFile{failFlushAt: 2}
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
-		if !recorder.Record(clievent.NewReady()) {
+		if !recorder.Record(appobs.NewReady()) {
 			t.Fatal("ready event unexpectedly rejected")
 		}
 		status := recorder.Close()
@@ -493,7 +494,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 	t.Run("cross-command context", func(t *testing.T) {
 		file := &memoryTraceFile{}
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
-		contentPath := mustValue(clievent.NewContentPathSelected(appobs.ContentPathDirect))
+		contentPath := mustValue(appobs.NewContentPathSelected(appobs.ContentPathDirect))
 		if recorder.Record(contentPath) {
 			t.Fatal("cross-command event unexpectedly accepted")
 		}
@@ -525,7 +526,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 			step:    -time.Millisecond,
 		}
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, clock, file, newManualTicker())
-		if recorder.Record(clievent.NewReady()) {
+		if recorder.Record(appobs.NewReady()) {
 			t.Fatal("event with regressing entry clock unexpectedly accepted")
 		}
 		status := recorder.Close()
@@ -540,7 +541,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 		recorder.entryMu.Lock()
 		recorder.lastSequence = ^uint64(0)
 		recorder.entryMu.Unlock()
-		if recorder.Record(clievent.NewReady()) {
+		if recorder.Record(appobs.NewReady()) {
 			t.Fatal("event unexpectedly accepted after sequence exhaustion")
 		}
 		health := awaitHealth(t, recorder.Health())
@@ -554,7 +555,7 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 		if len(file.Bytes()) != 0 {
 			t.Fatalf("unsafe sequence produced output: %s", file.Bytes())
 		}
-		if recorder.Record(clievent.NewReady()) || recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 1, ProgressDrops: 0}) {
+		if recorder.Record(appobs.NewReady()) || recorder.ReportUpstreamLoss(clievent.TraceLoss{LifecycleDrops: 1, ProgressDrops: 0}) {
 			t.Fatal("closed recorder accepted new state")
 		}
 	})
@@ -764,7 +765,7 @@ type decodedRecordV4 struct {
 	Event           string
 	Command         string
 	RunID           string
-	Correlation     *CorrelationV1
+	Correlation     *wire.CorrelationV1
 	Payload         json.RawMessage
 	VerifiedBytes   *string
 	TraceIncomplete *bool
@@ -775,16 +776,16 @@ type decodedRecordV4 struct {
 
 func (record *decodedRecordV4) UnmarshalJSON(data []byte) error {
 	var envelope struct {
-		SchemaVersion int             `json:"schema_version"`
-		Sequence      string          `json:"sequence"`
-		Time          string          `json:"time"`
-		ElapsedMS     string          `json:"elapsed_ms"`
-		Level         string          `json:"level"`
-		Event         string          `json:"event"`
-		Command       string          `json:"command"`
-		RuntimeRunID  string          `json:"runtime_run_id"`
-		Correlation   *CorrelationV1  `json:"correlation,omitempty"`
-		Payload       json.RawMessage `json:"payload"`
+		SchemaVersion int                 `json:"schema_version"`
+		Sequence      string              `json:"sequence"`
+		Time          string              `json:"time"`
+		ElapsedMS     string              `json:"elapsed_ms"`
+		Level         string              `json:"level"`
+		Event         string              `json:"event"`
+		Command       string              `json:"command"`
+		RuntimeRunID  string              `json:"runtime_run_id"`
+		Correlation   *wire.CorrelationV1 `json:"correlation,omitempty"`
+		Payload       json.RawMessage     `json:"payload"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

@@ -302,6 +302,7 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 			v4TraceObjectField("failure", failure, true),
 		),
 		"sender_capacity": v4TraceSchema(
+			v4TraceOptionalFields(v4TraceString, "capacity_store_id", "capacity_share_id"),
 			v4TraceFields(v4TraceString, "stage"),
 			v4TraceOptionalFields(v4TraceHexDigest, "decision_id", "revision_id"),
 			v4TraceObjectField("process", capacityScope, false),

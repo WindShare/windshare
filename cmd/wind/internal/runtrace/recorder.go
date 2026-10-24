@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/observation/wire"
 )
 
 const (
-	SchemaVersion            = 4
+	SchemaVersion            = wire.SchemaVersion
 	DefaultLifecycleCapacity = 256
 	DefaultSampleInterval    = 250 * time.Millisecond
 )
@@ -256,7 +258,7 @@ func (recorder *Recorder) Record(event clievent.Event) (accepted bool) {
 		recorder.markIncomplete(clievent.TraceIncompleteSchemaLimit)
 		return false
 	}
-	if event.Command() != recorder.command {
+	if clievent.CommandOf(event) != recorder.command {
 		recorder.schemaLimited.Store(true)
 		recorder.countDropped(progress, 1)
 		recorder.markIncomplete(clievent.TraceIncompleteSchemaLimit)
@@ -372,7 +374,7 @@ func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
 	}
 	// Event is sealed by clievent. Treating every non-nil event as schema-owned avoids
 	// a second event registry that can silently reject newly added visitor-backed events.
-	_, progress = event.(clievent.TransferProgress)
+	_, progress = event.(appobs.TransferProgress)
 	return progress, true
 }
 
@@ -394,7 +396,7 @@ func (recorder *Recorder) addRejectionEvidenceDropped(count uint64) {
 	recorder.markIncomplete(clievent.TraceIncompleteRejectionEvidence)
 }
 func (recorder *Recorder) countRejectionEvidence(event clievent.Event) {
-	if loss, ok := event.(clievent.ObserverLossObserved); ok {
+	if loss, ok := event.(appobs.ObserverLossObserved); ok {
 		_, sample := loss.Rejection()
 		if sample || loss.OmittedSamples() != 0 {
 			recorder.addRejectionEvidenceDropped(loss.Count())

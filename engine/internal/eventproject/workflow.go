@@ -43,10 +43,9 @@ func (p workflowProjection) emit(value appobs.Event, err error) bool {
 func (p workflowProjection) observe(envelope task.Observation) bool {
 	switch value := envelope.Event.(type) {
 	case task.Lifecycle:
-		// Lifecycle is also the application's state API; the detailed fact adds
-		// diagnostic correlation without asking clients to infer settlement.
-		accepted := p.publish(value)
-		return p.emit(projectTask(p.workflow, envelope)) && accepted
+		// Wait owns authoritative settlement; the stream carries one diagnostic
+		// representation of that result and may be dropped under pressure.
+		return p.emit(projectTask(p.workflow, envelope))
 	case share.Observation:
 		return p.share(envelope, value)
 	case receive.Warning:
@@ -67,14 +66,14 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 		event, err := ProjectRelayLifecycle(p.workflow, value.Value)
 		accepted := p.project(appobs.ObserverLossRelayLifecycle, event, err)
 		if err == nil && event.Stage() == appobs.RelayTraceDropped {
-			p.publish(appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
+			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
 		}
 		return accepted
 	case receive.WebRTCObserved:
 		event, err := ProjectWebRTCLifecycle(p.workflow, value.Value)
 		accepted := p.project(appobs.ObserverLossWebRTCLifecycle, event, err)
 		if err == nil && event.Transition() == appobs.WebRTCTraceDropped {
-			p.publish(appobs.LossSnapshot{Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
+			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
 		}
 		return accepted
 	case receive.OutputObserved:
@@ -100,7 +99,7 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 		event, err := ProjectNativeObservation(p.workflow, value.Value)
 		return p.project(appobs.ObserverLossNativeConnectivity, event, err)
 	case receive.PeerDiagnosticObserved:
-		return projectPeerLoss(value.Value, p.publish, p.emit)
+		return projectPeerLoss(p.workflow, value.Value, p.publish, p.emit)
 	case receive.PeerTerminated:
 		return p.receiverTermination(value)
 	case receive.ProgressObserved:
@@ -122,10 +121,8 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 		return p.emit(appobs.NewLaneAdopted(p.workflow, session, lane, appobs.TransportWebRTC))
 	case receive.ObservationLoss:
 		return p.publish(ReceiveLoss(value))
-	case receive.GenerationChanged, receive.AdmissionObserved:
+	case receive.GenerationChanged, receive.AdmissionObserved, receive.RelayContentClaimed:
 		return p.emit(projectTask(p.workflow, envelope))
-	case receive.Milestone:
-		return p.publish(value)
 	default:
 		return p.emit(nil, ErrInvalidProjection)
 	}
@@ -139,6 +136,9 @@ func (p workflowProjection) share(envelope task.Observation, value share.Observa
 	case value.Prefetch != nil:
 		event, err := ProjectRootPrefetch(*value.Prefetch)
 		return p.project(appobs.ObserverLossRootPrefetch, event, err)
+	case value.Capacity != nil:
+		event, err := ProjectSenderCapacity(*value.Capacity)
+		return p.project(appobs.ObserverLossSenderCapacity, event, err)
 	case value.Revision != nil:
 		event, err := ProjectSenderRevision(*value.Revision)
 		return p.project(appobs.ObserverLossSenderRevision, event, err)
@@ -151,14 +151,14 @@ func (p workflowProjection) share(envelope task.Observation, value share.Observa
 		event, err := ProjectRelayLifecycle(p.workflow, *value.RelayLifecycle)
 		accepted := p.project(appobs.ObserverLossRelayLifecycle, event, err)
 		if err == nil && event.Stage() == appobs.RelayTraceDropped {
-			p.publish(appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
+			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
 		}
 		return accepted
 	case value.SenderAttempt != nil:
 		event, err := ProjectSenderAttempt(p.workflow, *value.SenderAttempt)
 		return p.project(appobs.ObserverLossSenderAttempt, event, err)
 	case value.PeerDiagnostic != nil:
-		return projectPeerLoss(*value.PeerDiagnostic, p.publish, p.emit)
+		return projectPeerLoss(p.workflow, *value.PeerDiagnostic, p.publish, p.emit)
 	case value.Native != nil:
 		event, err := ProjectNativeObservation(p.workflow, *value.Native)
 		return p.project(appobs.ObserverLossNativeConnectivity, event, err)
@@ -166,7 +166,7 @@ func (p workflowProjection) share(envelope task.Observation, value share.Observa
 		event, err := ProjectWebRTCLifecycle(p.workflow, *value.WebRTC)
 		accepted := p.project(appobs.ObserverLossWebRTCLifecycle, event, err)
 		if err == nil && event.Transition() == appobs.WebRTCTraceDropped {
-			p.publish(appobs.LossSnapshot{Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
+			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
 		}
 		return accepted
 	case value.Protocol != nil:
@@ -180,11 +180,8 @@ func (p workflowProjection) share(envelope task.Observation, value share.Observa
 		return p.project(appobs.ObserverLossSenderSessionTerminal, event, err)
 	case value.Loss != nil:
 		return p.publish(ShareLoss(*value.Loss))
-	case value.Milestone == share.SourceAcquiring || value.Milestone == share.SourceAcquired || value.Milestone == share.SourceAcquisitionFailed:
+	case value.Milestone != "":
 		return p.emit(projectTask(p.workflow, envelope))
-	case value.Milestone == share.ShareReady || value.Milestone == share.ShareStopping || value.Milestone == share.ShareStopped || value.Milestone == share.SessionRetired:
-		// These milestones are application facts, not connection implementations.
-		return p.publish(ShareMilestone{Milestone: value.Milestone, Failed: value.Failure != nil})
 	default:
 		return p.emit(nil, ErrInvalidProjection)
 	}
@@ -199,13 +196,6 @@ func receiveWarning(code receive.FailureCode, cause error) appobs.Failure {
 	}
 	return mustFailure(appobs.FailureUnexpected)
 }
-
-type ShareMilestone struct {
-	Milestone share.Milestone
-	Failed    bool
-}
-
-func (ShareMilestone) EngineEvent() {}
 
 func projectLocalStop(value receive.ReceiverLocalStopReason) appobs.ReceiverLocalStopReason {
 	switch value {

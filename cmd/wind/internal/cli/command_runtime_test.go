@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/internal/testrun"
 )
 
 func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
@@ -57,7 +56,7 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 		!shareOptions.Diagnostics || !shareOptions.TraceLifecycle {
 		t.Fatal("verbose/trace runtime did not enable detailed diagnostics")
 	}
-	if !runtime.Publish(clievent.NewReady()) {
+	if !runtime.Publish(appobs.NewReady()) {
 		t.Fatal("ready event was not retained")
 	}
 	runtime.Close()
@@ -255,7 +254,7 @@ func TestCommandRuntimeReportsPreRecorderObserverLoss(t *testing.T) {
 	if len(recorded) != 1 {
 		t.Fatalf("observer loss trace events=%#v", recorded)
 	}
-	loss, ok := recorded[0].(clievent.ObserverLossObserved)
+	loss, ok := recorded[0].(appobs.ObserverLossObserved)
 	if !ok || loss.Category() != appobs.ObserverLossRelayLifecycle || loss.Reason() != appobs.ObserverLossTraceQueue || loss.Count() != 3 {
 		t.Fatalf("observer loss event=%#v", recorded[0])
 	}
@@ -287,7 +286,7 @@ func TestCommandRuntimeObserverLossCoalescesByClassAndSaturates(t *testing.T) {
 
 	got := make(map[[2]uint8]uint64)
 	for _, event := range recorder.recorded() {
-		loss, ok := event.(clievent.ObserverLossObserved)
+		loss, ok := event.(appobs.ObserverLossObserved)
 		if !ok {
 			continue
 		}
@@ -331,7 +330,7 @@ func TestCommandRuntimeCumulativeLossCountsEachDeltaOnce(t *testing.T) {
 
 	var capacity, closed uint64
 	for _, event := range recorder.recorded() {
-		loss, ok := event.(clievent.ObserverLossObserved)
+		loss, ok := event.(appobs.ObserverLossObserved)
 		if !ok {
 			continue
 		}
@@ -367,17 +366,17 @@ func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T)
 		t.Fatal(err)
 	}
 	app.projectReceiveObservation(observation, fact)
-	app.projectReceiveObservation(observation, appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: 4})
-	app.projectReceiveObservation(observation, appobs.LossSnapshot{Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossStreamCapacity, Count: 4})
+	app.projectReceiveObservation(observation, appobs.LossSnapshot{WorkflowKind: appobs.WorkflowReceive, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: 4})
+	app.projectReceiveObservation(observation, appobs.LossSnapshot{WorkflowKind: appobs.WorkflowReceive, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossStreamCapacity, Count: 4})
 	runtime.Close()
 
 	var lifecycleSeen bool
 	var queueLoss, streamLoss uint64
 	for _, event := range recorder.recorded() {
 		switch value := event.(type) {
-		case clievent.RelayLifecycleObserved:
+		case appobs.RelayLifecycleObserved:
 			lifecycleSeen = value.Stage() == appobs.RelayTraceDropped && value.Dropped() == 4
-		case clievent.ObserverLossObserved:
+		case appobs.ObserverLossObserved:
 			if value.Category() == appobs.ObserverLossRelayLifecycle && value.Reason() == appobs.ObserverLossTraceQueue {
 				queueLoss = saturatingAdd(queueLoss, value.Count())
 			}
@@ -416,7 +415,7 @@ func TestObservationPublicationGateSerializesRevocationWithRuntimeEnqueue(t *tes
 		close(validated)
 		<-resume
 		lateResult <- gate.Commit(context.Background(), func() bool {
-			return runtime.Observe(clievent.NewReady())
+			return runtime.Observe(appobs.NewReady())
 		})
 	}()
 	<-validated
@@ -434,7 +433,7 @@ func TestObservationPublicationGateSerializesRevocationWithRuntimeEnqueue(t *tes
 		commitDone <- preCutGate.Commit(context.Background(), func() bool {
 			close(insideGate)
 			<-releaseEnqueue
-			return runtime.Observe(clievent.NewReady())
+			return runtime.Observe(appobs.NewReady())
 		})
 	}()
 	<-insideGate
@@ -462,7 +461,7 @@ func TestObservationPublicationGateSerializesRevocationWithRuntimeEnqueue(t *tes
 	if len(events) != 2 {
 		t.Fatalf("events=%#v", events)
 	}
-	if _, ok := events[0].(clievent.Ready); !ok {
+	if _, ok := events[0].(appobs.Ready); !ok {
 		t.Fatalf("pre-cut event=%T", events[0])
 	}
 	if _, ok := events[1].(clievent.SharingStopped); !ok {
@@ -510,7 +509,7 @@ func TestMalformedRelayLifecycleProducesTypedLossAndSingleIncompleteWarning(t *t
 	if len(recorded) != 1 {
 		t.Fatalf("trace events=%#v", recorded)
 	}
-	loss, ok := recorded[0].(clievent.ObserverLossObserved)
+	loss, ok := recorded[0].(appobs.ObserverLossObserved)
 	if !ok || loss.Category() != appobs.ObserverLossRelayLifecycle ||
 		loss.Reason() != appobs.ObserverLossInvalidIdentity || loss.Count() != 1 {
 		t.Fatalf("observer loss=%#v", recorded[0])
@@ -536,11 +535,11 @@ func TestCommandRuntimeGetFinalizationSurvivesObserverSaturation(t *testing.T) {
 
 	events := recorder.recorded()
 	assertRuntimeEventTypes(t, events,
-		clievent.Warning{},
-		clievent.Warning{},
-		clievent.TransferProgress{},
-		clievent.ObserverLossObserved{},
-		clievent.TransferProgress{},
+		appobs.Warning{},
+		appobs.Warning{},
+		appobs.TransferProgress{},
+		appobs.ObserverLossObserved{},
+		appobs.TransferProgress{},
 		clievent.TransferSettled{},
 	)
 	if recorder.lifecycle != 1 {
@@ -555,7 +554,7 @@ func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := clievent.NewSharingSubjectSelected(subject)
+	selected, err := appobs.NewSharingSubjectSelected(subject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,12 +573,12 @@ func TestCommandRuntimeShareReadyAndStopSurviveObserverSaturation(t *testing.T) 
 	closeBlockedRuntime(t, runtime, writer)
 
 	assertRuntimeEventTypes(t, recorder.recorded(),
-		clievent.Warning{},
-		clievent.Warning{},
-		clievent.Ready{},
-		clievent.SharingSubjectSelected{},
-		clievent.RelayConnected{},
-		clievent.ObserverLossObserved{},
+		appobs.Warning{},
+		appobs.Warning{},
+		appobs.Ready{},
+		appobs.SharingSubjectSelected{},
+		appobs.RelayConnected{},
+		appobs.ObserverLossObserved{},
 		clievent.SharingStopped{},
 	)
 }
@@ -609,9 +608,9 @@ func TestCommandRuntimeObserverIngestionStaysLossyAndNonblockingWhileFailureIsGu
 	closeBlockedRuntime(t, runtime, writer)
 
 	assertRuntimeEventTypes(t, recorder.recorded(),
-		clievent.Warning{},
-		clievent.Warning{},
-		clievent.ObserverLossObserved{},
+		appobs.Warning{},
+		appobs.Warning{},
+		appobs.ObserverLossObserved{},
 		clievent.CommandFailed{},
 	)
 	if recorder.lifecycle != 2 {
@@ -685,7 +684,7 @@ func assertRuntimeEventTypes(t *testing.T, events []clievent.Event, want ...clie
 	}
 }
 
-func newRuntimeTestWarning(t *testing.T, command clievent.Command) clievent.Warning {
+func newRuntimeTestWarning(t *testing.T, command clievent.Command) appobs.Warning {
 	t.Helper()
 	failure, err := appobs.NewFailure(appobs.FailureTraceWrite)
 	if err != nil {
@@ -698,7 +697,7 @@ func newRuntimeTestWarning(t *testing.T, command clievent.Command) clievent.Warn
 	return warning
 }
 
-func newRuntimeTestProgress(t *testing.T) clievent.TransferProgress {
+func newRuntimeTestProgress(t *testing.T) appobs.TransferProgress {
 	t.Helper()
 	receiveID, err := appobs.NewReceiveOperationID(bytes.Repeat([]byte{1}, appobs.IdentityBytes))
 	if err != nil {
@@ -719,7 +718,7 @@ func newRuntimeTestProgress(t *testing.T) clievent.TransferProgress {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := clievent.NewTransferProgress(receiveID, jobID, snapshot)
+	event, err := appobs.NewTransferProgress(receiveID, jobID, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,44 +758,6 @@ func newRuntimeTestSharingStopped(t *testing.T) clievent.SharingStopped {
 		t.Fatal(err)
 	}
 	return event
-}
-
-func TestPrivateAndUserTraceRemainIndependent(t *testing.T) {
-	values := map[string]string{
-		testrun.RunIDEnvironment: "run-1", testrun.OperationIDEnvironment: "operation-1",
-		testrun.ScenarioEnvironment: "coexistence",
-	}
-	privateSink := &recordingProcessTraceSink{}
-	private, err := newProcessTraceWithSink(func(name string) (string, bool) {
-		value, ok := values[name]
-		return value, ok
-	}, func(testrun.Identity) (processTraceEventSink, error) { return privateSink, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	user := newFakeUserTrace(runtrace.Status{Complete: true})
-	app := &App{
-		Stderr: bytes.NewBuffer(nil), processTrace: private,
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
-			return user, nil
-		},
-	}
-	runtime, err := app.newCommandRuntime(clievent.CommandShare, testExactTraceOptions("trace.ndjson"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	app.recordProcessTrace(processTraceShareComponent, processTraceSenderReady, testrun.OutcomeSucceeded)
-	_ = runtime.Publish(clievent.NewReady())
-	runtime.Close()
-	if err := private.close(); err != nil {
-		t.Fatal(err)
-	}
-	if privateSink.closeCalls != 1 || privateSink.event.Milestone != string(processTraceSenderReady) {
-		t.Fatalf("private trace=%+v close=%d", privateSink.event, privateSink.closeCalls)
-	}
-	if len(user.recorded()) != 1 {
-		t.Fatalf("user trace events=%d", len(user.recorded()))
-	}
 }
 
 type fakeUserTrace struct {

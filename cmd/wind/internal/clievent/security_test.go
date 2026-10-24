@@ -5,27 +5,29 @@ import (
 	"testing"
 	"time"
 
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/core/diagnosticerror"
+
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T) {
 	eventTypes := []reflect.Type{
-		reflect.TypeFor[PlatformSetupObserved](), reflect.TypeFor[ObserverLossObserved](),
-		reflect.TypeFor[Ready](), reflect.TypeFor[SharingSubjectSelected](),
-		reflect.TypeFor[RelayConnected](), reflect.TypeFor[RelayRecovering](),
-		reflect.TypeFor[ContentPathSelected](), reflect.TypeFor[Fallback](),
-		reflect.TypeFor[TransferProgress](), reflect.TypeFor[Warning](),
+		reflect.TypeFor[PlatformSetupObserved](), reflect.TypeFor[appobs.ObserverLossObserved](),
+		reflect.TypeFor[appobs.Ready](), reflect.TypeFor[appobs.SharingSubjectSelected](),
+		reflect.TypeFor[appobs.RelayConnected](), reflect.TypeFor[appobs.RelayRecovering](),
+		reflect.TypeFor[appobs.ContentPathSelected](), reflect.TypeFor[appobs.Fallback](),
+		reflect.TypeFor[appobs.TransferProgress](), reflect.TypeFor[appobs.Warning](),
 		reflect.TypeFor[CommandFailed](), reflect.TypeFor[TransferSettled](),
 		reflect.TypeFor[SharingStopped](), reflect.TypeFor[TraceIncomplete](),
-		reflect.TypeFor[LaneAdopted](),
-		reflect.TypeFor[RelayLifecycleObserved](), reflect.TypeFor[WebRTCLifecycleObserved](),
-		reflect.TypeFor[PeerAttemptObserved](), reflect.TypeFor[TransferLifecycleObserved](),
-		reflect.TypeFor[FilesystemOutputObserved](), reflect.TypeFor[SenderTerminalSendObserved](),
-		reflect.TypeFor[SenderSessionTerminated](), reflect.TypeFor[ProtocolObservationObserved](),
-		reflect.TypeFor[CatalogStorageObserved](),
-		reflect.TypeFor[RootPrefetchObserved](),
-		reflect.TypeFor[SenderCapacityObserved](), reflect.TypeFor[SenderRevisionObserved](),
+		reflect.TypeFor[appobs.LaneAdopted](),
+		reflect.TypeFor[appobs.RelayLifecycleObserved](), reflect.TypeFor[appobs.WebRTCLifecycleObserved](),
+		reflect.TypeFor[appobs.PeerAttemptObserved](), reflect.TypeFor[appobs.TransferLifecycleObserved](),
+		reflect.TypeFor[fsobs.FilesystemOutputObserved](), reflect.TypeFor[appobs.SenderTerminalSendObserved](),
+		reflect.TypeFor[appobs.SenderSessionTerminated](), reflect.TypeFor[appobs.ProtocolObservationObserved](),
+		reflect.TypeFor[appobs.CatalogStorageObserved](),
+		reflect.TypeFor[appobs.RootPrefetchObserved](),
+		reflect.TypeFor[appobs.SenderCapacityObserved](), reflect.TypeFor[appobs.SenderRevisionObserved](),
 	}
 	seen := make(map[reflect.Type]bool)
 	for _, eventType := range eventTypes {
@@ -77,7 +79,7 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				// aggregate/per-value byte bounds; raw errors are never retained.
 				diagnostic = diagnostic || value == reflect.TypeFor[appobs.ObservationRejection]() ||
 					value == reflect.TypeFor[appobs.RejectionField]() || value == reflect.TypeFor[appobs.SendAttemptCause]()
-				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" {
+				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}
 			}

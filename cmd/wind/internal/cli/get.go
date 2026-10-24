@@ -48,7 +48,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 		return observation.commandFailure(ExitFailure, err)
 	}
 	for value := range task.Observations() {
-		observeEngineTask(runtime, clievent.CommandGet, value)
+		observeEngineTask(runtime, value)
 		a.projectReceiveObservation(observation, value.Event)
 	}
 	result, err := task.Wait(context.Background())

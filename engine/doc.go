@@ -8,9 +8,9 @@
 // ShareTask.StopShare explicitly stops a share; Close stops all
 // tasks and closes the instance's capacity owner.
 //
-// TaskResult and the finished LifecycleObservation share one Settlement containing
-// Outcome, FailureClass, normalized Failure/CleanupFailure, and diagnostic causes.
-// Value contains workflow details;
+// TaskResult retains the authoritative Settlement and diagnostic causes. Share
+// and receive streams expose its normalized EngineTaskObserved fact once, using
+// engine/observation/wire for serialization. Value contains workflow details;
 // errors.As can recover a structured ReceiveFailure from Err even without a
 // low-level cause. A nil Wait error means the result was retrieved, not that the
 // operation succeeded. StopReason records intent independently of the outcome.

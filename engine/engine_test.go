@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	appobs "github.com/windshare/windshare/engine/observation"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -210,10 +212,11 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 	}
 	finished := 0
 	for observation := range current.Observations() {
-		if lifecycle, ok := observation.Event.(LifecycleObservation); ok && lifecycle.State == TaskFinished {
+		if lifecycle, ok := observation.Event.(appobs.EngineTaskObserved); ok && lifecycle.Facts().Stage == appobs.EngineTaskSettled {
 			finished++
-			if lifecycle.Settlement != result.Settlement || lifecycle.Err == nil {
-				t.Fatalf("failed receive lost its terminal reason: %+v", lifecycle)
+			facts := lifecycle.Facts()
+			if facts.Outcome != appobs.EngineOutcomeFailed || facts.FailureClass != appobs.EngineFailureUsage || facts.Failure != result.Failure || !facts.Failure.Valid() {
+				t.Fatalf("failed receive lost its terminal reason: %+v", facts)
 			}
 		}
 	}

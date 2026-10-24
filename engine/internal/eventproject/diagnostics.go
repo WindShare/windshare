@@ -255,7 +255,7 @@ func projectPeerTeardown(value v2peer.PeerTeardownTransition) (appobs.PeerTeardo
 	}
 }
 
-func projectPeerLoss(value v2peer.PeerDiagnosticObservation, publish func(task.Event) bool, reject func(appobs.Event, error) bool) bool {
+func projectPeerLoss(workflow appobs.Workflow, value v2peer.PeerDiagnosticObservation, publish func(task.Event) bool, reject func(appobs.Event, error) bool) bool {
 	category, reason, count, err := ProjectPeerDiagnostic(value)
 	if err != nil {
 		return reject(nil, err)
@@ -271,11 +271,11 @@ func projectPeerLoss(value v2peer.PeerDiagnosticObservation, publish func(task.E
 			source = appobs.LossSenderCleanupResidue
 		}
 	}
-	return publish(appobs.LossSnapshot{Source: source, Category: category, Reason: reason, Count: count})
+	return publish(appobs.LossSnapshot{WorkflowKind: workflow, Source: source, Category: category, Reason: reason, Count: count})
 }
 
 func ReceiveLoss(value receive.ObservationLoss) appobs.LossSnapshot {
-	loss := appobs.LossSnapshot{Reason: appobs.ObserverLossStreamCapacity, Count: value.Count}
+	loss := appobs.LossSnapshot{WorkflowKind: appobs.WorkflowReceive, Reason: appobs.ObserverLossStreamCapacity, Count: value.Count}
 	switch value.Source {
 	case receive.ObservationRelay:
 		loss.Source, loss.Category = appobs.LossRelayQueue, appobs.ObserverLossRelayLifecycle
@@ -296,7 +296,7 @@ func ReceiveLoss(value receive.ObservationLoss) appobs.LossSnapshot {
 }
 
 func ShareLoss(value share.ObservationLoss) appobs.LossSnapshot {
-	loss := appobs.LossSnapshot{Reason: appobs.ObserverLossStreamCapacity, Count: value.Dropped}
+	loss := appobs.LossSnapshot{WorkflowKind: appobs.WorkflowShare, Reason: appobs.ObserverLossStreamCapacity, Count: value.Dropped}
 	switch value.Source {
 	case share.RelayObservations:
 		loss.Source, loss.Category = appobs.LossRelayQueue, appobs.ObserverLossRelayLifecycle

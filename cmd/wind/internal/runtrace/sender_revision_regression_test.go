@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *testing.T) {
@@ -13,20 +14,19 @@ func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *tes
 	operation, _ := appobs.NewProtocolOperationID(identityBytes(0x62))
 	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-3-decision-4")
 	decision, _ := appobs.NewSenderCapacityDecision(decisionID)
-	event, err := clievent.NewSenderContentDecisionObserved(appobs.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowShare, Role: appobs.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessageOpenRevisions}, decision, appobs.LaneIdentity{}, false)
+	event, err := appobs.NewSenderContentDecisionObserved(appobs.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowShare, Role: appobs.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessageOpenRevisions}, decision, appobs.LaneIdentity{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV4{}
-	visitor := &encodeVisitorV4{record: record}
-	if err := visitor.VisitProtocolObservationObserved(event); err != nil {
+	record, encodeErr := wire.Encode(event)
+	if err := encodeErr; err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(senderContentDecisionPayloadV4)
+	payload, ok := record.Payload.(wire.SenderContentDecisionPayload)
 	if !ok || payload.ContentDecision == nil || payload.ContentDecision.CapacityDecisionID == nil ||
 		*payload.ContentDecision.CapacityDecisionID != decisionID.Hex() || record.Correlation == nil ||
-		record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) ||
-		record.Correlation.ProtocolOperationID != encodeCorrelationIdentity(operation.Bytes()) {
+		record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) ||
+		record.Correlation.ProtocolOperationID != wire.EncodeIdentity(operation.Bytes()) {
 		t.Fatalf("sender decision record = %#v", record)
 	}
 }
@@ -36,7 +36,8 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-5-decision-6")
 	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-one"))
 	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := clievent.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+	capacityEvent, err := appobs.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+		StoreID: fixtureCapacityStoreID(t), ShareID: fixtureCapacityShareID(t),
 		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
 		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
 		HasShare: true, HasSessionScope: true,
@@ -44,35 +45,33 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV4{}
-	visitor := &encodeVisitorV4{record: record}
-	if err := visitor.VisitSenderCapacityObserved(capacityEvent); err != nil {
+	record, encodeErr := wire.Encode(capacityEvent)
+	if err := encodeErr; err != nil {
 		t.Fatal(err)
 	}
-	capacityPayload, ok := record.Payload.(senderCapacityPayloadV4)
+	capacityPayload, ok := record.Payload.(wire.SenderCapacityPayload)
 	if !ok || capacityPayload.DecisionID == nil || *capacityPayload.DecisionID != decisionID.Hex() ||
 		capacityPayload.RevisionID == nil || *capacityPayload.RevisionID != revisionID.Hex() ||
-		record.Correlation == nil || record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) {
+		record.Correlation == nil || record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) {
 		t.Fatalf("sender capacity record = %#v", record)
 	}
 
 	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x72))
-	revisionEvent, err := clievent.NewSenderRevisionObserved(
+	revisionEvent, err := appobs.NewSenderRevisionObserved(
 		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
 		revisionID, lease, session,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record = &RunTraceRecordV4{}
-	visitor = &encodeVisitorV4{record: record}
-	if err := visitor.VisitSenderRevisionObserved(revisionEvent); err != nil {
+	record, encodeErr = wire.Encode(revisionEvent)
+	if err := encodeErr; err != nil {
 		t.Fatal(err)
 	}
-	revisionPayload, ok := record.Payload.(senderRevisionPayloadV4)
+	revisionPayload, ok := record.Payload.(wire.SenderRevisionPayload)
 	if !ok || revisionPayload.LeaseID == nil || *revisionPayload.LeaseID != lease.Hex() ||
 		revisionPayload.RevisionID != revisionID.Hex() || record.Correlation == nil ||
-		record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) {
+		record.Correlation.ProtocolSessionID != wire.EncodeIdentity(session.Bytes()) {
 		t.Fatalf("sender revision record = %#v", record)
 	}
 }
@@ -82,7 +81,8 @@ func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
 	decisionID, _ := appobs.NewCapacityDecisionID("capacity-owner-7-decision-8")
 	revisionID, _ := appobs.NewSenderRevisionID([]byte("revision-two"))
 	scope := appobs.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
-	capacityEvent, err := clievent.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+	capacityEvent, err := appobs.NewSenderCapacityObserved(appobs.SenderCapacitySpec{
+		StoreID: fixtureCapacityStoreID(t), ShareID: fixtureCapacityShareID(t),
 		Stage: appobs.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
 		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
 		HasShare: true, HasSessionScope: true,
@@ -91,7 +91,7 @@ func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	lease, _ := appobs.NewRevisionLeaseID(identityBytes(0x82))
-	revisionEvent, err := clievent.NewSenderRevisionObserved(
+	revisionEvent, err := appobs.NewSenderRevisionObserved(
 		appobs.SenderRevisionLeaseSettlement, appobs.SenderRevisionCauseRelinquished,
 		revisionID, lease, session,
 	)
@@ -128,4 +128,21 @@ func identityBytes(first byte) []byte {
 	raw := make([]byte, appobs.IdentityBytes)
 	raw[0] = first
 	return raw
+}
+
+func fixtureCapacityStoreID(t *testing.T) appobs.CapacityStoreID {
+	t.Helper()
+	id, err := appobs.NewCapacityStoreID("store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+func fixtureCapacityShareID(t *testing.T) appobs.CapacityShareID {
+	t.Helper()
+	id, err := appobs.NewCapacityShareID("share")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

@@ -57,18 +57,26 @@ func (facts v4EngineTaskFacts) validate(command string, correlation *v4TraceCorr
 	}
 	switch facts.Stage {
 	case "task_started", "task_stopping", "task_settled":
+	case "share_ready", "share_stopping", "share_closed":
+		if command != "share" {
+			return fmt.Errorf("share lifecycle belongs to another workflow")
+		}
+	case "session_retired":
+		if command != "share" || correlation == nil || correlation.ProtocolSessionID == "" {
+			return fmt.Errorf("retired session lacks share/session ownership")
+		}
 	case "source_acquiring", "source_acquired", "source_failed":
 		if command != "share" || facts.ShareInstance == "" {
 			return fmt.Errorf("source acquisition lacks share ownership")
 		}
-	case "generation_changed", "admission_decision":
+	case "generation_changed", "admission_decision", "relay_content_claimed":
 		if command != "get" || correlation == nil || correlation.ProtocolSessionID == "" {
 			return fmt.Errorf("receive decision lacks protocol session ownership")
 		}
 	default:
 		return fmt.Errorf("unknown stage %q", facts.Stage)
 	}
-	if facts.Stage == "admission_decision" {
+	if facts.Stage == "admission_decision" || facts.Stage == "relay_content_claimed" {
 		switch facts.AdmissionTrigger {
 		case "none", "peer_failed", "peer_detached", "relay_only_policy":
 		default:
@@ -189,7 +197,7 @@ func assertV4CriticalEngineTask(t *testing.T, command string, records []v4TraceR
 
 func TestUserTraceV4EngineTaskFacts(t *testing.T) {
 	runID, session, previous := v4CapacityBase64ID(1), v4CapacityBase64ID(2), v4CapacityBase64ID(3)
-	for _, stage := range []string{"task_started", "task_stopping", "task_settled", "source_acquiring", "source_acquired", "source_failed", "generation_changed", "admission_decision"} {
+	for _, stage := range []string{"task_started", "task_stopping", "task_settled", "source_acquiring", "source_acquired", "source_failed", "generation_changed", "admission_decision", "relay_content_claimed", "share_ready", "share_stopping", "share_closed", "session_retired"} {
 		t.Run(stage, func(t *testing.T) {
 			command := "share"
 			payload := map[string]any{
@@ -205,7 +213,7 @@ func TestUserTraceV4EngineTaskFacts(t *testing.T) {
 				payload["cleanup_failure"] = map[string]any{"code": "io", "message_key": "failure.io"}
 			case "source_acquiring", "source_acquired", "source_failed":
 				payload["share_instance"] = v4CapacityBase64ID(4)
-			case "generation_changed", "admission_decision":
+			case "generation_changed", "admission_decision", "relay_content_claimed":
 				command = "get"
 				payload["receive_operation_id"], payload["transfer_job_id"] = v4CapacityBase64ID(5), v4CapacityBase64ID(6)
 				if stage == "generation_changed" {
@@ -215,7 +223,7 @@ func TestUserTraceV4EngineTaskFacts(t *testing.T) {
 				}
 			}
 			record := v4CapacityTraceRecord(1, command, "engine_task_observed", runID, payload)
-			if command == "get" {
+			if command == "get" || stage == "session_retired" {
 				record["correlation"] = map[string]any{"protocol_session_id": session}
 			}
 			v4ReadTraceVectors(t, command, []map[string]any{record})

@@ -36,7 +36,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 1 {
 		t.Fatalf("first loss = %+v", loss)
 	}
-	first, ok := runtime.takeNext().(clievent.ObserverLossObserved)
+	first, ok := runtime.takeNext().(appobs.ObserverLossObserved)
 	if !ok || first.Count() != 1 {
 		t.Fatalf("first report = %#v", first)
 	}
@@ -63,7 +63,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	if loss := runtime.collectPendingLossLocked(false); loss.ContractRejections != 0 {
 		t.Fatal("counted the same failures twice")
 	}
-	repeated := runtime.takeNext().(clievent.ObserverLossObserved)
+	repeated := runtime.takeNext().(appobs.ObserverLossObserved)
 	repeatedSample, _ := repeated.Rejection()
 	if repeated.Count() != 100 || repeatedSample != sample {
 		t.Fatalf("repeat report = %#v", repeated)
@@ -74,7 +74,7 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	if !runtime.Finalize(terminal) {
 		t.Fatal("finalize failed")
 	}
-	final := runtime.takeNext().(clievent.ObserverLossObserved)
+	final := runtime.takeNext().(appobs.ObserverLossObserved)
 	if final.Count() != 2 || runtime.takeNext() != terminal || runtime.takeNext() != nil {
 		t.Fatalf("final report ordering/count = %#v", final)
 	}
@@ -101,8 +101,8 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 	var total, omitted uint64
 	reports := 0
 	for event := runtime.takeNext(); event != nil; event = runtime.takeNext() {
-		total += event.(clievent.ObserverLossObserved).Count()
-		omitted += event.(clievent.ObserverLossObserved).OmittedSamples()
+		total += event.(appobs.ObserverLossObserved).Count()
+		omitted += event.(appobs.ObserverLossObserved).OmittedSamples()
 		reports++
 	}
 	if total != count || reports != maxProjectionRejectionSignatures || omitted != count-(maxProjectionRejectionSignatures-1) {
@@ -154,7 +154,7 @@ func TestObservationRejectionConcurrentAccounting(t *testing.T) {
 	if loss := runtime.collectPendingLossLocked(true); loss.ContractRejections != 256 {
 		t.Fatalf("loss=%+v", loss)
 	}
-	event := runtime.takeNext().(clievent.ObserverLossObserved)
+	event := runtime.takeNext().(appobs.ObserverLossObserved)
 	if event.Count() != 256 || runtime.takeNext() != nil {
 		t.Fatal("concurrent counts were lost or duplicated")
 	}

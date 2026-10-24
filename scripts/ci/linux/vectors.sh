@@ -16,6 +16,6 @@ go test -count=1 ./core/transfer/lanescheduling -run '^TestSchedulingBehaviorVec
 echo "-- verify peer-signaling vectors"
 go test -count=1 ./connectivity/v2signal
 echo "-- verify diagnostic-correlation vectors"
-go test -count=1 ./cmd/wind/internal/runtrace -run 'Test(CorrelationV1|DiagnosticCorrelationVectors)'
+go test -count=1 ./engine/observation/wire -run 'Test(CorrelationV1|DiagnosticCorrelationVectors)'
 
 echo "== vectors: PASS in ${SECONDS}s =="

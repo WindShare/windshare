@@ -16,19 +16,13 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 const protocolObservationCapacity observationstream.Capacity = 256
-const (
-	processTraceGetComponent         testrun.Component = "wind_get"
-	processTraceReceiverDirectLane   testrun.Milestone = "receiver_direct_lane"
-	processTraceReceiverRelayContent testrun.Milestone = "receiver_relay_content"
-	processTraceReceiverJoinStopped  testrun.Milestone = "receiver_join_stopped"
-)
+const ()
 
 type observedSource struct {
 	complete func() uint64
@@ -243,11 +237,6 @@ func (o getObservation) registerReceiverFactory(source receiverObservationComple
 	}, terminal)
 	o.register(ObservationPeerDiagnostic, func() uint64 { return completion.Diagnostics.Loss.CapacityDropped }, diagnostic)
 }
-func (a *runner) recordProcessTrace(component testrun.Component, name testrun.Milestone, outcome testrun.Outcome) {
-	if a.control.Emit != nil {
-		a.control.Emit(Milestone{Component: component, Name: name, Outcome: outcome})
-	}
-}
 
 func (o getObservation) admission(decision receiverAdmissionDecision) {
 	event := AdmissionObserved{Session: o.session, Trigger: decision.Trigger, TerminalOwner: decision.TerminalOwner, Cause: decision.Cause}
@@ -300,4 +289,12 @@ func (o getObservation) lossSnapshot() []ObservationLoss {
 		}
 	}
 	return result
+}
+
+func (o getObservation) relayContentClaimed(trigger receiverAdmissionTrigger) {
+	event := RelayContentClaimed{Session: o.session, Trigger: trigger}
+	if o.paths != nil {
+		event.Operation, event.Job = o.paths.transferIdentity()
+	}
+	o.emit(event)
 }

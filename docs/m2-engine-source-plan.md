@@ -93,7 +93,8 @@ URI 可读或文件描述符支持随机定位，都不足以单独证明内容�
 
 ### 4. 整理 engine 结果与 CLI 观测接入
 
-- 由 engine 提供 CLI 实际使用的类型化请求、任务状态、结果和有界观测事件。复用现有观测基础设施，以及稳定的分享、操作和会话标识符。
+- `engine/observation` owns share/receive facts; `engine/observation/wire` owns their shared JSON schema. CLI rendering consumes the facts directly; runtrace adds recording metadata and command results. Future RPC reuses the same codec. Provider diagnostics retain their adapter-owned payloads.
+- Capacity observations follow each store registration into its owning task while capacity budgets remain shared. E2E derives milestones from ordinary traces; production code has no test-protocol dependency.
 - 将终端展示和日志订阅与任务执行分开。订阅结束只释放观测资源；CLI 将 Ctrl+C 等用户操作显式映射为任务取消或 engine 关闭。
 - 在任务创建、文件源获取、会话换代、准入决策和结算时输出结构化 trace，包含相关标识符和决策上下文。
 - 保持最终结果的发布顺序：各生产者结束工作、资源完成释放后，再结算任务状态。进度展示可以合并更新，终端输出缓慢不阻塞内容传输。

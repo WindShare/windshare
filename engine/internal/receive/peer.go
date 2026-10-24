@@ -15,7 +15,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/internal/testrun"
 )
 
 var ErrInvalidConnectivityPolicy = errors.New("invalid connectivity policy")
@@ -141,17 +140,6 @@ func (a *runner) monitorReceiverAdmission(
 		}
 	}()
 	return done
-}
-
-func (a *runner) observeRelayContentAdmission(
-	_ receiverAdmissionTrigger,
-	_ *receiverContentPaths,
-) {
-	a.recordProcessTrace(
-		processTraceGetComponent,
-		processTraceReceiverRelayContent,
-		testrun.OutcomeSucceeded,
-	)
 }
 
 // receiverContentPaths projects recent useful delivery separately from admitted
@@ -460,11 +448,6 @@ func (a *runner) monitorReceiverPeer(
 			ready = nil
 			if lane, ok := attempt.Lane(); ok {
 				observation.laneAdopted(session, lane)
-				a.recordProcessTrace(
-					processTraceGetComponent,
-					processTraceReceiverDirectLane,
-					testrun.OutcomeSucceeded,
-				)
 			}
 			notifyReceiverPeer(observe, receiverPeerReady)
 		case <-attempt.Done():

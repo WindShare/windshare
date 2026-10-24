@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 const (
@@ -32,7 +33,7 @@ func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := projectProgress(snapshot)
+	progress, err := wire.EncodeProgress(snapshot)
 	if err != nil || progress.PreviouslyPublishedBytes != "4" || progress.VerifiedBytes != "0" ||
 		progress.NewlyVerifiedBytes != "0" || progress.FileOutcomes.PreviouslyPublishedFiles != "1" ||
 		progress.FileOutcomes.ResumedFiles != "0" {
@@ -107,7 +108,7 @@ func TestEncodeV4VisitsEveryEventWithSealedPayloads(t *testing.T) {
 		eventNames[record.Event] = struct{}{}
 		payloadType := reflect.TypeOf(record.Payload)
 		if previous, duplicate := payloadTypes[payloadType]; duplicate &&
-			payloadType != reflect.TypeFor[emptyPayloadV4]() {
+			payloadType != reflect.TypeFor[wire.EmptyPayload]() {
 			t.Fatalf("events %q and %q share payload type %v", previous, record.Event, payloadType)
 		}
 		payloadTypes[payloadType] = record.Event
@@ -126,7 +127,7 @@ func TestEncodeV4PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	transferPayload, ok := transfer.Payload.(transferLifecyclePayloadV4)
+	transferPayload, ok := transfer.Payload.(wire.TransferLifecyclePayload)
 	if !ok || transferPayload.ItemBlockReason == nil ||
 		*transferPayload.ItemBlockReason != "revision_conflict" {
 		t.Fatalf("transfer item block payload = %#v", transfer.Payload)
@@ -140,7 +141,7 @@ func TestEncodeV4PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystemPayload, ok := filesystem.Payload.(filesystemOutputPayloadV4)
+	filesystemPayload, ok := filesystem.Payload.(fsobs.FilesystemOutputPayload)
 	if !ok || filesystemPayload.CheckpointDecision == nil ||
 		*filesystemPayload.CheckpointDecision != "revision_conflict" {
 		t.Fatalf("filesystem checkpoint payload = %#v", filesystem.Payload)
@@ -162,10 +163,10 @@ func TestV4PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 	}
 	roots = append(roots,
 		reflect.TypeFor[traceSummaryPayloadV4](),
-		reflect.TypeFor[ProtocolErrorContentV4](),
-		reflect.TypeFor[protocolResponseSendPayloadV4](),
-		reflect.TypeFor[protocolSendAttemptSettledPayloadV4](),
-		reflect.TypeFor[protocolErrorReceivedPayloadV4](),
+		reflect.TypeFor[wire.ProtocolErrorContent](),
+		reflect.TypeFor[wire.ProtocolResponseSendPayload](),
+		reflect.TypeFor[wire.ProtocolSendAttemptSettledPayload](),
+		reflect.TypeFor[wire.ProtocolErrorReceivedPayload](),
 	)
 	seen := make(map[reflect.Type]struct{})
 	var inspect func(reflect.Type)
@@ -229,7 +230,7 @@ func TestEncodeV4EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
 			time:      time.Unix(1, 234).In(time.FixedZone("private", 9*60*60)),
 			elapsedMS: math.MaxInt64,
 		},
-		clievent.NewReady(),
+		appobs.NewReady(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +261,7 @@ func TestEncodeV4ProgressUsesNestedDecimalStrings(t *testing.T) {
 		Discovery:               appobs.DiscoveryFailed,
 		CountersExact:           false,
 	}))
-	event := mustValue(clievent.NewTransferProgress(
+	event := mustValue(appobs.NewTransferProgress(
 		mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0xa1))),
 		mustValue(appobs.NewTransferJobID(testIdentity(t, 0xb2))),
 		snapshot,
@@ -273,7 +274,7 @@ func TestEncodeV4ProgressUsesNestedDecimalStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(transferProgressPayloadV4)
+	payload, ok := record.Payload.(wire.TransferProgressPayload)
 	if !ok {
 		t.Fatalf("payload type = %T", record.Payload)
 	}
@@ -302,7 +303,7 @@ func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
 	lane := mustValue(appobs.NewLaneIdentity(math.MaxUint32, 0))
-	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 		Workflow:          appobs.WorkflowReceive,
 		Role:              appobs.ProtocolRoleReceiver,
 		Stage:             appobs.ProtocolOperationReceiverEnded,
@@ -333,7 +334,7 @@ func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
 	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
-	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
 		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
 		ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessagePeerOffer,
 		Stage: appobs.ProtocolOperationReceiverEnded, Cause: appobs.ProtocolOperationCauseCanceled,
@@ -342,7 +343,7 @@ func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := record.Payload.(protocolOperationPayloadV4)
+	payload := record.Payload.(wire.ProtocolOperationPayload)
 	if payload.Stage != "receiver_ended" || payload.Cause != "canceled" ||
 		record.Correlation == nil || record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
 		t.Fatalf("normal cancellation was lost or classified as failure: %+v", record)
@@ -353,7 +354,7 @@ func TestEncodeV4IncludesBlockWaitDecision(t *testing.T) {
 	for _, phase := range []appobs.BlockWaitPhase{appobs.BlockWaitAwaitingFirstFragment, appobs.BlockWaitReceivingFragments} {
 		session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
 		operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
-		event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+		event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
 			ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
 			Stage: appobs.ProtocolOperationReceiverFailed, ProtocolSession: session, ProtocolOperation: operation,
 			RequestKind: appobs.ProtocolMessageRequestBlocks, Cause: appobs.ProtocolOperationCauseDeadline,
@@ -363,7 +364,7 @@ func TestEncodeV4IncludesBlockWaitDecision(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wait := record.Payload.(protocolOperationPayloadV4).BlockWait
+		wait := record.Payload.(wire.ProtocolOperationPayload).BlockWait
 		name, _ := phase.Name()
 		if wait == nil || wait.Phase != name || wait.WaitedMS != "35000" || wait.QueueProgress != "12" ||
 			record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
@@ -376,7 +377,7 @@ func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T)
 	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
 	lane := mustValue(appobs.NewLaneIdentity(3, 2))
-	event := mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
 		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
 		Stage: appobs.ProtocolOperationReceiverEnded, ProtocolSession: session, ProtocolOperation: operation,
 		RequestKind: appobs.ProtocolMessageOpenRevisions, Lane: lane, HasLane: true,
@@ -387,7 +388,7 @@ func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision := record.Payload.(protocolOperationPayloadV4).RequestScheduling
+	decision := record.Payload.(wire.ProtocolOperationPayload).RequestScheduling
 	if decision == nil || decision.ExpectedMS != "42" || decision.ResponseMS != "10" || decision.QueuedContentMS != "12" || decision.PendingRequests != 2 ||
 		record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
 		t.Fatalf("uncorrelated scheduling decision: %+v", record)
@@ -397,13 +398,13 @@ func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T)
 func TestEncodeV4SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x61)))
 	lane := mustValue(appobs.NewLaneIdentity(1, 0))
-	send := mustValue(clievent.NewSenderTerminalSendObserved(
+	send := mustValue(appobs.NewSenderTerminalSendObserved(
 		session, lane, false,
 		appobs.SenderTerminalSendUnsettled,
 		appobs.SenderTerminalSendUnknown,
 		appobs.SenderTerminalSendFailed,
 	))
-	root := mustValue(clievent.NewSenderSessionTerminated(
+	root := mustValue(appobs.NewSenderSessionTerminated(
 		session,
 		appobs.SenderSessionTerminalGracefulStop,
 		appobs.SenderSessionTerminalNormalStop,
@@ -430,7 +431,7 @@ func TestEncodeV4SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 		sendRecord.Correlation.LaneID == nil || rootRecord.Correlation.LaneID != nil {
 		t.Fatalf("terminal records = send %+v, root %+v", sendRecord, rootRecord)
 	}
-	rootPayload := rootRecord.Payload.(senderSessionTerminatedPayloadV4)
+	rootPayload := rootRecord.Payload.(wire.SenderSessionTerminatedPayload)
 	if rootPayload.Trigger != "graceful_stop" || rootPayload.Provenance != "normal_stop" {
 		t.Fatalf("terminal root payload = %+v", rootPayload)
 	}
@@ -542,17 +543,17 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 	}))
 
 	return []clievent.Event{
-		clievent.NewReady(),
-		mustValue(clievent.NewSharingSubjectSelected(subject)),
+		appobs.NewReady(),
+		mustValue(appobs.NewSharingSubjectSelected(subject)),
 		mustValue(clievent.NewRelayConnected(clievent.CommandShare, authority)),
 		mustValue(clievent.NewRelayRecovering(
 			clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed, retryFailure,
 		)),
-		mustValue(clievent.NewContentPathSelected(appobs.ContentPathDirect)),
+		mustValue(appobs.NewContentPathSelected(appobs.ContentPathDirect)),
 		mustValue(clievent.NewFallback(
 			clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay, failure,
 		)),
-		mustValue(clievent.NewTransferProgress(receiveOperation, transferJob, progress)),
+		mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, progress)),
 		mustValue(clievent.NewWarning(clievent.CommandGet, faultFailure)),
 		mustValue(clievent.NewCommandFailed(
 			clievent.CommandShare, clievent.ExitFailure, failure,
@@ -565,7 +566,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		mustValue(clievent.NewLaneAdopted(
 			clievent.CommandGet, protocolSession, lane, appobs.TransportWebRTC,
 		)),
-		mustValue(clievent.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
+		mustValue(appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
 			Workflow:         appobs.WorkflowShare,
 			LinkID:           math.MaxUint64,
 			RelaySession:     relaySession,
@@ -577,7 +578,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			DrainCause:       appobs.RelayCauseNone,
 			Dropped:          math.MaxUint64,
 		})),
-		mustValue(clievent.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
+		mustValue(appobs.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
 			Workflow:        appobs.WorkflowReceive,
 			ChannelID:       math.MaxUint64,
 			SendOperationID: math.MaxUint64,
@@ -589,7 +590,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			Cause:           appobs.WebRTCCauseNone,
 			Dropped:         math.MaxUint64,
 		})),
-		mustValue(clievent.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+		mustValue(appobs.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
 			Workflow:      appobs.WorkflowReceive,
 			Session:       protocolSession,
 			PeerPath:      peerPath,
@@ -603,7 +604,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			FailureScope:  appobs.PeerFailureAttempt,
 			Failure:       failure,
 		})),
-		mustValue(clievent.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
+		mustValue(appobs.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
 			ReceiveOperation: receiveOperation,
 			ProtocolSession:  protocolSession,
 			TransferJob:      transferJob,
@@ -615,7 +616,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			TreeSettlement:   appobs.TreeSettlementPartial,
 			Failure:          failure,
 		})),
-		mustValue(clievent.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+		mustValue(fsobs.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
 			Operation:           fsobs.FilesystemRuntimeDecision,
 			ReceiveOperation:    receiveOperation,
 			Certification:       fsobs.FilesystemCertificationWindowsNTFSProcessRestart,
@@ -642,19 +643,19 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			ReconciliationStep: fsobs.FilesystemReconciliationRecordPromotion,
 			NativeErrorClass:   fsobs.FilesystemNativeErrorSharingViolation,
 		})),
-		mustValue(clievent.NewSenderTerminalSendObserved(
+		mustValue(appobs.NewSenderTerminalSendObserved(
 			protocolSession, lane, false,
 			appobs.SenderTerminalSendUnsettled,
 			appobs.SenderTerminalSendUnknown,
 			appobs.SenderTerminalSendFailed,
 		)),
-		mustValue(clievent.NewSenderSessionTerminated(
+		mustValue(appobs.NewSenderSessionTerminated(
 			protocolSession,
 			appobs.SenderSessionTerminalGracefulStop,
 			appobs.SenderSessionTerminalNormalStop,
 			diagnosticerror.Snapshot{},
 		)),
-		mustValue(clievent.NewCatalogStorageObserved(
+		mustValue(appobs.NewCatalogStorageObserved(
 			appobs.CatalogStorageBudgetRejected,
 			appobs.CatalogStorageCauseBudget,
 			appobs.CatalogUsage{
@@ -666,13 +667,13 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			},
 			math.MaxUint64,
 		)),
-		mustValue(clievent.NewRootPrefetchObserved(
+		mustValue(appobs.NewRootPrefetchObserved(
 			appobs.RootPrefetchCommitted,
 			math.MaxUint64,
 			math.MaxUint64,
 			math.MaxUint64,
 		)),
-		mustValue(clievent.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+		mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 			Workflow:                appobs.WorkflowReceive,
 			Role:                    appobs.ProtocolRoleReceiver,
 			Stage:                   appobs.ProtocolOperationReceiverFailed,
@@ -692,7 +693,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			UsableLanesAtSettlement: math.MaxUint32,
 			Cause:                   appobs.ProtocolOperationCauseDeadline,
 		})),
-		mustValue(clievent.NewLaneSettlementObserved(appobs.LaneSettlementSpec{
+		mustValue(appobs.NewLaneSettlementObserved(appobs.LaneSettlementSpec{
 			Session:             protocolSession,
 			Route:               appobs.LaneRouteDirect,
 			Lane:                lane,
@@ -702,13 +703,13 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			ReassignedBlocks:    3,
 			Incomplete:          true,
 		})),
-		mustValue(clievent.NewObserverLossObserved(appobs.ObserverLossSpec{
+		mustValue(appobs.NewObserverLossObserved(appobs.ObserverLossSpec{
 			Workflow: appobs.WorkflowReceive,
 			Category: appobs.ObserverLossReceiverTermination,
 			Reason:   appobs.ObserverLossAdapterCapacityTimeout,
 			Count:    math.MaxUint64,
 		})),
-		mustValue(clievent.NewReceiverTerminationObserved(appobs.ReceiverTerminationSpec{
+		mustValue(appobs.NewReceiverTerminationObserved(appobs.ReceiverTerminationSpec{
 			Operation:             protocolOperation,
 			HasOperation:          true,
 			LocalGeneration:       math.MaxUint64,
@@ -731,7 +732,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			ChannelDrainFailed: true,
 		})),
 		mustValue(clievent.NewPlatformSetupObserved(clievent.CommandGet, "declined", "user-skipped")),
-		mustValue(clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "provider_created", State: "unknown"})),
+		mustValue(appobs.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "provider_created", State: "unknown"})),
 	}
 }
 
