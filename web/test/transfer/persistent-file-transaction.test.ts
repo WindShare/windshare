@@ -6,7 +6,7 @@ import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/
 import {
   PersistentOutputTransaction,
   PersistentWriterOpenPauseRequestedError,
-} from '../../src/transfer/settlement/persistent-file-transaction'
+} from '../../src/output/execution/persistent-file-transaction'
 
 describe('persistent output transaction recovery boundary', () => {
   it('retains the exact failed preserving open in a typed resumable pause', async () => {

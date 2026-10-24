@@ -13,7 +13,7 @@ import {
   canonicalU8,
   concatCanonicalBytes,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
@@ -32,7 +32,7 @@ import type {
   PlanPauseRequest,
   PlanSettlementRequest,
   PlanStopRequest,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type {
   CompletedTransferWorkerSettlement,
   TransferFailure,

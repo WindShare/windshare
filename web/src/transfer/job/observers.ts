@@ -4,16 +4,18 @@ import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import {
   observePerformance,
   type PerformanceSummaryObservations,
-} from '../../output/diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 import type { ReceiveIntent } from '../intent'
 import type { SelectionMeasure } from '../measure'
-import type { MaterializationSummary } from '../output-session'
+import type { MaterializationSummary } from '../output/session'
 import type {
   ArtifactLayoutClass,
-  MaterializationFailureReason,
   TransferProgress,
   TransferTraceEvent,
 } from './contract'
+import type {
+  MaterializationFailureReason,
+} from '../failure/materialization'
 import { normalizeV2FileTransferFailure } from './failures'
 import type { WorkerFamilyConsequenceFailure } from '../worker-family/supervisor'
 import type { V2RevisionCapacityTrace } from '../revision-capacity/public'

@@ -2,12 +2,14 @@ import {
   snapshotRecoverySelectionFacts,
   type ReceiveLifecycleState,
   type RecoverySelectionFacts,
-} from '../output/workspace/state'
+} from './lifecycle/state'
 import type { TransferJobOptions, TransferJobResult } from './job/contract'
 import {
   V2ClassifiedTransferFailureError,
-  normalizeV2FileTransferFailure,
   type ClassifiedTransferFailure,
+} from './failure/classification'
+import {
+  normalizeV2FileTransferFailure,
 } from './job/failures'
 import {
   failedTreeOutcome,
@@ -30,7 +32,7 @@ import {
   type ExactPreparationEvidence,
   type MaterializationSummary,
   type PlanExecution,
-} from './output-session'
+} from './output/session'
 import type { V2TransferProgressLedger } from './progress/v2-ledger'
 import {
   pauseFailedV2Execution,

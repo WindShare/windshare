@@ -5,7 +5,9 @@ import type {
 import type { V2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
 import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
-import type { ClassifiedTransferFailure } from '../../src/transfer/job/failures'
+import type {
+  ClassifiedTransferFailure,
+} from '../../src/transfer/failure/classification'
 
 // The yielded block retains its window reservation until the writer advances.
 export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =

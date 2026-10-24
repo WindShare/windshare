@@ -7,7 +7,7 @@ import type {
   MaterializationRouteIdentity,
   ResolvedArtifactAction,
 } from '../../planning'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type {
   DirectZipOperationLeaseEvidence,
   DirectZipReservationCandidate,

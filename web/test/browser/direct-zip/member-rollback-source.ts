@@ -10,7 +10,7 @@ import {
 import {
   snapshotLogicalArtifactPath, snapshotMaterializationRootRelativePath, snapshotSourceAuthenticationPath,
 } from '../../../src/transfer/job/coordinate/direct-tree'
-import type { DirectResumableZipExecution } from '../../../src/transfer/output-session'
+import type { DirectResumableZipExecution } from '../../../src/transfer/output/session'
 
 export const MEMBER_ROLLBACK_BLOCK_BYTES = 3
 export const MEMBER_ROLLBACK_PAUSE = new Error('Pause after the active member first block')

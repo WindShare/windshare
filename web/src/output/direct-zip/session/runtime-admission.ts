@@ -12,7 +12,7 @@ import {
   canonicalRecord,
   canonicalText,
   canonicalU8,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 import { directZipPolicyDigestsV2 } from '../format'
 import { directZipJournalBudgetDigestV1 } from '../journal'
 import {

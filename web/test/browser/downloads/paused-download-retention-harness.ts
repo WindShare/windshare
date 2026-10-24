@@ -4,7 +4,7 @@ import { createSelectionSpec } from '../../../src/transfer/intent'
 import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
 import { TransferJob } from '../../../src/transfer/v2-job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../../src/transfer/outcome'
-import type { V2PlanExecutionAuthority } from '../../../src/transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../../src/transfer/output/session'
 import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../../../src/ui/v2-browser-receive-composition'
 import { catalogFixture, directoryEntry, fileEntry, identity, identityText, readerFixture } from '../../transfer/v2-job-fixture'
 import { commitProductionChoice, productZipProjection } from '../durable-preparation-harness'
@@ -87,7 +87,7 @@ export async function provePausedDownloadRetention() {
         lifecycle: row.lifecycle.kind, continuation: row.continuation,
         display: row.display, actions: row.actions,
         completeFileCount: row.lifecycle.kind === 'resumable-receive' &&
-          row.lifecycle.payloadKind === 'opfs-zip' ? row.lifecycle.completedFileCount.toString() : null,
+          row.lifecycle.payloadKind === 'workspace-archive' ? row.lifecycle.completedFileCount.toString() : null,
       }
     } finally { inventory.close() }
   } finally { await runtime.detach() }

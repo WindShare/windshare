@@ -5,16 +5,18 @@ import {
   type PackagedArtifactV1,
   type SealedMaterializationV1,
 } from '../aggregate'
-import { canonicalDigest, snapshotIdentity } from '../canonical'
+import { canonicalDigest, snapshotIdentity } from '../../../transfer/encoding/canonical'
 import {
   createMaterializedManifestPages,
   materializedGenerationTableDigest,
   sealMaterializedManifest,
-  type AuthenticatedGenerationReference,
   type FinalCheckpointReader,
   type MaterializedManifestEntry,
   type MaterializedManifestV1,
 } from '../manifest'
+import {
+  type AuthenticatedGenerationReference,
+} from '../../../transfer/preparation/generation'
 import {
   createPackageReceipt,
   createPackageTemporaryCleanupReceipt,
@@ -33,7 +35,7 @@ import {
   RECEIVE_RECORD_SEALED_MATERIALIZATION,
   type ReceiveOperationHandleRecord,
 } from '../records'
-import type { PackageFailureReason, ReceiveLifecycleState } from '../state'
+import type { PackageFailureReason, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
   WORKSPACE_HANDLE_PACKAGE_OBJECT,
   type PackageTemporaryCleanupEvidence,

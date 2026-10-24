@@ -18,7 +18,7 @@ import {
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
   snapshotOutputFileRequest,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 
 export const SINGLE_FILE_STREAM_BACKEND = 'single-file-stream'
 

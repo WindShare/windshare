@@ -4,7 +4,7 @@ import { FileGeometry } from '../../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../../src/content/v2-broker'
 import type { V2RevisionReader } from '../../../src/content/v2-session-services'
 import { OutputCapacityBlockedError } from '../../../src/transfer/capacity-pressure/drain'
-import { createProgressiveWorkspaceExecution } from '../../../src/transfer/settlement/progressive-workspace-execution'
+import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { ProgressiveZipArchive, type ZipObjectCapacity } from '../../../src/output/progressive-zip/archive'
 import { ZipCapacityWindow } from '../../../src/output/progressive-zip/capacity-window'
 import { ObjectCheckpointCoordinator } from '../../../src/output/origin-private/native-object/coordinator'
@@ -108,7 +108,7 @@ describe('native ZIP capacity scheduling', () => {
           expect(evidence.kind).toBe('checkpoint-committed')
           expect(evidence.checkpoint).toEqual(await store.readCheckpoint())
           return { operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
-            kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: object.objectId,
+            kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: object.objectId,
             checkpointGeneration: evidence.checkpoint.generation, occupiedBytes: evidence.checkpoint.physicalLength,
             checkpointRecovery: 'current-cut', completedFileCount: 2n, completedBytes: BLOCK_SIZE * 2n,
             discoveryComplete: evidence.checkpoint.discoveryComplete }
@@ -154,7 +154,7 @@ describe('native ZIP capacity scheduling', () => {
     const catalog = catalogFixture([{ id: identity(2), entries: files }])
     const result = await transferJobFixture({ catalog: catalog.catalog, selection, intent, plans, revisions, broker, chunkSize: BLOCK_BYTES }).run()
     expect(result.worker.status).toBe('Paused')
-    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip' })
+    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive' })
     expect(result.failureTrigger?.fault).toMatchObject({ domain: 'output', code: 'resource-budget' })
     expect(refusals).toBe(2)
     expect(readers.releases).toHaveLength(4)

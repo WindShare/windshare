@@ -11,7 +11,7 @@ import {
   snapshotCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../../../workspace/canonical'
+} from '../../../../transfer/encoding/canonical'
 import { directZipJournalBudgetDigestV1 } from '../budget'
 import {
   DIRECT_ZIP_JOURNAL_SCHEMA_VERSION,

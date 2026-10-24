@@ -6,8 +6,8 @@ import {
 import type { DirectZipEpochProofV1, DirectZipMemberAdmissionV1 } from '../../../../output/direct-zip/writer'
 import {
   canonicalFrame, canonicalRecord, canonicalU64, equalCanonicalBytes, type CanonicalBytes,
-} from '../../../../output/workspace/canonical'
-import { CanonicalRecordReader } from '../../../../output/workspace/canonical-reader'
+} from '../../../../transfer/encoding/canonical'
+import { CanonicalRecordReader } from '../../../../transfer/encoding/canonical-reader'
 
 const LAYOUT_DOMAIN = 'windshare/browser-direct-zip-layout/v1'
 const CENTRAL_DOMAIN = 'windshare/browser-direct-zip-central/v1'

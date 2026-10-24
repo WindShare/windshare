@@ -18,7 +18,9 @@ import {
   createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,
   createReceiveIntent, createSelectionSpec, createZipArchiveArtifact,
 } from '../../src/transfer/intent'
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import type { V2RetainedCompatibleNameRepairSource } from '../../src/application/receive/observation/contracts'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'

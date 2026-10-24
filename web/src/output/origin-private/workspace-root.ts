@@ -4,7 +4,7 @@ import {
   WORKSPACE_HANDLE_ROOT,
   type WorkspaceContentGate,
 } from '../workspace/stages'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import { TargetOwnershipUnknownError, type TargetOwnershipStage } from '../persistent-tree/errors'
 import type { OriginPrivateWorkspaceBudgetClaim } from './admission'
 import type { ObjectGrowthRequest, ObjectGrowthReservation } from './object-capacity'

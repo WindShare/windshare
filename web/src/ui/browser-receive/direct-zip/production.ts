@@ -22,7 +22,7 @@ import {
 } from '../../../output/workspace/records'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import { receiveOperationDisplayFields } from '../../../output/workspace/operation-display'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../../output/workspace/state-codec'
 import {
   createFSAOwnedFileBinding, createOperationID, deriveArtifactChoiceIdentity,

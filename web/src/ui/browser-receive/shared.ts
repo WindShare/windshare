@@ -9,9 +9,9 @@ import {
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../../output/workspace/lifecycle'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { decodeStoredReceiveLifecycleState } from '../../output/workspace/state-codec'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { AdmittedWorkspaceContent } from '../../output/workspace/stages'
-import type { WorkspaceMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
+import type { WorkspaceMaterializationEvidence } from '../../output/execution/persistent-execution'
 import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
@@ -20,7 +20,7 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
-import type { ExactSingleFileEvidence } from '../../transfer/output-session'
+import type { ExactSingleFileEvidence } from '../../transfer/output/session'
 import type { OriginPrivateStorageManager } from './contracts'
 
 const WORKSPACE_ROUTE_ID = 'browser-origin-private-workspace'

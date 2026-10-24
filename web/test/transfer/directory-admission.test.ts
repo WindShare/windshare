@@ -26,7 +26,7 @@ import {
   DirectoryAdmissionLedger,
   DirectoryAdmissionLimitError,
 } from '../../src/transfer/directory-admission-ledger'
-import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
 import {
   createDirectorySelectionResultRoot,
   createDirectAtomicPlan,

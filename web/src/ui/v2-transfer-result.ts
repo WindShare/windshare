@@ -1,9 +1,11 @@
 import {
   compatibleNameRepairSummary,
-  type CompatibleNameRepairSummary,
 } from '../output/file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../transfer/lifecycle/name-repair'
 import type { TransferWorkerSettlement } from '../transfer/outcome'
-import type { ReceiveLifecycleState } from '../output/workspace/state'
+import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 import { hasValidatedTerminalCompatibleNameRepair } from './v2-lifecycle-presentation'
 
 export type TransferResultTone = 'success' | 'warning'

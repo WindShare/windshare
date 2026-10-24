@@ -7,7 +7,7 @@ import {
 } from '../diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { verifyFSAOperationBinding } from '../browser/indexeddb-root-binding'
-import { equalCanonicalBytes } from '../workspace/canonical'
+import { equalCanonicalBytes } from '../../transfer/encoding/canonical'
 import { MaterializationLedgerEvidenceOutcome } from '../materialization-ledger/evidence'
 import { MaterializationLedgerSealPurpose } from '../materialization-ledger/model'
 import type { FSATerminalMutationKind } from '../browser/mutation-coordination/model'
@@ -17,7 +17,7 @@ import {
 } from '../workspace/lifecycle'
 import type { PersistedReceiveRecord } from '../workspace/records'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../workspace/state-codec'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { DirectoryAdmissionScope } from '../../transfer/directory-admission'
 import { snapshotTransferJobId } from '../../transfer/job/identity'
 import type { ReceiveIntent } from '../../transfer/intent'
@@ -26,13 +26,13 @@ import {
   type PlanPauseRequest,
   type PlanSettlementRequest,
   type PlanStopRequest,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { CompletedTransferWorkerSettlement } from '../../transfer/outcome'
 import type {
   PersistentDirectTreeSettlementAuthority,
   PersistentDirectTreeMaterializationEvidence,
   PersistentMaterializationSettlementCut,
-} from '../../transfer/settlement/persistent-execution'
+} from '../execution/persistent-execution'
 import {
   FileSystemAccessOutputSession,
   type FSAFinalSettlementObservation,
@@ -51,7 +51,9 @@ import {
 } from './settlement-proof'
 import { validateSealedFSASettlementEvidence } from './settlement-evidence'
 import { cleanupTerminalFSAMetadata, normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
-import type { RecoverySummary } from './recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import { deriveSettledFSARecoverySummary } from './recovery-settlement'
 import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
 import type {

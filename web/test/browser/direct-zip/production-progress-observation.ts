@@ -1,7 +1,7 @@
 import type { V2BoundReceiveOperation, V2DirectZipProgressSnapshot } from '../../../src/application/receive/contracts'
 import { presentDirectZipProgress } from '../../../src/ui/v2-progress-presentation'
 import { presentReceiveLifecycle } from '../../../src/ui/v2-lifecycle-presentation'
-import type { ReceiveLifecycleState } from '../../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 
 export function observeProductionDirectZipProgress(selectedBytes: bigint) {
   const samples: Record<string, ReturnType<typeof capture>> = {}

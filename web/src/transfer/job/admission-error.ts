@@ -1,7 +1,9 @@
 import {
   materializeClassifiedTransferFailure,
-  type ClassifiedTransferFailure,
 } from './failures'
+import {
+  type ClassifiedTransferFailure,
+} from '../failure/classification'
 
 export type V2TransferAdmissionFailureAuthority =
   | Readonly<{ readonly kind: 'canceled' }>

@@ -62,7 +62,7 @@ import { decodeStoredReceiveLifecycleState } from '../../output/workspace/state-
 import {
   initialReceiveLifecycleState,
   type ReceiveLifecycleState,
-} from '../../output/workspace/state'
+} from '../../transfer/lifecycle/state'
 import {
   createDestinationReservationID,
   createOperationID,

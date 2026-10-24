@@ -2,7 +2,7 @@ import {
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-} from '../state'
+} from '../../../transfer/lifecycle/state'
 import type { LifecycleEvent, LifecycleReducerContext } from './events'
 import { requireState } from './transitions'
 

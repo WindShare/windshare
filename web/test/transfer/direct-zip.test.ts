@@ -10,7 +10,7 @@ import {
   type V2ContentGeneration,
   type V2ContentGenerationProvider,
 } from '../../src/receiver/v2-supervised-content'
-import { TransferPauseRequestedError } from '../../src/transfer/output-session'
+import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
 import { createDirectZipProgressObservers, runDirectZipJob } from '../../src/transfer/v2-job-direct-zip'
 import {
@@ -31,9 +31,6 @@ import type { DirectZipWriterCheckpointV1 } from '../../src/output/direct-zip/wr
 import {
   DirectZipCatalogSourceV1,
   DirectZipOrderedCoordinatorV1,
-  DirectZipRuntimeUnsupportedError,
-  DirectZipTransferOutputV1,
-  createDirectZipExecutionV1,
   transferDirectZipFileV1,
   type DirectZipAuthenticatedRootV1,
   type DirectZipOutputSessionV1,
@@ -41,10 +38,17 @@ import {
   type DirectZipOrderedMemberV1,
   type DirectZipOrderedOutputV1,
   type DirectZipOrderedSourceV1,
-  type DirectZipReplayAuthorityV1,
-  type DirectZipMemberRollbackAuthorityV1,
   type DirectZipPayloadProgressV1,
 } from '../../src/transfer/direct-zip'
+import {
+  DirectZipRuntimeUnsupportedError,
+  createDirectZipExecutionV1,
+} from '../../src/output/direct-zip/transfer/execution'
+import {
+  DirectZipTransferOutputV1,
+  type DirectZipReplayAuthorityV1,
+  type DirectZipMemberRollbackAuthorityV1,
+} from '../../src/output/direct-zip/transfer/output-session'
 import {
   V2RevisionCapacityCoordinator,
   type V2RevisionCapacityClock,

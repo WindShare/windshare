@@ -15,7 +15,7 @@ import {
   createZipArchiveArtifact, deriveArtifactChoiceIdentity,
 } from '../../../src/transfer/intent'
 import { normalizeV2FileTransferFailure } from '../../../src/transfer/job/failures'
-import { TransferPauseRequestedError, type WorkspaceExecution } from '../../../src/transfer/output-session'
+import { TransferPauseRequestedError, type WorkspaceExecution } from '../../../src/transfer/output/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY } from '../../../src/transfer/outcome'
 import { WorkspaceReceiveOperation } from '../../../src/ui/browser-receive/workspace-operation'
 

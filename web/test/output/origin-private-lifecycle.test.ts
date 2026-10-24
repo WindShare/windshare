@@ -10,7 +10,7 @@ import {
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
   type ReceiveLifecycleStatePayload,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 
 const OPERATION_ID = identity(16, 1)
 const INTENT_DIGEST = identity(32, 2)

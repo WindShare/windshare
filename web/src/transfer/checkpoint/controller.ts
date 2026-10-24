@@ -2,7 +2,7 @@ import {
   evaluateCheckpointSchedule, snapshotAutomaticCheckpointPolicy,
   type AutomaticCheckpointPolicy, type AutomaticCheckpointTrigger,
 } from '../checkpoint-schedule'
-import { snapshotOutputCheckpointObject, type OutputCheckpointObject } from '../output-file-contract'
+import { snapshotOutputCheckpointObject, type OutputCheckpointObject } from '../output/file'
 
 export interface CheckpointClock {
   now(): number

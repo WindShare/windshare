@@ -6,9 +6,11 @@ import {
   SourceFaultCode,
   outputFault,
   sourceFault,
-} from '../../src/transfer/fault'
-import type { Fault } from '../../src/transfer/fault'
-import type { MaterializationFailureReason } from '../../src/transfer/job/contract'
+} from '../../src/transfer/failure/fault'
+import type { Fault } from '../../src/transfer/failure/fault'
+import type {
+  MaterializationFailureReason,
+} from '../../src/transfer/failure/materialization'
 import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,

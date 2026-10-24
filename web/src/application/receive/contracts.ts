@@ -14,9 +14,11 @@ import type {
 import type { ReceiveOperationContinuation } from '../../output/resume/descriptor'
 import type { ReceiveLifecycleState } from '../../output/workspace'
 import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
-import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import type { ArtifactChoiceID, ReceiveIntent } from '../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../transfer/output/session'
 import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from './actions'
 
 export type V2PresentationSourceOutcome =
@@ -213,7 +215,7 @@ export interface V2RetainedReceiveInventoryPort {
   readRepairSummary?(
     operationId: string,
     signal: AbortSignal,
-  ): PromiseLike<import('../../output/file-system-access/compatible-name/model').CompatibleNameRepairSummary | undefined>
+  ): PromiseLike<import('../../transfer/lifecycle/name-repair').CompatibleNameRepairSummary | undefined>
 }
 
 export interface V2ReceiveCompositionPort {

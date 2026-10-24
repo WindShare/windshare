@@ -14,8 +14,10 @@ import {
   type CompatibleNameOperationBootstrapV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePairKind,
-  type CompatibleNamePairPlacement,
 } from './model'
+import {
+  type CompatibleNamePairPlacement,
+} from '../../../transfer/lifecycle/name-repair'
 import {
   COMPATIBLE_NAME_COLLISION_RETRY_LIMIT,
   compatibleNameCandidate,

@@ -49,8 +49,10 @@ import {
   type CompatibleNameMappingV1,
   type CompatibleNameOperationHeaderV1,
   type CompatibleNamePendingTerminalOutcomeV1,
-  type CompatibleNameRepairSummary,
 } from '../../src/output/file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import {
   discardReopenedFileSystemAccessOutput,
   type ReopenedFileSystemAccessDiscardOperation,
@@ -74,16 +76,16 @@ import {
 } from '../../src/output/workspace/repository'
 import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../src/output/workspace/state'
+import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import {
   disabledOutputExecutionProfile,
   outputSessionIdentity,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
-import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
+import { createPersistentDirectTreeExecution } from '../../src/output/execution/persistent-execution'
 import { identity } from './planning/fixture'
 import {
   MemoryDirectory,

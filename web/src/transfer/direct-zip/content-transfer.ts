@@ -7,7 +7,7 @@ import {
 import type { V2OpenedRevision, V2RevisionReader } from '../../content/v2-session-services'
 import {
   canonicalDigest, canonicalFrame, canonicalRecord, canonicalText, canonicalU64,
-} from '../../output/workspace/canonical'
+} from '../encoding/canonical'
 import { validateOpenedFileRevision } from '../job/file-authority'
 import type { DirectZipOrderedFileV1, DirectZipOutputSessionV1 } from './model'
 

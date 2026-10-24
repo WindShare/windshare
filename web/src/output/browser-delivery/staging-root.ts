@@ -4,7 +4,7 @@ import type { OriginPrivateRawObjectRoot } from '../origin-private/workspace-tre
 import type { PersistentHandleRepository } from '../persistence/journal'
 import type { DurableCheckpointNamespaceIdentity } from '../persistence/namespace'
 import { TargetOwnershipUnknownError, type TargetOwnershipStage } from '../persistent-tree/errors'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import { deliveryDigest, namespaceFields } from './codec'
 
 const STAGING_ROOT_HANDLE_KIND = 5

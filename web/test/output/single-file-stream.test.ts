@@ -5,7 +5,7 @@ import { SingleFileStreamOutputSession } from '../../src/output/streams/single-f
 import type {
   OpenedOutputRevision,
   OutputFileRequest,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   snapshotLogicalArtifactPath,
   snapshotMaterializationRootRelativePath,

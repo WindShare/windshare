@@ -5,7 +5,7 @@ import {
   newFileCheckpointV2, validateFileCheckpoint, type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import { sameDurableCheckpointNamespace, type DurableCheckpointNamespaceIdentity } from '../persistence/namespace'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import { deliveryDigest, deliveryReason } from './codec'
 import {
   BROWSER_DELIVERY_RECORD_VERSION, type BrowserDeliveryRecordV1, type BrowserDeliverySource,

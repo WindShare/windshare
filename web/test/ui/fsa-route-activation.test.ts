@@ -19,7 +19,7 @@ import {
 } from '../../src/output/file-system-access/compatible-name/coordinator'
 import {
   type CompatibleNameRepairSummary,
-} from '../../src/output/file-system-access/compatible-name/model'
+} from '../../src/transfer/lifecycle/name-repair'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {

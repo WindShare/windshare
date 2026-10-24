@@ -35,12 +35,12 @@ import {
   type OutputFileTransaction,
   type OutputSession,
   type V2PlanExecutionAuthority,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   createPersistentDirectTreeExecution,
   type PersistentDirectTreeSettlementAuthority,
   type PersistentDirectTreeMaterializationEvidence,
-} from '../../src/transfer/settlement/persistent-execution'
+} from '../../src/output/execution/persistent-execution'
 import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
 import { TransferJob } from '../../src/transfer/v2-job'
 import {
@@ -50,7 +50,7 @@ import {
 import type { FSASemanticOutputRepository } from '../../src/output/file-system-access/checkpoint-repository'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import {
   MemoryDirectory,
   MemoryFile,

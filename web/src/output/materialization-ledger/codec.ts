@@ -12,7 +12,7 @@ import {
   FILE_REVISION_BYTES,
   OPERATION_ID_BYTES,
 } from '../persistence/checkpoint'
-import { CanonicalRecordReader } from '../workspace/canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -24,7 +24,7 @@ import {
   snapshotCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   MATERIALIZATION_LEDGER_DIRECTORY_FINALIZATION_ORDER,
   MATERIALIZATION_LEDGER_PATH_CLAIM_ORDER,

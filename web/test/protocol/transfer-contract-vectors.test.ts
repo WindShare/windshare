@@ -33,7 +33,7 @@ import {
   type DirectoryAdmissionScope,
   type MaterializationDirectory,
 } from '../../src/transfer/directory-admission'
-import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
 import {
   createCatalogRootDirectoryTreeArtifact,
   createCompleteDirectoryResultRoot,

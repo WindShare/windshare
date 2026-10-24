@@ -25,11 +25,11 @@ import type { CompatibleNameRepairProjectionSource } from '../../output/file-sys
 import { createAutomaticCheckpointAdmissionAuthority } from '../../output/persistent-tree/automatic-checkpoint-admission'
 import { createPreservingWriterCapacityAuthority } from '../../output/persistent-tree/preserving-writer-capacity'
 import { checkpointAuthorityObserver } from '../../output/file-system-access/session-diagnostics'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { ReceiveLifecycleObservation, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
-import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
+import { createPersistentDirectTreeExecution } from '../../output/execution/persistent-execution'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
   createV2PlanExecutionAuthority,
@@ -45,7 +45,7 @@ import {
   outputExecutionProfile,
   outputSessionIdentity,
   type V2PlanExecutionAuthority,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../application/receive/actions'
 import type {
   V2BoundReceiveOperation,

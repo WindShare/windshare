@@ -7,7 +7,7 @@ import {
   type WorkspaceBudgetV1,
   type WorkspaceCapacitySnapshot,
 } from '../workspace/budget'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import type {
   WorkspaceBudgetAuthority,
   WorkspaceBudgetClaim,

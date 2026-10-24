@@ -18,7 +18,6 @@ import {
   snapshotSelectedRoot,
   unsettledTargetsForSelection,
   type ArtifactShapeProof,
-  type AuthenticatedGenerationReference,
   type AuthenticatedProjectionEvidence,
   type DiscoveryState,
   type LayoutBasisProof,
@@ -35,6 +34,9 @@ import {
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
 } from './model'
+import {
+  type AuthenticatedGenerationReference,
+} from '../preparation/generation'
 
 const MAXIMUM_PROJECTION_BYTES = (1n << 64n) - 1n
 const IDLE_DISCOVERY: DiscoveryState = Object.freeze({ kind: 'idle' })

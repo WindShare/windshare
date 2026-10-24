@@ -5,7 +5,7 @@ import {
   FaultScope,
   OutputFaultCode,
   outputFault,
-} from '../../../src/transfer/fault'
+} from '../../../src/transfer/failure/fault'
 import {
   FAILURE_FACT_KINDS,
   FAILURE_IDENTITY_KINDS,

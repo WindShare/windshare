@@ -10,7 +10,7 @@ import type {
   DirectTreeExecution,
   IncrementalDirectoryOutput,
   PlanExecution,
-} from '../output-session'
+} from '../output/session'
 
 export interface DirectorySettlementLedgerOptions {
   readonly retention: 'durable-at-admission' | 'after-content'

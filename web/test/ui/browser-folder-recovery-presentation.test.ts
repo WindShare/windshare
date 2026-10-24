@@ -7,7 +7,9 @@ import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
 import { planningFixture } from './fsa-route-activation-fixture'
 import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import { retainedBrowserDeliveryActions } from '../../src/ui/browser-receive/fsa/retained-delivery'
 
 describe('folder receiving and local saving presentation', () => {

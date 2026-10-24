@@ -23,14 +23,14 @@ import {
   type PersistentOutputStageFailureMilestone,
   type PersistentOutputStageMilestone,
 } from '../../src/output/persistent-tree/stage-diagnostics'
-import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
 import {
   disabledOutputExecutionProfile,
   outputSessionIdentity,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coordinate/direct-tree'
-import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
+import { createPersistentDirectTreeExecution } from '../../src/output/execution/persistent-execution'
 import {
   createCompleteDirectoryResultRoot,
   createResultRootDirectoryTreeArtifact,

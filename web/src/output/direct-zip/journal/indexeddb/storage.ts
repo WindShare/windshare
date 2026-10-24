@@ -8,7 +8,7 @@ import {
   requestResult,
   transactionCompletion,
 } from '../../../browser/indexeddb-database'
-import { snapshotIdentity } from '../../../workspace/canonical'
+import { snapshotIdentity } from '../../../../transfer/encoding/canonical'
 import { receiveOperationLeaseId, validateReceiveOperationLeaseRecord, type ReceiveOperationLeaseRecord } from '../../../workspace/records'
 import {
   DIRECT_ZIP_CANDIDATE_BOOTSTRAP,

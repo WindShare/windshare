@@ -22,9 +22,9 @@ import {
   MaterializationLedgerDirectoryOutcome,
   MaterializationLedgerEntryKind,
 } from '../../src/output/materialization-ledger/model'
-import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/fault'
+import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/failure/fault'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output-session'
+import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 
 describe('materialization ledger canonical records', () => {
   it('binds the W1 final-output proof shape to one final checkpoint and file entry', async () => {

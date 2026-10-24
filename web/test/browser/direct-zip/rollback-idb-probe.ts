@@ -11,7 +11,7 @@ import {
   type DirectZipImmutablePageV1, type DirectZipPageChainV1,
 } from '../../../src/output/direct-zip/journal'
 import { directZipPageStore } from '../../../src/output/direct-zip/journal/indexeddb/authority'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import { receiveOperationHandleRecord, receiveOperationLeaseRecord } from '../../../src/output/workspace/records'
 import { rollbackCheckpointFixture } from '../../output/direct-zip/journal/rollback-fixture'

@@ -1,9 +1,11 @@
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   createFSARecoveryCheckpointSnapshot,
   deriveFSARecoverySummary,
-  type RecoverySummary,
 } from './recovery-summary'
+import {
+  type RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import type { FSAResumableCheckpointEvidence } from './settlement-ledger'
 import type { DirectTreeIntent } from './settlement-proof'
 

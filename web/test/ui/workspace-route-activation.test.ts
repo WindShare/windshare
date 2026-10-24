@@ -34,7 +34,7 @@ import { recoverWorkspaceActivationCandidate } from '../../src/output/workspace/
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import {
   journalWorkspaceActivation,
   promoteWorkspaceActivation,
@@ -45,7 +45,7 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
 import type {
   V2BoundReceiveOperation,
   V2RouteCommitResult,

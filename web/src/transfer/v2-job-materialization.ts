@@ -1,5 +1,5 @@
 import type { V2CommittedDirectory } from '../catalog/v2-page-store'
-import type { ReceiveLifecycleState } from '../output/workspace/state'
+import type { ReceiveLifecycleState } from './lifecycle/state'
 import {
   createDirectoryAdmissionScope,
   type DirectoryAdmissionScope,
@@ -32,7 +32,7 @@ import {
   type PlanExecution,
   type DirectResumableZipExecution,
   type V2PlanExecutionAuthority,
-} from './output-session'
+} from './output/session'
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
 type DirectAtomicIntent = ReceiveIntent & Readonly<{ plan: DirectAtomicPlan }>

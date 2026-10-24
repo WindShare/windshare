@@ -1,6 +1,5 @@
 import {
   SelectionProjectionError,
-  type AuthenticatedGenerationReference,
   type AuthenticatedProjectionEvidence,
   type ProjectionEpoch,
   type RetryableDiscoveryReason,
@@ -9,6 +8,9 @@ import {
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
 } from './model'
+import {
+  type AuthenticatedGenerationReference,
+} from '../preparation/generation'
 import { SelectionProjectionController } from './reducer'
 
 export interface AuthenticatedDiscoveryRequest {

@@ -1,5 +1,5 @@
 import { TargetOwnershipUnknownError } from '../../output/persistent-tree/errors'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { WorkspaceUsage } from '../../application/receive/actions'
 import type { V2LifecycleMutation } from '../../application/receive/contracts'
 import { isWorkspaceTerminal } from './shared'

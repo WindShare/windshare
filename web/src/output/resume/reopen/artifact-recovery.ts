@@ -1,5 +1,5 @@
 import { openOriginPrivateRetainedArtifactBackend } from '../../origin-private/session'
-import { nextReceiveLifecycleState } from '../../workspace/state'
+import { nextReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { WorkspaceOperationStages } from '../../workspace/stages'
 import type { ReopenLifecycleAuthority } from './model'
 import type { WorkspaceContinuationInput } from './workspace-continuation-authority'

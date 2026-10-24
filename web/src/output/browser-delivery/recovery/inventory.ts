@@ -1,10 +1,16 @@
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb/receive-operation-repository'
 import { acquireBrowserReceiveOperationLease, BrowserReceiveOperationBusyError } from '../../browser/session-lease'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { scanAllFSAFileCheckpoints } from '../../file-system-access/checkpoint-repository'
 import type { DirectTreeIntent } from '../../file-system-access/settlement-proof'
 import type { FileCheckpointJournal } from '../../persistence/journal'
-import { createFSARecoveryCheckpointSnapshot, deriveFSARecoverySummary, type RecoverySummary } from '../../file-system-access/recovery-summary'
+import {
+  createFSARecoveryCheckpointSnapshot,
+  deriveFSARecoverySummary,
+} from '../../file-system-access/recovery-summary'
+import {
+  type RecoverySummary,
+} from '../../../transfer/lifecycle/recovery-summary'
 import { IndexedDbBrowserDeliveryRepository } from '../indexeddb'
 import type { BrowserDeliveryRecordV1 } from '../model'
 import { deriveBrowserDeliveryLifecycle, type LocalFileSetLifecycle } from './authority'

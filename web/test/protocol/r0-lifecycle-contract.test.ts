@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { CanonicalRecordReader } from '../../src/output/workspace/canonical-reader'
+import { CanonicalRecordReader } from '../../src/transfer/encoding/canonical-reader'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import { isTerminalLifecycleState } from '../../src/output/workspace/state'
+import { isTerminalLifecycleState } from '../../src/transfer/lifecycle/state'
 
 import {
   classifyConnectionSize,
@@ -300,7 +300,7 @@ describe('R0 receive recovery and lifecycle contract', () => {
     )
     const identity = (width: number) => encodeBase64Url(new Uint8Array(width).fill(1))
     const record = await storedReceiveLifecycleState({
-      kind: 'resumable-receive', payloadKind: 'opfs-zip',
+      kind: 'resumable-receive', payloadKind: 'workspace-archive',
       operationId: identity(16), receiveIntentDigest: identity(32), generation: 1n,
       objectId: identity(32), checkpointGeneration: 2n, occupiedBytes: 200n,
       completedFileCount: 1n, completedBytes: 100n, discoveryComplete: false,

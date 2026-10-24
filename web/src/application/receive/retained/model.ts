@@ -1,4 +1,6 @@
-import type { CompatibleNameRepairSummary } from '../../../output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../contracts'
 
 export type RetainedReceiveOperationSnapshot = Readonly<

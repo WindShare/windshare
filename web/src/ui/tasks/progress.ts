@@ -1,6 +1,6 @@
 import { formatBytes } from '../v2-progress-presentation'
 import type { TaskFacts, TaskProgressPresentation } from './model'
-import { isTerminalLifecycleState } from '../../output/workspace/state'
+import { isTerminalLifecycleState } from '../../transfer/lifecycle/state'
 
 const PERCENT_SCALE = 100n
 const UNSETTLED_PERCENT_LIMIT = 99n
@@ -69,7 +69,7 @@ function retainedReceiveBytes(state: Extract<TaskFacts['lifecycle'], { kind: 're
   switch (state.payloadKind) {
     case 'file-set': return state.retainedBytes
     case 'direct-zip': return state.safeSelectedPayloadBytes
-    case 'opfs-zip': return state.completedBytes
+    case 'workspace-archive': return state.completedBytes
   }
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import type { DirectZipIntent } from '../../src/transfer/direct-zip'
 import { SelectionMeasureTracker } from '../../src/transfer/measure'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
@@ -8,7 +8,7 @@ import {
   TransferPauseRequestedError,
   type DirectResumableZipExecution,
   type MaterializationSummary,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
 import { pauseFailedV2Execution } from '../../src/transfer/settlement/v2-output'
 import { V2JobFailureAuthority } from '../../src/transfer/v2-job-failure-authority'

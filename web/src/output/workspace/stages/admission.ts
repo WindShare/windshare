@@ -16,7 +16,7 @@ import {
   RECEIVE_RECORD_RECEIPT,
 } from '../records'
 import { storedReceiveLifecycleState } from '../state-codec'
-import type { PreparationAdmissionReason, ReceiveLifecycleState } from '../state'
+import type { PreparationAdmissionReason, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
   checkedAdd,
   issueContentGate,

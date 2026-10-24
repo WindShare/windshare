@@ -3,7 +3,7 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   ReceiveLifecycleObservation, sameReceiveLifecycleState,
 } from '../../../src/output/workspace/lifecycle/observation'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 
 const identity = (fill: number, width = 16) => encodeBase64Url(new Uint8Array(width).fill(fill))
 const initial = initialReceiveLifecycleState({ operationId: identity(1), receiveIntentDigest: identity(2, 32) })

@@ -1,9 +1,9 @@
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import type { LifecycleEvent } from '../workspace/lifecycle'
 import {
   snapshotRetainedFileSetProgress,
   type ReceiveLifecycleState,
-} from '../workspace/state'
+} from '../../transfer/lifecycle/state'
 import type { DirectTreeIntent } from './settlement-proof'
 
 export type ReceiveAdmissionFallback = Extract<

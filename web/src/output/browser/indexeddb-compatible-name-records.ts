@@ -20,8 +20,10 @@ import {
   type CompatibleNameOperationHeaderV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePairKind,
-  type CompatibleNameRepairSummary,
 } from '../file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,

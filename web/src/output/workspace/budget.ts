@@ -13,8 +13,8 @@ import {
   equalCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from './canonical'
-import { CanonicalRecordReader } from './canonical-reader'
+} from '../../transfer/encoding/canonical'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 
 export const MINIMUM_OPFS_QUOTA_RESERVE = 536_870_912n
 

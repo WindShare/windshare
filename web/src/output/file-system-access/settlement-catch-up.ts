@@ -8,7 +8,7 @@ import {
   type PersistedReceiveRecord,
 } from '../workspace/records'
 import { storedReceiveLifecycleState } from '../workspace/state-codec'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReopenedDirectTreeOperation } from '../resume/reopen-authority'
 import {
   openFileSystemAccessCompatibleNameCatchUp,
@@ -19,7 +19,7 @@ import { completeFileSystemAccessPublishedCleanup } from './published-cleanup'
 
 export interface FileSystemAccessCompatibleNameCatchUpResult {
   readonly lifecycle: ReceiveLifecycleState
-  readonly repairSummary: import('./compatible-name/model').CompatibleNameRepairSummary
+  readonly repairSummary: import('../../transfer/lifecycle/name-repair').CompatibleNameRepairSummary
 }
 
 export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{

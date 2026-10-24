@@ -14,7 +14,7 @@ import { prepareReceiveOperationTransition } from '../../../src/output/workspace
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
-} from '../../../src/output/workspace/state'
+} from '../../../src/transfer/lifecycle/state'
 import {
   canonicalReceiveLifecycleStateBytes,
   decodeReceiveLifecycleState,

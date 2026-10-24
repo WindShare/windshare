@@ -2,7 +2,7 @@ import type { ReceiveIntent } from '../../transfer/intent'
 import { progressiveZipObjectRef } from '../origin-private/progressive-backend'
 import { IndexedDbTaskCheckpointStore } from '../origin-private/task-checkpoint/indexeddb-store'
 import type { TaskCheckpointStore } from '../origin-private/task-checkpoint/store'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { verifyProgressiveZipRecovery, verifyProgressiveZipSelection } from './progressive-checkpoint'
 
 const FAILURE_SCAN_PAGE_SIZE = 128

@@ -6,7 +6,7 @@ import {
 } from '../../src/transfer/intent'
 import {
   TransferPauseRequestedError, type DirectResumableZipExecution,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   createV2PlanExecutionAuthority,
   type V2PlanExecutionRouteRegistry,

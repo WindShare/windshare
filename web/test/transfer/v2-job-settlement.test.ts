@@ -5,7 +5,7 @@ import {
   disabledOutputExecutionProfile,
   TransferPauseRequestedError,
   TransferStopRequestedError,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
 import {
   V2OutputSettlementTimeoutError,

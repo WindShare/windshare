@@ -1,14 +1,14 @@
 import type { OutputDiagnosticsPorts } from '../diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import type { ReceiveOperationRepository } from '../workspace/repository'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { createDirectoryAdmissionScope, type DirectoryAdmissionScope } from '../../transfer/directory-admission'
 import { snapshotTransferJobId } from '../../transfer/job/identity'
 import type { ReceiveIntent } from '../../transfer/intent'
 import type {
   PersistentDirectTreeSettlementAuthority,
-} from '../../transfer/settlement/persistent-execution'
+} from '../execution/persistent-execution'
 import {
   FileSystemAccessOutputSession,
 } from './session'

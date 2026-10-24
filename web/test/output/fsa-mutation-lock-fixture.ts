@@ -10,7 +10,7 @@ import type {
   FSAHandleIdentityRecord,
   FSAHandleIdentityStore,
 } from '../../src/output/browser/mutation-coordination/handle-identity'
-import type { PerformanceSummaryObservations } from '../../src/output/diagnostics/performance-summary'
+import type { PerformanceSummaryObservations } from '../../src/diagnostics/performance/performance-summary'
 
 export class MemoryFSAHandleIdentityStore implements FSAHandleIdentityStore {
   readonly records: FSAHandleIdentityRecord[] = []

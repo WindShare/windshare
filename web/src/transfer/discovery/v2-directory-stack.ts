@@ -1,4 +1,4 @@
-import { FaultScope } from '../fault'
+import { FaultScope } from '../failure/fault'
 import type { DirectoryCursor, DirectoryWork } from '../job/contract'
 import { V2DirectoryOutputError, normalizeV2FileTransferFailure } from '../job/failures'
 

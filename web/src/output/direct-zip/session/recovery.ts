@@ -38,7 +38,7 @@ export type DirectZipRecoverySessionResult<ParentHandle, FileHandle, Runtime> =
     }>
   | Readonly<{
       readonly kind: 'gated'
-      readonly lifecycle: import('../../workspace/state').ReceiveLifecycleState
+      readonly lifecycle: import('../../../transfer/lifecycle/state').ReceiveLifecycleState
       readonly decision: DirectZipLifecycleDecision
       readonly verify?: () => Promise<DirectZipRecoverySessionResult<ParentHandle, FileHandle, Runtime>>
     }>
@@ -61,7 +61,7 @@ export class DirectZipActiveSession<ParentHandle, FileHandle, Runtime> {
     return this.#runtime
   }
 
-  async pause(signal: AbortSignal): Promise<import('../../workspace/state').ReceiveLifecycleState> {
+  async pause(signal: AbortSignal): Promise<import('../../../transfer/lifecycle/state').ReceiveLifecycleState> {
     if (!this.#open) throw new DOMException('Direct ZIP session is closed', 'InvalidStateError')
     signal.throwIfAborted()
     const lifecycle = await this.#input.lifecycle.pause(this.#runtime, signal)

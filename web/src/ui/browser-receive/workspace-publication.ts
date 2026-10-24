@@ -11,13 +11,13 @@ import type {
   WorkspaceOwnedObjectCleanupObservation,
 } from '../../output/workspace/cleanup'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   createV2PlanExecutionAuthority,
   type V2PlanExecutionRouteRegistry,
 } from '../../transfer/settlement/v2-plan-authority'
 import { createOperationID, type ReceiveIntent } from '../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../transfer/output/session'
 import type { BrowserReceiveWindow } from './contracts'
 import { unavailableRoute } from './shared'
 import type { WorkspaceReceiveOperation } from './workspace-operation'

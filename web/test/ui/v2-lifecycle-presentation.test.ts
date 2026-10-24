@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
-import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
+import type {
+  RecoverySummary,
+} from '../../src/transfer/lifecycle/recovery-summary'
 import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
@@ -31,7 +35,7 @@ type TestLifecyclePayload = Exclude<ReceiveLifecycleStatePayload, ResumableFileS
 describe('receive lifecycle product phases', () => {
   it('explains how to resume a native archive after storage pressure', () => {
     const state = lifecycle({
-      kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: 'object',
+      kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: 'object',
       checkpointGeneration: 2n, occupiedBytes: 2048n, completedFileCount: 1n,
       completedBytes: 1024n, discoveryComplete: false, pauseReason: 'storage-pressure',
     })

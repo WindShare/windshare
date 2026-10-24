@@ -4,7 +4,7 @@ import {
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
-import type { PreparationFileEntry } from '../workspace/preparation'
+import type { PreparationFileEntry } from '../../transfer/preparation'
 import {
   type BeginOutputFileResult,
   type AutomaticCheckpointResult,
@@ -25,7 +25,7 @@ import {
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
   snapshotOutputFileRequest,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { ReceiveIntent } from '../../transfer/intent'
 import { SingleFileStreamOutputSession } from '../streams/single-file'
 import { StreamingZipArchiveWriter } from '../streams/streaming-zip'

@@ -12,7 +12,7 @@ import {
 } from '../../../../output/direct-zip/journal'
 import {
   canonicalDigest, canonicalFrame, canonicalIdentity, canonicalRecord,
-} from '../../../../output/workspace/canonical'
+} from '../../../../transfer/encoding/canonical'
 import { encodeCentral, encodeEpoch, encodeLayout, UNBOUND_DISCOVERY } from './records'
 
 export interface InitialBrowserDirectZipCheckpointOptions {

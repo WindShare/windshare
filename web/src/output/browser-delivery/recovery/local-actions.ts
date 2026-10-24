@@ -1,4 +1,4 @@
-import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../workspace/state'
+import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { BrowserDeliveryResumeSummary } from '../retained'
 
 export type BrowserDeliveryLocalAction = 'save-staged-files' | 'cleanup-staging' | 'discard-incomplete-staging'

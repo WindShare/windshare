@@ -82,7 +82,7 @@ it('keeps a paused task paused when the connection returns or the user requests 
   const controller = controllerFor(joined, receive)
   await startTransfer(controller, joined)
   const runtime = receive.startedAuthorities[0]!.runtime!
-  const paused = next(runtime.lifecycle, { kind: 'resumable-receive', payloadKind: 'opfs-zip',
+  const paused = next(runtime.lifecycle, { kind: 'resumable-receive', payloadKind: 'workspace-archive',
     objectId: identityText(92), checkpointGeneration: 2n, occupiedBytes: 4096n,
     completedFileCount: 1n, completedBytes: 1024n, discoveryComplete: false })
   joined.transferRuns[0]!.resolve(paused)

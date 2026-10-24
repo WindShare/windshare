@@ -1,6 +1,6 @@
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
-import { receiveTimingFields } from './lifecycle/timing'
-import { receiveContentWarningFields } from './lifecycle/content-warning'
+import { receiveTimingFields } from '../../transfer/lifecycle/timing'
+import { receiveContentWarningFields } from '../../transfer/lifecycle/content-warning'
 import {
   canonicalFrame,
   canonicalIdentity,
@@ -9,7 +9,7 @@ import {
   canonicalU64,
   concatCanonicalBytes,
   type CanonicalBytes,
-} from './canonical'
+} from '../../transfer/encoding/canonical'
 import {
   receiveStateByte,
   RECEIVE_STATE_SOURCE_INVALIDATED,
@@ -19,7 +19,7 @@ import {
   type ReceiveLifecycleState,
   type RecoveryDiscoveryState,
   type RestartRequiredReason,
-} from './state'
+} from '../../transfer/lifecycle/state'
 
 const RESUMABLE_RECEIVE_FILE_SET = 1
 const START_PAUSED = 1
@@ -152,7 +152,7 @@ function resumableReceivePayload(
       canonicalFrame(canonicalU8(directZipCheckpointPhaseByte(state.checkpointPhase))),
     ]
   }
-  if (state.payloadKind === 'opfs-zip') {
+  if (state.payloadKind === 'workspace-archive') {
     if (state.checkpointGeneration === 0n || typeof state.discoveryComplete !== 'boolean') {
       throw new TypeError('native ZIP recovery checkpoint is invalid')
     }
@@ -448,7 +448,7 @@ function decodeResumableReceiveState(
     if (checkpointGeneration === 0n || discovery > 1 || pauseReason > 1) {
       throw new TypeError('native ZIP recovery checkpoint is invalid')
     }
-    return Object.freeze({ ...base, kind: 'resumable-receive', payloadKind: 'opfs-zip',
+    return Object.freeze({ ...base, kind: 'resumable-receive', payloadKind: 'workspace-archive',
       objectId, checkpointGeneration, occupiedBytes, completedFileCount, completedBytes, discoveryComplete: discovery === 1,
       ...(pauseReason === 1 ? { pauseReason: 'storage-pressure' as const } : {}),
     })

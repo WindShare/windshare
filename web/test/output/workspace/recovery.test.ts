@@ -7,7 +7,7 @@ import {
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-} from '../../../src/output/workspace/state'
+} from '../../../src/transfer/lifecycle/state'
 import type { ReceiveOperationTraceEvent } from '../../../src/output/workspace/trace'
 
 const OBSERVATION_INTERVAL = 86_400_000

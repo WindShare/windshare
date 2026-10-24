@@ -35,7 +35,7 @@ describe('quota-paused partial ZIP reopen', () => {
     state.budget.mockRejectedValue(new DOMException('No quota headroom', 'QuotaExceededError'))
     state.backend.mockRejectedValue(new Error('A native writer must never open for a partial read'))
     const resources: ReopenResources = {}
-    const lifecycle = { kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: 'archive',
+    const lifecycle = { kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: 'archive',
       checkpointGeneration: 2n, generation: 8n }
     const input = {
       repository: { readHandle: async () => ({ operationId: 'operation', ownedObjectId: 'archive' }) },

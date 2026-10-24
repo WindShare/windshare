@@ -14,7 +14,7 @@ import {
   type WorkspaceOwnedCleanupPort,
   type WorkspaceOwnedObjectCleanupTarget,
 } from '../cleanup'
-import { snapshotIdentity } from '../canonical'
+import { snapshotIdentity } from '../../../transfer/encoding/canonical'
 import type {
   CleanupReceiptV1,
   PreparationAdmissionReceiptV1,
@@ -24,7 +24,7 @@ import {
   type PackageFailureReason,
   type PreparationAdmissionReason,
   type ReceiveLifecycleState,
-} from '../state'
+} from '../../../transfer/lifecycle/state'
 
 export const WORKSPACE_HANDLE_ROOT = 16 as const
 export const WORKSPACE_HANDLE_RAW_OBJECT = 17 as const

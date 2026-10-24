@@ -12,7 +12,7 @@ import type {
   WorkspaceOwnedObjectCleanupObservation,
   WorkspaceOwnedObjectCleanupTarget,
 } from '../workspace/cleanup'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import type {
   ReceiveOperationHandleInventoryRepository,
   ReceiveOperationRepository,

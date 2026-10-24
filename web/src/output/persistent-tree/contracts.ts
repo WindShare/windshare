@@ -22,7 +22,7 @@ import type {
   AutomaticCheckpointTrigger,
   OutputSessionIdentity,
   VerifiedFinalOutputFile,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type {
   PersistentOutputStageAuthority,
   PersistentOutputStageScope,

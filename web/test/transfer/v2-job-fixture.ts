@@ -9,14 +9,14 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import type {
   ReceiveLifecycleState,
   RecoverySelectionFacts,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import {
   createDirectoryAdmissionScope,
   isolatedDirectorySettlement,
   finalizedDirectorySettlement,
 } from '../../src/transfer/directory-admission'
-import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
+import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
 import {
   createCatalogRootDirectoryTreeArtifact,
   createDestinationReservationID,
@@ -61,7 +61,7 @@ import {
   type PortableExecution,
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   TransferJob,
   type V2RevisionCapacityPolicyOptions,

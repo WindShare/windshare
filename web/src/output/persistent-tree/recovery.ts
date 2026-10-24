@@ -44,17 +44,17 @@ import {
   performanceElapsedMilliseconds,
   performanceNowMilliseconds,
   type PerformanceSummaryObservations,
-} from '../diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 import {
   createPerformanceLineageClaimTimeline,
   type PerformanceLineageClaimTimeline,
-} from '../diagnostics/lineage-claim-performance'
+} from '../../diagnostics/performance/lineage-claim-performance'
 import {
   createPerformanceClaimInspectorObservation,
   type PerformanceClaimInspectorContextObservation,
   type PerformanceClaimInspectorObservation,
-} from '../diagnostics/claim-inspector-performance'
-import type { PerformanceFilePipelineObservation } from '../diagnostics/performance-runtime-observations'
+} from '../../diagnostics/performance/claim-inspector-performance'
+import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 import { InitialClaimPipeline } from './initial-claim-pipeline'
 
 /** Restores receiving authority before a recovered file accepts any new writes. */

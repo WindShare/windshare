@@ -2,7 +2,7 @@ import { acquireBrowserReceiveOperationLease, type BrowserReceiveOperationLeaseO
 import { createReceiveOperationV2, storedReceiveOperationRecord, decodeStoredReceiveOperation, RECEIVE_RECORD_OPERATION, operationRecordId } from '../workspace/records'
 import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveOperationHandleInventoryRepository } from '../workspace/repository'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationResumeDescriptor } from './descriptor'
 import { deriveArtifactChoiceIdentity, type ArtifactChoiceID, type ReceiveIntent } from '../../transfer/intent'
 import type { ReceiveOperationDisplay } from '../workspace/operation-display'

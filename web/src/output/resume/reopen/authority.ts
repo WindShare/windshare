@@ -28,7 +28,7 @@ import {
 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { WorkspaceOperationStages } from '../../workspace/stages'
 import type { ReceiveOperationResumeDescriptor } from '../descriptor'
 import {

@@ -25,7 +25,7 @@ import {
   sessionFault,
   sourceFault,
   type Fault,
-} from '../../src/transfer/fault'
+} from '../../src/transfer/failure/fault'
 
 describe('closed transfer fault values', () => {
   it('validates and freezes every domain, scope, and domain-specific code', () => {

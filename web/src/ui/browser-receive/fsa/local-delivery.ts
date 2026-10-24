@@ -3,7 +3,7 @@ import { acquireBrowserReceiveOperationLease, type BrowserReceiveOperationLease 
 import { openBrowserFolderDelivery, openBrowserFolderDeliveryCleanup } from '../../../output/browser-delivery/assembly'
 import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../../output/browser-delivery/recovery/local-lifecycle'
 import { isBrowserDeliveryLocalLifecycle, type BrowserDeliveryLocalAction } from '../../../output/browser-delivery/recovery/local-actions'
-import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../output/workspace/state'
+import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../../output/file-system-access/session'
 import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATION } from '../../../output/workspace/records'

@@ -11,7 +11,7 @@ import { forgetLegacyCompatibleNameRecord } from '../../src/output/browser/index
 import { IndexedDbReceiveResumeSource } from '../../src/output/browser/indexeddb-resume-state'
 import { browserReceiveOperationLockName } from '../../src/output/browser/session-lease'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
-import { initialReceiveLifecycleState } from '../../src/output/workspace/state'
+import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 
 export async function probeLegacyCompatibleNameCleanup(databaseName: string) {

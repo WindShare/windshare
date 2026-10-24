@@ -1,5 +1,5 @@
 import type { ArtifactChoiceID } from '../../../transfer/intent'
-import type { CanonicalBytes } from '../../workspace/canonical'
+import type { CanonicalBytes } from '../../../transfer/encoding/canonical'
 import type { DirectZipEntryPlanV2 } from '../format'
 import type {
   PersistedReceiveRecord,
@@ -7,7 +7,7 @@ import type {
   ReceiveOperationLeaseRecord,
   ReceiveOperationV2,
 } from '../../workspace/records'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 
 export const DIRECT_ZIP_JOURNAL_SCHEMA_VERSION = 1 as const
 export const DIRECT_ZIP_PAGE_LAYOUT = 1 as const
@@ -65,7 +65,7 @@ export interface DirectZipTargetObservationV1 {
 export interface DirectZipRecoveryGateV1 {
   readonly operationId: string
   readonly receiveIntentDigest: string
-  readonly kind: import('../../workspace/state').RecoveryGateKind
+  readonly kind: import('../../../transfer/lifecycle/state').RecoveryGateKind
   readonly checkpointDigest: string
   readonly candidateDigest?: string
   readonly additionalTemporaryBytesUpperBound?: bigint

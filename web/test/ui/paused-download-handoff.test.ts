@@ -16,7 +16,7 @@ it('retains a paused ZIP through authority release and exposes the same native p
   const runtime = receive.startedAuthorities[0]!.runtime!
   const display = controller.getSnapshot().taskDisplay!
   const paused = next(runtime.lifecycle, {
-    kind: 'resumable-receive', payloadKind: 'opfs-zip',
+    kind: 'resumable-receive', payloadKind: 'workspace-archive',
     objectId: identityText(92), checkpointGeneration: 2n, occupiedBytes: 4096n,
     completedFileCount: 1n, completedBytes: 1024n, discoveryComplete: false,
   })

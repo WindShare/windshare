@@ -6,7 +6,7 @@ import {
   FaultScope,
   OutputFaultCode,
   outputFault,
-} from '../../../src/transfer/fault'
+} from '../../../src/transfer/failure/fault'
 import {
   createFailureFactAccumulator,
   createFailureIdentity,

@@ -25,7 +25,7 @@ import {
   canonicalRecord,
   canonicalU64,
   snapshotIdentity,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   ORIGIN_PRIVATE_DIRECTORY_OBJECT_CONTAINER,
   ORIGIN_PRIVATE_RAW_FILE_CONTAINER,

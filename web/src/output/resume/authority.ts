@@ -1,8 +1,10 @@
 import { NativeZipRecoveryUnavailableError } from './progressive-checkpoint'
 import type { OutputFailureSinks } from '../diagnostics'
-import type { RecoverySummary } from '../file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import type { PersistentPausedFileRecovery } from '../persistent-tree/contracts'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { DirectZipBootstrapResumeDescriptorV1 } from '../direct-zip/journal/repository'
 import {
   assertReceiveOperationCanContinue,

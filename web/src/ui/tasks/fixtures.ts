@@ -1,5 +1,5 @@
 import { EMPTY_V2_PROGRESS } from '../v2-model'
-import type { ReceiveLifecycleState, ReceiveLifecycleStatePayload } from '../../output/workspace/state'
+import type { ReceiveLifecycleState, ReceiveLifecycleStatePayload } from '../../transfer/lifecycle/state'
 import type { TaskFacts } from './model'
 
 const FIXTURE_OPERATION_ID = '1'.repeat(32)

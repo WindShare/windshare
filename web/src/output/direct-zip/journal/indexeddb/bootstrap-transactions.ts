@@ -23,7 +23,7 @@ import {
   receiveOperationLeaseId,
   type ReceiveOperationLeaseRecord,
 } from '../../../workspace/records'
-import { equalCanonicalBytes } from '../../../workspace/canonical'
+import { equalCanonicalBytes } from '../../../../transfer/encoding/canonical'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../../../workspace/state-codec'
 import { prepareReceiveOperationTransition, type ReceiveOperationTransition } from '../../../workspace/repository'
 import { applyOperationTransition, assertOperationConcurrency, assertOperationMutationOwnership } from '../../../browser/indexeddb/repository-transactions'

@@ -61,8 +61,8 @@ import { collectExactSingleFileEvidence } from './job/single-file-evidence'
 import { V2JobRootAuthority } from './job/root'
 import { V2CatalogTraversalGuard } from './job/traversal'
 import { newFileQueue, runDiscoveryWorkers, runPreparedFileWorkers } from './job/workers'
-import type { PerformanceFilePipelineObservation } from '../output/diagnostics/performance-runtime-observations'
-import type { PerformanceSummaryObservations } from '../output/diagnostics/performance-summary'
+import type { PerformanceFilePipelineObservation } from '../diagnostics/performance/performance-runtime-observations'
+import type { PerformanceSummaryObservations } from '../diagnostics/performance/performance-summary'
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
   snapshotDirectoryMaterializationRequest,
@@ -71,7 +71,7 @@ import {
   type IncrementalDirectoryOutput,
   type MaterializationSummary,
   type PlanExecution,
-} from './output-session'
+} from './output/session'
 import type { DirectZipIntent } from './direct-zip'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
 import { observeTransferContent } from './progress/content'

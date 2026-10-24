@@ -7,7 +7,7 @@ import {
 import type { FileCheckpointJournal } from '../../persistence/journal'
 import { durableCheckpointNamespaceIdentity, sameDurableCheckpointNamespace } from '../../persistence/namespace'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../../workspace/canonical'
+import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../../../transfer/encoding/canonical'
 
 const ORIGINAL_CHECKPOINT_AUTHORITY_BOUND = 2
 const RECEIVE_CHECKPOINT_SET_DOMAIN = 'windshare/original-receive-checkpoint-set'

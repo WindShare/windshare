@@ -6,12 +6,12 @@ import type { AuthorityOwnedReceiveOperationContinuation } from '../../src/outpu
 import type { ReceiveOperationRepository, ReceiveOperationTransition } from '../../src/output/workspace/repository'
 import { WorkspaceOperationStages } from '../../src/output/workspace/stages'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications } from '../../src/output/workspace/lifecycle/observation'
 import { WorkspaceReceiveOperation } from '../../src/ui/browser-receive/workspace-operation'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
 import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
-import * as progressiveExecution from '../../src/transfer/settlement/progressive-workspace-execution'
+import * as progressiveExecution from '../../src/output/execution/progressive-workspace-execution'
 import {
   catalogFixture, digestIdentity, identity, identityText, readerFixture,
   receiveIntentFixture, transferJobFixture,
@@ -95,7 +95,7 @@ describe('reopened ZIP admission ownership', () => {
 
       expect(result.worker.status).toBe('Paused')
       expect(result.lifecycle).toMatchObject({
-        kind: 'resumable-receive', payloadKind: 'opfs-zip',
+        kind: 'resumable-receive', payloadKind: 'workspace-archive',
         completedBytes: 64n, checkpointGeneration: 7n,
       })
       expect(f.lifecycle()).toEqual(result.lifecycle)
@@ -127,7 +127,7 @@ describe('reopened ZIP admission ownership', () => {
     try {
       expect(await runtime.startLifecycleAction('continue', paused)).toMatchObject({ resumeTransfer: true })
       const settled = await runtime.settleTransferAdmissionFailure(new Error('resume connection failed'))
-      expect(settled.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip', completedBytes: 64n })
+      expect(settled.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive', completedBytes: 64n })
       expect(f.discard).not.toHaveBeenCalled()
     } finally {
       open.mockRestore()
@@ -145,7 +145,7 @@ describe('reopened ZIP admission ownership', () => {
     ])
     expect(first).toEqual(second)
     expect(first.lifecycle).toMatchObject({
-      kind: 'resumable-receive', payloadKind: 'opfs-zip', completedBytes: 64n,
+      kind: 'resumable-receive', payloadKind: 'workspace-archive', completedBytes: 64n,
       completedFileCount: 1n, occupiedBytes: 128n, checkpointGeneration: 7n,
     })
     expect(first.workspaceUsage).toEqual({ ownedBytes: 128n })
@@ -173,7 +173,7 @@ describe('reopened ZIP admission ownership', () => {
     expect(exposed).toBe(false)
     expect(f.lifecycle().kind).toBe('receiving')
     release.resolve()
-    expect(await running).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip', completedBytes: 64n })
+    expect(await running).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive', completedBytes: 64n })
     await observation
     expect(f.discard).not.toHaveBeenCalled()
   })

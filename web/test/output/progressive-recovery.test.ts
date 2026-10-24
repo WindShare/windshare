@@ -3,7 +3,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import { NativeZipRecoveryUnavailableError, verifyProgressiveZipRecovery } from '../../src/output/resume/progressive-checkpoint'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import type { TaskCheckpoint, TaskEntry, TaskObjectRef } from '../../src/output/origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../../src/output/origin-private/task-checkpoint/store'
 
@@ -11,7 +11,7 @@ const id = (width: number, n: number) => encodeBase64Url(new Uint8Array(width).f
 const object: TaskObjectRef = { operationId: id(16, 1), objectId: id(32, 2), kind: 'zip-archive', handleId: 'owned-handle' }
 const lifecycle: ReceiveLifecycleState = {
   operationId: object.operationId, receiveIntentDigest: id(32, 3), generation: 4n,
-  kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: object.objectId,
+  kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: object.objectId,
   checkpointGeneration: 2n, occupiedBytes: 58n, completedFileCount: 1n, completedBytes: 8n, discoveryComplete: true,
 }
 const entry: TaskEntry = {

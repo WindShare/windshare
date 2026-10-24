@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8, canonicalU64 } from '../../../src/output/workspace/canonical'
+import { canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8, canonicalU64 } from '../../../src/transfer/encoding/canonical'
 import {
   createPreparationAdmissionReceipt,
   decodePreparationAdmissionAuthority,

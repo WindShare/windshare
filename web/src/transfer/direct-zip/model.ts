@@ -1,16 +1,11 @@
 import type { V2CatalogModifiedTime } from '../../catalog/v2-records'
-import type { DirectZipCompletionProofV1, DirectZipWriterCheckpointV1 } from '../../output/direct-zip/writer'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { DirectResumableZipPlan, ReceiveIntent, ZipArchiveArtifact } from '../intent'
 import type { PendingFile } from '../job/contract'
 import type {
   OutputCapabilities,
   OutputSessionIdentity,
   MaterializationSummary,
-  PlanPauseRequest,
-  PlanSettlementRequest,
-} from '../output-session'
-import type { SuccessfulTransferWorkerSettlement } from '../outcome'
+} from '../output/session'
 
 export type DirectZipIntent = ReceiveIntent & Readonly<{
   plan: DirectResumableZipPlan
@@ -95,29 +90,4 @@ export interface DirectZipOutputSessionV1 {
 export interface DirectZipOrderedSourceV1 {
   root(signal: AbortSignal): Promise<DirectZipAuthenticatedRootV1>
   members(signal: AbortSignal): AsyncIterable<DirectZipOrderedMemberV1>
-}
-
-export interface DirectZipStableEvidenceV1 {
-  readonly checkpoint: DirectZipWriterCheckpointV1
-  readonly materialization: MaterializationSummary
-  readonly additionalTemporaryBytesUpperBound: bigint
-}
-
-export interface DirectZipPublishedEvidenceV1 extends DirectZipStableEvidenceV1 {
-  readonly completion: DirectZipCompletionProofV1
-}
-
-export interface DirectZipSettlementAuthorityV1 {
-  pause(
-    intent: DirectZipIntent,
-    request: PlanPauseRequest,
-    evidence: DirectZipStableEvidenceV1,
-    signal: AbortSignal,
-  ): Promise<ReceiveLifecycleState>
-  settle(
-    intent: DirectZipIntent,
-    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
-    evidence: DirectZipPublishedEvidenceV1,
-    signal: AbortSignal,
-  ): Promise<ReceiveLifecycleState>
 }

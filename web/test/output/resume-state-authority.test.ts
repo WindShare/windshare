@@ -2,14 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { OutputFailureSinks } from '../../src/output/diagnostics'
-import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../src/transfer/lifecycle/recovery-summary'
 import {
   ReceiveOperationResumeAuthority,
   type ReceiveOperationMutationPort,
 } from '../../src/output/resume/authority'
 import {
   type ReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 
 afterEach(() => vi.useRealTimers())
 

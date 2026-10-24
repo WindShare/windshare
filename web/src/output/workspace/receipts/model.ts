@@ -1,5 +1,5 @@
-import type { CanonicalBytes } from '../canonical'
-import type { ReceiveLifecycleState } from '../state'
+import type { CanonicalBytes } from '../../../transfer/encoding/canonical'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 
 export const RECEIPT_SCHEMA_VERSION = 1 as const
 export const RECEIPT_PREPARATION_ADMISSION = 5 as const

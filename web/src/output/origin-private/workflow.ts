@@ -11,7 +11,7 @@ import type {
 } from '../workspace/aggregate'
 import type { MaterializedManifestV1 } from '../workspace/manifest'
 import type { ArtifactVerificationReceiptV1 } from '../workspace/receipts'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { WorkspaceOperationStages } from '../workspace/stages'
 import { OriginPrivatePackageStore } from './package-store'
 

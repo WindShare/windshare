@@ -1,6 +1,11 @@
 import type { RetainedReceiveOperationSnapshot } from './model'
 import type { V2RetainedCompatibleNameRepairSource } from '../observation/contracts'
-import { compatibleNameRepairSummary, type CompatibleNameRepairSummary } from '../../../output/file-system-access/compatible-name/model'
+import {
+  compatibleNameRepairSummary,
+} from '../../../output/file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import { hasValidatedTerminalCompatibleNameRepair } from '../repair'
 import type {
   V2RetainedReceiveInventory,

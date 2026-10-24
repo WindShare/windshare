@@ -1,4 +1,4 @@
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalU64, equalCanonicalBytes, snapshotIdentity } from '../../workspace/canonical'
+import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalU64, equalCanonicalBytes, snapshotIdentity } from '../../../transfer/encoding/canonical'
 import type { DirectZipCheckpointV1, DirectZipRollbackCandidateV1, DirectZipPendingCandidateV1 } from './model'
 import { DIRECT_ZIP_CANDIDATE_ROLLBACK, DIRECT_ZIP_JOURNAL_SCHEMA_VERSION } from './model'
 import { validateDirectZipCheckpointProposalV1, validateDirectZipCommitCandidateV1 } from './records'

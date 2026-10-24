@@ -14,7 +14,7 @@ import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type {
   V2PlanExecutionAuthority,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   createReceiveIntent,
   createSelectionSpec,
@@ -36,7 +36,7 @@ import {
 } from '../../src/output/origin-private/progressive-backend'
 import { IndexedDbTaskCheckpointStore } from '../../src/output/origin-private/task-checkpoint/indexeddb-store'
 import type { TaskCheckpoint } from '../../src/output/origin-private/task-checkpoint/model'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import {
   createBrowserReceiveComposition,

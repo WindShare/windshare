@@ -3,7 +3,7 @@ import type {
   DirectZipJournalRepository, DirectZipPageChainV1, DirectZipPageKind, DirectZipRetainedEpochProofV1,
 } from '../../../../output/direct-zip/journal'
 import type { DirectZipEpochProofV1, DirectZipWriterCheckpointV1 } from '../../../../output/direct-zip/writer'
-import { equalCanonicalBytes } from '../../../../output/workspace/canonical'
+import { equalCanonicalBytes } from '../../../../transfer/encoding/canonical'
 import { ZERO_DIGEST } from './bootstrap'
 import { decodeEpoch, digestBytes, encodeEpoch } from './records'
 

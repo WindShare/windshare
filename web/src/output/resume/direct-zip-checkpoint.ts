@@ -1,5 +1,5 @@
 import type { DirectZipJournalRepository } from '../direct-zip/journal/repository'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 
 export type DirectZipRecoveryRequirement = 'receive' | 'verify-completion' | 'published'
 

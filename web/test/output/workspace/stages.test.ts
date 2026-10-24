@@ -30,7 +30,7 @@ import {
   type WorkspaceBudgetAuthority,
   type WorkspaceStageTraceEvent,
 } from '../../../src/output/workspace/stages'
-import { initialReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 import {
   decodeStoredReceiveLifecycleState,
   storedReceiveLifecycleState,

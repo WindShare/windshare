@@ -1,6 +1,6 @@
 import type { FSATerminalMutationKind } from '../browser/mutation-coordination/model'
 import type { CreateFileSystemAccessSettlementAuthorityOptions, FSASettlementTraceEvent } from './settlement'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { emitOutputTrace, outputTraceEvent, recordOutputException } from '../diagnostics'
 import { completeFileSystemAccessPublishedCleanup } from './published-cleanup'
 import type { FSAFinalSettlementObservation } from './session'

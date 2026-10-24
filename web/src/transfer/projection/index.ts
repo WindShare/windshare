@@ -9,7 +9,6 @@ export {
   selectionTargetKey,
   unsettledTargetsForSelection,
   type ArtifactShapeProof,
-  type AuthenticatedGenerationReference,
   type AuthenticatedProjectionEvidence,
   type DiscoveryState,
   type LayoutBasisProof,
@@ -28,6 +27,9 @@ export {
   type UnsettledSelectionTarget,
   type WorkspaceCostObservationV1,
 } from './model'
+export {
+  type AuthenticatedGenerationReference,
+} from '../preparation/generation'
 export {
   SelectionProjectionController,
   createSelectionProjectionState,

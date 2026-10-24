@@ -4,7 +4,7 @@ import { fileCheckpointIsComplete } from '../persistence/checkpoint'
 import type { FileCheckpointJournal, FinalFileCheckpointProof } from '../persistence/journal'
 import { originalCheckpointBinding } from '../origin-private/recovery/receive-checkpoint'
 import { validateWorkspaceBudget, type WorkspaceBudgetV1 } from '../workspace/budget'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { readPersistedWorkspaceAdmission } from './reopen/persistence'
 
 const ORIGINAL_CHECKPOINT_AUTHORITY_BOUND = 2

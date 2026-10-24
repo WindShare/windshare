@@ -10,7 +10,7 @@ import type { TaskAction } from '../../src/ui/tasks'
 function retained(actions: V2RetainedReceiveOperation['actions'] = ['continue', 'save-partial', 'discard']): V2RetainedReceiveOperation {
   const state: ReceiveLifecycleState = {
     operationId: '1'.repeat(32), receiveIntentDigest: '2'.repeat(64), generation: 4n,
-    kind: 'resumable-receive', payloadKind: 'opfs-zip',
+    kind: 'resumable-receive', payloadKind: 'workspace-archive',
     objectId: '3'.repeat(32), checkpointGeneration: 3n, occupiedBytes: 4096n,
     completedFileCount: 2n, completedBytes: 1024n, discoveryComplete: false,
   }

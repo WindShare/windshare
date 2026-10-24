@@ -1,11 +1,13 @@
 import type { CompatibleNameLedger } from './ledger'
 import type {
-  CompatibleNameFooterObservationV1,
-  CompatibleNameFooterState,
   CompatibleNameMappingV1,
-  CompatibleNamePairPlacement,
   CompatibleNameTerminalFooterState,
 } from './model'
+import type {
+  CompatibleNameFooterObservationV1,
+  CompatibleNameFooterState,
+  CompatibleNamePairPlacement,
+} from '../../../transfer/lifecycle/name-repair'
 import {
   compatibleNameSidecarPlacement,
   decodeCompatibleNameSidecar,

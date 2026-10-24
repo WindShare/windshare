@@ -1,5 +1,5 @@
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import { TransferPauseRequestedError } from '../../src/transfer/output-session'
+import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'

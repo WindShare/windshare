@@ -1,6 +1,6 @@
 import type { DirectZipMilestonePayloadV1 } from '../../../diagnostics/trace/model'
 import { projectDiagnosticException } from '../../../diagnostics/exception'
-import { snapshotIdentity } from '../../workspace/canonical'
+import { snapshotIdentity } from '../../../transfer/encoding/canonical'
 import {
   DIRECT_ZIP_CHECKPOINT_PHASES,
   DIRECT_ZIP_CLEANUP_DECISIONS,

@@ -1,6 +1,6 @@
 import type { DirectoryAdmissionScope } from '../../transfer/directory-admission'
-import type { MaterializationSummary } from '../../transfer/output-session'
-import type { PersistentDirectTreeMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
+import type { MaterializationSummary } from '../../transfer/output/session'
+import type { PersistentDirectTreeMaterializationEvidence } from '../execution/persistent-execution'
 import {
   MaterializationLedgerEvidenceOutcome,
   validateMaterializationLedgerEvidence,

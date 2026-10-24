@@ -1,6 +1,8 @@
 import { vi } from 'vitest'
 
-import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../src/transfer/lifecycle/recovery-summary'
 import type {
   ReceiveOperationMutationPort,
   ReceiveOperationResumeSource,

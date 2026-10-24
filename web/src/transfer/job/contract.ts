@@ -1,3 +1,4 @@
+import { type MaterializationFailureReason } from '../failure/materialization'
 export type FileTransferSettlement =
   | Readonly<{ kind: 'completed'; exactSize: bigint }>
   | Readonly<{ kind: 'paused'; retainedBytes: bigint }>
@@ -14,9 +15,13 @@ import type { V2BlockRangeReader, V2ContentLaneStatus } from '../../content/v2-b
 import type { V2RevisionReader } from '../../content/v2-session-services'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
-import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type {
+  CompatibleNameRepairSummary,
+} from '../lifecycle/name-repair'
+import type {
+  RecoverySummary,
+} from '../lifecycle/recovery-summary'
+import type { ReceiveLifecycleState } from '../lifecycle/state'
 import type {
   CanonicalModifiedTime,
   DirectoryAdmission,
@@ -25,7 +30,9 @@ import type {
 import type { ReceiveIntent } from '../intent'
 import type { SelectionMeasure } from '../measure'
 import type { TransferWorkerSettlement } from '../outcome'
-import type { ClassifiedTransferFailure } from './failures'
+import type {
+  ClassifiedTransferFailure,
+} from '../failure/classification'
 import type {
   LogicalArtifactPath,
   MaterializationRootRelativePath,
@@ -35,8 +42,8 @@ import type {
   DurabilityLevel,
   ExactPreparationEvidence,
   V2PlanExecutionAuthority,
-} from '../output-session'
-import { MAXIMUM_OPEN_OUTPUT_FILES } from '../output-file-contract'
+} from '../output/session'
+import { MAXIMUM_OPEN_OUTPUT_FILES } from '../output/file'
 import { MAX_DIRECTORY_ADMISSIONS } from '../directory-admission-ledger'
 import type { V2OutputSettlementDeadline } from '../settlement/v2-output'
 import type { WorkerFamilyFailureSource } from '../worker-family/supervisor'
@@ -127,17 +134,6 @@ export interface TransferProgress {
 }
 
 export type ArtifactLayoutClass = DirectoryAdmissionLayout | 'original-file'
-export const MATERIALIZATION_FAILURE_REASONS = Object.freeze([
-  'file-open-failed',
-  'source-revision-changed',
-  'content-read-failed',
-  'output-write-failed',
-  'output-commit-failed',
-  'directory-finalize-failed',
-] as const)
-
-export type MaterializationFailureReason =
-  (typeof MATERIALIZATION_FAILURE_REASONS)[number]
 
 export type TransferTraceEvent =
   | (Readonly<{

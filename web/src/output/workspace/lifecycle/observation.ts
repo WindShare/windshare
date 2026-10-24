@@ -1,4 +1,4 @@
-import type { ReceiveLifecycleState } from '../state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { canonicalReceiveLifecycleStateBytes } from '../state-codec'
 import { equalBytes } from '../../../crypto/bytes'
 

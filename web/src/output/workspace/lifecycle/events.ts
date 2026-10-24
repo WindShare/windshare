@@ -9,7 +9,7 @@ import type {
   RecoverySelectionFacts,
   RecoveryGateKind,
   RestartRequiredReason,
-} from '../state'
+} from '../../../transfer/lifecycle/state'
 
 interface LifecycleEventAuthority {
   readonly expectedGeneration: bigint

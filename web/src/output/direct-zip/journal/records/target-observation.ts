@@ -5,7 +5,7 @@ import {
   canonicalRecord,
   canonicalU64,
   snapshotIdentity,
-} from '../../../workspace/canonical'
+} from '../../../../transfer/encoding/canonical'
 import { DIRECT_ZIP_JOURNAL_SCHEMA_VERSION, type DirectZipTargetObservationV1 } from '../model'
 import {
   assertCanonicalProjection,

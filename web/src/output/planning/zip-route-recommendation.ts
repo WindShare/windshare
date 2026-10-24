@@ -4,7 +4,7 @@ import type {
   ZipRouteGroup,
   ZipRouteRecommendationPolicyV1,
 } from './contracts'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalU64 } from '../workspace/canonical'
+import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalU64 } from '../../transfer/encoding/canonical'
 
 const RECOMMENDATION_POLICY_DOMAIN = 'windshare/zip-route-recommendation-policy/v1'
 

@@ -26,7 +26,7 @@ import type {
 import type {
   PortableEnvironmentOffer,
 } from '../../src/output/planning'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { MemoryZipCentralDirectorySpool } from './zip-spool-fake'
 import type { ZipArchiveWriter } from '../../src/output/streams/zip-archive'
 import {
@@ -50,7 +50,7 @@ import {
 import type {
   ExactPreparationEvidence,
   OutputFileRequest,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
 import {
   snapshotLogicalArtifactPath,

@@ -8,13 +8,15 @@ import {
   type PresentationOutcome,
 } from '../../../diagnostics/incident'
 import type { ReceiveLifecycleState } from '../../../output/workspace'
-import { TransferPauseRequestedError } from '../../../transfer/output-session'
+import { TransferPauseRequestedError } from '../../../transfer/output/session'
 import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
 import {
   classificationForTransferFailure,
   materializeClassifiedTransferFailure,
-  type ClassifiedTransferFailure,
 } from '../../../transfer/job/failures'
+import {
+  type ClassifiedTransferFailure,
+} from '../../../transfer/failure/classification'
 import type { LifecycleUserAction } from '../actions'
 import type { ReceiveObservationOptions } from '../observation/contracts'
 import type { V2ReceiverTraceEvent } from '../observation/contracts'

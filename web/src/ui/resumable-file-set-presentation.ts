@@ -1,5 +1,7 @@
 import type { ReceiveLifecycleState } from '../output/workspace'
-import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../transfer/lifecycle/recovery-summary'
 import type { MaterializationPlan } from '../transfer/intent'
 import { formatBytes } from './v2-progress-presentation'
 

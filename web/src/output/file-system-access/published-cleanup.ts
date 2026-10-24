@@ -5,14 +5,14 @@ import { createMaterializationLedgerBinding } from '../materialization-ledger/co
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import { reduceReceiveLifecycle } from '../workspace/lifecycle'
 import {
   createPersistedReceiveRecord, operationRecordId, RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT, validatePersistedReceiveRecord,
 } from '../workspace/records'
 import { storedReceiveLifecycleState } from '../workspace/state-codec'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   openFSAFileCheckpointRepository, type FSAFileCheckpointRepositoryOptions,
 } from './checkpoint-repository'

@@ -1,7 +1,7 @@
 import type { TaskAction, TaskFacts, TaskPresentation, TaskPresentationTransition, TaskStage } from './model'
 import { presentTaskProgress } from './progress'
-import { receiveElapsedMilliseconds } from '../../output/workspace/lifecycle/timing'
-import type { ReceiveContentWarning } from '../../output/workspace/lifecycle/content-warning'
+import { receiveElapsedMilliseconds } from '../../transfer/lifecycle/timing'
+import type { ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 
 import { resolveTaskStage, type StageCopy } from './stage'
 

@@ -3,7 +3,7 @@ import type { V2CatalogClient } from '../../catalog/v2-client'
 import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import { V2_CATALOG_IDENTITY_BYTES, type V2CatalogEntry } from '../../catalog/v2-records'
 import { equalBytes } from '../../crypto/bytes'
-import { FaultScope } from '../fault'
+import { FaultScope } from '../failure/fault'
 import {
   V2CatalogTraversalError,
   V2DirectoryTraversalError,

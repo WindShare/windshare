@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ReceiveIntent } from '../../../../src/transfer/intent'
-import type { ReceiveLifecycleState } from '../../../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../../../src/transfer/lifecycle/state'
 import {
   deleteRetainedDirectZipSession,
   reopenDirectZipSession,

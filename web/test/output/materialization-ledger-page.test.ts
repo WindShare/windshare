@@ -24,7 +24,7 @@ import {
   validateMaterializationLedgerEntryPage,
   validateMaterializationLedgerSealPages,
 } from '../../src/output/materialization-ledger/page'
-import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/fault'
+import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/failure/fault'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
 
 describe('materialization ledger pages and seals', () => {
@@ -280,7 +280,7 @@ async function fileEntry(
   const { createFinalizedFileMaterializationRecords } = await import(
     '../../src/output/materialization-ledger/journal'
   )
-  const { VerifiedFinalOutputFile } = await import('../../src/transfer/output-session')
+  const { VerifiedFinalOutputFile } = await import('../../src/transfer/output/session')
   const checkpoint = newFileCheckpointV2({
     operationId: identity(16, 1),
     receiveIntentDigest: identity(32, 2),
