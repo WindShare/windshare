@@ -3,6 +3,7 @@ import type { V2BlockRangeReader } from '../../content/v2-broker'
 const RECEIPT_PROGRESS_INTERVAL_MILLISECONDS = 250
 
 interface TransferContentProgress {
+  remainingWork?: import('../../content/v2-lane-set').RemainingWorkObservation
   received(objectBytes: number): void
   updated(): void
 }
@@ -24,7 +25,8 @@ export function observeTransferContent(
   }
   return {
     readRange: (descriptor, leaseId, range, options) => broker.readRange(
-      descriptor, leaseId, range, { ...options, onReceive },
+      descriptor, leaseId, range, { ...options, onReceive,
+        ...(progress.remainingWork === undefined ? {} : { remainingWork: progress.remainingWork }) },
     ),
   }
 }

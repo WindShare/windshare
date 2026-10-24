@@ -15,7 +15,6 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 	demand := validDemand(t, descriptor, 0)
 	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](61),
-		RaceWidth:         MaxLogicalLanes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,14 +88,14 @@ func TestLaneSetBoundsOneDemandAcrossEpochChurnAndFinalHedgeBatch(t *testing.T) 
 	total := 0
 	for identity, count := range attempts {
 		total += count
-		if identity.ID != churnLaneID || count != 1 {
+		if count != 1 {
 			t.Fatalf("unexpected attempted identity %d/%d count=%d", identity.ID, identity.Epoch, count)
 		}
 	}
 	if total != MaxDemandAttempts {
 		t.Fatalf("physical attempts = %d, want %d", total, MaxDemandAttempts)
 	}
-	for epoch := uint32(1); epoch <= uint32(MaxDemandAttempts); epoch++ {
+	for epoch := uint32(1); epoch < uint32(MaxDemandAttempts); epoch++ {
 		if attempts[Identity{ID: churnLaneID, Epoch: epoch}] != 1 {
 			t.Fatalf("churn epoch %d was not attempted exactly once", epoch)
 		}

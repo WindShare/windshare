@@ -55,6 +55,9 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		s.detachControls()
 		return nil, err
 	}
+	if lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok {
+		s.work.Go(func() { s.runThroughput(lanes.LaneSet()) })
+	}
 	go func() {
 		<-ctx.Done()
 		s.mu.Lock()
@@ -146,25 +149,7 @@ func (s *ReceiverSession) startDirectLocked() error {
 		return err
 	}
 	s.direct = path
-	s.work.Go(func() {
-		ready := path.Ready()
-		for {
-			select {
-			case <-ready:
-				s.admitted(path)
-				ready = nil
-			case <-path.Done():
-				result := path.Result()
-				if s.turn == nil || result.Scope == protocolsession.PeerFailureSessionTerminal {
-					s.mu.Lock()
-					s.result = result
-					s.mu.Unlock()
-					s.cancel()
-				}
-				return
-			}
-		}
-	})
+	s.watchPath(path)
 	return nil
 }
 func (s *ReceiverSession) admitted(path *Path) {

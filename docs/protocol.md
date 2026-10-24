@@ -38,7 +38,7 @@ Output naming, ZIP, checkpoints, and download resumption are receiver-local and 
 1. **Share**: the sender seals the descriptor and registers it with a relay by signing a relay challenge; the relay then publishes the route. `RESUME` restores the route of the same share after a reconnect, using a resume token and a new signed challenge.
 2. **Join**: the receiver sends `JOIN` with the `shareId`, receives the sealed descriptor on a new relay session, and verifies it against `pkHash`.
 3. **Handshake**: `ClientHello` (HMAC proof of the read capability, ephemeral X25519) and the sender-signed `ServerHello` establish a `ProtocolSessionID` and per-direction traffic keys. The relay session becomes the first lane.
-4. **Operate**: the receiver lists directories, opens file revisions to obtain leases, and requests blocks for byte ranges. `PEER_*` messages negotiate WebRTC inside the session; a DataChannel joins as another lane after a sender-signed `LANE_ATTACH` grant and a `LaneHello`/`LaneAccept` exchange.
+4. **Operate**: the receiver lists directories, leases file revisions, and requests blocks. `PEER_*` negotiation binds a path's initial-connectivity, recovery, or throughput purpose for admission on both peers. A DataChannel joins the session after a sender-signed `LANE_ATTACH` grant and a `LaneHello`/`LaneAccept` exchange.
 5. **Stop**: a signed `STOP` permanently revokes the relay route of that `ShareInstance`.
 
 ## Capability link

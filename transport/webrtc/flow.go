@@ -84,6 +84,7 @@ func (c *Channel) waitForOwnedCapacity(ctx context.Context, required terminalSta
 }
 
 func (c *Channel) onBufferedAmountLow() {
+	c.sendCapacity.wake()
 	select {
 	case c.flowWake <- struct{}{}:
 	default:

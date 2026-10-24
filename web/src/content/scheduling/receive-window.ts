@@ -45,6 +45,8 @@ export class BlockReceiveWindow {
     return this.#active === 0 || (this.#bytesPerSecond > 0 && this.#remainingBytes <= ahead)
   }
 
+  get unfinishedBytes(): number { return this.#remainingBytes }
+
   tryAcquire(bytes: number, queuedAt = this.#now()): BlockReceivePermit | undefined {
     if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new RangeError('Block admission requires positive bytes')
     if (!this.available) return undefined

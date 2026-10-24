@@ -155,6 +155,7 @@ export const browserV2PeerRecoveryClock: V2PeerRecoveryClock = Object.freeze({
 })
 
 export interface V2PeerAttemptContext extends PeerAttemptOrdinal {
+  readonly purpose: import('../v2-signaling-codec').ConnectionPurpose
   readonly admissionWaitBudgetMilliseconds?: number
   readonly iceProfile?: AttemptICEProfile
   readonly observeICEFact?: (fact: PeerProviderFact) => void
@@ -242,6 +243,7 @@ export interface V2PeerRecoveryDependencies {
 }
 
 export interface V2PeerRecoverySupervisorOptions {
+  readonly purpose?: import('../v2-signaling-codec').ConnectionPurpose
   readonly slot: PeerSlotLease
   readonly onUnavailable?: () => void
   readonly observeState?: (state: V2PeerRecoveryState) => void

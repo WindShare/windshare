@@ -32,6 +32,7 @@ type Session struct {
 	flight          chan struct{}
 	failure         error
 	leases          map[transfer.RevisionHandle]*revisionLease
+	remaining       map[*remainingObservation]func()
 }
 
 func New(ctx context.Context, current *sessionruntime.ReceiverRuntime, replace Replace) (*Session, error) {
@@ -70,6 +71,12 @@ func (s *Session) Close() {
 	if flight != nil {
 		<-flight
 	}
+	s.mu.Lock()
+	for observer, release := range s.remaining {
+		release()
+		delete(s.remaining, observer)
+	}
+	s.mu.Unlock()
 }
 
 func (s *Session) recover(ctx context.Context, previous *sessionruntime.ReceiverRuntime) error {
@@ -124,6 +131,10 @@ func (s *Session) replaceGeneration(previous *sessionruntime.ReceiverRuntime, fl
 	s.mu.Lock()
 	if err == nil {
 		s.current = next
+		for observer, release := range s.remaining {
+			release()
+			s.remaining[observer] = next.LaneSet().ObserveRemainingWork(observer.snapshot)
+		}
 	} else {
 		s.failure = err
 	}

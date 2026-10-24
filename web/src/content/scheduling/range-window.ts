@@ -7,12 +7,12 @@ export const RANGE_READ_AHEAD_FACTOR = 4
 export interface BlockConsumer {
   readonly lastServed: () => number
   readonly distance: () => bigint
-  readonly canDispatch: () => boolean
+  readonly readiness: () => 'ready' | 'network' | 'consumer'
   readonly acquire: () => (() => void) | undefined
   readonly ready: (signal: AbortSignal) => Promise<void>
 }
 export const IMMEDIATE_BLOCK_CONSUMER: BlockConsumer = {
-  lastServed: () => 0, distance: () => 0n, canDispatch: () => true, acquire: () => () => undefined,
+  lastServed: () => 0, distance: () => 0n, readiness: () => 'ready', acquire: () => () => undefined,
   ready: async signal => { signal.throwIfAborted() },
 }
 
@@ -139,9 +139,13 @@ export class OrderedBlockWindow {
       const consumer: BlockConsumer = {
         lastServed: () => this.#lastServed,
         distance: () => index > this.#emitted ? index - this.#emitted : 0n,
-        canDispatch: () => (release !== undefined || index === this.#admitting) &&
-          this.#active < this.#options.parallel &&
-          (release !== undefined || this.#options.budget.available(bytes, this.#options.priority)),
+        readiness: () => {
+          if (release === undefined && (index !== this.#admitting ||
+            !this.#options.budget.available(bytes, this.#options.priority))) return 'consumer'
+          // Active network reads and retained output use different allowances.
+          // A full read window can still benefit from faster network supply.
+          return this.#active < this.#options.parallel ? 'ready' : 'network'
+        },
         acquire: () => {
           if (this.#active >= this.#options.parallel || !reserve()) return undefined
           this.#active++

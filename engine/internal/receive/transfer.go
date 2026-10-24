@@ -100,6 +100,7 @@ func (a *runner) connectGetReceiver(ctx context.Context, request getRequest, obs
 		config: relayset.ReceiverConfig{
 			Dial: a.receiverDial,
 			Receiver: liveshare.ReceiverConfig{
+				Capacity:   a.receiveCapacity,
 				Capability: request.link, ContentRoutePolicy: receiverRoutePolicy(request.connectivity),
 				PeerControls: v2signal.ReceiverControlValidator{}, ProtocolObservations: observation.protocolObservations(),
 				LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),

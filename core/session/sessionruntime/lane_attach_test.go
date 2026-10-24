@@ -985,6 +985,7 @@ type observedMemoryChannel struct {
 	gateMu         sync.Mutex
 	nextSendGate   *observedSendGate
 	nextResultGate *observedSendGate
+	loseAndClose   *atomic.Int32
 }
 
 type observedSendGate struct {
@@ -1028,8 +1029,15 @@ func (channel *observedMemoryChannel) Send(ctx context.Context, frame framechann
 	channel.sends.Add(1)
 	channel.gateMu.Lock()
 	sendGate, resultGate := channel.nextSendGate, channel.nextResultGate
+	loss := channel.loseAndClose
 	channel.nextSendGate, channel.nextResultGate = nil, nil
 	channel.gateMu.Unlock()
+	if loss != nil {
+		if loss.Add(1) == 1 {
+			return nil
+		}
+		return errors.New("accepted frame lost when carrier closed")
+	}
 	if err := sendGate.wait(ctx); err != nil {
 		return err
 	}

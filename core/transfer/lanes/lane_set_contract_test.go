@@ -75,7 +75,7 @@ func validateTransferRecord(demand Demand) func(records.BlockRecord) error {
 func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
-	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](5), RaceWidth: 2})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](5)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
-	lanes, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](6), RaceWidth: 1})
+	lanes, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](6)})
 	defer lanes.Close()
 	var firstCalls, secondCalls atomic.Int32
 	first := laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
@@ -129,11 +129,11 @@ func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
 		}
 	}
 	lanes.attempts.Wait()
-	if firstCalls.Load() == 0 || secondCalls.Load() == 0 || firstCalls.Load()+secondCalls.Load() > 5 {
+	if firstCalls.Load()+secondCalls.Load() != 4 {
 		t.Fatalf("bounded exploration calls first=%d second=%d", firstCalls.Load(), secondCalls.Load())
 	}
 
-	failing, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](7), RaceWidth: 1})
+	failing, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](7)})
 	defer failing.Close()
 	_ = failing.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return records.BlockRecord{}, errors.New("lane down")
@@ -199,7 +199,7 @@ func TestLaneFailureReductionIsPermutationStable(t *testing.T) {
 func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 	descriptor := transferDescriptor(t, 2)
 	demand := validDemand(t, descriptor, 0)
-	lanes, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](8), RaceWidth: 2})
+	lanes, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](8)})
 	defer lanes.Close()
 	_ = lanes.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 1), nil
@@ -208,8 +208,8 @@ func TestLaneSetRejectsHostileWinnerAndBoundsDynamicLanes(t *testing.T) {
 		time.Sleep(time.Millisecond)
 		return transferRecord(t, descriptor, 0), nil
 	}))
-	if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); err != nil {
-		t.Fatalf("hostile early result defeated valid lane: %v", err)
+	if _, err := lanes.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)}); !errors.Is(err, errTestBlockIdentity) {
+		t.Fatalf("hostile authenticated result lost its protocol meaning: %v", err)
 	}
 
 	full, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](9)})
@@ -242,7 +242,6 @@ func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](34),
-		RaceWidth:         1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +295,6 @@ func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](39),
-		RaceWidth:         1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +359,6 @@ func TestLaneSetRejectsForgedDemandNotAdmittedMarker(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, _ := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](45),
-		RaceWidth:         1,
 	})
 	defer lanes.Close()
 	if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
@@ -389,7 +386,6 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, _ := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](35),
-		RaceWidth:         1,
 	})
 	identity := Identity{ID: 1, Epoch: 1}
 	var calls atomic.Int32
@@ -505,7 +501,6 @@ func TestLaneSetContentSuspensionFollowsReplacementEpoch(t *testing.T) {
 	demand := validDemand(t, descriptor, 0)
 	lanes, _ := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](42),
-		RaceWidth:         1,
 	})
 	defer lanes.Close()
 

@@ -1,0 +1,260 @@
+{
+  "scope": "Two trace-enabled diagnostic runs with CPU sampling and Go ReadMemStats every 25 ms. CDP renderer samples exclude browser networking and WebCrypto worker CPU; process counters cover surviving processes only. Sampled CPU is not blocked syscall wall time.",
+  "runs": [
+    {
+      "report": ".tmp\\webrtc-preflight-20261023\\runs\\slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792752752707\\report.json",
+      "connections": 1,
+      "diagnosticMBps": 17.54457170492453,
+      "rendererSampleSeconds": 15.516018,
+      "rendererSelfSamples": [
+        {
+          "function": "(idle)",
+          "url": "",
+          "seconds": 8.347533,
+          "percent": 53.79945421563703
+        },
+        {
+          "function": "equalBytes",
+          "url": "htt<local-path>",
+          "seconds": 0.953359,
+          "percent": 6.14435353194357
+        },
+        {
+          "function": "digest",
+          "url": "",
+          "seconds": 0.828746,
+          "percent": 5.341228658022954
+        },
+        {
+          "function": "decrypt",
+          "url": "",
+          "seconds": 0.795927,
+          "percent": 5.129711759808477
+        },
+        {
+          "function": "(program)",
+          "url": "",
+          "seconds": 0.74034,
+          "percent": 4.771456181605358
+        },
+        {
+          "function": "copyBytes",
+          "url": "htt<local-path>",
+          "seconds": 0.452399,
+          "percent": 2.9156900952293303
+        },
+        {
+          "function": "decodeFragmentMessage",
+          "url": "htt<local-path>",
+          "seconds": 0.314704,
+          "percent": 2.028252351859865
+        },
+        {
+          "function": "(garbage collector)",
+          "url": "",
+          "seconds": 0.279667,
+          "percent": 1.8024405488573163
+        },
+        {
+          "function": "open",
+          "url": "htt<local-path>",
+          "seconds": 0.216468,
+          "percent": 1.3951259917331882
+        },
+        {
+          "function": "accept",
+          "url": "htt<local-path>",
+          "seconds": 0.21025,
+          "percent": 1.3550512766870983
+        },
+        {
+          "function": "snapshotBinaryMessage",
+          "url": "htt<local-path>",
+          "seconds": 0.190551,
+          "percent": 1.2280921561189218
+        },
+        {
+          "function": "verifyV2SenderControl",
+          "url": "htt<local-path>",
+          "seconds": 0.175378,
+          "percent": 1.130302890857693
+        },
+        {
+          "function": "decodeFragment",
+          "url": "htt<local-path>",
+          "seconds": 0.149375,
+          "percent": 0.9627147893228791
+        },
+        {
+          "function": "write",
+          "url": "",
+          "seconds": 0.142534,
+          "percent": 0.9186248688291029
+        },
+        {
+          "function": "transferMissingRange",
+          "url": "htt<local-path>",
+          "seconds": 0.120011,
+          "percent": 0.7734652022187651
+        }
+      ],
+      "equalBytesCallerSeconds": {
+        "decodeCanonicalCbor": 0.948003,
+        "openV2BlockRecord": 0.003229,
+        "accept": 0.00107,
+        "#requireIdentity": 0.001057
+      },
+      "browserProcessCPUSeconds": {
+        "browser": 1.0100000000000002,
+        "renderer": 15.870000000000001,
+        "GPU": 0.020000000000000004,
+        "network.mojom.NetworkService": 6.42,
+        "storage.mojom.StorageService": 0
+      },
+      "sender": {
+        "peakHeapAllocBytes": 186221584,
+        "peakHeapInuseBytes": 191037440,
+        "allocatedBytes": 6665721656,
+        "gcCycles": 102,
+        "gcPauseMs": 13.2769,
+        "peakGoroutines": 383,
+        "pprof": {
+          "flat": "File: wind.exe\nBuild ID: <local-path>\nType: cpu\nTime: 2026-10-23 18:52:41 +08\nDuration: 15.55s, Total samples = 9.21s (59.23%)\nShowing nodes accounting for 6.89s, 74.81% of 9.21s total\nDropped 368 nodes (cum <= 0.05s)\nShowing top 20 nodes out of 223\n      flat  flat%   sum%        cum   cum%\n     3.76s 40.83% 40.83%      3.79s 41.15%  runtime.cgocall\n     0.92s  9.99% 50.81%      0.92s  9.99%  runtime.semawakeup\n     0.40s  4.34% 55.16%      0.40s  4.34%  crypto/internal/fips140/sha256.blockSHANI\n     0.35s  3.80% 58.96%      0.35s  3.80%  runtime.memmove\n     0.23s  2.50% 61.45%      0.23s  2.50%  runtime.netpollQueueTimer\n     0.16s  1.74% 63.19%      0.16s  1.74%  runtime.memclrNoHeapPointers\n     0.15s  1.63% 64.82%      0.47s  5.10%  runtime.stealWork\n     0.11s  1.19% 66.02%      0.11s  1.19%  runtime.osyield.func1\n     0.10s  1.09% 67.10%      0.10s  1.09%  crypto/internal/fips140/aes/gcm.gcmAesEnc\n     0.09s  0.98% 68.08%      0.19s  2.06%  runtime.lock2\n     0.08s  0.87% 68.95%      0.08s  0.87%  runtime.semasleep\n     0.08s  0.87% 69.82%      0.08s  0.87%  runtime.sysUnusedOS\n     0.08s  0.87% 70.68%      0.08s  0.87%  runtime.unlock2\n     0.07s  0.76% 71.44%      0.30s  3.26%  runtime.netpoll\n     0.06s  0.65% 72.10%      0.06s  0.65%  runtime.(*waitq).dequeue\n     0.06s  0.65% 72.75%      0.22s  2.39%  runtime.selectgo\n     0.05s  0.54% 73.29%      0.05s  0.54%  runtime.(*guintptr).cas (inline)\n     0.05s  0.54% 73.83%      0.05s  0.54%  runtime.pMask.read (inline)\n     0.05s  0.54% 74.38%      0.10s  1.09%  runtime.sellock\n     0.04s  0.43% 74.81%      0.11s  1.19%  github.com/pion/dtls/v3.(*Conn).contextWithClose.func1\n",
+          "cum": "File: wind.exe\nBuild ID: <local-path>\nType: cpu\nTime: 2026-10-23 18:52:41 +08\nDuration: 15.55s, Total samples = 9.21s (59.23%)\nShowing nodes accounting for 3.88s, 42.13% of 9.21s total\nDropped 368 nodes (cum <= 0.05s)\nShowing top 20 nodes out of 223\n      flat  flat%   sum%        cum   cum%\n     0.01s  0.11%  0.11%      4.05s 43.97%  github.com/pion/sctp.(*Association).writeLoop\n         0     0%  0.11%      3.84s 41.69%  github.com/pion/dtls/v3.(*Conn).Write\n     3.76s 40.83% 40.93%      3.79s 41.15%  runtime.cgocall\n         0     0% 40.93%      3.79s 41.15%  syscall.syscalln\n     0.02s  0.22% 41.15%      3.59s 38.98%  github.com/pion/dtls/v3.(*Conn).writePackets\n     0.01s  0.11% 41.26%      3.30s 35.83%  github.com/pion/transport/v4/netctx.(*packetConn).WriteToContext\n     0.03s  0.33% 41.59%      3.09s 33.55%  internal/poll.(*FD).execIO\n     0.01s  0.11% 41.69%      3.03s 32.90%  github.com/pion/ice/v4.(*Conn).Write\n         0     0% 41.69%      3.03s 32.90%  github.com/pion/webrtc/v4/internal/mux.(*Endpoint).Write\n         0     0% 41.69%      3.03s 32.90%  github.com/pion/webrtc/v4/internal/mux.(*Endpoint).WriteTo\n         0     0% 41.69%      3.01s 32.68%  github.com/pion/ice/v4.(*CandidatePair).Write (inline)\n     0.01s  0.11% 41.80%      3.01s 32.68%  github.com/pion/ice/v4.(*candidateBase).writeTo\n     0.01s  0.11% 41.91%         3s 32.57%  github.com/pion/ice/v4.(*sharedAddrPortConn).WriteToAddrPort\n         0     0% 41.91%      2.99s 32.46%  github.com/pion/ice/v4.(*udpMuxedConn).WriteToAddrPort\n         0     0% 41.91%      2.95s 32.03%  github.com/pion/ice/v4.(*UDPMuxDefault).writeToUDPAddrPort\n         0     0% 41.91%      2.92s 31.70%  github.com/pion/ice/v4.(*udpAddrPortConn).WriteToAddrPort\n         0     0% 41.91%      2.92s 31.70%  github.com/pion/ice/v4.(*udpAddrPortReaderWriter).WriteToAddrPort\n         0     0% 41.91%      2.92s 31.70%  net.(*UDPConn).WriteToUDPAddrPort\n     0.02s  0.22% 42.13%      2.92s 31.70%  net.(*UDPConn).writeToAddrPort\n         0     0% 42.13%      2.90s 31.49%  internal/poll.(*FD).WriteToInet4\n"
+        }
+      },
+      "rawSHA256": {
+        "0-cpu-profile.json": "1a125840b12ff87e32ed3a03b55d7a3f7702e927b11156c0710bdbe0c4645f06",
+        "sender-cpu.pprof": "418fdabca414f96ac3e1e46dc073e5e55f14c26a73ef65e6fb95a6203bafaffe",
+        "sender-memory.ndjson": "cb0eda8a392a88aa1b12ba497e3d089333aa362c289dbff0bcacb4e9e87a9f90"
+      }
+    },
+    {
+      "report": ".tmp\\webrtc-preflight-20261023\\runs\\slow-opfs-trace-baseline-256-0-none-1-lan-isolated-1792752786549\\report.json",
+      "connections": 4,
+      "diagnosticMBps": 24.794296956541817,
+      "rendererSampleSeconds": 11.048635,
+      "rendererSelfSamples": [
+        {
+          "function": "(idle)",
+          "url": "",
+          "seconds": 4.422595,
+          "percent": 40.02842885116578
+        },
+        {
+          "function": "equalBytes",
+          "url": "htt<local-path>",
+          "seconds": 1.072882,
+          "percent": 9.710538903674527
+        },
+        {
+          "function": "digest",
+          "url": "",
+          "seconds": 0.734282,
+          "percent": 6.645906937825352
+        },
+        {
+          "function": "decrypt",
+          "url": "",
+          "seconds": 0.722947,
+          "percent": 6.54331507919304
+        },
+        {
+          "function": "(program)",
+          "url": "",
+          "seconds": 0.661515,
+          "percent": 5.987300693705603
+        },
+        {
+          "function": "copyBytes",
+          "url": "htt<local-path>",
+          "seconds": 0.426582,
+          "percent": 3.8609475288123827
+        },
+        {
+          "function": "(garbage collector)",
+          "url": "",
+          "seconds": 0.28156,
+          "percent": 2.5483690971780675
+        },
+        {
+          "function": "decodeFragmentMessage",
+          "url": "htt<local-path>",
+          "seconds": 0.24164,
+          "percent": 2.1870574962427485
+        },
+        {
+          "function": "open",
+          "url": "htt<local-path>",
+          "seconds": 0.194822,
+          "percent": 1.7633128436227643
+        },
+        {
+          "function": "accept",
+          "url": "htt<local-path>",
+          "seconds": 0.16032,
+          "percent": 1.4510389744977548
+        },
+        {
+          "function": "decodeFragment",
+          "url": "htt<local-path>",
+          "seconds": 0.156869,
+          "percent": 1.4198043468718082
+        },
+        {
+          "function": "snapshotBinaryMessage",
+          "url": "htt<local-path>",
+          "seconds": 0.142321,
+          "percent": 1.2881319728636162
+        },
+        {
+          "function": "write",
+          "url": "",
+          "seconds": 0.134333,
+          "percent": 1.2158334491093243
+        },
+        {
+          "function": "verifyV2SenderControl",
+          "url": "htt<local-path>",
+          "seconds": 0.123273,
+          "percent": 1.115730585723938
+        },
+        {
+          "function": "copyRecord",
+          "url": "htt<local-path>",
+          "seconds": 0.120239,
+          "percent": 1.088270179981509
+        }
+      ],
+      "equalBytesCallerSeconds": {
+        "decodeCanonicalCbor": 1.069667,
+        "#requireIdentity": 0.002144,
+        "accept": 0.001071
+      },
+      "browserProcessCPUSeconds": {
+        "browser": 0.8999999999999999,
+        "renderer": 13.679999999999998,
+        "GPU": 0.0,
+        "network.mojom.NetworkService": 3.9899999999999998,
+        "storage.mojom.StorageService": 0.0
+      },
+      "sender": {
+        "peakHeapAllocBytes": 190033920,
+        "peakHeapInuseBytes": 195796992,
+        "allocatedBytes": 6794766968,
+        "gcCycles": 97,
+        "gcPauseMs": 19.9766,
+        "peakGoroutines": 625,
+        "pprof": {
+          "flat": "File: wind.exe\nBuild ID: <local-path>\nType: cpu\nTime: 2026-10-23 18:53:16 +08\nDuration: 11.08s, Total samples = 11.50s (103.83%)\nShowing nodes accounting for 8.20s, 71.30% of 11.50s total\nDropped 436 nodes (cum <= 0.06s)\nShowing top 20 nodes out of 225\n      flat  flat%   sum%        cum   cum%\n     4.60s 40.00% 40.00%      4.65s 40.43%  runtime.cgocall\n     0.92s  8.00% 48.00%      0.92s  8.00%  runtime.semawakeup\n     0.39s  3.39% 51.39%      0.39s  3.39%  crypto/internal/fips140/sha256.blockSHANI\n     0.28s  2.43% 53.83%      0.28s  2.43%  runtime.semasleep\n     0.27s  2.35% 56.17%      0.27s  2.35%  runtime.memmove\n     0.25s  2.17% 58.35%      0.72s  6.26%  runtime.stealWork\n     0.20s  1.74% 60.09%      0.20s  1.74%  runtime.memclrNoHeapPointers\n     0.18s  1.57% 61.65%      0.35s  3.04%  runtime.netpoll\n     0.17s  1.48% 63.13%      0.17s  1.48%  runtime.netpollQueueTimer\n     0.17s  1.48% 64.61%      0.17s  1.48%  runtime.osyield.func1\n     0.13s  1.13% 65.74%      0.13s  1.13%  runtime.sysUnusedOS\n     0.11s  0.96% 66.70%      0.11s  0.96%  crypto/internal/fips140/aes/gcm.gcmAesEnc\n     0.08s   0.7% 67.39%      0.41s  3.57%  runtime.lock2\n     0.08s   0.7% 68.09%      0.26s  2.26%  runtime.selectgo\n     0.08s   0.7% 68.78%      0.11s  0.96%  runtime.unlock2\n     0.07s  0.61% 69.39%      1.59s 13.83%  runtime.findRunnable\n     0.06s  0.52% 69.91%      0.06s  0.52%  runtime.(*waitq).dequeue\n     0.06s  0.52% 70.43%      0.10s  0.87%  runtime.sellock\n     0.05s  0.43% 70.87%      0.06s  0.52%  runtime.mallocgcSmallScanNoHeaderSC6\n     0.05s  0.43% 71.30%      0.09s  0.78%  runtime.preemptM\n",
+          "cum": "File: wind.exe\nBuild ID: <local-path>\nType: cpu\nTime: 2026-10-23 18:53:16 +08\nDuration: 11.08s, Total samples = 11.50s (103.83%)\nShowing nodes accounting for 4.82s, 41.91% of 11.50s total\nDropped 436 nodes (cum <= 0.06s)\nShowing top 20 nodes out of 225\n      flat  flat%   sum%        cum   cum%\n     0.02s  0.17%  0.17%      5.14s 44.70%  github.com/pion/sctp.(*Association).writeLoop\n         0     0%  0.17%      4.82s 41.91%  github.com/pion/dtls/v3.(*Conn).Write\n     0.01s 0.087%  0.26%      4.66s 40.52%  syscall.syscalln\n     4.60s 40.00% 40.26%      4.65s 40.43%  runtime.cgocall\n     0.03s  0.26% 40.52%      4.62s 40.17%  github.com/pion/dtls/v3.(*Conn).writePackets\n     0.02s  0.17% 40.70%      4.30s 37.39%  github.com/pion/transport/v4/netctx.(*packetConn).WriteToContext\n     0.02s  0.17% 40.87%      4.15s 36.09%  internal/poll.(*FD).execIO\n     0.01s 0.087% 40.96%      4.08s 35.48%  github.com/pion/webrtc/v4/internal/mux.(*Endpoint).Write\n         0     0% 40.96%      4.08s 35.48%  github.com/pion/webrtc/v4/internal/mux.(*Endpoint).WriteTo\n     0.01s 0.087% 41.04%      4.07s 35.39%  github.com/pion/ice/v4.(*CandidatePair).Write (inline)\n         0     0% 41.04%      4.07s 35.39%  github.com/pion/ice/v4.(*Conn).Write\n     0.01s 0.087% 41.13%      4.05s 35.22%  github.com/pion/ice/v4.(*candidateBase).writeTo\n     0.03s  0.26% 41.39%      4.04s 35.13%  github.com/pion/ice/v4.(*sharedAddrPortConn).WriteToAddrPort\n         0     0% 41.39%      4.01s 34.87%  github.com/pion/ice/v4.(*udpMuxedConn).WriteToAddrPort\n     0.01s 0.087% 41.48%      3.99s 34.70%  github.com/pion/ice/v4.(*UDPMuxDefault).writeToUDPAddrPort\n         0     0% 41.48%      3.98s 34.61%  github.com/pion/ice/v4.(*udpAddrPortConn).WriteToAddrPort\n     0.01s 0.087% 41.57%      3.98s 34.61%  github.com/pion/ice/v4.(*udpAddrPortReaderWriter).WriteToAddrPort\n     0.01s 0.087% 41.65%      3.97s 34.52%  net.(*UDPConn).WriteToUDPAddrPort\n     0.02s  0.17% 41.83%      3.96s 34.43%  net.(*UDPConn).writeToAddrPort\n     0.01s 0.087% 41.91%      3.93s 34.17%  internal/poll.(*FD).WriteToInet4\n"
+        }
+      },
+      "rawSHA256": {
+        "0-cpu-profile.json": "6987cefe82c202365b3e6fb245ce66c91781091f2520841a242f67c28537b151",
+        "sender-cpu.pprof": "8f7017c80a2535ce8e13076b71421f08b5ea85182a0b21fa4e6bbd06f46c773b",
+        "sender-memory.ndjson": "a5b87a56c824058f2853a66a93e6b951e53a18f412638d902635a22f4b5fe9f8"
+      }
+    }
+  ]
+}

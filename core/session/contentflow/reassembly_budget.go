@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -16,7 +17,11 @@ const (
 	DefaultProcessReassemblyRecords = uint32(256)
 )
 
-var ErrReassemblyBudget = errors.New("block reassembly budget exceeded")
+var (
+	ErrReassemblyBudget       = errors.New("block reassembly budget exceeded")
+	ErrReassemblyClosed       = errors.New("block reassembly account is closed")
+	reassemblyAccountSequence atomic.Uint64
+)
 
 type ReassemblyLimits struct {
 	Bytes   uint64
@@ -29,17 +34,20 @@ type ReassemblyUsage struct {
 }
 
 type ReassemblyAccount struct {
-	mu     sync.Mutex
-	name   string
-	limits ReassemblyLimits
-	used   ReassemblyUsage
+	mu      sync.Mutex
+	order   uint64
+	name    string
+	limits  ReassemblyLimits
+	used    ReassemblyUsage
+	closed  bool
+	changed chan struct{}
 }
 
 func NewReassemblyAccount(name string, limits ReassemblyLimits) (*ReassemblyAccount, error) {
 	if name == "" || limits.Bytes == 0 || limits.Records == 0 {
 		return nil, errors.New("reassembly account requires a name and positive limits")
 	}
-	return &ReassemblyAccount{name: name, limits: limits}, nil
+	return &ReassemblyAccount{name: name, limits: limits, order: reassemblyAccountSequence.Add(1)}, nil
 }
 
 func (a *ReassemblyAccount) Usage() ReassemblyUsage {
@@ -51,21 +59,29 @@ func (a *ReassemblyAccount) Usage() ReassemblyUsage {
 	return a.used
 }
 
-func (a *ReassemblyAccount) reserve(bytes uint64) error {
+func (a *ReassemblyAccount) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if bytes > a.limits.Bytes-a.used.Bytes || a.used.Records == a.limits.Records {
-		return fmt.Errorf("%w: %s", ErrReassemblyBudget, a.name)
+	a.closed = true
+	a.wakeLocked()
+	if a.used != (ReassemblyUsage{}) {
+		return fmt.Errorf("reassembly account %s retained %+v", a.name, a.used)
 	}
-	a.used.Bytes += bytes
-	a.used.Records++
 	return nil
+}
+
+func (a *ReassemblyAccount) wakeLocked() {
+	if a.changed != nil {
+		close(a.changed)
+		a.changed = nil
+	}
 }
 
 func (a *ReassemblyAccount) release(bytes uint64) {
 	a.mu.Lock()
 	a.used.Bytes -= bytes
 	a.used.Records--
+	a.wakeLocked()
 	a.mu.Unlock()
 }
 
@@ -81,27 +97,64 @@ type reassemblyReservation struct {
 	accounts []*ReassemblyAccount
 }
 
-func reserveReassembly(hierarchy ReassemblyHierarchy, bytes uint64) (*reassemblyReservation, error) {
+// Checking and charging the complete hierarchy under one lock order avoids
+// partial reservations and wake loops caused by rolling back a busy child.
+func tryReserveReassembly(hierarchy ReassemblyHierarchy, bytes uint64) (*reassemblyReservation, <-chan struct{}, error) {
 	accounts := []*ReassemblyAccount{hierarchy.Process, hierarchy.Share, hierarchy.Session}
-	seen := make(map[*ReassemblyAccount]struct{}, len(accounts))
-	reservation := &reassemblyReservation{bytes: bytes, accounts: make([]*ReassemblyAccount, 0, len(accounts))}
-	for _, account := range accounts {
+	for i, account := range accounts {
 		if account == nil {
-			reservation.Release()
-			return nil, errors.New("reassembly hierarchy contains a nil account")
+			return nil, nil, errors.New("reassembly hierarchy contains a nil account")
 		}
-		if _, duplicate := seen[account]; duplicate {
-			reservation.Release()
-			return nil, errors.New("reassembly hierarchy accounts must be distinct")
+		if slices.Contains(accounts[:i], account) {
+			return nil, nil, errors.New("reassembly hierarchy accounts must be distinct")
 		}
-		seen[account] = struct{}{}
-		if err := account.reserve(bytes); err != nil {
-			reservation.Release()
-			return nil, err
-		}
-		reservation.accounts = append(reservation.accounts, account)
 	}
-	return reservation, nil
+	slices.SortFunc(accounts, func(a, b *ReassemblyAccount) int {
+		if a.order < b.order {
+			return -1
+		}
+		if a.order > b.order {
+			return 1
+		}
+		return 0
+	})
+	for _, account := range accounts {
+		account.mu.Lock()
+	}
+	defer func() {
+		for _, account := range slices.Backward(accounts) {
+			account.mu.Unlock()
+		}
+	}()
+	for _, account := range accounts {
+		if account.closed {
+			return nil, nil, fmt.Errorf("%w: %s", ErrReassemblyClosed, account.name)
+		}
+		if bytes == 0 || bytes > account.limits.Bytes {
+			return nil, nil, fmt.Errorf("%w: %s", ErrReassemblyBudget, account.name)
+		}
+	}
+	for _, account := range accounts {
+		if bytes > account.limits.Bytes-account.used.Bytes || account.used.Records == account.limits.Records {
+			if account.changed == nil {
+				account.changed = make(chan struct{})
+			}
+			return nil, account.changed, nil
+		}
+	}
+	for _, account := range accounts {
+		account.used.Bytes += bytes
+		account.used.Records++
+	}
+	return &reassemblyReservation{bytes: bytes, accounts: accounts}, nil, nil
+}
+
+func reserveReassembly(hierarchy ReassemblyHierarchy, bytes uint64) (*reassemblyReservation, error) {
+	reservation, _, err := tryReserveReassembly(hierarchy, bytes)
+	if reservation == nil && err == nil {
+		err = ErrReassemblyBudget
+	}
+	return reservation, err
 }
 
 func (r *reassemblyReservation) Release() {
@@ -109,8 +162,8 @@ func (r *reassemblyReservation) Release() {
 		return
 	}
 	r.once.Do(func() {
-		for index := range slices.Backward(r.accounts) {
-			r.accounts[index].release(r.bytes)
+		for _, account := range slices.Backward(r.accounts) {
+			account.release(r.bytes)
 		}
 	})
 }

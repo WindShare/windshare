@@ -42,8 +42,14 @@ func TestBlockReceiverWaitsBehindProductiveRequests(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					capacity, _, err := fixture.lane.assembler.TryReserve(3 * contentflow.MaxFragmentPayloadBytes)
+					if err != nil || capacity == nil {
+						t.Fatalf("reserve response: %v", err)
+					}
+					operation.capacity = capacity
 					done := make(chan error, 1)
 					go func() {
+						defer capacity.Release()
 						_, err := operation.receive(t.Context(), fixture.demand, nil)
 						done <- operation.finish(t.Context(), err)
 					}()

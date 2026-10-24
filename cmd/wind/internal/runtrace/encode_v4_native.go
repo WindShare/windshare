@@ -25,6 +25,25 @@ type nativeConnectivityPayloadV4 struct {
 	Admission         *nativeAdmissionPayloadV4    `json:"admission,omitempty"`
 	Socket            *nativeSocketPayloadV4       `json:"socket,omitempty"`
 	TURN              *nativeTURNPayloadV4         `json:"turn,omitempty"`
+	Parallelism       *nativeParallelismPayloadV4  `json:"parallelism,omitempty"`
+}
+
+type nativeParallelismPayloadV4 struct {
+	NetworkWaitingBytes  string  `json:"network_waiting_bytes"`
+	InFlightBytes        string  `json:"in_flight_bytes"`
+	RemainingBytes       string  `json:"remaining_bytes"`
+	RemainingKnown       bool    `json:"remaining_known"`
+	Action               string  `json:"action"`
+	Reason               string  `json:"reason"`
+	Paths                string  `json:"paths"`
+	OptionalPaths        string  `json:"optional_paths"`
+	QueuedBytes          string  `json:"queued_bytes"`
+	UnfinishedBytes      string  `json:"unfinished_bytes"`
+	CapacityWaitingBytes string  `json:"capacity_waiting_bytes"`
+	UsefulRate           float64 `json:"useful_rate"`
+	OutputRate           float64 `json:"output_rate"`
+	BaselineUsefulRate   float64 `json:"baseline_useful_rate"`
+	BaselineOutputRate   float64 `json:"baseline_output_rate"`
 }
 
 type nativeProviderDiagnosticV4 struct {
@@ -72,6 +91,7 @@ type nativeSocketPayloadV4 struct {
 }
 
 type nativeAdmissionPayloadV4 struct {
+	Purpose             string                         `json:"purpose,omitempty"`
 	Wait                string                         `json:"wait_ms"`
 	Active              string                         `json:"active"`
 	Queued              string                         `json:"queued"`
@@ -162,8 +182,14 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 	if l := facts.Lifecycle; l != nil {
 		payload.Lifecycle = &nativeLifecyclePayloadV4{Content: l.Content, Direct: l.Direct, PreviousGeneration: nativeKnownUint(l.PreviousGeneration)}
 	}
+	if p := facts.Parallelism; p != nil {
+		payload.Parallelism = &nativeParallelismPayloadV4{Action: p.Action, Reason: p.Reason, Paths: decimal(p.Paths), OptionalPaths: decimal(p.OptionalPaths),
+			NetworkWaitingBytes: decimal(p.NetworkWaitingBytes), InFlightBytes: decimal(p.InFlightBytes), RemainingBytes: decimal(p.RemainingBytes), RemainingKnown: p.RemainingKnown,
+			QueuedBytes: decimal(p.QueuedBytes), UnfinishedBytes: decimal(p.UnfinishedBytes), CapacityWaitingBytes: decimal(p.CapacityWaitingBytes),
+			UsefulRate: p.UsefulRate, OutputRate: p.OutputRate, BaselineUsefulRate: p.BaselineUsefulRate, BaselineOutputRate: p.BaselineOutputRate}
+	}
 	if a := facts.Admission; a != nil {
-		payload.Admission = &nativeAdmissionPayloadV4{Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}
+		payload.Admission = &nativeAdmissionPayloadV4{Purpose: a.Purpose, Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}
 	}
 	if s := facts.Socket; s != nil {
 		payload.Socket = &nativeSocketPayloadV4{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}

@@ -5,13 +5,16 @@ package bufferbudget
 type cacheLink struct {
 	previous, next *cacheLink
 	entry          evictionCandidate
+	bytes          uint64
 }
 
 type cacheList struct {
 	first, last *cacheLink
+	bytes       uint64
 }
 
 func (l *cacheList) pushFront(link *cacheLink) {
+	l.bytes += link.bytes
 	link.previous, link.next = nil, l.first
 	if l.first != nil {
 		l.first.previous = link
@@ -22,6 +25,7 @@ func (l *cacheList) pushFront(link *cacheLink) {
 }
 
 func (l *cacheList) remove(link *cacheLink) {
+	l.bytes -= link.bytes
 	if link.previous != nil {
 		link.previous.next = link.next
 	} else {

@@ -161,7 +161,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 			t.Errorf("close prepared sender: %v", err)
 		}
 	})
-	preparedReceiver, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
+	preparedReceiver, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t),
 		Capability:       preparedSender.Capability(),
 		DescriptorObject: preparedSender.Registration().Descriptor,
 		PeerControls: v2signal.ReceiverControlValidator{

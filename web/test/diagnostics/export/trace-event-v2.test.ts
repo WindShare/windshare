@@ -422,6 +422,13 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   }),
   correlated('peer_recovery', { stage: 'peer_detached' }),
   correlated('peer_recovery', {
+    stage: 'parallelism', action: 'keep', reason: 'aggregate-progress-improved', paths: 2,
+    network_waiting_bytes: '9007199254740993', in_flight_bytes: '8388608', remaining_bytes: '9007199254740993', remaining_known: false,
+    queued_bytes: '9007199254740993', unfinished_bytes: '8388608', capacity_waiting_bytes: '0',
+    useful_rate: 24_000_000, output_rate: 23_000_000,
+    baseline_useful_rate: 20_000_000, baseline_output_rate: 19_000_000,
+  }),
+  correlated('peer_recovery', {
     stage: 'session_budget_exhausted',
     reason: 'session_elapsed_budget',
   }),

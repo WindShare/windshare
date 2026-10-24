@@ -44,7 +44,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 		revisions.opened[file] = opened
 	}
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
-	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](50), RaceWidth: 1})
+	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](50)})
 	defer lanes.Close()
 	if err := lanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, lane); err != nil {
 		t.Fatal(err)
@@ -285,7 +285,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](byte(75+index)), descriptor)
 	}
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
-	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
+	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80)})
 	defer lanes.Close()
 	_ = lanes.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, lane)
 	budget, _ := NewPlaintextBudget(4 * chunk)

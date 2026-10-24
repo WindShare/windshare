@@ -68,7 +68,7 @@ func (s *Set) Fetch(
 		s.resolveLaneReassignments(pendingReassignments, false)
 	}()
 	for len(attempted) < MaxDemandAttempts {
-		candidates, exhausted, err := s.candidates(ctx, attempted, blockDemandBytes(demand), request.Claim)
+		candidates, exhausted, err := s.candidates(ctx, attempted, request)
 		if err != nil {
 			normalized := failurestate.Require(normalizeSourceBoundary(ctx, err))
 			return Block{}, failurestate.BoundaryError(normalized, err)
@@ -136,32 +136,31 @@ func (s *Set) runLaneRound(
 	}()
 	results := make(chan laneResult, MaxDemandAttempts)
 	for _, state := range candidates {
-		go s.fetchLane(raceContext, demand, validate, state, decision, results, lanescheduling.Content)
+		go s.fetchLane(raceContext, demand, validate, state, decision, results, state.purpose)
 	}
 	started, estimate := candidates[0].started, candidates[0].expected
 	active := len(candidates)
-	startSupplement := func(purpose lanescheduling.Purpose) {
+	startRescue := func() {
 		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
 			return
 		}
-		state := s.supplement(demand, attempted, candidates[0].laneState, s.now().Sub(started), estimate, purpose, claim)
+		state := s.rescue(demand, attempted, s.now().Sub(started), estimate, claim)
 		if state == nil {
 			return
 		}
 		*supplemented = true
 		active++
-		go s.fetchLane(raceContext, demand, validate, state, decision, results, purpose)
+		go s.fetchLane(raceContext, demand, validate, state, decision, results, lanescheduling.Rescue)
 	}
-	startSupplement(lanescheduling.Probe)
-	ticker := time.NewTicker(rescuePollInterval)
-	defer ticker.Stop()
+	rescue := s.after(rescuePollInterval)
 	failures := make([]laneResult, 0, active)
 	for active > 0 {
 		select {
 		case <-raceContext.Done():
 			return interruptedLaneRound(ctx)
-		case <-ticker.C:
-			startSupplement(lanescheduling.Rescue)
+		case <-rescue:
+			startRescue()
+			rescue = s.after(rescuePollInterval)
 		case result := <-results:
 			// Cancellation and its lane result can become ready together. The
 			// demand owner determines the outcome, not select's ready-case choice.
@@ -224,13 +223,17 @@ func (s *Set) fetchLane(
 			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
 			"purpose", purpose, "expected_ms", admission.expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
 	}
-	record, fetchErr := state.lane.FetchBlock(ctx, demand, func(bytes uint64) {
-		s.mu.Lock()
-		if admission.permit.Receive(bytes, s.now()) {
-			s.notifyAdmissionChangedLocked()
-		}
-		s.mu.Unlock()
-	})
+	var record records.BlockRecord
+	fetchErr := ctx.Err()
+	if fetchErr == nil {
+		record, fetchErr = admission.source.FetchBlock(ctx, demand, func(bytes uint64) {
+			s.mu.Lock()
+			if admission.permit.Receive(bytes, s.now()) {
+				s.notifyAdmissionChangedLocked()
+			}
+			s.mu.Unlock()
+		})
+	}
 	if fetchErr == nil {
 		fetchErr = validate(record)
 	}

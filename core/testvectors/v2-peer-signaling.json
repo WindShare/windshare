@@ -109,7 +109,7 @@
       "sequence": "24"
     }
   ],
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "messageKinds": {
     "offer": 16,
     "answer": 17,
@@ -128,27 +128,27 @@
   },
   "offer": {
     "sdp": "v=0\r\na=setup:actpass\r\n",
-    "bodyB64": "hgNQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQJ2dj0wDQphPXNldHVwOmFjdHBhc3MNCg=="
+    "bodyB64": "hwRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdnY9MA0KYT1zZXR1cDphY3RwYXNzDQo="
   },
   "answer": {
     "sdp": "v=0\r\na=setup:active\r\n",
-    "bodyB64": "hgNQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQJ1dj0wDQphPXNldHVwOmFjdGl2ZQ0K",
+    "bodyB64": "hwRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAdXY9MA0KYT1zZXR1cDphY3RpdmUNCg==",
     "sequence": "9",
-    "unsignedWrapperCborB64": "ogABAYYDUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECdXY9MA0KYT1zZXR1cDphY3RpdmUNCg==",
-    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAkRgYKDhIWGh4iJiouMjY6PkN6358Qtqdd5mBPk7gQ9fyKQCQbeA5gHiSE+1cUM1ZhF",
-    "controlSignatureB64": "4F3lN2w3Wmwl6Jgn6mtASMIEOnHD9lsRhUjMv9mRHbd/baCD1qldsnyTIpUGX/zlDlW3eMH2NHT+lmdVNLdjAQ==",
-    "signedBodyB64": "owABAYYDUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECdXY9MA0KYT1zZXR1cDphY3RpdmUNChj/WEDgXeU3bDdabCXomCfqa0BIwgQ6ccP2WxGFSMy/2ZEdt39toIPWqV2yfJMilQZf/OUOVbd4wfY0dP6WZ1U0t2MB"
+    "unsignedWrapperCborB64": "ogABAYcEUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECAHV2PTANCmE9c2V0dXA6YWN0aXZlDQo=",
+    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAkRgYKDhIWGh4iJiouMjY6PkNiWaW48Z4+XckfQ1gPFEIRazAqmdGlDBgsz/hemEpjf",
+    "controlSignatureB64": "Z178+rYlOzdzr7AU/XiLwwioNSYS5/0U+UH1zXTv/22LxyUHyL/2c5Ft6lCpgiC1cld22wJkPdLpXlEJMz3CAQ==",
+    "signedBodyB64": "owABAYcEUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECAHV2PTANCmE9c2V0dXA6YWN0aXZlDQoY/1hAZ178+rYlOzdzr7AU/XiLwwioNSYS5/0U+UH1zXTv/22LxyUHyL/2c5Ft6lCpgiC1cld22wJkPdLpXlEJMz3CAQ=="
   },
   "candidate": {
     "candidate": "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host",
     "sdpMid": "data",
     "sdpMLineIndex": 0,
     "usernameFragment": "windshare",
-    "bodyB64": "iQNQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQJ4NGNhbmRpZGF0ZToxIDEgdWRwIDIxMjIyNjAyMjMgMTkyLjAuMi4xIDUwMDAgdHlwIGhvc3RkZGF0YQBpd2luZHNoYXJl",
+    "bodyB64": "igRQAQIDBAUGBwgJCgsMDQ4PEFAhIiMkJSYnKCkqKywtLi8wAQIAeDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZQ==",
     "sequence": "10",
-    "unsignedWrapperCborB64": "ogABAYkDUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECeDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZQ==",
-    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAoSgYKDhIWGh4iJiouMjY6PkCFLBrce1aKG3ds/9iNnHj4mADhhtd1fjg9yRIWu9auu",
-    "controlSignatureB64": "N/esxj40WXUwLVMdVMtbp/ZrCnJvpVTs18R1XOiwjg6b0TvaEqsUWkrHHijKvFiPz5xmT1W0z/TD9ykM8/3lAg==",
-    "signedBodyB64": "owABAYkDUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECeDRjYW5kaWRhdGU6MSAxIHVkcCAyMTIyMjYwMjIzIDE5Mi4wLjIuMSA1MDAwIHR5cCBob3N0ZGRhdGEAaXdpbmRzaGFyZRj/WEA396zGPjRZdTAtUx1Uy1un9msKcm+lVOzXxHVc6LCODpvRO9oSqxRaSsceKMq8WI/PnGZPVbTP9MP3KQzz/eUC"
+    "unsignedWrapperCborB64": "ogABAYoEUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECAHg0Y2FuZGlkYXRlOjEgMSB1ZHAgMjEyMjI2MDIyMyAxOTIuMC4yLjEgNTAwMCB0eXAgaG9zdGRkYXRhAGl3aW5kc2hhcmU=",
+    "controlPreimageB64": "d2luZHNoYXJlL3YyIGNvbnRyb2wvb3BlcmF0aW9uAEFCQ0RFRkdISUpLTE1OT1BhYmNkZWZnaGlqa2xtbm9wAQIDBAAAAAIBAAAAAAAAAAoSgYKDhIWGh4iJiouMjY6PkGe4GPJBIqDOmXLopbmXInjLYswLYG9T28HWq2Vpi6aL",
+    "controlSignatureB64": "WbgZMTh8bSEhk1UJ1YIFYGstppOygqISHwM/FEpN7vNB82MXashun2T2NyQZQzXi7vU4TEU+6Jr0xyOKxZiDAA==",
+    "signedBodyB64": "owABAYoEUAECAwQFBgcICQoLDA0ODxBQISIjJCUmJygpKissLS4vMAECAHg0Y2FuZGlkYXRlOjEgMSB1ZHAgMjEyMjI2MDIyMyAxOTIuMC4yLjEgNTAwMCB0eXAgaG9zdGRkYXRhAGl3aW5kc2hhcmUY/1hAWbgZMTh8bSEhk1UJ1YIFYGstppOygqISHwM/FEpN7vNB82MXashun2T2NyQZQzXi7vU4TEU+6Jr0xyOKxZiDAA=="
   }
 }

@@ -27,6 +27,18 @@ type Exploration struct {
 }
 
 func (e *Exploration) Acquire(purpose Purpose, now time.Time) bool {
+	if !e.Available(purpose, now) {
+		return false
+	}
+	if purpose == Probe {
+		e.probes++
+		e.lastProbe = now
+	}
+	e.active++
+	return true
+}
+
+func (e *Exploration) Available(purpose Purpose, now time.Time) bool {
 	if e.active >= MaximumSupplements {
 		return false
 	}
@@ -34,12 +46,11 @@ func (e *Exploration) Acquire(purpose Purpose, now time.Time) bool {
 		if e.probes != 0 || (!e.lastProbe.IsZero() && now.Sub(e.lastProbe) < ProbeInterval) {
 			return false
 		}
-		e.probes++
-		e.lastProbe = now
 	}
-	e.active++
 	return true
 }
+
+func (e *Exploration) NextProbe() time.Time { return e.lastProbe.Add(ProbeInterval) }
 
 func (e *Exploration) Release(purpose Purpose) {
 	e.active--

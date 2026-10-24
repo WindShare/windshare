@@ -50,6 +50,7 @@ type pathKey struct {
 }
 
 type pathSockets struct {
+	optional  bool
 	key       pathKey
 	addresses []netip.Addr
 	mux       *Mux

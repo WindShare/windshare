@@ -91,7 +91,6 @@ func benchmarkFileLocalMultiLane(b *testing.B, blockBytes uint32) {
 		b.Run(fmt.Sprintf("lanes=%02d/window=%02d/block_bytes=%07d", laneCount, laneCount, blockBytes), func(b *testing.B) {
 			lanes, err := transferlanes.New(transferlanes.Config{
 				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101),
-				RaceWidth:         1,
 			})
 			if err != nil {
 				b.Fatal(err)

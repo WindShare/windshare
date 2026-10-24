@@ -45,6 +45,12 @@ import { PeerPathControl } from './peer-set/path-control'
 import { PeerNetworkGeneration } from './peer-set/network-generation'
 import { TurnReceiver, type TurnObservation } from './turn/receiver'
 import { turnRTCConfiguration, type TurnGrant } from './turn/control-codec'
+import type { ConnectionPurpose } from './v2-signaling-codec'
+import { PEER_CONTINUATION_SLOTS } from '../session/peer-slots/slots'
+import { PeerRecoveryTrace } from './peer-set/trace'
+import { ThroughputController, THROUGHPUT_SAMPLE_MS, type ThroughputDecision } from './peer-set/throughput'
+
+const MAXIMUM_THROUGHPUT_PATHS = PEER_CONTINUATION_SLOTS - 1
 
 export type V2ConnectivityPolicy = 'auto' | 'relay-only' | 'p2p-only'
 
@@ -148,6 +154,8 @@ interface V2InstalledPeer {
 
 /** Browsing keeps relay control-only; explicit content activation admits both routes. */
 export class V2ReceiverConnectivity {
+  readonly #optionalPaths = new Map<string, { identity: V2PeerPathIdentity; activation?: V2PeerRecoveryActivation }>()
+  #throughputTask: Promise<void> | undefined
   readonly #policy: V2ConnectivityPolicy
   readonly #session: V2ReceiverSessionRuntime
   readonly #lanes: V2LaneSet
@@ -266,6 +274,9 @@ export class V2ReceiverConnectivity {
       throw error
     }
     active.peerRecovery = this.#activatePeerRecovery()
+    if (this.#policy !== 'relay-only' && this.#capabilityAllowsAttempt()) {
+      this.#throughputTask ??= this.#runThroughput()
+    }
     this.#turn.setDemand(this.#activations.size > 0)
     if (!this.#activations.has(id)) active.peerRecovery?.close()
     let closed = false
@@ -314,6 +325,7 @@ export class V2ReceiverConnectivity {
       turnClose,
       ...(recoveryClose === undefined ? [] : [recoveryClose]),
       this.#joinPeerCleanup(),
+      this.#throughputTask,
     ])
   }
 
@@ -343,7 +355,7 @@ export class V2ReceiverConnectivity {
     return recovery
   }
 
-  #createPeerRecovery(peerPathId: V2PeerPathIdentity, offers: OfferChannelFactory, onUnavailable: () => void, grant?: TurnGrant): V2PeerRecoverySupervisor {
+  #createPeerRecovery(peerPathId: V2PeerPathIdentity, offers: OfferChannelFactory, onUnavailable: () => void, grant?: TurnGrant, purpose: ConnectionPurpose = 'initial'): V2PeerRecoverySupervisor {
     const peerPathIdentity = peerPathId.copyBytes()
     const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
     let budget = this.#peerRecoveryOptions.budget
@@ -364,6 +376,7 @@ export class V2ReceiverConnectivity {
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
     const recovery = this.#peers.add({
+      purpose,
       protocolSessionId: this.#protocolSessionId,
       peerPathId,
       attempts,
@@ -421,11 +434,85 @@ export class V2ReceiverConnectivity {
 
   #peerUnavailable(): void {
     if (this.#policy !== 'p2p-only') return
+    if (this.#peers.hasEligiblePath || [...this.#admitted.values()].some(lane => lane.route === 'direct')) return
     const error = new Error('No authenticated direct path is available within the current connection wave')
     for (const [id, active] of this.#activations) {
       active.routes.close(error)
       this.#endActivation(id, error)
     }
+  }
+
+  async #runThroughput(): Promise<void> {
+    const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
+    const controller = new ThroughputController()
+    try {
+      while (!this.#lifetime.signal.aborted) {
+        await clock.sleep(THROUGHPUT_SAMPLE_MS, this.#lifetime.signal)
+        if (this.#lifetime.signal.aborted) break
+        const demand = this.#lanes.schedulingDemand()
+        const paths = [...this.#installedPeers.values()].filter(peer => peer.peer.pathRoute === 'direct').length
+        const pending = this.#peers.hasPendingPath
+        const decision = controller.step(clock.now(), { ...demand, paths, pending,
+          unfinishedBytes: this.#activations.size === 0 ? 0 : demand.unfinishedBytes,
+          networkWaitingBytes: this.#activations.size === 0 ? 0 : demand.networkWaitingBytes, optionalPaths: this.#optionalPaths.size }, MAXIMUM_THROUGHPUT_PATHS)
+        await this.#applyParallelism(decision)
+        this.#traceParallelism(decision, demand, paths)
+      }
+    } catch (error) {
+      if (!this.#lifetime.signal.aborted) throw error
+    }
+  }
+
+  async #applyParallelism(decision: ThroughputDecision): Promise<void> {
+    if (decision.action === 'explore' && this.#peers.size < MAXIMUM_THROUGHPUT_PATHS) this.#openOptional()
+    if (decision.action === 'retire') {
+      const last = [...this.#optionalPaths.values()].at(-1)
+      if (last !== undefined) await this.#retireOptional(last.identity)
+    }
+  }
+
+  #traceParallelism(decision: ThroughputDecision, demand: ReturnType<V2LaneSet['schedulingDemand']>, paths: number): void {
+    if (decision.action === 'hold' || this.#peerPathId === undefined) return
+    new PeerRecoveryTrace(this.#protocolSessionId, this.#peerPathId, this.#connectivityTrace).emit(() => ({
+      stage: 'parallelism', action: decision.action, reason: decision.reason ?? '', paths,
+      networkWaitingBytes: demand.networkWaitingBytes, inFlightBytes: demand.inFlightBytes,
+      remainingBytes: demand.remainingBytes, remainingKnown: demand.remainingKnown,
+      queuedBytes: demand.queuedBytes, unfinishedBytes: demand.unfinishedBytes, capacityWaitingBytes: demand.capacityWaitingBytes,
+      usefulRate: decision.usefulRate ?? 0, outputRate: decision.outputRate ?? 0,
+      baselineUsefulRate: decision.baselineUsefulRate ?? 0, baselineOutputRate: decision.baselineOutputRate ?? 0,
+    }))
+  }
+
+  #openOptional(): void {
+    const identity = createV2PeerPathIdentityValue(createV2PeerPathIdentity(this.#randomBytes))
+    const key = encodeBase64Url(identity.copyBytes())
+    if (this.#peers.path(identity) !== undefined) return
+    const path = this.#createPeerRecovery(identity, this.#offers, () => {
+      this.#retireOptional(identity).then(() => this.#peerUnavailable()).catch(() => this.#peerUnavailable())
+    }, undefined, 'throughput')
+    const entry: { identity: V2PeerPathIdentity; activation?: V2PeerRecoveryActivation } = { identity }
+    this.#optionalPaths.set(key, entry)
+    const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
+    const control = new PeerPathControl(this.#session, identity.copyBytes(), this.#peerRecoveryOptions.network!, clock,
+      notice => path.pathChanged(notice), this.#peerRecoveryOptions.providerProfile)
+    this.#pathControls.set(key, control)
+    control.activate()
+    entry.activation = path.activate()
+    // Immediate resource denial can retire the entry from inside activate().
+    if (!this.#optionalPaths.has(key)) entry.activation.close()
+  }
+
+  async #retireOptional(identity: V2PeerPathIdentity): Promise<void> {
+    const key = encodeBase64Url(identity.copyBytes())
+    const entry = this.#optionalPaths.get(key)
+    if (entry === undefined) return
+    this.#optionalPaths.delete(key)
+    entry.activation?.close()
+    const control = this.#pathControls.get(key)
+    this.#pathControls.delete(key)
+    const installed = this.#installedPeers.get(key)
+    if (installed !== undefined) this.#releasePeer(installed.laneId, installed.laneEpoch)
+    await Promise.allSettled([this.#peers.remove(identity), control?.close()])
   }
 
   #publishPeer(candidate: V2PeerCandidatePublication): boolean {

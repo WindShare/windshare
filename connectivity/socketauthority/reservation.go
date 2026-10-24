@@ -38,6 +38,28 @@ func (r *Request) Changes() <-chan struct{} {
 // Reserve performs no network I/O. Optional TCP listeners share this ledger but
 // cannot consume capacity already promised to another path's mandatory UDP set.
 func (r *Request) Reserve() (*Reservation, error) {
+	return r.reserve(false)
+}
+
+// ReserveOptional leaves a complete mandatory socket opportunity for a new
+// receiver. The reserve uses the frozen address cost, not a guessed path count.
+func (r *Request) ReserveOptional() (*Reservation, error) { return r.reserve(true) }
+func (r *Request) SamePool(other *Request) bool           { return r.authority == other.authority }
+func (a *Authority) essentialReserveLocked() int {
+	reserve := 0
+	for _, path := range a.paths {
+		if path.optional {
+			reserve = max(reserve, len(path.addresses))
+		}
+	}
+	for _, reservation := range a.reservations {
+		if reservation.optional {
+			reserve = max(reserve, len(reservation.request.addresses))
+		}
+	}
+	return reserve
+}
+func (r *Request) reserve(optional bool) (*Reservation, error) {
 	a := r.authority
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -57,10 +79,14 @@ func (r *Request) Reserve() (*Reservation, error) {
 		entry.refs++
 		return &Reservation{request: r, lease: &Lease{authority: a, entry: entry}}, nil
 	}
-	if a.reservations[r.key] != nil || a.socketCount+a.reservedCount+len(r.addresses) > a.config.Capacity {
+	reserve := 0
+	if optional {
+		reserve = max(len(r.addresses), a.essentialReserveLocked())
+	}
+	if a.reservations[r.key] != nil || a.socketCount+a.reservedCount+len(r.addresses)+reserve > a.config.Capacity {
 		return nil, a.capacityLocked(len(r.addresses))
 	}
-	reservation := &Reservation{request: r}
+	reservation := &Reservation{request: r, optional: optional}
 	a.reservations[r.key] = reservation
 	a.reservedCount += len(r.addresses)
 	return reservation, nil
@@ -69,9 +95,10 @@ func (r *Request) Reserve() (*Reservation, error) {
 // Reservation owns either a future allocation or a retained existing lease.
 // Activate transfers ownership once; abandonment returns only this reservation.
 type Reservation struct {
-	request *Request
-	lease   *Lease
-	settled bool
+	optional bool
+	request  *Request
+	lease    *Lease
+	settled  bool
 }
 
 func (r *Reservation) Activate() (*Lease, error) {
@@ -94,6 +121,9 @@ func (r *Reservation) Activate() (*Lease, error) {
 	delete(a.reservations, r.request.key)
 	a.reservedCount -= len(r.request.addresses)
 	lease, err := a.acquireLocked(r.request.key, r.request.addresses)
+	if err == nil {
+		lease.entry.optional = r.optional
+	}
 	a.notifyLocked()
 	a.mu.Unlock()
 	return lease, err

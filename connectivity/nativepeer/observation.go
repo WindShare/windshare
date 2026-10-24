@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/transport/webrtc/provider"
@@ -37,6 +38,21 @@ type Observation struct {
 	Admission    *AdmissionFacts
 	Socket       *socketauthority.Event
 	TURN         *turnpath.Event
+	Parallelism  *ParallelismFacts
+}
+
+type ParallelismFacts struct {
+	At       time.Time
+	Decision throughput.Decision
+	Demand   throughput.Observation
+}
+
+func (n *NativePeerConnectivity) ObserveParallelism(subject Subject, decision throughput.Decision, demand throughput.Observation) {
+	if n == nil {
+		return
+	}
+	subject.Side = n.config.Side
+	n.producer.TryPublish(Observation{Subject: subject, Parallelism: &ParallelismFacts{At: n.config.Now(), Decision: decision, Demand: demand}})
 }
 
 // ObserveTURN shares the bounded native diagnostic stream while preserving the

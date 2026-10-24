@@ -1,0 +1,175 @@
+{
+  "screen": [
+    {
+      "name": "one-memory",
+      "paths": 1,
+      "sink": "memory"
+    },
+    {
+      "name": "two-opfs",
+      "paths": 2
+    },
+    {
+      "name": "three-opfs",
+      "paths": 3
+    },
+    {
+      "name": "three-memory",
+      "paths": 3,
+      "sink": "memory"
+    },
+    {
+      "name": "two-memory",
+      "paths": 2,
+      "sink": "memory"
+    },
+    {
+      "name": "one-opfs",
+      "paths": 1
+    }
+  ],
+  "long-and-profile": [
+    {
+      "name": "large-adaptive",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "large-three",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "profile-two",
+      "paths": 2,
+      "profile": true
+    },
+    {
+      "name": "profile-one",
+      "paths": 1,
+      "profile": true
+    },
+    {
+      "name": "profile-three",
+      "paths": 3,
+      "profile": true
+    }
+  ],
+  "confirmation": [
+    {
+      "name": "wall-one",
+      "paths": 1,
+      "profile": true,
+      "profileFlavor": "wall"
+    },
+    {
+      "name": "wall-three",
+      "paths": 3,
+      "profile": true,
+      "profileFlavor": "wall"
+    },
+    {
+      "name": "large-original-2",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "large-success-no-cooldown-2",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "success-no-cooldown"
+    },
+    {
+      "name": "large-success-no-cooldown-3",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "success-no-cooldown"
+    },
+    {
+      "name": "large-original-3",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "large-original-4",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "large-success-no-cooldown-4",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "success-no-cooldown"
+    },
+    {
+      "name": "large-fixed-three-2",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "large-fixed-two",
+      "paths": 2,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "loopback-one",
+      "paths": 1,
+      "topology": "loopback"
+    },
+    {
+      "name": "loopback-three",
+      "paths": 3,
+      "topology": "loopback"
+    }
+  ],
+  "trial-window": [
+    {
+      "name": "original-1",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "recovery-window-1",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "recovery-window"
+    },
+    {
+      "name": "recovery-window-2",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "recovery-window"
+    },
+    {
+      "name": "original-2",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "original-3",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "original"
+    },
+    {
+      "name": "recovery-window-3",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin",
+      "policy": "recovery-window"
+    },
+    {
+      "name": "fixed-three-3",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    }
+  ]
+}

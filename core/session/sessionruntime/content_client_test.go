@@ -22,7 +22,7 @@ import (
 )
 
 func TestBlockFragmentInactivityIsALaneTransportBoundary(t *testing.T) {
-	err := blockFragmentInactivityBoundary(contentflow.ErrFragmentInactivity)
+	err := blockTransportBoundary(contentflow.ErrFragmentInactivity)
 	var boundary *transferfault.BoundaryError
 	expected, buildErr := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
 	if buildErr != nil {
@@ -106,17 +106,9 @@ func TestReceiverBlockLaneRetiresAnInactiveOperationBeforeReassignment(t *testin
 }
 
 func TestReceiverBlockLaneMarksOnlyPreAdmissionFailureReassignable(t *testing.T) {
-	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	lease := id16[content.LeaseID](70)
-	revisions := &receiverRevisionClient{leases: map[content.LeaseID]*remoteLeaseState{
-		lease: {id: lease},
-	}}
-	lane := &receiverBlockLane{
-		identity:  LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1},
-		rpc:       newRPCClient(runtime, &deterministicReader{next: 71}),
-		revisions: revisions,
-	}
-	demand := transferlanes.Demand{LeaseID: lease}
+	fixture := newBlockProtocolFixture(t, false)
+	lane, demand := fixture.lane, fixture.demand
+	lane.identity = LaneIdentity{ID: fixture.runtime.initial.ID + 1, Epoch: 1}
 	_, err := lane.FetchBlock(context.Background(), demand, nil)
 	capabilityType := reflect.TypeOf(transferlanes.NewDemandNotAdmitted(ErrLaneUnavailable))
 	if reflect.TypeOf(err) != capabilityType || !errors.Is(err, ErrLaneUnavailable) {
@@ -286,6 +278,7 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 	blockLane := &receiverBlockLane{
 		identity: LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1},
 		rpc:      newRPCClient(runtime, &deterministicReader{next: 78}), revisions: revisions,
+		assembler: newBlockProtocolFixture(t, false).lane.assembler,
 	}
 	contentLanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: runtime.sessionID})
 	if err != nil {

@@ -39,9 +39,9 @@ func TestFailedLaneAttemptReleasesCapacityBeforePublishing(t *testing.T) {
 				t.Fatal(err)
 			}
 			var releases atomic.Int32
-			candidates, exhausted, err := lanes.candidates(context.Background(), make(map[Identity]struct{}), blockDemandBytes(demand), func() (func(), <-chan struct{}, error) {
+			candidates, exhausted, err := lanes.candidates(context.Background(), make(map[Identity]struct{}), Request{Demand: demand, Claim: func() (func(), <-chan struct{}, error) {
 				return func() { releases.Add(1) }, nil, nil
-			})
+			}})
 			if err != nil || exhausted || len(candidates) != 1 {
 				t.Fatalf("candidate admission: count=%d exhausted=%v error=%v", len(candidates), exhausted, err)
 			}

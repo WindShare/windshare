@@ -189,7 +189,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       resources.route = route
       permit = await this.#tabAdmission.acquire(this.#admissionReceiver,
         this.#transportRoute === 'turn' ? 0 : context.iceProfile?.endpointIDs.length ?? 2,
-        context.admissionWaitBudgetMilliseconds ?? 0, signal, this.#transportRoute)
+        context.admissionWaitBudgetMilliseconds ?? 0, signal, this.#transportRoute, context.purpose)
       signal.throwIfAborted()
       if (context.iceProfile !== undefined) route.providerFact({ kind: 'profile',
         profileID: context.iceProfile.id, networkGenerationID: context.iceProfile.networkGenerationID,

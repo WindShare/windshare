@@ -1,0 +1,58 @@
+package main
+
+import (
+    "encoding/json"
+    "os"
+    "path/filepath"
+    "runtime"
+    "runtime/pprof"
+    "time"
+)
+
+// A build overlay adds this sampler only to diagnostic binaries. File markers
+// bracket the transfer, so catalog setup and final whole-file hashing stay out.
+func init() {
+    directory := os.Getenv("WS_PREFLIGHT_NATIVE_PROFILE")
+    if directory == "" { return }
+    go func() {
+        control := filepath.Join(directory, "native-profile-control")
+        ticker := time.NewTicker(25 * time.Millisecond)
+        defer ticker.Stop()
+        var cpu *os.File
+        var samples *os.File
+        active := false
+        var previous string
+        for range ticker.C {
+            raw, err := os.ReadFile(control)
+            if err != nil { continue }
+            command := string(raw)
+            if command == "start" && previous != command {
+                cpu, err = os.Create(filepath.Join(directory, "sender-cpu.pprof"))
+                if err != nil { return }
+                if pprof.StartCPUProfile(cpu) != nil { cpu.Close(); return }
+                samples, err = os.Create(filepath.Join(directory, "sender-memory.ndjson"))
+                if err != nil { pprof.StopCPUProfile(); cpu.Close(); return }
+                active = true
+                os.WriteFile(filepath.Join(directory, "native-profile-ready"), []byte("ready"), 0600)
+            }
+            if active {
+                var memory runtime.MemStats
+                runtime.ReadMemStats(&memory)
+                json.NewEncoder(samples).Encode(map[string]any{
+                    "at": time.Now().UnixMilli(), "heapAlloc": memory.HeapAlloc,
+                    "heapInuse": memory.HeapInuse, "totalAlloc": memory.TotalAlloc,
+                    "gc": memory.NumGC, "pauseTotalNs": memory.PauseTotalNs,
+                    "goroutines": runtime.NumGoroutine(),
+                })
+            }
+            if command == "stop" && active {
+                pprof.StopCPUProfile()
+                cpu.Close()
+                samples.Close()
+                os.WriteFile(filepath.Join(directory, "native-profile-stopped"), []byte("stopped"), 0600)
+                return
+            }
+            previous = command
+        }
+    }()
+}

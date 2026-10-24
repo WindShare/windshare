@@ -76,3 +76,35 @@ export class PeerAttemptBudget {
       this.#elapsed + elapsed * this.#elapsedCapacity / this.#refillMilliseconds)
   }
 }
+
+/** Active time stops between waves; idle retention never spends negotiation time. */
+export class PeerActivityClock {
+  readonly #readNow: () => number
+  #lastNow: number | undefined
+  #activeSince: number | undefined
+  #elapsed = 0
+
+  constructor(readNow: () => number) { this.#readNow = readNow }
+
+  now(): number {
+    const now = this.#readNow()
+    if (!Number.isFinite(now) || (this.#lastNow !== undefined && now < this.#lastNow)) {
+      throw new RangeError('recovery clock must be finite and monotonic')
+    }
+    this.#lastNow = now
+    return now
+  }
+
+  begin(at: number): void { this.#activeSince = at }
+
+  elapsed(): number {
+    const now = this.now()
+    return this.#elapsed + (this.#activeSince === undefined ? 0 : now - this.#activeSince)
+  }
+
+  pause(): void {
+    if (this.#activeSince === undefined) return
+    this.#elapsed += this.now() - this.#activeSince
+    this.#activeSince = undefined
+  }
+}

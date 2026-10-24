@@ -76,6 +76,7 @@ const DefaultLifecycleObservationCapacity = 256
 // ChannelOptions carries optional process observability without allowing
 // consumer execution to become transport work. Zero capacity disables it.
 type ChannelOptions struct {
+	SendCapacity                 *SendCapacity
 	LifecycleObservationCapacity int
 }
 

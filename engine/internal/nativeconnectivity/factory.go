@@ -45,7 +45,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        native,
 		Now:           config.Now,
-		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel),
+		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel, config.Capacity.Sends()),
 	}
 	if config.Diagnostics || config.TraceLifecycle {
 		result.SenderAttemptObservationCapacity = v2peer.DefaultSenderAttemptObservationCapacity
@@ -57,6 +57,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 }
 
 type ReceiverConfig struct {
+	SendCapacity   *wsrtc.SendCapacity
 	Random         io.Reader
 	Native         *nativepeer.NativePeerConnectivity
 	Diagnostics    bool
@@ -72,7 +73,7 @@ func receiverConfig(config ReceiverConfig) v2peer.ReceiverFactoryConfig {
 		Random:        config.Random,
 		Native:        config.Native,
 		Configuration: v2peer.DefaultConfiguration(),
-		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel),
+		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel, config.SendCapacity),
 	}
 	if config.Diagnostics {
 		result.ReceiverTerminationObservationCapacity = v2peer.DefaultReceiverTerminationObservationCapacity
@@ -81,13 +82,14 @@ func receiverConfig(config ReceiverConfig) v2peer.ReceiverFactoryConfig {
 	return result
 }
 
-func channelAdapter(diagnostics bool, observe func(*wsrtc.Channel)) v2peer.DataChannelAdapter {
+func channelAdapter(diagnostics bool, observe func(*wsrtc.Channel), sends *wsrtc.SendCapacity) v2peer.DataChannelAdapter {
 	return v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
 		capacity := 0
 		if diagnostics {
 			capacity = wsrtc.DefaultLifecycleObservationCapacity
 		}
 		wrapped, err := wsrtc.NewChannelWithOptions(channel, wsrtc.ChannelOptions{
+			SendCapacity:                 sends,
 			LifecycleObservationCapacity: capacity,
 		})
 		if err == nil && observe != nil {

@@ -79,7 +79,7 @@ func (f *fixture) connect() (*sessionruntime.ReceiverRuntime, *pipeChannel) {
 
 func (f *fixture) connectChannels(senderChannel framechannel.Channel, receiverChannel *pipeChannel) *sessionruntime.ReceiverRuntime {
 	f.t.Helper()
-	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capability: f.sender.Capability(), DescriptorObject: f.sender.Registration().Descriptor})
+	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capacity: testReceiveCapacity(f.t), Capability: f.sender.Capability(), DescriptorObject: f.sender.Registration().Descriptor})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -200,7 +200,10 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	}
 	id, _ := transfer.NewTransferJobID()
 	var reads []content.Range
-	reader := rangeReaderFunc(func(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+	reader := observedContinuationReader{Session: continuation, read: func(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+		if demand := continuation.Runtime().LaneSet().SchedulingDemand(); !demand.RemainingKnown || demand.RemainingBytes == 0 {
+			t.Errorf("job lost remaining-work observation: %+v", demand)
+		}
 		reads = append(reads, requested)
 		err := continuation.ReadRange(ctx, lease, descriptor, requested, sink)
 		if len(reads) == 1 && err == nil {
@@ -208,7 +211,7 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 			<-runtime.Done()
 		}
 		return err
-	})
+	}}
 	liveOutput := &singleOpenMaterializer{materializer: output}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation, Blocks: reader, Materializer: liveOutput, RevisionWait: &revisionwait.Config{GenerationFence: continuation}})
 	if err != nil {
@@ -233,6 +236,9 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	}
 	if len(continuation.leases) != 0 {
 		t.Fatal("fresh leases not released")
+	}
+	if demand := continuation.Runtime().LaneSet().SchedulingDemand(); demand.RemainingKnown || demand.OutputBytes+runtime.LaneSet().SchedulingDemand().OutputBytes != uint64(len(f.payload)) {
+		t.Fatalf("completed job retained demand or lost materialized output: %+v", demand)
 	}
 	if liveOutput.opens != 1 || liveOutput.session.starts != 1 {
 		t.Fatalf("output reopened: roots=%d files=%d", liveOutput.opens, liveOutput.session.starts)
@@ -304,6 +310,15 @@ func (f *transientFileTransaction) Commit(ctx context.Context) (transfer.FileSet
 }
 
 type rangeReaderFunc func(context.Context, transfer.RevisionHandle, content.FileRevisionDescriptor, content.Range, transfer.RangeSink) error
+
+type observedContinuationReader struct {
+	*Session
+	read rangeReaderFunc
+}
+
+func (r observedContinuationReader) ReadRange(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+	return r.read(ctx, lease, descriptor, requested, sink)
+}
 
 func (f rangeReaderFunc) ReadRange(ctx context.Context, l transfer.RevisionHandle, d content.FileRevisionDescriptor, r content.Range, s transfer.RangeSink) error {
 	return f(ctx, l, d, r, s)

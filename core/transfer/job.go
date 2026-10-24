@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -333,6 +334,18 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	}
 	j.started = true
 	j.mu.Unlock()
+	if observer, ok := j.blocks.(interface {
+		ObserveRemainingWork(func() transferlanes.RemainingWork) func()
+	}); ok {
+		defer observer.ObserveRemainingWork(func() transferlanes.RemainingWork {
+			progress := j.Progress()
+			var remaining uint64
+			if progress.DiscoveredBytes > progress.CompletedBytes() {
+				remaining = progress.DiscoveredBytes - progress.CompletedBytes()
+			}
+			return transferlanes.RemainingWork{Bytes: remaining, Known: progress.CountersExact && progress.Discovery == DiscoveryComplete}
+		})()
+	}
 
 	runContext, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

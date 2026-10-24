@@ -73,6 +73,8 @@ type cachedBlock struct {
 type blockConsumer struct {
 	ready    func() bool
 	admitted func()
+	order    func() transferlanes.WorkOrder
+	served   func(uint64)
 }
 
 type blockCall struct {
@@ -114,6 +116,7 @@ type BlockBroker struct {
 	cleanupErr     error
 	closed         bool
 	activeAttempts int
+	allocationTurn uint64
 	entries        map[blockKey]*cachedBlock
 	inflight       map[blockKey]*blockCall
 }
@@ -383,6 +386,10 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 		call.reserved, _ = reservation.Split(call.expected)
 		call.deliveryReserved, _ = reservation.Split(call.expected)
 		consumer.admitted()
+		b.allocationTurn++
+		if consumer.served != nil {
+			consumer.served(b.allocationTurn)
+		}
 	}
 	b.activeAttempts++
 	call.activeAttempts++
@@ -397,16 +404,19 @@ func (b *BlockBroker) claimCall(call *blockCall) (func(), <-chan struct{}, error
 
 func (b *BlockBroker) runLoad(call *blockCall, demand transferlanes.Demand) {
 	defer b.loads.Done()
-	record, err := b.blocks.Fetch(call.ctx, transferlanes.Request{Demand: demand, Claim: func() (func(), <-chan struct{}, error) { return b.claimCall(call) }, Validate: func(candidate records.BlockRecord) error {
-		if candidate.Descriptor() != demand.Descriptor || candidate.LocalBlockIndex() != demand.Index {
-			return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
-		}
-		expected, lengthErr := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
-		if lengthErr != nil || uint64(candidate.DataLength()) != uint64(expected) {
-			return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
-		}
-		return nil
-	}})
+	record, err := b.blocks.Fetch(call.ctx, transferlanes.Request{Demand: demand,
+		Order: func() transferlanes.WorkOrder { return b.callOrder(call) },
+		Ready: func() transferlanes.CapacityReadiness { return b.callReady(call) },
+		Claim: func() (func(), <-chan struct{}, error) { return b.claimCall(call) }, Validate: func(candidate records.BlockRecord) error {
+			if candidate.Descriptor() != demand.Descriptor || candidate.LocalBlockIndex() != demand.Index {
+				return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
+			}
+			expected, lengthErr := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
+			if lengthErr != nil || uint64(candidate.DataLength()) != uint64(expected) {
+				return fault.Wrap(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), ErrBlockIdentity)
+			}
+			return nil
+		}})
 	var data []byte
 	if err == nil {
 		data = record.Data()

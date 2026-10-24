@@ -3,7 +3,7 @@ import type { BlockReceivePermit } from './receive-window'
 import type { DispatchPurpose } from './exploration'
 
 const PRIORITIES = ['preview', 'download', 'prefetch'] as const
-const WEIGHTS = { preview: 4, download: 2, prefetch: 1 } as const
+const PRIORITY_AGING_MILLISECONDS = 1000
 
 function compareFrontiers(left: ContentWork, right: ContentWork): number {
   if (left.distance() < right.distance()) return -1
@@ -35,7 +35,6 @@ export class ContentAdmissions {
   readonly #now: () => number
   readonly #pending = new Set<PendingAdmission>()
   readonly #allocation = new ContentAllocation()
-  readonly #served = { preview: 0, download: 0, prefetch: 0 }
   #scheduled = false
   #probeWake: ReturnType<typeof setTimeout> | undefined
 
@@ -114,20 +113,27 @@ export class ContentAdmissions {
   }
 
   #select(): ContentSelection<PendingAdmission> {
-    let nextProbe = Infinity
-    for (let round = 0; round < 2; round++) {
-      for (const priority of PRIORITIES) {
-        if (this.#served[priority] >= WEIGHTS[priority]) continue
-        const candidates = [...this.#pending].filter(item => item.priority === priority &&
-          (item.capacity?.available() ?? true)).sort(compareFrontiers)
-        const selection = this.#allocation.select(candidates, this.#lanes(), this.#now(),
-          (lane, item) => item.eligible(lane))
-        if (selection.kind === 'dispatch') return selection
-        if (selection.kind === 'probe-deadline') nextProbe = Math.min(nextProbe, selection.at)
-      }
-      for (const priority of PRIORITIES) this.#served[priority] = 0
+    const now = this.#now()
+    const candidates = [...this.#pending].filter(item => item.capacity === undefined || item.capacity.readiness() === 'ready').sort((a, b) => {
+      const agedA = now - a.queuedAt >= PRIORITY_AGING_MILLISECONDS
+      const agedB = now - b.queuedAt >= PRIORITY_AGING_MILLISECONDS
+      if (agedA !== agedB) return agedA ? -1 : 1
+      if (!agedA && a.priority !== b.priority) return PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)
+      return compareFrontiers(a, b) || a.queuedAt - b.queuedAt
+    })
+    return this.#allocation.select(candidates, this.#lanes(), now, (lane, item) => item.eligible(lane))
+  }
+
+  demand(): { queuedBytes: number; queuedBlocks: number; networkWaitingBytes: number; capacityWaitingBytes: number } {
+    let queuedBytes = 0, queuedBlocks = 0, networkWaitingBytes = 0, capacityWaitingBytes = 0
+    for (const work of this.#pending) {
+      if (work.signal.aborted || work.purpose === 'rescue') continue
+      const bytes = demandBytes(work.demand)
+      queuedBytes += bytes; queuedBlocks++
+      if (work.capacity?.readiness() === 'consumer') capacityWaitingBytes += bytes
+      else if (this.#lanes().some(work.eligible)) networkWaitingBytes += bytes
     }
-    return Number.isFinite(nextProbe) ? { kind: 'probe-deadline', at: nextProbe } : { kind: 'blocked' }
+    return { queuedBytes, queuedBlocks, networkWaitingBytes, capacityWaitingBytes }
   }
 
   #commit(assignment: ContentAssignment<PendingAdmission>): boolean {
@@ -141,7 +147,6 @@ export class ContentAdmissions {
       const purpose = work.purpose === 'rescue' ? 'rescue' : assignment.purpose
       this.#pending.delete(work)
       work.cleanup()
-      this.#served[work.priority]++
       this.#allocation.started(work, purpose, this.#now())
       work.resolve(this.#begin(work, lane, purpose, permit, release))
     } catch (error) {

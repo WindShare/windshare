@@ -30,6 +30,7 @@ func (a *Account[K]) Store(key K, data []byte, reservation Reservation) (*Cached
 	}
 	cached := &Cached[K]{account: a, key: key, data: data, hold: hold}
 	cached.global.entry, cached.local.entry = cached, cached
+	cached.global.bytes, cached.local.bytes = uint64(len(data)), uint64(len(data))
 	b.cache.pushFront(&cached.global)
 	a.cache.pushFront(&cached.local)
 	b.wakeLocked()

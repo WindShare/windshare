@@ -1,0 +1,85 @@
+{
+  "revision": "3788857e592047d63d4bee1a2d3209968b932926",
+  "trackedSnapshotFiles": 4151,
+  "snapshotManifestSHA256": "43757b78995075d28509b9be1b25fd583528ead7d4c77cbd4f85dbaf252c9dae",
+  "initialGitIndexSHA256": "10c2c64bd836c095d2c08dd988032f9972d0e86367160565826197906fd2daa3",
+  "gitIndexSHA256AtVerification": "a3bd20b4d6b8c5407bbfcff1f07b7ee479ccbb26f0195ed9571ddf1a57fb7659",
+  "stagedPathsAtVerification": "<private-log>",
+  "sourceChangesAfterMeasurement": [
+    "docs/plans/webrtc-throughput.md"
+  ],
+  "initialGitStatus": "<private-log>",
+  "binaries": {
+    "wind.exe": "1eef8c9d4225f920eac83a753ee82896152c1dcde1fc9e5530474300cf6abe85",
+    "relay-native.exe": "7f39cb2988beb69430a6fbed91ad1f25b43496d4c8d78337fa02694d3e4987a2",
+    "go": "go version go1.27.3 windows/amd64",
+    "node": "v24.16.0"
+  },
+  "profileBinaries": {
+    "wind.exe": "cdba7154e83eb076a1026125b4d9997f619a8b53781e9dde720e5e63d2ba88f8",
+    "relay-native.exe": "7f39cb2988beb69430a6fbed91ad1f25b43496d4c8d78337fa02694d3e4987a2",
+    "overlaySHA256": "78de2eeeff6de411162cc60306f6c1ddb0001ea3871c59ae1d536e8607d9d69d"
+  },
+  "fixturePrefixSHA256": {
+    "268435456": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+    "131072": "14d688d5ca59189aab30a7de695aace4f1297491897133811f527d07174d9d09",
+    "134217728": "4c06b2e8a4dd52c17ef1281f27ec189e2c7d3a07ea8aa61f34c1d549f109d4b5",
+    "67108864": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+  },
+  "runCounts": {
+    "passed": 54,
+    "transfers": 59,
+    "failed": 7
+  },
+  "remoteCleanupsAcknowledged": 57,
+  "harnessSHA256": {
+    "analyze.py": "7c6d42bb015c19cfd3204ab99a74da1dc411519dcb27c3cc6e4cfeb5bfe6f006",
+    "native-profile.go.txt": "78de2eeeff6de411162cc60306f6c1ddb0001ea3871c59ae1d536e8607d9d69d",
+    "prepare-profile.py": "cefddf97ecb06dd8ac34066bf83d7546ac7ec150a4318146645d637fdf2addb8",
+    "prepare.py": "392c5e214c9e5a891e6bc0b6181fac6ce0a7e17d13582840fe3deb4689086571",
+    "probe.mjs": "ee82a5ae3b16b02c012d66257aa8c7771437426406114d015479f47a2e04b4a7",
+    "profiles.py": "8a2752c2b657277023f629891569ef7f644b5062042243a6af61cd8acfdd62ad",
+    "routes.mjs": "5882eb99f6eaea8a653b45291b000b34306dbb4c2017c2f257a25ebc9156c627",
+    "run.ps1": "62c584821c19ecd02413d1a99898cced999c73a3d38c75d8bb41ddb0d877a479",
+    "verify.py": "0a7571ed4df7b24230cd14c0cf07fdf25d227754559714258f6f09bf4929d09f",
+    "workflows.mjs": "862f99ef8734b6e10437f64be757f92b7fc6333246864d41074dc0cd097fab61"
+  },
+  "evidenceSHA256": {
+    "results.json": "36e04449ff4e363d561b8135320b8c3060e31a029e6f726f5b0b9daf0204f8fb",
+    "profiles.json": "adc6fc76a56ab3d1f94f0611a637f354922a12e710c2903e19a2af56a64741fd"
+  },
+  "validation": {
+    "web": {
+      "files": 10,
+      "tests": 99,
+      "status": "passed",
+      "logSHA256": "1919d388031ef73d30291e4df4be1e52ad9139b691865d8ad2230ea42a12fa7d",
+      "command": "pnpm --dir web exec vitest run test/connectivity/peer-budget.test.ts test/connectivity/peer-slot-lifecycle.test.ts test/connectivity/v2-receiver-policy.test.ts test/connectivity/v2-peer-recovery.test.ts test/connectivity/peer-tab-admission.test.ts test/content/admission-wake.test.ts test/content/range-window.test.ts test/content/block-buffers.test.ts test/content/receive-window.test.ts test/content/v2-lane-set.test.ts"
+    },
+    "go": {
+      "command": "GOWORK=off GOTOOLCHAIN=local go test -short ./core/transfer/lanes ./connectivity/v2peer/peerset ./core/liveshare ./engine",
+      "packages": 4,
+      "status": "passed",
+      "logSHA256": "e7d6d64066fdef59fcaca44039bc8200b2b25836c198affbba217d25b8be47d6"
+    },
+    "syntax": "Python AST and node --check passed",
+    "hygiene": {
+      "command": "make hygiene",
+      "exitCode": 0,
+      "status": "passed",
+      "logSHA256": "cf4c9ce771bf0ac6874c0762fa2ac5499646b48bcbff9631703f9f58a8f3cc25"
+    }
+  },
+  "cleanup-audit.json": {
+    "kernel": "7.0.0-38-generic",
+    "machine": "x86_64",
+    "profilesChecked": 57,
+    "remainingProfiles": [],
+    "matchingProcesses": []
+  },
+  "local-process-audit.json": [],
+  "privateEvidenceSHA256": {
+    "results.json": "a78363ca933ed06b77827f77f91bd4f0477c021f0364891da835fca4c6b03173",
+    "profiles.json": "3b8fbf6006bf9a5d097126aab9631d08d65f66cdef14cd674313a80811c272ff"
+  }
+}

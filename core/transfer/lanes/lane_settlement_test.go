@@ -50,7 +50,7 @@ func settlementByLane(t *testing.T, summaries []SettlementSummary) map[Identity]
 
 func TestUsefulContentActivityDoesNotRequireObservationQueue(t *testing.T) {
 	now := time.Unix(70, 0)
-	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](83), Now: func() time.Time { return now }, RaceWidth: 1})
+	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](83), Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,8 @@ func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 	sessionID := transferID[protocolsession.ProtocolSessionID](81)
 	collector := &laneSettlementCollector{}
 	lanes, err := New(Config{
-		ProtocolSessionID:             sessionID,
-		RaceWidth:                     1,
+		ProtocolSessionID: sessionID,
+
 		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
@@ -145,8 +145,8 @@ func TestLaneSettlementCreditsReassignmentOnlyAfterNextRoundAdmission(t *testing
 	demand := validDemand(t, descriptor, 0)
 	collector := &laneSettlementCollector{}
 	lanes, err := New(Config{
-		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](82),
-		RaceWidth:                     1,
+		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](82),
+
 		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {
@@ -204,8 +204,8 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	demand := validDemand(t, descriptor, 0)
 	collector := &laneSettlementCollector{}
 	lanes, err := New(Config{
-		ProtocolSessionID:             transferID[protocolsession.ProtocolSessionID](84),
-		RaceWidth:                     2,
+		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](84),
+
 		SettlementObservationCapacity: DefaultSettlementObservationCapacity,
 	})
 	if err != nil {

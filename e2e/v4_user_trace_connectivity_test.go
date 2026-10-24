@@ -38,8 +38,16 @@ func v4NativeConnectivitySchema() *v4TraceObjectSchema {
 		v4TraceFields(v4TraceString, "previous_network_generation_id"),
 	)
 	admission := v4TraceSchema(
+		v4TraceOptionalFields(v4TraceString, "purpose"),
 		v4TraceFields(v4TraceDecimal, "active", "queued"),
 		v4TraceFields(v4TraceString, "wait_ms", "starts_remaining", "stun_remaining", "active_time_remaining_ms"),
+		v4TraceObjectField("socket_capacity", v4TraceSchema(v4TraceFields(v4TraceDecimal, "used", "reserved", "requested", "limit")), true),
+	)
+	parallelism := v4TraceSchema(
+		v4TraceFields(v4TraceString, "action", "reason"),
+		v4TraceFields(v4TraceDecimal, "paths", "optional_paths", "queued_bytes", "unfinished_bytes", "capacity_waiting_bytes", "network_waiting_bytes", "in_flight_bytes", "remaining_bytes"),
+		v4TraceFields(v4TraceBool, "remaining_known"),
+		v4TraceFields(v4TraceRate, "useful_rate", "output_rate", "baseline_useful_rate", "baseline_output_rate"),
 	)
 	socket := v4TraceSchema(
 		v4TraceFields(v4TraceString, "local_endpoint", "stun_server", "duration_ms", "result"),
@@ -54,6 +62,7 @@ func v4NativeConnectivitySchema() *v4TraceObjectSchema {
 		v4TraceObjectField("reachability", reachability, true),
 		v4TraceObjectField("lifecycle", lifecycle, true),
 		v4TraceObjectField("admission", admission, true),
+		v4TraceObjectField("parallelism", parallelism, true),
 		v4TraceObjectField("socket", socket, true),
 		v4TraceObjectField("diagnostic", diagnostic, true),
 	)

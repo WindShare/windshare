@@ -81,7 +81,7 @@ describe('admission wake ownership', () => {
     let available = false
     let admitted = false
     const pending = request({ ...work(1, controller.signal), capacity: {
-      lastServed: () => 0, available: () => available, acquire: () => () => {},
+      lastServed: () => 0, readiness: () => available ? 'ready' : 'consumer', acquire: () => () => {},
     } }).then(value => { admitted = true; return value })
     await flush()
     expect(vi.getTimerCount()).toBe(0)
@@ -140,7 +140,7 @@ describe('admission wake ownership', () => {
   it('coalesces reentrant admission wakes into one pending deadline', async () => {
     const { request, admissions, controller } = fixture()
     const first = request({ ...work(0, controller.signal), capacity: {
-      lastServed: () => 0, available: () => true,
+      lastServed: () => 0, readiness: () => 'ready',
       acquire: () => { admissions.wake(); return () => {} },
     } })
     const pending = request(work(1, controller.signal)).catch(() => undefined)

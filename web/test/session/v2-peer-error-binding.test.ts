@@ -31,10 +31,10 @@ it('verifies Go signed peer errors and confines delayed terminal codes after tom
   let now = 0
   let terminal = false
   const router = new V2OperationRouter(() => { terminal = true }, () => now)
-  router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([3, path, attempt, 1n, vector.peerSlot, 'v=0'])).close()
+  router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([4, path, attempt, 1n, vector.peerSlot, 0, 'v=0'])).close()
   now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
   const currentId = new Uint8Array(16).fill(70)
-  const current = router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([3, path, currentId, 2n, vector.peerSlot, 'v=0']))
+  const current = router.create(V2_MESSAGE_KIND.peerOffer, encodeV2Body([4, path, currentId, 2n, vector.peerSlot, 0, 'v=0']))
   const message = await authenticated(item)
   expect(decodeV2OperationErrorControl(message.body)).toMatchObject({
    code: item.code, peerAttempt: { peerPathId: path, attemptId: attempt, attemptSequence: 1n, peerSlot: vector.peerSlot },

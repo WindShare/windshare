@@ -33,10 +33,12 @@ type laneState struct {
 }
 
 type Set struct {
+	remaining          map[*remainingObserver]struct{}
+	outputBytes        uint64
 	contentRoutePolicy ContentRoutePolicy
 	sessionID          protocolsession.ProtocolSessionID
-	raceWidth          int
 	now                func() time.Time
+	after              func(time.Duration) <-chan time.Time
 
 	lifecycle context.Context
 	stop      context.CancelFunc
@@ -50,9 +52,11 @@ type Set struct {
 	closed             bool
 	lanes              map[uint32]*laneState
 	contentSuspensions map[uint32]*contentLaneSuspensionPolicy
-	cursor             uint64
+
 	exploration        lanescheduling.Exploration
 	admissionChanged   chan struct{}
+	pending            []*pendingAdmission
+	allocationSequence uint64
 	settlementProducer observationstream.Producer[SettlementSummary]
 	settlementConsumer observationstream.Consumer[SettlementSummary]
 	finalSettlements   []*laneState
@@ -67,14 +71,11 @@ func New(config Config) (*Set, error) {
 	if config.ProtocolSessionID.IsZero() {
 		return nil, errors.New("lane set requires a protocol session identity")
 	}
-	if config.RaceWidth == 0 {
-		config.RaceWidth = DefaultRaceWidth
-	}
-	if config.RaceWidth < 1 || config.RaceWidth > MaxLogicalLanes {
-		return nil, errors.New("lane race width is outside the logical lane limit")
-	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	if config.After == nil {
+		config.After = time.After
 	}
 	var settlementProducer observationstream.Producer[SettlementSummary]
 	var settlementConsumer observationstream.Consumer[SettlementSummary]
@@ -90,7 +91,7 @@ func New(config Config) (*Set, error) {
 	lifecycle, stop := context.WithCancel(context.Background())
 	return &Set{
 		contentRoutePolicy: config.ContentRoutePolicy,
-		sessionID:          config.ProtocolSessionID, raceWidth: config.RaceWidth, now: config.Now,
+		sessionID:          config.ProtocolSessionID, now: config.Now, after: config.After,
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
 		contentSuspensions: make(map[uint32]*contentLaneSuspensionPolicy),
 		admissionChanged:   make(chan struct{}),

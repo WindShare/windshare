@@ -42,7 +42,7 @@ func TestDownloadMetricsSurviveGenerationAndLaneEpochReplacement(t *testing.T) {
 	metrics := downloadmetrics.New("download", now, false)
 	descriptor := transferDescriptor(t, 2)
 	makeLanes := func(generation byte) *transferlanes.Set {
-		lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](generation), RaceWidth: 1, Now: now})
+		lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](generation), Now: now})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestDownloadMetricsSurviveGenerationAndLaneEpochReplacement(t *testing.T) {
 func TestDownloadMetricsDoNotAttributeRetiredLaneCompletion(t *testing.T) {
 	metrics := downloadmetrics.New("download", nil, false)
 	descriptor := transferDescriptor(t, 1)
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](92), RaceWidth: 1})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](92)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestDownloadMetricsDoNotAttributeRetiredLaneCompletion(t *testing.T) {
 func TestDownloadMetricsExcludeResumeAlignmentOverreadAndPreserveCacheProvenance(t *testing.T) {
 	descriptor := transferDescriptor(t, 2)
 	metrics := downloadmetrics.New("download", nil, false)
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](93), RaceWidth: 1})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](93)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestDownloadMetricsExcludeOutputWaitWithActivePrefetch(t *testing.T) {
 	now := func() time.Time { return time.UnixMilli(tick.Load()) }
 	metrics := downloadmetrics.New("download-output", now, false)
 	descriptor := transferDescriptor(t, 2)
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](99), RaceWidth: 1})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](99)})
 	if err != nil {
 		t.Fatal(err)
 	}

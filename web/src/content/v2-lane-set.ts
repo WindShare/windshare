@@ -106,7 +106,12 @@ interface PendingLane {
   unsubscribeRoutes?: () => void
 }
 
+export type RemainingWorkObservation = () => { bytes: number; known: boolean }
+
 export class V2LaneSet {
+  readonly #remaining = new Map<RemainingWorkObservation, number>()
+  #authenticatedBytes = 0
+  #outputBytes = 0
   readonly #lanes = new Map<number, LaneState>()
   readonly #useful = new Map<number, { bytes: number; admittedAt: number; lastAt: number | undefined }>()
   readonly #waiters = new Set<PendingLane>()
@@ -160,6 +165,41 @@ export class V2LaneSet {
 
   get size(): number {
     return this.#lanes.size
+  }
+
+  recordOutput(bytes: number): void { this.#outputBytes += bytes }
+
+  observeRemainingWork(snapshot: RemainingWorkObservation): () => void {
+    this.#remaining.set(snapshot, (this.#remaining.get(snapshot) ?? 0) + 1)
+    let closed = false
+    return () => {
+      if (closed) return
+      closed = true
+      const count = this.#remaining.get(snapshot)! - 1
+      if (count === 0) this.#remaining.delete(snapshot)
+      else this.#remaining.set(snapshot, count)
+    }
+  }
+
+  schedulingDemand(): {
+    queuedBytes: number; queuedBlocks: number; networkWaitingBytes: number; capacityWaitingBytes: number;
+    inFlightBytes: number; unfinishedBytes: number; usefulBytes: number; outputBytes: number;
+    remainingBytes: number; remainingKnown: boolean;
+  } {
+    const demand = this.#admissions.demand()
+    let inFlightBytes = 0, unfinishedBytes = 0
+    for (const lane of this.#lanes.values()) {
+      inFlightBytes += lane.performance.pendingBytes
+      unfinishedBytes += lane.receive.unfinishedBytes
+    }
+    let remainingBytes = 0, remainingKnown = this.#remaining.size > 0
+    for (const snapshot of this.#remaining.keys()) {
+      const work = snapshot()
+      remainingBytes += work.bytes
+      remainingKnown &&= work.known && Number.isSafeInteger(remainingBytes)
+    }
+    return { ...demand, inFlightBytes, unfinishedBytes, usefulBytes: this.#authenticatedBytes, outputBytes: this.#outputBytes,
+      remainingBytes: this.#remaining.size > 0 ? remainingBytes : demand.queuedBytes + inFlightBytes, remainingKnown }
   }
 
   laneIds(): readonly number[] {
@@ -328,6 +368,7 @@ export class V2LaneSet {
   }
 
   #observeFetched(state: LaneState, observation: V2BlockDispatchObservation, record: V2BlockRecord): void {
+	this.#authenticatedBytes += record.data.byteLength
     // A retired route may finish valid content, but cannot attest which replacement path carried it.
     if (this.#lanes.get(state.lane.id) !== state) return
     deliveredRoutes.set(record, state.route)

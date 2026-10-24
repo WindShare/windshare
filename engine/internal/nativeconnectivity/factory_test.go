@@ -94,7 +94,7 @@ func TestDataChannelAdapterPreservesObservationOwnershipAndFailure(t *testing.T)
 			t.Fatal(err)
 		}
 		var observed *wsrtc.Channel
-		adapter := channelAdapter(diagnostics, func(channel *wsrtc.Channel) { observed = channel })
+		adapter := channelAdapter(diagnostics, func(channel *wsrtc.Channel) { observed = channel }, wsrtc.NewSendCapacity())
 		wrapped, err := adapter.WrapDataChannel(raw)
 		if err != nil {
 			_ = peer.Close()
@@ -108,7 +108,7 @@ func TestDataChannelAdapterPreservesObservationOwnershipAndFailure(t *testing.T)
 		observed.CompleteObservations()
 	}
 	called := false
-	if _, err := channelAdapter(true, func(*wsrtc.Channel) { called = true }).WrapDataChannel(nil); err == nil || called {
+	if _, err := channelAdapter(true, func(*wsrtc.Channel) { called = true }, wsrtc.NewSendCapacity()).WrapDataChannel(nil); err == nil || called {
 		t.Fatalf("failed channel published ownership: %v, %v", err, called)
 	}
 }

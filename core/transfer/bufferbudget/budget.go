@@ -95,6 +95,18 @@ func (a *Account[K]) Reserve(bytes uint64) (Reservation, bool) {
 	return a.reserveLocked(bytes)
 }
 
+// Available includes reclaimable cache, but never output or authentication
+// holdings. Selection can inspect pressure without allocating and rolling back.
+func (a *Account[K]) Available(bytes uint64) bool {
+	b := a.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	local, global := a.ledger.Snapshot(), b.ledger.Snapshot()
+	return bytes > 0 && !local.Closed && !global.Closed &&
+		bytes <= a.ledger.Limit()-local.Used+a.cache.bytes &&
+		bytes <= b.ledger.Limit()-global.Used+b.cache.bytes
+}
+
 func (a *Account[K]) reserveLocked(bytes uint64) (Reservation, bool) {
 	b := a.budget
 	if bytes == 0 || bytes > a.ledger.Limit() || a.ledger.Snapshot().Closed || b.ledger.Snapshot().Closed {

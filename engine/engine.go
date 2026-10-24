@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/eventproject"
@@ -54,22 +55,23 @@ type managedTask interface {
 // other Engines in the process. Once Close begins,
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
-	relaySetup    *relaysetup.Service
-	turn          *turnruntime.Runtime
-	mu            sync.Mutex
-	config        Config
-	random        *lockedReader
-	identity      string
-	sequence      uint64
-	revisions     *revisioncapacity.ProcessOwner
-	catalog       *catalog.BudgetAccount
-	cache         *contentflow.ProcessCacheBudget
-	connectivity  *nativeconnectivity.Capacity
-	tasks         map[task.ID]managedTask
-	closing       bool
-	closed        chan struct{}
-	closeErr      error
-	cleanupErrors []error
+	relaySetup      *relaysetup.Service
+	turn            *turnruntime.Runtime
+	mu              sync.Mutex
+	config          Config
+	random          *lockedReader
+	identity        string
+	sequence        uint64
+	revisions       *revisioncapacity.ProcessOwner
+	catalog         *catalog.BudgetAccount
+	cache           *contentflow.ProcessCacheBudget
+	receiveCapacity *liveshare.ReceiveCapacity
+	connectivity    *nativeconnectivity.Capacity
+	tasks           map[task.ID]managedTask
+	closing         bool
+	closed          chan struct{}
+	closeErr        error
+	cleanupErrors   []error
 }
 
 func New(config Config) (*Engine, error) {
@@ -117,9 +119,15 @@ func New(config Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	receiveCapacity, err := liveshare.NewReceiveCapacity(config.ReceiveCapacity)
+	if err != nil {
+		_ = revisions.Close()
+		return nil, err
+	}
 	random := &lockedReader{reader: config.Random}
 	var identity [applicationIdentityBytes]byte
 	if _, err = io.ReadFull(random, identity[:]); err != nil {
+		_ = receiveCapacity.Close()
 		_ = revisions.Close()
 		return nil, fmt.Errorf("create engine identity: %w", err)
 	}
@@ -129,6 +137,7 @@ func New(config Config) (*Engine, error) {
 	}
 	turn, err := turnruntime.New(config.TURN, turnDependencies)
 	if err != nil {
+		_ = receiveCapacity.Close()
 		_ = revisions.Close()
 		return nil, err
 	}
@@ -140,7 +149,8 @@ func New(config Config) (*Engine, error) {
 		relaySetup: relaysetup.New(config.RelaySetup),
 		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
-		tasks: make(map[task.ID]managedTask), closed: make(chan struct{}),
+		receiveCapacity: receiveCapacity,
+		tasks:           make(map[task.ID]managedTask), closed: make(chan struct{}),
 	}, nil
 }
 
@@ -225,6 +235,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 		<-current.Done()
 	}
 	capacityErr := engine.revisions.Close()
+	receiveCapacityErr := engine.receiveCapacity.Close()
 	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()
@@ -233,7 +244,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes, cause: cacheErr}
 	}
 	engine.mu.Lock()
-	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, turnErr, retainedErr)...)
+	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, receiveCapacityErr, turnErr, retainedErr)...)
 	engine.cleanupErrors = nil
 	engine.mu.Unlock()
 	close(engine.closed)

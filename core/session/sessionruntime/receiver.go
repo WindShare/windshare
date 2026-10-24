@@ -75,7 +75,6 @@ type ReceiverFactoryConfig struct {
 	RuntimeResources                  ReceiverRuntimeResourceSource
 	OperationLimits                   protocolsession.OperationLimits
 	RouterLimits                      protocolsession.RouterLimits
-	LaneRaceWidth                     int
 	Now                               func() time.Time
 	After                             func(time.Duration) <-chan time.Time
 	ProtocolObservations              observationstream.Producer[ProtocolObservation]
@@ -102,7 +101,6 @@ type ReceiverFactory struct {
 	resources                         ReceiverRuntimeResourceSource
 	operationLimits                   protocolsession.OperationLimits
 	routerLimits                      protocolsession.RouterLimits
-	raceWidth                         int
 	now                               func() time.Time
 	after                             func(time.Duration) <-chan time.Time
 	protocolObservations              observationstream.Producer[ProtocolObservation]
@@ -159,7 +157,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		catalogProgress:    config.CatalogProgress, semantic: semantic, peerSemantics: config.PeerControls,
 		resources:       config.RuntimeResources,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits,
-		raceWidth: config.LaneRaceWidth, now: config.Now, after: config.After,
+		now: config.Now, after: config.After,
 		protocolObservations:              config.ProtocolObservations,
 		laneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,
 		closeDone:                         make(chan struct{}),
@@ -253,7 +251,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 		identity: initialLane, rpc: rpc, assembler: assembler, opener: factory.opener, revisions: revisions,
 	}
 	lanes, err := transferlanes.New(transferlanes.Config{
-		ProtocolSessionID: keys.ProtocolSessionID(), RaceWidth: factory.raceWidth, Now: factory.now,
+		ProtocolSessionID: keys.ProtocolSessionID(), Now: factory.now, After: factory.after,
 		SettlementObservationCapacity: factory.laneSettlementObservationCapacity,
 		ContentRoutePolicy:            factory.contentRoutePolicy,
 	})

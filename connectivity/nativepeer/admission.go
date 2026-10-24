@@ -5,6 +5,8 @@ import (
 	"errors"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/socketauthority"
+	"github.com/windshare/windshare/connectivity/v2signal"
+	"slices"
 	"sync"
 	"time"
 )
@@ -37,6 +39,7 @@ const (
 )
 
 type AdmissionFacts struct {
+	Purpose                        v2signal.ConnectionPurpose
 	Kind                           AdmissionKind
 	At                             time.Time
 	Wait                           time.Duration
@@ -55,6 +58,7 @@ type AdmissionClock struct {
 // Admission belongs to the application; every native owner shares its allowances.
 // Replacing a connection manager must not replenish the application's rate budget.
 type Admission struct {
+	optional                      []*optionalHolding
 	mu                            sync.Mutex
 	clock                         AdmissionClock
 	updated                       time.Time
@@ -64,6 +68,7 @@ type Admission struct {
 	timer                         func()
 }
 type admissionWaiter struct {
+	purpose   v2signal.ConnectionPurpose
 	relayed   bool
 	owner     *NativePeerConnectivity
 	endpoints int
@@ -93,14 +98,14 @@ func NewAdmission(clock AdmissionClock) *Admission {
 	return &Admission{clock: clock, updated: clock.Now(), starts: StartsPerWindow, endpoints: STUNEndpointsPerWindow, activeTime: float64(ActiveTimePerWindow)}
 }
 
-func (g *Admission) acquireRoute(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool) (*attemptPermit, error) {
+func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool, purpose v2signal.ConnectionPurpose) (*attemptPermit, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	if endpoints < 0 || endpoints > MaximumSTUNEndpointsPerAttempt {
 		return nil, ErrAdmission
 	}
-	w := &admissionWaiter{owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe, relayed: relayed}
+	w := &admissionWaiter{purpose: purpose, owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe, relayed: relayed}
 	g.mu.Lock()
 	if len(g.queue) >= MaximumQueuedAttempts {
 		g.emitLocked(w, AdmissionRejected)
@@ -116,6 +121,12 @@ func (g *Admission) acquireRoute(ctx context.Context, owner *NativePeerConnectiv
 		changed := sockets.Changes()
 		g.mu.Lock()
 		g.drainLocked()
+		if purpose == v2signal.ThroughputExploration && w.permit == nil && w.err == nil {
+			g.queue = slices.DeleteFunc(g.queue, func(entry *admissionWaiter) bool { return entry == w })
+			g.emitLocked(w, AdmissionRejected)
+			g.mu.Unlock()
+			return nil, ErrAdmission
+		}
 		g.mu.Unlock()
 		select {
 		case <-w.ready:
@@ -127,29 +138,25 @@ func (g *Admission) acquireRoute(ctx context.Context, owner *NativePeerConnectiv
 		case <-changed:
 			continue
 		case <-ctx.Done():
-			g.mu.Lock()
-			if w.permit == nil {
-				for i, item := range g.queue {
-					if item == w {
-						g.queue = append(g.queue[:i], g.queue[i+1:]...)
-						break
-					}
-				}
-				g.emitLocked(w, AdmissionRejected)
-				g.drainLocked()
-			}
-			permit := w.permit
-			capacity := w.capacity
-			g.mu.Unlock()
-			if permit != nil {
-				permit.release()
-			}
-			if capacity != nil && errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
-				return nil, errors.Join(capacity, context.Cause(ctx))
-			}
-			return nil, context.Cause(ctx)
+			return nil, g.cancelWaiter(w, context.Cause(ctx))
 		}
 	}
+}
+
+func (g *Admission) cancelWaiter(w *admissionWaiter, cause error) error {
+	g.mu.Lock()
+	if w.permit == nil {
+		g.queue = slices.DeleteFunc(g.queue, func(item *admissionWaiter) bool { return item == w })
+		g.emitLocked(w, AdmissionRejected)
+		g.drainLocked()
+	}
+	permit, capacity := w.permit, w.capacity
+	g.mu.Unlock()
+	permit.release()
+	if capacity != nil && errors.Is(cause, context.DeadlineExceeded) {
+		return errors.Join(capacity, cause)
+	}
+	return cause
 }
 func (g *Admission) refillLocked() {
 	now := g.clock.Now()
@@ -167,6 +174,7 @@ func (g *Admission) drainLocked() {
 		g.timer = nil
 	}
 	g.refillLocked()
+	slices.SortStableFunc(g.queue, admissionPriority)
 	var nextRefill time.Duration
 	defer func() {
 		if nextRefill > 0 && len(g.queue) > 0 {
@@ -176,7 +184,7 @@ func (g *Admission) drainLocked() {
 	for index := 0; index < len(g.queue) && g.active < ConcurrentAttempts; {
 		w := g.queue[index]
 		reserve := 0
-		if w.relayed {
+		if w.relayed || w.purpose == v2signal.ThroughputExploration {
 			// Leave one whole opportunity for ordinary direct recovery, including
 			// its start token and time budget, even during TURN replacement.
 			reserve = DirectAttemptReserve
@@ -199,12 +207,8 @@ func (g *Admission) drainLocked() {
 			}
 			return
 		}
-		reservation, err := w.sockets.Reserve()
-		if capacity, ok := errors.AsType[*socketauthority.CapacityError](err); ok {
-			if w.capacity == nil || *w.capacity != *capacity {
-				w.capacity = capacity
-				g.emitLocked(w, AdmissionQueued)
-			}
+		reservation, err := g.reserveSocketsLocked(w)
+		if _, blocked := errors.AsType[*socketauthority.CapacityError](err); blocked {
 			// One sender's full socket pool cannot stall independent receivers.
 			index++
 			continue
@@ -228,6 +232,26 @@ func (g *Admission) drainLocked() {
 		index = 0
 	}
 }
+
+func (g *Admission) reserveSocketsLocked(w *admissionWaiter) (*socketauthority.Reservation, error) {
+	var reservation *socketauthority.Reservation
+	var err error
+	if w.purpose == v2signal.ThroughputExploration {
+		reservation, err = w.sockets.ReserveOptional()
+	} else {
+		reservation, err = w.sockets.Reserve()
+	}
+	if capacity, blocked := errors.AsType[*socketauthority.CapacityError](err); blocked {
+		if w.purpose != v2signal.ThroughputExploration {
+			g.yieldOptionalLocked(w.sockets)
+		}
+		if w.capacity == nil || *w.capacity != *capacity {
+			w.capacity = capacity
+			g.emitLocked(w, AdmissionQueued)
+		}
+	}
+	return reservation, err
+}
 func (g *Admission) rotateOwnerLocked(owner *NativePeerConnectivity) {
 	// Rotate all remaining requests from this owner behind the other owners.
 	var same, other []*admissionWaiter
@@ -240,6 +264,19 @@ func (g *Admission) rotateOwnerLocked(owner *NativePeerConnectivity) {
 	}
 	other = append(other, same...)
 	g.queue = other
+	// Fairness rotates owners within each purpose class. It cannot promote an
+	// optional attempt ahead of a queued initial connection or recovery.
+	slices.SortStableFunc(g.queue, admissionPriority)
+}
+
+func admissionPriority(a, b *admissionWaiter) int {
+	if (a.purpose == v2signal.ThroughputExploration) == (b.purpose == v2signal.ThroughputExploration) {
+		return 0
+	}
+	if a.purpose == v2signal.ThroughputExploration {
+		return 1
+	}
+	return -1
 }
 func (p *attemptPermit) release() {
 	if p == nil {
@@ -270,6 +307,6 @@ func (g *Admission) emitLocked(w *admissionWaiter, kind AdmissionKind) {
 			snapshot := *w.capacity
 			capacity = &snapshot
 		}
-		w.observe(AdmissionFacts{Kind: kind, At: g.clock.Now(), Wait: wait, Active: g.active, Queued: len(g.queue), StartsRemaining: g.starts, STUNRemaining: g.endpoints, ActiveTimeRemaining: time.Duration(g.activeTime), SocketCapacity: capacity})
+		w.observe(AdmissionFacts{Purpose: w.purpose, Kind: kind, At: g.clock.Now(), Wait: wait, Active: g.active, Queued: len(g.queue), StartsRemaining: g.starts, STUNRemaining: g.endpoints, ActiveTimeRemaining: time.Duration(g.activeTime), SocketCapacity: capacity})
 	}
 }

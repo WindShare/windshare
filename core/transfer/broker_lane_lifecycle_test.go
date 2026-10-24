@@ -27,7 +27,6 @@ func TestLaneSetCloseJoinsBlockedHedgeAfterFastWinner(t *testing.T) {
 
 		lanes, err := transferlanes.New(transferlanes.Config{
 			ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](91),
-			RaceWidth:         2,
 		})
 		if err != nil {
 			t.Fatal(err)

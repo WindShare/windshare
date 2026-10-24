@@ -388,6 +388,13 @@ func (writer *SessionWriter) sendSealed(
 	if class == classTerminal {
 		return writer.channel.SendTerminal(ctx, frame)
 	}
+	if class == classControl {
+		if channel, ok := writer.channel.(interface {
+			SendControl(context.Context, framechannel.Frame) error
+		}); ok {
+			return channel.SendControl(ctx, frame)
+		}
+	}
 	return writer.channel.Send(ctx, frame)
 }
 

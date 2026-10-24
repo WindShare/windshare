@@ -75,6 +75,10 @@ func NewAssembler(sessionID protocolsession.ProtocolSessionID, hierarchy Reassem
 }
 
 func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error) {
+	return a.acceptAuthenticated(plaintext, nil)
+}
+
+func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapacity) (AssemblyResult, error) {
 	fragment, err := DecodeAuthenticatedFragment(plaintext)
 	if err != nil {
 		return AssemblyResult{}, err
@@ -83,6 +87,19 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	defer a.mu.Unlock()
 	if a.closed {
 		return AssemblyResult{}, ErrAssemblerClosed
+	}
+	if capacity != nil {
+		if capacity.released {
+			return AssemblyResult{}, ErrAssemblerClosed
+		}
+		if uint64(fragment.TotalLength) > capacity.reservation.bytes {
+			return AssemblyResult{}, ErrReassemblyBudget
+		}
+		if capacity.operation.IsZero() {
+			capacity.operation, capacity.record = fragment.OperationID, fragment.RecordID
+		} else if capacity.operation != fragment.OperationID || capacity.record != fragment.RecordID {
+			return AssemblyResult{}, ErrFragmentConflict
+		}
 	}
 	now := a.now()
 	a.pruneLocked(now)
@@ -99,33 +116,9 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 	if _, complete := a.recordTombstones[key]; complete {
 		return AssemblyResult{Status: FragmentTombstoned, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
 	}
-	state := a.records[key]
-	if state == nil {
-		// Every live assembly reserves the tombstone slot it will need when it
-		// completes. This keeps late-arrival protection bounded without evicting
-		// a still-live 30-second tombstone under hostile churn.
-		if len(a.records)+len(a.recordTombstones)+len(a.operationTombs) >= MaxFragmentTombstones {
-			return AssemblyResult{}, ErrReassemblyBudget
-		}
-		operationBytes := a.operationBytes[fragment.OperationID]
-		if uint64(fragment.TotalLength) > MaxOperationReassemblyBytes-operationBytes {
-			_ = a.terminateOperationLocked(fragment.OperationID, now)
-			return AssemblyResult{}, ErrReassemblyBudget
-		}
-		reservation, reserveErr := reserveReassembly(a.hierarchy, uint64(fragment.TotalLength))
-		if reserveErr != nil {
-			return AssemblyResult{}, reserveErr
-		}
-		state = &assemblyState{
-			count: fragment.Count, total: fragment.TotalLength,
-			buffer: make([]byte, fragment.TotalLength), received: make([]bool, fragment.Count),
-			progressDeadline: now.Add(FragmentInactivityTimeout), reservation: reservation,
-		}
-		a.records[key] = state
-		a.operationBytes[fragment.OperationID] = operationBytes + uint64(fragment.TotalLength)
-	} else if state.count != fragment.Count || state.total != fragment.TotalLength {
-		_ = a.terminateOperationLocked(fragment.OperationID, now)
-		return AssemblyResult{}, ErrFragmentConflict
+	state, err := a.assemblyLocked(key, fragment, capacity, now)
+	if err != nil {
+		return AssemblyResult{}, err
 	}
 	offset := uint64(fragment.Index) * MaxFragmentPayloadBytes
 	end := offset + uint64(len(fragment.Payload))
@@ -153,10 +146,50 @@ func (a *Assembler) AcceptAuthenticated(plaintext []byte) (AssemblyResult, error
 		_ = a.terminateOperationLocked(fragment.OperationID, now)
 		return AssemblyResult{}, ErrRecordDigest
 	}
-	object := slices.Clone(state.buffer)
+	// The completed buffer leaves the assembly table. A pre-dispatch reservation
+	// remains with its physical attempt through authentication and cancellation.
+	object := state.buffer
 	a.releaseRecordLocked(key)
 	a.recordTombstones[key] = now.Add(FragmentTombstone)
 	return AssemblyResult{Status: RecordComplete, OperationID: fragment.OperationID, RecordID: fragment.RecordID, Object: object, ReceivedBytes: uint64(len(fragment.Payload))}, nil
+}
+
+func (a *Assembler) assemblyLocked(key assemblyKey, fragment Fragment, capacity *AssemblyCapacity, now time.Time) (*assemblyState, error) {
+	state := a.records[key]
+	if state != nil {
+		if state.count != fragment.Count || state.total != fragment.TotalLength {
+			_ = a.terminateOperationLocked(fragment.OperationID, now)
+			return nil, ErrFragmentConflict
+		}
+		return state, nil
+	}
+	// Every live assembly reserves the tombstone slot it will need when it
+	// completes. This keeps late-arrival protection bounded without evicting
+	// a still-live 30-second tombstone under hostile churn.
+	if len(a.records)+len(a.recordTombstones)+len(a.operationTombs) >= MaxFragmentTombstones {
+		return nil, ErrReassemblyBudget
+	}
+	operationBytes := a.operationBytes[fragment.OperationID]
+	if uint64(fragment.TotalLength) > MaxOperationReassemblyBytes-operationBytes {
+		_ = a.terminateOperationLocked(fragment.OperationID, now)
+		return nil, ErrReassemblyBudget
+	}
+	var reservation *reassemblyReservation
+	if capacity == nil {
+		var reserveErr error
+		reservation, reserveErr = reserveReassembly(a.hierarchy, uint64(fragment.TotalLength))
+		if reserveErr != nil {
+			return nil, reserveErr
+		}
+	}
+	state = &assemblyState{
+		count: fragment.Count, total: fragment.TotalLength,
+		buffer: make([]byte, fragment.TotalLength), received: make([]bool, fragment.Count),
+		progressDeadline: now.Add(FragmentInactivityTimeout), reservation: reservation,
+	}
+	a.records[key] = state
+	a.operationBytes[fragment.OperationID] = operationBytes + uint64(fragment.TotalLength)
+	return state, nil
 }
 
 func (a *Assembler) CancelOperation(operationID protocolsession.OperationID) error {

@@ -76,7 +76,7 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 		clear(capability.ReadSecret)
 		clear(registration.SenderPrivateKey)
 	})
-	preparedReceiver, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
+	preparedReceiver, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t),
 		Capability:       capability,
 		DescriptorObject: registration.Descriptor,
 		PeerControls: v2signal.ReceiverControlValidator{

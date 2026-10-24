@@ -69,6 +69,7 @@ export interface V2BlockSlice {
 }
 
 export interface V2BlockRangeReaderOptions {
+  readonly remainingWork?: import('./v2-lane-set').RemainingWorkObservation
   /** New sealed-object traffic, including retries; never output or resume coverage. */
   readonly onReceive?: (objectBytes: number) => void
   readonly signal?: AbortSignal
@@ -248,6 +249,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         ...(options.onReceive === undefined ? {} : { onReceive: options.onReceive }),
       }),
     })
+    const stopObservation = options.remainingWork === undefined ? undefined : this.#lanes.observeRemainingWork(options.remainingWork)
     try {
       for (let emitted = plan.blocks.first; emitted < plan.blocks.end; emitted += 1n) {
         const record = await window.next(controller.signal)
@@ -263,8 +265,10 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         // Advancing the iterator acknowledges that the sink no longer owns this
         // independent copy. Network receipt alone cannot release output bytes.
         window.consumed()
+        this.#lanes.recordOutput(length)
       }
     } finally {
+      stopObservation?.()
       unlink()
       controller.abort(new DOMException('Range consumer left', 'AbortError'))
       await window.close()
@@ -330,15 +334,21 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     const load: SharedBlockLoad = {
       capacity: {
         lastServed: () => Math.min(...[...consumers].map(consumer => consumer.lastServed())),
-        available: () => this.#activeLoads < attemptLimit() &&
-          buffers.available(load.priority) &&
-          (load.releaseConsumer !== undefined || [...consumers].some(consumer => !consumer.signal?.aborted && consumer.canDispatch())),
+        readiness: () => {
+          if (!buffers.available(load.priority)) return 'consumer'
+          if (load.releaseConsumer === undefined) {
+            const readiness = [...consumers].filter(consumer => !consumer.signal?.aborted)
+              .map(consumer => consumer.readiness())
+            if (!readiness.includes('ready')) return readiness.includes('network') ? 'network' : 'consumer'
+          }
+          return this.#activeLoads < attemptLimit() ? 'ready' : 'network'
+        },
         acquire: () => {
           if (this.#activeLoads >= attemptLimit() ||
             !buffers.available(load.priority)) return undefined
           const hadConsumer = load.releaseConsumer !== undefined
           if (!hadConsumer) {
-            const consumer = [...consumers].find(candidate => !candidate.signal?.aborted && candidate.canDispatch())
+            const consumer = [...consumers].find(candidate => !candidate.signal?.aborted && candidate.readiness() === 'ready')
             if (consumer === undefined) return undefined
             load.releaseConsumer = consumer.acquire()
             if (load.releaseConsumer === undefined) return undefined

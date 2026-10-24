@@ -14,7 +14,7 @@ import (
 func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing.T) {
 	for _, policy := range []ContentRoutePolicy{ContentRouteAll, ContentRouteDirectOnly, ContentRouteRelayOnly} {
 		t.Run(fmt.Sprintf("policy=%d", policy), func(t *testing.T) {
-			lanes, err := New(Config{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: policy, RaceWidth: 1})
+			lanes, err := New(Config{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: policy})
 			if err != nil {
 				t.Fatal(err)
 			}
