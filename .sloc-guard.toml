@@ -102,7 +102,7 @@ max_files = 20
 max_dirs = 25
 warn_dirs_at = 15
 warn_files_at = 13
-reason = "Go and Rust source: keep modules small and flat"
+reason = "Go and Rust source: keep modules small"
 
 # E2E fixtures include reusable process/service infrastructure, so their modules
 # retain the same file-count limit as production code and validation scripts.
@@ -112,7 +112,7 @@ max_files = 20
 max_dirs = 25
 warn_dirs_at = 15
 warn_files_at = 13
-reason = "Web source and reusable test infrastructure: keep modules small and flat"
+reason = "Web source and reusable test infrastructure: keep modules small"
 
 # Scenario-local fixtures, harnesses, and probes grow with test coverage. Their
 # directory file count does not measure module sprawl; content limits still apply.
