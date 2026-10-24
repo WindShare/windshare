@@ -58,39 +58,10 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	return a.reportReceiveTask(result, observation)
 }
 
-type capabilityInputErrorKind uint8
-
-const (
-	capabilityInputInvalid capabilityInputErrorKind = iota + 1
-	capabilityInputKeyMissing
-)
-
 const (
 	invalidCapabilityDiagnostic    = "invalid capability link"
 	missingCapabilityKeyDiagnostic = "key string is required"
 )
-
-type capabilityInputError struct {
-	kind  capabilityInputErrorKind
-	cause error
-}
-
-func (failure *capabilityInputError) Error() string {
-	if failure.kind == capabilityInputKeyMissing {
-		return missingCapabilityKeyDiagnostic
-	}
-	return invalidCapabilityDiagnostic
-}
-
-func (failure *capabilityInputError) Unwrap() error { return failure.cause }
-
-func invalidCapabilityInput(cause error) error {
-	return &capabilityInputError{kind: capabilityInputInvalid, cause: cause}
-}
-
-func missingCapabilityKey(cause error) error {
-	return &capabilityInputError{kind: capabilityInputKeyMissing, cause: cause}
-}
 
 func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 	flags := a.newFlagSet("get")
@@ -132,16 +103,11 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 	}
 	capability, err := a.resolveLink(positional[0], *keyString)
 	if err != nil {
-		var failure *capabilityInputError
-		if errors.As(err, &failure) && failure.kind == capabilityInputKeyMissing {
-			a.writeCompleteLine("get: key string is required")
+		if errors.Is(err, engine.ErrReceiveKeyRequired) {
+			a.writeCompleteLine("get: %s", missingCapabilityKeyDiagnostic)
 		} else {
-			a.writeCompleteLine("get: invalid capability link")
+			a.writeCompleteLine("get: %s", invalidCapabilityDiagnostic)
 		}
-		return getRequest{}, requestParseUsageFailure
-	}
-	if capability.Suite != link.SuiteSenderAuthenticated {
-		a.writeCompleteLine("get: this build accepts only suite-02 links")
 		return getRequest{}, requestParseUsageFailure
 	}
 	return getRequest{
@@ -151,32 +117,20 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 }
 
 func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
-	if keyString != "" {
-		capability, err := link.Merge(raw, keyString)
-		if err != nil {
-			return link.Link{}, invalidCapabilityInput(err)
-		}
-		return capability, nil
-	}
-	capability, err := link.Parse(raw)
-	if !errors.Is(err, link.ErrMissingFragment) {
-		if err != nil {
-			return link.Link{}, invalidCapabilityInput(err)
-		}
-		return capability, nil
+	input := engine.ReceiveLinkInput{URL: raw, SeparateKey: keyString}
+	capability, err := engine.ResolveReceiveLink(input)
+	if !errors.Is(err, engine.ErrReceiveKeyRequired) {
+		return capability, err
 	}
 	_, _ = fmt.Fprint(a.stderrWriter(), "Link has no key; enter the key string: ")
 	line, readErr := bufio.NewReader(a.Stdin).ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
 		if readErr != nil {
-			return link.Link{}, missingCapabilityKey(fmt.Errorf("read key string: %w", readErr))
+			return link.Link{}, fmt.Errorf("%w: read key string: %w", engine.ErrReceiveKeyRequired, readErr)
 		}
-		return link.Link{}, missingCapabilityKey(errors.New("no key string was provided"))
+		return link.Link{}, engine.ErrReceiveKeyRequired
 	}
-	capability, err = link.Merge(raw, line)
-	if err != nil {
-		return link.Link{}, invalidCapabilityInput(err)
-	}
-	return capability, nil
+	input.SeparateKey = line
+	return engine.ResolveReceiveLink(input)
 }

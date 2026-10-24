@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -160,6 +161,37 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Run("complete link does not request input", func(t *testing.T) {
+		input := strings.NewReader("unused")
+		app, _, stderr := newSemanticTestApp(input)
+		resolved, err := app.resolveLink(bare+"#"+keyString, "")
+		if err != nil || !reflect.DeepEqual(resolved, capability) {
+			t.Fatalf("resolved=%+v error=%v", resolved, err)
+		}
+		if input.Len() != len("unused") || stderr.Len() != 0 {
+			t.Fatal("complete link prompted or consumed input")
+		}
+	})
+
+	t.Run("conflicting key does not request replacement input", func(t *testing.T) {
+		conflicting := capability
+		conflicting.ReadSecret = append([]byte(nil), capability.ReadSecret...)
+		conflicting.ReadSecret[0] ^= 0xff
+		otherKey, err := conflicting.KeyString()
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := strings.NewReader(keyString + "\n")
+		app, _, stderr := newSemanticTestApp(input)
+		_, err = app.resolveLink(bare+"#"+keyString, otherKey)
+		if !errors.Is(err, engine.ErrReceiveKeyConflict) {
+			t.Fatalf("error=%v", err)
+		}
+		if input.Len() != len(keyString)+1 || stderr.Len() != 0 {
+			t.Fatal("conflicting key prompted or consumed input")
+		}
+	})
+
 	t.Run("explicit key", func(t *testing.T) {
 		app, _, stderr := newSemanticTestApp(strings.NewReader("ignored"))
 		resolved, err := app.resolveLink(bare, keyString)
@@ -190,7 +222,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 
 	t.Run("empty entered key", func(t *testing.T) {
 		app, _, _ := newSemanticTestApp(strings.NewReader("\n"))
-		if _, err := app.resolveLink(bare, ""); err == nil || err.Error() != missingCapabilityKeyDiagnostic {
+		if _, err := app.resolveLink(bare, ""); !errors.Is(err, engine.ErrReceiveKeyRequired) {
 			t.Fatalf("error=%v", err)
 		}
 	})
@@ -211,8 +243,7 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 			t.Fatalf("stderr=%q", stderr.String())
 		}
 		_, err := app.resolveLink("not-a-link", "")
-		var typed *capabilityInputError
-		if !errors.As(err, &typed) || typed.kind != capabilityInputInvalid {
+		if !errors.Is(err, engine.ErrInvalidReceiveLink) {
 			t.Fatalf("error=%#v", err)
 		}
 	})

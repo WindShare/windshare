@@ -2,6 +2,10 @@
 // aggregate resource limits while each task owns its connections, selected
 // source or output, cancellation, and final settlement.
 //
+// ResolveReceiveLink accepts a URL and optional separate key before task admission.
+// Clients handle ErrReceiveKeyRequired with their own input UI; link validation
+// and key-conflict decisions are shared by native and RPC callers.
+//
 // StartShare and StartReceive return tasks whose bounded observation streams
 // never control execution. Wait returns the durable final result only after the
 // workflow has stopped producers and released resources. Cancel stops one task;
