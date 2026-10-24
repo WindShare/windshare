@@ -14,7 +14,7 @@ import (
 
 // The controller borrows scheduling observations; it never creates private
 // work queues or retries an optional path with the essential recovery budget.
-func (s *ReceiverSession) runThroughput(lanes *transferlanes.Set) {
+func (s *ReceiverSession) runContentControl(lanes *transferlanes.Set) {
 	var controller throughput.Controller
 	for {
 		timer := s.owner.config.Clock.NewTimer(throughput.SampleInterval)
@@ -24,6 +24,7 @@ func (s *ReceiverSession) runThroughput(lanes *transferlanes.Set) {
 			return
 		case <-timer.C():
 		}
+		s.recoverContentDemand(lanes)
 		demand := lanes.SchedulingDemand()
 		s.mu.Lock()
 		if s.closed || s.ctx.Err() != nil {

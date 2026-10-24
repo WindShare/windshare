@@ -273,7 +273,7 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 	}
 }
 
-func TestTransferJobCombinesBeginAndTerminalReleaseFailures(t *testing.T) {
+func TestTransferJobSeparatesOutputFailureFromRevisionCleanup(t *testing.T) {
 	share := transferID[catalog.ShareInstance](210)
 	output := newJobOutput(share)
 	output.beginErr = outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("file create"))
@@ -282,11 +282,11 @@ func TestTransferJobCombinesBeginAndTerminalReleaseFailures(t *testing.T) {
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
 
 	result := job.Run(context.Background())
-	if result.Outcome != DirectTreeOutcomePaused ||
-		result.TerminationFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+	if result.Outcome != DirectTreeOutcomePartial || result.TerminationCause != nil ||
 		len(result.Files) != 1 || result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
-		result.Files[0].LeaseReleaseFault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
-		output.pauseCalls != 1 || output.completeCalls != 0 {
+		len(result.RevisionCleanupFailures) != 1 ||
+		result.RevisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+		output.pauseCalls != 0 || output.completeCalls != 1 {
 		t.Fatalf("begin/release result=%+v", result)
 	}
 }

@@ -1,0 +1,7 @@
+[
+  {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi"},
+  {"endpoint":"lan","direction":"reverse","sizeMiB":256,"windowsInterface":"WiFi"},
+  {"endpoint":"lan","direction":"reverse","sizeMiB":256,"windowsInterface":"WiFi"},
+  {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi"},
+  {"endpoint":"lan","direction":"local","topology":"linux-cross","sameHost":true,"sender":"lan","sizeMiB":256,"lanInterface":"wlp0s20f3"}
+]

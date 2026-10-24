@@ -26,7 +26,7 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 			for range 12 {
 				path.handleNativeChange(ctx, nativepeer.Change{Remote: true, MappingReady: true, RemoteNetworkChanged: true})
 			}
-			if path.consumeRestart() {
+			if path.consumeRestart() != nil {
 				t.Fatal("remote notice interrupted live ICE")
 			}
 		}

@@ -604,7 +604,7 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 		TransferAdmissionStarted, TransferAdmissionCompleted, TransferDiscoveryStarted,
 		TransferGenerationCommitted, TransferDirectoryAdmitted, TransferDirectoryFinalized,
 		TransferFileEnqueued, TransferFileStarted, TransferFileAdmitted, TransferFileFirstWrite,
-		TransferFileSettled, TransferDiscoveryCompleted, TransferJobSettled,
+		TransferFileSettled, TransferRevisionCleanupSettled, TransferDiscoveryCompleted, TransferJobSettled,
 	}
 	if len(traces) != len(wantStages) {
 		t.Fatalf("traces=%+v", traces)

@@ -1,0 +1,63 @@
+[
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "topology": "linux-cross",
+    "sender": "public"
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64,
+    "topology": "linux-cross",
+    "sender": "lan"
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "fault": "drop-large-once",
+    "deadlineSeconds": 70
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "fault": "drop-large-once",
+    "deadlineSeconds": 70
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "fault": "drop-large-once",
+    "connectivity": "auto",
+    "deadlineSeconds": 70
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  }
+]

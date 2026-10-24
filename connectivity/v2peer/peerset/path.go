@@ -32,6 +32,7 @@ type attemptOpportunity struct {
 
 func (p *Path) run() {
 	defer close(p.done)
+	defer p.supply.Close()
 	maintenance, cancel := context.WithCancel(p.ctx)
 	done := make(chan struct{})
 	go p.maintainResources(maintenance, done)
@@ -306,7 +307,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	defer func() { cancel(); <-watchdogDone }()
 	attempt, err := start(child, binding)
 	if child.Err() != nil {
-		closeAttempt(attempt)
+		p.closeAttempt(attempt)
 		return Result{Cause: context.DeadlineExceeded, Stopped: p.ctx.Err() != nil}, false
 	}
 	if err != nil || attempt == nil {
@@ -314,14 +315,19 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	}
 	p.mu.Lock()
 	p.current = attempt
+	p.binding = binding
 	p.mu.Unlock()
 	p.resourceDemand(false)
 	defer func() {
-		_ = attempt.Close()
 		p.mu.Lock()
+		// Revoke recovery authority before joining the old provider. A late
+		// observation during Close must not restart the next generation.
 		p.current = nil
+		p.binding = v2signal.Binding{}
 		p.lane = sessionruntime.LaneIdentity{}
+		p.restartCause = nil
 		p.mu.Unlock()
+		p.closeAttempt(attempt)
 	}()
 	ready := attempt.Ready()
 	deadline := (<-chan time.Time)(deadlineExpired)
@@ -338,8 +344,8 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 		case <-p.ctx.Done():
 			return Result{Stopped: true}, admitted
 		case <-p.wake:
-			if p.consumeRestart() {
-				return Result{Cause: errors.New("network generation replaced")}, admitted
+			if cause := p.consumeRestart(); cause != nil {
+				return Result{Cause: cause}, admitted
 			}
 			switch p.currentDemand() {
 			case NoDemand:
@@ -383,8 +389,18 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	}
 }
 
-func closeAttempt(attempt Attempt) {
-	if attempt != nil {
-		_ = attempt.Close()
+func (p *Path) closeAttempt(attempt Attempt) {
+	if attempt == nil {
+		return
+	}
+	initial, admitted := attempt.Lane()
+	if admitted && p.config.Content != nil {
+		p.config.Content.DetachLane(initial)
+	}
+	_ = attempt.Close()
+	// Close joins attachment as well as negotiation. Admission can win the
+	// cancellation race after the first snapshot, transferring a final lane.
+	if final, attached := attempt.Lane(); attached && (!admitted || final != initial) && p.config.Content != nil {
+		p.config.Content.DetachLane(final)
 	}
 }

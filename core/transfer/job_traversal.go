@@ -216,32 +216,34 @@ func newNodeIdentityLedger(limit int) (nodeIdentityLedger, error) {
 }
 
 type jobRun struct {
-	job                        *TransferJob
-	output                     DirectTreeSession
-	directoryAdmissionScope    DirectoryAdmissionScope
-	failureMu                  sync.Mutex
-	directories                []DirectoryJobFailure
-	files                      []FileJobFailure
-	failurePathBytes           uint64
-	omittedDirectories         uint64
-	omittedFiles               uint64
-	sourceDriftFailure         *failurestate.Failure
-	terminationCause           *failurestate.Failure
-	settlementFailure          *failurestate.Failure
-	settlement                 DirectTreeSettlement
-	admitted                   bool
-	needsAttention             bool
-	selectionObservation       SelectionObservationV1
-	selectionResolutionFailure error
-	matchedPaths               map[string]struct{}
-	matchedDirectories         map[catalog.DirectoryID]struct{}
-	matchedFiles               map[catalog.FileID]struct{}
-	unmatchedOpaqueTargets     int
-	activeDirectories          map[catalog.DirectoryID]struct{}
-	discoveryFailed            bool
-	discoveryFault             fault.Fault
-	catalogTraversalComplete   bool
-	rootGeneration             catalog.DirectoryGeneration
+	job                            *TransferJob
+	output                         DirectTreeSession
+	directoryAdmissionScope        DirectoryAdmissionScope
+	failureMu                      sync.Mutex
+	directories                    []DirectoryJobFailure
+	files                          []FileJobFailure
+	revisionCleanupFailures        []RevisionCleanupFailure
+	omittedRevisionCleanupFailures uint64
+	failurePathBytes               uint64
+	omittedDirectories             uint64
+	omittedFiles                   uint64
+	sourceDriftFailure             *failurestate.Failure
+	terminationCause               *failurestate.Failure
+	settlementFailure              *failurestate.Failure
+	settlement                     DirectTreeSettlement
+	admitted                       bool
+	needsAttention                 bool
+	selectionObservation           SelectionObservationV1
+	selectionResolutionFailure     error
+	matchedPaths                   map[string]struct{}
+	matchedDirectories             map[catalog.DirectoryID]struct{}
+	matchedFiles                   map[catalog.FileID]struct{}
+	unmatchedOpaqueTargets         int
+	activeDirectories              map[catalog.DirectoryID]struct{}
+	discoveryFailed                bool
+	discoveryFault                 fault.Fault
+	catalogTraversalComplete       bool
+	rootGeneration                 catalog.DirectoryGeneration
 	// This sender-authenticity ledger covers every discovered catalog node,
 	// including nodes never admitted to output. Destination-mutation claims belong
 	// exclusively behind DirectTreeSession and must never be merged into this ledger.
@@ -465,14 +467,10 @@ func (r *jobRun) recordFileFailure(failure FileJobFailure) {
 	if !failure.SettlementFault.Valid() {
 		failure.SettlementFault = failurestate.FaultOf(failure.SettlementFailure)
 	}
-	if !failure.LeaseReleaseFault.Valid() {
-		failure.LeaseReleaseFault = failurestate.FaultOf(failure.LeaseReleaseFailure)
-	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
 	failure.Cause = failurestate.Diagnostic(failure.Cause)
 	failure.SettlementFailure = failurestate.Diagnostic(failure.SettlementFailure)
-	failure.LeaseReleaseFailure = failurestate.Diagnostic(failure.LeaseReleaseFailure)
 	if r.reserveFailurePath(failure.Path) {
 		r.files = append(r.files, failure)
 	} else if r.omittedFiles != ^uint64(0) {
@@ -482,7 +480,7 @@ func (r *jobRun) recordFileFailure(failure FileJobFailure) {
 }
 
 func (r *jobRun) reserveFailurePath(path string) bool {
-	if len(r.directories)+len(r.files) >= MaximumRetainedJobFailures {
+	if len(r.directories)+len(r.files)+len(r.revisionCleanupFailures) >= MaximumRetainedJobFailures {
 		return false
 	}
 	pathBytes := uint64(len(path))

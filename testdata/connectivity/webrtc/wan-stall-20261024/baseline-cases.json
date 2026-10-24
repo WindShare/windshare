@@ -1,0 +1,54 @@
+[
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 256
+  },
+  {
+    "endpoint": "lan",
+    "direction": "forward",
+    "sizeMiB": 256
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "connectivity": "auto"
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "connectivity": "relay-only"
+  }
+]

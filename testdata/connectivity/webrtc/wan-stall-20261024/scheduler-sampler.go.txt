@@ -1,0 +1,61 @@
+package lanes
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+var researchSetID atomic.Uint64
+
+func researchObserveSet(s *Set) {
+	if os.Getenv("WS_WAN_DIAGNOSTICS") == "0" {
+		return
+	}
+	id := researchSetID.Add(1)
+	go func() {
+		output, err := os.Create(fmt.Sprintf("research-scheduler-%s-%d.ndjson", os.Args[1], id))
+		if err != nil {
+			return
+		}
+		defer output.Close()
+		encoder := json.NewEncoder(output)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.lifecycle.Done():
+				return
+			case <-ticker.C:
+			}
+			demand := s.SchedulingDemand()
+			s.mu.Lock()
+			pending := make([]map[string]any, 0, len(s.pending))
+			for _, p := range s.pending {
+				attempted := make([]Identity, 0, len(p.attempted))
+				for identity := range p.attempted {
+					attempted = append(attempted, identity)
+				}
+				pending = append(pending, map[string]any{
+					"block": p.request.Demand.Index, "attempted": attempted,
+					"blocked": p.blocked, "done": p.done, "ageMs": time.Since(p.queuedAt).Milliseconds(),
+				})
+			}
+			lanes := make([]map[string]any, 0, len(s.lanes))
+			for _, lane := range s.lanes {
+				lanes = append(lanes, map[string]any{
+					"identity": lane.identity, "route": lane.route,
+					"allowed":   s.contentRoutePolicy.Allows(lane.route),
+					"suspended": s.contentSuspensions[lane.identity.ID] != nil,
+					"inflight":  lane.inflight, "pendingBytes": lane.performance.PendingBytes,
+					"unfinished": lane.receive.UnfinishedBytes(), "failures": lane.failures,
+					"available": lane.receive.Available(), "usefulBytes": lane.usefulBytes,
+				})
+			}
+			s.mu.Unlock()
+			_ = encoder.Encode(map[string]any{"timeMs": time.Now().UnixMilli(), "demand": demand, "pending": pending, "lanes": lanes})
+		}
+	}()
+}

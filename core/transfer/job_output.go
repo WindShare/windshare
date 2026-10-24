@@ -30,11 +30,10 @@ func (r *jobRun) settleFailedFile(
 	settlement, rawSettlementErr := transaction.Retire(settleContext, retireReason)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	failure := FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
-		LeaseReleaseFailure: releaseErr,
 	}
 	valid := settlementErr == nil && settlement.matchesBinding(transaction.Binding()) &&
 		(settlement.Kind() == FileFailed || settlement.Kind() == FileItemBlocked)
@@ -47,13 +46,10 @@ func (r *jobRun) settleFailedFile(
 		failure.SettlementFailure = settlementErr
 	}
 	r.recordFileFailure(failure)
-	r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
+	r.traceFileSettlement(plan, settlement, settlementErr)
 	if settlementErr != nil {
 		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
 		return cause
-	}
-	if isJobTerminalError(releaseErr) {
-		return releaseErr
 	}
 	return nil
 }
@@ -75,7 +71,7 @@ func (r *jobRun) pauseFailedFile(
 	settlement, rawSettlementErr := transaction.Pause(settleContext, reason)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
 		settlement.Kind() != FilePaused && settlement.Kind() != FileItemBlocked && settlement.Kind() != FileFailed) {
 		settlementErr = outputContractFault(nil)
@@ -86,15 +82,11 @@ func (r *jobRun) pauseFailedFile(
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
-		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
+	r.traceFileSettlement(plan, settlement, settlementErr)
 	if settlementErr != nil {
 		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
-		return failurestate.Join(cause, releaseErr, settlementErr)
-	}
-	if isJobTerminalError(releaseErr) {
-		return failurestate.Join(cause, releaseErr)
+		return failurestate.Join(cause, settlementErr)
 	}
 	// A verified file-local pause restores the output session invariant. Keeping
 	// the original fault in JobResult is sufficient; returning it here would
@@ -102,7 +94,7 @@ func (r *jobRun) pauseFailedFile(
 	if isolatedOutputFailure || isolatedSourceFailure {
 		return nil
 	}
-	return failurestate.Join(cause, releaseErr)
+	return cause
 }
 
 func (r *jobRun) commitTransferredFile(
@@ -123,17 +115,16 @@ func (r *jobRun) commitTransferredFile(
 	cancel()
 	if settlementErr != nil {
 		r.settlementFailure = failurestate.Merge(r.settlementFailure, settlementErr)
-		releaseErr := r.releaseRevision(ctx, opened.Handle)
+		r.releaseRevision(ctx, plan, opened.Handle)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: settlementErr, Settlement: settlement, SettlementFailure: settlementErr,
-			LeaseReleaseFailure: releaseErr,
 		})
-		r.traceFileSettlement(plan, settlement, failurestate.Join(settlementErr, releaseErr))
+		r.traceFileSettlement(plan, settlement, settlementErr)
 		// Commit is the transaction's terminal publication operation. Once its
 		// settlement cannot be proven, no sibling or directory finalization may
 		// advance the same job namespace before PauseTree takes ownership.
-		return failurestate.Join(settlementErr, releaseErr)
+		return settlementErr
 	}
 	if !settlement.matchesCommittedOutput(transaction.Binding(), r.output.Capabilities()) || settlement.Kind() != FilePublished &&
 		settlement.Kind() != FileCollision && settlement.Kind() != FileItemBlocked {
@@ -142,30 +133,20 @@ func (r *jobRun) commitTransferredFile(
 	if err := r.acceptTransactionFileSettlement(plan, transaction, progress, settlement); err != nil {
 		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
 	}
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
-	r.traceFileSettlement(plan, settlement, releaseErr)
+	r.traceFileSettlement(plan, settlement, nil)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	switch settlement.Kind() {
 	case FilePublished:
-		if releaseErr != nil {
-			r.recordFileFailure(FileJobFailure{
-				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease, Cause: releaseErr,
-			})
-		}
 	case FileCollision:
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
 		})
 	case FileItemBlocked:
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
 		})
-	}
-	if isJobTerminalError(releaseErr) {
-		return releaseErr
 	}
 	return nil
 }
@@ -177,23 +158,36 @@ func (r *jobRun) rejectCommitSettlement(
 	settlement FileSettlement,
 ) error {
 	contractFailure := outputContractFault(nil)
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	r.settlementFailure = failurestate.Merge(r.settlementFailure, contractFailure)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: contractFailure,
 		Settlement: settlement, SettlementFailure: contractFailure,
-		LeaseReleaseFailure: releaseErr,
 	})
-	r.traceFileSettlement(plan, settlement, failurestate.Join(contractFailure, releaseErr))
-	return failurestate.Join(contractFailure, releaseErr)
+	r.traceFileSettlement(plan, settlement, contractFailure)
+	return contractFailure
 }
 
-func (r *jobRun) releaseRevision(ctx context.Context, lease RevisionHandle) error {
+func (r *jobRun) releaseRevision(ctx context.Context, plan plannedFile, lease RevisionHandle) {
 	settleContext, cancel := r.job.newSettlementContext(ctx)
 	rawReleaseErr := r.job.revisions.ReleaseRevision(settleContext, lease)
 	err := normalizeSourceBoundary(settleContext, rawReleaseErr)
 	cancel()
-	return err
+	// Remote cleanup cannot retract an accepted output settlement. Its bounded
+	// ownership and diagnostic result remain visible without inventing file failure.
+	if err != nil {
+		r.failureMu.Lock()
+		if r.reserveFailurePath(plan.failurePath()) {
+			r.revisionCleanupFailures = append(r.revisionCleanupFailures, RevisionCleanupFailure{
+				FileID: plan.file, Path: plan.failurePath(), Cause: failurestate.Diagnostic(err),
+				Fault: failurestate.FaultOf(err), Interruption: closedInterruption(err),
+			})
+		} else if r.omittedRevisionCleanupFailures != ^uint64(0) {
+			r.omittedRevisionCleanupFailures++
+		}
+		r.failureMu.Unlock()
+	}
+	r.traceFileLifecycle(TransferRevisionCleanupSettled, plan, err)
 }
 
 func (r *jobRun) finish(ctx context.Context) JobResult {
@@ -219,16 +213,18 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 		SelectionObservation: r.selectionObservation,
 		Progress:             progress, Directories: directories, Files: files,
 		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
-		SelectionResolutionFailure: r.selectionResolutionFailure,
-		SourceDriftFailure:         failurestate.Err(sourceDriftFailure),
-		SourceDriftFault:           sourceDriftFailure.Fault(),
-		SucceededFiles:             progress.PublishedFiles,
-		TerminationCause:           failurestate.Err(r.terminationCause),
-		TerminationFault:           r.terminationCause.Fault(),
-		TerminationInterruption:    closedLifecycleInterruption(r.terminationCause),
-		SettlementFailure:          failurestate.Err(r.settlementFailure),
-		SettlementFault:            r.settlementFailure.Fault(),
-		SettlementInterruption:     closedLifecycleInterruption(r.settlementFailure),
+		RevisionCleanupFailures:        r.revisionCleanupFailures,
+		OmittedRevisionCleanupFailures: r.omittedRevisionCleanupFailures,
+		SelectionResolutionFailure:     r.selectionResolutionFailure,
+		SourceDriftFailure:             failurestate.Err(sourceDriftFailure),
+		SourceDriftFault:               sourceDriftFailure.Fault(),
+		SucceededFiles:                 progress.PublishedFiles,
+		TerminationCause:               failurestate.Err(r.terminationCause),
+		TerminationFault:               r.terminationCause.Fault(),
+		TerminationInterruption:        closedLifecycleInterruption(r.terminationCause),
+		SettlementFailure:              failurestate.Err(r.settlementFailure),
+		SettlementFault:                r.settlementFailure.Fault(),
+		SettlementInterruption:         closedLifecycleInterruption(r.settlementFailure),
 	}
 }
 

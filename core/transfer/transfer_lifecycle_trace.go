@@ -27,6 +27,7 @@ const (
 	TransferFileAdmitted
 	TransferFileFirstWrite
 	TransferFileSettled
+	TransferRevisionCleanupSettled
 	TransferCapacityRetryScheduled
 	TransferCapacityRetryReady
 	TransferCapacityRetrySucceeded

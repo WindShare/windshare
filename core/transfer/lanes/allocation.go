@@ -118,7 +118,7 @@ func comparePending(left, right *pendingAdmission, now time.Time) int {
 func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
 	remaining := MaxDemandAttempts - len(pending.attempted)
 	ordered, suspended := s.eligiblePendingLanesLocked(pending)
-	if remaining <= 0 || (len(ordered) == 0 && !suspended && (len(s.lanes) != 0 || len(pending.attempted) != 0)) {
+	if remaining <= 0 || (len(ordered) == 0 && !suspended) {
 		pending.exhausted, pending.done = true, true
 		return
 	}
@@ -171,12 +171,22 @@ func priorityRank(priority WorkPriority) int {
 
 func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission) ([]*laneState, bool) {
 	ordered := make([]*laneState, 0, len(s.lanes))
-	suspended := false
+	suspended := len(s.routeSupplies) != 0
+	for laneID, hold := range s.contentSuspensions {
+		if s.lanes[laneID] == nil && s.contentRoutePolicy.Allows(hold.route) {
+			suspended = true
+		}
+	}
 	for _, state := range s.lanes {
 		if _, tried := pending.attempted[state.identity]; tried {
 			continue
 		}
-		if s.contentSuspensions[state.identity.ID] != nil || !s.contentRoutePolicy.Allows(state.route) {
+		// Policy exclusion is immutable for this session and cannot promise
+		// future availability. Only an explicit hold or route owner can do that.
+		if !s.contentRoutePolicy.Allows(state.route) {
+			continue
+		}
+		if s.contentSuspensions[state.identity.ID] != nil {
 			suspended = true
 			continue
 		}

@@ -67,12 +67,22 @@ func (n *NativePeerConnectivity) ObserveTURN(event turnpath.Event) {
 	})
 }
 
+func (n *NativePeerConnectivity) ObserveContentRecovery(subject Subject, direct bool) {
+	if n == nil {
+		return
+	}
+	subject.Side = n.config.Side
+	n.producer.TryPublish(Observation{Subject: subject,
+		Lifecycle: &LifecycleFacts{Kind: ContentRecoveryRequested, At: n.config.Now(), Content: true, Direct: direct}})
+}
+
 type LifecycleKind string
 
 const (
-	DemandChanged  LifecycleKind = "demand_changed"
-	NetworkChanged LifecycleKind = "network_changed"
-	PathClosed     LifecycleKind = "path_closed"
+	DemandChanged            LifecycleKind = "demand_changed"
+	NetworkChanged           LifecycleKind = "network_changed"
+	PathClosed               LifecycleKind = "path_closed"
+	ContentRecoveryRequested LifecycleKind = "content_recovery_requested"
 )
 
 type LifecycleFacts struct {

@@ -25,7 +25,8 @@ _ID_FIELDS = {
     "id", "localcandidateid", "remotecandidateid", "transportid",
     "selectedcandidatepairid", "protocolsessionid", "peerpathid", "peerattemptid",
     "networkgenerationid", "iceprofileid", "fileid", "shareid", "keyid",
-    "pathid", "trialpath",
+    "pathid", "trialpath", "runtimerunid", "receiveoperationid", "transferjobid",
+    "operationid", "outputsessionid",
 }
 _WINDOWS_PATH = re.compile(r"(?i)(?:file:///)?[a-z]:[\\/][^\r\n\t\"'<>|]*")
 _HOME_PATH = re.compile(r"/(?:home|Users)/[^\r\n\t\"'<>| ]+")
@@ -46,6 +47,7 @@ class PublicEvidence:
     def __init__(self):
         self.identifiers = {}
         self.private_terms = set()
+        self.next_identifier = 1
 
     def text(self, value):
         for term in sorted(self.private_terms, key=len, reverse=True):
@@ -77,9 +79,15 @@ class PublicEvidence:
             elif isinstance(item, list):
                 for child in item:
                     collect(child, key)
-            elif isinstance(item, str) and _field(key) in {"endpoint", "hostname", "username", "password", "secret", "sharedsecret"}:
-                if len(item) > 4 and not item.startswith("<") and item not in {"public", "cloudflare", "isolated-pion"}:
-                    self.private_terms.add(item)
+            elif isinstance(item, str):
+                # Re-exporting public evidence must preserve existing aliases and
+                # keep newly covered identifiers out of their namespace.
+                if re.fullmatch(r"identifier-\d+", item):
+                    self.identifiers[item] = item
+                    self.next_identifier = max(self.next_identifier, int(item.split("-")[1]) + 1)
+                if _field(key) in {"endpoint", "hostname", "username", "password", "secret", "sharedsecret"}:
+                    if len(item) > 4 and not item.startswith("<") and item not in {"public", "cloudflare", "isolated-pion"}:
+                        self.private_terms.add(item)
         collect(value)
         return self._project(value)
 
@@ -94,7 +102,10 @@ class PublicEvidence:
         if field in _ID_FIELDS and isinstance(value, str):
             # Stable aliases retain correlations within this artifact without
             # exposing the protocol's original random identifiers.
-            return self.identifiers.setdefault(value, "identifier-" + str(len(self.identifiers) + 1))
+            if value not in self.identifiers:
+                self.identifiers[value] = "identifier-" + str(self.next_identifier)
+                self.next_identifier += 1
+            return self.identifiers[value]
         if field == "endpoint" and isinstance(value, str):
             return value if value in {"lan", "public", "cloudflare", "isolated-pion"} else "<endpoint>"
         if isinstance(value, dict):

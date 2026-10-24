@@ -18,6 +18,7 @@ func (s *Set) Stop() {
 		}
 		clear(s.lanes)
 		clear(s.contentSuspensions)
+		clear(s.routeSupplies)
 		s.notifyLaneAvailabilityLocked()
 	}
 	s.mu.Unlock()

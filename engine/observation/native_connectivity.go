@@ -321,7 +321,7 @@ func validateNativeFactKinds(spec NativeConnectivitySpec) error {
 		return EventContractError{Field: "candidate_pair", Rule: "kind_matches_facts"}
 	}
 	isReachability := slices.Contains([]string{"gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked"}, spec.Kind)
-	isLifecycle := slices.Contains([]string{"demand_changed", "network_changed", "path_closed"}, spec.Kind)
+	isLifecycle := slices.Contains([]string{"demand_changed", "network_changed", "path_closed", "content_recovery_requested"}, spec.Kind)
 	if isReachability != (spec.Reachability != nil) || isLifecycle != (spec.Lifecycle != nil) {
 		return EventContractError{Field: "reachability_lifecycle", Rule: "kind_matches_facts"}
 	}
@@ -354,7 +354,7 @@ func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
 	if spec.TURN != nil && spec.TURN.Cleanup.Valid() && spec.Kind == spec.TURN.Cleanup.EventKind() {
 		return true
 	}
-	return slices.Contains([]string{"turn_path", "turn_binding", "turn_route", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
+	return slices.Contains([]string{"turn_path", "turn_binding", "turn_route", "provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "content_recovery_requested", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
 }
 
 func validateNativeTURN(spec NativeConnectivitySpec) error {

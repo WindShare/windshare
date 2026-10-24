@@ -1,0 +1,9 @@
+[
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":0},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":4194304},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":4194304},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":0},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":0},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":4194304},
+ {"endpoint":"lan","direction":"forward","sizeMiB":256,"windowsInterface":"WiFi","lanInterface":"wlp0s20f3","receiveBufferBytes":262144}
+]

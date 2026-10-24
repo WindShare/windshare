@@ -78,7 +78,7 @@ func TestAuthenticatedPathControlsWakeOnlyTheExistingOwnerAndRevokeRetires(t *te
 		if kind != protocolsession.PeerPathRevoke && !path.consumeMapping() {
 			t.Fatal("missing reserved-attempt signal")
 		}
-		if kind == protocolsession.PeerPathRevoke && !path.consumeRestart() {
+		if kind == protocolsession.PeerPathRevoke && path.consumeRestart() == nil {
 			t.Fatal("missing generation retirement")
 		}
 	}

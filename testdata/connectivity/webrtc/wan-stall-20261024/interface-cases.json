@@ -1,0 +1,102 @@
+[
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "Mihomo",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "Mihomo",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "Mihomo",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64,
+    "windowsInterface": "Mihomo",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "deadlineSeconds": 90
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sender": "public",
+    "topology": "linux-cross",
+    "sizeMiB": 64,
+    "lanInterface": "wlp0s20f3"
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sender": "lan",
+    "topology": "linux-cross",
+    "sizeMiB": 64,
+    "lanInterface": "wlp0s20f3"
+  },
+  {
+    "endpoint": "public",
+    "direction": "forward",
+    "sender": "lan",
+    "topology": "linux-cross",
+    "sizeMiB": 64,
+    "lanInterface": "wlp0s20f3"
+  },
+  {
+    "endpoint": "public",
+    "direction": "reverse",
+    "sender": "public",
+    "topology": "linux-cross",
+    "sizeMiB": 64,
+    "lanInterface": "wlp0s20f3"
+  },
+  {
+    "endpoint": "lan",
+    "direction": "forward",
+    "sizeMiB": 256,
+    "windowsInterface": "WiFi"
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 256,
+    "windowsInterface": "WiFi"
+  }
+]

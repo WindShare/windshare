@@ -79,7 +79,6 @@ const (
 	FailureRevisionIdentity
 	FailureBlockTransfer
 	FailureFileOutput
-	FailureLeaseRelease
 )
 
 type DirectoryJobFailure struct {
@@ -93,16 +92,24 @@ type DirectoryJobFailure struct {
 }
 
 type FileJobFailure struct {
-	FileID              catalog.FileID
-	Path                string
-	Stage               FailureStage
-	Cause               error
-	Fault               fault.Fault
-	Settlement          FileSettlement
-	SettlementFailure   error
-	SettlementFault     fault.Fault
-	LeaseReleaseFailure error
-	LeaseReleaseFault   fault.Fault
+	FileID            catalog.FileID
+	Path              string
+	Stage             FailureStage
+	Cause             error
+	Fault             fault.Fault
+	Settlement        FileSettlement
+	SettlementFailure error
+	SettlementFault   fault.Fault
+}
+
+// RevisionCleanupFailure is diagnostic ownership settlement, independent of
+// whether authenticated file content was published successfully.
+type RevisionCleanupFailure struct {
+	FileID       catalog.FileID
+	Path         string
+	Cause        error
+	Fault        fault.Fault
+	Interruption TransferInterruption
 }
 
 // FileOutcomeSummary is the bounded command-facing projection of typed file
@@ -136,12 +143,14 @@ type JobResult struct {
 	ReceiveIntent       ReceiveIntent
 	// SelectionObservation is diagnostic only and is normally zero for the
 	// incremental path, which does not materialize a whole-tree snapshot.
-	SelectionObservation     SelectionObservationV1
-	Progress                 ReceiveProgressSnapshot
-	Directories              []DirectoryJobFailure
-	Files                    []FileJobFailure
-	OmittedDirectoryFailures uint64
-	OmittedFileFailures      uint64
+	SelectionObservation           SelectionObservationV1
+	Progress                       ReceiveProgressSnapshot
+	Directories                    []DirectoryJobFailure
+	Files                          []FileJobFailure
+	OmittedDirectoryFailures       uint64
+	OmittedFileFailures            uint64
+	RevisionCleanupFailures        []RevisionCleanupFailure
+	OmittedRevisionCleanupFailures uint64
 	// SelectionResolutionFailure is separate from bounded diagnostics because a
 	// proven explicit miss is an authoritative job outcome, not an incidental detail.
 	SelectionResolutionFailure error
@@ -183,6 +192,7 @@ func NewOpenedRevision(handle RevisionHandle, descriptor content.FileRevisionDes
 
 type RevisionClient interface {
 	OpenRevision(context.Context, catalog.FileID) (OpenedRevision, error)
+	// Release relinquishes local ownership even if remote cleanup cannot be confirmed.
 	ReleaseRevision(context.Context, RevisionHandle) error
 }
 
@@ -523,16 +533,16 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	err = normalizeOutputBoundary(ctx, err)
 	if err != nil {
 		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
-		releaseErr := r.releaseRevision(ctx, opened.Handle)
+		r.releaseRevision(ctx, plan, opened.Handle)
 		policy := lifecyclePolicyFor(err)
 		failure := FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
-			Cause: err, LeaseReleaseFailure: releaseErr,
+			Cause: err,
 		}
-		if policy.jobTerminal() || isJobTerminalError(releaseErr) ||
+		if policy.jobTerminal() ||
 			policy.outputRequiresJobPause(r.output.Capabilities()) {
 			r.recordFileFailure(failure)
-			return failurestate.Join(err, releaseErr)
+			return err
 		}
 		r.recordFileFailure(failure)
 		return nil
@@ -590,12 +600,11 @@ func (r *jobRun) rejectUnstartedFile(
 	opened OpenedRevision,
 	cause error,
 ) error {
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: cause,
-		LeaseReleaseFailure: releaseErr,
 	})
-	return failurestate.Join(cause, releaseErr)
+	return cause
 }
 
 func (r *jobRun) rejectImmediateSettlement(
@@ -606,13 +615,13 @@ func (r *jobRun) rejectImmediateSettlement(
 	cause error,
 ) error {
 	fault := cause
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	r.settlementFailure = failurestate.Merge(r.settlementFailure, fault)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: fault,
-		Settlement: settlement, SettlementFailure: fault, LeaseReleaseFailure: releaseErr,
+		Settlement: settlement, SettlementFailure: fault,
 	})
-	r.traceFileSettlement(plan, settlement, failurestate.Join(fault, releaseErr))
+	r.traceFileSettlement(plan, settlement, fault)
 	return fault
 }
 
@@ -622,32 +631,21 @@ func (r *jobRun) handleImmediateSettlement(
 	opened OpenedRevision,
 	settlement FileSettlement,
 ) error {
-	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
-	r.traceFileSettlement(plan, settlement, releaseErr)
+	r.traceFileSettlement(plan, settlement, nil)
+	r.releaseRevision(ctx, plan, opened.Handle)
 	switch settlement.Kind() {
 	case FilePublished, FilePreviouslyPublished:
-		if releaseErr != nil {
-			r.recordFileFailure(FileJobFailure{
-				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease,
-				Cause: releaseErr,
-			})
-		}
-		if isJobTerminalError(releaseErr) {
-			return releaseErr
-		}
 		return nil
 	case FileCollision:
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputPublishBlocked, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
 		})
 	case FileItemBlocked:
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputQuarantined, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
 		})
 	case FileFailed:
 		// A recovered retirement is already-authorized durable cleanup. Preserve
@@ -656,15 +654,11 @@ func (r *jobRun) handleImmediateSettlement(
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: ErrOutputRetired, Settlement: settlement,
-			LeaseReleaseFailure: releaseErr,
 		})
 	default:
 		contractFailure := outputContractFault(nil)
 		r.settlementFailure = failurestate.Merge(r.settlementFailure, contractFailure)
 		return contractFailure
-	}
-	if isJobTerminalError(releaseErr) {
-		return releaseErr
 	}
 	return nil
 }

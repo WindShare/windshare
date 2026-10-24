@@ -31,6 +31,8 @@ func projectTransferStage(value transfer.TransferLifecycleStage) (appobs.Transfe
 		return appobs.TransferFileFirstWrite, true
 	case transfer.TransferFileSettled:
 		return appobs.TransferFileSettled, true
+	case transfer.TransferRevisionCleanupSettled:
+		return appobs.TransferRevisionCleanupSettled, true
 	case transfer.TransferCapacityRetryScheduled:
 		return appobs.TransferCapacityRetryScheduled, true
 	case transfer.TransferCapacityRetryReady:

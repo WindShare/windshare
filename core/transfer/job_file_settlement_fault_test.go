@@ -588,12 +588,12 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 		{name: "commit", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.transactionScript.commitErr = errors.New("publish failed")
 		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomePaused, wantFailureStage: FailureFileOutput},
-		{name: "unknown release pauses as dependency contract", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
+		{name: "unknown cleanup is diagnosed independently", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = errors.New("release failed")
-		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomePaused, wantFailureStage: FailureLeaseRelease},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeSuccess},
 		{name: "canceled release", configure: func(_ *jobOutput, revisions *jobRevisionClient, _ catalog.FileID) {
 			revisions.releaseErr = context.Canceled
-		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomePaused},
+		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomeSuccess},
 		{name: "finish", configure: func(output *jobOutput, _ *jobRevisionClient, _ catalog.FileID) {
 			output.finishErr = errors.New("finalize failed")
 		}, blocks: scriptedRangeReader{}, wantOutcome: DirectTreeOutcomePaused},
@@ -637,7 +637,8 @@ func TestTransferJobRevisionIdentitySessionReleaseAndStreamSkipBranches(t *testi
 	output = newJobOutput(share)
 	revisions = &jobRevisionClient{releaseErr: sessionTransportFailure(errors.New("session closed"))}
 	job, _ = branchJob(t, output, revisions, scriptedRangeReader{})
-	if result = job.Run(context.Background()); result.Outcome != DirectTreeOutcomePaused {
+	if result = job.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess ||
+		len(result.RevisionCleanupFailures) != 1 {
 		t.Fatalf("session release result=%+v", result)
 	}
 

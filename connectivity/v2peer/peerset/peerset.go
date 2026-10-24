@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/peerslot"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 type Timer interface {
@@ -71,6 +72,13 @@ type PeerPathControlSession interface {
 	SendPeerPathControl(context.Context, []byte) error
 }
 
+// ContentLaneOwner keeps adopted data transports under session ownership;
+// ending negotiation alone cannot retire an admitted lane.
+type ContentLaneOwner interface {
+	LaneSet() *transferlanes.Set
+	DetachLane(sessionruntime.LaneIdentity) bool
+}
+
 type PathConfig struct {
 	Purpose       v2signal.ConnectionPurpose
 	Budget        *Budget
@@ -83,6 +91,7 @@ type PathConfig struct {
 	Prepare       Preparer
 	Demand        Demand
 	StopAfterWave bool
+	Content       ContentLaneOwner
 }
 
 func (p *Path) budget() *Budget {
@@ -159,8 +168,21 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 		config.Budget = NewBudget(s.config.Clock.Now())
 		config.StopAfterWave = true
 	}
+	var supply *transferlanes.RouteSupply
+	if config.Content != nil {
+		route := transferlanes.RouteDirect
+		if _, relayed := config.ICE.Relay(); relayed {
+			route = transferlanes.RouteTURN
+		}
+		supply, err = config.Content.LaneSet().ExpectRoute(route)
+		if err != nil {
+			cancel()
+			slot.Close()
+			return nil, err
+		}
+	}
 	s.sequence++
-	path := &Path{sequence: s.sequence, owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot,
+	path := &Path{sequence: s.sequence, owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot, supply: supply,
 		resourceChanges: make(chan struct{}, 1), demand: config.Demand, wake: make(chan struct{}, 1), done: make(chan struct{}), ready: make(chan struct{})}
 	s.paths[key] = path
 	go path.run()
@@ -168,27 +190,30 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 }
 
 type Path struct {
-	sequence                         uint64
-	networkGeneration                uint64
-	restartRequested, mappingPending bool
-	resourceActive                   bool
-	retired                          bool
-	resourceChanges                  chan struct{}
-	deferred                         *reservedAttempt
-	owner                            *PeerSet
-	config                           PathConfig
-	key                              pathKey
-	ctx                              context.Context
-	cancel                           context.CancelFunc
-	mu                               sync.Mutex
-	demand                           Demand
-	slot                             *peerslot.Lease
-	current                          Attempt
-	lane                             sessionruntime.LaneIdentity
-	result                           Result
-	wake                             chan struct{}
-	done, ready                      chan struct{}
-	readyOnce                        sync.Once
+	sequence          uint64
+	networkGeneration uint64
+	restartCause      error
+	mappingPending    bool
+	supply            *transferlanes.RouteSupply
+	resourceActive    bool
+	retired           bool
+	resourceChanges   chan struct{}
+	deferred          *reservedAttempt
+	owner             *PeerSet
+	config            PathConfig
+	key               pathKey
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	demand            Demand
+	slot              *peerslot.Lease
+	current           Attempt
+	binding           v2signal.Binding
+	lane              sessionruntime.LaneIdentity
+	result            Result
+	wake              chan struct{}
+	done, ready       chan struct{}
+	readyOnce         sync.Once
 }
 
 func (p *Path) SetDemand(demand Demand) error {
@@ -236,7 +261,7 @@ func (p *Path) wait(delay time.Duration) bool {
 		case <-p.ctx.Done():
 			return false
 		case <-p.wake:
-			if p.mappingReady() || p.consumeRestart() {
+			if p.mappingReady() || p.consumeRestart() != nil {
 				return true
 			}
 			if p.currentDemand() == NoDemand {

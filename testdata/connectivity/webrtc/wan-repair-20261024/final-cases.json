@@ -1,0 +1,4 @@
+[
+  {"endpoint":"lan","direction":"reverse","sizeMiB":64,"windowsInterface":"WiFi","connectivity":"p2p-only","fault":"drop-large-once","deadlineSeconds":90},
+  {"endpoint":"lan","direction":"reverse","sizeMiB":64,"windowsInterface":"WiFi","connectivity":"auto","fault":"drop-large-once","deadlineSeconds":90}
+]
