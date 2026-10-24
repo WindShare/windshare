@@ -92,8 +92,8 @@ release_root=""
 echo "-- Linux loop-ext4 certification contract"
 certifier="scripts/ci/native-output/linux/certify.sh"
 root_worker="scripts/ci/native-output/linux/root-worker.sh"
-assert_contains "$certifier" 'compile_static_test_binary ./core/osfs "$osfs_test_binary"'
-assert_contains "$certifier" 'compile_static_test_binary ./core/osfs/internal/outputlinux "$outputlinux_test_binary"'
+assert_contains "$certifier" 'compile_static_test_binary ./osfs "$osfs_test_binary"'
+assert_contains "$certifier" 'compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"'
 assert_contains "$certifier" 'mkfs.ext4 -q -F -N 1024 -I 256 -m 0'
 assert_contains "$certifier" 'sudo -n unshare --mount --propagation private --fork --kill-child'
 assert_contains "$certifier" 'bash "$script_root/root-worker.sh"'

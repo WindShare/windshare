@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/osfs"
 )
 
 func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
@@ -77,6 +78,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 	tests := []struct {
 		name       string
 		diagnostic osfs.FilesystemOutputDiagnostic
+		stage      output.FailureStage
 		reason     string
 		fields     []string
 	}{
@@ -85,6 +87,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 			diagnostic: osfs.FilesystemOutputDiagnostic{
 				Stage: osfs.FilesystemOutputFailureDestinationBinding,
 			},
+			stage:  output.FailureDestinationBinding,
 			reason: resumeDestinationBindingReason,
 		},
 		{
@@ -92,6 +95,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 			diagnostic: osfs.FilesystemOutputDiagnostic{
 				Stage: osfs.FilesystemOutputFailureInventoryPaging,
 			},
+			stage:  output.FailureInventory,
 			reason: resumeInventoryPagingReason,
 		},
 		{
@@ -99,6 +103,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 			diagnostic: osfs.FilesystemOutputDiagnostic{
 				Stage: osfs.FilesystemOutputFailureOperationAcquisition,
 			},
+			stage:  output.FailureOpen,
 			reason: resumeOperationAcquisitionReason,
 		},
 		{
@@ -107,6 +112,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 				Stage:              osfs.FilesystemOutputFailureCheckpointReconciliation,
 				ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion,
 			},
+			stage:  output.FailureCheckpoint,
 			reason: resumeCheckpointReconcileReason,
 			fields: []string{`reconciliation_stage="record_promotion"`},
 		},
@@ -117,6 +123,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 				ReconciliationStep: osfs.FilesystemCheckpointStageDurability,
 				NativeErrorClass:   osfs.FilesystemNativeErrorAccessDenied,
 			},
+			stage:  output.FailureDurability,
 			reason: resumeNativeDurabilityReason,
 			fields: []string{
 				`reconciliation_stage="stage_durability"`,
@@ -128,22 +135,22 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 			diagnostic: osfs.FilesystemOutputDiagnostic{
 				Stage: osfs.FilesystemOutputFailureAuthorityClose,
 			},
+			stage:  output.FailureClose,
 			reason: resumeAuthorityCloseReason,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			app, stdout, _ := newResumeTestApp()
-			app.resumeInventories = &fakeResumeStateInventoryOpener{
-				err: resumeDiagnosticTestError{diagnostic: test.diagnostic},
-			}
+			cause, _ := output.SealFailure(resumeDiagnosticTestError{diagnostic: test.diagnostic}, output.FailureDiagnostic{Stage: test.stage})
+			app.resumeInventories = &fakeResumeStateInventoryOpener{err: cause}
 			result := app.Run(context.Background(), []string{
 				"resume", "list", "-o", t.TempDir(),
 			})
 			rendered := stdout.String()
 			if result != ResultFailure ||
 				!strings.Contains(rendered, `reason="`+test.reason+`"`) ||
-				!strings.Contains(rendered, `stage="`+test.diagnostic.Stage.String()+`"`) {
+				!strings.Contains(rendered, `stage="`+test.stage.String()+`"`) {
 				t.Fatalf("result=%d output=%q", result, rendered)
 			}
 			for _, field := range test.fields {

@@ -12,16 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/adapters/filesystem"
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
+
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testrun"
+	"github.com/windshare/windshare/osfs"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -133,17 +136,23 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	var cut sync.Once
 	factory := engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
 		authorities.Add(1)
-		trace := config.Tracer
-		config.Tracer = osfs.FilesystemOutputTraceFunc(func(value osfs.FilesystemOutputTrace) {
+		trace := config.Observe
+		config.Observe = func(value appobs.OutputDiagnostic, projectionErr error) {
 			if trace != nil {
-				trace.TraceFilesystemOutput(value)
+				trace(value, projectionErr)
 			}
-			// Cut at a native write boundary, independently of observation consumption.
-			if value.RuntimeOperation == osfs.FilesystemOutputRuntimeWriteRange && !value.Failed {
+			// The callback runs at the write boundary, before queue consumption.
+			event, ok := value.(fsobs.FilesystemOutputObserved)
+			if !ok || projectionErr != nil {
+				return
+			}
+			_, operation, _, active := event.RuntimeDecision()
+			_, failed := event.Failure()
+			if active && operation == fsobs.FilesystemRuntimeWriteRange && !failed {
 				cut.Do(func() { connection := <-connections; _ = connection.Channel().Close() })
 			}
-		})
-		authority, err := (engine.FilesystemOutput{RootPath: root.RootPath, CreateRoot: true}).NewOutputAuthority(config)
+		}
+		authority, err := (filesystem.FilesystemOutput{RootPath: root.RootPath, CreateRoot: true}).NewOutputAuthority(config)
 		if err != nil {
 			return nil, err
 		}

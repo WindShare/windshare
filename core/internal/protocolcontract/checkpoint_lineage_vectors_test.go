@@ -7,9 +7,9 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs"
 )
 
 func newFileCheckpointVectorRecord(

@@ -3,7 +3,6 @@ package engine
 import (
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -28,9 +27,6 @@ func DescribeSharingSubject(summary liveshare.SelectedRootSummary) (appobs.Shari
 }
 func DescribeCapacity(value revisioncapacity.TraceEvent) (appobs.SenderCapacityObserved, error) {
 	return eventproject.ProjectSenderCapacity(value)
-}
-func SealFilesystemOutputFailure(value osfs.FilesystemOutputDiagnostic) (error, bool) {
-	return eventproject.SealFilesystemOutputFailure(value)
 }
 
 func ReceiveLossSnapshot(value ReceiveObservationLoss) appobs.LossSnapshot {
@@ -64,9 +60,6 @@ func describeSettlement(value task.Settlement) task.Settlement {
 
 func DescribeProtocolObservation(workflow appobs.Workflow, value sessionruntime.ProtocolObservation) (appobs.ProtocolObservationObserved, error) {
 	return eventproject.ProjectProtocolObservation(workflow, value)
-}
-func DescribeFilesystemOutput(value osfs.FilesystemOutputTrace) (appobs.FilesystemOutputObserved, error) {
-	return eventproject.ProjectFilesystemOutput(value)
 }
 func DescribeSenderTermination(value sessionruntime.SenderSessionTerminated) (appobs.SenderSessionTerminated, error) {
 	return eventproject.ProjectSenderSessionTerminated(value)

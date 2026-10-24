@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/osfs"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -36,7 +35,7 @@ func TestSourceFailuresPreserveMeaningAndSelectedPathThroughCleanup(t *testing.T
 				t.Fatal("invented a path for a transport-neutral file source")
 			}
 			cause := fmt.Errorf("prepare: %w", errors.Join(
-				&osfs.SelectedPathError{Path: selected, Cause: source}, context.DeadlineExceeded,
+				&catalog.SelectionError{Label: selected, Cause: source}, context.DeadlineExceeded,
 			))
 			failure, present := ClassifyError(cause)
 			path, located := failure.SourcePath()
@@ -51,11 +50,11 @@ func TestSourceFailuresPreserveMeaningAndSelectedPathThroughCleanup(t *testing.T
 }
 
 func TestSourceFailureProjectionKeepsTraversalBounded(t *testing.T) {
-	cycle := &osfs.SelectedPathError{Path: "selected"}
+	cycle := &catalog.SelectionError{Label: "selected"}
 	cycle.Cause = cycle
 	for _, cause := range []error{
 		cycle,
-		(*osfs.SelectedPathError)(nil),
+		(*catalog.SelectionError)(nil),
 		(*catalog.SourceError)(nil),
 		&catalog.SourceError{Failure: catalog.SourceFailure(255)},
 	} {
@@ -64,7 +63,7 @@ func TestSourceFailureProjectionKeepsTraversalBounded(t *testing.T) {
 			t.Fatalf("invalid source failure %T = %+v, %v", cause, failure, present)
 		}
 	}
-	failure, _ := ClassifyError(&osfs.SelectedPathError{Path: "selected", Cause: context.Canceled})
+	failure, _ := ClassifyError(&catalog.SelectionError{Label: "selected", Cause: context.Canceled})
 	if failure.Code() != appobs.FailureCanceled {
 		t.Fatalf("cancellation became a source failure: %+v", failure)
 	}

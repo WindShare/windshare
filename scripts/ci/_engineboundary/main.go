@@ -23,7 +23,7 @@ import (
 const module = "github.com/windshare/windshare"
 
 func prohibited(path string) bool {
-	for _, family := range []string{"/connectivity", "/transport", "/relay"} {
+	for _, family := range []string{"/connectivity", "/transport", "/relay", "/osfs", "/core/osfs", "/adapters"} {
 		if path == module+family || strings.HasPrefix(path, module+family+"/") {
 			return true
 		}
@@ -31,11 +31,35 @@ func prohibited(path string) bool {
 	return false
 }
 
+func storageImplementation(path string) bool {
+	for _, family := range []string{"/osfs", "/core/osfs", "/adapters"} {
+		if path == module+family || strings.HasPrefix(path, module+family+"/") {
+			return true
+		}
+	}
+	return false
+}
+func prohibitedAPI(path string) bool {
+	if !strings.HasPrefix(path, module+"/") {
+		return false
+	}
+	// Process-test milestones are value-only contracts, still traversed below.
+	if path == module+"/internal/testrun" {
+		return false
+	}
+	for _, contract := range []string{"/core", "/engine"} {
+		if path == module+contract || strings.HasPrefix(path, module+contract+"/") {
+			return false
+		}
+	}
+	return true
+}
+
 // Parse all production files, including inactive platform variants, so a local
 // platform cannot conceal a forbidden import until another CI runner builds it.
 func sourceFindings(root string) ([]string, error) {
 	var findings []string
-	for _, subtree := range []string{"cmd", "engine/observation"} {
+	for _, subtree := range []string{"cmd", "engine"} {
 		err := filepath.WalkDir(filepath.Join(root, subtree), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -52,7 +76,12 @@ func sourceFindings(root string) ([]string, error) {
 				if err != nil {
 					return err
 				}
-				if prohibited(dependency) {
+				relative, _ := filepath.Rel(root, path)
+				application := strings.HasPrefix(filepath.ToSlash(relative), "engine/")
+				observation := strings.HasPrefix(filepath.ToSlash(relative), "engine/observation/")
+				forbidden := storageImplementation(dependency) && application ||
+					prohibited(dependency) && (observation || !application && !storageImplementation(dependency))
+				if forbidden {
 					relative, _ := filepath.Rel(root, path)
 					findings = append(findings, fmt.Sprintf("%s imports implementation package %s", relative, dependency))
 				}
@@ -91,12 +120,13 @@ func typeFindings(label string, root types.Type) []string {
 			object := value.Obj()
 			if object.Pkg() != nil {
 				path := object.Pkg().Path()
-				if prohibited(path) {
+				if prohibited(path) || prohibitedAPI(path) {
 					findings = append(findings, at+" exposes "+path+"."+object.Name())
 					return
 				}
-				// Core and standard library contracts are independently owned boundaries.
-				if !strings.HasPrefix(path, module+"/engine") {
+				// Repository-owned contracts are traversed even when wrapped by core.
+				// Standard-library interfaces remain independently owned boundaries.
+				if !strings.HasPrefix(path, module+"/") {
 					return
 				}
 			}

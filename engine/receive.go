@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -32,7 +31,6 @@ type OutputLookup = receive.OutputLookup
 type OutputLookupKind = receive.OutputLookupKind
 type OutputReservation = receive.OutputReservation
 type OutputOperation = receive.OutputOperation
-type FilesystemOutput = receive.FilesystemOutput
 
 const (
 	ConnectivityAuto                 = receive.ConnectivityAuto
@@ -97,8 +95,4 @@ func SettleReceive(input ReceiveSettlementInput) (TaskCompletion[ReceiveResult],
 	result, err := receive.Settle(input)
 	result.Settlement = describeSettlement(result.Settlement)
 	return result, err
-}
-
-func ReceiveOutputDiagnostic(cause error) (osfs.FilesystemOutputDiagnostic, bool) {
-	return receive.OutputDiagnostic(cause)
 }

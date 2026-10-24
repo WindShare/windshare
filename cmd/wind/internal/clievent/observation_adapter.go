@@ -1,6 +1,7 @@
 package clievent
 
 import (
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -107,8 +108,8 @@ func NewPeerAttemptObserved(spec appobs.PeerAttemptSpec) (PeerAttemptObserved, e
 	return PeerAttemptObserved{value}, err
 }
 
-func NewFilesystemOutputObserved(spec appobs.FilesystemOutputSpec) (FilesystemOutputObserved, error) {
-	value, err := appobs.NewFilesystemOutputObserved(spec)
+func NewFilesystemOutputObserved(spec fsobs.FilesystemOutputSpec) (FilesystemOutputObserved, error) {
+	value, err := fsobs.NewFilesystemOutputObserved(spec)
 	return FilesystemOutputObserved{value}, err
 }
 
@@ -247,7 +248,7 @@ func FromObservation(value appobs.Event) (Event, error) {
 	case appobs.Fallback:
 		return Fallback{value}, nil
 
-	case appobs.FilesystemOutputObserved:
+	case fsobs.FilesystemOutputObserved:
 		return FilesystemOutputObserved{value}, nil
 
 	case appobs.LaneAdopted:

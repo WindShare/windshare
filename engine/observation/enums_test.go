@@ -41,8 +41,6 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"file settlement", int(FileSettlementNone), int(FileFailed), func(value int) (string, bool) { return FileSettlement(value).Name() }},
 		{"item block reason", int(ItemBlockNone), int(ItemBlockOwnedObjectUnknown), func(value int) (string, bool) { return ItemBlockReason(value).Name() }},
 		{"tree settlement", int(TreeSettlementNone), int(TreeSettlementFailed), func(value int) (string, bool) { return TreeSettlement(value).Name() }},
-		{"filesystem operation", int(FilesystemCertified), int(FilesystemRuntimeDecision), func(value int) (string, bool) { return FilesystemOutputOperation(value).Name() }},
-		{"filesystem checkpoint decision", int(FilesystemCheckpointAbsent), int(FilesystemCheckpointInvalid), func(value int) (string, bool) { return FilesystemCheckpointDecision(value).Name() }},
 		{"sender terminal send transport", int(SenderTerminalSendAccepted), int(SenderTerminalSendRetired), func(value int) (string, bool) { return SenderTerminalSendTransport(value).Name() }},
 		{"sender terminal send outcome", int(SenderTerminalSendDelivered), int(SenderTerminalSendUnknown), func(value int) (string, bool) { return SenderTerminalSendOutcome(value).Name() }},
 		{"sender terminal send decision", int(SenderTerminalSendDecisionDelivered), int(SenderTerminalSendFailed), func(value int) (string, bool) { return SenderTerminalSendDecision(value).Name() }},
@@ -66,9 +64,6 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"receiver benign", int(ReceiverBenignContextCanceled), int(ReceiverBenignRemoteFinalOperationMissing), func(value int) (string, bool) { return ReceiverBenignComponent(value).Name() }},
 		{"receiver cause class", int(ReceiverCauseRuntimeClosed), int(ReceiverCauseUnknown), func(value int) (string, bool) { return ReceiverCauseClass(value).Name() }},
 		{"peer teardown", int(PeerTeardownShutdownInitiated), int(PeerTeardownChannelDrainJoined), func(value int) (string, bool) { return PeerTeardownTransition(value).Name() }},
-		{"filesystem failure stage", int(FilesystemFailureDestinationBinding), int(FilesystemFailureAuthorityClose), func(value int) (string, bool) { return FilesystemFailureStage(value).Name() }},
-		{"filesystem reconciliation", int(FilesystemReconciliationCandidateObservation), int(FilesystemReconciliationRecordPromotion), func(value int) (string, bool) { return FilesystemReconciliationStep(value).Name() }},
-		{"filesystem native error", int(FilesystemNativeErrorAccessDenied), int(FilesystemNativeErrorUnknown), func(value int) (string, bool) { return FilesystemNativeErrorClass(value).Name() }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

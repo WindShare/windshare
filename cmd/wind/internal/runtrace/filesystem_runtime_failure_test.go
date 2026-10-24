@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/osfs"
 )
 
 func TestFilesystemRuntimeFailuresSurviveProjectionAndEncoding(t *testing.T) {

@@ -4,16 +4,14 @@ import (
 	"context"
 	"errors"
 
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/engine/internal/recovery"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/recovery"
 )
 
 type RecoveryObservation = recovery.Observation
 type RecoveryPhase = recovery.Phase
 type RecoveryAuthority = recovery.Authority
-type FilesystemRecoveryAuthority = recovery.FilesystemAuthority
 type RecoverySnapshot = recovery.Snapshot
 type RecoveryOperation = recovery.Operation
 type RecoveryOperationState = recovery.OperationState
@@ -57,11 +55,7 @@ const (
 )
 
 var ErrRecoveryContract = recovery.ErrContract
-var ErrRecoveryBusy = osfs.ErrResumeStateBusy
-
-func FilesystemRecovery(rootPath string) *FilesystemRecoveryAuthority {
-	return recovery.Filesystem(rootPath)
-}
+var ErrRecoveryBusy = recovery.ErrBusy
 
 func NewRecoverySnapshot(operations []RecoveryOperation, registryUnknown bool) (RecoverySnapshot, error) {
 	return recovery.NewSnapshot(operations, registryUnknown)

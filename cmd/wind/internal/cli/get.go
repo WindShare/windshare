@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
@@ -40,7 +41,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	}
 	factory := a.getOutputFactory
 	if factory == nil {
-		factory = engine.FilesystemOutput{RootPath: destination, CreateRoot: true}
+		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
 	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Capability: request.link, Only: request.only, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.detailedDiagnosticsEnabled()})
 	if err != nil {

@@ -9,13 +9,13 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -147,8 +147,8 @@ func (o getObservation) relayConnected(v v2.RelayEndpoint) { o.emit(RelayConnect
 func (o getObservation) receiverRecovery(v relayset.ReceiverRecoveryObservation) {
 	o.emit(RecoveryObserved{Value: v})
 }
-func (o getObservation) filesystemOutput(v osfs.FilesystemOutputTrace) {
-	o.emit(FilesystemObserved{Value: v})
+func (o getObservation) outputDiagnostic(v appobs.OutputDiagnostic, err error) {
+	o.emit(OutputObserved{Value: v, Err: err})
 }
 func (o getObservation) transferLifecycle(v transfer.TransferLifecycleTrace) {
 	o.emit(TransferObserved{Value: v})

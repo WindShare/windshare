@@ -17,7 +17,7 @@ Windows 上现有 CLI 与 osfs 的接口、句柄和文件版本实现随重构�
 | CLI 接收编排 `get.go` 与传输装配 `get_transfer.go` | 会话替换、连接准入、传输接续和最终结算目前由 CLI 代码协调。 |
 | CLI 分享 `share.go` 与分享结算 `share_settlement.go` | 发送端准备、中转注册、提供分享服务，以及用户明确停止分享时的行为。 |
 | [发送端准备](../core/liveshare/sender.go)与[资源所有权](../core/liveshare/sender_lifecycle.go) | `SenderConfig.Paths` 在内部创建 osfs；准备和释放流程都持有具体的文件版本源类型。 |
-| [目录扫描](../core/catalog/progress.go)、[文件版本源](../core/content/revision.go)与[osfs 文件选择](../core/osfs/catalog_source.go) | 现有消费侧接口和按需发现机制，为文件源注入提供了基础。 |
+| [目录扫描](../core/catalog/progress.go)、[文件版本源](../core/content/revision.go)与[osfs 文件选择](../osfs/catalog_source.go) | 现有消费侧接口和按需发现机制，为文件源注入提供了基础。 |
 | [私有目录记录](../core/catalog/model.go) | 源对象身份和版本证据已采用不透明表示；定位信息仍假设由根槽位与相对路径组成。 |
 | [接收接续](../core/session/receivercontinuation/session.go)与 CLI 输出适配器 `get_output_authority.go` | 提取应用装配逻辑时，复用现有恢复和输出语义。 |
 
@@ -36,7 +36,7 @@ Android 文档选择返回带授权的 URI，通过内容提供者访问。提�
 | 现有原生适配器 | 通过 osfs 获取所选文件源和输出目标，管理操作系统句柄，并注入具体存储和网络依赖。 |
 | CLI 适配器 | 将命令参数转换为 engine 请求，将 engine 结果转换为终端展示和退出码。 |
 
-保持 engine 公共入口精简，将分享和接收实现在职责集中的内部包中。在消费侧定义小接口，注入时间、随机源、文件源与输出构造，以及连接创建能力。共享容量协调由 engine 实例持有，每次分享和接收的状态归对应任务所有。
+保持 engine 公共入口精简，将分享和接收实现在职责集中的内部包中。文件源由 `liveshare.FileSourceFactory` 注入；输出与恢复清单契约分别由 `engine/output`、`engine/recovery` 拥有。`adapters/filesystem` 装配 `osfs`，保留平台诊断；共享 engine 不依赖文件系统实现。时间、随机源和连接创建能力同样可注入。共享容量协调由 engine 实例持有，每次分享和接收的状态归对应任务所有。
 
 CLI 与桌面端复用同一份 engine 代码，并在各自进程中持有独立实例；任务状态和生命周期由各自实例管理。默认中转等基础配置未来可以共用，本次沿用现有配置行为。
 

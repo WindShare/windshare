@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/adapters/filesystem"
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
@@ -17,7 +19,6 @@ import (
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -25,6 +26,7 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/osfs"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -168,17 +170,6 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		transfer.DirectTreeSettlementPaused, transfer.DirectTreeSettlementFailed,
 	}, transfer.DirectTreeSettlementKind(255), projectTreeSettlement)
 
-	assertClosedProjection(t, "filesystem operation", []osfs.FilesystemOutputTraceOperation{
-		osfs.TraceFilesystemCertified, osfs.TraceFeatureProbeCompleted,
-		osfs.TraceCheckpointNamespaceOpened, osfs.TraceNativeLock,
-		osfs.TraceSessionOpened, osfs.TraceCheckpointReconciled,
-		osfs.TraceRuntimeDecision,
-	}, osfs.FilesystemOutputTraceOperation(255), projectFilesystemOperation)
-	assertClosedProjection(t, "filesystem checkpoint decision", []osfs.FilesystemCheckpointDecision{
-		0, osfs.FilesystemCheckpointAbsent, osfs.FilesystemCheckpointExact,
-		osfs.FilesystemCheckpointRevisionConflict, osfs.FilesystemCheckpointOwnershipConflict,
-		osfs.FilesystemCheckpointInvalid,
-	}, osfs.FilesystemCheckpointDecision(255), projectFilesystemCheckpointDecision)
 	assertClosedProjection(t, "sender terminal send transport", []sessionruntime.SenderTerminalSendTransportDisposition{
 		sessionruntime.SenderTerminalSendTransportAccepted,
 		sessionruntime.SenderTerminalSendTransportNotReached,
@@ -229,25 +220,6 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		liveshare.RootPrefetchBudgetFailed, liveshare.RootPrefetchScanFailed,
 		liveshare.RootPrefetchStopped,
 	}, liveshare.RootPrefetchDecision(255), projectRootPrefetchDecision)
-}
-
-func TestFilesystemCheckpointDecisionProjectionIsExact(t *testing.T) {
-	tests := []struct {
-		source osfs.FilesystemCheckpointDecision
-		want   appobs.FilesystemCheckpointDecision
-	}{
-		{osfs.FilesystemCheckpointAbsent, appobs.FilesystemCheckpointAbsent},
-		{osfs.FilesystemCheckpointExact, appobs.FilesystemCheckpointExact},
-		{osfs.FilesystemCheckpointRevisionConflict, appobs.FilesystemCheckpointRevisionConflict},
-		{osfs.FilesystemCheckpointOwnershipConflict, appobs.FilesystemCheckpointOwnershipConflict},
-		{osfs.FilesystemCheckpointInvalid, appobs.FilesystemCheckpointInvalid},
-	}
-	for _, test := range tests {
-		got, ok := projectFilesystemCheckpointDecision(test.source)
-		if !ok || got != test.want {
-			t.Fatalf("checkpoint decision %v projected as %v, present=%t", test.source, got, ok)
-		}
-	}
 }
 
 func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
@@ -401,7 +373,7 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		t.Fatalf("canceled lifecycle=%#v failure=%#v present=%t", canceled, canceledFailure, present)
 	}
 
-	filesystemEvent, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
+	filesystemEvent, err := filesystem.ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
 		Operation: osfs.TraceRuntimeDecision, ReceiveOperationID: receiveID,
 		ReceiveIntentDigest: transfer.ReceiveIntentDigest{0x71},
 		SessionID:           transfer.OutputSessionID{0x72}, OperationID: 73, ClaimID: 74,
@@ -419,18 +391,18 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		t.Fatalf("filesystem projection = %#v", filesystemEvent)
 	}
 	checkpointDecision, present := filesystemEvent.CheckpointDecision()
-	if !present || checkpointDecision != appobs.FilesystemCheckpointRevisionConflict {
+	if !present || checkpointDecision != fsobs.FilesystemCheckpointRevisionConflict {
 		t.Fatalf("checkpoint decision = %v, present=%t", checkpointDecision, present)
 	}
 	assertProjectionOmits(t, filesystemEvent, fmt.Sprintf("%x", transfer.ReceiveIntentDigest{0x71}), fmt.Sprintf("%x", transfer.OutputSessionID{0x72}))
-	withoutReceive, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{Operation: osfs.TraceFilesystemCertified})
+	withoutReceive, err := filesystem.ProjectFilesystemOutput(osfs.FilesystemOutputTrace{Operation: osfs.TraceFilesystemCertified})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, present := withoutReceive.ReceiveOperationID(); present {
 		t.Fatal("pre-binding filesystem trace invented receive-operation correlation")
 	}
-	failedFilesystem, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
+	failedFilesystem, err := filesystem.ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
 		Operation:          osfs.TraceCheckpointReconciled,
 		FailureStage:       osfs.FilesystemOutputFailureNativeDurability,
 		ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion,
@@ -441,9 +413,9 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		t.Fatal(err)
 	}
 	stage, step, nativeClass, present := failedFilesystem.FailureClassification()
-	if !present || stage != appobs.FilesystemFailureNativeDurability ||
-		step != appobs.FilesystemReconciliationRecordPromotion ||
-		nativeClass != appobs.FilesystemNativeErrorSharingViolation {
+	if !present || stage != fsobs.FilesystemFailureNativeDurability ||
+		step != fsobs.FilesystemReconciliationRecordPromotion ||
+		nativeClass != fsobs.FilesystemNativeErrorSharingViolation {
 		t.Fatalf("filesystem failure classification = (%v, %v, %v, %t)", stage, step, nativeClass, present)
 	}
 

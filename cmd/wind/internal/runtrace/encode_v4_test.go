@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -614,20 +615,20 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			TreeSettlement:   appobs.TreeSettlementPartial,
 			Failure:          failure,
 		})),
-		mustValue(clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
-			Operation:           appobs.FilesystemRuntimeDecision,
+		mustValue(clievent.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+			Operation:           fsobs.FilesystemRuntimeDecision,
 			ReceiveOperation:    receiveOperation,
-			Certification:       appobs.FilesystemCertificationWindowsNTFSProcessRestart,
-			NativeLockScope:     appobs.FilesystemNativeLockSession,
-			NativeLockMilestone: appobs.FilesystemNativeLockAcquired,
-			RootDisposition:     appobs.FilesystemRootAuthorityCreated,
-			RuntimeComponent:    appobs.FilesystemRuntimeFile,
-			RuntimeOperation:    appobs.FilesystemRuntimeWriteRange,
-			RuntimeDecision:     appobs.FilesystemRuntimeNeedsAttention,
-			CheckpointDecision:  appobs.FilesystemCheckpointRevisionConflict,
+			Certification:       fsobs.FilesystemCertificationWindowsNTFSProcessRestart,
+			NativeLockScope:     fsobs.FilesystemNativeLockSession,
+			NativeLockMilestone: fsobs.FilesystemNativeLockAcquired,
+			RootDisposition:     fsobs.FilesystemRootAuthorityCreated,
+			RuntimeComponent:    fsobs.FilesystemRuntimeFile,
+			RuntimeOperation:    fsobs.FilesystemRuntimeWriteRange,
+			RuntimeDecision:     fsobs.FilesystemRuntimeNeedsAttention,
+			CheckpointDecision:  fsobs.FilesystemCheckpointRevisionConflict,
 			OperationID:         math.MaxUint64,
 			ClaimID:             math.MaxUint64,
-			Counters: appobs.FilesystemOutputCounters{
+			Counters: fsobs.FilesystemOutputCounters{
 				NodeClaims:             math.MaxUint64,
 				DirectoryClaims:        2,
 				FileClaims:             3,
@@ -637,9 +638,9 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 				CheckpointRecords:      7,
 			},
 			Failure:            faultFailure,
-			FailureStage:       appobs.FilesystemFailureNativeDurability,
-			ReconciliationStep: appobs.FilesystemReconciliationRecordPromotion,
-			NativeErrorClass:   appobs.FilesystemNativeErrorSharingViolation,
+			FailureStage:       fsobs.FilesystemFailureNativeDurability,
+			ReconciliationStep: fsobs.FilesystemReconciliationRecordPromotion,
+			NativeErrorClass:   fsobs.FilesystemNativeErrorSharingViolation,
 		})),
 		mustValue(clievent.NewSenderTerminalSendObserved(
 			protocolSession, lane, false,

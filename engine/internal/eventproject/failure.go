@@ -12,12 +12,12 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/output"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -68,12 +68,12 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (ap
 	// otherwise describe destination I/O. Selected paths are display facts, not
 	// raw provider error text or filesystem authority.
 	//nolint:errorlint
-	if selected, ok := cause.(*osfs.SelectedPathError); ok {
+	if selected, ok := cause.(*catalog.SelectionError); ok {
 		failure, known := classifyErrorAtDepth(selected.Cause, depth+1, traversal)
 		if !known {
 			return appobs.Failure{}, false
 		}
-		if located, err := appobs.NewSourcePathFailure(failure.Code(), appobs.NewDisplayPath(selected.Path)); err == nil {
+		if located, err := appobs.NewSourcePathFailure(failure.Code(), appobs.NewDisplayPath(selected.Label)); err == nil {
 			return located, true
 		}
 		return failure, true
@@ -123,8 +123,8 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (ap
 }
 
 func classifyDirectError(cause error) (appobs.Failure, bool) {
-	if diagnostic, ok := receive.OutputDiagnostic(cause); ok {
-		return ProjectNormalizedFault(diagnostic.FaultDomain, diagnostic.NormalizedScope, diagnostic.NormalizedCode)
+	if diagnostic, ok := output.DiagnosticFor(cause); ok {
+		return diagnostic.Failure, diagnostic.Failure.Valid()
 	}
 	// Engine stop causes preserve ownership, but all express deliberate local
 	// cancellation rather than an unexpected provider failure.
@@ -134,21 +134,6 @@ func classifyDirectError(cause error) (appobs.Failure, bool) {
 	}
 	if exactError(cause, context.DeadlineExceeded) {
 		return mustFailure(appobs.FailureDeadline), true
-	}
-	// The concrete type is intentionally private. The filesystem adapter seals a
-	// validated value at its trust boundary; arbitrary diagnostic carriers remain
-	// unable to grant themselves presentation authority.
-	//nolint:errorlint
-	if filesystemFailure, ok := cause.(*filesystemOutputFailure); ok && filesystemFailure != nil {
-		diagnostic := filesystemFailure.diagnostic
-		if !diagnostic.Valid() {
-			return appobs.Failure{}, false
-		}
-		return ProjectNormalizedFault(
-			diagnostic.FaultDomain,
-			diagnostic.NormalizedScope,
-			diagnostic.NormalizedCode,
-		)
 	}
 	// Only a direct concrete provider fault is trusted here. errors.As could invoke
 	// an untrusted As method while diagnostics are crossing the safety boundary.
@@ -272,30 +257,6 @@ func ProjectRelayErrorCode(code v2.ErrorCode) (appobs.Failure, bool) {
 	return mustFailure(projected), true
 }
 
-func ProjectFault(value transferfault.Fault) (appobs.Failure, bool) {
-	if !value.Valid() {
-		return appobs.Failure{}, false
-	}
-	domain, ok := projectFaultDomain(value.Domain())
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	scope, ok := projectFaultScope(value.Scope())
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	code, ok := projectFaultCode(value)
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	context, err := appobs.NewFaultContext(domain, scope, value.Code())
-	if err != nil {
-		return appobs.Failure{}, false
-	}
-	failure, err := appobs.NewFaultFailure(code, context)
-	return failure, err == nil
-}
-
 func ProjectTransferInterruption(value transfer.TransferInterruption) (appobs.Failure, bool) {
 	switch value {
 	case transfer.TransferInterruptionCanceled:
@@ -304,255 +265,6 @@ func ProjectTransferInterruption(value transfer.TransferInterruption) (appobs.Fa
 		return mustFailure(appobs.FailureDeadline), true
 	default:
 		return appobs.Failure{}, false
-	}
-}
-
-func ProjectNormalizedFault(domain uint8, scope uint8, code uint16) (appobs.Failure, bool) {
-	projectedDomain, ok := projectFaultDomain(transferfault.Domain(domain))
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	projectedScope, ok := projectFaultScope(transferfault.Scope(scope))
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	projectedCode, ok := projectNumericFaultCode(transferfault.Domain(domain), code)
-	if !ok {
-		return appobs.Failure{}, false
-	}
-	context, err := appobs.NewFaultContext(projectedDomain, projectedScope, code)
-	if err != nil {
-		return appobs.Failure{}, false
-	}
-	failure, err := appobs.NewFaultFailure(projectedCode, context)
-	return failure, err == nil
-}
-
-func projectNumericFaultCode(domain transferfault.Domain, code uint16) (appobs.FailureCode, bool) {
-	switch domain {
-	case transferfault.DomainSource:
-		switch transferfault.SourceCode(code) {
-		case transferfault.SourceUnavailable:
-			return appobs.FailureSourceUnavailable, true
-		case transferfault.SourceRevisionChanged:
-			return appobs.FailureSourceRevisionChanged, true
-		case transferfault.SourceRevisionInvalidated:
-			return appobs.FailureSourceRevisionInvalidated, true
-		case transferfault.SourcePermanent:
-			return appobs.FailureSourcePermanent, true
-		}
-	case transferfault.DomainCatalog:
-		switch transferfault.CatalogCode(code) {
-		case transferfault.CatalogUnavailable:
-			return appobs.FailureCatalogUnavailable, true
-		case transferfault.CatalogDirectoryStale:
-			return appobs.FailureCatalogDirectoryStale, true
-		case transferfault.CatalogInvalidGeneration:
-			return appobs.FailureCatalogInvalidGeneration, true
-		}
-	case transferfault.DomainSession:
-		switch transferfault.SessionCode(code) {
-		case transferfault.SessionTransport:
-			return appobs.FailureSessionTransport, true
-		case transferfault.SessionProtocol:
-			return appobs.FailureSessionProtocol, true
-		case transferfault.SessionResourceBudget:
-			return appobs.FailureSessionResourceBudget, true
-		case transferfault.SessionDependencyContract:
-			return appobs.FailureSessionDependencyContract, true
-		}
-	case transferfault.DomainOutput:
-		switch transferfault.OutputCode(code) {
-		case transferfault.OutputStateIO:
-			return appobs.FailureOutputStateIO, true
-		case transferfault.OutputOwnership:
-			return appobs.FailureOutputOwnership, true
-		case transferfault.OutputNamespaceUnsafe:
-			return appobs.FailureOutputNamespaceUnsafe, true
-		case transferfault.OutputUnsupportedFilesystem:
-			return appobs.FailureOutputUnsupportedFilesystem, true
-		case transferfault.OutputDirectoryBinding:
-			return appobs.FailureOutputDirectoryBinding, true
-		case transferfault.OutputDirectoryMetadata:
-			return appobs.FailureOutputDirectoryMetadata, true
-		case transferfault.OutputFileAlreadyActive:
-			return appobs.FailureOutputFileAlreadyActive, true
-		case transferfault.OutputResourceBudget:
-			return appobs.FailureOutputResourceBudget, true
-		case transferfault.OutputMutationAmbiguous:
-			return appobs.FailureOutputMutationAmbiguous, true
-		case transferfault.OutputContract:
-			return appobs.FailureOutputContract, true
-		}
-	case transferfault.DomainCheckpoint:
-		switch transferfault.CheckpointCode(code) {
-		case transferfault.CheckpointBusy:
-			return appobs.FailureCheckpointBusy, true
-		case transferfault.CheckpointCorruptRecord:
-			return appobs.FailureCheckpointCorruptRecord, true
-		case transferfault.CheckpointUnsafeInstall:
-			return appobs.FailureCheckpointUnsafeInstall, true
-		case transferfault.CheckpointOwnershipMismatch:
-			return appobs.FailureCheckpointOwnershipMismatch, true
-		case transferfault.CheckpointStateIO:
-			return appobs.FailureCheckpointStateIO, true
-		}
-	}
-	return 0, false
-}
-
-func projectFaultDomain(value transferfault.Domain) (appobs.FaultDomain, bool) {
-	switch value {
-	case transferfault.DomainSource:
-		return appobs.FaultSource, true
-	case transferfault.DomainCatalog:
-		return appobs.FaultCatalog, true
-	case transferfault.DomainSession:
-		return appobs.FaultSession, true
-	case transferfault.DomainOutput:
-		return appobs.FaultOutput, true
-	case transferfault.DomainCheckpoint:
-		return appobs.FaultCheckpoint, true
-	default:
-		return 0, false
-	}
-}
-
-func projectFaultScope(value transferfault.Scope) (appobs.FaultScope, bool) {
-	switch value {
-	case transferfault.ScopeFileLocal:
-		return appobs.FaultFileLocal, true
-	case transferfault.ScopeDirectoryLocal:
-		return appobs.FaultDirectoryLocal, true
-	case transferfault.ScopeOutputPause:
-		return appobs.FaultOutputPause, true
-	case transferfault.ScopeSessionTerminal:
-		return appobs.FaultSessionTerminal, true
-	default:
-		return 0, false
-	}
-}
-
-func projectFaultCode(value transferfault.Fault) (appobs.FailureCode, bool) {
-	switch value.Domain() {
-	case transferfault.DomainSource:
-		code, ok := value.SourceCode()
-		if !ok {
-			return 0, false
-		}
-		return projectSourceFaultCode(code)
-	case transferfault.DomainCatalog:
-		code, ok := value.CatalogCode()
-		if !ok {
-			return 0, false
-		}
-		return projectCatalogFaultCode(code)
-	case transferfault.DomainSession:
-		code, ok := value.SessionCode()
-		if !ok {
-			return 0, false
-		}
-		return projectSessionFaultCode(code)
-	case transferfault.DomainOutput:
-		code, ok := value.OutputCode()
-		if !ok {
-			return 0, false
-		}
-		return projectOutputFaultCode(code)
-	case transferfault.DomainCheckpoint:
-		code, ok := value.CheckpointCode()
-		if !ok {
-			return 0, false
-		}
-		return projectCheckpointFaultCode(code)
-	}
-	return 0, false
-}
-
-func projectSourceFaultCode(code transferfault.SourceCode) (appobs.FailureCode, bool) {
-	switch code {
-	case transferfault.SourceUnavailable:
-		return appobs.FailureSourceUnavailable, true
-	case transferfault.SourceRevisionChanged:
-		return appobs.FailureSourceRevisionChanged, true
-	case transferfault.SourceRevisionInvalidated:
-		return appobs.FailureSourceRevisionInvalidated, true
-	case transferfault.SourcePermanent:
-		return appobs.FailureSourcePermanent, true
-	default:
-		return 0, false
-	}
-}
-
-func projectCatalogFaultCode(code transferfault.CatalogCode) (appobs.FailureCode, bool) {
-	switch code {
-	case transferfault.CatalogUnavailable:
-		return appobs.FailureCatalogUnavailable, true
-	case transferfault.CatalogDirectoryStale:
-		return appobs.FailureCatalogDirectoryStale, true
-	case transferfault.CatalogInvalidGeneration:
-		return appobs.FailureCatalogInvalidGeneration, true
-	default:
-		return 0, false
-	}
-}
-
-func projectSessionFaultCode(code transferfault.SessionCode) (appobs.FailureCode, bool) {
-	switch code {
-	case transferfault.SessionTransport:
-		return appobs.FailureSessionTransport, true
-	case transferfault.SessionProtocol:
-		return appobs.FailureSessionProtocol, true
-	case transferfault.SessionResourceBudget:
-		return appobs.FailureSessionResourceBudget, true
-	case transferfault.SessionDependencyContract:
-		return appobs.FailureSessionDependencyContract, true
-	default:
-		return 0, false
-	}
-}
-
-func projectOutputFaultCode(code transferfault.OutputCode) (appobs.FailureCode, bool) {
-	switch code {
-	case transferfault.OutputStateIO:
-		return appobs.FailureOutputStateIO, true
-	case transferfault.OutputOwnership:
-		return appobs.FailureOutputOwnership, true
-	case transferfault.OutputNamespaceUnsafe:
-		return appobs.FailureOutputNamespaceUnsafe, true
-	case transferfault.OutputUnsupportedFilesystem:
-		return appobs.FailureOutputUnsupportedFilesystem, true
-	case transferfault.OutputDirectoryBinding:
-		return appobs.FailureOutputDirectoryBinding, true
-	case transferfault.OutputDirectoryMetadata:
-		return appobs.FailureOutputDirectoryMetadata, true
-	case transferfault.OutputFileAlreadyActive:
-		return appobs.FailureOutputFileAlreadyActive, true
-	case transferfault.OutputResourceBudget:
-		return appobs.FailureOutputResourceBudget, true
-	case transferfault.OutputMutationAmbiguous:
-		return appobs.FailureOutputMutationAmbiguous, true
-	case transferfault.OutputContract:
-		return appobs.FailureOutputContract, true
-	default:
-		return 0, false
-	}
-}
-
-func projectCheckpointFaultCode(code transferfault.CheckpointCode) (appobs.FailureCode, bool) {
-	switch code {
-	case transferfault.CheckpointBusy:
-		return appobs.FailureCheckpointBusy, true
-	case transferfault.CheckpointCorruptRecord:
-		return appobs.FailureCheckpointCorruptRecord, true
-	case transferfault.CheckpointUnsafeInstall:
-		return appobs.FailureCheckpointUnsafeInstall, true
-	case transferfault.CheckpointOwnershipMismatch:
-		return appobs.FailureCheckpointOwnershipMismatch, true
-	case transferfault.CheckpointStateIO:
-		return appobs.FailureCheckpointStateIO, true
-	default:
-		return 0, false
 	}
 }
 
@@ -610,4 +322,11 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func ProjectFault(value transferfault.Fault) (appobs.Failure, bool) {
+	return appobs.ProjectFault(value)
+}
+func ProjectNormalizedFault(domain uint8, scope uint8, code uint16) (appobs.Failure, bool) {
+	return appobs.ProjectNormalizedFault(domain, scope, code)
 }

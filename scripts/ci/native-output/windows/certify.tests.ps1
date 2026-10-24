@@ -113,10 +113,10 @@ if ($requiredSelectors.Count -ne 2) {
     throw 'required native test selectors drifted from the release contract'
 }
 $coreSelector = @($requiredSelectors | Where-Object {
-    $_.PackageArgument -ceq './core/osfs'
+    $_.PackageArgument -ceq './osfs'
 })
 $outputWindowsSelector = @($requiredSelectors | Where-Object {
-    $_.PackageArgument -ceq './core/osfs/internal/outputwindows'
+    $_.PackageArgument -ceq './osfs/internal/outputwindows'
 })
 if ($coreSelector.Count -ne 1 -or
     $outputWindowsSelector.Count -ne 1 -or
@@ -728,7 +728,7 @@ Assert-Throws 'missing top-level pass' {
 Assert-Throws 'empty JSON event stream' {
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events @() -RequiredTests $requiredTests
 }
-Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./core/osfs/internal/outputwindows' {
+Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/outputwindows' {
     Assert-WindowsNativeTestEvents `
         -ExitCode 0 `
         -Events @(
@@ -736,7 +736,7 @@ Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: p
             [pscustomobject]@{ Action = 'pass'; Package = 'example/outputwindows' }
         ) `
         -RequiredTests @('TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment') `
-        -SelectorPackage './core/osfs/internal/outputwindows' `
+        -SelectorPackage './osfs/internal/outputwindows' `
         -SelectorExpression '^(TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment)$'
 }
 

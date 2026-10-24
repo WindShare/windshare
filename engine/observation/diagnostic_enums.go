@@ -26,7 +26,7 @@ const (
 	ObserverLossLaneSettlement
 	ObserverLossProtocolOperation
 	ObserverLossTransferLifecycle
-	ObserverLossFilesystemOutput
+	ObserverLossOutputDiagnostic
 	ObserverLossCatalogStorage
 	ObserverLossRootPrefetch
 	ObserverLossSenderTerminalSend
@@ -42,7 +42,7 @@ const (
 func (value ObserverLossCategory) Name() (string, bool) {
 	names := [...]string{
 		"", "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination",
-		"lane_settlement", "protocol_operation", "transfer_lifecycle", "filesystem_output",
+		"lane_settlement", "protocol_operation", "transfer_lifecycle", "output_diagnostic",
 		"catalog_storage", "root_prefetch", "sender_terminal_send", "sender_session_terminal",
 		"sender_capacity", "sender_revision", "command_adapter", "native_connectivity", "engine_observation",
 	}

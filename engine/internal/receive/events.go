@@ -5,12 +5,12 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/downloadmetrics"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -76,9 +76,10 @@ type WebRTCObserved struct {
 	event
 	Value wsrtc.LifecycleTrace
 }
-type FilesystemObserved struct {
+type OutputObserved struct {
 	event
-	Value osfs.FilesystemOutputTrace
+	Value appobs.OutputDiagnostic
+	Err   error
 }
 type TransferObserved struct {
 	event

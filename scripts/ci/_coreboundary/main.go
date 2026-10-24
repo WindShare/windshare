@@ -270,7 +270,11 @@ func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 	}
 
 	if isWindShareImportPath(logicalImportPath) {
-		if !isCoreImportPath(logicalImportPath) {
+		// Native storage integration fixtures belong only to the test graph delta.
+		// Production traversal still rejects this adapter and every other non-core package.
+		nativeStorageFixture := scope == testDeltaScope &&
+			inPathFamily(logicalImportPath, repositoryModulePath+"/osfs")
+		if !isCoreImportPath(logicalImportPath) && !nativeStorageFixture {
 			return []string{"WindShare package is outside the core boundary"}
 		}
 		if pkg.Module == nil || pkg.Module.Path == "" {

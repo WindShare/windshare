@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/diagnosticerror"
@@ -239,8 +240,8 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystem, err := clievent.NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
-		ReceiveOperation: mustReceiveID(t), Operation: appobs.FilesystemCertified,
+	filesystem, err := clievent.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+		ReceiveOperation: mustReceiveID(t), Operation: fsobs.FilesystemCertified,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -52,7 +51,7 @@ func (a *runner) prepareGetOutput(
 	}
 	authority, err := factory.NewOutputAuthority(getOutputAuthorityConfig{
 
-		Tracer: osfs.FilesystemOutputTraceFunc(observation.filesystemOutput),
+		Observe: observation.outputDiagnostic,
 	})
 	if err != nil {
 		if authority != nil {
@@ -69,7 +68,7 @@ func (a *runner) prepareGetOutput(
 		observation.recordCleanup(closeErr)
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(err, closeErr))
 	}
-	if !mode.valid() {
+	if !mode.Valid() {
 		closeErr := authority.Close()
 		observation.recordCleanup(closeErr)
 		return getOutputPreparation{}, observation.fail(stepLocalFailure, errors.Join(errGetOutputAdapterContract, closeErr))
@@ -398,7 +397,7 @@ type getOutputAdmission struct {
 }
 
 func getOperationDestination(displayRoot string, operation getOutputOperation) (string, bool, error) {
-	if !operation.valid() {
+	if !operation.Valid() {
 		return "", false, errGetOutputReservationContract
 	}
 	if operation.Destination != "" {
@@ -420,7 +419,7 @@ func resolveGetOutputOperation(
 	if err != nil {
 		return getOutputAdmission{}, err
 	}
-	if !lookup.valid() {
+	if !lookup.Valid() {
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
 	var operation getOutputOperation
@@ -451,7 +450,7 @@ func resolveGetOutputOperation(
 	default:
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
-	if !operation.valid() {
+	if !operation.Valid() {
 		return getOutputAdmission{}, errGetOutputReservationContract
 	}
 	reservation, direct := operation.Intent.MaterializationPlan().DestinationReservation()

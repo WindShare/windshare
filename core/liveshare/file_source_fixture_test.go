@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/osfs"
 )
 
 func testFileSource(paths []string) FileSourceFactory {

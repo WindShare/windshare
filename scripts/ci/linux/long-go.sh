@@ -15,6 +15,6 @@ echo "-- catalog long suites"
 go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/catalog
 
 echo "-- output runtime long suites"
-go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/osfs/internal/outputruntime
+go run ./scripts/ci/_gotestsuite -run '^TestLong' ./osfs/internal/outputruntime
 
 echo "== long-go: PASS in ${SECONDS}s =="

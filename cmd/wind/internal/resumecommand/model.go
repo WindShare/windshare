@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/output"
+	"github.com/windshare/windshare/osfs"
 )
 
 const (
@@ -32,7 +35,7 @@ const (
 	resumeOperationAcquisitionReason = "operation-acquisition-failed"
 	resumeOperationAdmissionReason   = "operation-admission-failed"
 	resumeCheckpointReconcileReason  = "checkpoint-reconciliation-failed"
-	resumeNativeDurabilityReason     = "native-durability-failed"
+	resumeNativeDurabilityReason     = "output-durability-failed"
 	resumeAuthorityCloseReason       = "authority-close-failed"
 	resumeDestinationBusyReason      = "destination-already-in-use"
 	resumeOperationRunningReason     = "operation-already-running"
@@ -69,7 +72,25 @@ type resumeDiscardRequest struct {
 	itemNumber int
 }
 
-type resumeFailureDetail = engine.RecoveryFailureDetail
+type resumeFailureDetail struct {
+	Stage          output.FailureStage
+	Reconciliation osfs.FilesystemCheckpointReconciliationStep
+	NativeClass    osfs.FilesystemNativeErrorClass
+}
+
+func (detail resumeFailureDetail) Valid() bool {
+	return (detail.Stage == 0 || detail.Stage.Valid()) &&
+		(detail.Reconciliation == 0 || detail.Reconciliation.Valid()) &&
+		(detail.NativeClass == 0 || detail.NativeClass.Valid())
+}
+func presentFailureDetail(failure *engine.RecoveryFailure) resumeFailureDetail {
+	detail := resumeFailureDetail{Stage: failure.Detail.Stage}
+	if native, ok := filesystem.FailureDiagnostic(failure.Cause); ok {
+		detail.Reconciliation, detail.NativeClass = native.ReconciliationStep, native.NativeErrorClass
+	}
+	return detail
+}
+
 type resumeOperationState = engine.RecoveryOperationState
 type resumeOperation = engine.RecoveryOperation
 type resumeBlockedItem = engine.RecoveryBlockedItem

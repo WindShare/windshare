@@ -65,8 +65,8 @@ compile_static_test_binary() {
 # in its native package rather than copying the test into osfs, so the release
 # fixture executes the same package boundary that production code uses.
 echo "-- compile static Linux native certification binaries"
-compile_static_test_binary ./core/osfs "$osfs_test_binary"
-compile_static_test_binary ./core/osfs/internal/outputlinux "$outputlinux_test_binary"
+compile_static_test_binary ./osfs "$osfs_test_binary"
+compile_static_test_binary ./osfs/internal/outputlinux "$outputlinux_test_binary"
 
 echo "-- construct deterministic tiny-inode ext4 fixture"
 truncate -s 128M -- "$image"
@@ -128,7 +128,7 @@ timeout --signal=TERM --kill-after=30s 25m \
     bash "$script_root/root-worker.sh" \
       "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputlinux_test_binary" \
       "$(id -u)" "$(id -g)" \
-  | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t -p github.com/windshare/windshare/core/osfs \
+  | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t -p github.com/windshare/windshare/osfs \
   | tee "$events"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e

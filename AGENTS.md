@@ -57,11 +57,13 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── observationstream/        Bounded producer-owned observation queues
 │   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
 │   ├── liveshare/                Runtime assembly and injected file-source ownership
-│   ├── osfs/                     Selected native file sources, output authority, checkpoints/recovery
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
 │   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
+├── osfs/                         Native file sources, filesystem output, checkpoints/recovery
+├── adapters/filesystem/          Native output/recovery assembly and provider diagnostics
 ├── engine/                       Shared native application API, tasks, observations, aggregate budgets
 │   ├── observation/              Application observation and diagnostic contracts
+│   ├── output/, recovery/        Platform-neutral destination and recovery inventory ports
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
 │   ├── turn/                     TURN settings, status, and observation contracts
 │   └── internal/                 Share/receive/recovery workflows, native connectivity, and TURN runtime

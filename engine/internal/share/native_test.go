@@ -18,11 +18,11 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/osfs"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
