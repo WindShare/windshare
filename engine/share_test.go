@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -13,9 +14,11 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
-func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T) {
+const shareStartupTestTimeout = 5 * time.Second
+
+func TestShareReadinessAndFinalizationUseDurableAuthority(t *testing.T) {
 	prepared := &preparedFacadeShare{}
-	relays := &facadeRelays{}
+	relays := &facadeRelays{accepting: make(chan struct{})}
 	peers := &facadePeers{}
 	application := newTestEngine(t, Config{
 		ObservationCapacity: 1,
@@ -34,12 +37,10 @@ func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T
 	if err != nil || !ready.RelayAuthority.Valid() {
 		t.Fatalf("ready = %+v, %v", ready, err)
 	}
-	if prepared.prefetched.Load() {
-		t.Fatal("root discovery started before capability publication")
-	}
-	current.Activate(nil)
-	if err := current.Activated(context.Background()); err != nil || !prepared.prefetched.Load() {
-		t.Fatalf("activation = %v, prefetch = %v", err, prepared.prefetched.Load())
+	select {
+	case <-relays.accepting:
+	case <-time.After(shareStartupTestTimeout):
+		t.Fatal("ready share cannot admit receivers without caller activation")
 	}
 	current.StopShare()
 	result, err := current.Wait(context.Background())
@@ -59,8 +60,8 @@ func TestShareReadinessActivationAndFinalizationUseDurableAuthority(t *testing.T
 	}
 }
 
-func TestSharePublicationFailureCompletesReadinessAndRetainsCause(t *testing.T) {
-	prepared := &preparedFacadeShare{}
+func TestShareStartsWithoutReadinessConsumer(t *testing.T) {
+	prepared := &preparedFacadeShare{prefetchStarted: make(chan struct{})}
 	application := newTestEngine(t, Config{Share: ShareDependencies{
 		Peers:   func() (SharePeers, error) { return &facadePeers{}, nil },
 		Prepare: func(context.Context, liveshare.SenderConfig) (PreparedShare, error) { return prepared, nil },
@@ -73,27 +74,28 @@ func TestSharePublicationFailureCompletesReadinessAndRetainsCause(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.Ready(context.Background()); err != nil {
-		t.Fatal(err)
+	select {
+	case <-prepared.prefetchStarted:
+	case <-time.After(shareStartupTestTimeout):
+		t.Fatal("unobserved readiness held share startup")
 	}
-	cause := errors.New("capability sink failed")
-	current.Activate(&SharePublicationError{Stage: SharePublicationOutput, Cause: cause})
-	if err := current.Activated(context.Background()); !errors.Is(err, cause) {
-		t.Fatalf("activation error = %v", err)
-	}
+	current.StopShare()
 	result, err := current.Wait(context.Background())
-	if err != nil || !errors.Is(result.Err, cause) || result.Outcome != OutcomeFailed || result.FailureClass != FailureLocal {
-		t.Fatalf("publication result = %+v, %v", result, err)
+	if err != nil || result.Err != nil || result.Outcome != OutcomeStopped || !result.Value.Ready {
+		t.Fatalf("unobserved share result = %+v, %v", result, err)
 	}
-	if prepared.prefetched.Load() || !prepared.closed.Load() {
-		t.Fatal("failed publication kept source or started discovery")
+	if !prepared.closed.Load() {
+		t.Fatal("stopped share retained its source")
+	}
+	if _, err := current.Ready(context.Background()); err != nil {
+		t.Fatalf("first readiness query after shutdown = %v", err)
 	}
 }
 
 type preparedFacadeShare struct {
-	prefetched    atomic.Bool
-	closed        atomic.Bool
-	sessionClosed atomic.Bool
+	prefetchStarted chan struct{}
+	closed          atomic.Bool
+	sessionClosed   atomic.Bool
 }
 
 func (*preparedFacadeShare) AuthorizeRegistration() error { return nil }
@@ -107,8 +109,12 @@ func (*preparedFacadeShare) SelectedRootSummary() liveshare.SelectedRootSummary 
 func (prepared *preparedFacadeShare) NewRuntimeFactory(liveshare.RuntimeFactoryConfig) (ShareSessionFactory, error) {
 	return facadeSessionFactory{prepared}, nil
 }
-func (prepared *preparedFacadeShare) StartRootPrefetch() { prepared.prefetched.Store(true) }
-func (prepared *preparedFacadeShare) Close() error       { prepared.closed.Store(true); return nil }
+func (prepared *preparedFacadeShare) StartRootPrefetch() {
+	if prepared.prefetchStarted != nil {
+		close(prepared.prefetchStarted)
+	}
+}
+func (prepared *preparedFacadeShare) Close() error { prepared.closed.Store(true); return nil }
 
 type facadeSessionFactory struct{ prepared *preparedFacadeShare }
 
@@ -120,9 +126,12 @@ func (factory facadeSessionFactory) Stop(context.Context, string) error {
 	return nil
 }
 
-type facadeRelays struct{}
+type facadeRelays struct{ accepting chan struct{} }
 
-func (*facadeRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
+func (relays *facadeRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
+	if relays.accepting != nil {
+		close(relays.accepting)
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }

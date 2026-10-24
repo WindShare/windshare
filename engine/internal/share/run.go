@@ -48,7 +48,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 	}
 	result := Result{Elapsed: max(d.Control.Now().Sub(started), 0), Ready: active.ready, ObservationLosses: o.lossSnapshot()}
 	finishErr := errors.Join(runErr, cleanupErr)
-	if finishErr == nil && !active.activated {
+	if finishErr == nil && !active.ready {
 		finishErr = context.Cause(ctx)
 	}
 	d.Controller.finish(finishErr)
@@ -68,7 +68,6 @@ type activeShare struct {
 	cancelResources context.CancelFunc
 	networkDone     chan struct{}
 	ready           bool
-	activated       bool
 }
 
 func (s *activeShare) start(ctx, resourceContext context.Context, request Request) (task.FailureClass, error) {
@@ -150,21 +149,20 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	if s.factory == nil {
 		return task.FailureLocal, ErrConfiguration
 	}
-	s.ready = true
-	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint})
-	if err := d.Controller.activate(ctx, s.prepared.StartRootPrefetch); err != nil {
-		if isCallerInterruption(ctx, err) {
-			return task.FailureLocal, err
-		}
-		var publication *PublicationError
-		if errors.As(err, &publication) && publication.Stage == PublicationEncoding {
-			return task.FailureUsage, errors.Join(ErrPublication, err)
-		}
-		return task.FailureLocal, errors.Join(ErrPublication, err)
+	if err := ctx.Err(); err != nil {
+		return task.FailureNone, context.Cause(ctx)
 	}
-	s.activated = true
-	o.emit(Observation{Milestone: ShareActivated})
+	// Admission belongs to the share lifetime, so callers need no presentation
+	// acknowledgement to make a returned capability usable.
 	s.server = startSessionServer(resourceContext, s.factory, s.relays, o)
+	s.ready = true
+	o.emit(Observation{Milestone: ShareReady})
+	d.Controller.publish(Ready{Capability: s.prepared.Capability(), SelectedRootSummary: s.prepared.SelectedRootSummary(), RelayEndpoint: endpoint})
+	// Optional warming follows readiness and retains its own bounded background
+	// work. A slow scan or a caller that never displays the link cannot hold Ready.
+	if ctx.Err() == nil {
+		s.prepared.StartRootPrefetch()
+	}
 	select {
 	case <-ctx.Done():
 		return task.FailureNone, context.Cause(ctx)
@@ -231,12 +229,6 @@ func stopFactoryWithin(ctx context.Context, factory SessionFactory, message stri
 		err = errors.Join(err, factory.Stop(context.Background(), message))
 	}
 	return err
-}
-
-func isCallerInterruption(ctx context.Context, err error) bool {
-	return ctx.Err() != nil && errorTreeContainsOnly(err, func(leaf error) bool {
-		return exactShareInterruption(leaf, ctx.Err()) || exactShareInterruption(leaf, context.Cause(ctx))
-	})
 }
 
 type sessionServer struct {

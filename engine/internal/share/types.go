@@ -25,25 +25,6 @@ import (
 )
 
 var ErrConfiguration = errors.New("invalid share workflow configuration")
-var ErrPublication = errors.New("share capability publication failed")
-
-type PublicationStage uint8
-
-const (
-	PublicationEncoding PublicationStage = iota + 1
-	PublicationOutput
-	PublicationReadiness
-)
-
-// PublicationError reports the adapter's failing operation without deciding the
-// application outcome or exposing its terminal representation to the engine.
-type PublicationError struct {
-	Stage PublicationStage
-	Cause error
-}
-
-func (e *PublicationError) Error() string { return ErrPublication.Error() }
-func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type Request struct {
 	Source         liveshare.FileSourceFactory
@@ -60,7 +41,8 @@ type Ready struct {
 }
 
 type Result struct {
-	Elapsed           time.Duration
+	Elapsed time.Duration
+	// Ready records first service readiness, not availability at shutdown.
 	Ready             bool
 	ObservationLosses []ObservationLoss
 }
@@ -73,6 +55,7 @@ type Prepared interface {
 	Capability() link.Link
 	SelectedRootSummary() liveshare.SelectedRootSummary
 	NewRuntimeFactory(liveshare.RuntimeFactoryConfig) (SessionFactory, error)
+	// StartRootPrefetch schedules optional work without waiting for a scan.
 	StartRootPrefetch()
 	Close() error
 }

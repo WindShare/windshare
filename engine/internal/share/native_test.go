@@ -118,18 +118,13 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 		t.Fatal("capability contains private relay configuration")
 	}
 	mu.Lock()
-	acquired, prefetch := false, false
+	acquired := false
 	for _, fact := range facts {
 		acquired = acquired || fact.Milestone == SourceAcquired && !fact.ShareInstance.IsZero()
-		prefetch = prefetch || fact.Prefetch != nil
 	}
 	mu.Unlock()
-	if !acquired || prefetch {
-		t.Fatalf("acquired=%v prefetchBeforePublication=%v", acquired, prefetch)
-	}
-	dependencies.Controller.Acknowledge(nil)
-	if err := dependencies.Controller.Activated(context.Background()); err != nil {
-		t.Fatal(err)
+	if !acquired {
+		t.Fatal("source acquisition evidence missing")
 	}
 	cancel(task.ErrShareStopped)
 	result := awaitResult(t, done)
@@ -217,34 +212,16 @@ type exhaustedRandom struct{}
 
 func (exhaustedRandom) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
-func TestReadinessWaitCancellationDoesNotAcknowledgeOrCancelShare(t *testing.T) {
+func TestReadinessWaitCancellationDoesNotResolveOrCancelShare(t *testing.T) {
 	controller := NewController()
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := controller.Ready(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ready err=%v", err)
 	}
-	if err := controller.Activated(canceled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("activated err=%v", err)
-	}
 	controller.publish(Ready{})
-	entered := false
-	controller.Acknowledge(nil)
-	if err := controller.activate(context.Background(), func() { entered = true }); err != nil || !entered {
-		t.Fatalf("activate err=%v entered=%v", err, entered)
-	}
-}
-
-func TestActivationCancellationNeverStartsDescendantWork(t *testing.T) {
-	controller := NewController()
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := controller.activate(canceled, func() { t.Error("canceled activation prefetched") }); !errors.Is(err, context.Canceled) {
-		t.Fatalf("err=%v", err)
-	}
-	controller.Acknowledge(nil)
-	if err := controller.activate(canceled, func() { t.Error("canceled activation prefetched") }); !errors.Is(err, context.Canceled) {
-		t.Fatalf("err=%v", err)
+	if _, err := controller.Ready(context.Background()); err != nil {
+		t.Fatalf("canceled wait poisoned retained readiness: %v", err)
 	}
 }
 

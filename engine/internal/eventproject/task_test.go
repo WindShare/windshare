@@ -96,7 +96,7 @@ func TestSourceAcquisitionTraceKeepsScopeAndSkipsUnrelatedObservations(t *testin
 			t.Fatal(err)
 		}
 	}
-	for _, event := range []task.Event{nil, share.Observation{Milestone: share.ShareActivated}, receive.Warning{}} {
+	for _, event := range []task.Event{nil, share.Observation{Milestone: share.ShareReady}, receive.Warning{}} {
 		if _, relevant, err := projectTaskSpec(appobs.WorkflowReceive, task.Observation{Event: event}); err != nil || relevant {
 			t.Fatalf("unrelated projection: %v, %v", relevant, err)
 		}

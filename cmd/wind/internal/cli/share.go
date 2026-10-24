@@ -66,7 +66,12 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 	ready, readyErr := current.Ready(context.Background())
 	var publicationErr error
 	if readyErr == nil {
-		publicationErr = a.publishEngineShare(current, ready, request.link, runtime, observations)
+		publicationErr = a.publishEngineShare(ready, request.link, runtime, observations)
+		if publicationErr != nil {
+			// Service readiness precedes presentation. Even a partial output failure
+			// must stop the share and join its work before this command returns.
+			current.StopShare()
+		}
 	}
 	result, waitErr := current.Wait(context.Background())
 	completionContext, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
@@ -101,38 +106,27 @@ func shareFileSource(paths []string) liveshare.FileSourceFactory {
 	})
 }
 
-func (a *App) publishEngineShare(current *engine.ShareTask, ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime, observations *shareObservations) error {
+func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime, observations *shareObservations) error {
 	payload, err := buildShareCapabilityPayload(ready.Capability, presentation)
 	if err != nil {
-		failure := &engine.SharePublicationError{Stage: engine.SharePublicationEncoding, Cause: err}
-		current.Activate(failure)
-		return failure
+		return errors.Join(errShareCapabilityEncoding, err)
 	}
 	defer clear(payload)
 	if err := publishShareCapability(a.Stdout, payload); err != nil {
-		failure := &engine.SharePublicationError{Stage: engine.SharePublicationOutput, Cause: err}
-		current.Activate(failure)
-		return failure
-	}
-	current.Activate(nil)
-	if err := current.Activated(context.Background()); err != nil {
-		return err
+		return errors.Join(errShareCapabilityOutput, err)
 	}
 	a.recordProcessTrace(processTraceShareComponent, processTraceSenderReady, testrun.OutcomeSucceeded)
 	if err := a.processTrace.err(); err != nil {
-		current.StopShare()
-		return &engine.SharePublicationError{Stage: engine.SharePublicationReadiness, Cause: err}
+		return err
 	}
 	authority := ready.RelayAuthority
 	observations.SetRelayAuthority(authority)
 	subject, err := commandprojection.ProjectSharingSubject(ready.SelectedRootSummary)
 	if err != nil {
-		current.StopShare()
 		return err
 	}
 	connected, err := clievent.NewRelayConnected(clievent.CommandShare, authority)
 	if err != nil {
-		current.StopShare()
 		return err
 	}
 	emitShareReady(runtime, subject, connected)

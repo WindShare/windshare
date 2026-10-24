@@ -85,6 +85,7 @@ type testPrepared struct {
 	step                               func(string)
 	authorizeErr, runtimeErr, closeErr error
 	observeRuntime                     func(liveshare.RuntimeFactoryConfig)
+	observePrefetch                    func()
 }
 
 func (p *testPrepared) AuthorizeRegistration() error { p.step("authorize"); return p.authorizeErr }
@@ -102,18 +103,27 @@ func (p *testPrepared) NewRuntimeFactory(config liveshare.RuntimeFactoryConfig) 
 	}
 	return p.factory, p.runtimeErr
 }
-func (p *testPrepared) StartRootPrefetch() { p.step("prefetch") }
-func (p *testPrepared) Close() error       { p.step("source_closed"); return p.closeErr }
+func (p *testPrepared) StartRootPrefetch() {
+	p.step("prefetch")
+	if p.observePrefetch != nil {
+		p.observePrefetch()
+	}
+}
+func (p *testPrepared) Close() error { p.step("source_closed"); return p.closeErr }
 
 type testRelays struct {
 	step                           func(string)
 	waitErr, acceptErr, cleanupErr error
 	wait                           func(context.Context) error
 	stopped                        chan struct{}
+	accepting                      chan struct{}
 	once                           sync.Once
 }
 
 func (r *testRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
+	if r.accepting != nil {
+		close(r.accepting)
+	}
 	if r.acceptErr != nil {
 		return nil, r.acceptErr
 	}
@@ -192,22 +202,34 @@ func awaitResult(t *testing.T, result <-chan task.Completion[Result]) task.Compl
 	}
 }
 
-func TestShareActivationPublishesBeforePrefetchAndJoinsBeforeSourceRelease(t *testing.T) {
+func TestShareReadinessStartsAdmissionBeforePrefetchAndJoinsBeforeSourceRelease(t *testing.T) {
 	f := newShareFixture(t)
 	f.factory.entered, f.factory.release = make(chan struct{}), make(chan struct{})
+	f.relays.accepting = make(chan struct{})
+	prefetched := make(chan struct{})
+	f.prepared.observePrefetch = func() {
+		select {
+		case <-f.dependencies.Controller.readyDone:
+		default:
+			t.Error("prefetch preceded service readiness")
+		}
+		select {
+		case <-f.relays.accepting:
+		case <-time.After(testWaitTimeout):
+			t.Error("session admission waited for prefetch")
+		}
+		close(prefetched)
+	}
 	ctx, stop := context.WithCancelCause(context.Background())
 	done := fixtureRun(f, ctx, Request{Diagnostics: true, TraceLifecycle: true})
 	ready, err := f.dependencies.Controller.Ready(context.Background())
 	if err != nil || ready.RelayEndpoint.DialURL == "" {
 		t.Fatalf("ready=%+v error=%v", ready, err)
 	}
-	if slices.Contains(f.snapshot(), "prefetch") {
-		t.Fatal("descendant work started before capability publication")
-	}
-	f.step("capability_published")
-	f.dependencies.Controller.Acknowledge(nil)
-	if err := f.dependencies.Controller.Activated(context.Background()); err != nil {
-		t.Fatal(err)
+	select {
+	case <-prefetched:
+	case <-time.After(testWaitTimeout):
+		t.Fatal("share waited for caller activation")
 	}
 	stop(task.ErrShareStopped)
 	<-f.factory.entered
@@ -221,7 +243,7 @@ func TestShareActivationPublishesBeforePrefetchAndJoinsBeforeSourceRelease(t *te
 	}
 	steps := f.snapshot()
 	for _, ordered := range [][2]string{
-		{"capability_published", "prefetch"}, {"admission_frozen", "sessions_joined"},
+		{"admission_frozen", "sessions_joined"},
 		{"sessions_joined", "registrations_released"}, {"registrations_released", "source_closed"},
 		{"network_joined", "source_closed"},
 	} {
@@ -231,39 +253,20 @@ func TestShareActivationPublishesBeforePrefetchAndJoinsBeforeSourceRelease(t *te
 	}
 }
 
-func TestSharePublicationFailureSettlesWithoutStartingDescendants(t *testing.T) {
-	for _, stage := range []PublicationStage{PublicationEncoding, PublicationOutput} {
-		t.Run(stageName(stage), func(t *testing.T) {
-			f := newShareFixture(t)
-			done := fixtureRun(f, context.Background(), Request{})
-			if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			failure := errors.New("publication failed")
-			f.dependencies.Controller.Acknowledge(&PublicationError{Stage: stage, Cause: failure})
-			f.dependencies.Controller.Acknowledge(nil)
-			result := awaitResult(t, done)
-			class := task.FailureLocal
-			if stage == PublicationEncoding {
-				class = task.FailureUsage
-			}
-			if result.Outcome != task.OutcomeFailed || result.FailureClass != class || !errors.Is(result.Err, failure) {
-				t.Fatalf("result=%+v", result)
-			}
-			if slices.Contains(f.snapshot(), "prefetch") {
-				t.Fatal("publication failure started descendant work")
-			}
-			if err := f.dependencies.Controller.Activated(context.Background()); !errors.Is(err, failure) {
-				t.Fatalf("activation error=%v", err)
-			}
-		})
+func TestShareCancellationBeforeServiceStartDoesNotPublishReadiness(t *testing.T) {
+	f := newShareFixture(t)
+	ctx, stop := context.WithCancelCause(context.Background())
+	f.prepared.observeRuntime = func(liveshare.RuntimeFactoryConfig) { stop(task.ErrShareStopped) }
+	result := Run(ctx, Request{}, f.dependencies)
+	if result.Outcome != task.OutcomeStopped || result.Value.Ready || result.Err != nil {
+		t.Fatalf("result=%+v", result)
 	}
-}
-func stageName(stage PublicationStage) string {
-	if stage == PublicationEncoding {
-		return "encoding"
+	if _, err := f.dependencies.Controller.Ready(context.Background()); !errors.Is(err, task.ErrShareStopped) {
+		t.Fatalf("ready error=%v", err)
 	}
-	return "output"
+	if slices.Contains(f.snapshot(), "prefetch") {
+		t.Fatal("canceled startup began prefetch")
+	}
 }
 
 func TestSharePreparationFailuresReturnCleanupAndResolveReadiness(t *testing.T) {
@@ -335,10 +338,6 @@ func TestShareCallerCancellationKeepsIndependentStopAndSourceFailures(t *testing
 			if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			f.dependencies.Controller.Acknowledge(nil)
-			if err := f.dependencies.Controller.Activated(context.Background()); err != nil {
-				t.Fatal(err)
-			}
 			cancel()
 			result := awaitResult(t, done)
 			if result.FailureClass != want || (result.Err != nil) != (failureOwner != "none") {
@@ -355,13 +354,21 @@ func TestShareCallerCancellationKeepsIndependentStopAndSourceFailures(t *testing
 	}
 }
 
-func TestShareCancelWhileWaitingForRelayNeverActivates(t *testing.T) {
+func TestShareCancelWhileWaitingForRelayNeverStartsService(t *testing.T) {
 	f := newShareFixture(t)
+	f.relays.accepting = make(chan struct{})
 	waiting := make(chan struct{})
 	f.relays.wait = func(ctx context.Context) error { close(waiting); <-ctx.Done(); return context.Cause(ctx) }
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := fixtureRun(f, ctx, Request{})
 	<-waiting
+	select {
+	case <-f.dependencies.Controller.readyDone:
+		t.Fatal("share became ready before relay registration")
+	case <-f.relays.accepting:
+		t.Fatal("session admission started before relay registration")
+	default:
+	}
 	cancel(task.ErrApplicationClosed)
 	result := awaitResult(t, done)
 	if result.Err != nil || result.CleanupError != nil || result.Outcome != task.OutcomeCancelled {
@@ -371,7 +378,7 @@ func TestShareCancelWhileWaitingForRelayNeverActivates(t *testing.T) {
 		t.Fatalf("ready error=%v", err)
 	}
 	if slices.Contains(f.snapshot(), "prefetch") {
-		t.Fatal("canceled share activated")
+		t.Fatal("canceled share started prefetch")
 	}
 }
 
@@ -383,7 +390,6 @@ func TestShareServeFailureRetainsPrimaryFailureWithoutMislabelingCleanup(t *test
 	if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	f.dependencies.Controller.Acknowledge(nil)
 	result := awaitResult(t, done)
 	if !errors.Is(result.Err, failure) || result.CleanupError != nil || result.FailureClass != task.FailureNetwork {
 		t.Fatalf("result=%+v", result)

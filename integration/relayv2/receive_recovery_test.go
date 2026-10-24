@@ -122,7 +122,6 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sender.Activate(nil)
 	trace.RequireCleanup(t, "sender share", func(cleanup context.Context) error {
 		sender.StopShare()
 		result, err := sender.Wait(cleanup)
