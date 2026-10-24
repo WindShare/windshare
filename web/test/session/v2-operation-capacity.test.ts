@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
-import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
+import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import {
   V2_MAXIMUM_ACTIVE_OPERATIONS,

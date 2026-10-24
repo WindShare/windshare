@@ -7,8 +7,9 @@ import {
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import type { V2ReceiverController, V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
+import type { V2ReceiverController } from '../../src/ui/v2-controller'
+import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
 import {
   controllerFor, deferred, DIRECT_ZIP_ENVIRONMENT, FakeJoinedShare, FakeReceiveComposition,
   identityText, resetOrchestrationTestEnvironment, turns, waitFor,

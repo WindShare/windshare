@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CapabilityNavigation, type CapabilityJoinOutcome } from '../../src/ui/capability/navigation'
+import { CapabilityNavigation, type CapabilityJoinOutcome } from '../../src/application/browser-share/capability-navigation'
 import { deferred } from './v2-receiver-orchestration-fixture'
 
 describe('capability navigation ownership', () => {

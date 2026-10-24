@@ -1,5 +1,5 @@
 import { V2SelectionPolicy } from '../../catalog/v2-selection'
-import type { V2BrowseDirectory, V2BrowsePage } from '../v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from '../../application/browser-share/gateway'
 import type { V2SelectionDraft, V2ShareIdentity } from '../v2-model'
 
 export const EMPTY_SELECTION_DRAFT: V2SelectionDraft = Object.freeze({

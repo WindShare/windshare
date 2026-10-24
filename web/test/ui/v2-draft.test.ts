@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { projectDraft, scopeSelection, shareIdentityFromRoot } from '../../src/ui/draft/model'
-import type { V2BrowsePage } from '../../src/ui/v2-gateway'
+import type { V2BrowsePage } from '../../src/application/browser-share/gateway'
 
 const id = (value: number) => new Uint8Array(16).fill(value)
 const root = { id: id(1), idText: encodeBase64Url(id(1)), name: 'Shared files', path: [], ancestry: [encodeBase64Url(id(1))] }

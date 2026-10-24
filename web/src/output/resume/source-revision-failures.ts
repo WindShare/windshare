@@ -1,3 +1,4 @@
+import type { SourceRevisionFailure, SourceRevisionFailures } from '../../transfer/lifecycle/source-revision'
 import type { ReceiveIntent } from '../../transfer/intent'
 import { progressiveZipObjectRef } from '../origin-private/progressive-backend'
 import { IndexedDbTaskCheckpointStore } from '../origin-private/task-checkpoint/indexeddb-store'
@@ -7,18 +8,6 @@ import { verifyProgressiveZipRecovery, verifyProgressiveZipSelection } from './p
 
 const FAILURE_SCAN_PAGE_SIZE = 128
 export const SOURCE_REVISION_FAILURE_DISPLAY_LIMIT = 20
-
-export interface SourceRevisionFailure {
-  readonly entryId: string
-  readonly path: readonly string[]
-  readonly sourcePath: readonly string[]
-}
-
-export interface SourceRevisionFailures {
-  readonly shareInstance: string
-  readonly count: bigint
-  readonly files: readonly SourceRevisionFailure[]
-}
 
 /** Failed revisions remain immutable; these paths authorize only a separate selection. */
 export async function projectSourceRevisionFailures(

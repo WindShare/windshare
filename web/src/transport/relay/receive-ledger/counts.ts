@@ -1,7 +1,8 @@
 import {
   V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES, V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES,
 } from '../v2-protocol'
-import { ReceiveLedgerError, type ReceiveCounts } from './types'
+import { ReceiveLedgerError } from './types'
+import { type ReceiveCounts } from '../../../contracts/relay-delivery-observation'
 
 export const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
 export const ZERO_COUNTS: ReceiveCounts = Object.freeze({ frames: 0n, encodedBytes: 0n })

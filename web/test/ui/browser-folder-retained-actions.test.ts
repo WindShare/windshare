@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createBrowserReceiveComposition } from '../../src/ui/v2-browser-receive-composition'
+import { createBrowserReceiveComposition } from '../../src/application/browser-receive/composition'
 import type { BrowserDeliveryRepository } from '../../src/output/browser-delivery/repository'
 import type { BrowserDeliveryRecordV1 } from '../../src/output/browser-delivery/model'
 import { deliveryFixture } from '../output/browser-delivery-fixture'

@@ -17,7 +17,7 @@ import {
 import { normalizeV2FileTransferFailure } from '../../../src/transfer/job/failures'
 import { TransferPauseRequestedError, type WorkspaceExecution } from '../../../src/transfer/output/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY } from '../../../src/transfer/outcome'
-import { WorkspaceReceiveOperation } from '../../../src/ui/browser-receive/workspace-operation'
+import { WorkspaceReceiveOperation } from '../../../src/application/browser-receive/workspace/operation'
 
 let runtime: WorkspaceReceiveOperation | undefined
 let repository: ReceiveOperationRepository | undefined

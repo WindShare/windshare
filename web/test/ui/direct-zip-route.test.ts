@@ -13,9 +13,9 @@ import {
   startBrowserDirectZipAuthority,
   type BrowserDirectZipCompositionPort,
   type InstalledBrowserDirectZipRoute,
-} from '../../src/ui/browser-receive/direct-zip'
-import { listBrowserRetainedOperations } from '../../src/ui/browser-receive/retained'
-import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
+} from '../../src/application/browser-receive/direct-zip'
+import { listBrowserRetainedOperations } from '../../src/application/browser-receive/retained/inventory'
+import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
 import type { V2ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
 
 const CHOICE = 'choice' as ArtifactChoiceID

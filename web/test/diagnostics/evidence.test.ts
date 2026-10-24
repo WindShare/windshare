@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import { deepFreezeJson } from '../../src/diagnostics/export/json'
 import { FakeTraceTime } from './trace/test-support'
 

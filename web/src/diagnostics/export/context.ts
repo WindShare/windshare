@@ -96,6 +96,13 @@ export interface OutputContextSnapshot {
   readonly planKind: OutputPlanKind
 }
 
+export interface ReceiverDiagnosticSnapshot {
+  readonly controller: ControllerContextSnapshot
+  readonly lifecycle?: LifecycleContextSnapshot
+  readonly progress: ProgressContextSnapshot
+  readonly output?: OutputContextSnapshot
+}
+
 export interface ProtocolContextSnapshot {
   readonly generation: bigint
 }

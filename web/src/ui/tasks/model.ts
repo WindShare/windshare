@@ -1,4 +1,4 @@
-import type { ReceiveLifecycleState } from '../../output/workspace'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
 import type { LifecycleUserAction } from '../../application/receive/actions'

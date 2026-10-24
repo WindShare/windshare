@@ -9,9 +9,9 @@ import {
   type DirectZipImmutablePageV1, type DirectZipJournalRepository,
 } from '../../src/output/direct-zip/journal'
 import type { DirectZipEpochProofV1 } from '../../src/output/direct-zip/writer'
-import { chainForKind, chainFromPage } from '../../src/ui/browser-receive/direct-zip/journal/bootstrap'
-import { BrowserDirectZipPages, pageState, type BrowserDirectZipPageAuthority } from '../../src/ui/browser-receive/direct-zip/journal/pages'
-import { encodeCentral, encodeEpoch, encodeLayout } from '../../src/ui/browser-receive/direct-zip/journal/records'
+import { chainForKind, chainFromPage } from '../../src/output/direct-zip/browser-journal/bootstrap'
+import { BrowserDirectZipPages, pageState, type BrowserDirectZipPageAuthority } from '../../src/output/direct-zip/browser-journal/pages'
+import { encodeCentral, encodeEpoch, encodeLayout } from '../../src/output/direct-zip/browser-journal/records'
 
 const identity = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 const OPERATION_ID = identity(16, 1)

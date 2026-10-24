@@ -1,4 +1,4 @@
-import type { ReceiveLifecycleState } from '../output/workspace'
+import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 import type {
   RecoverySummary,
 } from '../transfer/lifecycle/recovery-summary'

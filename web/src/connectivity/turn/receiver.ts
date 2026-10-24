@@ -2,7 +2,7 @@ import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
 import type { V2PeerRecoveryClock, V2PeerRecoveryState } from '../peer-set/contract'
 import { awaitWithAbort } from '../peer-offer-remote'
-import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader, type TurnLane } from './control-codec'
+import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader, type TurnLane } from '../../protocol/turn-control'
 
 const RENEW_DEMAND_MS = 60_000
 const MAX_PATHS = 3

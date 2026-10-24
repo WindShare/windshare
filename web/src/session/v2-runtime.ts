@@ -1,10 +1,11 @@
 import { cancellationTraceReason } from './v2-operation-diagnostics'
 import { V2OperationCancellationError } from './v2-runtime-types'
-import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
-import { decodeTurnControl } from '../connectivity/turn/control-codec'
+import { decodeV2PeerPathControl } from '../protocol/peer-path-control'
+import { decodeTurnControl } from '../protocol/turn-control'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
-import type { FailureCorrelation, ReceivedProtocolError } from '../diagnostics/incident/fact'
+import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
+import type { ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 import {
   decodeV2LaneGrant,
   encodeV2LaneAttachRequest,

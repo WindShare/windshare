@@ -5,11 +5,8 @@ import type {
 } from '../catalog/v2-client'
 import type { V2CatalogPageRequest } from '../catalog/v2-records'
 import { equalBytes } from '../crypto/bytes'
-import {
-  protocolFailureFact,
-  type FailureFact,
-  type ReceivedProtocolError,
-} from '../diagnostics/incident/fact'
+import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
+import { type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 import {
   decodeV2ScanProgress,
   type V2SessionMessage,

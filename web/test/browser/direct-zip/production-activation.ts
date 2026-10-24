@@ -8,12 +8,11 @@ import {
   type OfferedArtifactChoice, type ResolvedArtifactAction,
 } from '../../../src/output/planning'
 import { admitDirectZipRuntimeV1 } from '../../../src/output/direct-zip/session'
-import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
-import type { createBrowserDirectZipComposition } from '../../../src/ui/browser-receive/direct-zip/production'
-import {
-  observeBrowserDirectZipFeatureFacts, BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID,
-} from '../../../src/ui/browser-receive/direct-zip/support'
-import type { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-receive-composition'
+import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
+import type { createBrowserDirectZipComposition } from '../../../src/application/browser-receive/direct-zip/production'
+import { observeBrowserDirectZipFeatureFacts } from '../../../src/output/direct-zip/browser/features'
+import { BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID } from '../../../src/application/browser-receive/direct-zip/support'
+import type { createBrowserReceiveComposition } from '../../../src/application/browser-receive/composition'
 import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
 
 const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))

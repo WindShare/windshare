@@ -16,7 +16,7 @@ import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import { CandidateLimitExceededError, PeerNegotiationError } from '../../src/connectivity/errors'
 import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import { SIGNAL_KIND_OFFER } from '../../src/connectivity/signaling'
-import { decodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND } from '../../src/connectivity/v2-path-control-codec'
+import { decodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND } from '../../src/protocol/peer-path-control'
 import {
   V2AuthenticatedPeerOperationError,
   V2SessionSignalingRoute,

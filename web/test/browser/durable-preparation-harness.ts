@@ -41,7 +41,7 @@ import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
-} from '../../src/ui/v2-browser-receive-composition'
+} from '../../src/application/browser-receive/composition'
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,

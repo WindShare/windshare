@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server'
 import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
 import { composeTasks } from '../../src/ui/experience/task-composition'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway, V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2BrowserReceiverGateway, V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { runInitialJoin, type InitialJoinOptions } from '../../src/receiver/initial-join'
 import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 import { FakeReceiveComposition, FakeJoinedShare, WORKSPACE_ENVIRONMENT, controllerFor,

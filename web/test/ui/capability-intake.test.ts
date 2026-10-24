@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserCapabilityIntake } from '../../src/ui/capability/intake'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
-import { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
+import { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 describe('capability presentation intake', () => {

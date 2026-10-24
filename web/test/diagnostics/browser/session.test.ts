@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createBrowserDiagnosticsComposition } from '../../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../../src/application/diagnostics/composition'
 import { BrowserDiagnosticsSession, DIAGNOSTICS_CHECKPOINT_INTERVAL_MS } from '../../../src/diagnostics/browser/session'
 import { retainDiagnosticCaptures, summarizeDiagnosticCapture, type DiagnosticsArchiveStore, type SavedDiagnosticCapture } from '../../../src/diagnostics/browser/archive'
 import { DEFAULT_TRACE_CAPTURE_EXPIRY_MS } from '../../../src/diagnostics/trace/capacity'

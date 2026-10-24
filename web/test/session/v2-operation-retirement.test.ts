@@ -5,7 +5,7 @@ import { V2OperationRouter, V2_MAXIMUM_TRACKED_OPERATIONS, V2_OPERATION_TOMBSTON
 import { V2IssuedOperations } from '../../src/session/operations/issued-operations'
 import { V2EnvelopeSealer } from '../../src/session/v2-envelope'
 import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
-import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
+import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import { fragmentRecord } from '../content/v2-fragment-fixture'
 import { BINDING, KEY, id, runtimeFixture } from './v2-send-fixture'

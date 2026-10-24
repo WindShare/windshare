@@ -6,7 +6,7 @@ import {
 } from '../../src/transfer/projection'
 import { SelectionProjectionRuntime } from '../../src/application/receive/discovery'
 import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
   FakeJoinedShare,
   FakeReceiveComposition,

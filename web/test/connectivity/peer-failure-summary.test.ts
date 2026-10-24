@@ -5,9 +5,9 @@ import {
   createV2ProtocolSessionIdentity, createV2ProtocolOperationIdentity,
   createV2PeerPathIdentityValue, createV2PeerAttemptIdentity,
 } from '../../src/session/v2-identities'
-import { projectConnectivityTraceEvent } from '../../src/ui/v2-production-trace'
+import { projectConnectivityTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
-import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import { FakeTraceTime } from '../diagnostics/trace/test-support'
 
 const bytes = (seed: number) => new Uint8Array(16).fill(seed)

@@ -4,7 +4,7 @@ import { recordOutputException } from '../../src/output/diagnostics'
 import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
 import { V2TransferAdmissionFailureError } from '../../src/transfer/v2-job'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
+import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import {
   FakeGateway,
   FakeJoinedShare,

@@ -30,7 +30,7 @@ import { createSelectionSpec } from '../../src/transfer/intent'
 
 import {
   createBrowserReceiveComposition,
-} from '../../src/ui/v2-browser-receive-composition'
+} from '../../src/application/browser-receive/composition'
 import {
   COMPLETE_DISCOVERY,
   projection,

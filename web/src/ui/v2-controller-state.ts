@@ -3,12 +3,12 @@ import { EMPTY_SELECTION_DRAFT } from './draft/model'
 import { EMPTY_V2_OUTPUT_PRESENTATION } from './v2-output'
 import { EMPTY_V2_PROGRESS, EMPTY_V2_PREVIEW, type V2ReceiverProgress } from './v2-model'
 import { EMPTY_V2_RETAINED_INVENTORY } from '../application/receive/retained/model'
-import type { V2ReceiverDiagnosticSnapshot } from './v2-model'
+import type { ReceiverDiagnosticSnapshot } from '../diagnostics/export/context'
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import type { V2SelectionPolicy } from '../catalog/v2-selection'
 import type { V2ConnectivityActivation } from '../connectivity/v2-receiver-policy'
 import type { V2FilePreview, V2PreviewPresentation } from '../preview/v2-preview'
-import type { V2BrowseDirectory, V2BrowsePage } from './v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from '../application/browser-share/gateway'
 import type { V2BrowseRow, V2ReceiverSnapshot } from './v2-model'
 
 export interface ActiveV2Preview {
@@ -148,7 +148,7 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
-export function receiverDiagnosticSnapshot(snapshot: V2ReceiverSnapshot, generation: bigint): V2ReceiverDiagnosticSnapshot {
+export function receiverDiagnosticSnapshot(snapshot: V2ReceiverSnapshot, generation: bigint): ReceiverDiagnosticSnapshot {
   const lifecycle = snapshot.output.lifecycle
   const plan = snapshot.output.plan
   const progress = snapshot.progress

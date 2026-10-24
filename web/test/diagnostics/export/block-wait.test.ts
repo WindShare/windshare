@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { snapshotTraceEventObservationV2 } from '../../../src/diagnostics/export/trace-event-v2'
-import { projectProtocolTraceEvent } from '../../../src/ui/v2-protocol-trace'
+import { projectProtocolTraceEvent } from '../../../src/application/diagnostics/protocol-trace'
 import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from '../../../src/session/v2-identities'
 
 describe('block wait diagnostics', () => {

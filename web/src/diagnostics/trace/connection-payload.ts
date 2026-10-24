@@ -4,7 +4,7 @@ import { decimal, durationMilliseconds } from '../export/trace-observation'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 import type { V2ConnectionRecoveryTraceEvent, V2ProtocolTraceSource, V2RelayHeartbeatTraceEvent, V2RelayDeliveryTraceEvent } from '../../session/v2-diagnostics'
 import type { RelayHeartbeatTrace } from '../../transport/relay/heartbeat'
-import type { ReceiveCounts, ReceiveLedgerEvent } from '../../transport/relay/receive-ledger'
+import type { ReceiveCounts, ReceiveLedgerEvent } from '../../contracts/relay-delivery-observation'
 import type { TraceEventObservationV2 } from './model'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from './lane-payload'
 
@@ -39,15 +39,15 @@ export interface ConnectionTracePayloads {
     relay_session_id?: string
     share_id?: string
     share_instance_id?: string
-    action: import('../../transport/relay/receive-ledger/types').ReceiveAction
-    failure?: import('../../transport/relay/receive-ledger/types').ReceiveFailure
+    action: import('../../contracts/relay-delivery-observation').ReceiveAction
+    failure?: import('../../contracts/relay-delivery-observation').ReceiveFailure
     capacity: Readonly<{ frames: string; encoded_bytes: string }>
     held: Readonly<{ frames: string; encoded_bytes: string }>
     outstanding: Readonly<{ frames: string; encoded_bytes: string }>
     pending_consumed: Readonly<{ frames: string; encoded_bytes: string }>
     retained_sessions: string
     progress?: Readonly<{
-      phase: import('../../transport/relay/receive-ledger/types').ReceivePhase
+      phase: import('../../contracts/relay-delivery-observation').ReceivePhase
       received: Readonly<{ frames: string; encoded_bytes: string }>
       consumed: Readonly<{ frames: string; encoded_bytes: string }>
       discarded: Readonly<{ frames: string; encoded_bytes: string }>

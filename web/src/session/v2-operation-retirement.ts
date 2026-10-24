@@ -1,4 +1,4 @@
-import { createProtocolErrorContent } from '../diagnostics/incident/fact'
+import { createProtocolErrorContent } from '../diagnostics/incident/protocol-error'
 import { protocolMessageKindV1, type V2ProtocolOperationSettlement, type V2ProtocolTraceSource } from './v2-diagnostics'
 import { createV2ProtocolOperationIdentity, type V2ProtocolSessionIdentity } from './v2-identities'
 import { decodeV2OperationErrorControl, V2_MESSAGE_KIND, type V2MessageKind, type V2SessionMessage } from './v2-message'

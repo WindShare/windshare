@@ -5,15 +5,12 @@ import { V2_RELAY_SESSION_ID_BYTES } from '../v2-protocol'
 import {
   addCounts, appendEnvelope, positiveUint64, sameCounts, subtractCounts, ZERO_COUNTS,
 } from './counts'
-import {
-  ReceiveLedgerError, type ReceiveAction, type ReceiveCounts, type ReceiveFailure,
-  type ReceiveLedgerConfig, type ReceiveProgress, type ReceiveReceipt, type ReceiveSession, type ReceiveUsage,
-} from './types'
+import { ReceiveLedgerError, type ReceiveLedgerConfig, type ReceiveReceipt, type ReceiveSession } from './types'
+import { type ReceiveAction, type ReceiveCounts, type ReceiveFailure, type ReceiveProgress, type ReceiveUsage } from '../../../contracts/relay-delivery-observation'
 
 export { ReceiveLedgerError } from './types'
-export type {
-  ReceiveCounts, ReceiveLedgerConfig, ReceiveLedgerEvent, ReceiveProgress, ReceiveReceipt, ReceiveSession, ReceiveUsage,
-} from './types'
+export type { ReceiveCounts, ReceiveLedgerEvent, ReceiveProgress, ReceiveUsage } from '../../../contracts/relay-delivery-observation'
+export type { ReceiveLedgerConfig, ReceiveReceipt, ReceiveSession } from './types'
 
 type SettlementState =
   | { readonly phase: 'active' | 'retiring' }

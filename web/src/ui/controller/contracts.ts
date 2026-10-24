@@ -1,5 +1,5 @@
 import type { V2CapturedLocation } from '../capability/location'
-import type { V2DiagnosticFormatter, V2SecurityMilestone } from '../v2-capability-lifecycle'
+import type { V2DiagnosticFormatter, V2SecurityMilestone } from '../../application/browser-share/capability-lifecycle'
 import type { V2ReceiveCompositionPort } from '../../application/receive/contracts'
 import type { ReceiveObservationOptions } from '../../application/receive/observation/contracts'
 

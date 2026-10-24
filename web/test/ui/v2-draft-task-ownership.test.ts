@@ -5,7 +5,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
 import type { TransferProgress } from '../../src/transfer/v2-job'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
 import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
 import {
   FakeJoinedShare, FakeReceiveComposition, FILE_ID, MANAGED_ENVIRONMENT,

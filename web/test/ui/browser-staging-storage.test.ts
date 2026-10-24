@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inspectBrowserStagingStorage } from '../../src/ui/browser-receive/fsa/staging-storage'
+import { inspectBrowserStagingStorage } from '../../src/output/capability/staging-storage'
 
 describe('browser staging storage observations', () => {
   it('keeps persistence denial separate from usable OPFS and observed quota', async () => {

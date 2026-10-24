@@ -1,7 +1,7 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { decodeV2PeerPathControl, encodeV2PeerPathControl } from '../../src/connectivity/v2-path-control-codec'
+import { decodeV2PeerPathControl, encodeV2PeerPathControl } from '../../src/protocol/peer-path-control'
 import { decodeV2Message, decodeV2OperationErrorControl, encodeV2Body, encodeV2Message, peerFailureScope, V2_MESSAGE_KIND, verifyV2SenderControl } from '../../src/session/v2-message'
 import { V2OperationRouter } from '../../src/session/v2-operation-router'
 

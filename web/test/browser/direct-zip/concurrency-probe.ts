@@ -4,12 +4,12 @@ import { acquireBrowserReceiveOperationLease } from '../../../src/output/browser
 import { acquireFSAEntryMutationLease, FSAEntryMutationBusyError } from '../../../src/output/browser/namespace-mutation'
 import { IndexedDbDirectZipJournalRepository } from '../../../src/output/direct-zip/journal'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
-import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
+import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
 import {
   createBrowserDirectZipComposition, type BrowserDirectZipProductionOptions,
-} from '../../../src/ui/browser-receive/direct-zip/production'
-import { readEnvelope } from '../../../src/ui/browser-receive/direct-zip/resources'
-import { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-receive-composition'
+} from '../../../src/application/browser-receive/direct-zip/production'
+import { readEnvelope } from '../../../src/output/direct-zip/browser/resources'
+import { createBrowserReceiveComposition } from '../../../src/application/browser-receive/composition'
 import { prepareProductionDirectZipActivation } from './production-activation'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'
 

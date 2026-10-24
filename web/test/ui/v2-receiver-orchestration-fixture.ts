@@ -52,13 +52,14 @@ import {
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
 import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
-import { V2ReceiverController, type V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
+import { V2ReceiverController } from '../../src/ui/v2-controller'
+import { type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import type {
   V2BrowseDirectory,
   V2BrowsePage,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
-} from '../../src/ui/v2-gateway'
+} from '../../src/application/browser-share/gateway'
 import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../src/application/receive/actions'
 import type {
   V2BoundReceiveOperation,

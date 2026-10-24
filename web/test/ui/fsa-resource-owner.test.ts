@@ -8,7 +8,7 @@ import type { BrowserReceiveOperationLease } from '../../src/output/browser/sess
 import {
   FSAResourceOwner,
   type FSAOwnedOutputSession,
-} from '../../src/ui/browser-receive/fsa-resource-owner'
+} from '../../src/output/file-system-access/execution/resource-owner'
 import {
   MemoryDirectory,
   MemoryLockManager,

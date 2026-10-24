@@ -16,7 +16,7 @@ import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import {
   createBrowserDiagnosticsComposition,
   type BrowserDiagnosticsClock,
-} from '../../src/diagnostics/browser-composition'
+} from '../../src/application/diagnostics/composition'
 import { installWindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
 import { unclassifiedFailureFact } from '../../src/diagnostics/incident'
 import type {
@@ -33,8 +33,8 @@ import {
   projectProtocolTraceEvent,
   createV2ReceiverTraceSource,
   projectV2ReceiverTraceEvent,
-} from '../../src/ui/v2-production-trace'
-import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
+} from '../../src/application/diagnostics/receive-trace'
+import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 
 it('exports scheduling decisions with session, lane, block, and completion estimates', () => {
   const composition = productionComposition()

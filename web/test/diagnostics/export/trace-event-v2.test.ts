@@ -18,7 +18,7 @@ import {
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
 import { emitOutputTrace, outputTraceEvent } from '../../../src/output/diagnostics'
-import { createOutputTraceSource } from '../../../src/ui/v2-production-trace'
+import { createOutputTraceSource } from '../../../src/application/diagnostics/receive-trace'
 import type {
   TraceDomainEventNameV2,
   TraceEventObservationV2,

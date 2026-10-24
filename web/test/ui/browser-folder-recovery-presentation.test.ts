@@ -10,7 +10,7 @@ import { retainedReceiveActions } from '../../src/application/receive/retained/i
 import type {
   CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'
-import { retainedBrowserDeliveryActions } from '../../src/ui/browser-receive/fsa/retained-delivery'
+import { retainedBrowserDeliveryActions } from '../../src/application/browser-receive/fsa/retained-delivery'
 
 describe('folder receiving and local saving presentation', () => {
   it.each(['receiving', 'staged-complete', 'discarding'] as const)(

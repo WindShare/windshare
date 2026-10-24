@@ -19,7 +19,7 @@ import type {
   V2BrowseDirectory,
   V2BrowsePage,
   V2JoinedBrowserShare,
-} from '../v2-gateway'
+} from '../../application/browser-share/gateway'
 
 interface BrowserNavigationIncidentPort {
   openScope(kind: 'browse'): IncidentScopeOwner

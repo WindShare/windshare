@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { findReplacementFile } from '../../src/ui/source-replacement/selection'
+import { findReplacementFile } from '../../src/application/browser-share/source-replacement'
 import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
-import { V2JoinedBrowserShare, type V2BrowsePage } from '../../src/ui/v2-gateway'
+import { V2JoinedBrowserShare, type V2BrowsePage } from '../../src/application/browser-share/gateway'
 import { FakeJoinedShare, identityText } from './v2-receiver-orchestration-fixture'
 
 function fixture() {

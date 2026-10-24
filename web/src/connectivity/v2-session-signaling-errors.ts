@@ -1,8 +1,5 @@
-import {
-  protocolFailureFact,
-  type FailureFact,
-  type ReceivedProtocolError,
-} from '../diagnostics/incident/fact'
+import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
+import { type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 
 export class V2SessionSignalingError extends Error {
   constructor(message: string, options?: ErrorOptions) {

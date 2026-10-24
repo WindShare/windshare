@@ -33,7 +33,7 @@ export interface ReceiveOperationResumeDescriptor {
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
   readonly recoveryUnavailable?: 'native-checkpoint-unavailable'
-  readonly sourceRevisionFailures?: import('./source-revision-failures').SourceRevisionFailures
+  readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
 }
 
 /**

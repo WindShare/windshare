@@ -2,11 +2,8 @@ import { V2OperationTombstone, type V2ProtocolTraceContext } from './v2-operatio
 import { V2IssuedOperations } from './operations/issued-operations'
 import { encodeBase64Url } from '../crypto/bytes'
 import { cancellationTraceReason, snapshotOperationRequest, type V2CancellationTraceReason } from './v2-operation-diagnostics'
-import {
-  createReceivedProtocolError,
-  type FailureCorrelation,
-  type ReceivedProtocolError,
-} from '../diagnostics/incident/fact'
+import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
+import { type FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import {
   protocolMessageKindV1,
   type V2ProtocolOperationSettlement,

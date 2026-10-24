@@ -183,7 +183,7 @@ export interface V2RetainedReceiveOperation {
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
   readonly actions: readonly V2RetainedReceiveAction[]
-  readonly sourceRevisionFailures?: import('../../output/resume/source-revision-failures').SourceRevisionFailures
+  readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
   readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string

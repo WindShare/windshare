@@ -19,7 +19,7 @@ import { createSelectionSpec } from '../../src/transfer/intent'
 import type {
   BrowserReceiveWindow,
   BrowserRetainedContinuationExecutor,
-} from '../../src/ui/v2-browser-receive-composition'
+} from '../../src/application/browser-receive/composition'
 import type { V2BoundReceiveOperation } from '../../src/application/receive/contracts'
 
 type ResumableFileSetPayload = Extract<ReceiveLifecycleStatePayload, {

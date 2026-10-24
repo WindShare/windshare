@@ -21,7 +21,7 @@ import type { V2ActiveProjection } from '../../src/application/receive/discovery
 import type { ActiveReceiveAdoption } from '../../src/application/receive/active/coordinator'
 import { StaleReceiveBoundaryError, type V2ControllerWorkflowTraceEvent, type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,

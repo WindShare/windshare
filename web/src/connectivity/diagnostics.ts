@@ -1,4 +1,4 @@
-import type { FailureCorrelation } from '../diagnostics/incident/fact'
+import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import type { PeerProviderFact } from './peer-set/provider-facts'
 import { V2_PEER_OPERATION_CODE } from '../session/v2-message'
 import type {

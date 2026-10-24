@@ -1,6 +1,6 @@
 import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
 import { equalBytes } from '../../crypto/bytes'
-import { decodeV2PeerPathControl, encodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND } from '../v2-path-control-codec'
+import { decodeV2PeerPathControl, encodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND } from '../../protocol/peer-path-control'
 import type { V2PeerRecoveryClock } from './contract'
 import type { PeerPathNotice } from './wave'
 import type { PeerNetworkGeneration } from './network-generation'

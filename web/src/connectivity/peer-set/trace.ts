@@ -1,4 +1,4 @@
-import type { FailureCorrelation } from '../../diagnostics/incident/fact'
+import type { FailureCorrelation } from '../../diagnostics/incident/failure-correlation'
 import type { V2PeerAttemptIdentity, V2PeerPathIdentity, V2ProtocolSessionIdentity } from '../../session/v2-identities'
 import type { V2ConnectivityTraceSource, V2PeerRecoveryTraceEvent } from '../diagnostics'
 export type V2PeerRecoveryTracePayload<Event = V2PeerRecoveryTraceEvent> =

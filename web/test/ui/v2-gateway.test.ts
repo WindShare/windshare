@@ -103,7 +103,7 @@ import {
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
   type V2BrowseDirectory,
-} from '../../src/ui/v2-gateway'
+} from '../../src/application/browser-share/gateway'
 import {
   discoverAuthenticatedSelection,
   nextProjectionEpoch,

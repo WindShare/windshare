@@ -1,4 +1,4 @@
-import type { SourceRevisionFailure } from '../../output/resume/source-revision-failures'
+import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
 import type { V2RetainedReceiveOperation } from '../../application/receive/contracts'
 
 export function SourceRevisionFailuresPanel(props: {

@@ -27,7 +27,7 @@ import type {
   V2BrowsePage,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
-} from '../../src/ui/v2-gateway'
+} from '../../src/application/browser-share/gateway'
 import type { V2ReceiverSnapshot } from '../../src/ui/v2-model'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 

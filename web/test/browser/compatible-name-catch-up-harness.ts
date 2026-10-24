@@ -12,7 +12,7 @@ import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authori
 import { createBrowserReceiveOperationMutationPort } from '../../src/output/resume/reopen-authority'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { presentCompatibleNameRepair } from '../../src/ui/compatible-name-repair-presentation'
-import { listBrowserRetainedOperations } from '../../src/ui/browser-receive/retained'
+import { listBrowserRetainedOperations } from '../../src/application/browser-receive/retained/inventory'
 import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
 import { installNativeLookupInterceptor } from './fsa-namespace-atomicity-harness'
 import { createCompatibleNameRecoveryCut, reopenCompatibleNameRecovery, type CompatibleNameRecoveryFixture } from './durable-recovery-harness'

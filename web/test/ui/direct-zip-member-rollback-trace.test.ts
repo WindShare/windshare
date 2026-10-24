@@ -5,8 +5,8 @@ import type { OutputTraceEvent, OutputTraceSource } from '../../src/output/diagn
 import {
   traceDirectZipMemberRollback,
   type DirectZipMemberRollbackTraceInput,
-} from '../../src/ui/browser-receive/direct-zip/member-rollback-trace'
-import { createOutputTraceSource } from '../../src/ui/v2-production-trace'
+} from '../../src/output/direct-zip/browser/member-rollback-trace'
+import { createOutputTraceSource } from '../../src/application/diagnostics/receive-trace'
 
 const INPUT: DirectZipMemberRollbackTraceInput = {
   operationId: 'AQAAAAAAAAAAAAAAAAAAAA',

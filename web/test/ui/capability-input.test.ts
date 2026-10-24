@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
-import { capabilityFromInput, capabilityInputFingerprint } from '../../src/ui/capability/input'
+import { capabilityFromInput, capabilityInputFingerprint } from '../../src/application/browser-share/capability-input'
 
 describe('capability input identity', () => {
   it('recognizes a complete link and its separate key as the same capability', async () => {

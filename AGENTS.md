@@ -94,6 +94,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
 │   ├── src/connectivity/         Signaling, path policy, lane adoption, and TURN delegation/renewal
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
+│   ├── src/application/          Browser share/receive assembly, task commands, output-route coordination
 │   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
 │   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
 │   ├── src/diagnostics/          Bounded tracing, incident correlation, and developer export

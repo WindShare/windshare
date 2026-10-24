@@ -3,7 +3,7 @@ import { cleanupReopenedPublishedFileSystemAccessOutput } from '../../src/output
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { createPersistedReceiveOperationMutationPort } from '../../src/output/resume/reopen-authority'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
-import { retainedOperationAuthority } from '../../src/ui/browser-receive/retained-operation-authority'
+import { retainedOperationAuthority } from '../../src/application/browser-receive/retained/operation-authority'
 import {
   operationRecordId, RECEIVE_RECORD_CLEANUP, RECEIVE_RECORD_RECEIPT,
   receiveOperationLeaseRecord,

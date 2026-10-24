@@ -1,6 +1,6 @@
 import { decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
-import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import type { IncidentRecordV2 } from '../../src/diagnostics/export/incident-record-v2'
 import {
   createFailureIdentity,
@@ -31,10 +31,10 @@ import {
   deriveArtifactChoiceIdentity,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import { FSAReceiveOperation } from '../../src/ui/browser-receive/fsa'
+import { FSAReceiveOperation } from '../../src/application/browser-receive/fsa/operation'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
-import type { V2ReceiverDiagnosticSnapshot } from '../../src/ui/v2-model'
+import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import type { ReceiverDiagnosticSnapshot } from '../../src/diagnostics/export/context'
 import type {
   V2ReceiveCompositionPort,
   V2RetainedReceiveInventory,
@@ -44,7 +44,7 @@ import {
   createOutputTraceSource,
   createProtocolTraceSource,
   createV2ReceiverTraceSource,
-} from '../../src/ui/v2-production-trace'
+} from '../../src/application/diagnostics/receive-trace'
 const EVIDENCE_CLOCK_MILLISECONDS = Date.parse('2026-08-19T09:00:00.000Z')
 const ACTION_TIMEOUT_MILLISECONDS = 5_000
 const PRIVATE_REOPEN_DETAIL = 'private FSA continuation detail C:/receiver/secret.txt'
@@ -120,7 +120,7 @@ export async function reconstructFSAContinuationFailure(
   let clockMilliseconds = EVIDENCE_CLOCK_MILLISECONDS
   let lifecycle: ReceiveLifecycleState = stableLifecycle
   const incidentConsole: unknown[] = []
-  const snapshot = (): V2ReceiverDiagnosticSnapshot => Object.freeze({
+  const snapshot = (): ReceiverDiagnosticSnapshot => Object.freeze({
     controller: Object.freeze({ generation: 7n, phase: 'browsing' }),
     lifecycle: Object.freeze({
       generation: lifecycle.generation,
