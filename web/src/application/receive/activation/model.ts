@@ -5,8 +5,8 @@ import type {
   ProjectionEpoch,
   ResolvedArtifactAction,
   RetryableDiscoveryReason,
-} from '../../output/planning'
-import type { ArtifactChoiceID } from '../../transfer/intent'
+} from '../../../output/planning'
+import type { ArtifactChoiceID } from '../../../transfer/intent'
 
 export interface V2ActivationObservation {
   /**
@@ -102,5 +102,24 @@ export class V2ActivationStateContractError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
     this.name = 'V2ActivationStateContractError'
+  }
+}
+
+export function activationOwnsChoice(
+  activation: V2AuthorityActivationSnapshot,
+): activation is Extract<V2AuthorityActivationSnapshot, {
+  readonly kind: 'waiting-authority' | 'waiting-resolution' | 'retry-required' | 'committing' |
+    'cleanup-required'
+}> {
+  switch (activation.kind) {
+    case 'waiting-authority':
+    case 'waiting-resolution':
+    case 'retry-required':
+    case 'committing':
+    case 'cleanup-required':
+      return true
+    case 'inactive':
+    case 'terminal':
+      return false
   }
 }

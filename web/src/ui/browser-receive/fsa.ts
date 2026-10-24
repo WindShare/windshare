@@ -46,14 +46,11 @@ import {
   outputSessionIdentity,
   type V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-} from '../v2-lifecycle-presentation'
+import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../application/receive/actions'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-} from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
 import {
   readLifecycle,
   transitionLifecycle,

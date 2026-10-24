@@ -1,51 +1,41 @@
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
-import type { V2ConnectivityActivation } from '../../connectivity/v2-receiver-policy'
+import type { V2FrozenSelectionPolicy } from '../../../catalog/v2-selection'
+import type { V2ConnectivityActivation } from '../../../connectivity/v2-receiver-policy'
 import type {
   LateOutputFailureConsequenceCapability,
   OutputFailureBindingLease,
-} from '../../output/diagnostics'
-import { isTerminalLifecycleState } from '../../output/workspace'
-import { TransferPauseRequestedError } from '../../transfer/output-session'
-import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
+} from '../../../output/diagnostics'
+import { isTerminalLifecycleState } from '../../../output/workspace'
+import { TransferPauseRequestedError } from '../../../transfer/output-session'
+import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
 import {
   materializeClassifiedTransferFailure,
   type ClassifiedTransferFailure,
-} from '../../transfer/job/failures'
-import type { V2TransferAdmissionFailureAuthority } from '../../transfer/job/admission-error'
+} from '../../../transfer/job/failures'
+import type { V2TransferAdmissionFailureAuthority } from '../../../transfer/job/admission-error'
 import {
   V2TransferAdmissionFailureError,
   type TransferJobResult,
   type TransferProgress,
-} from '../../transfer/v2-job'
-import { SOURCE_INVALIDATED_DESCRIPTION, type LifecycleUserAction } from '../v2-lifecycle-presentation'
-import { isAbortError } from '../v2-controller-state'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
-import type { V2OutputPresentationController } from '../v2-output'
-import type { V2BoundReceiveOperation } from '../v2-receive-runtime'
-import {
-  StaleReceiveBoundaryError,
-  type V2ActiveCompatibleNameRepairProjection,
-  type V2ReceiverControllerOptions,
-} from './contracts'
+} from '../../../transfer/v2-job'
+import { type LifecycleUserAction } from '../actions'
+import { isAbortError, ReceiveSourceInvalidatedError } from '../errors'
+import type { ActiveReceiveJoinedShare } from '../joined-share'
+import type { ReceiveRuntimeState } from '../state'
+import type { V2BoundReceiveOperation } from '../contracts'
+import type { ReceiveObservationOptions } from '../observation/contracts'
+import { StaleReceiveBoundaryError, type V2ActiveCompatibleNameRepairProjection } from '../observation/contracts'
 import {
   ActiveReceiveObservability,
   type ReceiveFailureTrigger,
   type V2ReceivePresentationAttempt,
-} from './active-receive-observability'
+} from './observability'
 import {
   ActiveReceiveLifecycle,
   type ActiveReceiveLifecycleOperation,
-} from './active-receive-lifecycle'
-import { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
-import type { V2PresentationAttempt } from './presentation-attempt'
-import { isReceiveOutputDelivered } from '../operation-ownership/completion'
-
-export interface ActiveReceiveJoinedShare {
-  beginDownloadConnectivity(): V2ConnectivityActivation
-  transferJob(
-    ...args: Parameters<V2JoinedBrowserShare['transferJob']>
-  ): Pick<ReturnType<V2JoinedBrowserShare['transferJob']>, 'run'>
-}
+} from './lifecycle'
+import { ReceiveSettlementDeadline } from './settlement-wait'
+import type { V2PresentationAttempt } from '../observation/attempt'
+import { isReceiveOutputDelivered } from '../completion'
 
 interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly boundary: number
@@ -68,11 +58,11 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
 }
 
 export interface ActiveReceiveCoordinatorOptions {
-  readonly outputs: V2OutputPresentationController
+  readonly state: ReceiveRuntimeState
   readonly ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly onProgress: (progress: TransferProgress) => void
-  readonly trace?: V2ReceiverControllerOptions['trace']
-  readonly incidents?: V2ReceiverControllerOptions['incidents']
+  readonly trace?: ReceiveObservationOptions['trace']
+  readonly incidents?: ReceiveObservationOptions['incidents']
   readonly onActionError: (error: unknown) => void
   readonly onFailure: (error: unknown) => void
   readonly onRetainedFileFailure?: () => void
@@ -93,10 +83,10 @@ export interface PreparedActiveReceiveAdoption {
 }
 
 export class ActiveReceiveCoordinator {
-  readonly #outputs: V2OutputPresentationController
+  readonly #state: ReceiveRuntimeState
   readonly #ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly #onProgress: (progress: TransferProgress) => void
-  readonly #traceSource: V2ReceiverControllerOptions['trace']
+  readonly #traceSource: ReceiveObservationOptions['trace']
   readonly #observability: ActiveReceiveObservability
   readonly #lifecycle: ActiveReceiveLifecycle
   readonly #onFailure: (error: unknown) => void
@@ -106,7 +96,7 @@ export class ActiveReceiveCoordinator {
   #operation: ActiveReceiveOperation | undefined
 
   constructor(options: ActiveReceiveCoordinatorOptions) {
-    this.#outputs = options.outputs
+    this.#state = options.state
     this.#ownsJoinedShare = options.ownsJoinedShare
     this.#onProgress = options.onProgress
     this.#traceSource = options.trace
@@ -118,7 +108,7 @@ export class ActiveReceiveCoordinator {
     this.#onRetainedFileFailure = options.onRetainedFileFailure
     this.#onOwnershipReleased = options.onOwnershipReleased
     this.#lifecycle = new ActiveReceiveLifecycle({
-      outputs: this.#outputs,
+      state: this.#state,
       observability: this.#observability,
       currentOperation: () => this.#operation,
       operationIsCurrent: operation =>
@@ -140,7 +130,7 @@ export class ActiveReceiveCoordinator {
   }
 
   get canRetainForLocalOutput(): boolean {
-    const output = this.#outputs.getSnapshot()
+    const output = this.#state.getSnapshot()
     return this.#operation !== undefined && !this.#lifecycle.pending &&
       output.lifecycle?.kind === 'resumable-receive' &&
       ((output.plan?.kind === 'workspace-then-publish' && output.resolvedArtifact?.kind === 'zip-archive') ||
@@ -148,7 +138,7 @@ export class ActiveReceiveCoordinator {
   }
 
   get canRelease(): boolean {
-    const state = this.#outputs.getSnapshot().lifecycle
+    const state = this.#state.getSnapshot().lifecycle
     return this.#operation !== undefined && !this.#lifecycle.pending && state !== null &&
       (state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
        state.kind === 'needs-attention')
@@ -159,11 +149,11 @@ export class ActiveReceiveCoordinator {
   }
 
   adopt(input: ActiveReceiveAdoption): void {
-    const output = this.#outputs.getSnapshot()
+    const output = this.#state.getSnapshot()
     if (output.receiveIntent === null ||
         output.receiveIntent.operationId !== input.runtime.intent.operationId ||
         output.receiveIntent.digest !== input.runtime.intent.digest) {
-      throw new TypeError('active receive runtime does not belong to the presented receive intent')
+      throw new TypeError('active receive runtime does not belong to the adopted receive intent')
     }
     const prepared = this.prepareAdoption(input)
     prepared.commit()
@@ -175,14 +165,14 @@ export class ActiveReceiveCoordinator {
     if (this.#operation !== undefined) {
       throw new TypeError('active receive ownership must be cleared before adoption')
     }
-    const settlementPresentation = new ActiveReceiveSettlementPresentation({
-      outputs: this.#outputs,
+    const settlementWait = new ReceiveSettlementDeadline({
+      state: this.#state,
       operationIsCurrent: () => this.#operationIsCurrent(operation),
     })
     const operation: ActiveReceiveOperation = {
       boundary: this.#boundary + 1,
       ...input,
-      settlementPresentation,
+      settlementWait,
     }
     let committed = false
     return Object.freeze({
@@ -199,6 +189,10 @@ export class ActiveReceiveCoordinator {
         this.#startTransfer(operation)
       },
     })
+  }
+
+  canPerformLifecycleAction(action: LifecycleUserAction): boolean {
+    return this.#lifecycle.canPerform(action)
   }
 
   performLifecycleAction(action: LifecycleUserAction): void {
@@ -262,7 +256,7 @@ export class ActiveReceiveCoordinator {
           },
           ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
           ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),
-          outputSettlementDeadline: active.settlementPresentation,
+          outputSettlementDeadline: active.settlementWait,
           ...(active.runtime.observeCheckpoint === undefined ? {} : { onCheckpointObservation: active.runtime.observeCheckpoint }),
         },
       )
@@ -316,7 +310,7 @@ export class ActiveReceiveCoordinator {
   }
 
   #releaseDeliveredOutput(active: ActiveReceiveOperation): void {
-    const state = this.#outputs.getSnapshot().lifecycle
+    const state = this.#state.getSnapshot().lifecycle
     if (!this.#operationIsCurrent(active) || active.running !== undefined || this.#lifecycle.pending ||
         active.detachment !== undefined || !isReceiveOutputDelivered(state) || state === null) return
     // Keep ownership until detach resolves, while leaving the delivered result on screen.
@@ -364,7 +358,7 @@ export class ActiveReceiveCoordinator {
     }
 
     try {
-      if (!this.#outputs.settleLifecycle(
+      if (!this.#state.settleLifecycle(
         result.lifecycle,
         usage,
         Object.freeze([]),
@@ -373,7 +367,7 @@ export class ActiveReceiveCoordinator {
       )) {
         throw new TypeError('transfer lifecycle did not advance the active receive operation')
       }
-      if (!this.#outputs.adoptTransferResult(result)) {
+      if (!this.#state.adoptTransferResult(result)) {
         throw new TypeError('transfer result escaped its receive-intent authority')
       }
     } catch (error) {
@@ -396,7 +390,7 @@ export class ActiveReceiveCoordinator {
   #publishTransferFailures(result: TransferJobResult, trigger: ReceiveFailureTrigger | undefined): void {
     if (result.abortReason !== undefined && trigger !== undefined) {
       this.#reportTransferFailure(result.lifecycle.kind === 'source-invalidated'
-        ? new Error(SOURCE_INVALIDATED_DESCRIPTION, { cause: result.abortReason })
+        ? new ReceiveSourceInvalidatedError(result.abortReason)
         : result.abortReason)
     }
     if (result.lifecycle.kind !== 'resumable-receive' || result.lifecycle.payloadKind !== 'opfs-zip' ||
@@ -430,7 +424,7 @@ export class ActiveReceiveCoordinator {
       this.#stopLifecycleObservation(active)
       const applied = await this.#lifecycle.applyMutation(
         active,
-        this.#outputs.getSnapshot().lifecycle?.generation ?? 0n,
+        this.#state.getSnapshot().lifecycle?.generation ?? 0n,
         mutation,
         () => {
           if (trigger !== undefined) {
@@ -559,7 +553,7 @@ export class ActiveReceiveCoordinator {
     if (projection === undefined || active.unsubscribeRepairProjection !== undefined) return
     const unsubscribe = projection.subscribe(summary => {
       if (!this.#operationIsCurrent(active)) return
-      this.#outputs.updateRepairSummary(active.runtime.intent.operationId, summary)
+      this.#state.updateRepairSummary(active.runtime.intent.operationId, summary)
     })
     if (this.#operationIsCurrent(active)) {
       active.unsubscribeRepairProjection = unsubscribe
@@ -611,8 +605,8 @@ export class ActiveReceiveCoordinator {
     const publish = (progress: ReturnType<typeof source.getSnapshot>) => {
       if (!this.#operationIsCurrent(active)) return
       try {
-        if (progress.kind === 'browser-folder') this.#outputs.updateBrowserFolderProgress(progress)
-        else this.#outputs.updateDirectZipProgress(progress)
+        if (progress.kind === 'browser-folder') this.#state.updateBrowserFolderProgress(progress)
+        else this.#state.updateDirectZipProgress(progress)
       } catch (error) {
         this.#reportTransferFailure(error)
       }
@@ -634,7 +628,7 @@ export class ActiveReceiveCoordinator {
     let observing = true
     const publish = (state: V2BoundReceiveOperation['lifecycle']) => {
       if (!observing || !this.#operationIsCurrent(active)) return
-      try { this.#outputs.observeLifecycle(state) } catch (error) { this.#reportTransferFailure(error) }
+      try { this.#state.observeLifecycle(state) } catch (error) { this.#reportTransferFailure(error) }
     }
     // Subscribe first so the initial snapshot cannot leave a transition unobserved.
     const stop = active.runtime.subscribeLifecycle(publish)

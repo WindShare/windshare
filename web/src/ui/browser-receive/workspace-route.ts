@@ -37,7 +37,7 @@ import type {
   V2BoundReceiveOperation,
   V2RouteCommitInput,
   V2RouteCommitResult,
-} from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import { snapshotPreClickRanking } from './shared'
 import {

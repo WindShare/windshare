@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import type { V2ReceiverController } from '../../src/ui/v2-controller'
-import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, EMPTY_V2_RETAINED_INVENTORY, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { EMPTY_V2_RETAINED_INVENTORY } from '../../src/application/receive/retained/model'
 import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../src/ui/v2-output'
 
 export function experienceSnapshot(patch: Partial<V2ReceiverSnapshot> = {}): V2ReceiverSnapshot {

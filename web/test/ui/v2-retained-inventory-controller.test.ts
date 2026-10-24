@@ -19,10 +19,10 @@ import {
   createReceiveIntent, createSelectionSpec, createZipArchiveArtifact,
 } from '../../src/transfer/intent'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
-import type { V2RetainedCompatibleNameRepairSource } from '../../src/ui/controller/contracts'
-import { RetainedInventoryCoordinator } from '../../src/ui/controller/retained-inventory'
+import type { V2RetainedCompatibleNameRepairSource } from '../../src/application/receive/observation/contracts'
+import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
-import type { V2RetainedReceivePresentationOperation } from '../../src/ui/v2-model'
+import type { RetainedReceiveOperationSnapshot } from '../../src/application/receive/retained/model'
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
@@ -30,7 +30,7 @@ import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 
 describe('retained inventory local finalization and identity admission', () => {
   it.each(['cleanup-staging', 'discard-incomplete-staging'] as const)(
@@ -489,7 +489,7 @@ describe('retained inventory incident ownership', () => {
     })
 
     harness.coordinator.perform(
-      repaired as V2RetainedReceivePresentationOperation,
+      repaired as RetainedReceiveOperationSnapshot,
       'save',
     )
     expect(actedWith).toBe(repairedAuthority)

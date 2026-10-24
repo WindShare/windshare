@@ -49,7 +49,7 @@ import {
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
+import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
 import { V2ReceiverController, type V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
@@ -57,11 +57,7 @@ import type {
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
 } from '../../src/ui/v2-gateway'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-  WorkspaceUsage,
-} from '../../src/ui/v2-lifecycle-presentation'
+import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../src/application/receive/actions'
 import type {
   V2BoundReceiveOperation,
   V2ArtifactPresentationAuthority,
@@ -73,7 +69,7 @@ import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import type { V2ProtocolGenerationListener } from '../../src/receiver/v2-supervisor'
 import {
   environment,

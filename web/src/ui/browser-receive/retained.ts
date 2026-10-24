@@ -39,7 +39,7 @@ import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-} from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import { FSAReceiveOperation } from './fsa'
 import { WorkspaceReceiveOperation } from './workspace-operation'

@@ -76,8 +76,8 @@ import type {
   V2OwnedActivationAuthority,
   V2RouteCommitInput,
   V2RouteCommitResult,
-} from '../v2-receive-runtime'
-import { V2PresentationSourceError } from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
+import { V2PresentationSourceError } from '../../application/receive/contracts'
 import {
   FSAReceiveOperation,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,

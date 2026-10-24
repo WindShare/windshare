@@ -1,7 +1,7 @@
 import type {
   V2RetainedReceiveAction,
   V2RetainedReceiveOperation,
-} from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
 
 const RESUME_AUTHORITY_UNAVAILABLE =
   'Saved actions are unavailable because this browser has no persisted-operation authority.'

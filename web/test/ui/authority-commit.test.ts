@@ -12,13 +12,13 @@ import {
   advanceActivationCleanup,
   AuthorityCommitTransaction,
   provisionalOwnedEffectsCleanup,
-} from '../../src/ui/controller/authority-commit'
+} from '../../src/application/receive/activation/commit'
 import type {
   AuthorityCommitRoute,
   ProvisionalOwnedEffectAuthority,
-} from '../../src/ui/controller/authority-commit'
-import { V2ActivationStateContractError } from '../../src/ui/controller/activation-model'
-import type { V2ArtifactPresentationAuthority } from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/activation/commit'
+import { V2ActivationStateContractError } from '../../src/application/receive/activation/model'
+import type { V2ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
   projection,

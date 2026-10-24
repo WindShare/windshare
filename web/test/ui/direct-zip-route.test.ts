@@ -16,7 +16,7 @@ import {
 } from '../../src/ui/browser-receive/direct-zip'
 import { listBrowserRetainedOperations } from '../../src/ui/browser-receive/retained'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
-import type { V2ArtifactPresentationAuthority } from '../../src/ui/v2-receive-runtime'
+import type { V2ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
 
 const CHOICE = 'choice' as ArtifactChoiceID
 

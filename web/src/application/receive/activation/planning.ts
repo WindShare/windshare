@@ -10,10 +10,10 @@ import {
   type ArtifactResolutionObservation,
   type MaterializationRouteIdentity,
   type OfferedArtifactChoice,
-} from '../../output/planning'
-import type { ProjectionEpoch, SelectionProjectionState } from '../../transfer/projection'
-import { V2ActivationStateContractError } from './activation-model'
-import type { V2ActiveProjection } from './projection-observation'
+} from '../../../output/planning'
+import type { ProjectionEpoch, SelectionProjectionState } from '../../../transfer/projection'
+import { V2ActivationStateContractError } from './model'
+import type { V2ActiveProjection } from '../discovery'
 
 export interface V2AuthorityProjectionPublication {
   readonly observationRevision: number

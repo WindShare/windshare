@@ -1,4 +1,4 @@
-import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import {
   createMemberRollbackFixture, MEMBER_ROLLBACK_SIGNAL, readMemberRollbackState,
 } from './member-rollback-fixture'

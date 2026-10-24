@@ -4,8 +4,8 @@ import {
   RetryableProjectionDiscoveryError,
   type AuthenticatedDiscoveryRequest,
 } from '../../src/transfer/projection'
-import { SelectionProjectionRuntime } from '../../src/ui/controller/projection-observation'
-import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
+import { SelectionProjectionRuntime } from '../../src/application/receive/discovery'
+import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
 import {
   FakeJoinedShare,

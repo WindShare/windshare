@@ -13,7 +13,7 @@ import type {
 import { recordOutputException, emitOutputTrace, outputTraceEvent } from '../../output/diagnostics'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
-import type { V2BoundReceiveOperation, V2RetainedReceiveAction } from '../v2-receive-runtime'
+import type { V2BoundReceiveOperation, V2RetainedReceiveAction } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import { WorkspaceReceiveOperation } from './workspace-operation'
 import { handoffRetainedWorkspacePackage } from './workspace-publication'

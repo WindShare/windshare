@@ -1,4 +1,4 @@
-import { V2RemoteOperationError } from '../../content/v2-session-operations'
+import { V2RemoteOperationError } from '../../../content/v2-session-operations'
 import {
   faultFailureFact,
   unclassifiedFailureFact,
@@ -7,17 +7,18 @@ import {
   type FailureStage,
   type PresentationBoundary,
   type PresentationExclusionReason,
-} from '../../diagnostics/incident'
-import { ArtifactPlanningContractError } from '../../output/planning'
+} from '../../../diagnostics/incident'
+import { ArtifactPlanningContractError } from '../../../output/planning'
 import {
   FaultScope,
   OutputFaultCode,
   outputFault,
   type Fault,
-} from '../../transfer/fault'
-import { V2ActivationStateContractError } from './activation-model'
-import type { V2ReceiverControllerOptions, V2ReceiverTraceEvent } from './contracts'
-import { V2PresentationAttempt } from './presentation-attempt'
+} from '../../../transfer/fault'
+import { V2ActivationStateContractError } from '../activation/model'
+import type { ReceiveObservationOptions } from '../observation/contracts'
+import type { V2ReceiverTraceEvent } from './contracts'
+import { V2PresentationAttempt } from './attempt'
 
 type ControllerBoundary = Extract<PresentationBoundary, 'join' | 'projection_authority'>
 type ControllerScopeKind = 'join' | 'projection' | 'authority_activation'
@@ -41,10 +42,10 @@ const ACTIVATION_CONTRACT_FAULT: Fault = outputFault(
  * uniform across join, projection, and activation owners.
  */
 export class V2ControllerObservability {
-  readonly #incidents: V2ReceiverControllerOptions['incidents']
-  readonly #traceSource: V2ReceiverControllerOptions['trace']
+  readonly #incidents: ReceiveObservationOptions['incidents']
+  readonly #traceSource: ReceiveObservationOptions['trace']
 
-  constructor(options: Pick<V2ReceiverControllerOptions, 'incidents' | 'trace'>) {
+  constructor(options: Pick<ReceiveObservationOptions, 'incidents' | 'trace'>) {
     this.#incidents = options.incidents
     this.#traceSource = options.trace
   }

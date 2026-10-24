@@ -42,6 +42,17 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/application/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['**/ui/**', 'react', 'react-dom', 'react-dom/**'],
+          message: 'Application task authority must depend on domain facts and ports, never UI presentation.',
+        }],
+      }],
+    },
+  },
+  {
     // Config files and Vitest fixtures execute in Node, even when they import
     // browser-facing modules for type or vector conformance checks.
     files: ['*.config.ts', 'test/**/*.{ts,tsx}', 'e2e/**/*.{ts,tsx}'],

@@ -1,9 +1,9 @@
-import type { V2OutputSettlementDeadline } from '../../transfer/settlement/v2-output'
-import type { V2ActiveReceiveControl } from '../v2-lifecycle-presentation'
-import type { V2OutputPresentationController } from '../v2-output'
+import type { V2OutputSettlementDeadline } from '../../../transfer/settlement/v2-output'
+import type { V2ActiveReceiveControl } from '../actions'
+import type { ReceiveRuntimeState } from '../state'
 
-export interface ActiveReceiveSettlementPresentationOptions {
-  readonly outputs: V2OutputPresentationController
+export interface ReceiveSettlementDeadlineOptions {
+  readonly state: ReceiveRuntimeState
   readonly operationIsCurrent: () => boolean
 }
 
@@ -12,32 +12,32 @@ export interface ActiveReceiveSettlementPresentationOptions {
  * Expiry changes only what the user waits for; the transfer still owns the original
  * terminal promise and therefore cannot publish a fabricated paused/stopped state.
  */
-export class ActiveReceiveSettlementPresentation implements V2OutputSettlementDeadline {
-  readonly #outputs: V2OutputPresentationController
+export class ReceiveSettlementDeadline implements V2OutputSettlementDeadline {
+  readonly #state: ReceiveRuntimeState
   readonly #operationIsCurrent: () => boolean
   #control: V2ActiveReceiveControl | undefined
 
-  constructor(options: ActiveReceiveSettlementPresentationOptions) {
-    this.#outputs = options.outputs
+  constructor(options: ReceiveSettlementDeadlineOptions) {
+    this.#state = options.state
     this.#operationIsCurrent = options.operationIsCurrent
   }
 
   begin(control: V2ActiveReceiveControl): void {
     this.#control = control
     if (!this.#operationIsCurrent()) return
-    this.#outputs.updateReceiveInterruption(Object.freeze({ operation: control, phase: 'waiting' }))
+    this.#state.updateReceiveInterruption(Object.freeze({ operation: control, phase: 'waiting' }))
   }
 
   cancel(control: V2ActiveReceiveControl): void {
     if (this.#control !== control) return
     this.#control = undefined
-    if (this.#operationIsCurrent()) this.#outputs.updateReceiveInterruption(null)
+    if (this.#operationIsCurrent()) this.#state.updateReceiveInterruption(null)
   }
 
   schedule(delayMilliseconds: number, expire: () => void): Readonly<{ cancel(): void }> {
     const timer = setTimeout(() => {
       if (this.#operationIsCurrent()) {
-        this.#outputs.updateReceiveInterruption(Object.freeze({
+        this.#state.updateReceiveInterruption(Object.freeze({
           operation: this.#control ?? 'finish', phase: 'background',
         }))
       }

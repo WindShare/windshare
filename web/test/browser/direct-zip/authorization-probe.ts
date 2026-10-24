@@ -1,4 +1,4 @@
-import type { V2LifecycleMutation } from '../../../src/ui/v2-receive-runtime'
+import type { V2LifecycleMutation } from '../../../src/application/receive/contracts'
 import { createMemberRollbackFixture, readMemberRollbackState, MEMBER_ROLLBACK_SIGNAL } from './member-rollback-fixture'
 import { finishMemberRollbackFixture } from './member-rollback-probe'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'

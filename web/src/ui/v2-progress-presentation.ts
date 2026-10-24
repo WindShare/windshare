@@ -1,7 +1,7 @@
 import type { V2ReceiverProgress } from './v2-model'
 import type { ProjectedByteCount } from '../output/planning'
 import type { ReceiveLifecycleState } from '../output/workspace'
-import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
+import type { V2DirectZipProgressSnapshot } from '../application/receive/contracts'
 
 const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'] as const
 const PERCENT_SCALE = 100n

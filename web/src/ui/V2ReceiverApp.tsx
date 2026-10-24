@@ -18,7 +18,7 @@ import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
 import { ReceiverFold } from './receiver-presentation/ReceiverFold'
 import { WindShareMark } from './brand/WindShareMark'
-import { isReceiveOutputDelivered } from './operation-ownership/completion'
+import { isReceiveOutputDelivered } from '../application/receive/completion'
 
 function KeyForm({ controller }: { readonly controller: V2ReceiverController }) {
   const submit = (event: FormEvent<HTMLFormElement>) => {

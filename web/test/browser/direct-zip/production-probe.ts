@@ -14,7 +14,7 @@ import { readEnvelope } from '../../../src/ui/browser-receive/direct-zip/resourc
 import { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-receive-composition'
 import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
-import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
 import { listBrowserRetainedOperations } from '../../../src/ui/browser-receive/retained'
 import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'

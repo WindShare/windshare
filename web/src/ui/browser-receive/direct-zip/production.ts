@@ -34,7 +34,7 @@ import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-a
 import type { OutputTraceSource } from '../../../output/diagnostics'
 import type {
   V2ArtifactPresentationAuthority, V2RouteCommitInput, V2RouteCommitResult,
-} from '../../v2-receive-runtime'
+} from '../../../application/receive/contracts'
 import type { BrowserReceiveWindow } from '../contracts'
 import { digestText } from '../shared'
 import type { BrowserDirectZipCompositionPort, BrowserDirectZipFreshAuthorityInput } from './contracts'

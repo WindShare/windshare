@@ -6,20 +6,20 @@ import {
   type CandidateMaterializationBinding,
   type MaterializationRouteIdentity,
   type ResolvedArtifactAction,
-} from '../../output/planning'
-import { validateReceiveIntent, type ReceiveIntent, type SelectionSpec } from '../../transfer/intent'
+} from '../../../output/planning'
+import { validateReceiveIntent, type ReceiveIntent, type SelectionSpec } from '../../../transfer/intent'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
   V2RouteCommitInput,
   V2RouteCommitResult,
-} from '../v2-receive-runtime'
-import { V2ActivationStateContractError } from './activation-model'
+} from '../contracts'
+import { V2ActivationStateContractError } from './model'
 import type {
   V2ActivationCleanupOwnerKind,
   V2ActivationCleanupStage,
   V2AuthorityActivationTerminalOutcome,
-} from './activation-model'
+} from './model'
 
 export type ReceiveIntentBinder = typeof bindReceiveIntent
 

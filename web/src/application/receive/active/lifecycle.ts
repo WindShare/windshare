@@ -1,26 +1,24 @@
-import type { PresentationExclusionReason } from '../../diagnostics/incident'
-import type { OutputFailureBindingLease } from '../../output/diagnostics'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-} from '../v2-lifecycle-presentation'
-import type { V2OutputPresentationController } from '../v2-output'
+import { availableReceiveActions } from '../policy'
+import type { PresentationExclusionReason } from '../../../diagnostics/incident'
+import type { OutputFailureBindingLease } from '../../../output/diagnostics'
+import type { LifecycleUserAction, V2ActiveReceiveControl } from '../actions'
+import type { ReceiveRuntimeState } from '../state'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-} from '../v2-receive-runtime'
-import { presentationSourceOutcome } from '../v2-receive-runtime'
-import { StaleReceiveBoundaryError } from './contracts'
+} from '../contracts'
+import { presentationSourceOutcome } from '../contracts'
+import { StaleReceiveBoundaryError } from '../observation/contracts'
 import {
   type ActiveReceiveObservability,
   type V2ReceivePresentationAttempt,
-} from './active-receive-observability'
-import type { V2PresentationAttempt } from './presentation-attempt'
-import type { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
+} from './observability'
+import type { V2PresentationAttempt } from '../observation/attempt'
+import type { ReceiveSettlementDeadline } from './settlement-wait'
 
 export interface ActiveReceiveLifecycleOperation {
   readonly runtime: V2BoundReceiveOperation
-  readonly settlementPresentation: ActiveReceiveSettlementPresentation
+  readonly settlementWait: ReceiveSettlementDeadline
   transfer?: AbortController
   running?: Promise<void>
   receiveAttempt?: V2ReceivePresentationAttempt
@@ -35,7 +33,7 @@ interface PendingLifecycleAction {
 }
 
 export interface ActiveReceiveLifecycleOptions {
-  readonly outputs: V2OutputPresentationController
+  readonly state: ReceiveRuntimeState
   readonly observability: ActiveReceiveObservability
   readonly currentOperation: () => ActiveReceiveLifecycleOperation | undefined
   readonly operationIsCurrent: (operation: ActiveReceiveLifecycleOperation) => boolean
@@ -49,7 +47,7 @@ export interface ActiveReceiveLifecycleOptions {
 }
 
 export class ActiveReceiveLifecycle {
-  readonly #outputs: V2OutputPresentationController
+  readonly #state: ReceiveRuntimeState
   readonly #observability: ActiveReceiveObservability
   readonly #currentOperation: () => ActiveReceiveLifecycleOperation | undefined
   readonly #operationIsCurrent: (operation: ActiveReceiveLifecycleOperation) => boolean
@@ -60,7 +58,7 @@ export class ActiveReceiveLifecycle {
   #pending: PendingLifecycleAction | undefined
 
   constructor(options: ActiveReceiveLifecycleOptions) {
-    this.#outputs = options.outputs
+    this.#state = options.state
     this.#observability = options.observability
     this.#currentOperation = options.currentOperation
     this.#operationIsCurrent = options.operationIsCurrent
@@ -72,20 +70,25 @@ export class ActiveReceiveLifecycle {
 
   get pending(): boolean { return this.#pending !== undefined }
 
-  perform(action: LifecycleUserAction): void {
+  canPerform(action: LifecycleUserAction): boolean {
     const active = this.#currentOperation()
-    const output = this.#outputs.getSnapshot()
-    const lifecycle = output.lifecycle
-    const presented = output.lifecyclePresentation
-    if (
-      active === undefined ||
-      lifecycle === null ||
-      presented === null ||
-      this.#pending !== undefined ||
-      !presented.actions.some(candidate => candidate.kind === action)
-    ) {
-      return
-    }
+    const facts = this.#state.getSnapshot()
+    if (active === undefined || !this.#operationIsCurrent(active) || this.#pending !== undefined ||
+        facts.lifecycle === null || facts.plan === null) return false
+    if ((action === 'pause' || action === 'stop') &&
+        (active.transfer === undefined || active.transfer.signal.aborted || !active.runtime.activeControls.includes(action))) return false
+    return availableReceiveActions({
+      state: facts.lifecycle, plan: facts.plan, activeControls: facts.activeControls,
+      interruption: facts.receiveInterruption, recoverySummary: facts.recoverySummary,
+      browserDelivery: facts.browserFolderProgress?.summary ?? null,
+    }).includes(action)
+  }
+
+  perform(action: LifecycleUserAction): void {
+    if (!this.canPerform(action)) return
+    const active = this.#currentOperation()
+    const lifecycle = this.#state.getSnapshot().lifecycle
+    if (active === undefined || lifecycle === null) return
 
     const attempt = this.#observability.openLifecycleAction()
     const pending: PendingLifecycleAction = Object.freeze({
@@ -133,7 +136,7 @@ export class ActiveReceiveLifecycle {
     mutation: V2LifecycleMutation,
     beforePublish?: () => void,
   ): Promise<boolean> {
-    const current = this.#outputs.getSnapshot().lifecycle
+    const current = this.#state.getSnapshot().lifecycle
     if (
       !this.#operationIsCurrent(active) ||
       current === null ||
@@ -148,18 +151,18 @@ export class ActiveReceiveLifecycle {
       : mutation.workspaceUsage
     if (
       !this.#operationIsCurrent(active) ||
-      this.#outputs.getSnapshot().lifecycle?.generation !== expectedGeneration
+      this.#state.getSnapshot().lifecycle?.generation !== expectedGeneration
     ) {
       return false
     }
     isolateDiagnostic(beforePublish)
     // Journal-only local actions can finish without changing the authenticated lifecycle cut.
     const unchangedUsage = mutation.workspaceUsage === undefined ||
-      mutation.workspaceUsage === this.#outputs.getSnapshot().workspaceUsage
+      mutation.workspaceUsage === this.#state.getSnapshot().workspaceUsage
     if (mutation.lifecycle === current && mutation.resumeTransfer !== true && active.running === undefined &&
         mutation.activeControls === undefined && unchangedUsage) return true
     const controls = mutation.activeControls ?? Object.freeze([])
-    if (!this.#outputs.settleLifecycle(mutation.lifecycle, usage, controls, undefined, mutation.recoverySummary)) return false
+    if (!this.#state.settleLifecycle(mutation.lifecycle, usage, controls, undefined, mutation.recoverySummary)) return false
     if (mutation.resumeTransfer === true) this.#resumeTransferWhenIdle(active)
     return true
   }
@@ -179,9 +182,9 @@ export class ActiveReceiveLifecycle {
       return
     }
 
-    this.#outputs.updateActiveControls(Object.freeze([]))
+    this.#state.updateActiveControls(Object.freeze([]))
     try {
-      active.settlementPresentation.begin(control)
+      active.settlementWait.begin(control)
       active.runtime.interrupt(control, transfer)
       if (!transfer.signal.aborted) {
         throw new TypeError('receive interruption did not synchronously close the transfer lifetime')
@@ -195,8 +198,8 @@ export class ActiveReceiveLifecycle {
         control === 'pause' ? 'user_paused' : 'user_stopped',
       )
     } catch (error) {
-      active.settlementPresentation.cancel(control)
-      this.#outputs.updateActiveControls(active.runtime.activeControls)
+      active.settlementWait.cancel(control)
+      this.#state.updateActiveControls(active.runtime.activeControls)
       this.#finishFailure(pending, error)
     }
   }
@@ -215,7 +218,7 @@ export class ActiveReceiveLifecycle {
       // Local commands must return a new commit or the original unchanged authority;
       // equivalent snapshots are accepted only when settling an observed transfer.
       const hasMutationAuthority = mutation.lifecycle.generation > pending.generation ||
-        mutation.lifecycle === this.#outputs.getSnapshot().lifecycle
+        mutation.lifecycle === this.#state.getSnapshot().lifecycle
       const applied = hasMutationAuthority && await this.applyMutation(
         pending.operation,
         pending.generation,

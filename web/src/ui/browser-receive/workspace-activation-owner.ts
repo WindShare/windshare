@@ -31,7 +31,7 @@ import type {
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import type { ReceiveIntent } from '../../transfer/intent'
-import type { V2LifecycleMutation, V2OwnedActivationAuthority } from '../v2-receive-runtime'
+import type { V2LifecycleMutation, V2OwnedActivationAuthority } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 
 export interface WorkspaceActivationOwnerDependencies {

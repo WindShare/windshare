@@ -1,17 +1,17 @@
-import type { ArtifactChoiceID, SelectionSpec } from '../../transfer/intent'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
+import type { ArtifactChoiceID, SelectionSpec } from '../../../transfer/intent'
+import type { ReceivePlanningShare } from '../joined-share'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
-} from '../v2-receive-runtime'
-import { presentationSourceOutcome } from '../v2-receive-runtime'
-import type { ActiveReceiveCoordinator } from './active-receive'
+} from '../contracts'
+import { presentationSourceOutcome } from '../contracts'
+import type { ActiveReceiveCoordinator } from '../active/coordinator'
 import type {
   V2AuthorityActivationSnapshot,
   V2AuthorityActivationTerminalOutcome,
-} from './activation-model'
-import { V2ActivationStateContractError } from './activation-model'
-import { StaleReceiveBoundaryError } from './contracts'
+} from './model'
+import { V2ActivationStateContractError } from './model'
+import { StaleReceiveBoundaryError } from '../observation/contracts'
 import {
   AuthorityCommitTransaction,
   boundOperationCleanup,
@@ -19,7 +19,7 @@ import {
   type ActivationCleanupOwner,
   type AuthorityCommitOutcome,
   type ReceiveIntentBinder,
-} from './authority-commit'
+} from './commit'
 import {
   AuthorityPlanningPipeline,
   planningSubject,
@@ -27,7 +27,7 @@ import {
   type AuthorityPlanningResult,
   type AuthorityPlanningSubject,
   type V2AuthorityProjectionPublication,
-} from './authority-planning'
+} from './planning'
 import {
   cleanupRequiredSnapshot,
   closeActivationAttempt,
@@ -42,16 +42,16 @@ import {
   type AuthorityActivationOptions,
   type AuthorityAttemptExclusion,
   type AuthorityTraceDetail,
-} from './authority-lifecycle'
+} from './lifecycle'
 import {
   beginFrozenAuthorityCommit,
   createProvisionalAuthorityActivation,
-  displayedArtifactChoiceRanking,
+  offeredArtifactChoiceRanking,
   frozenBoundOperation,
-} from './authority-activation-transaction'
-import type { V2ActiveProjection } from './projection-observation'
+} from './transaction'
+import type { V2ActiveProjection } from '../discovery'
 
-export type { AuthorityActivationOptions } from './authority-lifecycle'
+export type { AuthorityActivationOptions } from './lifecycle'
 
 /**
  * Owns activation from the trusted click through the commit linearization point.
@@ -67,7 +67,7 @@ export class V2AuthorityActivationCoordinator {
   #snapshot: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
   #activation: AuthorityActivationRecord | undefined
   #joinSuspended = false
-  #joinReplacement: V2JoinedBrowserShare | undefined
+  #joinReplacement: ReceivePlanningShare | undefined
 
   constructor(options: AuthorityActivationOptions) {
     this.#options = options
@@ -148,8 +148,8 @@ export class V2AuthorityActivationCoordinator {
     this.#beginObservationReplacement(activation, reason)
   }
 
-  choose(choiceId: ArtifactChoiceID, display?: import('../../output/workspace/operation-display').ReceiveOperationDisplay,
-    recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic'): boolean {
+  choose(choiceId: ArtifactChoiceID, display?: import('../../../output/workspace/operation-display').ReceiveOperationDisplay,
+    recoveryPreference: import('../../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic'): boolean {
     const current = this.#options.currentProjection()
     const planned = this.#planning.latestOffers
     if (current === undefined || planned === undefined || planned.request.active !== current ||
@@ -159,7 +159,7 @@ export class V2AuthorityActivationCoordinator {
     const offered = [planned.offers.primary, ...planned.offers.alternatives]
       .find(candidate => candidate.choice.choiceId === choiceId)
     if (offered === undefined) return false
-    const preClickRanking = displayedArtifactChoiceRanking(planned.offers, offered.choice)
+    const preClickRanking = offeredArtifactChoiceRanking(planned.offers, offered.choice)
 
     const attempt = this.#options.observability.open('authority_activation')
     let activationId: string
@@ -231,7 +231,7 @@ export class V2AuthorityActivationCoordinator {
     }
   }
 
-  completeJoin(joined: V2JoinedBrowserShare, selection: SelectionSpec): void {
+  completeJoin(joined: ReceivePlanningShare, selection: SelectionSpec): void {
     const activation = this.#activation
     if (activation === undefined || activation.terminal !== undefined) {
       this.#joinSuspended = false

@@ -1,15 +1,12 @@
 import type {
   FailureFactRef,
   PresentationExclusionReason,
-} from '../../diagnostics/incident'
-import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import { validateReceiveIntent } from '../../transfer/intent'
-import {
-  EMPTY_V2_RETAINED_INVENTORY,
-  type V2ReceiverSnapshot,
-  type V2RetainedReceivePresentationOperation,
-} from '../v2-model'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
+} from '../../../diagnostics/incident'
+import type { DomainTraceSource } from '../../../diagnostics/trace/ports'
+import { validateReceiveIntent } from '../../../transfer/intent'
+import { type V2RetainedReceiveInventorySnapshot } from './model'
+import { EMPTY_V2_RETAINED_INVENTORY, type RetainedReceiveOperationSnapshot } from './model'
+import type { ReceiveJoinedShare } from '../joined-share'
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
@@ -17,18 +14,13 @@ import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-} from '../v2-receive-runtime'
+} from '../contracts'
+import { StaleReceiveBoundaryError, type V2ReceiverIncidentPort, type V2RetainedCompatibleNameRepairSource, type V2RetainedInventoryTraceEvent } from '../observation/contracts'
+import { V2PresentationAttempt } from '../observation/attempt'
 import {
-  StaleReceiveBoundaryError,
-  type V2ReceiverIncidentPort,
-  type V2RetainedCompatibleNameRepairSource,
-  type V2RetainedInventoryTraceEvent,
-} from './contracts'
-import { V2PresentationAttempt } from './presentation-attempt'
-import {
-  presentRetainedInventory,
-  type PresentedRetainedInventory,
-} from './retained-inventory-presentation'
+  resolveRetainedInventory,
+  type ResolvedRetainedInventory,
+} from './inventory'
 
 function retainedActionNeedsShare(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): boolean {
   return (action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)) &&
@@ -49,32 +41,32 @@ interface PendingInventoryLoad {
 
 interface PendingRetainedAction {
   readonly boundary: number
-  readonly inventory: PresentedRetainedInventory
-  readonly operation: V2RetainedReceivePresentationOperation
+  readonly inventory: ResolvedRetainedInventory
+  readonly operation: RetainedReceiveOperationSnapshot
   readonly sourceOperation: V2RetainedReceiveOperation
   readonly action: V2RetainedReceiveAction
-  readonly joined?: V2JoinedBrowserShare
+  readonly joined?: ReceiveJoinedShare
   readonly protocolSessionId?: string
   readonly controller: AbortController
   readonly attempt: RetainedAttempt
 }
 
 export interface RetainedContinuationAdoption {
-  readonly retained: V2RetainedReceivePresentationOperation
-  readonly joined: V2JoinedBrowserShare
+  readonly retained: RetainedReceiveOperationSnapshot
+  readonly joined: ReceiveJoinedShare
   readonly runtime: V2BoundReceiveOperation
 }
 
 export interface RetainedInventoryCoordinatorOptions {
   readonly receive: V2ReceiveCompositionPort
   readonly isDisposed: () => boolean
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
+  readonly currentJoinedShare: () => ReceiveJoinedShare | undefined
   readonly continuationBlocked: () => boolean
   readonly localFinalizationBlocked?: () => boolean
   readonly remoteContinuationUnavailable?: () => string | null
   readonly adoptContinuation: (input: RetainedContinuationAdoption) => Promise<void>
   readonly ownsRuntime: (runtime: V2BoundReceiveOperation) => boolean
-  readonly publish: (retained: V2ReceiverSnapshot['retained']) => void
+  readonly publish: (retained: V2RetainedReceiveInventorySnapshot) => void
   readonly repairSource?: V2RetainedCompatibleNameRepairSource
   readonly trace?: DomainTraceSource<V2RetainedInventoryTraceEvent>
   readonly onActionError: (error: unknown) => void
@@ -85,7 +77,8 @@ export interface RetainedInventoryCoordinatorOptions {
 export class RetainedInventoryCoordinator {
   readonly #options: RetainedInventoryCoordinatorOptions
   #load: PendingInventoryLoad | undefined
-  #inventory: PresentedRetainedInventory | undefined
+  #inventory: ResolvedRetainedInventory | undefined
+  #snapshot: V2RetainedReceiveInventorySnapshot = EMPTY_V2_RETAINED_INVENTORY
   #boundary = 0
   readonly #automaticFinalizations = new Set<string>()
   #pending: PendingRetainedAction | undefined
@@ -93,6 +86,8 @@ export class RetainedInventoryCoordinator {
   constructor(options: RetainedInventoryCoordinatorOptions) {
     this.#options = options
   }
+
+  readonly getSnapshot = (): V2RetainedReceiveInventorySnapshot => this.#snapshot
 
   get pending(): boolean {
     return this.#pending !== undefined
@@ -103,7 +98,7 @@ export class RetainedInventoryCoordinator {
   }
 
   actionAdmission(
-    operation: V2RetainedReceivePresentationOperation,
+    operation: RetainedReceiveOperationSnapshot,
     action: V2RetainedReceiveAction,
   ): Readonly<{ allowed: boolean; reason: string | null }> {
     const source = this.#inventory?.sourceOperations.get(operation)
@@ -132,7 +127,7 @@ export class RetainedInventoryCoordinator {
   }
 
   perform(
-    operation: V2RetainedReceivePresentationOperation,
+    operation: RetainedReceiveOperationSnapshot,
     action: V2RetainedReceiveAction,
   ): void {
     const inventory = this.#inventory
@@ -243,7 +238,7 @@ export class RetainedInventoryCoordinator {
         attempt.outputFailures,
       )
       pending.controller.signal.throwIfAborted()
-      const presented = await presentRetainedInventory(loaded, pending.controller.signal, this.#options.repairSource)
+      const presented = await resolveRetainedInventory(loaded, pending.controller.signal, this.#options.repairSource)
       pending.controller.signal.throwIfAborted()
       if (!this.#isCurrentLoad(pending)) {
         this.#closeLoadedInventory(loaded, attempt)
@@ -306,7 +301,7 @@ export class RetainedInventoryCoordinator {
     }
     this.#load = pending
     try {
-      this.#options.publish(EMPTY_V2_RETAINED_INVENTORY)
+      this.#publish(EMPTY_V2_RETAINED_INVENTORY)
       this.#trace(() => Object.freeze({
         name: 'receive.inventory.load.started',
       }))
@@ -357,7 +352,14 @@ export class RetainedInventoryCoordinator {
     attempt.incident('retained_inventory', 'failed', trigger)
   }
 
-  #publishLoadedInventory(loaded: PresentedRetainedInventory): void {
+  #publish(snapshot: V2RetainedReceiveInventorySnapshot): void {
+    this.#snapshot = snapshot
+    try { this.#options.publish(snapshot) } catch {
+      // Observers cannot revoke inventory-owned action authority.
+    }
+  }
+
+  #publishLoadedInventory(loaded: ResolvedRetainedInventory): void {
     this.#inventory = loaded
     this.#trace(() => Object.freeze({
       name: 'receive.inventory.load.completed',
@@ -367,10 +369,10 @@ export class RetainedInventoryCoordinator {
   }
 
   #publishReadyInventory(
-    inventory: PresentedRetainedInventory,
+    inventory: ResolvedRetainedInventory,
     pending?: PendingRetainedAction,
   ): void {
-    this.#options.publish(Object.freeze({
+    this.#publish(Object.freeze({
       kind: 'ready',
       operations: Object.freeze([...inventory.operations]),
       error: null,
@@ -404,7 +406,7 @@ export class RetainedInventoryCoordinator {
       return
     }
     this.#recordFailure(pending.attempt, 'retained_inventory')
-    this.#options.publish(Object.freeze({
+    this.#publish(Object.freeze({
       kind: 'failed',
       operations: Object.freeze([]),
       error: 'Stored receive tasks could not be loaded.',

@@ -8,7 +8,7 @@ import {
   presentDirectZipProgress,
 } from '../../src/ui/v2-progress-presentation'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
-import type { V2DirectZipProgressSnapshot } from '../../src/ui/v2-receive-runtime'
+import type { V2DirectZipProgressSnapshot } from '../../src/application/receive/contracts'
 
 describe('v2 progress presentation', () => {
   it.each(['open', 'failed'] as const)('keeps %s discovery and completion totals as lower bounds', (discovery) => {

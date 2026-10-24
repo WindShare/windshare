@@ -1,3 +1,4 @@
+import { activationOwnsChoice } from '../application/receive/activation/model'
 import type {
   ArtifactChoice,
   ArtifactOffers,
@@ -7,7 +8,7 @@ import type {
   ProjectedByteCount,
   ZipRouteGroup,
 } from '../output/planning'
-import type { V2AuthorityActivationSnapshot } from './controller/activation-model'
+import type { V2AuthorityActivationSnapshot } from '../application/receive/activation/model'
 import { formatBytes } from './v2-progress-presentation'
 
 export interface PresentedArtifactChoice {
@@ -146,7 +147,7 @@ export function presentArtifactActivation(
   activation: V2AuthorityActivationSnapshot,
   offered: OfferedArtifactChoice | null,
 ): ArtifactActivationPresentation | null {
-  if (!activationPresentsChoice(activation)) return null
+  if (!activationOwnsChoice(activation)) return null
   const choice = presentChoice(
     activation.choice,
     offered?.importance ?? 'primary',
@@ -201,28 +202,11 @@ export function presentArtifactActivation(
 export function activationLocksSelection(
   activation: V2AuthorityActivationSnapshot,
 ): boolean {
-  if (activationPresentsChoice(activation)) return true
+  if (activationOwnsChoice(activation)) return true
   return activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation'
 }
 
-export function activationPresentsChoice(
-  activation: V2AuthorityActivationSnapshot,
-): activation is Extract<V2AuthorityActivationSnapshot, {
-  readonly kind: 'waiting-authority' | 'waiting-resolution' | 'retry-required' | 'committing' |
-    'cleanup-required'
-}> {
-  switch (activation.kind) {
-    case 'waiting-authority':
-    case 'waiting-resolution':
-    case 'retry-required':
-    case 'committing':
-    case 'cleanup-required':
-      return true
-    case 'inactive':
-    case 'terminal':
-      return false
-  }
-}
+
 
 function presentChoice(
   choice: ArtifactChoice,

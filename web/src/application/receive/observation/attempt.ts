@@ -11,18 +11,18 @@ import {
   type PresentationExclusionReason,
   type PresentationOutcome,
   type RecoveryDisposition,
-} from '../../diagnostics/incident'
+} from '../../../diagnostics/incident'
 import {
   excludedPresentationDecision,
   incidentPresentationDecision,
-} from '../../diagnostics/incident/presentation'
+} from '../../../diagnostics/incident/presentation'
 import {
   createAttemptOutputFailureCapability,
   createLateOutputCleanupCapability,
   type AttemptOutputFailureCapability,
   type LateOutputFailureConsequenceCapability,
   type OutputFailureSinks,
-} from '../../output/diagnostics'
+} from '../../../output/diagnostics'
 import type { V2ReceiverIncidentPort } from './contracts'
 
 /**

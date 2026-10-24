@@ -49,7 +49,7 @@ import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session
 import type {
   V2BoundReceiveOperation,
   V2RouteCommitResult,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
 import {
   WorkspaceArtifactPresentationAuthority,

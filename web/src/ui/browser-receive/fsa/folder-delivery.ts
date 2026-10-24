@@ -3,7 +3,7 @@ import type { BrowserRecoveryPreference } from '../../../output/browser-delivery
 import type { BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
 import type { BrowserStagingStorageFacts } from '../../../output/planning/staging-storage'
 import type { OriginPrivateStorageManager } from '../contracts'
-import type { V2BrowserFolderProgressSnapshot, V2BrowserFolderProgressSource } from '../../v2-receive-runtime'
+import type { V2BrowserFolderProgressSnapshot, V2BrowserFolderProgressSource } from '../../../application/receive/contracts'
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import type { BrowserReceiveWindow } from '../contracts'
 import { inspectBrowserStagingStorage } from './staging-storage'

@@ -12,8 +12,8 @@ import type { SelectionProjectionState } from '../../src/transfer/projection'
 import {
   AuthorityPlanningPipeline,
   planningSubject,
-} from '../../src/ui/controller/authority-planning'
-import type { V2ActiveProjection } from '../../src/ui/controller/projection-observation'
+} from '../../src/application/receive/activation/planning'
+import type { V2ActiveProjection } from '../../src/application/receive/discovery'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
 import {
   COMPLETE_DISCOVERY,

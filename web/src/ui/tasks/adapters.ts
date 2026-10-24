@@ -1,12 +1,13 @@
 import type { ReceiveLifecycleState } from '../../output/workspace'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import { presentCompatibleNameRepair } from '../compatible-name-repair-presentation'
-import type { V2ReceiverProgress, V2RetainedReceivePresentationOperation, V2PendingRetainedReceiveActionSnapshot } from '../v2-model'
-import type { V2RetainedReceiveAction } from '../v2-receive-runtime'
+import type { V2ReceiverProgress } from '../v2-model'
+import type { RetainedReceiveOperationSnapshot, V2PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'
+import type { V2RetainedReceiveAction } from '../../application/receive/contracts'
 import type { V2OutputPresentationSnapshot } from '../v2-output'
 import { activeTaskAction, retainedTaskAction } from './actions'
 import { recoverySummaryDescription } from '../resumable-file-set-presentation'
-import { retainedContinuationReadiness } from '../controller/retained-readiness'
+import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import type { TaskBlocking, TaskCompleteness, TaskFacts, TaskPublication, TaskRecoveryReadiness } from './model'
 
 export function activeTaskFacts(input: Readonly<{
@@ -14,7 +15,7 @@ export function activeTaskFacts(input: Readonly<{
   progress: V2ReceiverProgress
   display?: ReceiveOperationDisplay | null
   blocking?: TaskBlocking | null
-  actionAdmission?: (action: import('../v2-lifecycle-presentation').LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>
+  actionAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>
 }>): TaskFacts | null {
   const { output, progress } = input
   const state = output.lifecycle
@@ -53,7 +54,7 @@ export function activeTaskFacts(input: Readonly<{
 }
 
 export function retainedTaskFacts(
-  operation: V2RetainedReceivePresentationOperation,
+  operation: RetainedReceiveOperationSnapshot,
   readiness: TaskRecoveryReadiness = retainedContinuationReadiness(operation, null),
   execution: Readonly<{
     pending?: V2PendingRetainedReceiveActionSnapshot | null

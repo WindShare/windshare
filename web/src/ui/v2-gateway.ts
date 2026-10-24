@@ -5,7 +5,6 @@ import {
 import { IndexedDbV2CatalogPageStore } from '../catalog/v2-page-store'
 import { type V2CatalogEntry, type V2ShareDescriptor } from '../catalog/v2-records'
 import {
-  frozenV2SelectionPolicy,
   V2SelectionPolicy,
   type V2FrozenSelectionPolicy,
 } from '../catalog/v2-selection'
@@ -20,7 +19,7 @@ import type {
 } from '../connectivity/v2-receiver-policy'
 import type { Suite02CapabilityLink } from '../crypto/suite02-link'
 import { capabilityFromInput } from './capability/input'
-import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
+import { encodeBase64Url } from '../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { joinBrowserRelays } from '../receiver/browser-join'
@@ -67,22 +66,6 @@ export class V2BrowseNavigationError extends Error {
     super(message, options)
     this.name = 'V2BrowseNavigationError'
   }
-}
-
-export function v2SelectionPolicyFromIntent(
-  intent: ReceiveIntent,
-): V2FrozenSelectionPolicy {
-  if (intent.selection.rules.mode !== 'node-id') {
-    throw new TypeError('Browser resume requires node-identity selection authority')
-  }
-  return frozenV2SelectionPolicy(
-    intent.selection.rules.defaultSelected,
-    intent.selection.rules.rules.map((rule) => {
-      const id = decodeBase64Url(rule.id)
-      if (id === undefined) throw new TypeError('Resumed selection rule identity is invalid')
-      return Object.freeze({ kind: rule.kind, id, selected: rule.selected })
-    }),
-  )
 }
 
 export class V2JoinedBrowserShare {

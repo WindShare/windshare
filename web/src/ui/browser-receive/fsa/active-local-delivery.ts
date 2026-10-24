@@ -8,7 +8,7 @@ import type { ReceiveOperationRepository } from '../../../output/workspace/repos
 import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../output/workspace/state'
 import { canonicalReceiveLifecycleStateBytes } from '../../../output/workspace/state-codec'
 import type { ReceiveIntent } from '../../../transfer/intent'
-import type { V2LifecycleActionOutcome, V2LifecycleMutation } from '../../v2-receive-runtime'
+import type { V2LifecycleActionOutcome, V2LifecycleMutation } from '../../../application/receive/contracts'
 import type { FSAResourceOwner } from '../fsa-resource-owner'
 import { readLifecycle, unavailableRoute } from '../shared'
 import { openFolderCleanupAttempt, openFolderDeliveryAttempt, readFolderRecoverySummary, type BrowserFolderDeliveryContext } from './folder-delivery'

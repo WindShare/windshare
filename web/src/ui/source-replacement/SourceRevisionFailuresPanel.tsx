@@ -1,5 +1,5 @@
 import type { SourceRevisionFailure } from '../../output/resume/source-revision-failures'
-import type { V2RetainedReceiveOperation } from '../v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../application/receive/contracts'
 
 export function SourceRevisionFailuresPanel(props: {
   readonly operation: V2RetainedReceiveOperation

@@ -7,7 +7,7 @@ import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
 import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import {
   FakeGateway,

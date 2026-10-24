@@ -4,7 +4,7 @@ import type {
   AuthorityOwnedReceiveOperationContinuation,
   AuthorityOwnedReceiveOperationMutationResult,
 } from '../../../output/resume/reopen-authority'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../v2-receive-runtime'
+import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../../application/receive/contracts'
 
 type RetainedActionAuthority = Pick<
   ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,

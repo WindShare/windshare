@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
+import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
 import { recordingIncidents } from './v2-receiver-orchestration-fixture'
 
 describe('controller failure evidence', () => {
