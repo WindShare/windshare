@@ -32,7 +32,7 @@ import type {
   V2PlanExecutionAuthority,
 } from '../../src/transfer/output/session'
 
-const GATEWAY_MODULE_PATH = '/src/ui/v2-gateway.ts'
+const GATEWAY_MODULE_PATH = '/src/application/browser-share/gateway.ts'
 const INTENT_MODULE_PATH = '/src/transfer/intent.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
 const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/v2-plan-authority.ts'
@@ -45,7 +45,7 @@ const HOT_SWITCH_RECEIPT_DOMAIN = 'windshare/e2e/hot-switch-receipt/v1'
 const STREAM_TARGET_OFFER_ID = 'hot-switch-managed-atomic-stream'
 const TEXT_ENCODER = new TextEncoder()
 
-type GatewayModule = typeof import('../../src/ui/v2-gateway')
+type GatewayModule = typeof import('../../src/application/browser-share/gateway')
 type IntentModule = typeof import('../../src/transfer/intent')
 type OfferModule = typeof import('../../src/connectivity/peer-offer')
 type PlanAuthorityModule = typeof import('../../src/transfer/settlement/v2-plan-authority')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { browserFolderDeliveryTrace, observeBrowserFolderCheckpoint } from '../../src/ui/browser-receive/fsa/delivery-trace'
+import { browserFolderDeliveryTrace, observeBrowserFolderCheckpoint } from '../../src/output/browser-delivery/trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import type { OutputDiagnosticsPorts, OutputTraceEvent } from '../../src/output/diagnostics'
 import { deliveryIdentity } from '../output/browser-delivery-fixture'

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { continueProgressiveZip } from '../../src/ui/browser-receive/retained-progressive'
-import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
+import { continueProgressiveZip } from '../../src/application/browser-receive/retained/progressive'
+import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../src/output/resume/reopen-authority'
 
 const ports = vi.hoisted(() => ({ reopen: vi.fn(), handoff: vi.fn() }))
-vi.mock('../../src/ui/browser-receive/workspace-operation', () => ({
+vi.mock('../../src/application/browser-receive/workspace/operation', () => ({
   WorkspaceReceiveOperation: { reopenProgressive: ports.reopen },
 }))
-vi.mock('../../src/ui/browser-receive/workspace-publication', () => ({
+vi.mock('../../src/application/browser-receive/workspace/publication', () => ({
   handoffRetainedWorkspacePackage: ports.handoff,
 }))
 

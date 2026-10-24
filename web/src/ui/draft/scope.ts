@@ -1,4 +1,4 @@
-import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from '../v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from '../../application/browser-share/gateway'
 import type { V2SelectionDraft, V2ShareIdentity } from '../v2-model'
 import { projectDraft, scopeSelection, shareIdentityFromRoot } from './model'
 

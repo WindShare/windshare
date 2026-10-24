@@ -1,0 +1,576 @@
+import { projectProtocolTraceEvent } from './protocol-trace'
+export { projectProtocolTraceEvent } from './protocol-trace'
+import { correlatedObservation, decimal, observation, requiredCorrelation, snake } from '../../diagnostics/export/trace-observation'
+import type {
+  V2ConnectivityTraceEvent,
+  V2ConnectivityTraceSource,
+} from '../../connectivity/diagnostics'
+import type {
+  TraceEventObservationV2,
+  TraceEventPayloadByNameV2,
+} from '../../diagnostics/trace/model'
+import type { DomainTraceSource } from '../../diagnostics/trace/ports'
+import type {
+  OutputTraceEvent,
+  OutputTraceSource,
+} from '../../output/diagnostics'
+import type { ProjectionTraceEvent } from '../../transfer/projection'
+import type { TransferTraceEvent } from '../../transfer/v2-job'
+import type {
+  V2ProtocolTraceSource,
+} from '../../session/v2-diagnostics'
+import type { V2ReceiverTraceEvent } from '../receive/observation/contracts'
+import { projectRetainedActionPayload } from './retained-trace'
+
+type BrowserTraceSource = DomainTraceSource<TraceEventObservationV2>
+
+export function createV2ReceiverTraceSource(
+  trace: BrowserTraceSource,
+): DomainTraceSource<V2ReceiverTraceEvent> {
+  return adaptTraceSource(trace, projectV2ReceiverTraceEvent)
+}
+
+export function createOutputTraceSource(
+  trace: BrowserTraceSource,
+): OutputTraceSource {
+  return adaptTraceSource(trace, projectOutputTraceEvent)
+}
+
+export function createProtocolTraceSource(
+  trace: BrowserTraceSource,
+): V2ProtocolTraceSource {
+  return adaptTraceSource(trace, projectProtocolTraceEvent)
+}
+
+export function createConnectivityTraceSource(
+  trace: BrowserTraceSource,
+): V2ConnectivityTraceSource {
+  return adaptTraceSource(trace, projectConnectivityTraceEvent)
+}
+
+export function projectV2ReceiverTraceEvent(
+  event: V2ReceiverTraceEvent,
+): TraceEventObservationV2 {
+  switch (event.name) {
+    case 'receiver_experience':
+      if (event.transition === 'task') return observation('receiver_experience', {
+        transition: 'task', operation_id: event.operationId, generation: decimal(event.generation),
+        stage: event.stage, reason: event.reason, attention: event.attention,
+        completeness: event.completeness, publication: event.publication,
+        elapsed_ms: event.elapsedMilliseconds === null ? null : String(event.elapsedMilliseconds),
+      })
+      if (event.transition === 'saving') return observation('receiver_experience', {
+        transition: 'saving', projection_epoch: event.projectionEpoch === null ? null : decimal(event.projectionEpoch),
+        choice_id: event.choiceId, outcome: event.outcome, reason: event.reason,
+      })
+      if (event.transition === 'ownership') return observation('receiver_experience', {
+        transition: 'ownership', state: event.state, operation_id: event.operationId,
+        generation: decimal(event.generation), lifecycle_state: snake(event.lifecycleKind),
+      })
+      return observation('receiver_experience', { transition: 'intent', action: event.action,
+        operation_id: event.operationId, generation: decimal(event.generation) })
+    case 'join_transition':
+      return observation('join_transition', { transition: event.transition })
+    case 'projection_transition':
+      return projectProjectionTraceEvent(event)
+    case 'authority_transition':
+      return projectAuthorityTraceEvent(event)
+    case 'receive_transition':
+    case 'transfer_progress':
+      return projectTransferTraceEvent(event)
+    case 'lifecycle_action_transition':
+      return observation('lifecycle_action_transition', {
+        transition: event.transition,
+        action: snake(event.action),
+        ...(event.lifecycleKind === undefined
+          ? {}
+          : { lifecycle_state: snake(event.lifecycleKind) }),
+      })
+    case 'receive.inventory.load.started':
+      return observation('retained_inventory', { transition: 'load_started' })
+    case 'receive.inventory.load.completed':
+      return observation('retained_inventory', {
+        transition: 'load_completed',
+        operation_count: decimal(event.operation_count),
+      })
+    case 'receive.inventory.load.failed':
+      return observation('retained_inventory', { transition: 'load_failed' })
+    case 'receive.inventory.action.started':
+    case 'receive.inventory.action.completed':
+    case 'receive.inventory.action.failed':
+      return observation('retained_action', projectRetainedActionPayload(event))
+  }
+}
+
+export function projectOutputTraceEvent(
+  event: OutputTraceEvent,
+): TraceEventObservationV2 {
+  // Output's diagnostic port already owns the frozen V1 field vocabulary. This
+  // boundary detaches it while the recorder performs the shared exact-key check.
+  return Object.freeze({
+    eventName: event.eventName,
+    payload: Object.freeze({ ...event.payload }),
+  }) as TraceEventObservationV2
+}
+
+export function projectConnectivityTraceEvent(
+  event: V2ConnectivityTraceEvent,
+): TraceEventObservationV2 {
+  const correlation = requiredCorrelation(event.correlation)
+  if (event.eventName === 'peer_attempt') {
+    return correlatedObservation(
+      event.eventName,
+      correlation,
+      projectPeerAttemptPayload(event),
+    )
+  }
+  return correlatedObservation(
+    event.eventName,
+    correlation,
+    projectPeerRecoveryPayload(event),
+  )
+}
+
+function projectProjectionTraceEvent(
+  event: ProjectionTraceEvent,
+): TraceEventObservationV2 {
+  switch (event.transition) {
+    case 'started':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+      })
+    case 'refined':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        shape_proof: snake(event.shapeProof),
+        discovery_state: snake(event.discoveryState),
+        file_count_lower_bound: decimal(event.fileCountLowerBound),
+        directory_count_lower_bound: decimal(event.directoryCountLowerBound),
+        byte_count_lower_bound: decimal(event.byteCountLowerBound),
+        unsettled_target_count: decimal(event.unsettledTargetCount),
+      })
+    case 'proven':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        shape_proof: snake(event.shapeProof),
+        layout_basis_class: snake(event.layoutBasisClass),
+      })
+    case 'retryable_failure':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        shape_proof: snake(event.shapeProof),
+        retryable_discovery_reason: snake(event.retryableDiscoveryReason),
+      })
+    case 'retry_started':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        retained_shape_proof: snake(event.retainedShapeProof),
+      })
+    case 'stale_event_dropped':
+      return observation(event.name, {
+        transition: event.transition,
+        current_projection_epoch: decimal(event.currentProjectionEpoch),
+        stale_projection_epoch: decimal(event.staleProjectionEpoch),
+        event_class: event.eventClass,
+      })
+  }
+}
+
+function projectAuthorityTraceEvent(
+  event: Extract<V2ReceiverTraceEvent, { readonly name: 'authority_transition' }>,
+): TraceEventObservationV2 {
+  switch (event.transition) {
+    case 'offers_computed':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        shape_proof: snake(event.shapeProof),
+        offered_artifact_kinds: event.offeredArtifactKinds.map(snake),
+        offered_plan_kinds: event.offeredPlanKinds.map(snake),
+        primary_artifact_kind: snake(event.primaryArtifactKind),
+      })
+    case 'offers_disabled':
+      return observation(event.name, {
+        transition: event.transition,
+        projection_epoch: decimal(event.projectionEpoch),
+        shape_proof: snake(event.shapeProof),
+        reason: snake(event.reason),
+        ...(event.hardLimitClass === undefined
+          ? {}
+          : { hard_limit_class: snake(event.hardLimitClass) }),
+      })
+    case 'stale_event_dropped':
+      return observation(event.name, {
+        transition: event.transition,
+        current_projection_epoch: decimal(event.currentProjectionEpoch),
+        stale_projection_epoch: decimal(event.staleProjectionEpoch),
+        event_class: snake(event.eventClass),
+      })
+    case 'activation_started':
+    case 'artifact_resolved':
+    case 'commit_started':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+      })
+    case 'commit_pre_cut_retry':
+    case 'cleanup_completed':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        ...(event.receiverOperationId === undefined
+          ? {}
+          : { receiver_operation_id: event.receiverOperationId }),
+      })
+    case 'prerequisite_waiting':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        waiting_for: snake(event.waitingFor),
+      })
+    case 'retry_required':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        retryable_discovery_reason: snake(event.retryableDiscoveryReason),
+      })
+    case 'semantic_invalidated':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        invalidation_reason: snake(event.invalidationReason),
+      })
+    case 'commit_bound_operation':
+    case 'commit_owned_effects':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        receiver_operation_id: event.receiverOperationId,
+      })
+    case 'cleanup_failed':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        receiver_operation_id: event.receiverOperationId,
+        failed_stage: event.failedStage,
+      })
+  }
+}
+
+function projectAuthorityActivationContext(
+  event: Extract<
+    V2ReceiverTraceEvent,
+    { readonly name: 'authority_transition'; readonly activationId: string }
+  >,
+) {
+  return {
+    activation_id: event.activationId,
+    authenticated_share_instance_id: event.authenticatedShareInstanceId,
+    selection_digest: event.selectionDigest,
+    observed_protocol_session_id: event.observedProtocolSessionId,
+    projection_epoch: decimal(event.projectionEpoch),
+    observation_revision: decimal(event.observationRevision),
+    artifact_kind: snake(event.artifactKind),
+    plan_kind: snake(event.planKind),
+  } as const
+}
+
+function projectTransferTraceEvent(
+  event: TransferTraceEvent,
+): TraceEventObservationV2 {
+  if (event.name === 'transfer_progress') {
+    return observation(event.name, {
+      operation_id: event.operationId,
+      transfer_job_id: event.transferJobId,
+      discovered_files: decimal(event.discoveredFiles),
+      discovered_bytes: decimal(event.discoveredBytes),
+      received_object_bytes: decimal(event.receivedObjectBytes),
+      written_bytes: decimal(event.writtenBytes),
+      completed_files: decimal(event.completedFiles),
+      completed_bytes: decimal(event.completedBytes),
+      file_errors: decimal(event.fileErrors),
+      selection_errors: decimal(event.selectionErrors),
+      failed_directories: decimal(event.failedDirectories),
+      capacity_waiting_files: decimal(event.capacityWaitingFiles),
+      capacity_accumulated_wait_ms: decimal(event.capacityAccumulatedWaitMilliseconds),
+      capacity_wait_attempts: decimal(event.capacityWaitAttempts),
+      capacity_wait_visible: event.capacityWaitVisible,
+      content_lanes: event.contentLanes,
+      discovery: event.discovery,
+      partial: event.partial,
+    })
+  }
+
+  switch (event.transition) {
+    case 'download_connectivity':
+      return observation(event.name, {
+        transition: event.transition, transfer_job_id: event.transferJobId,
+        connectivity: event.connectivity,
+      })
+    case 'intent_frozen':
+      return observation(event.name, {
+        transition: event.transition,
+        artifact_kind: snake(event.artifactKind),
+        layout_class: snake(event.layoutClass),
+        plan_kind: snake(event.planKind),
+      })
+    case 'discovery_scheduling':
+      return observation(event.name, {
+        transition: event.transition, operation_id: event.operationId, transfer_job_id: event.transferJobId,
+        queue: event.queue, decision: event.decision,
+        pending_items: decimal(BigInt(event.pendingItems)), metadata_bytes: decimal(event.metadataBytes),
+        maximum_items: decimal(BigInt(event.maximumItems)), maximum_metadata_bytes: decimal(event.maximumMetadataBytes),
+      })
+    case 'directory_admitted':
+      return observation(event.name, {
+        transition: event.transition,
+        admitted_directory_count: decimal(event.admittedDirectoryCount),
+        layout_class: snake(event.layoutClass),
+      })
+    case 'materialization_started':
+      return observation(event.name, {
+        transition: event.transition,
+        plan_kind: snake(event.planKind),
+      })
+    case 'materialization_failed':
+      return observation(event.name, {
+        transition: event.transition,
+        plan_kind: snake(event.planKind),
+        failure_reason: snake(event.materializationFailureReason),
+        completed_file_count: decimal(event.completedFileCount),
+        completed_bytes: decimal(event.completedBytes),
+      })
+    case 'materialization_completed':
+      return observation(event.name, {
+        transition: event.transition,
+        entry_count: decimal(event.entryCount),
+        file_count: decimal(event.fileCount),
+        directory_count: decimal(event.directoryCount),
+        raw_bytes: decimal(event.rawBytes),
+      })
+    case 'tree_finalized':
+      return observation(event.name, {
+        transition: event.transition,
+        outcome: event.outcome,
+        success_count: decimal(event.successCount),
+        failure_count: decimal(event.failureCount),
+      })
+    case 'worker_consequence_observed': {
+      const source = event.failureSource
+      const sourceIndex = workerConsequenceSourceIndex(source)
+      return observation(event.name, {
+        transition: event.transition,
+        worker_family: snake(event.workerFamily),
+        failure_source: snake(source.kind),
+        ...(sourceIndex === undefined ? {} : { failure_source_index: sourceIndex }),
+        operation_id: event.operationId,
+        transfer_job_id: event.transferJobId,
+        ...(event.protocolSessionId === undefined || event.protocolGeneration === undefined
+          ? {}
+          : {
+              protocol_session_id: event.protocolSessionId,
+              protocol_generation: event.protocolGeneration,
+            }),
+        ...(event.outputSessionId === undefined
+          ? {}
+          : { output_session_id: event.outputSessionId }),
+      })
+    }
+    case 'capacity_retry_scheduled':
+    case 'capacity_retry_succeeded':
+    case 'capacity_wait_budget_paused':
+    case 'capacity_wait_cancelled':
+    case 'capacity_generation_replaced':
+      return observation(event.name, {
+        transition: event.transition,
+        capacity_wait_id: event.capacityWaitId,
+        capacity_surface: event.capacitySurface,
+        receive_operation_id: event.receiveOperationId,
+        transfer_job_id: event.transferJobId,
+        protocol_session_id: event.protocolSessionId,
+        protocol_operation_id: event.protocolOperationId,
+        attempt: decimal(event.attempt),
+        sender_hint_ms: event.senderHintMilliseconds,
+        jitter_ms: event.jitterMilliseconds,
+        delay_ms: event.delayMilliseconds,
+        accumulated_wait_ms: event.accumulatedWaitMilliseconds,
+        active_waiters: event.activeWaiters,
+      })
+  }
+}
+
+function workerConsequenceSourceIndex(
+  source: Extract<
+    TransferTraceEvent,
+    { readonly transition: 'worker_consequence_observed' }
+  >['failureSource'],
+): number | undefined {
+  if (source.kind === 'worker') return source.workerIndex
+  if (source.kind === 'queue-close' || source.kind === 'queue-abort') return source.queueIndex
+  return undefined
+}
+
+function projectPeerAttemptPayload(
+  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
+): TraceEventPayloadByNameV2['peer_attempt'] {
+  const payload = projectPeerAttemptMilestone(event)
+  if (event.stage !== 'failed' && event.stage !== 'admitted') return payload
+  return {
+    ...payload,
+    ...(event.stage === 'failed' ? { failure: event.failure } : {}),
+    ...(event.summary === undefined ? {} : { summary: {
+      last_completed_stage: snake(event.summary.lastCompletedStage),
+      attempt_elapsed_ms: event.summary.attemptElapsedMilliseconds,
+      stage_elapsed_ms: event.summary.stageElapsedMilliseconds,
+      deadline_expired: event.summary.deadlineExpired,
+    } }),
+  }
+}
+
+function projectPeerAttemptMilestone(
+  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
+): TraceEventPayloadByNameV2['peer_attempt'] {
+  const ordinals = {
+    wave_ordinal: decimal(event.waveOrdinal),
+    wave_attempt_ordinal: decimal(event.waveAttemptOrdinal),
+    session_attempt_ordinal: decimal(event.sessionAttemptOrdinal),
+  }
+  switch (event.stage) {
+    case 'provider-fact':
+      return { stage: 'provider_fact', fact: event.fact }
+    case 'started':
+      return { stage: event.stage, ...ordinals }
+    case 'negotiation-deadline-armed':
+    case 'negotiation-deadline-expired':
+    case 'admission-deadline-armed':
+    case 'admission-deadline-expired':
+      return {
+        stage: snake(event.stage),
+        deadline_budget_ms: event.deadlineBudgetMilliseconds,
+      }
+    case 'offer-created':
+    case 'offer-sent':
+    case 'answer-received':
+    case 'datachannel-open':
+      return {
+        stage: snake(event.stage),
+        local_candidates_emitted: decimal(event.candidateCounts.localEmitted),
+        remote_candidates_accepted: decimal(event.candidateCounts.remoteAccepted),
+      }
+    case 'grant-requested':
+      return {
+        stage: 'grant_requested',
+        requested_lane_id: event.requestedLaneId,
+      }
+    case 'admission-response-settled':
+      return {
+        stage: 'admission_response_settled',
+        settlement: event.settlement.disposition === 'accepted'
+          ? { disposition: 'accepted' }
+          : {
+              disposition: 'rejected',
+              rejection_code: event.settlement.rejectionCode,
+              retry_after_ms: event.settlement.retryAfterMilliseconds,
+            },
+      }
+    case 'failed':
+      return {
+        stage: event.stage,
+        failed_at_stage: snake(event.failedAtStage),
+        failure_scope: event.failureScope,
+        code: snake(event.typedErrorCode),
+        retryable: event.retryable,
+      }
+    default:
+      return { stage: snake(event.stage) }
+  }
+}
+
+function projectPeerRecoveryPayload(
+  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_recovery' }>,
+): TraceEventPayloadByNameV2['peer_recovery'] {
+  switch (event.stage) {
+    case 'parallelism':
+      return { stage: 'parallelism', action: event.action, reason: event.reason, paths: event.paths,
+        network_waiting_bytes: decimal(event.networkWaitingBytes), in_flight_bytes: decimal(event.inFlightBytes),
+        remaining_bytes: decimal(event.remainingBytes), remaining_known: event.remainingKnown,
+        queued_bytes: decimal(event.queuedBytes), unfinished_bytes: decimal(event.unfinishedBytes), capacity_waiting_bytes: decimal(event.capacityWaitingBytes),
+        useful_rate: event.usefulRate, output_rate: event.outputRate, baseline_useful_rate: event.baselineUsefulRate, baseline_output_rate: event.baselineOutputRate,
+        ...(event.trialPath === undefined ? {} : { trial_path: { path_id: event.trialPath.pathId, lane_id: event.trialPath.laneId, lane_epoch: event.trialPath.laneEpoch } }),
+        ...(event.trialWork === undefined ? {} : { trial_work: {
+          offered_bytes: decimal(event.trialWork.offeredBytes), settled_bytes: decimal(event.trialWork.settledBytes), completed_bytes: decimal(event.trialWork.completedBytes),
+          completed_attempts: decimal(event.trialWork.completedAttempts), failed_attempts: decimal(event.trialWork.failedAttempts),
+          superseded_attempts: decimal(event.trialWork.supersededAttempts), cancelled_attempts: decimal(event.trialWork.cancelledAttempts), busy_ms: decimal(event.trialWork.busyMilliseconds),
+        } }) }
+    case 'wave-started':
+    case 'wave-rearmed':
+      return {
+        stage: snake(event.stage),
+        wave_ordinal: decimal(event.waveOrdinal),
+        trigger: snake(event.trigger),
+      }
+    case 'retry-decided':
+      return {
+        stage: 'retry_decided',
+        wave_ordinal: decimal(event.waveOrdinal),
+        decision: snake(event.decision),
+        reason: snake(event.reason),
+        authenticated_retry_after_ms: event.authenticatedRetryAfterMilliseconds,
+      }
+    case 'backoff-scheduled':
+      return {
+        stage: 'backoff_scheduled',
+        wave_ordinal: decimal(event.waveOrdinal),
+        retry_ordinal: decimal(event.retryOrdinal),
+        local_delay_ms: event.localDelayMilliseconds,
+        authenticated_retry_after_ms: event.authenticatedRetryAfterMilliseconds,
+        effective_delay_ms: event.effectiveDelayMilliseconds,
+      }
+    case 'attempt-replaced':
+      return {
+        stage: 'attempt_replaced',
+        wave_ordinal: decimal(event.waveOrdinal),
+      }
+    case 'wave-quiesced':
+      return {
+        stage: 'wave_quiesced',
+        wave_ordinal: decimal(event.waveOrdinal),
+        reason: snake(event.reason),
+      }
+    case 'peer-detached':
+      return { stage: 'peer_detached' }
+    case 'session-budget-exhausted':
+      return {
+        stage: 'session_budget_exhausted',
+        reason: snake(event.reason),
+      }
+    case 'path-stopped':
+      return {
+        stage: 'path_stopped',
+        reason: snake(event.reason),
+      }
+    case 'session-stopped':
+      return {
+        stage: 'session_stopped',
+        reason: snake(event.reason),
+      }
+  }
+}
+
+function adaptTraceSource<Input>(
+  trace: BrowserTraceSource,
+  project: (event: Input) => TraceEventObservationV2,
+): DomainTraceSource<Input> {
+  return Object.freeze({
+    get current() {
+      const observer = trace.current
+      if (observer === undefined) return undefined
+      return (event: Input) => observer(project(event))
+    },
+  })
+}

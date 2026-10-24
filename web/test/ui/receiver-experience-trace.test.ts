@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
-import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
+import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import { ReceiverExperienceObservability } from '../../src/ui/experience/observability'
-import { projectV2ReceiverTraceEvent } from '../../src/ui/v2-production-trace'
+import { projectV2ReceiverTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import {
   FakeJoinedShare, FakeReceiveComposition, MANAGED_ENVIRONMENT, controllerFor,
   resetOrchestrationTestEnvironment, startTransfer, next, identityText,

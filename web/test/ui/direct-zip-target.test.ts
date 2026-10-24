@@ -3,7 +3,7 @@ import { decodeBase64Url } from '../../src/crypto/bytes'
 import { DirectZipEpochWriterV1 } from '../../src/output/direct-zip/writer'
 import type { DirectZipEpochProofV1, DirectZipWriterCheckpointV1 } from '../../src/output/direct-zip/writer'
 import type { DirectZipFileSystemPort } from '../../src/output/direct-zip/target'
-import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from '../../src/ui/browser-receive/direct-zip/target'
+import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from '../../src/output/direct-zip/browser/target'
 import { StagedFsaModel, type StagedFileHandle } from '../output/direct-zip/target/staged-fsa-model'
 import { createWriterHarness, fileAdmission, fileSource } from '../output/direct-zip/writer/fault-model'
 

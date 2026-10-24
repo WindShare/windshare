@@ -19,7 +19,7 @@ import {
   persistentOutputCapturedException,
   type PersistentOutputStageFailureMilestone,
 } from '../../../src/output/persistent-tree/stage-diagnostics'
-import { projectProtocolTraceEvent } from '../../../src/ui/v2-production-trace'
+import { projectProtocolTraceEvent } from '../../../src/application/diagnostics/receive-trace'
 import {
   TEST_BUNDLE_IDENTITY,
   diagnosticsHealthV1,

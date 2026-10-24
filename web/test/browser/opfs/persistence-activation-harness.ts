@@ -3,7 +3,7 @@ import {
 } from '../../../src/output/planning'
 import type { OutputTraceEvent } from '../../../src/output/diagnostics/trace'
 import { createSelectionSpec } from '../../../src/transfer/intent'
-import { WorkspaceArtifactPresentationAuthority } from '../../../src/ui/browser-receive/workspace-route'
+import { WorkspaceArtifactPresentationAuthority } from '../../../src/application/browser-receive/workspace/route'
 import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY, environment, handoffTarget, identity, projection,

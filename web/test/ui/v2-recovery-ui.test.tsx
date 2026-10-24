@@ -7,9 +7,7 @@ import type {
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { TaskDetails } from '../../src/ui/tasks/TaskView'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
-import {
-  type V2ReceiverSnapshot,
-} from '../../src/ui/v2-model'
+import { type V2ReceiverSnapshot } from '../../src/ui/v2-model'
 
 describe('DirectTree recovery UI', () => {
   it('renders reload-safe recovery costs for retained actions', () => {

@@ -21,7 +21,7 @@ export interface ReceiveOperationResumeSource {
   }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
   readDirectZipRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./direct-zip-checkpoint').DirectZipRecoveryRequirement | undefined>
-  readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('./source-revision-failures').SourceRevisionFailures | undefined>
+  readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('../../transfer/lifecycle/source-revision').SourceRevisionFailures | undefined>
   isCleanupOnly?(operationId: string): Promise<boolean>
   readRecoverySummary?(
     lifecycle: Extract<ReceiveLifecycleState, {

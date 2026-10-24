@@ -48,7 +48,7 @@ import {
 import {
   FSAArtifactPresentationAuthority,
   type FSARouteDependencies,
-} from '../../src/ui/browser-receive/fsa-route'
+} from '../../src/application/browser-receive/fsa/route'
 import {
   MemoryDirectory,
   MemoryLockManager,

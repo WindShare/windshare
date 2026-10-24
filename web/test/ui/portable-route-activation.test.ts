@@ -18,12 +18,12 @@ import {
   type SelectionSpec,
 } from '../../src/transfer/intent'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
-import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
-import { createPortableReceiveOperation } from '../../src/ui/browser-receive/portable'
+import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
+import { createPortableReceiveOperation } from '../../src/application/browser-receive/portable/operation'
 import {
   PortableArtifactPresentationAuthority,
   startPortableArtifactAuthority,
-} from '../../src/ui/browser-receive/portable-route'
+} from '../../src/application/browser-receive/portable/route'
 import {
   COMPLETE_DISCOVERY,
   environment,

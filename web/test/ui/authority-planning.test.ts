@@ -14,7 +14,7 @@ import {
   planningSubject,
 } from '../../src/application/receive/activation/planning'
 import type { V2ActiveProjection } from '../../src/application/receive/discovery'
-import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
   COMPLETE_DISCOVERY,
   projection,

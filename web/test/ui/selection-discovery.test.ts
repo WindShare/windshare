@@ -5,7 +5,7 @@ import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { createSelectionSpec, selectionRulesSpecFromPolicy } from '../../src/transfer/intent'
 import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
-import { V2JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/ui/selection-discovery/source'
+import { V2JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/application/browser-share/discovery/source'
 import { offerArtifacts, reconcileArtifactChoice, materializationRouteIdentity } from '../../src/output/planning'
 import { environment, fsaTarget } from '../output/planning/fixture'
 

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
 import type { TransferJobResult } from '../../src/transfer/v2-job'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
+import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,

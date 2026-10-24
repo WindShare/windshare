@@ -5,7 +5,7 @@ import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
-} from '../../src/ui/v2-browser-receive-composition'
+} from '../../src/application/browser-receive/composition'
 import { presentArtifactChoice } from '../../src/ui/v2-artifact-presentation'
 import {
   V2AuthorityActivationCoordinator,

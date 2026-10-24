@@ -12,11 +12,7 @@ import type { ArtifactSpec } from '../../src/transfer/intent'
 import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
 import type { V2ReceiverController } from '../../src/ui/v2-controller'
 import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
-import {
-  EMPTY_V2_PREVIEW,
-  EMPTY_V2_PROGRESS,
-  type V2ReceiverSnapshot,
-} from '../../src/ui/v2-model'
+import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
 import {
   EMPTY_V2_OUTPUT_PRESENTATION,
   type V2OutputPresentationSnapshot,

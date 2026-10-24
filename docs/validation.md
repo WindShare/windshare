@@ -50,7 +50,9 @@ short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
 
 ### Web boundaries
 
-`make web` checks resolved TypeScript dependencies, including type imports, re-exports, aliases, and dynamic imports. `transfer/**` owns receive intent, lifecycle, output ports, and failure contracts; it cannot reach `output/**`, application composition, or UI, even through a shared module. Storage execution adapters live under `output/execution` and `output/direct-zip/transfer`. Backends declare immutable output-failure facts; transfer consumes those facts without recognizing native exception classes.
+`make web` checks resolved TypeScript dependencies, including type imports, re-exports, aliases, and dynamic imports. Application and reusable modules cannot depend on UI/React. Protocol contracts cannot reach runtime implementations; sessions cannot reach connectivity, transport, or storage implementations. UI invokes application commands and diagnostic services without assembling output routes or accessing storage ownership implementations.
+
+`transfer/**` owns receive intent, lifecycle, output ports, and failure contracts; it cannot reach `output/**`, application composition, or UI, even through shared modules. Browser route coordination lives in `application/browser-receive`; storage execution, journals, and file ownership stay in `output/**`.
 
 ### Go packages
 

@@ -4,7 +4,7 @@ import { v2RelayEndpointForShare, type V2RelayEndpoint } from './v2-endpoint'
 import { decodeV2DescriptorDelivery } from './v2-protocol'
 import { encodeDeliveryJoin, type RelayReceiveCapacity } from './delivery-handshake-codec'
 import type { RelayHeartbeatTrace } from './heartbeat'
-import type { ReceiveLedgerEvent } from './receive-ledger'
+import type { ReceiveLedgerEvent } from '../../contracts/relay-delivery-observation'
 import { receiverCapacity } from './receiver/capacity'
 import { V2OpaqueRelayFrameChannel } from './receiver/channel'
 import {

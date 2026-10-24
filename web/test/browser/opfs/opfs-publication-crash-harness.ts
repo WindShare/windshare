@@ -6,8 +6,8 @@ import { ReceiveOperationResumeAuthority } from '../../../src/output/resume/auth
 import { createBrowserReceiveOperationMutationPort } from '../../../src/output/resume/reopen-authority'
 import { WorkspaceOperationStages } from '../../../src/output/workspace/stages'
 import { createOperationID } from '../../../src/transfer/intent'
-import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
-import { handoffRetainedWorkspacePackage } from '../../../src/ui/browser-receive/workspace-publication'
+import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
+import { handoffRetainedWorkspacePackage } from '../../../src/application/browser-receive/workspace/publication'
 import type { DurablePackageFixture, DurableReceiveFixture } from '../durable-recovery-harness'
 import { durableIdentities, durableIntent } from '../durable-output-fixture'
 

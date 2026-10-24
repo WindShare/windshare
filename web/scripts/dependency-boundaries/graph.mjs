@@ -1,9 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
+import { TRANSFER_BOUNDARY } from './policies.mjs'
 
 const normalized = value => value.replaceAll('\\', '/')
-const inside = (file, directory) => file.startsWith(directory + '/')
+const inside = (file, directory) => {
+  const source = file.replace(/\?(raw|url)$/, '')
+  return source === directory || source.startsWith(directory + '/')
+}
+const STYLE_EXTENSION = '.css'
 
 export function moduleReferences(source) {
   const references = []
@@ -38,10 +43,20 @@ export function loadSourceGraph(sourceRoot, options) {
         const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
         const edges = moduleReferences(source).flatMap(specifier => {
           if (specifier === null) return ['<computed import>']
-          const resolved = ts.resolveModuleName(specifier, file, options, ts.sys, cache).resolvedModule
-          if (resolved === undefined) return specifier.startsWith('.') ? ['<unresolved import: ' + specifier + '>'] : []
-          const dependency = normalized(path.resolve(resolved.resolvedFileName))
-          return inside(dependency, root) ? [dependency.slice(root.length + 1)] : []
+          const asset = /\?(raw|url)$/.exec(specifier)
+          const sourceSpecifier = asset === null ? specifier : specifier.slice(0, asset.index)
+          const resolved = ts.resolveModuleName(sourceSpecifier, file, options, ts.sys, cache).resolvedModule
+          const bundledAsset = asset !== null || path.extname(sourceSpecifier) === STYLE_EXTENSION
+          const assetFile = bundledAsset && sourceSpecifier.startsWith('.')
+            ? path.resolve(path.dirname(file), sourceSpecifier) : undefined
+          const dependencyFile = resolved?.resolvedFileName ??
+            (assetFile !== undefined && fs.existsSync(assetFile) && fs.statSync(assetFile).isFile() ? assetFile : undefined)
+          if (dependencyFile === undefined) return [specifier.startsWith('.') || specifier.startsWith('/')
+            ? '<unresolved import: ' + specifier + '>' : 'package:' + specifier]
+          const dependency = normalized(path.resolve(dependencyFile))
+          // Raw assets remain visible to path policies, without executing their imports.
+          if (inside(dependency, root)) return [dependency.slice(root.length + 1) + (asset?.[0] ?? '')]
+          return specifier.startsWith('.') ? [] : ['package:' + specifier]
         })
         graph.set(normalized(path.resolve(file)).slice(root.length + 1), edges)
       }
@@ -50,11 +65,6 @@ export function loadSourceGraph(sourceRoot, options) {
   walk(sourceRoot)
   return graph
 }
-
-export const TRANSFER_BOUNDARY = Object.freeze({
-  roots: ['transfer'],
-  forbidden: ['output', 'application', 'ui'],
-})
 
 /** Resolve the entire path so an innocent-looking barrel cannot hide a forbidden implementation. */
 export function findBoundaryViolations(graph, policy = TRANSFER_BOUNDARY) {
@@ -71,7 +81,7 @@ export function findBoundaryViolations(graph, policy = TRANSFER_BOUNDARY) {
         const next = [...chain, dependency]
         if (dependency.startsWith('<') || policy.forbidden.some(directory => inside(dependency, directory))) {
           violations.push(next)
-        } else {
+        } else if (!policy.stopAt?.some(directory => inside(dependency, directory))) {
           queue.push(next)
         }
       }

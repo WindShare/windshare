@@ -2,7 +2,8 @@ import type { Frame } from '../../../contracts/channel'
 import { encodeDeliveryConsumed } from '../delivery-consumed-codec'
 import type { RelayReceiveCapacity } from '../delivery-handshake-codec'
 import { encodeSettlementAck, type RelaySettlementNotice } from '../delivery-settlement-codec'
-import { RelayReceiveLedger, type ReceiveLedgerEvent, type ReceiveReceipt, type ReceiveSession } from '../receive-ledger'
+import { RelayReceiveLedger, type ReceiveReceipt, type ReceiveSession } from '../receive-ledger'
+import { type ReceiveLedgerEvent } from '../../../contracts/relay-delivery-observation'
 
 interface ReceivedFrame {
   readonly payload: Frame

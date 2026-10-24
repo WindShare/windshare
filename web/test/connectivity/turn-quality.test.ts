@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { LanePerformance } from '../../src/content/scheduling/performance'
 import { TurnReceiver, type TurnMeasurement } from '../../src/connectivity/turn/receiver'
-import { decodeTurnControl, encodeTurnControl, type TurnControl, type TurnGrant } from '../../src/connectivity/turn/control-codec'
+import { decodeTurnControl, encodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
 import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'

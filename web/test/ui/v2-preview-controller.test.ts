@@ -14,7 +14,7 @@ import {
   type IncidentScopeOwner,
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
-import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import { FakeTraceTime } from '../diagnostics/trace/test-support'
 import { V2RemoteOperationError } from '../../src/content/v2-session-operations'
@@ -39,7 +39,7 @@ import type {
   V2BrowseDirectory,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
-} from '../../src/ui/v2-gateway'
+} from '../../src/application/browser-share/gateway'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 const entry: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({

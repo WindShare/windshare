@@ -34,7 +34,7 @@ vi.mock('../../src/output/workspace/state-codec', async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(), decodeStoredReceiveLifecycleState: () => mocks.lifecycle,
 }))
 
-import { runRetainedBrowserFolderAction } from '../../src/ui/browser-receive/fsa/local-delivery'
+import { runRetainedBrowserFolderAction } from '../../src/application/browser-receive/fsa/local-delivery'
 
 beforeEach(() => {
   vi.clearAllMocks()

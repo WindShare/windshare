@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectProtocolTraceEvent } from '../../../src/ui/v2-protocol-trace'
+import { projectProtocolTraceEvent } from '../../../src/application/diagnostics/protocol-trace'
 import { snapshotTraceEventObservationV2 } from '../../../src/diagnostics/export/trace-event-v2'
 
 import {

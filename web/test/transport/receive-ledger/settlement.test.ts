@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   decodeSettlementAck, decodeSettlementNotice, encodeSettlementAck, encodeSettlementNotice,
 } from '../../../src/transport/relay/delivery-settlement-codec'
-import type { ReceiveLedgerEvent, ReceiveReceipt, ReceiveSession } from '../../../src/transport/relay/receive-ledger'
+import type { ReceiveLedgerEvent } from '../../../src/contracts/relay-delivery-observation'
+import type { ReceiveReceipt, ReceiveSession } from '../../../src/transport/relay/receive-ledger'
 import { createLedger, notice, sessionId, ZERO } from './fixtures'
 
 describe('receive ledger retirement settlement', () => {

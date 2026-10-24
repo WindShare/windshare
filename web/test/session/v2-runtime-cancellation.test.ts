@@ -6,7 +6,7 @@ import { encodeV2Body, V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
 import { V2_SESSION_SEND_TIMEOUT_MILLISECONDS } from '../../src/session/v2-writer'
 import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
-import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
+import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { id, openSent, runtimeFixture, SHARE } from './v2-send-fixture'
 
 afterEach(() => vi.useRealTimers())

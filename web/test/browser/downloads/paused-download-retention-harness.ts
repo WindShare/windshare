@@ -5,7 +5,7 @@ import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
 import { TransferJob } from '../../../src/transfer/v2-job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../../src/transfer/outcome'
 import type { V2PlanExecutionAuthority } from '../../../src/transfer/output/session'
-import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../../../src/ui/v2-browser-receive-composition'
+import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../../../src/application/browser-receive/composition'
 import { catalogFixture, directoryEntry, fileEntry, identity, identityText, readerFixture } from '../../transfer/v2-job-fixture'
 import { commitProductionChoice, productZipProjection } from '../durable-preparation-harness'
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { encodeTurnControl, type TurnGrant } from '../../src/connectivity/turn/control-codec'
+import { encodeTurnControl, type TurnGrant } from '../../src/protocol/turn-control'
 import { TurnReceiver, type TurnObservation } from '../../src/connectivity/turn/receiver'
 import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'

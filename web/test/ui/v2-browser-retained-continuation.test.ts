@@ -7,7 +7,7 @@ import type {
   AuthorityOwnedReceiveOperationContinuation,
   AuthorityOwnedReceiveOperationMutationResult,
 } from '../../src/output/resume/reopen-authority'
-import { createBrowserReceiveComposition } from '../../src/ui/v2-browser-receive-composition'
+import { createBrowserReceiveComposition } from '../../src/application/browser-receive/composition'
 import {
   FakeResumeSource,
   capableWindow,

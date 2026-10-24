@@ -1,5 +1,5 @@
-import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
-import { decodeTurnControl } from '../connectivity/turn/control-codec'
+import { decodeV2PeerPathControl } from '../protocol/peer-path-control'
+import { decodeTurnControl } from '../protocol/turn-control'
 import { requirePeerSlot } from './peer-slots/slots'
 import { concatBytes, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'

@@ -4,7 +4,7 @@ import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
-import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import {
   createIncidentScopeIssuer,
   type FailureFactRelation,
@@ -17,7 +17,7 @@ import { V2ControllerObservability } from '../../src/application/receive/observa
 import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
 import { V2PresentationAttempt } from '../../src/application/receive/observation/attempt'
 import { projectBrowsePage } from '../../src/ui/v2-controller-state'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
 import type { V2RouteCommitResult } from '../../src/application/receive/contracts'
 
 describe('v2 browse page presentation', () => {

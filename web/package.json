@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "pnpm check:boundaries && eslint --concurrency 2 .",
-    "check:boundaries": "node --test scripts/dependency-boundaries/graph.test.mjs && node scripts/dependency-boundaries/check.mjs",
+    "check:boundaries": "node --test scripts/dependency-boundaries/*.test.mjs && node scripts/dependency-boundaries/check.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:browser:contract": "playwright test --config playwright.contract.config.ts --project chromium-short",

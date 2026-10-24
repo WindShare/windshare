@@ -1,11 +1,8 @@
 import type { Ed25519Observation } from '../crypto/ed25519'
 import type { V2CancellationTraceReason, V2OperationRequestTrace } from './v2-operation-diagnostics'
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
-import type {
-  FailureCorrelation,
-  ProtocolErrorContent,
-  ProtocolMessageKindV1,
-} from '../diagnostics/incident/fact'
+import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
+import type { ProtocolErrorContent, ProtocolMessageKindV1 } from '../diagnostics/incident/protocol-error'
 import { V2_MESSAGE_KIND, type V2MessageKind } from './v2-message'
 
 export type V2ProtocolOperationTransition =
@@ -175,7 +172,7 @@ export type V2RelayHeartbeatTraceEvent = Readonly<{
   timeoutMilliseconds: number
 }>
 
-export type V2RelayDeliveryTraceEvent = import('../transport/relay/receive-ledger').ReceiveLedgerEvent & Readonly<{
+export type V2RelayDeliveryTraceEvent = import('../contracts/relay-delivery-observation').ReceiveLedgerEvent & Readonly<{
   eventName: 'relay_delivery'
   correlation: FailureCorrelation
   relayBase: string

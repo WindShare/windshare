@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
 import { browserBuildSnapshot } from './diagnostics/build-identity'
-import { createBrowserDiagnosticsComposition } from './diagnostics/browser-composition'
+import { createBrowserDiagnosticsComposition } from './application/diagnostics/composition'
 import { createBrowserTraceActivationStore } from './diagnostics/browser-trace-activation'
 import { BrowserDiagnosticsSession, observeDiagnosticsPage } from './diagnostics/browser/session'
 import { IndexedDBDiagnosticsArchive } from './diagnostics/browser/indexeddb-archive'
@@ -15,18 +15,18 @@ import { createBrowserReceiveOperationMutationPort } from './output/resume/reope
 import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
-} from './ui/v2-browser-receive-composition'
-import { createBrowserDirectZipComposition } from './ui/browser-receive/direct-zip/production'
+} from './application/browser-receive/composition'
+import { createBrowserDirectZipComposition } from './application/browser-receive/direct-zip/production'
 import { V2ReceiverController } from './ui/v2-controller'
 import { captureV2Location, observeV2Location } from './ui/capability/location'
 import { BrowserCapabilityIntake } from './ui/capability/intake'
-import { V2BrowserReceiverGateway } from './ui/v2-gateway'
+import { V2BrowserReceiverGateway } from './application/browser-share/gateway'
 import {
   createConnectivityTraceSource,
   createOutputTraceSource,
   createProtocolTraceSource,
   createV2ReceiverTraceSource,
-} from './ui/v2-production-trace'
+} from './application/diagnostics/receive-trace'
 
 // Initialization runs outside React so StrictMode cannot duplicate capability
 // parsing, fragment erasure, or the pre-gesture relay join. Fragment erasure

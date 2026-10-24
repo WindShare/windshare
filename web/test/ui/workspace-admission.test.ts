@@ -5,7 +5,7 @@ import {
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
 } from '../../src/transfer/lifecycle/state'
-import { WorkspaceExecutionAdmissionSettlement } from '../../src/ui/browser-receive/workspace-admission'
+import { WorkspaceExecutionAdmissionSettlement } from '../../src/application/browser-receive/workspace/admission'
 
 describe('workspace execution admission settlement', () => {
   it('restores the exact continuation when execution was not admitted', async () => {

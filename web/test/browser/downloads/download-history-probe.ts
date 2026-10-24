@@ -7,8 +7,8 @@ import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../
 import { createReceiveOperationV2, storedReceiveOperationRecord } from '../../../src/output/workspace/records'
 import { storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import { createPortableBinding, createPortableHandoffPlan, createReceiveIntent, deriveArtifactChoiceIdentity } from '../../../src/transfer/intent'
-import { listBrowserRetainedOperations } from '../../../src/ui/browser-receive/retained'
-import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
+import { listBrowserRetainedOperations } from '../../../src/application/browser-receive/retained/inventory'
+import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
 import { durableIdentities, durableIntent } from '../durable-output-fixture'
 import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'
 

@@ -50,11 +50,11 @@ import type {
   V2BoundReceiveOperation,
   V2RouteCommitResult,
 } from '../../src/application/receive/contracts'
-import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
+import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
 import {
   WorkspaceArtifactPresentationAuthority,
   type WorkspaceRouteDependencyOverrides,
-} from '../../src/ui/browser-receive/workspace-route'
+} from '../../src/application/browser-receive/workspace/route'
 import {
   OriginPrivateWorkspaceNamespaceOpenError,
   type OriginPrivateWorkspaceNamespace,

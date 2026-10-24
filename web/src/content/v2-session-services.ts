@@ -7,12 +7,8 @@ import {
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
-import {
-  createReceivedProtocolError,
-  protocolFailureFact,
-  type FailureFact,
-  type ReceivedProtocolError,
-} from '../diagnostics/incident/fact'
+import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
+import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
 import { V2CborError } from '../protocol/cbor'
 import { V2_MESSAGE_KIND, type V2SessionMessage } from '../session/v2-message'
 import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../session/v2-runtime'

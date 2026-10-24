@@ -1,7 +1,7 @@
 import type { V2CatalogScanProgress } from '../../catalog/v2-client'
 import type { ReceiverConnectionSnapshot } from '../../receiver/connection-state'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
+import type { V2JoinedBrowserShare } from '../../application/browser-share/gateway'
 
 interface JoinedShareObservationOptions {
   readonly ownsJoinedShare: (joined: V2JoinedBrowserShare) => boolean

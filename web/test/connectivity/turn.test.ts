@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { encodeTurnControl, decodeTurnControl, turnRTCConfiguration, type TurnControl, type TurnGrant } from '../../src/connectivity/turn/control-codec'
+import { encodeTurnControl, decodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
+import { turnRTCConfiguration } from '../../src/connectivity/turn/rtc-configuration'
 import { TurnReceiver } from '../../src/connectivity/turn/receiver'
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'

@@ -40,7 +40,7 @@ import {
   WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
-} from '../../src/ui/browser-receive/fsa'
+} from '../../src/application/browser-receive/fsa/operation'
 import {
   MemoryDirectory,
   MemoryLockManager,

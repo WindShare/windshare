@@ -23,7 +23,7 @@ import type {
 } from '../../src/transfer/lifecycle/name-repair'
 import type { V2RetainedCompatibleNameRepairSource } from '../../src/application/receive/observation/contracts'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type { RetainedReceiveOperationSnapshot } from '../../src/application/receive/retained/model'
 import type {
   V2BoundReceiveOperation,

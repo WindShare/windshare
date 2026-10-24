@@ -8,7 +8,7 @@ import {
   type FSAHandleIdentityResolver,
 } from '../../src/output/browser/namespace-mutation'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
-import { BrowserDirectZipCoordination } from '../../src/ui/browser-receive/direct-zip/coordination'
+import { BrowserDirectZipCoordination } from '../../src/output/direct-zip/browser/coordination'
 import {
   acquireFSARootMutationLease,
   memoryFSAIdentities,

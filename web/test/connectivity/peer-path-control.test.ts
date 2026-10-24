@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PeerPathControl } from '../../src/connectivity/peer-set/path-control'
 import { PeerNetworkGeneration } from '../../src/connectivity/peer-set/network-generation'
-import { decodeV2PeerPathControl, encodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND as KIND } from '../../src/connectivity/v2-path-control-codec'
+import { decodeV2PeerPathControl, encodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND as KIND } from '../../src/protocol/peer-path-control'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
 
 describe('authenticated cross-attempt path control', () => {

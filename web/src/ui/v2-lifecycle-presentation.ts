@@ -9,7 +9,7 @@ import type {
 } from '../transfer/lifecycle/recovery-summary'
 import {
   type ReceiveLifecycleState,
-} from '../output/workspace'
+} from '../transfer/lifecycle/state'
 import type {
   ArtifactSpec,
   MaterializationPlan,

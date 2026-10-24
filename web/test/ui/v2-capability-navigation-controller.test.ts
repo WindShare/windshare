@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
-import { V2ReceiverController, type V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
+import { V2ReceiverController } from '../../src/ui/v2-controller'
+import { type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import {
   FakeGateway, FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT,
   deferred, resetOrchestrationTestEnvironment, startTransfer, turns, waitFor,

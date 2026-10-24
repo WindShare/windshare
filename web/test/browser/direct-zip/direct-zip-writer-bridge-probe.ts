@@ -18,7 +18,7 @@ import {
   createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,
   createReceiveIntent, createSelectionSpec, createZipArchiveArtifact, deriveArtifactChoiceIdentity,
 } from '../../../src/transfer/intent'
-import { BrowserDirectZipJournal, createInitialBrowserDirectZipCheckpoint } from '../../../src/ui/browser-receive/direct-zip/journal'
+import { BrowserDirectZipJournal, createInitialBrowserDirectZipCheckpoint } from '../../../src/output/direct-zip/browser-journal'
 import {
   INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE, INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE,
   openIndexedDbCheckpointDatabase, requestResult, transactionCompletion,

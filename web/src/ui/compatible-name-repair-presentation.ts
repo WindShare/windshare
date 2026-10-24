@@ -5,7 +5,7 @@ import {
 import {
   type CompatibleNameRepairSummary,
 } from '../transfer/lifecycle/name-repair'
-import type { ReceiveLifecycleState } from '../output/workspace'
+import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 
 export type CompatibleNameRepairPresentationContext =
   | 'receive-lifecycle'

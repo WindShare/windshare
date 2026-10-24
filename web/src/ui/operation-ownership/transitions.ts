@@ -1,13 +1,13 @@
 import type { V2ReceiverSnapshot } from '../v2-model'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
+import type { V2JoinedBrowserShare } from '../../application/browser-share/gateway'
 import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../application/receive/contracts'
 import type { LifecycleUserAction } from '../../application/receive/actions'
 import type { BrowserReceiveRuntime } from '../../application/receive/runtime'
 import type { BrowserNavigationCoordinator } from '../controller/navigation'
 import type { V2PreviewController } from '../v2-preview-controller'
 import type { ReceiverExperienceObservability } from '../experience/observability'
-import { findReplacementFile } from '../source-replacement/selection'
-import type { SourceRevisionFailure } from '../../output/resume/source-revision-failures'
+import { findReplacementFile } from '../../application/browser-share/source-replacement'
+import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
 import { projectDraft } from '../draft/model'
 
 interface OperationTransitionOptions {

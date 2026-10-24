@@ -13,7 +13,7 @@ import type {
   IncidentScopeHandle,
   IncidentScopeOwner,
 } from '../diagnostics/incident/scope'
-import type { V2JoinedBrowserShare } from './v2-gateway'
+import type { V2JoinedBrowserShare } from '../application/browser-share/gateway'
 import { EMPTY_V2_PREVIEW, type V2ReceiverSnapshot } from './v2-model'
 import {
   isAbortError,
