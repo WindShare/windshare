@@ -32,7 +32,7 @@ func rejectedProjection(reason ProjectionFailureReason, field, rule string) erro
 }
 
 func ProjectionRejection(err error) appobs.ObservationRejection {
-	if diagnostic, ok := errors.AsType[appobs.OutputDiagnosticError](err); ok {
+	if diagnostic, ok := errors.AsType[*appobs.OutputDiagnosticError](err); ok {
 		return completeRejectionContext(diagnostic.Context)
 	}
 	if projection, ok := errors.AsType[ProjectionError](err); ok {
@@ -84,7 +84,7 @@ func (err ProjectionError) Reason() ProjectionFailureReason { return err.reason 
 func invalidProjection(reason ProjectionFailureReason) error { return ProjectionError{reason: reason} }
 
 func ObserverLossReason(err error) appobs.ObserverLossReason {
-	if diagnostic, ok := errors.AsType[appobs.OutputDiagnosticError](err); ok {
+	if diagnostic, ok := errors.AsType[*appobs.OutputDiagnosticError](err); ok {
 		switch diagnostic.Reason {
 		case appobs.ObserverLossUnknownEnum, appobs.ObserverLossInvalidIdentity, appobs.ObserverLossInvalidStageFields:
 			return diagnostic.Reason

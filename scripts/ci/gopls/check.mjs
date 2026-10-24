@@ -79,7 +79,14 @@ export async function diagnose(connection, {
     }
   }
   await connection.notify('initialized', {})
-  log('initialized', { files: files.length })
+  let version = initialized.serverInfo?.version ?? null
+  try {
+    // gopls embeds its dependency manifest here; only the version explains tool drift.
+    version = JSON.parse(version)?.Version ?? version
+  } catch {
+    // LSP also permits a plain version string, which needs no decoding.
+  }
+  log('initialized', { files: files.length, server: initialized.serverInfo?.name ?? null, version })
   let submitted = 0
   let batch = []
   const anchors = new Set()

@@ -38,11 +38,12 @@ type OutputDiagnostic interface {
 }
 
 // OutputDiagnosticError retains why provider evidence was rejected without
-// granting that evidence authority over the receive task.
+// granting that evidence authority over the receive task. Only the pointer form
+// implements error so providers and consumers agree on errors.AsType matching.
 type OutputDiagnosticError struct {
 	Reason  ObserverLossReason
 	Context ObservationRejection
 }
 
-func (OutputDiagnosticError) Error() string { return ErrInvalidEvent.Error() }
-func (OutputDiagnosticError) Unwrap() error { return ErrInvalidEvent }
+func (*OutputDiagnosticError) Error() string { return ErrInvalidEvent.Error() }
+func (*OutputDiagnosticError) Unwrap() error { return ErrInvalidEvent }
