@@ -18,8 +18,6 @@ Go race instrumentation applies only to Go children.
 
 Make targets operate on the repository root and use the installed Go, Rust, Node.js, pnpm, browser, and analysis tools. Platform targets run `scripts/ci/linux/<target>.sh` or `scripts/ci/windows/<target>.ps1`.
 
-CI resolves stable Go and the latest Go analyzers; local gates do not update installed tools. Match analyzer versions when reproducing CI diagnostics. `make gopls` logs its server version at initialization.
-
 | Command | Runs |
 |---|---|
 | `make check` | `rust`, then Go short tests, Web typecheck, and Web unit tests. |
