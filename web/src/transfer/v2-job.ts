@@ -138,6 +138,11 @@ export class TransferJob {
     this.#capacity = new V2RevisionCapacityCoordinator({
       revisions: options.revisions,
       broker: observeTransferContent(options.broker, {
+        remainingWork: () => {
+          const snapshot = this.#progress.snapshot(this.#measure.snapshot())
+          const bytes = Number(snapshot.measure.discoveredBytes - snapshot.materializedBytes)
+          return { bytes: Math.max(0, bytes), known: snapshot.measure.discovery === 'complete' && Number.isSafeInteger(bytes) }
+        },
         received: bytes => this.#progress.receiveObjectBytes(bytes),
         updated: () => this.#emitProgress(),
       }),

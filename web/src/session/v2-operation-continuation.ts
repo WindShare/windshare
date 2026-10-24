@@ -20,7 +20,7 @@ export const V2_MAXIMUM_PEER_CANDIDATES = 64
 
 type ContinuationState = 'active' | 'closed' | 'local-cancel' | 'remote-final'
 
-const V2_CONTINUATION_SCHEMA_VERSION = 3n
+const V2_CONTINUATION_SCHEMA_VERSION = 4n
 const V2_OPERATION_ID_BYTES = 16
 const V2_PEER_IDENTITY_BYTES = 16
 const V2_MAXIMUM_OPERATION_BODY_BYTES = 65_536 - 44
@@ -35,6 +35,7 @@ export type V2OperationMessageReservation =
     }
 
 interface PeerBinding {
+  readonly purpose: bigint
   readonly peerSlot: number
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
@@ -77,7 +78,7 @@ export class V2RetiredPeerContinuations {
       return false
     }
     try {
-      const length = message.kind === V2_MESSAGE_KIND.peerAnswer ? 6 : 9
+      const length = message.kind === V2_MESSAGE_KIND.peerAnswer ? 7 : 10
       const binding = message.kind === V2_MESSAGE_KIND.operationError
         ? decodeV2OperationErrorControl(message.body).peerAttempt
         : decodePeerBinding(message.body, length, 'retired peer continuation')
@@ -115,7 +116,7 @@ export class V2OperationContinuationAuthority {
     this.requestKind = requestKind
     if (requestKind === V2_MESSAGE_KIND.peerOffer) {
       try {
-        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 6, 'peer offer')
+        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 7, 'peer offer')
       } catch (cause) {
         throw new V2SessionRuntimeError(
           'operation',
@@ -134,6 +135,7 @@ export class V2OperationContinuationAuthority {
           peerPathId: binding.peerPathId.slice(),
           attemptId: binding.attemptId.slice(),
           attemptSequence: binding.attemptSequence,
+          purpose: binding.purpose,
           peerSlot: binding.peerSlot,
         })
   }
@@ -286,10 +288,11 @@ export class V2OperationContinuationAuthority {
       if (expected === undefined) return
       const actual = decodePeerBinding(
         message.body,
-        message.kind === V2_MESSAGE_KIND.peerAnswer ? 6 : 9,
+        message.kind === V2_MESSAGE_KIND.peerAnswer ? 7 : 10,
         message.kind === V2_MESSAGE_KIND.peerAnswer ? 'peer answer' : 'peer candidate',
       )
       if (
+        actual.purpose !== expected.purpose ||
         actual.peerSlot !== expected.peerSlot ||
         actual.attemptSequence !== expected.attemptSequence ||
         !equalBytes(actual.peerPathId, expected.peerPathId) ||
@@ -345,10 +348,13 @@ function decodePeerBinding(body: Uint8Array, length: number, label: string): Pee
   ) {
     throw new Error(`${label} has a non-canonical continuation prefix`)
   }
+  const purpose = requireUnsigned(fields[5], 'connection purpose')
+  if (purpose > 2n) throw new Error('invalid connection purpose')
   const sequence = requireUnsigned(fields[3], 'attempt sequence')
   if (sequence === 0n || sequence > 0xffffffffffffffffn) throw new Error('invalid attempt sequence')
   return Object.freeze({
     attemptSequence: sequence,
+    purpose,
     peerSlot: requirePeerSlot(requireUnsigned(fields[4], 'peer slot')),
     peerPathId: requireBytes(fields[1], V2_PEER_IDENTITY_BYTES, `${label} peer path ID`, true),
     attemptId: requireBytes(fields[2], V2_PEER_IDENTITY_BYTES, `${label} attempt ID`, true),

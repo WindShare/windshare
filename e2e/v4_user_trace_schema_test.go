@@ -29,6 +29,7 @@ const (
 	v4TraceTimestamp
 	v4TraceRawString
 	v4TraceFraction
+	v4TraceRate
 )
 
 type v4TraceFieldSchema struct {

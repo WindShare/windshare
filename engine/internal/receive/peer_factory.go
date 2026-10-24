@@ -19,7 +19,7 @@ func (a *runner) newReceiverPeerStarter(observation getObservation, localStop *r
 	if len(options) > 0 {
 		native = options[0].native
 	}
-	factory, err := nativeconnectivity.NewReceiver(nativeconnectivity.ReceiverConfig{Native: native, Random: a.control.Random, Diagnostics: observation.detailed, ObserveChannel: observation.registerWebRTC})
+	factory, err := nativeconnectivity.NewReceiver(nativeconnectivity.ReceiverConfig{SendCapacity: a.connectivityCapacity.Sends(), Native: native, Random: a.control.Random, Diagnostics: observation.detailed, ObserveChannel: observation.registerWebRTC})
 	if err != nil {
 		return nil, err
 	}

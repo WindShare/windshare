@@ -88,6 +88,9 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 		path.attempts = make(map[*PreparedAttempt]struct{})
 	}
 	path.attempts[prepared] = struct{}{}
+	if request.Binding.Purpose == v2signal.ThroughputExploration {
+		n.holdOptionalLocked(key, path, sockets)
+	}
 	context.AfterFunc(lifetime, prepared.Close)
 	n.mu.Unlock()
 	wait, cancelWait := context.WithTimeout(ctx, QueueBudget)
@@ -103,7 +106,7 @@ func (n *NativePeerConnectivity) PrepareAttempt(ctx context.Context, request Att
 	if relayed {
 		endpointCost = 0
 	}
-	permit, err := n.config.Admission.acquireRoute(wait, n, endpointCost, sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) }, relayed)
+	permit, err := n.config.Admission.acquirePurpose(wait, n, endpointCost, sockets, func(facts AdmissionFacts) { n.producer.TryPublish(Observation{Subject: subject, Admission: &facts}) }, relayed, request.Binding.Purpose)
 	if err != nil {
 		prepared.Close()
 		return nil, err

@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -476,6 +477,14 @@ func (dependencies receiverTransferDependencies) OpenRevision(ctx context.Contex
 func (dependencies receiverTransferDependencies) ReleaseRevision(ctx context.Context, handle transfer.RevisionHandle) error {
 	return dependencies.classifyAccess(ctx, dependencies.runtime.access.ReleaseRevision(ctx, handle))
 }
+func (dependencies receiverTransferDependencies) ObserveRemainingWork(snapshot func() transferlanes.RemainingWork) func() {
+	return dependencies.runtime.broker.ObserveRemainingWork(snapshot)
+}
+
+func (dependencies receiverTransferDependencies) RecordOutput(bytes uint64) {
+	dependencies.runtime.laneSet.RecordOutput(bytes)
+}
+
 func (dependencies receiverTransferDependencies) ReadRange(ctx context.Context, handle transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	err := dependencies.runtime.access.ReadRange(ctx, handle, descriptor, requested, sink)
 	if errors.Is(err, revisionaccess.ErrClosed) {
@@ -493,4 +502,84 @@ func (dependencies receiverTransferDependencies) classifyAccess(ctx context.Cont
 		return receiverTerminalBoundaryError(dependencies.runtime, errors.Join(ErrRuntimeClosed, err))
 	}
 	return dependencies.classifySource(ctx, err)
+}
+
+const maximumBlockObjectOverhead = records.MaxBlockRecordObjectBytes - catalog.MaxChunkSize
+
+func (operation *receiverBlockOperation) complete(message protocolsession.Message, record records.BlockRecord) (records.BlockRecord, error) {
+	unsigned, err := protocolsession.SenderControlSemanticBody(message)
+	if err != nil {
+		return operation.rejectCompletion(err)
+	}
+	count, err := contentflow.DecodeOperationComplete(unsigned)
+	if err != nil || count != 1 {
+		return operation.rejectCompletion(errors.Join(ErrOperationMissing, err))
+	}
+	if record.DataLength() == 0 {
+		operation.call.stateMu.Lock()
+		carrier := operation.call.lastResponseLane
+		operation.call.stateMu.Unlock()
+		if carrier.valid(true) && carrier != operation.lane.identity {
+			// Transport admission does not prove delivery. A final migrating to
+			// another authenticated carrier can overtake or outlive old fragments.
+			// Retire this exact operation before requesting the missing block anew.
+			operation.call.recordProtocolTraceCause(ProtocolOperationCauseLaneUnavailable)
+			return operation.reassignAfterRetirement(ErrLaneUnavailable, contentflow.CancelReasonOutputAbort)
+		}
+		return operation.rejectCompletion(ErrOperationMissing)
+	}
+	if err := operation.lane.assembler.CompleteOperation(operation.call.id); err != nil {
+		return operation.rejectCompletion(err)
+	}
+	return record, nil
+}
+
+func (operation *receiverBlockOperation) rejectCompletion(err error) (records.BlockRecord, error) {
+	operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
+	return records.BlockRecord{}, err
+}
+
+type reservedBlockLane struct {
+	lane     *receiverBlockLane
+	capacity *contentflow.AssemblyCapacity
+}
+
+func (lane *receiverBlockLane) TryReserveBlock(demand transferlanes.Demand) (transferlanes.BlockReservation, <-chan struct{}, error) {
+	if err := lane.revisions.leaseError(demand.LeaseID); err != nil {
+		return transferlanes.BlockReservation{}, nil, err
+	}
+	bytes, err := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
+	if err != nil {
+		return transferlanes.BlockReservation{}, nil, err
+	}
+	capacity, changed, err := lane.assembler.TryReserve(uint64(bytes) + maximumBlockObjectOverhead)
+	if capacity == nil {
+		return transferlanes.BlockReservation{}, changed, err
+	}
+	return transferlanes.BlockReservation{Source: reservedBlockLane{lane, capacity}, Release: capacity.Release}, nil, nil
+}
+
+func (reserved reservedBlockLane) FetchBlock(ctx context.Context, demand transferlanes.Demand, received func(uint64)) (records.BlockRecord, error) {
+	return reserved.lane.fetchReservedBlock(ctx, demand, received, reserved.capacity)
+}
+
+func (lane *receiverBlockLane) FetchBlock(ctx context.Context, demand transferlanes.Demand, received func(uint64)) (records.BlockRecord, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return records.BlockRecord{}, err
+		}
+		reserved, changed, err := lane.TryReserveBlock(demand)
+		if err != nil {
+			return records.BlockRecord{}, err
+		}
+		if reserved.Source != nil {
+			defer reserved.Release()
+			return reserved.Source.FetchBlock(ctx, demand, received)
+		}
+		select {
+		case <-ctx.Done():
+			return records.BlockRecord{}, ctx.Err()
+		case <-changed:
+		}
+	}
 }

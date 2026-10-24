@@ -57,7 +57,7 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 	if len(material.Descriptor) == 0 || len(material.SenderPrivateKey) == 0 || len(material.ShareInstance) != catalog.IdentityBytes {
 		t.Fatalf("registration material = %+v", material)
 	}
-	receiver, err := PrepareReceiver(ReceiverConfig{Capability: capability, DescriptorObject: material.Descriptor})
+	receiver, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability, DescriptorObject: material.Descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 }
 
 func TestPrepareReceiverRejectsSuite01(t *testing.T) {
-	if _, err := PrepareReceiver(ReceiverConfig{Capability: link.Link{Suite: 0x01}}); err == nil {
+	if _, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: link.Link{Suite: 0x01}}); err == nil {
 		t.Fatal("suite-01 capability entered the production receiver")
 	}
 }
@@ -138,7 +138,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(err)
 	}
 	defer sender.Close()
-	receiver, err := PrepareReceiver(ReceiverConfig{
+	receiver, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t),
 		Capability: sender.Capability(), DescriptorObject: sender.Registration().Descriptor,
 	})
 	if err != nil {
@@ -462,12 +462,12 @@ func TestPrepareReceiverRejectsMalformedBootstrap(t *testing.T) {
 		Suite: link.SuiteSenderAuthenticated, ReadSecret: bytes.Repeat([]byte{1}, link.ReadSecretBytes),
 		PKHash: bytes.Repeat([]byte{2}, link.PKHashBytes), ShareID: "not-base64", Relays: []string{"ws://relay"},
 	}
-	if _, err := PrepareReceiver(ReceiverConfig{Capability: capability, DescriptorObject: []byte{1}}); err == nil {
+	if _, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability, DescriptorObject: []byte{1}}); err == nil {
 		t.Fatal("malformed share identity was accepted")
 	}
 	shareID, _ := link.ShareIDForSenderKeyHash(capability.PKHash)
 	capability.ShareID = shareID
-	if _, err := PrepareReceiver(ReceiverConfig{Capability: capability, DescriptorObject: []byte{1}}); err == nil {
+	if _, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability, DescriptorObject: []byte{1}}); err == nil {
 		t.Fatal("malformed descriptor object was accepted")
 	}
 	var nilReceiver *PreparedReceiver

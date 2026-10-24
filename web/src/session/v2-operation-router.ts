@@ -108,6 +108,7 @@ export class V2OperationQueue implements V2SessionOperation {
     peerPathId: Uint8Array<ArrayBuffer>
     attemptId: Uint8Array<ArrayBuffer>
     attemptSequence: bigint
+    purpose: bigint
   }> | undefined {
     return this.#authority.peerBinding()
   }

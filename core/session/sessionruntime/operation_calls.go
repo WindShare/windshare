@@ -249,14 +249,15 @@ func (routes *operationLaneRoutes) clear() {
 }
 
 type operationCall struct {
-	id            protocolsession.OperationID
-	messages      chan operationResponse
-	laneMu        sync.Mutex
-	lane          LaneIdentity
-	stateMu       sync.Mutex
-	closed        bool
-	done          chan struct{}
-	candidateSend chan struct{}
+	id               protocolsession.OperationID
+	messages         chan operationResponse
+	laneMu           sync.Mutex
+	lane             LaneIdentity
+	stateMu          sync.Mutex
+	lastResponseLane LaneIdentity
+	closed           bool
+	done             chan struct{}
+	candidateSend    chan struct{}
 
 	generation protocolsession.OperationGeneration
 	authority  protocolsession.OutboundOperationPermit
@@ -510,11 +511,6 @@ func (call *operationCall) close() {
 	}
 }
 
-type operationResponse struct {
-	message    protocolsession.Message
-	generation protocolsession.OperationGeneration
-}
-
 func (call *operationCall) setAuthority(
 	generation protocolsession.OperationGeneration,
 	authority protocolsession.OutboundOperationPermit,
@@ -601,11 +597,10 @@ func (router laneInboundRouter) prepareInboundRoute(
 	operationID, hasOperation := message.OperationID()
 	binding := inboundRouteBinding{ctx: ctx, operationID: operationID, hasOperation: hasOperation}
 	if router.runtime.role == protocolsession.RoleReceiver &&
-		message.Kind() == protocolsession.MessageOperationError &&
-		router.runtime.protocolOperationTracingEnabled() {
-		// The physical lane is attached only for the one authenticated failure
-		// message that consumes it. Successful and trace-disabled traffic avoid a
-		// context allocation on the protocol hot path.
+		(message.Kind() == protocolsession.MessageOperationComplete ||
+			message.Kind() == protocolsession.MessageOperationError && router.runtime.protocolOperationTracingEnabled()) {
+		// A migrated final can overtake fragments accepted by a retired carrier.
+		// Retain its authenticated origin without allocating for every fragment.
 		binding.ctx = bindInboundLane(binding.ctx, router.identity, router.runtime.now())
 	}
 	if !hasOperation || router.runtime.role != protocolsession.RoleSender {

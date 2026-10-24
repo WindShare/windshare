@@ -1,0 +1,663 @@
+{
+  "date": "2026-10-23",
+  "units": "decimal MB/s of authenticated plaintext",
+  "scope": "Same LAN endpoints and same 472759776-byte fixture. Exact historical binary/decoder reproduction, pacing removal, DNS isolation, and nearby complete-product controls. Sequential batches, not a randomized causal decomposition.",
+  "fixture": {
+    "bytes": 472759776,
+    "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af"
+  },
+  "historicalEvidence": {
+    "path": "testdata\\connectivity\\webrtc\\throughput-2026-10-21.json",
+    "sha256": "c12e7fc375f146f11386f7d2939ecf2b766fc3b78c8018ebbd594aaee1f1141f"
+  },
+  "historicalFourPacedMBps": [
+    38.482,
+    39.677,
+    36.1
+  ],
+  "historicalFourPacedMedianMBps": 38.482,
+  "pipelineDifferences": [
+    "The archived probe pre-seals the complete input and continuously allocates 64 KiB frames from a shared offset counter; four production block decoders authenticate plaintext into whole-file memory.",
+    "The current product reads/seals blocks on demand, schedules requests under bounded capacity, seals/opens per-frame session envelopes, reassembles records and authenticates them before OPFS output.",
+    "The archived record decoder does authenticate/decrypt: this is not an unencrypted-versus-encrypted comparison.",
+    "No ablation measures the individual cost of these product stages. Memory-sink controls in the preceding preflight did not recover the historical 38.48 MB/s."
+  ],
+  "originalBinarySHA256": "9e063fe2c5a8e6591865f87fee062891893d2160f26ae8106ed770b827f524ce",
+  "originalDecoderSHA256": "300b2280bf4e0201b713b15186dc2fed893ccaa58cdc457fe5f6333d78b9ad41",
+  "batches": [
+    {
+      "kind": "exact",
+      "report": {
+        "path": ".tmp\\webrtc-40m-recheck-20261023\\exact.json",
+        "sha256": "e3c9a0dfb416dd6bc52630db1a402cdabc6ca173279fb006f8f5111c0b8e8ad7"
+      },
+      "started": "2026-10-23T11:30:33.343Z",
+      "finished": "2026-10-23T11:35:25.152Z",
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.41768839902943,
+          "MBps": 47.33682242581917,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1451.6001
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.524587849038653,
+          "MBps": 44.017708813773034,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1568.2925999999861
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-305vrih9",
+        "status": "complete"
+      },
+      "trials": [
+        {
+          "id": "identifier-1",
+          "config": {
+            "repetition": 0,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": true,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 28.808546775152937,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "44e5b2e8f31acfaaf36c639b1c8ddceee132d5d72c8557fc4ba39f340eeb3ae1",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 543
+        },
+        {
+          "id": "identifier-2",
+          "config": {
+            "repetition": 0,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-unpaced",
+            "sealed": true,
+            "warmup": true,
+            "dynamic": true,
+            "count": 4,
+            "pace": 0
+          },
+          "MBps": 18.717006924491848,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "6f95c373d1fc8d1e25b9bce584a88e03966f3862656523799135437724f36114",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 420
+        },
+        {
+          "id": "identifier-3",
+          "config": {
+            "sealed": true,
+            "nativeMux": true,
+            "count": 1,
+            "repetition": 0,
+            "warmup": true,
+            "name": "single-mux-long",
+            "file": "<local-path>"
+          },
+          "MBps": 19.223190800718456,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "1f48d57a42890f2112444450faa3a15df161876a7e51b740bf0d6fa37eb377d1",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 342
+        },
+        {
+          "id": "identifier-4",
+          "config": {
+            "sealed": true,
+            "nativeMux": true,
+            "count": 1,
+            "repetition": 1,
+            "warmup": false,
+            "name": "single-mux-long",
+            "file": "<local-path>"
+          },
+          "MBps": 18.290631289415607,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "19a3b653af31fa59718f350f7750979bb8e4cd1bbcd87bae0841368c5c35a41a",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 185
+        },
+        {
+          "id": "identifier-5",
+          "config": {
+            "repetition": 1,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-unpaced",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 0
+          },
+          "MBps": 29.930218671303898,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "230c8533e3b199b55639e2054d61fade5ea617d144abfbd8b831983c89033cca",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 1227
+        },
+        {
+          "id": "identifier-6",
+          "config": {
+            "repetition": 1,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 26.868373324882672,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "bea9d52262e6d53de3f8db025fc685686d5fdf2d8bf5a176c492c292897a9281",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 369
+        },
+        {
+          "id": "identifier-7",
+          "config": {
+            "repetition": 2,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 37.3374856656858,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "eee798547b9c7ae622e3fc1cfee3bb42e0c7ee42b90dd6a5cdc52b05f663de4c",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 354
+        },
+        {
+          "id": "identifier-8",
+          "config": {
+            "repetition": 2,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-unpaced",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 0
+          },
+          "MBps": 27.531011477996927,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "4e2ea8d8ad4d8c979e5e4cd9181a8b27b2488f937aea14381eed178066693348",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 210
+        },
+        {
+          "id": "identifier-9",
+          "config": {
+            "sealed": true,
+            "nativeMux": true,
+            "count": 1,
+            "repetition": 2,
+            "warmup": false,
+            "name": "single-mux-long",
+            "file": "<local-path>"
+          },
+          "MBps": 20.22839215952684,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "03fb9217670fd76231c515e52ae0d3025b8f0f0a0e70dc09a434ce2b3baee4f6",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 266
+        },
+        {
+          "id": "identifier-10",
+          "config": {
+            "sealed": true,
+            "nativeMux": true,
+            "count": 1,
+            "repetition": 3,
+            "warmup": false,
+            "name": "single-mux-long",
+            "file": "<local-path>"
+          },
+          "MBps": 20.36107705823545,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "50e135bc6e40ecd81490ff3ac5dbfed0b62bae81218f17f80f89e829e39a9754",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 56
+        },
+        {
+          "id": "identifier-11",
+          "config": {
+            "repetition": 3,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-unpaced",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 0
+          },
+          "MBps": 32.215975522524076,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "a54905673932f08eb82600ed064cf00c86368ecd49fd6316a3155f70057643fd",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 484
+        },
+        {
+          "id": "identifier-12",
+          "config": {
+            "repetition": 3,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 29.84801823363438,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "c57959ab13c0000b83acd27ce752c692d6f7d543d671348731c5645d66c309a2",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 0
+        }
+      ],
+      "summaries": [
+        {
+          "arm": "four-mux-long-pace16",
+          "measuredMBps": [
+            26.868373324882672,
+            37.3374856656858,
+            29.84801823363438
+          ],
+          "medianMBps": 29.84801823363438,
+          "warmupMBps": [
+            28.808546775152937
+          ]
+        },
+        {
+          "arm": "four-mux-long-unpaced",
+          "measuredMBps": [
+            29.930218671303898,
+            27.531011477996927,
+            32.215975522524076
+          ],
+          "medianMBps": 29.930218671303898,
+          "warmupMBps": [
+            18.717006924491848
+          ]
+        },
+        {
+          "arm": "single-mux-long",
+          "measuredMBps": [
+            18.290631289415607,
+            20.22839215952684,
+            20.36107705823545
+          ],
+          "medianMBps": 20.22839215952684,
+          "warmupMBps": [
+            19.223190800718456
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "isolated-fixed",
+      "report": {
+        "path": ".tmp\\webrtc-40m-recheck-20261023\\isolated-fixed.json",
+        "sha256": "eee1a6b861688f1cd0a21819fcd16d617f6ef76a4d230b4d9cbb9091bad93949"
+      },
+      "started": "2026-10-23T11:39:23.120Z",
+      "finished": "2026-10-23T11:40:53.849Z",
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.5203375150449574,
+          "MBps": 44.14076699147659,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1553.0432
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.396778116992209,
+          "MBps": 48.04547206431808,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1430.7476000000024
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-gsz1ee9k",
+        "status": "complete"
+      },
+      "trials": [
+        {
+          "id": "identifier-13",
+          "config": {
+            "repetition": 0,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": true,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 33.900768425488565,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "2023b31f810581bbb879c7ffd75e0e50af8bce69bb0ca9f343e7bd02adcda41e",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 167
+        },
+        {
+          "id": "identifier-14",
+          "config": {
+            "repetition": 1,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 30.508503871966962,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "eedde96916096c2cc5822415aa0792a92a5b744e612c0fb254129affcfcd8dda",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 0
+        },
+        {
+          "id": "identifier-15",
+          "config": {
+            "repetition": 2,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 25.844600817859668,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "daa9ddf64aece9877c1fb7140f37c0bd0bcc0389183d8d3a71937e0a72b40975",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 92
+        },
+        {
+          "id": "identifier-16",
+          "config": {
+            "repetition": 3,
+            "file": "<local-path>",
+            "nativeMux": true,
+            "name": "four-mux-long-pace16",
+            "sealed": true,
+            "warmup": false,
+            "dynamic": true,
+            "count": 4,
+            "pace": 16
+          },
+          "MBps": 24.432661102354064,
+          "verifiedBytes": 472759776,
+          "plaintextSHA256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+          "wireSHA256": "56abd7dc6ae5a4931673fdffc7ea81496e491b00dd80d586dfe93c4116aa74cf",
+          "goVersion": "go1.27.0",
+          "gomaxprocs": 28,
+          "udpHostRcvbufErrorsDelta": 209
+        }
+      ],
+      "summaries": [
+        {
+          "arm": "four-mux-long-pace16",
+          "measuredMBps": [
+            30.508503871966962,
+            25.844600817859668,
+            24.432661102354064
+          ],
+          "medianMBps": 25.844600817859668,
+          "warmupMBps": [
+            33.900768425488565
+          ]
+        }
+      ]
+    }
+  ],
+  "ownedRemote": [
+    {
+      "pid": 1209891,
+      "profile": "/tmp/windshare-wan-research-48pe7ewq"
+    },
+    {
+      "pid": 1205574,
+      "profile": "/tmp/windshare-wan-research-305vrih9"
+    },
+    {
+      "pid": 1210541,
+      "profile": "/tmp/windshare-wan-research-gsz1ee9k"
+    },
+    {
+      "pid": 1208812,
+      "profile": "<local-path>"
+    }
+  ],
+  "harnessStartupFailures": {
+    "report": {
+      "path": ".tmp\\webrtc-40m-recheck-20261023\\isolated.json",
+      "sha256": "5216b45933d9aae01ce2a32d49caffdea84f72af4d57f4b1c5e6d11151c1b0d9"
+    },
+    "attempts": 4,
+    "reason": "Initial resolver rule omitted the loopback IP exclusion, preventing page navigation before any transfer. Corrected to the preflight helper's existing host exclusions.",
+    "cleanup": {
+      "event": "cleanup",
+      "profile": "/tmp/windshare-wan-research-48pe7ewq",
+      "status": "complete"
+    },
+    "errors": [
+      "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at htt<local-path>\nCall log:\n\u001b[2m  - navigating to \"htt<local-path>\", waiting until \"load\"\u001b[22m\n",
+      "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at htt<local-path>\nCall log:\n\u001b[2m  - navigating to \"htt<local-path>\", waiting until \"load\"\u001b[22m\n",
+      "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at htt<local-path>\nCall log:\n\u001b[2m  - navigating to \"htt<local-path>\", waiting until \"load\"\u001b[22m\n",
+      "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at htt<local-path>\nCall log:\n\u001b[2m  - navigating to \"htt<local-path>\", waiting until \"load\"\u001b[22m\n"
+    ]
+  },
+  "product": {
+    "report": {
+      "path": ".tmp\\webrtc-40m-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792755343532\\report.json",
+      "sha256": "31a478d67494babf2a0866d67e4df1606afb648965495f1b347e56e9f8bab7f7"
+    },
+    "config": {
+      "connections": 4,
+      "late": false,
+      "fault": "none",
+      "profile": false,
+      "cold": false,
+      "launch": "serial",
+      "workflow": "file",
+      "receivers": 1,
+      "revision": "3788857e592047d63d4bee1a2d3209968b932926",
+      "binaries": {
+        "wind.exe": "1eef8c9d4225f920eac83a753ee82896152c1dcde1fc9e5530474300cf6abe85",
+        "relay-native.exe": "7f39cb2988beb69430a6fbed91ad1f25b43496d4c8d78337fa02694d3e4987a2",
+        "go": "go version go1.27.3 windows/amd64",
+        "node": "v24.16.0"
+      }
+    },
+    "browser": "155.0.8059.84",
+    "tcpControls": [
+      {
+        "label": "before",
+        "bytes": 33554432,
+        "seconds": 0.7195298990118317,
+        "MBps": 46.63382584390456,
+        "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+      },
+      {
+        "label": "after",
+        "bytes": 33554432,
+        "seconds": 0.6892608200432733,
+        "MBps": 48.68176316462233,
+        "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+      }
+    ],
+    "cleanup": {
+      "event": "cleanup",
+      "profile": "<local-path>",
+      "status": "complete"
+    },
+    "rounds": [
+      {
+        "repetition": 0,
+        "MBps": 29.651823353447035,
+        "elapsedMs": 15943.699999988079,
+        "size": 472759776,
+        "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+        "workerStatus": "Succeeded",
+        "lifecycle": "published",
+        "buffers": {
+          "peakReserved": 17825792,
+          "peakCache": 58572256,
+          "reserved": 0,
+          "cached": 58572256
+        }
+      },
+      {
+        "repetition": 1,
+        "MBps": 26.063597501491877,
+        "elapsedMs": 18138.69999998808,
+        "size": 472759776,
+        "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+        "workerStatus": "Succeeded",
+        "lifecycle": "published",
+        "buffers": {
+          "peakReserved": 17825792,
+          "peakCache": 58572256,
+          "reserved": 0,
+          "cached": 58572256
+        }
+      },
+      {
+        "repetition": 2,
+        "MBps": 26.45949729400982,
+        "elapsedMs": 17867.299999952316,
+        "size": 472759776,
+        "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af",
+        "workerStatus": "Succeeded",
+        "lifecycle": "published",
+        "buffers": {
+          "peakReserved": 17825792,
+          "peakCache": 58720256,
+          "reserved": 0,
+          "cached": 58572256
+        }
+      }
+    ],
+    "medianMBps": 26.45949729400982,
+    "sourceManifest": {
+      "path": ".tmp\\webrtc-preflight-20261023\\sources.json",
+      "sha256": "43757b78995075d28509b9be1b25fd583528ead7d4c77cbd4f85dbaf252c9dae"
+    }
+  },
+  "harnessFiles": {
+    "analyze.py": "e0e0bb336103c455179428e1b5f3cd27e8c1d0186dd394feedf493ab72a88d9b",
+    "audit.py": "245cd388453fb8ddd62cca4aaf28699838eba4d9cfd065cc99e2a47371bab7b1",
+    "exact.config.json": "f4179b2618dd61ca42207888234626aa8eed9bf602862bc6af358e781dd7c58a",
+    "isolated-fixed.config.json": "a66782d84d33200fc0e848d857941f5b573bb5b836f5215c52b292f5b87cba15",
+    "isolated.config.json": "a66782d84d33200fc0e848d857941f5b573bb5b836f5215c52b292f5b87cba15",
+    "prepare-isolated.py": "13948a1ee880c6dddbf0f5405661ee18aac66f8dc97c21c19fb8433cdb8eea3f",
+    "prepare-product.py": "fbfae6b6148da35b02221b50246560bfe4d5e830f183f8ccecf5a3d04120f0cb",
+    "product.mjs": "f1c3099f014a9a027789313d6fc9ff86779080f75fc045fcd6c8d03e61fe4533",
+    "remote-isolated-initial.py": "6ea0eb598fef83a1062c0e7b750b30c966836eea2caf50c3b675b71654a73e54",
+    "remote-isolated.py": "e2d8e25c31ea51d7a359428976578f3d034c371093eb90db51b64c0f85a9a057",
+    "remote.py": "35e3d04ac76d60b9fa76362274ef55fe350c768118ec572c4aaf8c48ebbb8b00",
+    "run-isolated.cjs": "95d1ba9cb4d1f3bae19e5807b79fe438030793fa3e8a77b80a1bf441bb91b453",
+    "run-product.ps1": "445b0466b2e9ea2bfc2d5b4a18f1b902620ddbfab00688a6e225601c9a2c6ed3",
+    "run.cjs": "168d077e414b7b1a6eba9c5bdad91af6c6c63f273a7b46152226de99070d86e0"
+  },
+  "limitations": [
+    "The original reproduction keeps its /tmp profile and original resolver settings; the isolated arm changes only its browser DNS rules.",
+    "The product control keeps a persistent disk profile, current frozen product sources and Go 1.27.3. The historical transport executable uses Go 1.27.0 and archived source behavior.",
+    "Whole-file hash checks are excluded from throughput in every arm. Transport timing excludes reading/sealing and output; product timing includes those stages.",
+    "Host UDP drop counters are not attributable per connection. TCP controls bracket batches and do not measure capacity during each transfer.",
+    "Three repetitions and sequential batches cannot identify a unique cause or establish a stable 40 MB/s target."
+  ],
+  "cleanupAudit": [
+    {
+      "pid": 1209891,
+      "profile": "/tmp/windshare-wan-research-48pe7ewq",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1205574,
+      "profile": "/tmp/windshare-wan-research-305vrih9",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1210541,
+      "profile": "/tmp/windshare-wan-research-gsz1ee9k",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1208812,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    }
+  ],
+  "validatedTransfers": 19
+}

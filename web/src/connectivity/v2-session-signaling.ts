@@ -338,7 +338,7 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
 }
 
 export function createV2PeerBinding(
-  ordinal: PeerAttemptOrdinal,
+  ordinal: PeerAttemptOrdinal & { readonly purpose?: import('./v2-signaling-codec').ConnectionPurpose },
   randomBytes: (length: number) => Uint8Array = secureRandomBytes,
 ): V2PeerBinding {
   return createV2PeerBindingForPath(createV2PeerPathIdentity(randomBytes), ordinal, randomBytes)
@@ -352,7 +352,7 @@ export function createV2PeerPathIdentity(
 
 export function createV2PeerBindingForPath(
   peerPathId: Uint8Array,
-  ordinal: PeerAttemptOrdinal,
+  ordinal: PeerAttemptOrdinal & { readonly purpose?: import('./v2-signaling-codec').ConnectionPurpose },
   randomBytes: (length: number) => Uint8Array = secureRandomBytes,
 ): V2PeerBinding {
   if (peerPathId.byteLength !== 16 || !peerPathId.some((item) => item !== 0)) {
@@ -363,6 +363,7 @@ export function createV2PeerBindingForPath(
     attemptId: nonzeroIdentity(randomBytes),
     peerSlot: ordinal.peerSlot,
     attemptSequence: ordinal.attemptSequence,
+    purpose: ordinal.purpose ?? 'initial',
   })
 }
 
@@ -427,6 +428,7 @@ function snapshotBinding(binding: V2PeerBinding): V2PeerBinding {
     peerPathId: binding.peerPathId.slice(),
     attemptId: binding.attemptId.slice(),
     attemptSequence: binding.attemptSequence,
+    purpose: binding.purpose,
     peerSlot: binding.peerSlot,
   })
 }

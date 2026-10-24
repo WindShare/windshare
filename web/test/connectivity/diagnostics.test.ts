@@ -48,6 +48,7 @@ describe('connectivity diagnostics vocabulary', () => {
       'failed',
     ])
     expect(V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES).toEqual([
+      'parallelism',
       'wave-started',
       'retry-decided',
       'backoff-scheduled',

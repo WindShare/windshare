@@ -68,6 +68,8 @@ type pathKey struct {
 	path    v2signal.PeerPathID
 }
 type pathResources struct {
+	optionalDone                  chan struct{}
+	releaseOptional               func()
 	localSequence, remoteSequence uint64
 	remoteGeneration              [16]byte
 	remoteProfile                 provider.TCPProfile
@@ -312,6 +314,9 @@ func (n *NativePeerConnectivity) ClosePath(session [16]byte, path v2signal.PeerP
 		return
 	}
 	delete(n.paths, key)
+	if resource.optionalDone != nil {
+		close(resource.optionalDone)
+	}
 	var attempts []*PreparedAttempt
 	for attempt := range resource.attempts {
 		attempt.cancel()
@@ -322,6 +327,9 @@ func (n *NativePeerConnectivity) ClosePath(session [16]byte, path v2signal.PeerP
 	n.mu.Unlock()
 	for _, attempt := range attempts {
 		attempt.abort()
+	}
+	if resource.releaseOptional != nil {
+		resource.releaseOptional()
 	}
 }
 func (n *NativePeerConnectivity) CloseSession(session [16]byte) {

@@ -55,7 +55,7 @@ func (lane *countingLane) indices() []uint64 {
 func newBrokerFixture(t *testing.T, blocks uint64, lane transferlanes.BlockSource, maxBytes uint64, processBytes uint64) (*BlockBroker, *transferlanes.Set, content.FileRevisionDescriptor, content.LeaseID, *PlaintextBudget) {
 	t.Helper()
 	descriptor := transferDescriptor(t, blocks)
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](10), RaceWidth: 1})
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](10)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,8 +290,8 @@ func TestBlockBrokerInvalidationEvictionAndSharedProcessAdmission(t *testing.T) 
 	}
 
 	sharedProcess, _ := NewPlaintextBudget(uint64(catalog.MinChunkSize) * 3)
-	setA, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](31), RaceWidth: 1})
-	setB, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](32), RaceWidth: 1})
+	setA, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](31)})
+	setB, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](32)})
 	validLane := laneFunction(func(_ context.Context, demand transferlanes.Demand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, demand.Index), nil
 	})
@@ -408,7 +408,7 @@ func TestRangeSinkFailureAndLaneLifecycleCancelOnlyCurrentDemand(t *testing.T) {
 		t.Fatalf("sink failure escaped bounded prefetch: %v", indices)
 	}
 
-	blockingSet, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](33), RaceWidth: 1})
+	blockingSet, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](33)})
 	started := make(chan struct{})
 	_ = blockingSet.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, laneFunction(func(ctx context.Context, _ transferlanes.Demand) (records.BlockRecord, error) {
 		close(started)
@@ -438,9 +438,6 @@ func TestConstructorsAndLaneFailuresAreTyped(t *testing.T) {
 	}
 	if _, err := transferlanes.New(transferlanes.Config{}); err == nil {
 		t.Fatal("zero session lane set accepted")
-	}
-	if _, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](20), RaceWidth: transferlanes.MaxLogicalLanes + 1}); err == nil {
-		t.Fatal("oversized race width accepted")
 	}
 	lanes, _ := transferlanes.New(transferlanes.Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](21)})
 	defer lanes.Close()

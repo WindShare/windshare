@@ -1,0 +1,839 @@
+{
+  "date": "2026-10-23",
+  "userContext": "User reported high computer load during the previous run and requested a repeat.",
+  "fixture": {
+    "bytes": 472759776,
+    "sha256": "b972fd5178f6ec01c4809b4562c8fc1bab581e50aba7b86c3d334fccd66202af"
+  },
+  "machine": {
+    "cpus": 28,
+    "model": "Intel(R) Core(TM) i7-14700KF",
+    "totalMemory": 34184474624,
+    "node": "v24.16.0"
+  },
+  "binaries": {
+    "wind.exe": "1eef8c9d4225f920eac83a753ee82896152c1dcde1fc9e5530474300cf6abe85",
+    "relay-native.exe": "7f39cb2988beb69430a6fbed91ad1f25b43496d4c8d78337fa02694d3e4987a2",
+    "go": "go version go1.27.3 windows/amd64",
+    "node": "v24.16.0"
+  },
+  "sourceManifestSHA256": "43757b78995075d28509b9be1b25fd583528ead7d4c77cbd4f85dbaf252c9dae",
+  "method": "One warmup and four interleaved measurements per arm, fresh browser per transfer, external DNS isolated for both arms. Same archived/current binaries and 473 MB fixture as the prior recheck. No concurrent benchmark or builds.",
+  "measurementOrder": [
+    "product",
+    "cached",
+    "cached",
+    "product",
+    "product",
+    "cached",
+    "cached",
+    "product"
+  ],
+  "runs": [
+    {
+      "index": 1,
+      "arm": "cached",
+      "repetition": 0,
+      "warmup": true,
+      "label": "load-1-cached",
+      "startedMs": 1792756041187,
+      "exitCode": 0,
+      "finishedMs": 1792756075183,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\load-1-cached.json",
+        "sha256": "3a4b7c32d3dca41d204f9f5c63bb8ce505a3823cca3f640e67707f0420185c26"
+      },
+      "MBps": 35.78368827403794,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.2634435379877687,
+          "MBps": 53.11583935668495,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1300.0544000000002
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.236760938016232,
+          "MBps": 54.26179137549638,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1272.536
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-eldxhmbw",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 34,
+          "meanCPUPercent": 8.9886646930525,
+          "medianCPUPercent": 8.533121145065978,
+          "maxCPUPercent": 16.625534429420558,
+          "medianBusiestCorePercent": 47.292364532019704,
+          "maxBusiestCorePercent": 70.3
+        },
+        "linux": {
+          "samples": 34,
+          "meanCPUPercent": 10.254156699028297,
+          "medianCPUPercent": 8.648194794290514,
+          "maxCPUPercent": 18.4409052808047,
+          "medianBusiestCorePercent": 22.73469387755102,
+          "maxBusiestCorePercent": 64.64646464646464
+        }
+      }
+    },
+    {
+      "index": 1,
+      "arm": "product",
+      "repetition": 0,
+      "warmup": true,
+      "label": "retry-1-product",
+      "startedMs": 1792756139142,
+      "exitCode": 0,
+      "finishedMs": 1792756172463,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792756139945\\report.json",
+        "sha256": "d3f26347f34b8204cea9fe7513ddd5bdacb7920bd8fc0c9495696be97e2b78ba"
+      },
+      "MBps": 34.55593713909801,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 33554432,
+          "seconds": 0.5886302420403808,
+          "MBps": 57.004261085345526,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        },
+        {
+          "label": "after",
+          "bytes": 33554432,
+          "seconds": 2.3773091009934433,
+          "MBps": 14.114459068859865,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "<local-path>",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 34,
+          "meanCPUPercent": 11.544712500377583,
+          "medianCPUPercent": 11.635667414665312,
+          "maxCPUPercent": 19.644048162319656,
+          "medianBusiestCorePercent": 55.643893960596166,
+          "maxBusiestCorePercent": 73.89162561576354
+        },
+        "linux": {
+          "samples": 33,
+          "meanCPUPercent": 13.557679252486366,
+          "medianCPUPercent": 12.394603709949415,
+          "maxCPUPercent": 24.390243902439025,
+          "medianBusiestCorePercent": 26.80412371134021,
+          "maxBusiestCorePercent": 59.5959595959596
+        }
+      }
+    },
+    {
+      "index": 2,
+      "arm": "product",
+      "repetition": 1,
+      "warmup": false,
+      "label": "retry-2-product",
+      "startedMs": 1792756172466,
+      "exitCode": 0,
+      "finishedMs": 1792756203612,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792756173261\\report.json",
+        "sha256": "37f762fd3ead3a8911d8c29175f6c95f001c5150e5ab21b2ca6e167ce16d5109"
+      },
+      "MBps": 31.164124983520104,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 33554432,
+          "seconds": 0.5986624929937534,
+          "MBps": 56.04899654261473,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        },
+        {
+          "label": "after",
+          "bytes": 33554432,
+          "seconds": 0.9474254840170033,
+          "MBps": 35.416433868479096,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "<local-path>",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 30,
+          "meanCPUPercent": 11.095383283918608,
+          "medianCPUPercent": 11.611605416591244,
+          "maxCPUPercent": 16.792024409281204,
+          "medianBusiestCorePercent": 56.27187812187812,
+          "maxBusiestCorePercent": 81.2
+        },
+        "linux": {
+          "samples": 31,
+          "meanCPUPercent": 14.55804459024282,
+          "medianCPUPercent": 17.79089376053963,
+          "maxCPUPercent": 28.498293515358363,
+          "medianBusiestCorePercent": 28.57142857142857,
+          "maxBusiestCorePercent": 69.0
+        }
+      }
+    },
+    {
+      "index": 3,
+      "arm": "cached",
+      "repetition": 1,
+      "warmup": false,
+      "label": "retry-3-cached",
+      "startedMs": 1792756203616,
+      "exitCode": 0,
+      "finishedMs": 1792756240656,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\retry-3-cached.json",
+        "sha256": "7495de417754aa8894a40a01e37c9a6ec11014808ed161053179f28f02e72d32"
+      },
+      "MBps": 31.026683117657434,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.917932430980727,
+          "MBps": 34.990212854205794,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1951.1481999999999
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.3831351260305382,
+          "MBps": 48.51938378038004,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1418.4314000000013
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-tb_clscn",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 37,
+          "meanCPUPercent": 10.918261418441086,
+          "medianCPUPercent": 10.385767516621613,
+          "maxCPUPercent": 20.948823570481043,
+          "medianBusiestCorePercent": 48.49660523763337,
+          "maxBusiestCorePercent": 84.38438438438439
+        },
+        "linux": {
+          "samples": 37,
+          "meanCPUPercent": 10.231435312805809,
+          "medianCPUPercent": 8.984047019311504,
+          "maxCPUPercent": 19.259882253994952,
+          "medianBusiestCorePercent": 20.2020202020202,
+          "maxBusiestCorePercent": 61.61616161616161
+        }
+      }
+    },
+    {
+      "index": 4,
+      "arm": "cached",
+      "repetition": 2,
+      "warmup": false,
+      "label": "retry-4-cached",
+      "startedMs": 1792756240660,
+      "exitCode": 0,
+      "finishedMs": 1792756277048,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\retry-4-cached.json",
+        "sha256": "aadc5c77f57ebb54bd1a1676a4fbf9bb69b857ec5c880c556bd9eee19dcff4aa"
+      },
+      "MBps": 30.434852158238645,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.319202495040372,
+          "MBps": 50.87078310744572,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1357.2294
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1218616489786655,
+          "MBps": 59.819197902963715,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1152.4375
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-hb86poa8",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 36,
+          "meanCPUPercent": 13.077923385713165,
+          "medianCPUPercent": 10.56229801280217,
+          "maxCPUPercent": 46.4747087190679,
+          "medianBusiestCorePercent": 49.556255763152315,
+          "maxBusiestCorePercent": 82.63695450324977
+        },
+        "linux": {
+          "samples": 36,
+          "meanCPUPercent": 10.527908470682734,
+          "medianCPUPercent": 8.918771397745322,
+          "maxCPUPercent": 18.23529411764706,
+          "medianBusiestCorePercent": 24.49234614183068,
+          "maxBusiestCorePercent": 48.97959183673469
+        }
+      }
+    },
+    {
+      "index": 5,
+      "arm": "product",
+      "repetition": 2,
+      "warmup": false,
+      "label": "retry-5-product",
+      "startedMs": 1792756277052,
+      "exitCode": 0,
+      "finishedMs": 1792756309974,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792756277841\\report.json",
+        "sha256": "6fec2dc796442b6ac14d6e1006808e49309834fc5fb9bafd3ccf9e8443b04302"
+      },
+      "MBps": 27.23647140163237,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 33554432,
+          "seconds": 0.7044670110335574,
+          "MBps": 47.63094861002885,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        },
+        {
+          "label": "after",
+          "bytes": 33554432,
+          "seconds": 0.6211600380484015,
+          "MBps": 54.01898052782558,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "<local-path>",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 33,
+          "meanCPUPercent": 11.800109099822812,
+          "medianCPUPercent": 11.273823624421235,
+          "maxCPUPercent": 23.692996164227875,
+          "medianBusiestCorePercent": 49.95150339476237,
+          "maxBusiestCorePercent": 81.21878121878122
+        },
+        "linux": {
+          "samples": 33,
+          "meanCPUPercent": 14.031212493133824,
+          "medianCPUPercent": 16.32996632996633,
+          "maxCPUPercent": 23.044575273338943,
+          "medianBusiestCorePercent": 28.57142857142857,
+          "maxBusiestCorePercent": 69.0721649484536
+        }
+      }
+    },
+    {
+      "index": 6,
+      "arm": "product",
+      "repetition": 3,
+      "warmup": false,
+      "label": "retry-6-product",
+      "startedMs": 1792756309980,
+      "exitCode": 0,
+      "finishedMs": 1792756343782,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792756310805\\report.json",
+        "sha256": "946177c75b24313bf8525c59a625d3deeaa5740ae344870871e31c936c069342"
+      },
+      "MBps": 26.76281508987823,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 33554432,
+          "seconds": 0.5768194910488091,
+          "MBps": 58.171460085353985,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        },
+        {
+          "label": "after",
+          "bytes": 33554432,
+          "seconds": 0.9533299739705399,
+          "MBps": 35.19708067108033,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "<local-path>",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 33,
+          "meanCPUPercent": 11.621310272096704,
+          "medianCPUPercent": 11.24673675298102,
+          "maxCPUPercent": 17.951233183856502,
+          "medianBusiestCorePercent": 52.26377952755905,
+          "maxBusiestCorePercent": 78.1
+        },
+        "linux": {
+          "samples": 34,
+          "meanCPUPercent": 13.732947974723738,
+          "medianCPUPercent": 15.38906085539346,
+          "maxCPUPercent": 26.08326253186066,
+          "medianBusiestCorePercent": 28.715686274509807,
+          "maxBusiestCorePercent": 63.63636363636363
+        }
+      }
+    },
+    {
+      "index": 7,
+      "arm": "cached",
+      "repetition": 3,
+      "warmup": false,
+      "label": "retry-7-cached",
+      "startedMs": 1792756343789,
+      "exitCode": 0,
+      "finishedMs": 1792756379641,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\retry-7-cached.json",
+        "sha256": "94dbfa32973d3850753b450e28ec8e55c3a413569e8afadfc9453bbb369bc319"
+      },
+      "MBps": 33.940439511468135,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 2.322786820004694,
+          "MBps": 28.891529529112955,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 2355.0501
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1173501759767532,
+          "MBps": 60.06072710494316,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1150.0877
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-olyzm6jf",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 36,
+          "meanCPUPercent": 10.475393835658409,
+          "medianCPUPercent": 9.460522227523922,
+          "maxCPUPercent": 20.444907640336375,
+          "medianBusiestCorePercent": 46.16141732283465,
+          "maxBusiestCorePercent": 87.69685039370079
+        },
+        "linux": {
+          "samples": 36,
+          "meanCPUPercent": 10.214934967729079,
+          "medianCPUPercent": 8.533487689658974,
+          "maxCPUPercent": 18.31932773109244,
+          "medianBusiestCorePercent": 21.830550401978975,
+          "maxBusiestCorePercent": 82.17821782178218
+        }
+      }
+    },
+    {
+      "index": 8,
+      "arm": "cached",
+      "repetition": 4,
+      "warmup": false,
+      "label": "retry-8-cached",
+      "startedMs": 1792756379644,
+      "exitCode": 0,
+      "finishedMs": 1792756418149,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\retry-8-cached.json",
+        "sha256": "1db0cb84f268489c40bbb8dab45dc8b75f854ecc7f98fe7c763793c4b4fad86d"
+      },
+      "MBps": 26.586273612192382,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 67108864,
+          "seconds": 1.227483388967812,
+          "MBps": 54.671912144107864,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1264.0753
+        },
+        {
+          "label": "after",
+          "bytes": 67108864,
+          "seconds": 1.1227794960141182,
+          "MBps": 59.77029705141334,
+          "sha256": "e3f94a7cf5e4223ed571fd220888bd5037140aa8298eecc51eee8adac4cbd58f",
+          "localMs": 1155.5139999999992
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "/tmp/windshare-wan-research-t77zegau",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 38,
+          "meanCPUPercent": 9.835568251241463,
+          "medianCPUPercent": 8.969041350617548,
+          "maxCPUPercent": 17.13763531561929,
+          "medianBusiestCorePercent": 44.21527093596059,
+          "maxBusiestCorePercent": 80
+        },
+        "linux": {
+          "samples": 38,
+          "meanCPUPercent": 10.419941626390875,
+          "medianCPUPercent": 10.339589758002843,
+          "maxCPUPercent": 18.58704793944491,
+          "medianBusiestCorePercent": 23.46141830677913,
+          "maxBusiestCorePercent": 52.52525252525253
+        }
+      }
+    },
+    {
+      "index": 9,
+      "arm": "product",
+      "repetition": 4,
+      "warmup": false,
+      "label": "retry-9-product",
+      "startedMs": 1792756418153,
+      "exitCode": 0,
+      "finishedMs": 1792756448766,
+      "report": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\product-runs\\slow-opfs-quiet-baseline-450.8588562011719-0-none-1-lan-isolated-1792756418966\\report.json",
+        "sha256": "92a8d79da88596849aa8628a5bac1a1fc0d33729d1804f8a56c61e7052c9983d"
+      },
+      "MBps": 31.762525093748984,
+      "browser": "155.0.8059.84",
+      "tcpControls": [
+        {
+          "label": "before",
+          "bytes": 33554432,
+          "seconds": 0.6375214260187931,
+          "MBps": 52.63263418382878,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        },
+        {
+          "label": "after",
+          "bytes": 33554432,
+          "seconds": 0.5890311140101403,
+          "MBps": 56.96546617301841,
+          "sha256": "9cb49904e31a41a4a7c6b350ecc883ab29f23c71806de525a0e326b0f4d1f0c0"
+        }
+      ],
+      "cleanup": {
+        "event": "cleanup",
+        "profile": "<local-path>",
+        "status": "complete"
+      },
+      "hostLoad": {
+        "windows": {
+          "samples": 30,
+          "meanCPUPercent": 10.406373550264853,
+          "medianCPUPercent": 11.048759508503943,
+          "maxCPUPercent": 14.439932318104907,
+          "medianBusiestCorePercent": 47.710474768240175,
+          "maxBusiestCorePercent": 72.3152709359606
+        },
+        "linux": {
+          "samples": 31,
+          "meanCPUPercent": 14.02145053784413,
+          "medianCPUPercent": 17.63713080168776,
+          "maxCPUPercent": 22.823330515638208,
+          "medianBusiestCorePercent": 29.000000000000004,
+          "maxBusiestCorePercent": 64.64646464646464
+        }
+      }
+    }
+  ],
+  "failures": [
+    {
+      "label": "load-2-product",
+      "stage": "Node startup before product/browser creation",
+      "error": "Absolute Windows --import path was corrected to a file URL",
+      "log": {
+        "path": ".tmp\\webrtc-load-recheck-20261023\\load-2-product.log",
+        "sha256": "87584f555a96153a5b32cd188a6e33712ecf9566ac3cf36d4a5d405f92914e51"
+      }
+    }
+  ],
+  "ownedRemote": [
+    {
+      "pid": 1213015,
+      "profile": "/tmp/windshare-wan-research-eldxhmbw"
+    },
+    {
+      "pid": 1213772,
+      "profile": "<local-path>"
+    },
+    {
+      "pid": 1214321,
+      "profile": "<local-path>"
+    },
+    {
+      "pid": 1214876,
+      "profile": "/tmp/windshare-wan-research-tb_clscn"
+    },
+    {
+      "pid": 1215420,
+      "profile": "/tmp/windshare-wan-research-hb86poa8"
+    },
+    {
+      "pid": 1215965,
+      "profile": "<local-path>"
+    },
+    {
+      "pid": 1216520,
+      "profile": "<local-path>"
+    },
+    {
+      "pid": 1217061,
+      "profile": "/tmp/windshare-wan-research-olyzm6jf"
+    },
+    {
+      "pid": 1217608,
+      "profile": "/tmp/windshare-wan-research-t77zegau"
+    },
+    {
+      "pid": 1218154,
+      "profile": "<local-path>"
+    }
+  ],
+  "idleBefore": [
+    {
+      "windows": {
+        "samples": 4,
+        "meanCPUPercent": 7.493200243738262,
+        "medianCPUPercent": 7.253960249464342,
+        "maxCPUPercent": 9.364324705053706,
+        "medianBusiestCorePercent": 43.08221170629534,
+        "maxBusiestCorePercent": 53.1
+      },
+      "linux": {
+        "samples": 3,
+        "meanCPUPercent": 4.294628724509398,
+        "medianCPUPercent": 3.9297658862876284,
+        "maxCPUPercent": 5.091819699499167,
+        "medianBusiestCorePercent": 19.999999999999996,
+        "maxBusiestCorePercent": 21.999999999999996
+      }
+    },
+    {
+      "windows": {
+        "samples": 4,
+        "meanCPUPercent": 7.849100770915506,
+        "medianCPUPercent": 8.272394369286953,
+        "maxCPUPercent": 9.824561403508772,
+        "medianBusiestCorePercent": 39.2262086403069,
+        "maxBusiestCorePercent": 51.55038759689923
+      },
+      "linux": {
+        "samples": 3,
+        "meanCPUPercent": 3.8622084451021554,
+        "medianCPUPercent": 3.7815126050420145,
+        "maxCPUPercent": 4.110738255033553,
+        "medianBusiestCorePercent": 15.151515151515149,
+        "maxBusiestCorePercent": 20.408163265306122
+      }
+    }
+  ],
+  "loadScope": "Low-overhead 1 Hz host CPU sampling; per-run intervals include setup, TCP controls and final hashing. Host wall clocks delimit samples. This does not isolate background CPU from transfer work or prove the cause of prior slower runs.",
+  "rawLedgers": [
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\ledger.json",
+      "sha256": "039baffc9186a3a4921446952aab0a03973bd27496f72531bf5f3519b97c42d0"
+    },
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\ledger-resume.json",
+      "sha256": "3588f4a5b5e40247a9dd06eb39b3debab518284796468c7ff9d798d2eea298df"
+    }
+  ],
+  "loadEvidence": [
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\windows-load.ndjson",
+      "sha256": "bd6d5a8cba6d2d5a68a7dcb8839eb3caaac4456e495a5baeb9902031a707c9bf"
+    },
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\windows-load-resume.ndjson",
+      "sha256": "587ff893f62f054c73f23e1daff7ccdbde1a525400148aedd2735ff8797851ce"
+    },
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\linux-load.ndjson",
+      "sha256": "8284b3b9248dd77e8da5bc045839dc74ea6c203ca98fe72b05da934a65753726"
+    },
+    {
+      "path": ".tmp\\webrtc-load-recheck-20261023\\linux-load-resume.ndjson",
+      "sha256": "e207059f1dede6a5e6b0f0b6b1b8207b00c88c33a255026dd7562206aae7dd41"
+    }
+  ],
+  "summaries": {
+    "cached": {
+      "measuredMBps": [
+        31.026683117657434,
+        30.434852158238645,
+        33.940439511468135,
+        26.586273612192382
+      ],
+      "medianMBps": 30.73076763794804,
+      "warmupMBps": [
+        35.78368827403794
+      ]
+    },
+    "product": {
+      "measuredMBps": [
+        31.164124983520104,
+        27.23647140163237,
+        26.76281508987823,
+        31.762525093748984
+      ],
+      "medianMBps": 29.200298192576238,
+      "warmupMBps": [
+        34.55593713909801
+      ]
+    }
+  },
+  "pairs": [
+    {
+      "cached": 31.026683117657434,
+      "product": 31.164124983520104
+    },
+    {
+      "cached": 30.434852158238645,
+      "product": 27.23647140163237
+    },
+    {
+      "cached": 33.940439511468135,
+      "product": 26.76281508987823
+    },
+    {
+      "cached": 26.586273612192382,
+      "product": 31.762525093748984
+    }
+  ],
+  "verifiedTransfers": 10,
+  "cleanupAudit": [
+    {
+      "pid": 1213015,
+      "profile": "/tmp/windshare-wan-research-eldxhmbw",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1213772,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1214321,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1214876,
+      "profile": "/tmp/windshare-wan-research-tb_clscn",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1215420,
+      "profile": "/tmp/windshare-wan-research-hb86poa8",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1215965,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1216520,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1217061,
+      "profile": "/tmp/windshare-wan-research-olyzm6jf",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1217608,
+      "profile": "/tmp/windshare-wan-research-t77zegau",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    },
+    {
+      "pid": 1218154,
+      "profile": "<local-path>",
+      "profileExists": false,
+      "remainingBrowserPIDs": []
+    }
+  ],
+  "harnessSHA256": {
+    "analyze.py": "938fe14b011086bafc399df3434d720def0cb15315cab0c92910c708cfccba6c",
+    "linux-load.py": "0ec4a9fdde84ced1eb293161f69ded588b1e82a9339a411cf6c4849574f1dc7f",
+    "prepare-resume.mjs": "8371a2c269eaa68f6fd795382da992a611f5e5970cf37f88fe1cb5c2d0a1c2d9",
+    "product.mjs": "8a32994dc5dcdf317c80568ebf362691a8ccffe5f94792326a11f2ddca5d1f47",
+    "remote.py": "e2d8e25c31ea51d7a359428976578f3d034c371093eb90db51b64c0f85a9a057",
+    "resume.mjs": "b1adbfa0a4c1785f30813552149ae5ba7d622ece65ad0c1edb759fe3863a2641",
+    "run.cjs": "168d077e414b7b1a6eba9c5bdad91af6c6c63f273a7b46152226de99070d86e0",
+    "run.mjs": "0dde2d65f2e9a292caff1271be3a55a526b3b0aaa1926c42310b6b2574327295"
+  },
+  "limitations": [
+    "The previous run has no matching background-load measurement; the user's load report is context, not a quantified intervention.",
+    "Both current arms isolate browser DNS. The historical 38.48 MB/s batch used original DNS settings, and the earlier 29.85 MB/s repeat also used original DNS settings.",
+    "Archived transport excludes source reading/sealing and output, but includes record authentication/decryption. Complete product includes source, session scheduling/envelopes and OPFS.",
+    "TCP controls are 64 MiB for cached runs and 32 MiB for product runs; they bracket each trial and do not measure concurrent path capacity.",
+    "Three historical or four current samples are limited evidence; aggregate CPU does not exclude individual-thread or network limits."
+  ],
+  "verifiedSnapshotFiles": 4151
+}

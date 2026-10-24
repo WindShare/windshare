@@ -9,6 +9,7 @@ import (
 )
 
 type ReceiverConfig struct {
+	Purpose       v2signal.ConnectionPurpose
 	Routes        ReceiverRoutes
 	Factory       *v2peer.ReceiverFactory
 	Signaling     v2peer.ReceiverSignaling
@@ -46,11 +47,15 @@ func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (
 	if session, ok := receiver.Lanes.(PeerPathControlSession); ok {
 		controls = session
 	}
-	pathConfig := PathConfig{SessionID: sessionID, Demand: receiver.Demand, StopAfterWave: receiver.StopAfterWave,
+	pathConfig := PathConfig{Purpose: receiver.Purpose, SessionID: sessionID, Demand: receiver.Demand, StopAfterWave: receiver.StopAfterWave,
 		Native: receiver.Factory.NativeConnectivity(), Controls: controls,
 		Start: func(ctx context.Context, binding v2signal.Binding) (Attempt, error) {
 			return receiver.Factory.StartBinding(ctx, receiver.Signaling, receiver.Lanes, binding)
 		},
+	}
+	if receiver.Purpose == v2signal.ThroughputExploration {
+		pathConfig.Budget = NewBudget(owner.config.Clock.Now())
+		pathConfig.StopAfterWave = true
 	}
 	if receiver.Factory.NativeConnectivity() != nil {
 		pathConfig.Prepare = func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {

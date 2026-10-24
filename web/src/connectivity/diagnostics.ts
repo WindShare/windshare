@@ -29,6 +29,7 @@ export const V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES = Object.freeze([
 ] as const)
 
 export const V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
+  'parallelism',
   'wave-started',
   'retry-decided',
   'backoff-scheduled',
@@ -188,6 +189,10 @@ type V2PeerRecoveryBase = Readonly<{
 }>
 
 export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
+  | Readonly<{ stage: 'parallelism'; action: string; reason: string;
+      networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
+      paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;
+      usefulRate: number; outputRate: number; baselineUsefulRate: number; baselineOutputRate: number }>
   | Readonly<{
       stage: 'wave-started'
       waveOrdinal: number

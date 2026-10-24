@@ -21,7 +21,7 @@ func TestBlockBrokerHonorsExactWindowAcrossLaneWidths(t *testing.T) {
 	for _, laneCount := range laneCounts {
 		t.Run(fmt.Sprintf("lanes=%02d/window=%02d", laneCount, laneCount), func(t *testing.T) {
 			lanes, err := transferlanes.New(transferlanes.Config{
-				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101), RaceWidth: 1,
+				ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](101),
 			})
 			if err != nil {
 				t.Fatal(err)

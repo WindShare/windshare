@@ -3,12 +3,38 @@ package eventproject
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/connectionpath"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
+
+func TestParallelismObservationPreservesDecisionAndOwnsFacts(t *testing.T) {
+	source := nativepeer.ParallelismFacts{
+		At:       time.Unix(42, 0),
+		Decision: throughput.Decision{Action: throughput.Explore, Reason: "network_demand", UsefulRate: 12, OutputRate: 11, BaselineUsefulRate: 10, BaselineOutputRate: 9},
+		Demand:   throughput.Observation{Paths: 1, QueuedBytes: 32, UnfinishedBytes: 8, CapacityWaitingBytes: 4},
+	}
+	event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{
+		Subject:     nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideReceiver},
+		Parallelism: &source,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Decision.Reason = "mutated"
+	facts := event.Facts()
+	if facts.Kind != "parallelism" || facts.Parallelism.Reason != "network_demand" || facts.Parallelism.QueuedBytes != 32 || facts.Parallelism.OutputRate != 11 || !facts.Session.Valid() || !facts.Path.Valid() {
+		t.Fatalf("decision context lost: %+v", facts)
+	}
+	facts.Parallelism.QueuedBytes = 999
+	if event.Facts().Parallelism.QueuedBytes != 32 {
+		t.Fatal("mutable decision facts escaped")
+	}
+}
 
 func TestTURNRejectionsIdentifyFailedOperands(t *testing.T) {
 	for _, test := range []struct {

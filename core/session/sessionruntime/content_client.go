@@ -418,21 +418,24 @@ type receiverBlockLane struct {
 }
 
 type receiverBlockOperation struct {
+	capacity *contentflow.AssemblyCapacity
 	lane     *receiverBlockLane
 	call     *operationCall
 	retired  bool
 	terminal *protocolOperationTerminalOwner
 }
 
-func (lane *receiverBlockLane) FetchBlock(
+func (lane *receiverBlockLane) fetchReservedBlock(
 	ctx context.Context,
 	demand transferlanes.Demand, received func(uint64),
+	capacity *contentflow.AssemblyCapacity,
 ) (record records.BlockRecord, err error) {
 	operation, err := lane.beginBlockOperation(ctx, demand)
 	if err != nil {
 		return records.BlockRecord{}, err
 	}
 	defer func() { err = operation.finish(ctx, err) }()
+	operation.capacity = capacity
 	return operation.receive(ctx, demand, received)
 }
 
@@ -521,7 +524,7 @@ func (operation *receiverBlockOperation) receive(
 		}
 		switch message.Kind() {
 		case protocolsession.MessageBlockFragment:
-			next, progressed, err := operation.lane.acceptBlockFragment(demand, message, record, received)
+			next, progressed, err := operation.acceptBlockFragment(demand, message, record, received)
 			if err != nil {
 				// Decoding has no cancelable wait. Even a lifecycle-shaped opener
 				// error is a validation fault, regardless of a concurrent race winner.
@@ -535,11 +538,7 @@ func (operation *receiverBlockOperation) receive(
 		case protocolsession.MessageOperationError:
 			return records.BlockRecord{}, blockRequestOperationError(message)
 		case protocolsession.MessageOperationComplete:
-			completed, err := operation.complete(message, record)
-			if err != nil {
-				operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
-			}
-			return completed, err
+			return operation.complete(message, record)
 		default:
 			operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
 			return records.BlockRecord{}, ErrOperationMissing
@@ -551,20 +550,24 @@ func (operation *receiverBlockOperation) receiveFailure(cause error) (records.Bl
 	if !errors.Is(cause, contentflow.ErrFragmentInactivity) && !errors.Is(cause, contentflow.ErrBlockResponseInactivity) {
 		return records.BlockRecord{}, cause
 	}
-	boundaryErr := blockFragmentInactivityBoundary(cause)
-	if retireErr := operation.retire(contentflow.CancelReasonTimeout); retireErr != nil {
+	return operation.reassignAfterRetirement(cause, contentflow.CancelReasonTimeout)
+}
+
+func (operation *receiverBlockOperation) reassignAfterRetirement(cause error, reason contentflow.CancelReason) (records.BlockRecord, error) {
+	boundaryErr := blockTransportBoundary(cause)
+	if retireErr := operation.retire(reason); retireErr != nil {
 		return records.BlockRecord{}, errors.Join(boundaryErr, retireErr)
 	}
 	return records.BlockRecord{}, transferlanes.NewDemandReassignableAfterRetirement(boundaryErr)
 }
 
-func (lane *receiverBlockLane) acceptBlockFragment(
+func (operation *receiverBlockOperation) acceptBlockFragment(
 	demand transferlanes.Demand,
 	message protocolsession.Message,
 	current records.BlockRecord,
 	received func(uint64),
 ) (records.BlockRecord, bool, error) {
-	result, err := lane.assembler.AcceptAuthenticated(message.Body())
+	result, err := operation.capacity.AcceptAuthenticated(message.Body())
 	if err != nil {
 		return records.BlockRecord{}, false, err
 	}
@@ -575,26 +578,8 @@ func (lane *receiverBlockLane) acceptBlockFragment(
 	if result.Status != contentflow.RecordComplete {
 		return current, progressed, nil
 	}
-	record, err := lane.opener.OpenBlock(demand.Descriptor, demand.Index, result.Object)
+	record, err := operation.lane.opener.OpenBlock(demand.Descriptor, demand.Index, result.Object)
 	return record, progressed, err
-}
-
-func (operation *receiverBlockOperation) complete(
-	message protocolsession.Message,
-	record records.BlockRecord,
-) (records.BlockRecord, error) {
-	unsigned, err := protocolsession.SenderControlSemanticBody(message)
-	if err != nil {
-		return records.BlockRecord{}, err
-	}
-	count, err := contentflow.DecodeOperationComplete(unsigned)
-	if err != nil || count != 1 || record.DataLength() == 0 {
-		return records.BlockRecord{}, errors.Join(ErrOperationMissing, err)
-	}
-	if err := operation.lane.assembler.CompleteOperation(operation.call.id); err != nil {
-		return records.BlockRecord{}, err
-	}
-	return record, nil
 }
 
 func (lane *receiverBlockLane) blockFragmentInactivityTimeout() time.Duration {
@@ -622,7 +607,7 @@ func (lane *receiverBlockLane) awaitBlockMessage(
 	return message, err
 }
 
-func blockFragmentInactivityBoundary(cause error) error {
+func blockTransportBoundary(cause error) error {
 	value, err := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
 	if err != nil {
 		return errors.Join(cause, err)

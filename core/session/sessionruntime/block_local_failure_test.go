@@ -396,7 +396,8 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				fixture := newVerticalFixture(t)
+				const chunkSize = 64 << 10
+				fixture := newVerticalFixtureWithContent(t, make([]byte, chunkSize), chunkSize)
 				blockGate := make(chan struct{})
 				var releaseGate sync.Once
 				t.Cleanup(func() { releaseGate.Do(func() { close(blockGate) }) })

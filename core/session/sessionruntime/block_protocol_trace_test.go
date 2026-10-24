@@ -103,7 +103,7 @@ func TestBlockProtocolTraceRaceLoserEndsNormally(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				fixture := newBlockProtocolFixture(t, test.runWriter)
 				lanes, err := transferlanes.New(transferlanes.Config{
-					ProtocolSessionID: fixture.runtime.sessionID, RaceWidth: 2,
+					ProtocolSessionID:             fixture.runtime.sessionID,
 					SettlementObservationCapacity: transferlanes.DefaultSettlementObservationCapacity,
 				})
 				if err != nil {
@@ -111,7 +111,7 @@ func TestBlockProtocolTraceRaceLoserEndsNormally(t *testing.T) {
 				}
 				t.Cleanup(lanes.Close)
 				winnerReady := make(chan struct{})
-				if err := lanes.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteRelay, fixture.lane); err != nil {
+				if err := lanes.Add(transferlanes.Identity{ID: 1}, transferlanes.RouteDirect, fixture.lane); err != nil {
 					t.Fatal(err)
 				}
 				if err := lanes.Add(transferlanes.Identity{ID: 2}, transferlanes.RouteDirect, gatedBlockProtocolWinner{winnerReady}); err != nil {
@@ -142,6 +142,9 @@ func TestBlockProtocolTraceRaceLoserEndsNormally(t *testing.T) {
 				// This covers both boundaries without network timing or wall-clock sleeps.
 				synctest.Wait()
 				call := onlyActiveCall(t, fixture.lane.rpc)
+				// Advance the injected synctest clock until the stalled response is
+				// eligible for rescue; healthy blocks never start duplicate probes.
+				time.Sleep(time.Second)
 				if test.beforeWinner != nil {
 					test.beforeWinner(fixture)
 				}

@@ -400,6 +400,10 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
         retryable: boolean
       }>
   readonly peer_recovery:
+    | Readonly<{ stage: 'parallelism'; action: string; reason: string; paths: number;
+        network_waiting_bytes: string; in_flight_bytes: string; remaining_bytes: string; remaining_known: boolean;
+        queued_bytes: string; unfinished_bytes: string; capacity_waiting_bytes: string;
+        useful_rate: number; output_rate: number; baseline_useful_rate: number; baseline_output_rate: number }>
     | Readonly<{
         stage: 'wave_started' | 'wave_rearmed'
         wave_ordinal: string

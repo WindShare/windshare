@@ -18,13 +18,13 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 var errReceiverClosed = errors.New("live share receiver is closed")
 
 type ReceiverConfig struct {
+	Capacity                          *ReceiveCapacity
 	ContentRoutePolicy                transferlanes.ContentRoutePolicy
 	Capability                        link.Link
 	DescriptorObject                  []byte
@@ -46,6 +46,9 @@ type PreparedReceiver struct {
 }
 
 func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
+	if config.Capacity == nil {
+		return nil, errors.New("live share receiver requires application receive capacity")
+	}
 	capability := config.Capability
 	if capability.Suite != link.SuiteSenderAuthenticated || len(capability.ReadSecret) != link.ReadSecretBytes ||
 		len(capability.PKHash) != link.PKHashBytes || len(capability.Relays) == 0 || len(config.DescriptorObject) == 0 {
@@ -101,19 +104,9 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	if err != nil {
 		return fail(err)
 	}
-	processReassembly, err := contentflow.NewReassemblyAccount("live-get-process", contentflow.ReassemblyLimits{
-		Bytes: contentflow.DefaultProcessReassemblyBytes, Records: contentflow.DefaultProcessReassemblyRecords,
-	})
-	if err != nil {
-		return fail(err)
-	}
 	shareReassembly, err := contentflow.NewReassemblyAccount("live-get-share", contentflow.ReassemblyLimits{
 		Bytes: contentflow.DefaultShareReassemblyBytes, Records: contentflow.DefaultShareReassemblyRecords,
 	})
-	if err != nil {
-		return fail(err)
-	}
-	plaintext, err := transfer.NewPlaintextBudget(transfer.DefaultProcessPlaintextBytes)
 	if err != nil {
 		return fail(err)
 	}
@@ -127,7 +120,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 		ContentRoutePolicy: config.ContentRoutePolicy,
 		Descriptor:         descriptor, SessionAuthKey: authKey, Sender: sender,
 		CatalogVerifier: verifier, RecordOpener: opener,
-		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
+		ReassemblyProcess: config.Capacity.reassembly, ReassemblyShare: shareReassembly, PlaintextProcess: config.Capacity.plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
 		ProtocolObservations:              config.ProtocolObservations,
 		LaneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,

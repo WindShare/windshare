@@ -237,7 +237,7 @@ function attemptContext(phases: string[] = []): V2PeerAttemptContext {
     peerPathId: createV2PeerPathIdentityValue(identity(7)),
     waveOrdinal: 1,
     waveAttemptOrdinal: 1,
-    sessionAttemptOrdinal: 1,
+    sessionAttemptOrdinal: 1, purpose: 'initial' as const,
     peerSlot: 0, attemptSequence: 1n,
     negotiationBudgetMilliseconds: 10,
     admissionBudgetMilliseconds: 20,

@@ -67,7 +67,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		for index := 1; index <= MaxDemandAttempts; index++ {
 			attempted[Identity{ID: uint32(index), Epoch: 1}] = struct{}{}
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), attempted, 1, nil)
+		selected, exhausted, err := lanes.candidates(context.Background(), attempted, Request{})
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempt budget = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -81,7 +81,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		})); err != nil {
 			t.Fatal(err)
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), map[Identity]struct{}{identity: {}}, 1, nil)
+		selected, exhausted, err := lanes.candidates(context.Background(), map[Identity]struct{}{identity: {}}, Request{})
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempted identities = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -91,7 +91,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 4)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, _, err := lanes.candidates(ctx, nil, 1, nil); !errors.Is(err, context.Canceled) {
+		if _, _, err := lanes.candidates(ctx, nil, Request{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled candidate wait = %v", err)
 		}
 	})
@@ -100,7 +100,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 5)
 		done := make(chan error, 1)
 		go func() {
-			_, _, err := lanes.candidates(context.Background(), nil, 1, nil)
+			_, _, err := lanes.candidates(context.Background(), nil, Request{})
 			done <- err
 		}()
 		lanes.stop()
@@ -117,7 +117,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		}
 		done := make(chan laneCandidatesResult, 1)
 		go func() {
-			selected, _, err := lanes.candidates(context.Background(), nil, 1, nil)
+			selected, _, err := lanes.candidates(context.Background(), nil, Request{})
 			done <- laneCandidatesResult{selected: selected, err: err}
 		}()
 		if err := lanes.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, boundaryBlockLaneFunc(func(context.Context, Demand) (records.BlockRecord, error) {
@@ -159,7 +159,6 @@ func newBoundaryLaneSet(t *testing.T, seed byte) *Set {
 	t.Helper()
 	lanes, err := New(Config{
 		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](seed),
-		RaceWidth:         1,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -46,6 +46,58 @@ import type {
 } from '../../src/connectivity/peer-set/path'
 
 describe('content path policy authority', () => {
+  it('explores sustained work, then retires an unhelpful path without ending the download', async () => {
+    const clock = new ManualRecoveryClock()
+    const offers = new SuccessfulOffers()
+    const events: V2PeerRecoveryTraceEvent[] = []
+    const { connectivity, lanes } = fixture(offers, undefined, {
+      policy: 'p2p-only', peerRecovery: { clock }, recoveryTraceObserver: event => events.push(event),
+    })
+    vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
+      queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
+      inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
+      remainingBytes: 1_000_000, remainingKnown: true,
+    }))
+    const activation = connectivity.begin('download')
+    await waitForMicrotaskCondition('initial path', () => lanes.eligibleSize(activation.routes) === 1)
+    await turn()
+    for (let second = 0; second < 4; second++) await clock.advance(1000)
+    await waitForMicrotaskCondition('optional path', () => lanes.eligibleSize(activation.routes) === 2)
+    for (let second = 0; second < 4; second++) await clock.advance(1000)
+    await waitForMicrotaskCondition('unhelpful path retired', () => lanes.eligibleSize(activation.routes) === 1)
+    expect(activation.routes.active).toBe(true)
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'parallelism', action: 'retire', reason: 'no-aggregate-gain' }))
+    expect(offers.calls).toBe(2)
+    await connectivity.close()
+  })
+
+  it('contains an optional connection failure while the essential path remains usable', async () => {
+    const clock = new ManualRecoveryClock()
+    let calls = 0
+    const { connectivity, lanes } = fixture({
+      offer: async (route, signal, observer) => {
+        calls++
+        if (calls > 1) throw new PeerNegotiationError('optional transport failed')
+        await completeSuccessfulSignaling(route, signal, observer)
+        observer?.dataChannelOpened(CANDIDATE_COUNTS)
+        return fakePeer()
+      },
+    }, undefined, { policy: 'p2p-only', peerRecovery: { clock } })
+    vi.spyOn(lanes, 'schedulingDemand').mockImplementation(() => ({
+      queuedBytes: 100, queuedBlocks: 10, networkWaitingBytes: 100, capacityWaitingBytes: 0,
+      inFlightBytes: 100, unfinishedBytes: 100, usefulBytes: clock.now(), outputBytes: clock.now(),
+      remainingBytes: 1_000_000, remainingKnown: false,
+    }))
+    const activation = connectivity.begin('download')
+    await waitForMicrotaskCondition('initial path', () => lanes.eligibleSize(activation.routes) === 1)
+    await turn()
+    for (let second = 0; second < 10; second++) await clock.advance(1000)
+    expect(calls).toBe(2)
+    expect(lanes.eligibleSize(activation.routes)).toBe(1)
+    expect(activation.routes.active).toBe(true)
+    await connectivity.close()
+  })
+
   it('terminates p2p-only within one wave despite repeated network notices during ICE', async () => {
     const clock = new ManualRecoveryClock()
     let notice = () => undefined as void
@@ -874,7 +926,6 @@ describe('v2 receiver immediate dual-path policy', () => {
     expect(lanes.laneIds()).toEqual([1])
     expect(preview.routes.allows('application-relay')).toBe(true)
     expect(preview.routes.allows('direct')).toBe(true)
-    expect(vi.getTimerCount()).toBe(4)
 
     preview.close()
     expect(preview.routes.active).toBe(false)

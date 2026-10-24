@@ -86,6 +86,12 @@ type rpcClient struct {
 	calls  map[protocolsession.OperationID]*operationCall
 }
 
+type operationResponse struct {
+	message    protocolsession.Message
+	generation protocolsession.OperationGeneration
+	lane       LaneIdentity
+}
+
 func newRPCClient(runtime *runtimeCore, random io.Reader) *rpcClient {
 	return &rpcClient{
 		runtime: runtime, ids: operationIDSource{random: random},
@@ -121,7 +127,8 @@ func (client *rpcClient) HandleMessage(ctx context.Context, message protocolsess
 	if requestlane.Managed(call.requestKind) && senderResponseFinal(message.Kind()) {
 		call.requests.Complete(client.runtime.now())
 	}
-	response := operationResponse{message: message, generation: generation}
+	lane, _ := inboundLane(ctx)
+	response := operationResponse{message: message, generation: generation, lane: lane}
 	var err error
 	if call.traceEnabled && message.Kind() == protocolsession.MessageOperationError {
 		source, hasSource := ctx.Value(inboundLaneContextKey{}).(authenticatedReceiveContext)
@@ -574,6 +581,9 @@ func (client *rpcClient) awaitCall(
 		case response := <-call.messages:
 			expected, _ := call.operationAuthority()
 			if expected.Same(response.generation) {
+				call.stateMu.Lock()
+				call.lastResponseLane = response.lane
+				call.stateMu.Unlock()
 				return response.message, nil
 			}
 		}

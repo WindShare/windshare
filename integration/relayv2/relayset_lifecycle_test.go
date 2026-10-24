@@ -45,7 +45,7 @@ func TestReceiverDoesNotRedialSessionThatStoppedDuringBackoff(t *testing.T) {
 	clock := &relaysetRetryBarrierClock{waiting: make(chan context.Context, 1), release: make(chan struct{})}
 	var unavailableAttempts atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
-		Clock: clock, Receiver: liveshare.ReceiverConfig{Capability: capability},
+		Clock: clock, Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL != unavailableEndpoint {
 				return relayset.DialReceiver(ctx, config)
@@ -91,7 +91,7 @@ func TestReceiverStopsInFlightDialAndDisposesLateConnection(t *testing.T) {
 	dialCanceled := make(chan struct{})
 	var connected atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
-		Receiver: liveshare.ReceiverConfig{Capability: capability},
+		Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL != lateEndpoint {
 				return relayset.DialReceiver(ctx, config)

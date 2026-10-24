@@ -105,6 +105,26 @@ func TestFrozenPeerSignalingBodiesAndOperationKinds(t *testing.T) {
 
 func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	binding := testBinding()
+	for _, purpose := range []ConnectionPurpose{Recovery, ThroughputExploration} {
+		other := binding
+		other.Purpose = purpose
+		encoded, err := EncodeOffer(Offer{Binding: other, SDP: "v=0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeOffer(encoded)
+		if err != nil || decoded.Binding != other {
+			t.Fatalf("purpose roundtrip: %+v %v", decoded, err)
+		}
+		if !errors.Is(binding.RequireSame(other), ErrSignalBinding) {
+			t.Fatal("purpose substitution accepted")
+		}
+	}
+	invalidPurpose := binding
+	invalidPurpose.Purpose = ThroughputExploration + 1
+	if _, err := EncodeOffer(Offer{Binding: invalidPurpose, SDP: "v=0"}); !errors.Is(err, ErrInvalidSignal) {
+		t.Fatal(err)
+	}
 	other := binding
 	other.AttemptID[0] ^= 0xff
 	if err := binding.RequireSame(other); !errors.Is(err, ErrSignalBinding) {
@@ -133,7 +153,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	}
 
 	valid, _ := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
-	nonCanonical := append([]byte{0x98, 0x06}, valid[1:]...)
+	nonCanonical := append([]byte{0x98, 0x07}, valid[1:]...)
 	if _, err := DecodeOffer(nonCanonical); !errors.Is(err, ErrNonCanonicalSignal) {
 		t.Fatalf("noncanonical array error = %v", err)
 	}

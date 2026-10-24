@@ -495,6 +495,12 @@ function projectPeerRecoveryPayload(
   event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_recovery' }>,
 ): TraceEventPayloadByNameV2['peer_recovery'] {
   switch (event.stage) {
+    case 'parallelism':
+      return { stage: 'parallelism', action: event.action, reason: event.reason, paths: event.paths,
+        network_waiting_bytes: decimal(event.networkWaitingBytes), in_flight_bytes: decimal(event.inFlightBytes),
+        remaining_bytes: decimal(event.remainingBytes), remaining_known: event.remainingKnown,
+        queued_bytes: decimal(event.queuedBytes), unfinished_bytes: decimal(event.unfinishedBytes), capacity_waiting_bytes: decimal(event.capacityWaitingBytes),
+        useful_rate: event.usefulRate, output_rate: event.outputRate, baseline_useful_rate: event.baselineUsefulRate, baseline_output_rate: event.baselineOutputRate }
     case 'wave-started':
     case 'wave-rearmed':
       return {

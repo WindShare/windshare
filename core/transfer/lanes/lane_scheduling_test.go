@@ -15,8 +15,9 @@ func TestLaneAdmissionFreezesEstimateBeforeReservation(t *testing.T) {
 	now := time.Unix(100, 0)
 	set := &Set{now: func() time.Time { return now }}
 	state := &laneState{}
-	const blockBytes = uint64(1 << 20)
-	first, _, err := set.admitLaneLocked(state, blockBytes, nil)
+	demand := validDemand(t, transferDescriptor(t, 1), 0)
+	blockBytes := blockDemandBytes(demand)
+	first, _, err := set.admitLaneLocked(state, demand, nil)
 	if err != nil || first == nil {
 		t.Fatalf("first admission: %v", err)
 	}
@@ -25,7 +26,7 @@ func TestLaneAdmissionFreezesEstimateBeforeReservation(t *testing.T) {
 	now = now.Add(10 * time.Millisecond)
 	// Receipt opens capacity before authentication finishes the first sample.
 	first.permit.Receive(blockBytes, now)
-	second, _, err := set.admitLaneLocked(state, blockBytes*64, nil)
+	second, _, err := set.admitLaneLocked(state, demand, nil)
 	if err != nil || second == nil {
 		t.Fatalf("second admission: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestLaneAdmissionFreezesEstimateBeforeReservation(t *testing.T) {
 		t.Fatalf("admission estimates were computed after reservation: first=%v second=%v", first.expected, second.expected)
 	}
 	state.performance.Complete(now, blockBytes, true)
-	state.performance.Complete(now, blockBytes*64, false)
+	state.performance.Complete(now, blockBytes, false)
 	if first.expected != 250*time.Millisecond || second.expected != 500*time.Millisecond {
 		t.Fatal("settlement changed an admitted attempt's original estimate")
 	}
@@ -73,7 +74,7 @@ func TestLaneSchedulingKeepsUnmeasuredRelayOutOfFastContent(t *testing.T) {
 		}
 		lanes.attempts.Wait()
 	}
-	if directCalls.Load() != 16 || relayCalls.Load() != 1 || cancellations.Load() != 1 {
+	if directCalls.Load() != 16 || relayCalls.Load() != 0 || cancellations.Load() != 0 {
 		t.Fatalf("content=%d probe=%d canceled=%d", directCalls.Load(), relayCalls.Load(), cancellations.Load())
 	}
 	if lanes.Len() != 2 {
@@ -145,27 +146,26 @@ func TestLaneSchedulingUsesMeasuredCompletionAndMarginalRelayCost(t *testing.T) 
 	// Selection tests use measured capacity without adding wall-clock delays.
 	lanes.lanes[1].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 100}
 	lanes.lanes[2].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 10}
-	chosen, _, _ := lanes.selectCandidatesLocked([]*laneState{lanes.lanes[1], lanes.lanes[2]}, 1, bytes, nil)
+	chosen := []*laneState{lanes.lanes[1], lanes.lanes[2]}
+	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 1 {
 		t.Fatal("slow relay won over fast direct")
 	}
-	chosen[0].permit.Close()
 	lanes.lanes[1].performance.PendingBytes = bytes * 20
-	chosen, _, _ = lanes.selectCandidatesLocked([]*laneState{lanes.lanes[1], lanes.lanes[2]}, 1, bytes, nil)
+	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 2 {
 		t.Fatal("useful parallel relay capacity was ignored")
 	}
-	chosen[0].permit.Close()
 	lanes.lanes[1].performance.PendingBytes = 0
 	lanes.lanes[2].performance.PendingBytes = 0
 	lanes.lanes[2].performance.BytesPerSecond = float64(bytes) * 1000
-	chosen, _, _ = lanes.selectCandidatesLocked([]*laneState{lanes.lanes[1], lanes.lanes[2]}, 1, bytes, nil)
+	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 2 {
 		t.Fatal("route label overrode measured completion")
 	}
 }
 
-func TestLaneSchedulingSupplementRespectsAuthorityAndOldestProbe(t *testing.T) {
+func TestLaneSchedulingRescueRespectsRouteAndSuspension(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	input := validDemand(t, descriptor, 0)
 	lanes := newBoundaryLaneSet(t, 123)
@@ -182,8 +182,7 @@ func TestLaneSchedulingSupplementRespectsAuthorityAndOldestProbe(t *testing.T) {
 	lanes.lanes[2].performance.LastAttempt = time.Now().Add(-time.Hour)
 	attempted := map[Identity]struct{}{{ID: 1}: {}}
 	lanes.contentRoutePolicy = ContentRouteDirectOnly
-	if lanes.supplement(input, attempted, primary, time.Hour, time.Second, lanescheduling.Probe, nil) != nil ||
-		lanes.supplement(input, attempted, primary, time.Hour, time.Second, lanescheduling.Rescue, nil) != nil {
+	if lanes.rescue(input, attempted, time.Hour, time.Second, nil) != nil {
 		t.Fatal("route permission bypassed")
 	}
 	lanes.contentRoutePolicy = ContentRouteAll
@@ -194,11 +193,11 @@ func TestLaneSchedulingSupplementRespectsAuthorityAndOldestProbe(t *testing.T) {
 	if err := suspension.Resume(); err != nil {
 		t.Fatal(err)
 	}
-	selected := lanes.supplement(input, attempted, primary, 0, time.Second, lanescheduling.Probe, nil)
-	if selected == nil || selected.identity.ID != 3 {
-		t.Fatal("cold path was starved by previously sampled fallback")
+	selected := lanes.rescue(input, attempted, time.Hour, time.Second, nil)
+	if selected == nil || selected.identity.ID != 2 {
+		t.Fatal("eligible rescue path was not selected")
 	}
-	lanes.exploration.Release(lanescheduling.Probe)
+	lanes.exploration.Release(lanescheduling.Rescue)
 	lanes.attempts.Done()
 }
 

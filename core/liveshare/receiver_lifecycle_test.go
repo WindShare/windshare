@@ -135,7 +135,7 @@ func newPreparedReceiverForLifecycleTest(t *testing.T) *PreparedReceiver {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sender.Close() })
-	receiver, err := PrepareReceiver(ReceiverConfig{
+	receiver, err := PrepareReceiver(ReceiverConfig{Capacity: testReceiveCapacity(t),
 		Capability: sender.Capability(), DescriptorObject: sender.Registration().Descriptor,
 	})
 	if err != nil {

@@ -1,7 +1,8 @@
 import { decode, encode, rfc8949EncodeOptions, type DecodeOptions } from 'cborg'
 
-import { equalBytes } from '../crypto/bytes'
 import { isWellFormedUnicode } from './text'
+import { validateCanonicalEncoding, MAXIMUM_CBOR_DEPTH, MAXIMUM_CBOR_ARRAY_ITEMS, MAXIMUM_CBOR_MAP_FIELDS } from './cbor-canonical'
+export { MAXIMUM_CBOR_DEPTH, MAXIMUM_CBOR_ARRAY_ITEMS, MAXIMUM_CBOR_MAP_FIELDS } from './cbor-canonical'
 
 const STRICT_DECODE_OPTIONS: DecodeOptions = Object.freeze({
   allowBigInt: true,
@@ -13,10 +14,6 @@ const STRICT_DECODE_OPTIONS: DecodeOptions = Object.freeze({
   strict: true,
   useMaps: true,
 })
-
-export const MAXIMUM_CBOR_DEPTH = 16
-export const MAXIMUM_CBOR_ARRAY_ITEMS = 2_048
-export const MAXIMUM_CBOR_MAP_FIELDS = 256
 
 export class V2CborError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -47,20 +44,12 @@ export function decodeCanonicalCbor(
   }
   let decoded: unknown
   try {
+    validateCanonicalEncoding(encoded)
     decoded = decode(encoded, STRICT_DECODE_OPTIONS) as unknown
   } catch (cause) {
     throw new V2CborError(`${label} is not strict CBOR`, { cause })
   }
   validateValue(decoded, 0)
-  let canonical: Uint8Array
-  try {
-    canonical = encode(decoded, rfc8949EncodeOptions)
-  } catch (cause) {
-    throw new V2CborError(`${label} cannot be deterministically encoded`, { cause })
-  }
-  if (!equalBytes(canonical, encoded)) {
-    throw new V2CborError(`${label} is not deterministic CBOR`)
-  }
   return decoded
 }
 

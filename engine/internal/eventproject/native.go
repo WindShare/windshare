@@ -34,6 +34,9 @@ func projectNativeObservation(workflow appobs.Workflow, value nativepeer.Observa
 		spec.Side = "unknown"
 	}
 	count := 0
+	if value.Parallelism != nil {
+		count++
+	}
 	if value.Provider != nil {
 		count++
 	}
@@ -65,13 +68,24 @@ func projectNativeObservation(workflow appobs.Workflow, value nativepeer.Observa
 		spec.At = socket.At
 		spec.Socket = &appobs.NativeSocketFacts{Local: socket.Local, Server: socket.Server, Duration: socket.Duration, Result: socket.Result}
 	}
+	if parallelism := value.Parallelism; parallelism != nil {
+		d, o := parallelism.Decision, parallelism.Demand
+		if o.Paths < 0 || o.OptionalPaths < 0 {
+			return appobs.NativeConnectivityObserved{}, appobs.EventContractError{Field: "parallelism", Rule: "nonnegative_counts"}
+		}
+		spec.Kind, spec.At = "parallelism", parallelism.At
+		spec.Parallelism = &appobs.NativeParallelismFacts{Action: string(d.Action), Reason: d.Reason,
+			NetworkWaitingBytes: o.NetworkWaitingBytes, InFlightBytes: o.InFlightBytes, RemainingBytes: o.RemainingBytes, RemainingKnown: o.RemainingKnown,
+			Paths: uint64(o.Paths), OptionalPaths: uint64(o.OptionalPaths), QueuedBytes: o.QueuedBytes, UnfinishedBytes: o.UnfinishedBytes, CapacityWaitingBytes: o.CapacityWaitingBytes,
+			UsefulRate: d.UsefulRate, OutputRate: d.OutputRate, BaselineUsefulRate: d.BaselineUsefulRate, BaselineOutputRate: d.BaselineOutputRate}
+	}
 	if admission := value.Admission; admission != nil {
 		if admission.Active < 0 || admission.Queued < 0 {
 			return appobs.NativeConnectivityObserved{}, appobs.EventContractError{Field: "admission", Rule: "nonnegative_counts"}
 		}
 		spec.Kind = "admission_" + string(admission.Kind)
 		spec.At = admission.At
-		spec.Admission = &appobs.NativeAdmissionFacts{Wait: admission.Wait, Active: uint64(admission.Active), Queued: uint64(admission.Queued), StartsRemaining: admission.StartsRemaining, STUNRemaining: admission.STUNRemaining, ActiveTimeRemaining: admission.ActiveTimeRemaining}
+		spec.Admission = &appobs.NativeAdmissionFacts{Purpose: admission.Purpose.String(), Wait: admission.Wait, Active: uint64(admission.Active), Queued: uint64(admission.Queued), StartsRemaining: admission.StartsRemaining, STUNRemaining: admission.STUNRemaining, ActiveTimeRemaining: admission.ActiveTimeRemaining}
 		if capacity := admission.SocketCapacity; capacity != nil {
 			spec.Admission.SocketCapacity = appobs.NativeSocketCapacityFacts{Used: uint64(capacity.Used), Reserved: uint64(capacity.Reserved), Requested: uint64(capacity.Requested), Limit: uint64(capacity.Limit)}
 		}

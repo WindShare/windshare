@@ -1,6 +1,14 @@
 # WebRTC Throughput Improvement
 
-2026-10-23
+2026-10-24
+
+## Implementation
+
+Implemented shared Engine receive/send capacity, pre-dispatch response reservations, native shared block allocation, and demand-driven independent PeerSet paths. Initial connectivity and recovery retain capacity priority; optional paths use aggregate authenticated/output progress and retire without discarding verified data. Migrated block finals retain their authenticated carrier so accepted-but-lost fragments can be reassigned after exact-operation retirement. Browser canonical CBOR validation skips opaque payload bytes without re-encoding them.
+
+The ordinary validation gates pass. [Workflow evidence and reproduction](../../testdata/connectivity/webrtc/adaptive-20261023/README.md) record frozen builds, paired LAN measurements, public direct/TURN attempts, failure recovery, and limitations.
+
+[Follow-up bottleneck research](../../testdata/connectivity/webrtc/bottleneck-20261024/README.md) completed 38 transfers and retained one invalid control. With 1 GiB files, automatic operation has a 28.84 MB/s overall median and 30.29 MB/s fixed-middle median; three fixed PCs reach 33.31 / 33.49 MB/s. Automatic results remain variable. A three-second trial can retire an under-sampled path before the allocator's five-second retry, and successful trials still impose 15 seconds of growth cooldown. Constant-only experiments did not reliably resolve this. Next, make trial readiness depend on actual per-path work and settlement, with separate success/failure timing. Native wall-time profiles also localize most single-PC send-loop time to synchronous UDP submission. No diagnostic overlay is adopted; 40 MB/s and stable default-policy 30 MB/s remain unestablished.
 
 ## Rationale
 

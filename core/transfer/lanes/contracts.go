@@ -13,7 +13,6 @@ import (
 
 const (
 	MaxLogicalLanes     = 16
-	DefaultRaceWidth    = 1
 	MaxDemandAttempts   = MaxLogicalLanes
 	maximumLaneFailures = 1_000
 )
@@ -44,6 +43,17 @@ type BlockSource interface {
 	FetchBlock(context.Context, Demand, func(uint64)) (records.BlockRecord, error)
 }
 
+// BlockCapacitySource reserves response storage before any request is sent.
+// A source without storage (for example, an in-memory source) needs no claim.
+type BlockCapacitySource interface {
+	TryReserveBlock(Demand) (BlockReservation, <-chan struct{}, error)
+}
+
+type BlockReservation struct {
+	Source  BlockSource
+	Release func()
+}
+
 // AttemptSuperseded proves that the demand owner canceled a redundant
 // attempt after selecting an authenticated winner. Plain cancellation, including
 // a parent failure, cannot supply this evidence to a lane's terminal diagnostics.
@@ -54,8 +64,8 @@ func AttemptSuperseded(ctx context.Context) bool {
 type Config struct {
 	ContentRoutePolicy            ContentRoutePolicy
 	ProtocolSessionID             protocolsession.ProtocolSessionID
-	RaceWidth                     int
 	Now                           func() time.Time
+	After                         func(time.Duration) <-chan time.Time
 	SettlementObservationCapacity SettlementObservationCapacity
 }
 
@@ -71,6 +81,24 @@ type Request struct {
 	Demand   Demand
 	Validate func(records.BlockRecord) error
 	Claim    CapacityClaim
+	Order    func() WorkOrder
+	Ready    func() CapacityReadiness
+}
+
+type WorkPriority uint8
+
+const (
+	Download WorkPriority = iota
+	Preview
+	Prefetch
+)
+
+// Distance follows the consumer's output frontier; LastServed orders independent
+// consumers fairly without reserving a fixed share of traffic for any of them.
+type WorkOrder struct {
+	Priority   WorkPriority
+	Distance   uint64
+	LastServed uint64
 }
 
 // Block retains the admitted route of the selected authenticated result.

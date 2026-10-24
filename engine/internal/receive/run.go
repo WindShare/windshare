@@ -21,6 +21,8 @@ const getProgressInterval = 500 * time.Millisecond
 func Run(ctx context.Context, request Request, deps Dependencies) (completed task.Completion[Result]) {
 	deps = deps.normalized()
 	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: request.Output, control: deps.Control, clock: deps.Clock}
+	a.receiveCapacity = deps.Capacity
+	a.connectivityCapacity = deps.Connectivity
 	input := getRequest{outDir: request.Destination, only: append([]string(nil), request.Only...), link: request.Capability, connectivity: request.Connectivity, waitTimeout: request.WaitTimeout}
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)

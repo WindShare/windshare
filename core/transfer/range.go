@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
@@ -230,11 +231,12 @@ func (b *BlockBroker) ReadRange(
 	stopLifecycle := context.AfterFunc(b.lifecycle, cancel)
 	defer func() { stopLifecycle(); cancel() }()
 	results := make(chan rangeBlockResult, b.maxConcurrentBlocks)
-	var nextAdmission atomic.Uint64
-	nextAdmission.Store(first)
+	var admission rangeAdmission
+	admission.next.Store(first)
+	admission.frontier.Store(first)
 	launch := func(index uint64) {
 		go func() {
-			consumer := b.rangeConsumer(index, &nextAdmission)
+			consumer := b.rangeConsumer(index, &admission)
 			block, err := b.getBlock(readContext, leaseID, descriptor, index, consumer)
 			results <- rangeBlockResult{index: index, block: block, err: err}
 		}()
@@ -274,6 +276,7 @@ func (b *BlockBroker) ReadRange(
 			block.close()
 			delete(pending, nextWrite)
 			nextWrite++
+			admission.frontier.Store(nextWrite)
 			if nextLaunch <= last {
 				launch(nextLaunch)
 				nextLaunch++
@@ -287,13 +290,28 @@ func (b *BlockBroker) ReadRange(
 	return nil
 }
 
-func (b *BlockBroker) rangeConsumer(index uint64, next *atomic.Uint64) *blockConsumer {
+type rangeAdmission struct {
+	next       atomic.Uint64
+	frontier   atomic.Uint64
+	lastServed atomic.Uint64
+}
+
+func (b *BlockBroker) rangeConsumer(index uint64, admission *rangeAdmission) *blockConsumer {
 	var admitted atomic.Bool
 	return &blockConsumer{
-		ready: func() bool { return admitted.Load() || index == next.Load() },
+		ready: func() bool { return admitted.Load() || index == admission.next.Load() },
+		order: func() transferlanes.WorkOrder {
+			frontier := admission.frontier.Load()
+			var distance uint64
+			if index > frontier {
+				distance = index - frontier
+			}
+			return transferlanes.WorkOrder{Distance: distance, LastServed: admission.lastServed.Load()}
+		},
+		served: admission.lastServed.Store,
 		admitted: func() {
 			if admitted.CompareAndSwap(false, true) {
-				next.Add(1)
+				admission.next.Add(1)
 				b.process.Wake()
 			}
 		},
@@ -425,6 +443,11 @@ func (r *jobRun) transferRequestedRange(
 		return false, r.settleFailedFile(
 			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0, progress,
 		)
+	}
+	// Authentication fills a bounded range buffer; only the materializer's
+	// acceptance measures consumer progress for connection exploration.
+	if observer, ok := r.job.blocks.(interface{ RecordOutput(uint64) }); ok {
+		observer.RecordOutput(requested.Length())
 	}
 	if !progress.beginPending(requested) {
 		return false, r.settleFailedFile(

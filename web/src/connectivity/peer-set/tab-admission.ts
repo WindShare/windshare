@@ -20,6 +20,7 @@ export class PeerTabCapacityTimeoutError extends DOMException {
   constructor() { super('Tab peer capacity was unavailable within the attempt start window', 'TimeoutError') }
 }
 interface WaitingAttempt {
+  readonly purpose: import('../v2-signaling-codec').ConnectionPurpose
   readonly route: 'direct' | 'turn'
   readonly receiver: object
   readonly endpoints: number
@@ -56,7 +57,7 @@ export class PeerTabAdmission {
     this.#endpoints = this.#policy.stunEndpointsPerInterval
   }
 
-  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct'): Promise<PeerTabAdmissionPermit> {
+  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct', purpose: import('../v2-signaling-codec').ConnectionPurpose = 'initial'): Promise<PeerTabAdmissionPermit> {
     signal.throwIfAborted()
     if (!Number.isInteger(endpoints) || endpoints < 0 || endpoints > 2 ||
       !Number.isFinite(waitMilliseconds) || waitMilliseconds < 0) {
@@ -65,7 +66,7 @@ export class PeerTabAdmission {
     if (this.#queued >= this.#policy.queuedAttempts) return Promise.reject(capacityTimeout())
     return new Promise((resolve, reject) => {
       const pending: WaitingAttempt = {
-        receiver, endpoints, signal, route, expiresAt: this.#clock.now() + waitMilliseconds,
+        receiver, endpoints, signal, route, purpose, expiresAt: this.#clock.now() + waitMilliseconds,
         resolve, reject, abort: () => {
           this.#remove(pending)
           reject(signal.reason)
@@ -113,6 +114,7 @@ export class PeerTabAdmission {
       const receiver = this.#nextReceiver()
       const preferred = this.#receivers.get(receiver)!
       const pending = [...preferred, ...[...this.#receivers.values()].flat().filter((entry) => entry.receiver !== receiver)]
+        .sort((a, b) => Number(a.purpose === 'throughput') - Number(b.purpose === 'throughput'))
         .find((entry) => this.#refillDelay(entry) <= 0)
       if (pending === undefined) break
       if (pending.expiresAt < now) {
@@ -154,7 +156,7 @@ export class PeerTabAdmission {
     }).catch(() => undefined)
   }
   #refillDelay(pending: WaitingAttempt): number {
-    const reserve = pending.route === 'turn' ? 1 : 0
+    const reserve = pending.route === 'turn' || pending.purpose === 'throughput' ? 1 : 0
     if (this.#active >= this.#policy.concurrentAttempts - reserve) return Number.POSITIVE_INFINITY
     return Math.max((1 + reserve - this.#starts) * this.#policy.intervalMilliseconds / this.#policy.startsPerInterval,
       (pending.endpoints - this.#endpoints) * this.#policy.intervalMilliseconds / this.#policy.stunEndpointsPerInterval, 0)

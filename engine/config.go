@@ -48,6 +48,7 @@ type Config struct {
 	RevisionCapacity    revisioncapacity.ProcessConfig
 	CatalogLimits       catalog.BudgetLimits
 	CacheBytes          uint64
+	ReceiveCapacity     liveshare.ReceiveCapacityLimits
 	Share               ShareDependencies
 	Receive             ReceiveDependencies
 }

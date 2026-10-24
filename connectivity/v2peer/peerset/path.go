@@ -3,6 +3,7 @@ package peerset
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"io"
 	"time"
@@ -111,7 +112,7 @@ func (p *Path) nextWave(wave *recoveryWave) *Result {
 }
 func (p *Path) awaitMappingOpportunity(wave recoveryWave) bool {
 	now := p.owner.config.Clock.Now()
-	if wave.attempts == 0 && p.deferred == nil && p.config.Native != nil && p.currentDemand() == ContentDemand {
+	if p.config.Purpose != v2signal.ThroughputExploration && wave.attempts == 0 && p.deferred == nil && p.config.Native != nil && p.currentDemand() == ContentDemand {
 		p.deferred = p.budget().reserveDeferred(now)
 	}
 	if p.deferred == nil || wave.attempts != AttemptsPerWave-1 || p.mappingReady() {
@@ -128,15 +129,9 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	if !p.awaitMappingOpportunity(*wave) {
 		return nil, &Result{Stopped: true}
 	}
-	release := func() {}
-	// Native preparation owns the single bounded application queue. Custom providers
-	// retain their injectable receiver capacity without adding a hidden native queue.
-	if p.config.Native == nil {
-		var err error
-		release, err = p.owner.config.Capacity.acquire(p.ctx)
-		if err != nil {
-			return nil, &Result{Stopped: true}
-		}
+	release, unavailable := p.acquireProviderCapacity()
+	if unavailable != nil {
+		return nil, unavailable
 	}
 	now := p.owner.config.Clock.Now()
 	if wave.opportunities == 0 {
@@ -167,6 +162,28 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	}
 	return p.prepareProvider(wave, binding, refund, release), nil
 }
+func (p *Path) acquireProviderCapacity() (func(), *Result) {
+	release := func() {}
+	// Native preparation owns the single bounded application queue. Custom providers
+	// retain their injectable receiver capacity without adding a hidden native queue.
+	if p.config.Native != nil {
+		return release, nil
+	}
+	var err error
+	if p.config.Purpose == v2signal.ThroughputExploration {
+		release = p.owner.config.Capacity.tryExplore()
+		if release == nil {
+			return nil, &Result{Scope: protocolsession.PeerFailureResourceDeferred, Cause: nativepeer.ErrAdmission}
+		}
+	} else {
+		release, err = p.owner.config.Capacity.acquire(p.ctx)
+	}
+	if err != nil {
+		return nil, &Result{Stopped: true}
+	}
+	return release, nil
+}
+
 func (p *Path) reserveAttemptBudget(attempts int) (func(time.Duration), time.Duration) {
 	ready := p.consumeMapping()
 	if p.deferred != nil && (ready || attempts == AttemptsPerWave-1) {
@@ -188,7 +205,11 @@ func (p *Path) freshBinding() (v2signal.Binding, error) {
 	if err != nil {
 		return v2signal.Binding{}, err
 	}
-	binding := v2signal.Binding{PeerSlot: ordinal.Slot, PeerPathID: p.key.path, AttemptSequence: ordinal.Sequence}
+	purpose := p.config.Purpose
+	if purpose == v2signal.InitialConnectivity && ordinal.Sequence > 1 {
+		purpose = v2signal.Recovery
+	}
+	binding := v2signal.Binding{Purpose: purpose, PeerSlot: ordinal.Slot, PeerPathID: p.key.path, AttemptSequence: ordinal.Sequence}
 	p.owner.mu.Lock()
 	_, err = io.ReadFull(p.owner.config.Random, binding.AttemptID[:])
 	p.owner.mu.Unlock()
@@ -199,6 +220,9 @@ func (p *Path) freshBinding() (v2signal.Binding, error) {
 }
 func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *Result {
 	p.setResourceActive(p.deferred != nil)
+	if p.config.Purpose == v2signal.ThroughputExploration {
+		return &result
+	}
 	if p.currentDemand() == BrowseDemand && p.ctx.Err() == nil && result.Scope != protocolsession.PeerFailureSessionTerminal && result.Scope != protocolsession.PeerFailurePathTerminal {
 		if !p.awaitContentDemand() {
 			return &Result{Stopped: true}

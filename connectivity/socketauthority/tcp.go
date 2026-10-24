@@ -102,7 +102,7 @@ func (l *Lease) PrepareTCP(includeIPv6 bool) error {
 			needed = append(needed, address)
 		}
 	}
-	if a.socketCount+a.reservedCount+len(needed) > a.config.Capacity {
+	if a.socketCount+a.reservedCount+len(needed)+a.essentialReserveLocked() > a.config.Capacity {
 		return a.capacityLocked(len(needed))
 	}
 	allocated := &TCPMux{}

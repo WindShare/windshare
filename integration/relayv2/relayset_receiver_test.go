@@ -25,7 +25,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 	var primaryDials, secondaryDials atomic.Int32
 	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
 		Clock:    &relaysetClock{now: time.Unix(1, 0)},
-		Receiver: liveshare.ReceiverConfig{Capability: share.Capability()},
+		Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: share.Capability()},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == urls[0] {
 				primaryDials.Add(1)
@@ -185,7 +185,7 @@ func TestReceiverInitiallyFailedRelayRecoversWithoutReplacingHealthyGeneration(t
 		t.Fatal(err)
 	}
 	set, err := recovery.Join(ctx, relayset.ReceiverConfig{
-		Receiver: liveshare.ReceiverConfig{Capability: share.Capability()},
+		Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: share.Capability()},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == urls[1] {
 				if secondaryDials.Add(1) == 1 {
@@ -248,7 +248,7 @@ func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := relayset.ReceiverConfig{
-		Receiver: liveshare.ReceiverConfig{Capability: capability},
+		Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == stoppedEndpoint {
 				stoppedCalls.Add(1)

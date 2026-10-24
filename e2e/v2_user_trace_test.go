@@ -276,6 +276,11 @@ func validateV4TraceValue(t *testing.T, raw json.RawMessage, field v4TraceFieldS
 		if err := json.Unmarshal(raw, &value); err != nil || value < 0 || value > 1 {
 			t.Fatalf("%s is not a fraction in [0,1]: %s", fieldContext, raw)
 		}
+	case v4TraceRate:
+		var value float64
+		if err := json.Unmarshal(raw, &value); err != nil || value < 0 {
+			t.Fatalf("%s is not a nonnegative finite rate: %s", fieldContext, raw)
+		}
 	case v4TraceBool:
 		var value bool
 		if err := json.Unmarshal(raw, &value); err != nil {

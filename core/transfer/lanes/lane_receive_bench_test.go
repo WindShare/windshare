@@ -37,7 +37,6 @@ func BenchmarkLaneFragmentReceipt(b *testing.B) {
 	descriptor, blocks := benchmarkTransferData(b, receiptBenchmarkBlockBytes, 1)
 	lanes, err := New(Config{
 		ProtocolSessionID: benchmarkTransferIdentity[protocolsession.ProtocolSessionID](113),
-		RaceWidth:         1,
 	})
 	if err != nil {
 		b.Fatal(err)

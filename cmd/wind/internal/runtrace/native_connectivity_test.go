@@ -129,6 +129,37 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 	}
 }
 
+func TestParallelismTraceRetainsExactBacklogAndAggregateRates(t *testing.T) {
+	event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{
+		Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "parallelism", State: "unknown",
+		Parallelism: &appobs.NativeParallelismFacts{Action: "retire", Reason: "no_gain", Paths: 2, OptionalPaths: 1,
+			QueuedBytes: 9007199254740993, UnfinishedBytes: 100, CapacityWaitingBytes: 50,
+			UsefulRate: 12.5, OutputRate: 11.25, BaselineUsefulRate: 12, BaselineOutputRate: 11},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(record.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var decision map[string]any
+	if err := json.Unmarshal(payload["parallelism"], &decision); err != nil {
+		t.Fatal(err)
+	}
+	if decision["queued_bytes"] != "9007199254740993" || decision["useful_rate"] != 12.5 || decision["output_rate"] != 11.25 || decision["reason"] != "no_gain" {
+		t.Fatalf("parallelism trace lost exact backlog or rates: %s", raw)
+	}
+}
+
 func TestNativeTURNTraceSeparatesSocketCountersFromUsefulBytes(t *testing.T) {
 	event, err := clievent.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{
 		Workflow: appobs.WorkflowShare, Side: "sender", Kind: "provider_closed", State: "unknown",

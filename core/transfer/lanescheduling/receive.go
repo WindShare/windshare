@@ -31,6 +31,8 @@ type ReceivePermit struct {
 	closed    bool
 }
 
+func (w *ReceiveWindow) UnfinishedBytes() uint64 { return w.remaining }
+
 func (w *ReceiveWindow) Available() bool {
 	ahead := w.rate * (w.response + receiveAhead).Seconds()
 	return w.active == 0 || (w.rate > 0 && float64(w.remaining) <= ahead)

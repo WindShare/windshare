@@ -125,6 +125,16 @@ func (c *Capacity) acquire(ctx context.Context) (func(), error) {
 	var once sync.Once
 	return func() { once.Do(func() { c.mu.Lock(); c.active--; c.dispatchLocked(); c.mu.Unlock() }) }, nil
 }
+
+func (c *Capacity) tryExplore() func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.queue) > 0 || c.active >= c.limit-1 {
+		return nil
+	}
+	c.active++
+	return sync.OnceFunc(func() { c.mu.Lock(); c.active--; c.dispatchLocked(); c.mu.Unlock() })
+}
 func (c *Capacity) dispatchLocked() {
 	for c.active < c.limit && len(c.queue) > 0 {
 		waiter := c.queue[0]

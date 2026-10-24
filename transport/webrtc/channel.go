@@ -66,6 +66,7 @@ type inboundEvent struct {
 }
 
 type channelRuntime struct {
+	sendCapacity *SendCapacity
 	// Tests inject a gate to establish callback/worker schedules without sleeps.
 	// Production leaves it nil so dispatch begins immediately.
 	inboundGate              <-chan struct{}
@@ -77,9 +78,10 @@ type channelRuntime struct {
 // Channel is the sole owner of the callbacks installed on its Pion DataChannel.
 // A wrapped DataChannel must not be sent through directly after construction.
 type Channel struct {
-	dc        dataChannel
-	flow      flowControlProfile
-	lifecycle *channelLifecycle
+	sendCapacity *SendCapacity
+	dc           dataChannel
+	flow         flowControlProfile
+	lifecycle    *channelLifecycle
 
 	callbackMu sync.Mutex
 	recv       chan framechannel.Frame
@@ -112,6 +114,7 @@ func NewChannelWithOptions(dc *pion.DataChannel, options ChannelOptions) (*Chann
 		return nil, ErrNilDataChannel
 	}
 	return newChannelWithRuntime(pionDataChannel{DataChannel: dc}, defaultFlowControl, channelRuntime{
+		sendCapacity:                 options.SendCapacity,
 		lifecycleObservationCapacity: options.LifecycleObservationCapacity,
 	})
 }
@@ -143,6 +146,7 @@ func newChannelWithRuntime(dc dataChannel, flow flowControlProfile, runtime chan
 		lifecycle.configureTrace(nextLifecycleChannelID.Add(1), traceSource)
 	}
 	c := &Channel{
+		sendCapacity:             runtime.sendCapacity,
 		dc:                       dc,
 		flow:                     flow,
 		lifecycle:                lifecycle,
@@ -158,6 +162,7 @@ func newChannelWithRuntime(dc dataChannel, flow flowControlProfile, runtime chan
 		lifecycleTraces:          lifecycleTraces,
 	}
 	c.sendTurn <- struct{}{}
+	c.sendCapacity.register(c)
 
 	go c.runInbound()
 	go c.runFinalizer()
@@ -207,6 +212,10 @@ func (c *Channel) Err() error {
 }
 
 func (c *Channel) Send(ctx context.Context, frame framechannel.Frame) error {
+	return c.send(ctx, frame, false)
+}
+
+func (c *Channel) send(ctx context.Context, frame framechannel.Frame, control bool) error {
 	if err := validateOutboundFrame(frame); err != nil {
 		return framechannel.RejectSend(err)
 	}
@@ -223,6 +232,11 @@ func (c *Channel) Send(ctx context.Context, frame framechannel.Frame) error {
 	if err := c.waitForSendAdmissionCapacity(admission); err != nil {
 		return err
 	}
+	release, err := c.sendCapacity.acquire(c, admission, uint64(len(snapshot)), control)
+	if err != nil {
+		return err
+	}
+	defer release()
 	attempted, err := c.lifecycle.transmitSendAdmission(
 		admission,
 		func() error { return c.dc.Send(snapshot) },
@@ -286,6 +300,19 @@ func (c *Channel) sendLocalTerminal(ctx context.Context, frame framechannel.Fram
 		return err
 	}
 	defer c.releaseSendTurn()
+	stop, cancel := context.WithCancel(ctx)
+	end := context.AfterFunc(stop, c.sendCapacity.wake)
+	defer func() { end(); cancel() }()
+	release, err := c.sendCapacity.reserve(stop.Done(), func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return c.lifecycle.requireSendState(terminalLocalPending)
+	}, uint64(len(frame)+len(terminalIntentControl)), true)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err := c.lifecycle.requireSendState(terminalLocalPending); err != nil {
 		return err
@@ -649,6 +676,7 @@ func (c *Channel) requestPhysicalClose() {
 	c.physicalOnce.Do(func() {
 		go func() {
 			err := c.dc.Close()
+			c.sendCapacity.remove(c)
 			c.physicalMu.Lock()
 			c.physicalErr = err
 			c.physicalMu.Unlock()

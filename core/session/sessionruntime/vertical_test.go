@@ -559,10 +559,15 @@ func (fixture *verticalFixture) registerCapacitySession(
 
 func newVerticalFixture(t *testing.T) *verticalFixture {
 	t.Helper()
+	return newVerticalFixtureWithContent(t, bytes.Repeat([]byte("windshare-v2-"), 193), catalog.MinChunkSize)
+}
+
+func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) *verticalFixture {
+	t.Helper()
 	fixture := &verticalFixture{
 		share: id16[catalog.ShareInstance](1), syntheticRoot: id16[catalog.DirectoryID](2),
 		directoryID: id16[catalog.DirectoryID](3), fileID: id16[catalog.FileID](4),
-		fileData:    bytes.Repeat([]byte("windshare-v2-"), 193),
+		fileData:    data,
 		scanStarted: make(chan struct{}), scanGate: make(chan struct{}),
 	}
 	fixture.terminal = &verticalTerminalConnectivity{}
@@ -627,7 +632,7 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 	}
 	descriptor, err := catalog.NewShareDescriptor(catalog.DescriptorSpec{
 		WireVersion: catalog.WireVersionV2, Suite: catalog.SuiteV2, ShareInstance: fixture.share,
-		SyntheticRoot: fixture.syntheticRoot, RootCommit: committedRoot, ChunkSize: catalog.MinChunkSize,
+		SyntheticRoot: fixture.syntheticRoot, RootCommit: committedRoot, ChunkSize: chunkSize,
 		Capabilities:    catalog.CapabilityCatalog | catalog.CapabilityRanges,
 		SenderPublicKey: publicKey, CreatedAtSeconds: 1, PathPolicy: catalog.PathPolicyV1,
 	})
@@ -684,7 +689,7 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 	recordOpener, _ := records.NewOpener(records.OpenerConfig{
 		ShareInstance: fixture.share, Keys: keyTree, Sender: sender,
 	})
-	geometry, _ := content.NewFileGeometry(uint64(len(fixture.fileData)), catalog.MinChunkSize)
+	geometry, _ := content.NewFileGeometry(uint64(len(fixture.fileData)), chunkSize)
 	revisionDescriptor, _ := content.NewFileRevisionDescriptor(
 		fixture.share, fixture.fileID, id16[content.FileRevision](8), geometry, catalog.ModifiedTime{},
 	)

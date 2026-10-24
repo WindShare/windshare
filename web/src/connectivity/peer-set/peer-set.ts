@@ -9,6 +9,18 @@ export class V2PeerSet {
   readonly #retiring = new Set<Promise<void>>()
   readonly #slots = new Map<string, PeerSlotPool>()
 
+  get size(): number { return this.#paths.size + this.#retiring.size }
+
+  get hasPendingPath(): boolean {
+    return [...this.#paths.values()].some(path =>
+      path.state.kind === 'attempting' || path.state.kind === 'waiting-retry')
+  }
+
+  get hasEligiblePath(): boolean {
+    return [...this.#paths.values()].some(path =>
+      path.state.kind === 'admitted' || path.state.kind === 'attempting' || path.state.kind === 'waiting-retry')
+  }
+
   path(identity: V2PeerPathIdentity): V2PeerRecoverySupervisor | undefined {
     return this.#paths.get(encodeBase64Url(identity.copyBytes()))
   }

@@ -352,6 +352,20 @@ function validateProviderFact(input: unknown): void {
 
 export function validatePeerRecovery(payload: UnknownRecord): void {
   switch (payload.stage) {
+    case 'parallelism':
+      exactKeys(payload, ['stage', 'action', 'reason', 'paths', 'queued_bytes', 'unfinished_bytes', 'capacity_waiting_bytes',
+        'network_waiting_bytes', 'in_flight_bytes', 'remaining_bytes', 'remaining_known',
+        'useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate'], [], 'peer parallelism')
+      member(payload.action, ['explore', 'keep', 'retire'], 'parallelism action')
+      member(payload.reason, ['sustained-network-demand', 'aggregate-progress-improved', 'no-aggregate-gain', 'no-network-demand', 'consumer-pressure'], 'parallelism reason')
+      uint32(payload.paths, 'peer paths')
+      decimalFields(payload, ['queued_bytes', 'unfinished_bytes', 'capacity_waiting_bytes', 'network_waiting_bytes', 'in_flight_bytes', 'remaining_bytes'], 'parallelism bytes')
+      booleanValue(payload.remaining_known, 'remaining work knowledge')
+      for (const field of ['useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate']) {
+        const value = payload[field]
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new TypeError('Invalid throughput rate')
+      }
+      return
     case 'wave_started':
     case 'wave_rearmed':
       exactKeys(payload, ['stage', 'wave_ordinal', 'trigger'], [], 'peer wave payload')

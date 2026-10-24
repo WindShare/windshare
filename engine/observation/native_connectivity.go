@@ -31,6 +31,16 @@ type NativeConnectivitySpec struct {
 	Admission         *NativeAdmissionFacts
 	Socket            *NativeSocketFacts
 	TURN              *NativeTURNFacts
+	Parallelism       *NativeParallelismFacts
+}
+
+type NativeParallelismFacts struct {
+	NetworkWaitingBytes, InFlightBytes, RemainingBytes             uint64
+	RemainingKnown                                                 bool
+	Action, Reason                                                 string
+	Paths, OptionalPaths                                           uint64
+	QueuedBytes, UnfinishedBytes, CapacityWaitingBytes             uint64
+	UsefulRate, OutputRate, BaselineUsefulRate, BaselineOutputRate float64
 }
 
 const NativeProviderDiagnosticMessageLimit = 4096
@@ -106,6 +116,7 @@ type NativeSocketFacts struct {
 }
 
 type NativeAdmissionFacts struct {
+	Purpose                        string
 	Wait                           time.Duration
 	Active, Queued                 uint64
 	StartsRemaining, STUNRemaining float64
@@ -177,6 +188,10 @@ func NewNativeConnectivityObserved(spec NativeConnectivitySpec) (NativeConnectiv
 		copied := *spec.Socket
 		spec.Socket = &copied
 	}
+	if spec.Parallelism != nil {
+		copied := *spec.Parallelism
+		spec.Parallelism = &copied
+	}
 	spec.TURN = spec.TURN.clone()
 	return NativeConnectivityObserved{spec: spec}, nil
 }
@@ -216,6 +231,10 @@ func (value NativeConnectivityObserved) Facts() NativeConnectivitySpec {
 	if spec.Socket != nil {
 		copied := *spec.Socket
 		spec.Socket = &copied
+	}
+	if spec.Parallelism != nil {
+		copied := *spec.Parallelism
+		spec.Parallelism = &copied
 	}
 	spec.TURN = spec.TURN.clone()
 	return spec
@@ -284,6 +303,15 @@ func validateNativeConnectivity(spec NativeConnectivitySpec) error {
 }
 
 func validateNativeFactKinds(spec NativeConnectivitySpec) error {
+	if (spec.Kind == "parallelism") != (spec.Parallelism != nil) {
+		return EventContractError{Field: "parallelism", Rule: "kind_matches_facts"}
+	}
+	if p := spec.Parallelism; p != nil {
+		if !slices.Contains([]string{"explore", "keep", "retire"}, p.Action) || len(p.Reason) > 64 ||
+			!nativeAllowance(p.UsefulRate) || !nativeAllowance(p.OutputRate) || !nativeAllowance(p.BaselineUsefulRate) || !nativeAllowance(p.BaselineOutputRate) {
+			return EventContractError{Field: "parallelism", Rule: "valid_decision_rates"}
+		}
+	}
 	if (spec.Kind == "candidate") != (spec.Candidate != nil) || (spec.Kind == "selected_pair") != (spec.Pair != nil) {
 		return EventContractError{Field: "candidate_pair", Rule: "kind_matches_facts"}
 	}
@@ -315,7 +343,7 @@ func validNativeProviderDiagnostic(spec NativeConnectivitySpec) bool {
 }
 
 func validNativeConnectivityKind(spec NativeConnectivitySpec) bool {
-	if spec.Kind == "provider_diagnostic" {
+	if spec.Kind == "provider_diagnostic" || spec.Kind == "parallelism" {
 		return true
 	}
 	if spec.TURN != nil && spec.TURN.Cleanup.Valid() && spec.Kind == spec.TURN.Cleanup.EventKind() {

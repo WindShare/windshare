@@ -72,6 +72,7 @@ type PeerPathControlSession interface {
 }
 
 type PathConfig struct {
+	Purpose       v2signal.ConnectionPurpose
 	Budget        *Budget
 	ICE           iceconfig.Connection
 	Native        *nativepeer.NativePeerConnectivity
@@ -96,6 +97,7 @@ type pathKey struct {
 	path    v2signal.PeerPathID
 }
 type PeerSet struct {
+	sequence  uint64
 	mu        sync.Mutex
 	config    Config
 	paths     map[pathKey]*Path
@@ -119,7 +121,7 @@ func New(config Config) (*PeerSet, error) {
 	return &PeerSet{config: config, paths: make(map[pathKey]*Path), prewarmed: make(map[protocolsession.ProtocolSessionID]bool), slots: make(map[protocolsession.ProtocolSessionID]*peerslot.Pool)}, nil
 }
 func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
-	if ctx == nil || (config.Start == nil && config.Prepare == nil) || config.Demand > ContentDemand {
+	if ctx == nil || (config.Start == nil && config.Prepare == nil) || config.Demand > ContentDemand || config.Purpose > v2signal.ThroughputExploration {
 		return nil, ErrConfig
 	}
 	s.mu.Lock()
@@ -153,7 +155,12 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 		s.prewarmed[config.SessionID] = true
 	}
 	child, cancel := context.WithCancel(ctx)
-	path := &Path{owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot,
+	if config.Purpose == v2signal.ThroughputExploration {
+		config.Budget = NewBudget(s.config.Clock.Now())
+		config.StopAfterWave = true
+	}
+	s.sequence++
+	path := &Path{sequence: s.sequence, owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot,
 		resourceChanges: make(chan struct{}, 1), demand: config.Demand, wake: make(chan struct{}, 1), done: make(chan struct{}), ready: make(chan struct{})}
 	s.paths[key] = path
 	go path.run()
@@ -161,6 +168,7 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 }
 
 type Path struct {
+	sequence                         uint64
 	networkGeneration                uint64
 	restartRequested, mappingPending bool
 	resourceActive                   bool

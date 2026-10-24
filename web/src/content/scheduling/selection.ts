@@ -19,7 +19,7 @@ export type ContentPriority = 'preview' | 'download' | 'prefetch'
 
 export interface ContentCapacity {
   readonly lastServed: () => number
-  readonly available: () => boolean
+  readonly readiness: () => 'ready' | 'network' | 'consumer'
   readonly acquire: () => (() => void) | undefined
 }
 
