@@ -1,6 +1,7 @@
 package throughput
 
 import (
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
@@ -86,14 +87,7 @@ func samePaths(a, b []PathIdentity) bool {
 		return false
 	}
 	for _, path := range a {
-		found := false
-		for _, other := range b {
-			if path == other {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(b, path) {
 			return false
 		}
 	}

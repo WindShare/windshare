@@ -18,7 +18,11 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
-func TestBlockReassignedWhenRetiredCarrierLosesAcceptedFragments(t *testing.T) {
+func TestBlockRecoveredWhenRetiredCarrierLosesAcceptedFragments(t *testing.T) {
+	synctest.Test(t, testBlockRecoveredWhenRetiredCarrierLosesAcceptedFragments)
+}
+
+func testBlockRecoveredWhenRetiredCarrierLosesAcceptedFragments(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
 	defer sender.Close()
@@ -54,10 +58,18 @@ func TestBlockReassignedWhenRetiredCarrierLosesAcceptedFragments(t *testing.T) {
 		t.Fatal("did not exercise accepted loss followed by carrier failure")
 	}
 	if !bytes.Equal(output, fixture.fileData) {
-		t.Fatal("reassignment changed authenticated output")
+		t.Fatal("recovery changed authenticated output")
 	}
-	if receiver.operations.ActiveCount() != 0 {
-		t.Fatal("retired block retained operation authority")
+	// Recovery may finish through a rescue before the losing RPC processes its
+	// cancellation. Check ownership after runnable cleanup settles, without
+	// advancing a timeout or closing the session to revoke leaked authority.
+	synctest.Wait()
+	receiver.rpc.mu.Lock()
+	calls := len(receiver.rpc.calls)
+	receiver.rpc.mu.Unlock()
+	active, records := receiver.operations.ActiveCount(), receiver.assembler.ActiveRecords()
+	if active != 0 || calls != 0 || records != 0 {
+		t.Fatalf("recovery retained operations=%d calls=%d records=%d", active, calls, records)
 	}
 }
 
