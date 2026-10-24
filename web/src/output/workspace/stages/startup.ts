@@ -1,6 +1,6 @@
 import { decodePreparationAdmissionAuthority } from '../receipts'
 import { RECEIVE_RECORD_RECEIPT } from '../records'
-import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../state'
+import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { WorkspaceStageRuntime } from './runtime'
 
 type ResumableStart = Extract<ReceiveLifecycleState, { kind: 'resumable-start' }>

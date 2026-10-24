@@ -47,7 +47,7 @@ import type { IndexedDbDirectZipJournalStorage } from './storage'
 
 function applyRecoveryCandidateDisposition(
   store: IDBObjectStore,
-  lifecycleKind: import('../../../workspace/state').ReceiveLifecycleState['kind'],
+  lifecycleKind: import('../../../../transfer/lifecycle/state').ReceiveLifecycleState['kind'],
   candidate: DirectZipPendingCandidateV1 | undefined,
 ): void {
   if (lifecycleKind === 'discarded' && candidate !== undefined) store.delete(candidate.id)

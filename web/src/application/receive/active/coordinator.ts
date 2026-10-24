@@ -5,12 +5,14 @@ import type {
   OutputFailureBindingLease,
 } from '../../../output/diagnostics'
 import { isTerminalLifecycleState } from '../../../output/workspace'
-import { TransferPauseRequestedError } from '../../../transfer/output-session'
+import { TransferPauseRequestedError } from '../../../transfer/output/session'
 import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
 import {
   materializeClassifiedTransferFailure,
-  type ClassifiedTransferFailure,
 } from '../../../transfer/job/failures'
+import {
+  type ClassifiedTransferFailure,
+} from '../../../transfer/failure/classification'
 import type { V2TransferAdmissionFailureAuthority } from '../../../transfer/job/admission-error'
 import {
   V2TransferAdmissionFailureError,
@@ -393,7 +395,7 @@ export class ActiveReceiveCoordinator {
         ? new ReceiveSourceInvalidatedError(result.abortReason)
         : result.abortReason)
     }
-    if (result.lifecycle.kind !== 'resumable-receive' || result.lifecycle.payloadKind !== 'opfs-zip' ||
+    if (result.lifecycle.kind !== 'resumable-receive' || result.lifecycle.payloadKind !== 'workspace-archive' ||
         result.worker.fileFailureCount === 0) return
     // Release after settlement so inventory can read durable file failures under its own authority.
     this.#onRetainedFileFailure?.()

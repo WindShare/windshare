@@ -5,7 +5,7 @@ import {
   createDirectZipRecoveryGateV1,
   decodeDirectZipRecoveryGateV1,
 } from '../../../src/output/direct-zip/journal/recovery-gate'
-import { canonicalRecord } from '../../../src/output/workspace/canonical'
+import { canonicalRecord } from '../../../src/transfer/encoding/canonical'
 import { reduceReceiveLifecycle } from '../../../src/output/workspace/lifecycle'
 import {
   RECEIVE_STATE_AUTHORIZATION_REQUIRED,
@@ -15,7 +15,7 @@ import {
   initialReceiveLifecycleState,
   isTerminalLifecycleState,
   type ReceiveLifecycleState,
-} from '../../../src/output/workspace/state'
+} from '../../../src/transfer/lifecycle/state'
 import {
   canonicalReceiveLifecycleStateBytes,
   decodeReceiveLifecycleState,

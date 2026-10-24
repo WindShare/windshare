@@ -1,4 +1,4 @@
-import { observePerformance, type PerformanceSummaryObservations } from '../diagnostics/performance-summary'
+import { observePerformance, type PerformanceSummaryObservations } from '../../diagnostics/performance/performance-summary'
 import {
   createMaterializationDirectoryAdmittedEntry,
   createMaterializationDirectoryFinalizedEntry,
@@ -16,7 +16,7 @@ import {
   newFileCheckpointV2,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
-import type { PerformanceFilePipelineObservation } from '../diagnostics/performance-runtime-observations'
+import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 import { snapshotMaterializationRootRelativePath, type MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import type {
   OpenedFileRevision,

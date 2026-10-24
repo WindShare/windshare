@@ -2,9 +2,9 @@ import {
   decideDirectZipMemberResumeV1, DirectZipEpochWriterV1, DirectZipWriterGateError,
   type DirectZipWriterObserver,
 } from '../../../output/direct-zip/writer'
-import type { DirectZipMemberRollbackAuthorityV1 } from '../../../transfer/direct-zip/output-session'
-import { DirectZipTransferDiagnosticsV1 } from '../../../transfer/direct-zip/diagnostics'
-import type { DirectZipWriterJournalPortV1 } from '../../../transfer/direct-zip/execution'
+import type { DirectZipMemberRollbackAuthorityV1 } from '../../../output/direct-zip/transfer/output-session'
+import { DirectZipTransferDiagnosticsV1 } from '../../../output/direct-zip/transfer/diagnostics'
+import type { DirectZipWriterJournalPortV1 } from '../../../output/direct-zip/transfer/execution'
 import type { DirectZipRuntimeFactsV1 } from '../../../output/direct-zip/session'
 import type { DirectZipCheckpointV1, DirectZipJournalRepository } from '../../../output/direct-zip/journal'
 import { createDirectZipRecoveryGateV1 } from '../../../output/direct-zip/journal'
@@ -15,10 +15,12 @@ import {
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
   type ReceiveLifecycleStatePayload,
-} from '../../../output/workspace/state'
+} from '../../../transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../../output/workspace/state-codec'
 import {
   createDirectZipExecutionV1,
+} from '../../../output/direct-zip/transfer/execution'
+import {
   type DirectZipIntent,
   type DirectZipPayloadProgressV1,
 } from '../../../transfer/direct-zip'
@@ -27,7 +29,7 @@ import {
   TransferPauseRequestedError,
   type DirectResumableZipExecution,
   type V2PlanExecutionAuthority,
-} from '../../../transfer/output-session'
+} from '../../../transfer/output/session'
 import type {
   V2BoundReceiveOperation,
   V2DirectZipProgressSnapshot,

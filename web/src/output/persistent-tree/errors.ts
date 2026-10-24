@@ -1,3 +1,10 @@
+import { OUTPUT_FAILURE, type OutputFailureSource } from '../../transfer/failure/output'
+import {
+  checkpointLineageFailure,
+  destinationCollisionFailure,
+  persistedSourceRevisionFailure,
+} from '../failure/semantics'
+
 export type PersistentOutputErrorKind =
   | 'authorization'
   | 'checkpoint-invalid'
@@ -51,7 +58,9 @@ export type CheckpointBlockDecision =
   | 'ownership-conflict'
   | 'invalid'
 
-export class CheckpointLineageDecisionError extends PersistentOutputError {
+export class CheckpointLineageDecisionError extends PersistentOutputError implements OutputFailureSource {
+  readonly [OUTPUT_FAILURE]: OutputFailureSource[typeof OUTPUT_FAILURE]
+
   readonly decision: CheckpointBlockDecision
 
   constructor(decision: CheckpointBlockDecision) {
@@ -60,6 +69,7 @@ export class CheckpointLineageDecisionError extends PersistentOutputError {
       'Authenticated local checkpoint evidence blocks this file lineage',
     )
     this.name = 'CheckpointLineageDecisionError'
+    this[OUTPUT_FAILURE] = checkpointLineageFailure(decision)
     this.decision = decision
   }
 }
@@ -72,14 +82,19 @@ function checkpointBlockKind(decision: CheckpointBlockDecision): PersistentOutpu
   }
 }
 
-export class DestinationCollisionError extends PersistentOutputError {
+export class DestinationCollisionError extends PersistentOutputError implements OutputFailureSource {
+  readonly [OUTPUT_FAILURE]: OutputFailureSource[typeof OUTPUT_FAILURE]
+
   constructor(options?: ErrorOptions) {
     super('collision', 'An existing unowned destination blocks this file', options)
     this.name = 'DestinationCollisionError'
+    this[OUTPUT_FAILURE] = destinationCollisionFailure()
   }
 }
 
-export class SourceRevisionChangedError extends PersistentOutputError {
+export class SourceRevisionChangedError extends PersistentOutputError implements OutputFailureSource {
+  readonly [OUTPUT_FAILURE]: OutputFailureSource[typeof OUTPUT_FAILURE]
+
   constructor(options?: ErrorOptions) {
     super(
       'source-revision-changed',
@@ -87,5 +102,6 @@ export class SourceRevisionChangedError extends PersistentOutputError {
       options,
     )
     this.name = 'SourceRevisionChangedError'
+    this[OUTPUT_FAILURE] = persistedSourceRevisionFailure()
   }
 }

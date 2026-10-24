@@ -13,7 +13,7 @@ import {
   canonicalText,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import type { MaterializedManifestV1 } from '../workspace/manifest'
 import {
   type ReceiveOperationHandleRecord,

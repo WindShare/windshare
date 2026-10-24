@@ -1,5 +1,5 @@
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../lifecycle/state'
 import {
   snapshotCanonicalModifiedTime,
   snapshotMaterializationPath,
@@ -26,7 +26,7 @@ import {
   type PortableExecution,
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
-} from '../output-session'
+} from '../output/session'
 
 const CATALOG_IDENTITY_BYTES = 16
 const MAXIMUM_EXACT_PREPARATION_ENTRIES = 1_000_000

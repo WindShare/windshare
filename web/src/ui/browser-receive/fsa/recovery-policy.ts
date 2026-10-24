@@ -1,6 +1,6 @@
 import type {
   PersistentExecutionRecoveryPolicy,
-} from '../../../transfer/settlement/persistent-execution'
+} from '../../../output/execution/persistent-execution'
 import type { PersistentPausedFileRecovery } from '../../../output/persistent-tree/contracts'
 
 /** Preserve/restart is chosen once at the operation pause boundary. */

@@ -13,7 +13,9 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { recordOutputException, type OutputFailureSinks } from '../../src/output/diagnostics'
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import type {
   CandidateMaterializationBinding,
   EnvironmentOffers,
@@ -37,7 +39,7 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,

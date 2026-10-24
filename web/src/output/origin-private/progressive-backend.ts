@@ -1,5 +1,5 @@
 import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
-import { canonicalDigest, canonicalFrame, canonicalIdentity, canonicalRecord } from '../workspace/canonical'
+import { canonicalDigest, canonicalFrame, canonicalIdentity, canonicalRecord } from '../../transfer/encoding/canonical'
 import { receiveOperationHandleRecord } from '../workspace/records'
 import { WORKSPACE_HANDLE_PACKAGE_OBJECT, type WorkspaceStageTraceListener } from '../workspace/stages'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'

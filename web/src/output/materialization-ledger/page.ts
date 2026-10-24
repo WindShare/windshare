@@ -1,4 +1,4 @@
-import { canonicalDigest, canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8, canonicalU64 } from '../workspace/canonical'
+import { canonicalDigest, canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8, canonicalU64 } from '../../transfer/encoding/canonical'
 import {
   canonicalMaterializationLedgerRootFact,
   checkedLedgerAdd,

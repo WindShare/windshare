@@ -20,7 +20,7 @@ import {
   type PortableExecutionLifecycleAuthority,
   type PortableExecutionRoutes,
 } from '../../src/output/portable/preparation'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
@@ -45,12 +45,12 @@ import {
   type PlanPauseRequest,
   type PortableExecution,
   type WorkspaceExecution,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
-import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
+import { createPersistentDirectTreeExecution } from '../../src/output/execution/persistent-execution'
 import {
   V2PlanRouteUnavailableError,
   createV2PlanExecutionAuthority,

@@ -1,4 +1,6 @@
-import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import type { ReceiveLifecycleState } from '../../output/workspace'
 
 export type CompatibleNameRepairActionMode =

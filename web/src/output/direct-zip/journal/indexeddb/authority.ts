@@ -3,9 +3,9 @@ import {
   INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE,
   INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE,
 } from '../../../browser/indexeddb-database'
-import { equalCanonicalBytes, snapshotIdentity } from '../../../workspace/canonical'
+import { equalCanonicalBytes, snapshotIdentity } from '../../../../transfer/encoding/canonical'
 import type { PersistedReceiveRecord } from '../../../workspace/records'
-import type { ReceiveLifecycleState } from '../../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../../transfer/lifecycle/state'
 import type {
   DirectZipBootstrapCandidateV1,
   DirectZipCandidateRetirementV1,

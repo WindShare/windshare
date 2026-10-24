@@ -1,8 +1,13 @@
+import { type TransferFileOutcomeEvidence } from './failure/file-outcome'
 import type { DirectoryId, FileId } from '../catalog/model'
 import { isFailureFact } from '../diagnostics/incident'
-import { compareFaults, isFault } from './fault'
-import { MATERIALIZATION_FAILURE_REASONS } from './job/contract'
-import type { ClassifiedTransferFailure } from './job/failures'
+import { compareFaults, isFault } from './failure/fault'
+import {
+  MATERIALIZATION_FAILURE_REASONS,
+} from './failure/materialization'
+import type {
+  ClassifiedTransferFailure,
+} from './failure/classification'
 
 export interface DirectoryTransferFailure {
   readonly kind: 'directory'
@@ -26,15 +31,6 @@ export type TransferFileOutcome =
   | 'owned-object-unknown'
   | 'destination-collision'
   | 'failed'
-
-export type TransferFileOutcomeEvidence =
-  | Readonly<{ readonly kind: 'authenticated-source-drift' }>
-  | Readonly<{
-      readonly kind: 'checkpoint-decision'
-      readonly decision: 'revision-conflict' | 'ownership-conflict' | 'invalid'
-    }>
-  | Readonly<{ readonly kind: 'occupied-unbound-destination' }>
-  | Readonly<{ readonly kind: 'residual-failure' }>
 
 export interface TransferFileOutcomeCounts {
   readonly sourceDriftFiles: number

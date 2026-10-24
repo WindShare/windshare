@@ -1,4 +1,4 @@
-import { BoundaryFaultError } from '../../transfer/fault'
+import { BoundaryFaultError } from '../../transfer/failure/fault'
 import type { BrowserReceiveOperationLease } from '../../output/browser/session-lease'
 import {
   emitOutputTrace,
@@ -18,7 +18,7 @@ import {
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../output/resume/reopen-authority'
 import { verifyProgressiveZipRecovery } from '../../output/resume/progressive-checkpoint'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { ReceiveLifecycleObservation, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import {
   type AdmittedWorkspaceContent,
@@ -26,8 +26,8 @@ import {
   type WorkspaceStageTraceListener,
 } from '../../output/workspace/stages'
 import { openOriginPrivateProgressiveZipBackend, type OriginPrivateProgressiveZipBackend } from '../../output/origin-private/progressive-backend'
-import { createProgressiveWorkspaceExecution } from '../../transfer/settlement/progressive-workspace-execution'
-import { createPersistentWorkspaceExecution } from '../../transfer/settlement/persistent-execution'
+import { createProgressiveWorkspaceExecution } from '../../output/execution/progressive-workspace-execution'
+import { createPersistentWorkspaceExecution } from '../../output/execution/persistent-execution'
 import type { V2ExecutionAdmissionLifecycle } from '../../transfer/settlement/v2-plan-authority'
 import {
   createOutputSessionID,
@@ -41,7 +41,7 @@ import {
   type ExecutionAdmissionResult,
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../application/receive/actions'
 import type { V2BoundReceiveOperation, V2LifecycleMutation } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
@@ -278,7 +278,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
     if (action === 'continue' && lifecycle.kind === 'resumable-start') return this.#continueStart()
-    if (action === 'continue' && lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'opfs-zip') {
+    if (action === 'continue' && lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'workspace-archive') {
       return this.#continueProgressive(lifecycle)
     }
     return this.#packaging.startLifecycleAction(
@@ -425,7 +425,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   }
 
   async #continueProgressive(
-    lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-receive'; payloadKind: 'opfs-zip' }>,
+    lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-receive'; payloadKind: 'workspace-archive' }>,
   ): Promise<V2LifecycleMutation> {
     const previous = this.#backend
     const content = this.#admitted

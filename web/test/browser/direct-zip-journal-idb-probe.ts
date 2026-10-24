@@ -39,7 +39,7 @@ import {
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import {
   createDirectorySelectionResultRoot,

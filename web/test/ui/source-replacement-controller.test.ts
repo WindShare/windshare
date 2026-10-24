@@ -19,7 +19,7 @@ class ReplacementJoinedShare extends FakeJoinedShare {
 function retained(joined: FakeJoinedShare): V2RetainedReceiveOperation {
   return {
     operationId: identityText(90), receiveIntentDigest: identityText(91, 32), lifecycleGeneration: 2n,
-    lifecycle: { kind: 'resumable-receive', payloadKind: 'opfs-zip',
+    lifecycle: { kind: 'resumable-receive', payloadKind: 'workspace-archive',
       operationId: identityText(90), receiveIntentDigest: identityText(91, 32), generation: 2n,
       objectId: identityText(92, 32), checkpointGeneration: 3n, occupiedBytes: 128n,
       completedFileCount: 1n, completedBytes: 64n, discoveryComplete: true },
@@ -150,7 +150,7 @@ describe('source revision replacement controller flow', () => {
 function settleFailedZip(joined: FakeJoinedShare, receive: FakeReceiveComposition): V2RetainedReceiveOperation {
   const runtime = receive.startedAuthorities[0]!.runtime!
   const lifecycle = next(runtime.lifecycle, {
-    kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: identityText(92, 32),
+    kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: identityText(92, 32),
     checkpointGeneration: 3n, occupiedBytes: 128n, completedFileCount: 1n,
     completedBytes: 64n, discoveryComplete: true,
   })

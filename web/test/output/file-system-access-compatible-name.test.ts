@@ -10,7 +10,9 @@ import {
   reopenFileSystemAccessOutput,
 } from '../../src/output/file-system-access/session'
 import type { CompatibleNameActivationLedger } from '../../src/output/file-system-access/compatible-name/coordinator'
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import { cleanupReopenedPublishedFileSystemAccessOutput } from '../../src/output/file-system-access/published-cleanup'
 import {
@@ -30,7 +32,7 @@ import {
   EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
-import { TransferStopRequestedError } from '../../src/transfer/output-session'
+import { TransferStopRequestedError } from '../../src/transfer/output/session'
 import { identity } from './planning/fixture'
 import {
   MemoryDirectory,

@@ -3,7 +3,7 @@ import {
   canonicalFrame,
   canonicalRecord,
   canonicalU64,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 
 const DIRECT_ZIP_EPOCH_POLICY_DOMAIN = 'windshare/direct-zip-epoch-policy/v2'
 

@@ -5,7 +5,7 @@ import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } 
 import type { OutputDiagnosticsPorts } from '../../../output/diagnostics'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../../output/file-system-access/session'
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
-import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../output/workspace/state'
+import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { canonicalReceiveLifecycleStateBytes } from '../../../output/workspace/state-codec'
 import type { ReceiveIntent } from '../../../transfer/intent'
 import type { V2LifecycleActionOutcome, V2LifecycleMutation } from '../../../application/receive/contracts'

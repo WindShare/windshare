@@ -1,5 +1,5 @@
 import { sameRetainedEpochProof } from './retained-epoch'
-import { equalCanonicalBytes } from '../../../workspace/canonical'
+import { equalCanonicalBytes } from '../../../../transfer/encoding/canonical'
 import type { DirectZipCheckpointProposalV1, DirectZipPolicyDigestsV1, DirectZipStateRowV1 } from '../model'
 
 export function sameJournalPolicies(

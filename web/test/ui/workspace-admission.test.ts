@@ -4,7 +4,7 @@ import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import { WorkspaceExecutionAdmissionSettlement } from '../../src/ui/browser-receive/workspace-admission'
 
 describe('workspace execution admission settlement', () => {

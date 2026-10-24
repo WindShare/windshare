@@ -20,11 +20,13 @@ import type { CompatibleNameLedger } from './ledger'
 import type {
   CompatibleNameEntryKind,
   CompatibleNameOperationBootstrapV1,
-  CompatibleNamePairPlacement,
   CompatibleNamePendingTerminalOutcomeV1,
-  CompatibleNameRepairSummary,
   CompatibleNameTerminalFooterState,
 } from './model'
+import type {
+  CompatibleNamePairPlacement,
+  CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import type { CompatibleNameRandomBitsSource } from './naming'
 import {
   LogicalSiblingNamespaceAuthority,

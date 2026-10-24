@@ -14,7 +14,7 @@ import {
   OutputFaultCode,
   outputFault,
   type Fault,
-} from '../../../transfer/fault'
+} from '../../../transfer/failure/fault'
 import { V2ActivationStateContractError } from '../activation/model'
 import type { ReceiveObservationOptions } from '../observation/contracts'
 import type { V2ReceiverTraceEvent } from './contracts'

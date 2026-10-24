@@ -1,7 +1,9 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../src/transfer/lifecycle/recovery-summary'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { TaskDetails } from '../../src/ui/tasks/TaskView'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'

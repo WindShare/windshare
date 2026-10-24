@@ -10,9 +10,13 @@ import {
 } from '../../output/planning'
 import {
   compatibleNameRepairSummary,
-  type CompatibleNameRepairSummary,
 } from '../../output/file-system-access/compatible-name/model'
-import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import {
   isTerminalLifecycleState,
   type ReceiveLifecycleState,
@@ -24,7 +28,7 @@ import type {
 } from '../../transfer/intent'
 import type { SelectionProjectionState } from '../../transfer/projection'
 import type { TransferJobResult } from '../../transfer/job/contract'
-import { PersistentWriterOpenPauseRequestedError } from '../../transfer/settlement/persistent-file-transaction'
+import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/persistent-file-transaction'
 import type { V2AuthorityActivationSnapshot } from './activation/model'
 import { type V2ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
 import type { V2DirectZipProgressSnapshot } from './contracts'

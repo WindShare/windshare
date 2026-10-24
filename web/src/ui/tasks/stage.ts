@@ -181,7 +181,7 @@ function pausedStage(facts: TaskFacts): StageCopy {
     return stage('needs-action', 'Open the original link to continue',
       'The retained record identifies this task, but does not contain the credentials needed to receive more content.', facts.readiness)
   }
-  if (state.kind === 'resumable-receive' && state.payloadKind === 'opfs-zip' && state.pauseReason === 'storage-pressure') {
+  if (state.kind === 'resumable-receive' && state.payloadKind === 'workspace-archive' && state.pauseReason === 'storage-pressure') {
     return stage('needs-action', 'Browser storage is full', 'Free browser storage, then continue from retained progress.', 'storage-pressure')
   }
   return stage('paused', 'Paused', facts.readiness === 'local'

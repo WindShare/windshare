@@ -8,7 +8,7 @@ import {
   equalCanonicalBytes,
   snapshotCanonicalBytes,
   type CanonicalBytes,
-} from '../canonical'
+} from '../../../transfer/encoding/canonical'
 import { decodeWorkspaceBudgetV1, type WorkspaceBudgetV1 } from '../budget'
 import { RECEIVE_RECORD_RECEIPT, type PersistedReceiveRecord } from '../records'
 import {

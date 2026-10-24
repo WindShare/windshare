@@ -71,7 +71,7 @@ import {
   type FSAFileCheckpointRepositoryFactory,
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
-import type { PersistentDirectTreeMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
+import type { PersistentDirectTreeMaterializationEvidence } from '../execution/persistent-execution'
 import type {
   CompatibleNameActivationLedger,
   CompatibleNameCoordinator,
@@ -87,9 +87,11 @@ import { openDirectDeliveryFile } from '../browser-delivery/indexeddb/direct-fil
 import type { BrowserDirectFileDelivery } from '../browser-delivery/ports'
 import type {
   CompatibleNamePendingTerminalOutcomeV1,
-  CompatibleNameRepairSummary,
   CompatibleNameTerminalFooterState,
 } from './compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   canonicalAuthorityRef,
   createFSAAuthorityReference,

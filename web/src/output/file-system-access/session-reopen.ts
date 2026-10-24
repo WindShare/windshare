@@ -39,8 +39,10 @@ import {
 } from './compatible-name/coordinator'
 import type {
   CompatibleNamePendingTerminalOutcomeV1,
-  CompatibleNameRepairSummary,
 } from './compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   defaultCompatibleNamePreparation,
   emitFSAOutputTrace,

@@ -20,8 +20,8 @@ import {
 import {
   createPerformanceFilePipelineObservation,
   type PerformanceFilePipelineObservation,
-} from '../../output/diagnostics/performance-runtime-observations'
-import type { PerformanceSummaryObservations } from '../../output/diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-runtime-observations'
+import type { PerformanceSummaryObservations } from '../../diagnostics/performance/performance-summary'
 
 export function newFileQueue(limits: TransferJobLimits): AsyncBoundedQueue<PendingFile> {
   return new AsyncBoundedQueue<PendingFile>(

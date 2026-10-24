@@ -1,4 +1,4 @@
-import type { AutomaticCheckpointTrigger } from '../../transfer/output-session'
+import type { AutomaticCheckpointTrigger } from '../../transfer/output/session'
 import { PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES } from '../../transfer/checkpoint-schedule'
 import type {
   AutomaticCheckpointAdmissionAuthority,

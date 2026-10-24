@@ -1,5 +1,5 @@
 import type { ReceiveIntent } from '../../transfer/intent'
-import type { PersistentDirectTreeMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
+import type { PersistentDirectTreeMaterializationEvidence } from '../execution/persistent-execution'
 import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import type {
   MaterializationLedgerBindingV1,
@@ -18,7 +18,7 @@ import {
   performanceElapsedMilliseconds,
   performanceNowMilliseconds,
   type PerformanceSummaryObservations,
-} from '../diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 
 export interface FSAResumableCheckpointEvidence {
   readonly checkpointCount: bigint

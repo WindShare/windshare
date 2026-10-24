@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import { validatePersistedReceiveRecord } from '../../../src/output/workspace/records'
-import { receiveElapsedMilliseconds, snapshotReceiveTiming } from '../../../src/output/workspace/lifecycle/timing'
+import { receiveElapsedMilliseconds, snapshotReceiveTiming } from '../../../src/transfer/lifecycle/timing'
 
 const OPERATION_ID = encodeBase64Url(new Uint8Array(16).fill(1))
 const INTENT_DIGEST = encodeBase64Url(new Uint8Array(32).fill(2))
@@ -20,7 +20,7 @@ describe('receive elapsed time', () => {
   it('keeps the original start across pause, durable reload and resume, then freezes at ready', async () => {
     const receiving = nextReceiveLifecycleState(initial(), { kind: 'receiving', activeLeaseId: LEASE_ID })
     const paused = nextReceiveLifecycleState(receiving, {
-      kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: PACKAGE_DIGEST,
+      kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: PACKAGE_DIGEST,
       checkpointGeneration: 1n, occupiedBytes: 10n, completedFileCount: 1n,
       completedBytes: 10n, discoveryComplete: false,
     })

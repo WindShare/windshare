@@ -1,3 +1,4 @@
+import { type AuthenticatedGenerationReference } from '../../transfer/preparation/generation'
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import {
@@ -12,23 +13,18 @@ import {
   equalCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from './canonical'
+} from '../../transfer/encoding/canonical'
 import {
   createManifestPageRecord,
   MANIFEST_PAGE_ENTRY_LIMIT,
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
   type ManifestPageRecord,
 } from './records'
-import { CanonicalRecordReader } from './canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 
 const TEXT_ENCODER = new TextEncoder()
 
 export const MAX_ARTIFACT_ENTRIES = 1_000_000
-
-export interface AuthenticatedGenerationReference {
-  readonly directoryId: string
-  readonly generation: string
-}
 
 export interface MaterializedDirectoryEntry {
   readonly kind: 'directory'

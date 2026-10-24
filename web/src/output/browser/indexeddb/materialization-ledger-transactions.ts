@@ -39,7 +39,7 @@ import {
   validateBinding,
 } from '../../materialization-ledger/codec'
 import { sameDurableCheckpointNamespace, durableCheckpointNamespaceIdentity } from '../../persistence/namespace'
-import { equalCanonicalBytes } from '../../workspace/canonical'
+import { equalCanonicalBytes } from '../../../transfer/encoding/canonical'
 import {
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,

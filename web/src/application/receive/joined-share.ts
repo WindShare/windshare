@@ -4,7 +4,7 @@ import type { AuthenticatedDiscoverySource } from '../../transfer/projection'
 import type { V2ConnectivityActivation } from '../../connectivity/v2-receiver-policy'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import type { ReceiveIntent } from '../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../transfer/output/session'
 import type { TransferJob, TransferJobOptions } from '../../transfer/v2-job'
 
 export interface ActiveReceiveJoinedShare {

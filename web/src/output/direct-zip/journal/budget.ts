@@ -4,7 +4,7 @@ import {
   canonicalRecord,
   canonicalU64,
   type CanonicalBytes,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 import type { DirectZipJournalBudgetUsageV1 } from './model'
 
 export const DIRECT_ZIP_JOURNAL_BUDGET_DOMAIN =

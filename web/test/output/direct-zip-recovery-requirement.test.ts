@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { DirectZipJournalRepository } from '../../src/output/direct-zip/journal/repository'
 import { readDirectZipRecoveryRequirement } from '../../src/output/resume/direct-zip-checkpoint'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 
 const lifecycle: ReceiveLifecycleState = {
   kind: 'receiving', operationId: 'operation', receiveIntentDigest: 'intent', generation: 2n, activeLeaseId: 'lease',

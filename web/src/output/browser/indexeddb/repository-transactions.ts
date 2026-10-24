@@ -30,8 +30,8 @@ import {
   type PersistedReceiveRecord,
   type ReceiveOperationLeaseRecord,
 } from '../../workspace/records'
-import { equalCanonicalBytes, snapshotIdentity } from '../../workspace/canonical'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import { equalCanonicalBytes, snapshotIdentity } from '../../../transfer/encoding/canonical'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import type { PreparedReceiveOperationTransition } from '../../workspace/repository'
 import {

@@ -4,7 +4,7 @@ import { FSAResourceOwner } from '../../src/ui/browser-receive/fsa-resource-owne
 import { BrowserFolderDeliveryProgress, type BrowserFolderDeliveryContext } from '../../src/ui/browser-receive/fsa/folder-delivery'
 import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications } from '../../src/output/workspace/lifecycle/observation'
 import { deliveryFixture, deliveryIdentity } from '../output/browser-delivery-fixture'
 import { deferred } from './fsa-route-activation-fixture'

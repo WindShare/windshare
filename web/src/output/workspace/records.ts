@@ -21,9 +21,9 @@ import {
   snapshotCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from './canonical'
-import { isReceiveStateByte } from './state'
-import { CanonicalRecordReader } from './canonical-reader'
+} from '../../transfer/encoding/canonical'
+import { isReceiveStateByte } from '../../transfer/lifecycle/state'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from './operation-display'
 
 export const RECEIVE_OPERATION_SCHEMA_VERSION = 2 as const
@@ -84,8 +84,8 @@ export interface PersistedReceiveRecord {
   readonly reopenKey?: string
   readonly state?: number
   readonly lifecycleGeneration?: string
-  readonly timing?: import('./lifecycle/timing').ReceiveTiming
-  readonly contentWarning?: import('./lifecycle/content-warning').ReceiveContentWarning
+  readonly timing?: import('../../transfer/lifecycle/timing').ReceiveTiming
+  readonly contentWarning?: import('../../transfer/lifecycle/content-warning').ReceiveContentWarning
 }
 
 export interface ManifestPageRecord {

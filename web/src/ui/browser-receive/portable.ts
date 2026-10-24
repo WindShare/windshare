@@ -19,7 +19,7 @@ import {
 import type { ResolvedArtifactAction } from '../../output/planning'
 import { IndexedDbZipCentralDirectorySpool } from '../../output/streams/zip-spool'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../../output/workspace/lifecycle'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
+import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import {
   createV2PlanExecutionAuthority,
@@ -36,7 +36,7 @@ import {
   type ExecutionAdmissionResult,
   type PortableExecution,
   type V2PlanExecutionAuthority,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { V2ActiveReceiveControl } from '../../application/receive/actions'
 import type {
   V2BoundReceiveOperation,

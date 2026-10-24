@@ -12,7 +12,7 @@ import {
   snapshotCanonicalModifiedTime,
 } from '../directory-admission'
 import type { OriginalFileArtifact } from '../intent'
-import type { ExactSingleFileEvidence } from '../output-session'
+import type { ExactSingleFileEvidence } from '../output/session'
 import { V2CatalogTraversalError } from './contract'
 
 export interface ExactSingleFileCatalogEvidenceOptions {

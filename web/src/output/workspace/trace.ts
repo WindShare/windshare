@@ -1,7 +1,7 @@
 import type {
   NeedsAttentionReason,
   ReceiveLifecycleState,
-} from './state'
+} from '../../transfer/lifecycle/state'
 
 export type RecoveryDecision =
   | 'resume-receive'

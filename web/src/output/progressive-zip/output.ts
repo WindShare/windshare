@@ -4,17 +4,17 @@ import {
   VerifiedFinalOutputFile,
   type OutputSession, type OutputSessionIdentity, type OutputFileOwnership,
   type OpenedOutputRevision, type OutputFileRequest,
-} from '../../transfer/output-file-contract'
+} from '../../transfer/output/file'
 import {
   snapshotDirectoryMaterializationRequest, type IncrementalDirectoryOutput,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import {
   createDirectoryAdmission, createDirectoryAdmissionScope, createDirectoryAdmissionSecret,
   finalizedDirectorySettlement, isImmediateChildPath, verifyDirectoryAdmissionReceipt,
   type DirectoryAdmission, type CanonicalModifiedTime,
 } from '../../transfer/directory-admission'
-import { FaultDomain, SourceFaultCode } from '../../transfer/fault'
-import { MAX_CONTENT_WARNING_FILES, type MissingContentFile } from '../workspace/lifecycle/content-warning'
+import { FaultDomain, SourceFaultCode } from '../../transfer/failure/fault'
+import { MAX_CONTENT_WARNING_FILES, type MissingContentFile } from '../../transfer/lifecycle/content-warning'
 import { normalizeV2FileTransferFailure } from '../../transfer/job/failures'
 import type { ReceiveIntent } from '../../transfer/intent'
 import {

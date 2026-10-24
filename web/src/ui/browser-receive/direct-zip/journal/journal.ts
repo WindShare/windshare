@@ -13,10 +13,10 @@ import type {
 } from '../../../../output/direct-zip/writer'
 import {
   canonicalDigest, equalCanonicalBytes, snapshotCanonicalBytes,
-} from '../../../../output/workspace/canonical'
+} from '../../../../transfer/encoding/canonical'
 import type { PersistedReceiveRecord } from '../../../../output/workspace/records'
-import type { ReceiveLifecycleState } from '../../../../output/workspace/state'
-import type { DirectZipReplayAuthorityV1 } from '../../../../transfer/direct-zip/output-session'
+import type { ReceiveLifecycleState } from '../../../../transfer/lifecycle/state'
+import type { DirectZipReplayAuthorityV1 } from '../../../../output/direct-zip/transfer/output-session'
 import type {
   DirectZipAuthenticatedRootV1, DirectZipOrderedMemberV1,
 } from '../../../../transfer/direct-zip/model'

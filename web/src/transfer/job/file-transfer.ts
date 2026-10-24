@@ -16,7 +16,7 @@ import {
   retireOutputFileTransaction,
   bindOutputFileTransaction,
   ownOutputFileTransaction,
-} from '../output-file-transaction'
+} from '../output/transaction'
 import {
   registerFileCheckpoint, systemCheckpointClock,
   type CheckpointClock, type CheckpointObservation, type FileCheckpointController,
@@ -32,15 +32,17 @@ import {
   type OutputFile,
   type OpenedOutputRevision,
   type OutputSession,
-} from '../output-session'
+} from '../output/session'
 import { V2OutputPausedError, type FileTransferSettlement, type PendingFile } from './contract'
 import {
   V2ClassifiedTransferFailureError,
+  type ClassifiedTransferFailure,
+} from '../failure/classification'
+import {
   V2FileOutputError,
   materializeClassifiedTransferFailure,
   normalizeV2FileTransferFailure,
   normalizedV2FileTransferFault,
-  type ClassifiedTransferFailure,
   type NormalizedV2FileTransferFailure,
 } from './failures'
 import {
@@ -52,11 +54,11 @@ import {
   joinFaults,
   outputFault,
   promoteFaultScope,
-} from '../fault'
+} from '../failure/fault'
 import { validateOpenedFileRevision } from './file-authority'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
 import { withOutputSettlementTimeout } from '../settlement/v2-output'
-import type { PerformanceFilePipelineObservation } from '../../output/diagnostics/performance-runtime-observations'
+import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 
 export class V2RangeReaderContractError extends Error {
   constructor(message: string) {

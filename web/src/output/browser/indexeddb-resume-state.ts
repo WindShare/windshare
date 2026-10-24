@@ -24,7 +24,7 @@ import {
   RECEIVE_STATE_WAITING_TO_SAVE,
   RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
   type ReceiveLifecycleState,
-} from '../workspace/state'
+} from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-legacy-cleanup'
 import { readSourceRevisionFailures } from '../resume/source-revision-failures'
@@ -33,7 +33,9 @@ import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoi
 import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
 import { IndexedDbDirectZipJournalRepository } from '../direct-zip/journal/indexeddb'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
-import type { RecoverySummary } from '../file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import { repairBrowserDeliveryInventoryLifecycle, readBrowserDeliveryRecoverySummary } from '../browser-delivery/recovery/inventory'
 import { openFSAFileCheckpointRepository } from '../file-system-access/checkpoint-repository'
 import { requireDirectTreeIntent } from '../file-system-access/settlement-proof'
@@ -202,7 +204,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
   }
 
   async readSourceRevisionFailures(lifecycle: ReceiveLifecycleState) {
-    if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'opfs-zip') return undefined
+    if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'workspace-archive') return undefined
     const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
     const stored = await requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(
       operationRecordId(lifecycle.operationId, RECEIVE_RECORD_OPERATION),

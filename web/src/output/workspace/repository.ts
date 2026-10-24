@@ -1,4 +1,4 @@
-import { snapshotIdentity } from './canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   receiveOperationRecordPrefix,
@@ -13,7 +13,7 @@ import {
   type ReceiveRecordKind,
   type WorkspaceActivationCandidateV1,
 } from './records'
-import type { ReceiveLifecycleState } from './state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   decodeStoredReceiveLifecycleState,
   storedReceiveLifecycleState,

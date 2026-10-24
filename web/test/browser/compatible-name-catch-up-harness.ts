@@ -5,7 +5,7 @@ import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/se
 import { openFileSystemAccessCompatibleNameCatchUp, reopenFileSystemAccessOutput } from '../../src/output/file-system-access/session'
 import { catchUpFileSystemAccessCompatibleNames } from '../../src/output/file-system-access/settlement'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
-import { initialReceiveLifecycleState } from '../../src/output/workspace/state'
+import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'

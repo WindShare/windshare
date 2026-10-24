@@ -4,7 +4,7 @@ import {
   type PlanKind,
   type ReceiveLifecycleState,
   type RecoverySelectionFacts,
-} from './state'
+} from '../../transfer/lifecycle/state'
 import {
   observeRecovery,
   type ReceiveOperationTraceListener,

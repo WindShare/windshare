@@ -18,9 +18,9 @@ import {
 import {
   createBoundedPerformanceSummary,
   createPerformanceSummaryObservations,
-} from '../../src/output/diagnostics/performance-summary'
-import { createPerformanceLineageClaimTimeline } from '../../src/output/diagnostics/lineage-claim-performance'
-import { createPerformanceClaimInspectorObservation } from '../../src/output/diagnostics/claim-inspector-performance'
+} from '../../src/diagnostics/performance/performance-summary'
+import { createPerformanceLineageClaimTimeline } from '../../src/diagnostics/performance/lineage-claim-performance'
+import { createPerformanceClaimInspectorObservation } from '../../src/diagnostics/performance/claim-inspector-performance'
 
 const RECEIVE_OPERATION_ID = 'AQAAAAAAAAAAAAAAAAAAAA'
 const TRANSFER_JOB_ID = 'AgAAAAAAAAAAAAAAAAAAAA'

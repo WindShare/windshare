@@ -11,7 +11,7 @@ import {
   type WorkspaceActivationCandidateV1,
 } from './records'
 import type { ReceiveOperationRepository } from './repository'
-import { initialReceiveLifecycleState } from './state'
+import { initialReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import { WorkspaceAdmissionStages } from './stages/admission'
 import { WorkspaceArtifactStages } from './stages/artifact'
 import { WorkspaceCleanupStages } from './stages/cleanup'

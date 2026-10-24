@@ -8,7 +8,7 @@ import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   RECEIVE_RECORD_OPERATION,
 } from '../records'
-import type { PreparationAdmissionReason, ReceiveLifecycleState } from '../state'
+import type { PreparationAdmissionReason, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
   mergeHandleIds,
   type WorkspaceCleanupRequest,

@@ -10,7 +10,9 @@ import {
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
 } from '../../src/output/workspace'
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import {
   materializationRouteIdentity,
   offerArtifacts,
@@ -24,10 +26,10 @@ import {
   createSelectionSpec,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/fault'
+import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/failure/fault'
 import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
 import type { SelectionMeasure } from '../../src/transfer/measure'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
 import {
   TransferFailureAccumulator,
   transferWorkerSettlement,

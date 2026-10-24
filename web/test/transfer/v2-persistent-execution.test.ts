@@ -14,7 +14,7 @@ import type {
   PersistentMaterializationPort,
   PersistentOutputNamespaceClaimPort,
 } from '../../src/output/persistent-tree/contracts'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import {
@@ -35,7 +35,7 @@ import {
   snapshotDirectoryMaterializationRequest,
   type DirectoryMaterializationRequest,
   type OutputFileRequest,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import { isolatedDirectoryOutputFailure } from '../../src/transfer/job/failures'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
@@ -49,7 +49,7 @@ import {
   type PersistentWorkspaceExecutionInput,
   type PersistentWorkspaceSettlementAuthority,
   type WorkspaceMaterializationEvidence,
-} from '../../src/transfer/settlement/persistent-execution'
+} from '../../src/output/execution/persistent-execution'
 import {
   digestIdentity,
   fileEntry,

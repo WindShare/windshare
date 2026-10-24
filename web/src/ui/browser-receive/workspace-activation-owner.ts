@@ -28,7 +28,7 @@ import type {
   ReceiveOperationRepository,
   WorkspaceActivationJournalRepository,
 } from '../../output/workspace/repository'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
+import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import type { ReceiveIntent } from '../../transfer/intent'
 import type { V2LifecycleMutation, V2OwnedActivationAuthority } from '../../application/receive/contracts'

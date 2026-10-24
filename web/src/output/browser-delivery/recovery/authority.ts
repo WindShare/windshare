@@ -2,7 +2,7 @@ import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../../persisten
 import { sameDurableCheckpointNamespace } from '../../persistence/namespace'
 import { createFSARecoveryCheckpointSnapshot, deriveFSARecoverySummary } from '../../file-system-access/recovery-summary'
 import type { DirectTreeIntent } from '../../file-system-access/settlement-proof'
-import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../../workspace/state'
+import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { validateBrowserDeliveryRecord } from '../records'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from '../model'
 

@@ -1,4 +1,4 @@
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 
 export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 2 as const
 

@@ -10,7 +10,7 @@ import {
 import {
   outputExecutionProfile,
   type OutputExecutionProfile,
-} from '../output-file-contract'
+} from '../output/file'
 
 import {
   V2_MAXIMUM_PENDING_GENERATIONS,

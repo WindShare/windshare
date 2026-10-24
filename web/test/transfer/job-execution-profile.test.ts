@@ -10,7 +10,7 @@ import {
   OutputBudgetExceededError,
   disabledOutputExecutionProfile,
   type OutputExecutionProfile,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import type { TransferJobOptions } from '../../src/transfer/job/contract'
 
 describe('late output execution-profile binding', () => {

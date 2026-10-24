@@ -35,7 +35,7 @@ import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/st
 import {
   initialReceiveLifecycleState,
   type ReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import {
   createDirectTreePlan,
   createReceiveIntent,
@@ -66,8 +66,8 @@ import {
   type DirectTreeExecution,
   type OutputFileRequest,
   type OutputSession,
-} from '../../src/transfer/output-session'
-import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
+} from '../../src/transfer/output/session'
+import { createPersistentDirectTreeExecution } from '../../src/output/execution/persistent-execution'
 import {
   digestIdentity,
   fileEntry,

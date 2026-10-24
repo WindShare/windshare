@@ -7,7 +7,7 @@ import {
   type OutputFileTransaction,
   type OutputExecutionProfile,
   type OutputSession,
-} from '../output-file-contract'
+} from '../output/file'
 import {
   bindTransferExecutionLimits,
   type TransferExecutionLimits,
@@ -18,7 +18,7 @@ import {
   performanceElapsedMilliseconds,
   performanceNowMilliseconds,
   type PerformanceSummaryObservations,
-} from '../../output/diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 
 const PENDING_FILE_STRUCTURAL_METADATA_BYTES = 128n
 const PENDING_FILE_EXACT_SIZE_BYTES = 8n
@@ -435,7 +435,7 @@ function budgetedOutputTransaction(
     automaticCheckpoint: (trigger, signal) => transaction.automaticCheckpoint(trigger, signal),
     commit: signal => transaction.commit(signal),
     ...(transaction.recordSourceFailure === undefined ? {} : {
-      recordSourceFailure: (fault: import('../fault').SourceFault) => transaction.recordSourceFailure!(fault),
+      recordSourceFailure: (fault: import('../failure/fault').SourceFault) => transaction.recordSourceFailure!(fault),
     }),
     retire: reason => transaction.retire(reason),
     pause: reason => transaction.pause(reason),

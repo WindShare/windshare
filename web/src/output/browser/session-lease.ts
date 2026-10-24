@@ -1,5 +1,5 @@
 import { encodeBase64Url } from '../../crypto/bytes'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import {
   receiveOperationLeaseRecord,
   type ReceiveOperationLeaseRecord,

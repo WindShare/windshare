@@ -1,20 +1,22 @@
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
-import type { RecoverySelectionFacts } from '../../output/workspace/state'
-import { dependencyContractFault } from '../fault'
+import type { ReceiveLifecycleState } from '../lifecycle/state'
+import type { RecoverySelectionFacts } from '../lifecycle/state'
+import { dependencyContractFault } from '../failure/fault'
 import type { ReceiveIntent } from '../intent'
 import {
   materializeClassifiedTransferFailure,
   normalizeV2FileTransferFailure,
   normalizedV2FileTransferFault,
-  type ClassifiedTransferFailure,
 } from '../job/failures'
+import {
+  type ClassifiedTransferFailure,
+} from '../failure/classification'
 import type { TransferWorkerSettlement } from '../outcome'
 import type {
   MaterializationSummary,
   PlanExecution,
   V2PlanExecutionAuthority,
-} from '../output-session'
+} from '../output/session'
 
 export const V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 30_000
 export const V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 5 * 60_000

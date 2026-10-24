@@ -16,7 +16,7 @@ import {
   openOriginPrivateRetainedArtifactBackend,
   type OriginPrivateRetainedArtifactBackend,
 } from '../../origin-private/session'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { PersistentPausedFileRecovery } from '../../persistent-tree/contracts'
 import type {
   ReceiveOperationDiscardResult,

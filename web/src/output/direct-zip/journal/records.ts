@@ -10,7 +10,7 @@ import {
   canonicalU64,
   snapshotCanonicalBytes,
   snapshotIdentity,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 import {
   admitDirectZipJournalPageV1,
   validateDirectZipJournalBudgetUsageV1,

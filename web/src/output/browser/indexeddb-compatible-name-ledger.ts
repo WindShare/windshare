@@ -1,4 +1,4 @@
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import {
   receiveOperationHandleRecord,
 } from '../workspace/records'
@@ -25,8 +25,10 @@ import {
   type CompatibleNameOperationHeaderV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePendingTerminalOutcomeV1,
-  type CompatibleNameRepairSummary,
 } from '../file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT,
   FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR,

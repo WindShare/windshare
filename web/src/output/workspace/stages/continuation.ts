@@ -4,7 +4,7 @@ import {
   persistedReceiptRecord,
 } from '../receipts'
 import type { ReceiveOperationHandleRecord } from '../records'
-import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../state'
+import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../../../transfer/lifecycle/state'
 import {
   WORKSPACE_HANDLE_PACKAGE_OBJECT,
   type PackageTemporaryCleanupEvidence,

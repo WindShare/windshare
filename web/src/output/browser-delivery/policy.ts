@@ -5,7 +5,7 @@ import {
   OPERATION_ID_BYTES,
 } from '../persistence/checkpoint'
 import { durableCheckpointNamespaceIdentity } from '../persistence/namespace'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import { deliveryDigest, namespaceFields } from './codec'
 import { BROWSER_SAVE_POLICY_VERSION, type BrowserSavePolicyV1 } from './model'
 

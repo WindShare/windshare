@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { byteRange } from '../../src/content/geometry'
-import { TransferPauseRequestedError } from '../../src/transfer/output-session'
+import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import type { TransferProgress } from '../../src/transfer/v2-job'
 import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
 import {

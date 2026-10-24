@@ -10,7 +10,7 @@ import type {
 import {
   observePerformance,
   type PerformanceSummaryObservations,
-} from '../../diagnostics/performance-summary'
+} from '../../../diagnostics/performance/performance-summary'
 
 const ROOT_AUTHORITY_CACHES = new WeakMap<object, Map<string, FSAAuthorityCache>>()
 

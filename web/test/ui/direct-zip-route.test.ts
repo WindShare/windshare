@@ -7,7 +7,7 @@ import type {
   AuthorityOwnedReceiveOperationMutationResult,
   ReopenedDirectZipOperation,
 } from '../../src/output/resume/reopen-authority'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import {
   BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID,
   startBrowserDirectZipAuthority,

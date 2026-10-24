@@ -1,4 +1,6 @@
-import type { CompatibleNameRepairSummary } from './model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import type { CompatibleNameOwnedSidecarWriter } from './projector'
 import type { CompatibleNameRepairProjectionSource } from './path-authority'
 

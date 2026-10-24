@@ -2,7 +2,7 @@ import {
   snapshotCanonicalModifiedTime,
   type CanonicalModifiedTime,
 } from '../../transfer/directory-admission'
-import { isFault, type Fault } from '../../transfer/fault'
+import { isFault, type Fault } from '../../transfer/failure/fault'
 import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
@@ -11,14 +11,14 @@ import {
   VerifiedFinalOutputFile,
   type OutputFileOwnership,
   type OutputSourceIdentity,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import {
   FILE_CHECKPOINT_ID_BYTES,
   FILE_ID_BYTES,
   FILE_REVISION_BYTES,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
-import { CanonicalRecordReader } from '../workspace/canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   canonicalFrame,
   canonicalIdentity,
@@ -29,7 +29,7 @@ import {
   equalCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 const DIRECTORY_FINALIZED_OUTCOME_DISCRIMINANT = 1

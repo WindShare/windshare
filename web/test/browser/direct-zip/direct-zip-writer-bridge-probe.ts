@@ -12,7 +12,7 @@ import {
   createReceiveOperationV2, receiveOperationHandleRecord, receiveOperationLeaseRecord,
   storedReceiveOperationRecord,
 } from '../../../src/output/workspace/records'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import {
   createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,

@@ -12,14 +12,14 @@ import {
   concatCanonicalBytes,
   equalCanonicalBytes,
   snapshotIdentity,
-} from './canonical'
+} from '../../transfer/encoding/canonical'
 import {
   createPersistedReceiveRecord,
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
   type PersistedReceiveRecord,
 } from './records'
-import { CanonicalRecordReader } from './canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   RECEIVE_RECEIPT_PREFIX,
   ReceiptReader,

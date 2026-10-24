@@ -8,7 +8,7 @@ import {
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-} from '../../../src/output/workspace/state'
+} from '../../../src/transfer/lifecycle/state'
 
 const LEASE = identity(16, 7)
 const SELECTION_FACTS = Object.freeze({
@@ -22,7 +22,7 @@ describe('receive lifecycle reducer', () => {
     const paused = nextReceiveLifecycleState(initialReceiveLifecycleState({
       operationId: identity(16, 1), receiveIntentDigest: identity(32, 2),
     }), {
-      kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: identity(32, 9),
+      kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: identity(32, 9),
       checkpointGeneration: 4n, completedFileCount: 1n, completedBytes: 12n,
       discoveryComplete: false, occupiedBytes: 100n, pauseReason: 'storage-pressure',
     })

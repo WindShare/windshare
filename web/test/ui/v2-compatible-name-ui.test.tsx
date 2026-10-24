@@ -4,7 +4,9 @@ import { experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { ArtifactSpec } from '../../src/transfer/intent'
 import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'

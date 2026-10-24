@@ -1,3 +1,4 @@
+import { type RecoverySummary } from '../../transfer/lifecycle/recovery-summary'
 import {
   FILE_CHECKPOINT_COMMIT_PUBLISHED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
@@ -11,7 +12,7 @@ import {
 import {
   snapshotRecoverySelectionFacts,
   type ReceiveLifecycleState,
-} from '../workspace/state'
+} from '../../transfer/lifecycle/state'
 import type { FileCheckpointJournal } from '../persistence/journal'
 import { scanAllFSAFileCheckpoints } from './checkpoint-repository'
 import {
@@ -30,25 +31,6 @@ export interface FSARecoveryCheckpointSnapshot {
   readonly lifecycleGeneration: bigint
   readonly checkpointSetDigest: string
   readonly checkpoints: readonly FileCheckpointV2[]
-}
-
-export interface RecoverySummary {
-  readonly lifecycleGeneration: bigint
-  readonly checkpointSetDigest: string
-  readonly discoveredFileCount: bigint
-  readonly discoveredBytes: bigint
-  readonly discovery: 'complete' | 'known-so-far'
-  readonly completedFileCount: bigint
-  readonly completedBytes: bigint
-  readonly incompleteFileCount: bigint
-  readonly verifiedPartialFileCount: bigint
-  readonly verifiedPartialBytes: bigint
-  readonly unstartedFileCount: bigint
-  readonly unstartedBytes: bigint
-  readonly preservingRemainingBytes: bigint
-  readonly restartRemainingBytes: bigint
-  readonly restartRedownloadBytes: bigint
-  readonly maximumPreservingTemporaryBytes: bigint
 }
 
 export async function createFSARecoveryCheckpointSnapshot(

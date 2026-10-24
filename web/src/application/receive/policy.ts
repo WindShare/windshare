@@ -1,7 +1,9 @@
 import type { ReceiveLifecycleState } from '../../output/workspace'
 import { isTerminalLifecycleState } from '../../output/workspace'
 import type { MaterializationPlan } from '../../transfer/intent'
-import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
+import type {
+  RecoverySummary,
+} from '../../transfer/lifecycle/recovery-summary'
 import type { BrowserDeliveryResumeSummary } from '../../output/browser-delivery/retained'
 import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
 import type { LifecycleUserAction, V2ActiveReceiveControl, ReceiveSettlementWait } from './actions'

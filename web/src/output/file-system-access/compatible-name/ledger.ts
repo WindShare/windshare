@@ -7,8 +7,10 @@ import type {
   CompatibleNameOperationSnapshotV1,
   CompatibleNamePairKind,
   CompatibleNamePendingTerminalOutcomeV1,
-  CompatibleNameRepairSummary,
 } from './model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 
 export interface CompatibleNamePairOwnershipInput {
   readonly operationId: string

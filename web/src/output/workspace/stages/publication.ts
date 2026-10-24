@@ -21,7 +21,7 @@ import {
   RECEIVE_RECORD_RESERVATION,
   type ReceiveOperationHandleRecord,
 } from '../records'
-import type { ExternalAttemptReason, ReceiveLifecycleState } from '../state'
+import type { ExternalAttemptReason, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
   WORKSPACE_HANDLE_PUBLICATION_TARGET,
   checkedLeaseEnd,

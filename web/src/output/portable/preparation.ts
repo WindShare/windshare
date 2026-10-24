@@ -22,7 +22,7 @@ import type {
   PlanPauseRequest,
   PlanSettlementRequest,
   PortableExecution,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { SuccessfulTransferWorkerSettlement } from '../../transfer/outcome'
 import type {
   V2PortableOriginalExecutionRoute,
@@ -31,8 +31,8 @@ import type {
 import type {
   PreparationAdmissionReason,
   ReceiveLifecycleState,
-} from '../workspace/state'
-import type { PreparationFileEntry } from '../workspace/preparation'
+} from '../../transfer/lifecycle/state'
+import type { PreparationFileEntry } from '../../transfer/preparation'
 import type { ZipCentralDirectorySpool } from '../streams/zip-spool'
 import {
   issuePortableArtifactAdmission,

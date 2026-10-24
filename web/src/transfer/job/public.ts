@@ -20,8 +20,10 @@ export type {
 export {
   V2ClassifiedTransferFailureError,
   isClassifiedTransferFailure,
-  isV2FileScopedTransferFailure,
   type ClassifiedTransferFailure,
+} from '../failure/classification'
+export {
+  isV2FileScopedTransferFailure,
 } from './failures'
 export {
   V2TransferAdmissionFailureError,
@@ -40,20 +42,7 @@ export {
   snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
 } from '../settlement/v2-plan-authority'
-export {
-  createPersistentDirectTreeExecution,
-  createPersistentWorkspaceExecution,
-} from '../settlement/persistent-execution'
-export type {
-  PersistentDirectorySettlementEvidence,
-  PersistentDirectTreeSettlementAuthority,
-  PersistentMaterializationEvidence,
-  PersistentMaterializationSettlementCut,
-  PersistentExecutionRecoveryPolicy,
-  PersistentWorkspaceExecutionInput,
-  PersistentWorkspaceSettlementAuthority,
-  WorkspaceMaterializationEvidence,
-} from '../settlement/persistent-execution'
+
 export type {
   V2DirectAtomicExecutionRoute,
   V2DirectTreeExecutionRoute,

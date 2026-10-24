@@ -17,7 +17,7 @@ import {
   equalCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../../../workspace/canonical'
+} from '../../../../transfer/encoding/canonical'
 import { validateDirectZipJournalBudgetUsageV1 } from '../budget'
 import type {
   DirectZipCheckpointPhase,

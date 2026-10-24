@@ -1,5 +1,5 @@
 import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
-import { receiveContentWarningFields, type ReceiveContentWarning } from '../../workspace/lifecycle/content-warning'
+import { receiveContentWarningFields, type ReceiveContentWarning } from '../../../transfer/lifecycle/content-warning'
 import { validateZipEntryPlan, type ZipEntryPlanV1 } from '../../zip-layout/policy'
 
 export interface TaskObjectRef {

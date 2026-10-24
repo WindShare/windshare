@@ -3,7 +3,7 @@ import { IndexedDbReceiveResumeSource } from '../../../src/output/browser/indexe
 import { createBrowserReceiveOperationMutationPort } from '../../../src/output/resume/reopen-authority'
 import { forgetReceiveOperationHistory, persistPortableDownloadHistory } from '../../../src/output/resume/operation-history'
 import { receiveOperationResumeDescriptor } from '../../../src/output/resume/descriptor'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 import { createReceiveOperationV2, storedReceiveOperationRecord } from '../../../src/output/workspace/records'
 import { storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import { createPortableBinding, createPortableHandoffPlan, createReceiveIntent, deriveArtifactChoiceIdentity } from '../../../src/transfer/intent'

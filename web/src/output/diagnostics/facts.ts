@@ -11,7 +11,7 @@ import {
   OutputFaultCode,
   type CheckpointFaultCode as CheckpointFaultCodeValue,
   type OutputFaultCode as OutputFaultCodeValue,
-} from '../../transfer/fault'
+} from '../../transfer/failure/fault'
 import { FileCheckpointError } from '../persistence/checkpoint-lifecycle'
 import {
   PersistentOutputError,

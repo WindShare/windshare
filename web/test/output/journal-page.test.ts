@@ -17,7 +17,7 @@ import {
   RECEIVE_RECORD_RECEIPT,
   createPersistedReceiveRecord,
 } from '../../src/output/workspace/records'
-import { canonicalRecord } from '../../src/output/workspace/canonical'
+import { canonicalRecord } from '../../src/transfer/encoding/canonical'
 import { prepareReceiveOperationTransition } from '../../src/output/workspace/repository'
 
 describe('checkpoint journal authority', () => {

@@ -16,11 +16,13 @@ import {
   type CompatibleNameMappingV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePairKind,
-  type CompatibleNamePairPlacement,
   type CompatibleNamePendingTerminalOutcomeV1,
-  type CompatibleNameRepairSummary,
   type CompatibleNameTerminalFooterState,
 } from './model'
+import {
+  type CompatibleNamePairPlacement,
+  type CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import { generateCompatibleNamePrimaryToken } from './naming'
 import {
   LogicalSiblingNamespaceAuthority,

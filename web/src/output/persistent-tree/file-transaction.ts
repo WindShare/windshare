@@ -8,7 +8,7 @@ import {
   type OutputFileOwnership,
   type OutputSourceIdentity,
   VerifiedFinalOutputFile,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import {
   emitOutputTrace,

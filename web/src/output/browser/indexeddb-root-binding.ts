@@ -35,7 +35,7 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperationTransition,
 } from '../workspace/repository'
-import { equalCanonicalBytes } from '../workspace/canonical'
+import { equalCanonicalBytes } from '../../transfer/encoding/canonical'
 
 export const FSA_OPERATION_HANDLE_PARENT = 1 as const
 export const FSA_OPERATION_HANDLE_DIRECTORY = 2 as const

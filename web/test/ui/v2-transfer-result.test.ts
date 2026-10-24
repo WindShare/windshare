@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
 import { presentTransferResult } from '../../src/ui/v2-transfer-result'
 

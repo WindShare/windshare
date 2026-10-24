@@ -11,7 +11,7 @@ import {
   snapshotCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../canonical'
+} from '../../../transfer/encoding/canonical'
 import {
   RECEIPT_SCHEMA_VERSION,
   type OwnedWorkspaceObjectReceipt,

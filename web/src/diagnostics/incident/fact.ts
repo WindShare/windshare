@@ -7,13 +7,13 @@ import {
   type CheckpointFaultCode as CheckpointFaultCodeValue,
   type Fault,
   type OutputFaultCode as OutputFaultCodeValue,
-} from '../../transfer/fault'
+} from '../../transfer/failure/fault'
 import type {
   NeedsAttentionReason,
   PartialDirectoryReason,
   ReceiveLifecycleState,
   RestartRequiredReason,
-} from '../../output/workspace/state'
+} from '../../transfer/lifecycle/state'
 import {
   V2_CONNECTIVITY_FAILURE_SCOPES,
   V2_TYPED_PEER_ERROR_CODES,

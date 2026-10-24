@@ -19,7 +19,7 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperationTransition,
 } from '../../../src/output/workspace/repository'
-import { initialReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { initialReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 
 describe('browser receive operation lease', () => {
   it.each([true, false])('observes live Web Lock availability %s without acquiring a durable lease', async available => {

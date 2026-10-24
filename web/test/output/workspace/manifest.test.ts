@@ -8,7 +8,7 @@ import {
   newFileCheckpointV2,
 } from '../../../src/output/persistence/checkpoint'
 import { finalFileCheckpointProof } from '../../../src/output/persistence/journal'
-import { canonicalText } from '../../../src/output/workspace/canonical'
+import { canonicalText } from '../../../src/transfer/encoding/canonical'
 import {
   decodeMaterializedManifestV1,
   sealMaterializedManifest,

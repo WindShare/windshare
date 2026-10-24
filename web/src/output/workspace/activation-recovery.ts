@@ -10,7 +10,7 @@ import type {
   WorkspaceOwnedCleanupPort,
   WorkspaceOwnedObjectCleanupObservation,
 } from './cleanup'
-import { equalCanonicalBytes } from './canonical'
+import { equalCanonicalBytes } from '../../transfer/encoding/canonical'
 import {
   decodeStoredReceiveOperation,
   operationRecordId,
@@ -31,7 +31,7 @@ import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
-} from './state'
+} from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from './state-codec'
 import {
   WorkspaceOperationStages,

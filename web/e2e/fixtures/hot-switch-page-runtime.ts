@@ -20,7 +20,7 @@ import {
 import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
 import type {
   EnvironmentOffers,
@@ -30,7 +30,7 @@ import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
   DirectAtomicExecution,
   V2PlanExecutionAuthority,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 
 const GATEWAY_MODULE_PATH = '/src/ui/v2-gateway.ts'
 const INTENT_MODULE_PATH = '/src/transfer/intent.ts'
@@ -39,7 +39,7 @@ const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/v2-plan-authority.t
 const PLANNING_MODULE_PATH = '/src/output/planning/index.ts'
 const PROJECTION_MODULE_PATH = '/src/transfer/projection/index.ts'
 const STREAM_MODULE_PATH = '/src/output/streams/single-file.ts'
-const WORKSPACE_STATE_MODULE_PATH = '/src/output/workspace/state.ts'
+const WORKSPACE_STATE_MODULE_PATH = '/src/transfer/lifecycle/state.ts'
 const AUTHORITY_REFERENCE_BYTES = 32
 const HOT_SWITCH_RECEIPT_DOMAIN = 'windshare/e2e/hot-switch-receipt/v1'
 const STREAM_TARGET_OFFER_ID = 'hot-switch-managed-atomic-stream'
@@ -52,7 +52,7 @@ type PlanAuthorityModule = typeof import('../../src/transfer/settlement/v2-plan-
 type PlanningModule = typeof import('../../src/output/planning')
 type ProjectionModule = typeof import('../../src/transfer/projection')
 type StreamModule = typeof import('../../src/output/streams/single-file')
-type WorkspaceStateModule = typeof import('../../src/output/workspace/state')
+type WorkspaceStateModule = typeof import('../../src/transfer/lifecycle/state')
 type JoinedReceiver = Awaited<ReturnType<
   InstanceType<GatewayModule['V2BrowserReceiverGateway']>['join']
 >>

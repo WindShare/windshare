@@ -22,8 +22,8 @@ import {
   type ReceiveRecordKind,
   type WorkspaceActivationCandidateV1,
 } from '../../workspace/records'
-import { snapshotIdentity } from '../../workspace/canonical'
-import { RECEIVE_STATE_INTENT_FROZEN } from '../../workspace/state'
+import { snapshotIdentity } from '../../../transfer/encoding/canonical'
+import { RECEIVE_STATE_INTENT_FROZEN } from '../../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../workspace/lifecycle/observation'
 import type { FSACompatibleNameBootstrapRepository } from '../indexeddb-root-binding'

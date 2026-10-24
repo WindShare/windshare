@@ -4,7 +4,7 @@ import { V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { deferred } from '../session/v2-send-fixture'
 import { catalogFixture, identity, planAuthorityFixture, receiveIntentFixture, testOutput, transferJobFixture } from './v2-job-fixture'
-import { disabledOutputExecutionProfile } from '../../src/transfer/output-session'
+import { disabledOutputExecutionProfile } from '../../src/transfer/output/session'
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 
 type Scenario = 'healthy' | 'relay-loss' | 'relay-loss-before-release' | 'invalid-release-completion'

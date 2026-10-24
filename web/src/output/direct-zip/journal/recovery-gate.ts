@@ -9,9 +9,9 @@ import {
   snapshotIdentity,
   equalCanonicalBytes,
   type CanonicalBytes,
-} from '../../workspace/canonical'
-import { CanonicalRecordReader } from '../../workspace/canonical-reader'
-import type { RecoveryGateKind } from '../../workspace/state'
+} from '../../../transfer/encoding/canonical'
+import { CanonicalRecordReader } from '../../../transfer/encoding/canonical-reader'
+import type { RecoveryGateKind } from '../../../transfer/lifecycle/state'
 import type { DirectZipRecoveryGateV1 } from './model'
 
 export async function createDirectZipRecoveryGateV1(input: {

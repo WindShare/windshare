@@ -7,7 +7,7 @@ import { createMaterializationLedgerBinding } from '../../materialization-ledger
 import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATION } from '../../workspace/records'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { IndexedDbBrowserDeliveryRepository } from '../indexeddb'
 import type { BrowserDeliveryRecordV1 } from '../model'
 import { deriveBrowserDeliveryLifecycle } from './authority'

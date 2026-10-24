@@ -43,7 +43,7 @@ test('production worker loading failure retains one retryable ZIP task across at
     expect(await call(page, 'attempt')).toEqual(failed)
     await page.unroute(WORKER_ASSET)
     expect(await call(page, 'retry')).toMatchObject({ operationId, state: 'receiving', admissions: 1 })
-    expect(await call(page, 'pause')).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip' })
+    expect(await call(page, 'pause')).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive' })
     await call(page, 'detach')
     expect(await discard(page, operationId)).toBe('discarded')
 

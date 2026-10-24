@@ -13,7 +13,7 @@ import {
   canonicalText,
   canonicalU32,
   snapshotIdentity,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 import type { CompatibleNameEntryKind } from './model'
 
 const TEXT_ENCODER = new TextEncoder()

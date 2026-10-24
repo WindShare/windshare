@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
-import { canonicalRecord } from '../../../src/output/workspace/canonical'
+import { canonicalRecord } from '../../../src/transfer/encoding/canonical'
 import {
   createDirectorySelectionResultRoot,
   createDirectResumableZipPlan,

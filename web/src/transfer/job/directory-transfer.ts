@@ -5,7 +5,7 @@ import {
   type DirectoryAdmission,
   type DirectorySettlement,
 } from '../directory-admission'
-import type { IncrementalDirectoryOutput } from '../output-session'
+import type { IncrementalDirectoryOutput } from '../output/session'
 import type { DirectoryWork } from './contract'
 import type { V2DirectoryReplay } from '../discovery/v2-directory-replay'
 import type { AsyncBoundedQueue } from './scheduler'

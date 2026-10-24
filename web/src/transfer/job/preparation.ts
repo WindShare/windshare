@@ -1,19 +1,21 @@
 import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../catalog/v2-records'
 import { encodeBase64Url } from '../../crypto/bytes'
-import type { AuthenticatedGenerationReference } from '../../output/workspace/manifest'
+import type {
+  AuthenticatedGenerationReference,
+} from '../preparation/generation'
 import type {
   PreparationDirectoryEntry,
   PreparationDirectoryRole,
   PreparationFileEntry,
   PreparationManifestEntry,
-} from '../../output/workspace/preparation'
+} from '../preparation'
 import {
   snapshotCanonicalModifiedTime,
   snapshotMaterializationPath,
 } from '../directory-admission'
 import type { ReceiveIntent } from '../intent'
-import { OutputSessionBindingError, type ExactPreparationEvidence } from '../output-session'
+import { OutputSessionBindingError, type ExactPreparationEvidence } from '../output/session'
 import { directoryIsResultRoot } from './artifact-path'
 import type {
   AuthenticatedDirectory,

@@ -1,8 +1,10 @@
 import type {
   CompatibleNameEntryKind,
+} from './model'
+import type {
   CompatibleNameFooterState,
   CompatibleNamePairPlacement,
-} from './model'
+} from '../../../transfer/lifecycle/name-repair'
 
 export const COMPATIBLE_NAME_SIDECAR_FORMAT_VERSION =
   'windshare-name-restoration/v2' as const

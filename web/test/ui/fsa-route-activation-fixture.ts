@@ -33,8 +33,10 @@ import {
   type CompatibleNameOperationHeaderV1,
   type CompatibleNameOperationSnapshotV1,
   type CompatibleNamePendingTerminalOutcomeV1,
-  type CompatibleNameRepairSummary,
 } from '../../src/output/file-system-access/compatible-name/model'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
 import type { ReceiveOperationTransition } from '../../src/output/workspace/repository'
 import { receiveOperationHandleRecord } from '../../src/output/workspace/records'
 import {

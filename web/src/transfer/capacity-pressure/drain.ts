@@ -1,4 +1,4 @@
-import { BoundaryFaultError, FaultScope, OutputFaultCode, outputFault } from '../fault'
+import { BoundaryFaultError, FaultScope, OutputFaultCode, outputFault } from '../failure/fault'
 
 /** A declined in-place growth admission owns no write; existing admitted files drain before task pause. */
 export class OutputCapacityBlockedError extends BoundaryFaultError {

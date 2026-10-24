@@ -3,7 +3,7 @@ import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
 } from '../../transfer/job/coordinate/direct-tree'
-import { VerifiedFinalOutputFile } from '../../transfer/output-session'
+import { VerifiedFinalOutputFile } from '../../transfer/output/session'
 import {
   FILE_CHECKPOINT_ID_BYTES,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
@@ -17,7 +17,7 @@ import {
   durableCheckpointNamespaceIdentity,
   sameDurableCheckpointNamespace,
 } from '../persistence/namespace'
-import { CanonicalRecordReader } from '../workspace/canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -27,7 +27,7 @@ import {
   canonicalU8,
   canonicalU64,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   materializationLedgerPathKey,
   materializationRecordDigest,

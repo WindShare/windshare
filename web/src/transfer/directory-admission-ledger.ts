@@ -19,7 +19,7 @@ import {
   type DirectorySettlement,
   type MaterializationDirectory,
 } from './directory-admission'
-import { FaultScope, OutputFaultCode, outputFault } from './fault'
+import { FaultScope, OutputFaultCode, outputFault } from './failure/fault'
 
 export const MAX_DIRECTORY_ADMISSIONS = 1_000_000
 export const MAX_DIRECTORY_ADMISSION_METADATA_BYTES = 67_108_864

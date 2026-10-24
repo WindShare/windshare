@@ -5,7 +5,7 @@ import { readStoredCheckpoint } from '../../browser/indexeddb/repository-transac
 import { FILE_ID_BYTES, OPERATION_ID_BYTES, type FileCheckpointV2 } from '../../persistence/checkpoint'
 import type { MaterializationFinalFileProofV1 } from '../../materialization-ledger/model'
 import { finalFileCheckpointProof, type FinalFileCheckpointProof } from '../../persistence/journal'
-import { snapshotIdentity } from '../../workspace/canonical'
+import { snapshotIdentity } from '../../../transfer/encoding/canonical'
 import { validateBrowserTargetProof, validateDirectCheckpointProof } from '../final-proof'
 import { advanceBrowserDeliveryRecord } from '../lifecycle'
 import { snapshotBrowserDeliveryRecord, validateBrowserDeliveryRecord } from '../records'

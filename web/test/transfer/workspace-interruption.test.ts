@@ -3,9 +3,9 @@ import { V2RemoteRevisionError } from '../../src/content/v2-session-services'
 import { createFailureIdentity } from '../../src/diagnostics/incident'
 import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
 import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
-import { TransferPauseRequestedError, type PlanPauseRequest } from '../../src/transfer/output-session'
+import { TransferPauseRequestedError, type PlanPauseRequest } from '../../src/transfer/output/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
-import { persistentWorkspaceInterruption } from '../../src/transfer/settlement/persistent-evidence'
+import { persistentWorkspaceInterruption } from '../../src/output/execution/persistent-evidence'
 
 const SOURCE_STALE = 0x3001
 const SOURCE_DRIFT = 0x3007

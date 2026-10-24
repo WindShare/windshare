@@ -20,7 +20,7 @@ import {
   performanceElapsedMilliseconds,
   performanceNowMilliseconds,
   type PerformanceSummaryObservations,
-} from '../diagnostics/performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 import type { PerformanceNamespaceKindV1 } from '../../diagnostics/trace/transfer-payload'
 
 const FSA_ROOT_LOCK_DOMAIN = 'windshare/fsa-parent-lock/v1'

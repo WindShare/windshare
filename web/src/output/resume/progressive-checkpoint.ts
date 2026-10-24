@@ -3,7 +3,7 @@ import { progressiveZipObjectRef } from '../origin-private/progressive-backend'
 import { IndexedDbTaskCheckpointStore } from '../origin-private/task-checkpoint/indexeddb-store'
 import { taskEntryComplete, type TaskCheckpoint, type TaskObjectRef } from '../origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../origin-private/task-checkpoint/store'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 
 export class NativeZipRecoveryUnavailableError extends Error {
   constructor(cause: unknown) {
@@ -24,7 +24,7 @@ export async function verifyProgressiveZipRecovery(
       checkpoint.object.objectId !== object.objectId || checkpoint.object.handleId !== object.handleId ||
       checkpoint.object.kind !== 'zip-archive') throw new TypeError('Native ZIP checkpoint ownership is missing')
   if (lifecycle.kind === 'resumable-receive' &&
-      (lifecycle.payloadKind !== 'opfs-zip' || lifecycle.objectId !== object.objectId ||
+      (lifecycle.payloadKind !== 'workspace-archive' || lifecycle.objectId !== object.objectId ||
        lifecycle.checkpointGeneration > checkpoint.generation)) {
     throw new TypeError('Native ZIP lifecycle does not match its committed checkpoint')
   }

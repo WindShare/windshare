@@ -23,7 +23,7 @@ import {
 } from '../../workspace/receipts'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import { storedReceiveLifecycleState } from '../../workspace/state-codec'
-import type { PlanKind, ReceiveLifecycleState } from '../../workspace/state'
+import type { PlanKind, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { AdmittedWorkspaceContent, WorkspaceBudgetClaim } from '../../workspace/stages'
 import { receiveOperationResumeDescriptor, type ReceiveOperationResumeDescriptor } from '../descriptor'
 import type {

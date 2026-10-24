@@ -240,7 +240,7 @@ test('admits product-bound workspace ZIP before requesting content', async ({ pa
   expect(checkpointAfterPause).toEqual(checkpointBeforePause)
   expect(paused).toMatchObject({
     kind: 'resumable-receive',
-    payloadKind: 'opfs-zip',
+    payloadKind: 'workspace-archive',
     objectId: checkpointBeforePause.object.objectId,
     checkpointGeneration: checkpointBeforePause.generation,
     completedFileCount: 0n,

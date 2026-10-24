@@ -1,8 +1,12 @@
 import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
-import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../src/transfer/lifecycle/name-repair'
+import type {
+  RecoverySummary,
+} from '../../src/transfer/lifecycle/recovery-summary'
 import {
   WorkspaceCostObservationAccumulatorV1,
   materializationRouteIdentity,
@@ -18,7 +22,7 @@ import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { PersistentPreservingWriterOpenError } from '../../src/output/persistent-tree/recovery'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { PersistentWriterOpenPauseRequestedError } from '../../src/transfer/settlement/persistent-file-transaction'
+import { PersistentWriterOpenPauseRequestedError } from '../../src/output/execution/persistent-file-transaction'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
 import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {

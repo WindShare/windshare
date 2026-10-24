@@ -35,7 +35,7 @@ import {
 } from '../../src/output/persistence/checkpoint'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output-session'
+import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 
 const MIGRATION_SENTINEL_BYTES = Uint8Array.of(91, 92, 93, 94)
 // The seeded rows use the retired v9 schema even when the current database advances.

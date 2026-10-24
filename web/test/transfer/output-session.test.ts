@@ -12,7 +12,7 @@ import {
   validatePlanExecutionBinding,
   type DirectTreeExecution,
   type OutputSession,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import {
   createDirectTreePlan,
   createFSANamedEntryReservation,

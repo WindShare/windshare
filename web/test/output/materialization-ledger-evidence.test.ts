@@ -31,9 +31,9 @@ import {
   FILE_CHECKPOINT_PHASE_ACTIVE,
   newFileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
-import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/fault'
+import { outputFault, FaultScope, OutputFaultCode } from '../../src/transfer/failure/fault'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output-session'
+import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 
 describe('materialization ledger settlement evidence', () => {
   it('validates a published single-file [] fact against worker counts', async () => {

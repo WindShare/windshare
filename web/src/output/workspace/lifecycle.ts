@@ -2,7 +2,7 @@ import {
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-} from './state'
+} from '../../transfer/lifecycle/state'
 import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
 import {
   gateDirectZipRecovery,
@@ -209,7 +209,7 @@ function resumeStable(
       state.payloadKind === 'direct-zip'
     const fileSetResume = (context.planKind === 'direct-tree' ||
       context.planKind === 'workspace-then-publish') && state.payloadKind === 'file-set'
-    const nativeZipResume = context.planKind === 'workspace-then-publish' && state.payloadKind === 'opfs-zip'
+    const nativeZipResume = context.planKind === 'workspace-then-publish' && state.payloadKind === 'workspace-archive'
     if (!directZipResume && !fileSetResume && !nativeZipResume) {
       throw new TypeError('plan cannot resume receive state')
     }
@@ -598,4 +598,4 @@ export type {
   PreparationAdmissionReason,
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
-} from './state'
+} from '../../transfer/lifecycle/state'

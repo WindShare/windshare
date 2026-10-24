@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   bindOutputFileTransaction,
-} from '../../src/transfer/output-file-transaction'
+} from '../../src/transfer/output/transaction'
 import {
   VerifiedDurableRanges,
   VerifiedFinalOutputFile,
@@ -9,7 +9,7 @@ import {
   type OutputFile,
   type OutputFileOwnership,
   type OutputSession,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 import { identityText } from './v2-job-fixture'
 import {
   snapshotLogicalArtifactPath,

@@ -10,7 +10,7 @@ import {
   type DirectZipIntent,
 } from './direct-zip'
 import type { SelectionMeasure } from './measure'
-import type { DirectResumableZipExecution } from './output-session'
+import type { DirectResumableZipExecution } from './output/session'
 import type { V2TransferProgressLedger } from './progress/v2-ledger'
 
 interface DirectZipProgressObservers {

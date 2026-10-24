@@ -31,7 +31,7 @@ import type {
 import type { DirectZipJournalRepository } from '../../direct-zip/journal/repository'
 import type { PersistedReceiveRecord, ReceiveOperationV2 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
-import type { PlanKind, ReceiveLifecycleState } from '../../workspace/state'
+import type { PlanKind, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type {
   AdmittedWorkspaceContent,
   WorkspaceBudgetClaim,

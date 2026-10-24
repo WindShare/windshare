@@ -2,7 +2,7 @@ import type { OutputFailureSinks } from './facts'
 import {
   createPerformanceSummaryObservations,
   type PerformanceSummaryObservations,
-} from './performance-summary'
+} from '../../diagnostics/performance/performance-summary'
 import type { OutputDiagnosticBackend, OutputTraceSource } from './trace'
 import type { TraceClock } from '../../diagnostics/trace/ports'
 import type { PerformanceCorrelationProjectionInput } from '../../diagnostics/trace/transfer-payload'

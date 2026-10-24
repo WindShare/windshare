@@ -5,7 +5,7 @@ import { OriginPrivateWorkspaceRoot } from '../../origin-private/workspace-root'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
 import type { WorkspaceBudgetV1 } from '../../workspace/budget'
 import { recoverAbandonedOperation } from '../../workspace/recovery'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { originalCheckpointBinding, originalReceiveCheckpointSummary,
   readOriginalReceiveCheckpoint } from '../../origin-private/recovery/receive-checkpoint'
 import type { WorkspaceContinuationInput } from './workspace-continuation-authority'

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
-import { disabledOutputExecutionProfile } from '../../src/transfer/output-session'
+import { disabledOutputExecutionProfile } from '../../src/transfer/output/session'
 import {
   catalogFixture,
   directoryEntry,

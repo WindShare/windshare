@@ -6,7 +6,7 @@ import {
   type OriginPrivatePackageAttemptResult,
 } from '../../output/origin-private/workflow'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   type WorkspaceCleanupRequest,
   type WorkspaceOperationStages,
@@ -16,13 +16,13 @@ import type {
   PersistentMaterializationSettlementCut,
   PersistentWorkspaceSettlementAuthority,
   WorkspaceMaterializationEvidence,
-} from '../../transfer/settlement/persistent-execution'
+} from '../../output/execution/persistent-execution'
 import type {
   PlanSettlementRequest,
   V2PlanExecutionAuthority,
-} from '../../transfer/output-session'
+} from '../../transfer/output/session'
 import type { SuccessfulTransferWorkerSettlement } from '../../transfer/outcome'
-import type { PersistentWorkspaceInterruption } from '../../transfer/settlement/persistent-evidence'
+import type { PersistentWorkspaceInterruption } from '../../output/execution/persistent-evidence'
 import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../application/receive/actions'
 import type { V2LifecycleMutation } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
@@ -153,7 +153,7 @@ export class WorkspaceReceivePackaging {
     if (lifecycle.kind === 'discarded' || lifecycle.kind === 'source-invalidated') return null
     let ownedBytes = 0n
     if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
-      ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.retainedBytes
+      ownedBytes = lifecycle.payloadKind === 'workspace-archive' ? lifecycle.occupiedBytes : lifecycle.retainedBytes
     }
     else if (this.#packageExactBytes !== undefined &&
         (lifecycle.kind === 'waiting-to-save' ||

@@ -1,8 +1,12 @@
 import { availableReceiveActions, receiveLifecycleCategory, newReceiveOperationKind, type ReceiveActionFacts } from '../application/receive/policy'
 import type { LifecycleUserAction, PersistentWriterOpenPauseFact, V2ActiveReceiveControl, ReceiveSettlementWait, WorkspaceUsage } from '../application/receive/actions'
 import { artifactRequestedName } from '../output/planning'
-import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
-import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
+import type {
+  CompatibleNameRepairSummary,
+} from '../transfer/lifecycle/name-repair'
+import type {
+  RecoverySummary,
+} from '../transfer/lifecycle/recovery-summary'
 import {
   type ReceiveLifecycleState,
 } from '../output/workspace'
@@ -367,7 +371,7 @@ function resumableReceiveCopy(
       'warning',
     )
   }
-  if (state.payloadKind === 'opfs-zip') {
+  if (state.payloadKind === 'workspace-archive') {
     if (state.pauseReason === 'storage-pressure') {
       return copy('Browser storage is full',
         `${formatBytes(state.completedBytes)} of received content is retained. Free browser storage, then choose Continue.`, 'warning')

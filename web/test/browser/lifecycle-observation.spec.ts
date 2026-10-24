@@ -5,13 +5,13 @@ test('observes only committed lifecycle transitions from the owned IndexedDB han
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const proof = await page.evaluate(async () => {
     const repositoryPath = '/src/output/browser/indexeddb/receive-operation-repository.ts'
-    const statePath = '/src/output/workspace/state.ts'
+    const statePath = '/src/transfer/lifecycle/state.ts'
     const codecPath = '/src/output/workspace/state-codec.ts'
     const bytesPath = '/src/crypto/bytes.ts'
     const { IndexedDbReceiveOperationRepository } = await import(repositoryPath) as
       typeof import('../../src/output/browser/indexeddb/receive-operation-repository')
     const { initialReceiveLifecycleState, nextReceiveLifecycleState } = await import(statePath) as
-      typeof import('../../src/output/workspace/state')
+      typeof import('../../src/transfer/lifecycle/state')
     const { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } = await import(codecPath) as
       typeof import('../../src/output/workspace/state-codec')
     const { encodeBase64Url } = await import(bytesPath) as typeof import('../../src/crypto/bytes')

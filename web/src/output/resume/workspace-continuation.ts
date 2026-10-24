@@ -32,7 +32,7 @@ import {
   type PreparationAdmissionReceiptV1,
 } from '../workspace/receipts'
 import type { ReceiveOperationRepository } from '../workspace/repository'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   type AdmittedWorkspaceContent,
   type WorkspaceOperationStages,

@@ -7,7 +7,7 @@ import {
 } from '../browser/indexeddb-database'
 import { readStoredCheckpoint } from '../browser/indexeddb/repository-transactions'
 import { FILE_ID_BYTES, OPERATION_ID_BYTES, fileCheckpointDigest } from '../persistence/checkpoint'
-import { snapshotIdentity } from '../workspace/canonical'
+import { snapshotIdentity } from '../../transfer/encoding/canonical'
 import { requireBrowserTargetProof } from './final-proof'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import { authorizeBrowserDeliveryRestart, assertBrowserDeliveryTransition, stageCheckpoint, targetCheckpoint } from './lifecycle'

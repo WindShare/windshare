@@ -11,7 +11,9 @@ import { IndexedDbReceiveResumeSource } from '../../output/browser/indexeddb-res
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
 import { IndexedDbCompatibleNameLedger } from '../../output/browser/indexeddb-compatible-name-ledger'
 import type { CompatibleNameLedger } from '../../output/file-system-access/compatible-name/ledger'
-import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../transfer/lifecycle/name-repair'
 import {
   createOutputFailureBinding,
   recordOutputException,
@@ -246,7 +248,7 @@ export async function listBrowserRetainedOperations(
           canForgetReceiveOperationHistory(descriptor.lifecycle)
           ? Object.freeze([...presentation.actions, 'forget' as const]) : presentation.actions
         const ordinaryActions = descriptor.lifecycle.kind === 'resumable-receive' &&
-          descriptor.lifecycle.payloadKind === 'opfs-zip'
+          descriptor.lifecycle.payloadKind === 'workspace-archive'
           ? routeActions.filter(action => action !== 'catch-up') : routeActions
         const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, ordinaryActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
@@ -263,7 +265,7 @@ export async function listBrowserRetainedOperations(
           ...(browserDelivery === undefined ? {} : { browserDelivery }),
           actions: hasMutationAuthority && descriptor.recoveryUnavailable === undefined && supportsPartialExport(windowPort) &&
             descriptor.lifecycle.kind === 'resumable-receive' &&
-            descriptor.lifecycle.payloadKind === 'opfs-zip' &&
+            descriptor.lifecycle.payloadKind === 'workspace-archive' &&
             descriptor.lifecycle.completedFileCount > 0n
             ? Object.freeze([...availableActions, 'save-partial' as const])
             : availableActions,

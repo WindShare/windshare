@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
-import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/fault'
+import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
 import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
-import { createProgressiveWorkspaceExecution } from '../../../src/transfer/settlement/progressive-workspace-execution'
+import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { createProgressiveZipOutput } from '../../../src/output/progressive-zip/output'
 import { catalogFixture, directoryEntry, fileEntry, identity, planAuthorityFixture, readerFixture,
   receiveIntentFixture, transferJobFixture } from '../../transfer/v2-job-fixture'
@@ -134,7 +134,7 @@ describe('progressive ZIP settlement and cancellation', () => {
     })
     const close = vi.spyOn(archive, 'close')
     const pause = vi.fn(async (_request, evidence) => ({
-      kind: 'resumable-receive' as const, payloadKind: 'opfs-zip' as const,
+      kind: 'resumable-receive' as const, payloadKind: 'workspace-archive' as const,
       operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
       objectId: identity(33).toString(), checkpointGeneration: evidence.checkpoint.generation,
       occupiedBytes: evidence.checkpoint.physicalLength, completedFileCount: 1n, completedBytes: 6n,
@@ -167,7 +167,7 @@ describe('progressive ZIP settlement and cancellation', () => {
     release.resolve()
     const result = await running
     await observation
-    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip' })
+    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive' })
     expect(pause).toHaveBeenCalledOnce()
     expect(close).toHaveBeenCalledOnce()
     expect(publish).not.toHaveBeenCalled()
@@ -277,7 +277,7 @@ describe('progressive native ZIP missing-file results', () => {
           const checkpoint = evidence.checkpoint
           return {
             operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
-            kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: checkpoint.object.objectId,
+            kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: checkpoint.object.objectId,
             checkpointGeneration: checkpoint.generation, occupiedBytes: checkpoint.physicalLength,
             completedFileCount: 2n, completedBytes: 8n, discoveryComplete: checkpoint.discoveryComplete,
           }
@@ -459,7 +459,7 @@ describe('progressive native ZIP archive', () => {
           expect(checkpoint).toEqual(await f.store.readCheckpoint())
           return {
             operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
-            kind: 'resumable-receive', payloadKind: 'opfs-zip',
+            kind: 'resumable-receive', payloadKind: 'workspace-archive',
             objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
             occupiedBytes: checkpoint.physicalLength, completedFileCount: 0n, completedBytes: 0n,
             discoveryComplete: checkpoint.discoveryComplete,
@@ -501,7 +501,7 @@ describe('progressive native ZIP archive', () => {
       revisions: readers.revisions, broker: readers.broker,
     }).run()
     expect(result.worker.status).not.toBe('Succeeded')
-    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip' })
+    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'workspace-archive' })
     expect((await archive.committedEntry(`file:${file.idText}`)).ranges.map(r => [r.start, r.end])).toEqual([[0n, 2n]])
     expect(archive.failed).toBe(true)
     expect(f.io.closed).toBe(true)

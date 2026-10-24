@@ -1,12 +1,12 @@
 import { createProgressiveZipWorkspaceBudget } from '../budget'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../canonical'
+import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../../../transfer/encoding/canonical'
 import { sealPackagedArtifact } from '../aggregate'
 import {
   createPreparationAdmissionReceipt, createZipArtifactVerificationReceipt,
   createPackageReceipt, persistedReceiptRecord,
 } from '../receipts'
 import { createPersistedReceiveRecord, RECEIVE_RECORD_PACKAGE } from '../records'
-import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../state'
+import { nextReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { taskEntryComplete, type TaskCheckpoint } from '../../origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../../origin-private/task-checkpoint/store'
 import { issueContentGate, type AdmittedWorkspaceContent, type WorkspaceBudgetAuthority } from './contracts'
@@ -71,7 +71,7 @@ export class WorkspaceProgressiveStages {
     const state = await this.runtime.lifecycle()
     requireReceivingState(state)
     const next = nextReceiveLifecycleState(state, {
-      kind: 'resumable-receive', payloadKind: 'opfs-zip',
+      kind: 'resumable-receive', payloadKind: 'workspace-archive',
       objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
       completedFileCount: progress.completedFileCount, completedBytes: progress.completedBytes,
       discoveryComplete: checkpoint.discoveryComplete, occupiedBytes: checkpoint.physicalLength,
@@ -142,7 +142,7 @@ export class WorkspaceProgressiveStages {
 
 function requireReceivingState(state: ReceiveLifecycleState, initial = false): void {
   if (state.kind === 'receiving' || (initial && state.kind === 'intent-frozen') ||
-      (state.kind === 'resumable-receive' && state.payloadKind === 'opfs-zip')) return
+      (state.kind === 'resumable-receive' && state.payloadKind === 'workspace-archive')) return
   throw new TypeError('Native ZIP stage cannot replace a completed or foreign lifecycle')
 }
 

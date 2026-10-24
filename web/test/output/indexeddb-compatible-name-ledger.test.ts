@@ -20,7 +20,7 @@ import {
   readOperationRow,
   storedOperationRow,
 } from '../../src/output/browser/indexeddb-compatible-name-records'
-import { initialReceiveLifecycleState } from '../../src/output/workspace/state'
+import { initialReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 
 describe('compatible-name ledger model', () => {
   it('keys exact canonical path boundaries and entry kind without joined-path ambiguity', () => {

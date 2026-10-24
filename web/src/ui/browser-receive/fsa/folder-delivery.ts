@@ -13,7 +13,7 @@ import { openFSAFileCheckpointRepository } from '../../../output/file-system-acc
 import { readFSARecoverySummary } from '../../../output/file-system-access/recovery-summary'
 import { requireDirectTreeIntent } from '../../../output/file-system-access/settlement-proof'
 import type { ReceiveIntent } from '../../../transfer/intent'
-import type { ReceiveLifecycleState } from '../../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 
 export interface BrowserFolderDeliveryContext {
   readonly storage: OriginPrivateStorageManager

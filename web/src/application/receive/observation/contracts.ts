@@ -1,5 +1,7 @@
 import type { DomainTraceSource } from '../../../diagnostics/trace/ports'
-import type { CompatibleNameRepairSummary } from '../../../output/file-system-access/compatible-name/model'
+import type {
+  CompatibleNameRepairSummary,
+} from '../../../transfer/lifecycle/name-repair'
 import type { IncidentScopeHandle, IncidentScopeKind, IncidentScopeOwner, PresentationDecision } from '../../../diagnostics/incident'
 import type { ReceiveLifecycleState } from '../../../output/workspace'
 import type { OfferComputedDecision, OfferDisabledDecision, ProjectionEpoch, RetryableDiscoveryReason } from '../../../output/planning'

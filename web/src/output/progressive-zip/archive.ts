@@ -1,5 +1,5 @@
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
-import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../workspace/lifecycle/content-warning'
+import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
 import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
 import { zipFinalizationBatches } from './finalization'

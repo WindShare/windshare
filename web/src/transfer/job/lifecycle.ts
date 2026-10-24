@@ -1,4 +1,4 @@
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../lifecycle/state'
 import type { TransferJobOptions } from './contract'
 import type {
   CompletedTransferWorkerSettlement,

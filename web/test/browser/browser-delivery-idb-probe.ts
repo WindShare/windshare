@@ -11,7 +11,7 @@ import { finalFileCheckpointProof } from '../../src/output/persistence/journal'
 import { newFileCheckpointV2, type FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
 import { createFinalizedFileMaterializationRecords } from '../../src/output/materialization-ledger/journal'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output-session'
+import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
 import { deliveryFixture, deliveryIdentity } from '../output/browser-delivery-fixture'
 

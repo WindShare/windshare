@@ -15,7 +15,7 @@ import type {
   OutputFileRequest,
   OutputFileTransaction,
   OutputSession,
-} from '../../src/transfer/output-session'
+} from '../../src/transfer/output/session'
 
 type StreamModule = typeof import('../../src/output/streams/single-file')
 

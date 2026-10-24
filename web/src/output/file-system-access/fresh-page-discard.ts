@@ -22,7 +22,7 @@ import {
   equalCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../workspace/lifecycle'
 import {
   RECEIVE_RECORD_CLEANUP,
@@ -37,7 +37,7 @@ import {
   decodeStoredReceiveLifecycleState,
   storedReceiveLifecycleState,
 } from '../workspace/state-codec'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   validateReceiveIntent,
   type DirectoryTreeArtifact,

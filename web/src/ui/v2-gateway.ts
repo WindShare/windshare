@@ -39,7 +39,7 @@ import type {
 import { V2FilePreview } from '../preview/v2-preview'
 import { TransferJob, type TransferJobOptions } from '../transfer/v2-job'
 import { type ReceiveIntent } from '../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../transfer/output-session'
+import type { V2PlanExecutionAuthority } from '../transfer/output/session'
 import type { AuthenticatedDiscoverySource } from '../transfer/projection'
 import { type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 import { V2JoinedProjectionSource } from './selection-discovery/source'

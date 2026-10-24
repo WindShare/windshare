@@ -11,7 +11,7 @@ import {
   isFault,
   outputFault,
   type Fault,
-} from './fault'
+} from './failure/fault'
 import {
   RECEIVE_INTENT_DIGEST_BYTES,
   STABLE_IDENTITY_BYTES,

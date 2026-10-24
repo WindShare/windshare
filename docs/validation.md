@@ -48,6 +48,10 @@ The ordinary gate set shared by `make ci` and `make ci-parallel`:
 short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
 ```
 
+### Web boundaries
+
+`make web` checks resolved TypeScript dependencies, including type imports, re-exports, aliases, and dynamic imports. `transfer/**` owns receive intent, lifecycle, output ports, and failure contracts; it cannot reach `output/**`, application composition, or UI, even through a shared module. Storage execution adapters live under `output/execution` and `output/direct-zip/transfer`. Backends declare immutable output-failure facts; transfer consumes those facts without recognizing native exception classes.
+
 ### Go packages
 
 The root `go.mod` owns all production Go packages. Core is `./core/...`; non-core is the remainder. Core packages cannot import non-core WindShare packages or concrete networking and transport implementations. Production `cmd/**` files cannot import `connectivity/**`, `transport/**`, or `relay/**`; the engine boundary gate follows exported aliases, fields, methods, and factory signatures in every public `engine/**` package to reject native types in the application API. Go gates run with `GOWORK=off` and `GOTOOLCHAIN=local`.

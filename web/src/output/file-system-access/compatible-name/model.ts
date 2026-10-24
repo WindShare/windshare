@@ -1,10 +1,11 @@
+import type { CompatibleNameRepairSummary, CompatibleNamePairPlacement, CompatibleNameFooterObservationV1, CompatibleNameFooterState } from '../../../transfer/lifecycle/name-repair'
 import {
   catalogNameCollisionKey,
   snapshotPortableCatalogPath,
   isPortableCatalogName,
 } from '../../../catalog/path-policy'
 import { encodeBase64Url } from '../../../crypto/bytes'
-import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
   RECEIVE_OPERATION_SCHEMA_VERSION,
   RECEIVE_RECORD_RECEIPT,
@@ -16,7 +17,7 @@ import {
   canonicalText,
   snapshotCanonicalBytes,
   snapshotIdentity,
-} from '../../workspace/canonical'
+} from '../../../transfer/encoding/canonical'
 import {
   canonicalReceiveLifecycleStateBytes,
   decodeReceiveLifecycleState,
@@ -31,12 +32,10 @@ export const MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS = 8
 const BASE32_TOKEN_PATTERN = /^[a-z2-7]{6}$/u
 
 export type CompatibleNameEntryKind = 'file' | 'directory'
-export type CompatibleNamePairPlacement = 'inside-logical-root' | 'beside-mapped-root'
 export type CompatibleNameActivationState = 'prepared' | 'pair-ready' | 'active'
 export type CompatibleNameOwnershipState = 'selected' | 'owned'
 export type CompatibleNameCommitState = 'uncommitted' | 'committed'
 export type CompatibleNamePairKind = 'script' | 'sidecar'
-export type CompatibleNameFooterState = 'active' | 'completed' | 'stopped' | 'failed'
 export type CompatibleNameTerminalFooterState = Exclude<CompatibleNameFooterState, 'active'>
 export type CompatibleNameOrdinaryTerminalLifecycle = Extract<
   ReceiveLifecycleState,
@@ -67,24 +66,6 @@ export interface CompatibleNamePendingTerminalOutcomeV1 {
   readonly ordinaryLifecycle: CompatibleNameOrdinaryTerminalLifecycle
   /** Immutable local receipt needed to finish lifecycle publication without sender work. */
   readonly terminalReceipt: PersistedReceiveRecord
-}
-
-export interface CompatibleNameFooterObservationV1 {
-  readonly committedCount: number
-  readonly state: CompatibleNameFooterState
-}
-
-export interface CompatibleNameRepairSummary {
-  readonly committedCount: number
-  readonly logicalPathSample: readonly (readonly string[])[]
-  readonly pairDisplayNames: Readonly<{
-    script: string
-    sidecar: string
-  }>
-  readonly placement: CompatibleNamePairPlacement
-  readonly latestObservedFooter?: CompatibleNameFooterObservationV1
-  readonly sidecarSync: 'pending' | 'current'
-  readonly terminalSettlement: 'none' | 'pending' | 'complete'
 }
 
 export interface CompatibleNameOperationHeaderV1 {

@@ -1,7 +1,7 @@
 import type { DirectTreeRootExpectation } from '../../transfer/job/coordinate/direct-tree'
-import type { MaterializationSummary } from '../../transfer/output-session'
+import type { MaterializationSummary } from '../../transfer/output/session'
 import { FILE_CHECKPOINT_ID_BYTES } from '../persistence/checkpoint'
-import { CanonicalRecordReader } from '../workspace/canonical-reader'
+import { CanonicalRecordReader } from '../../transfer/encoding/canonical-reader'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -12,7 +12,7 @@ import {
   concatCanonicalBytes,
   snapshotIdentity,
   type CanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   canonicalRootFact,
   compareMaterializationLedgerEntryCursors,

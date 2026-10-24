@@ -10,7 +10,7 @@ import {
 } from '../../src/output/workspace/records'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import type { ReceiveOperationTransition } from '../../src/output/workspace/repository'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import {
   absentCompatibleNameLedgerFactory, bindTask, fsaExecution, MemoryDirectory,

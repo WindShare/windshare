@@ -1,16 +1,16 @@
 import type { ReceiveIntent } from '../../transfer/intent'
-import type { ExactPreparationEvidence } from '../../transfer/output-session'
+import type { ExactPreparationEvidence } from '../../transfer/output/session'
 import type {
   V2PortableOriginalExecutionRoute,
   V2PortableZipExecutionRoute,
 } from '../../transfer/settlement/v2-plan-authority'
 import type { CanonicalModifiedTime } from '../../transfer/directory-admission'
-import type { PreparationAdmissionReason } from '../workspace/state'
+import type { PreparationAdmissionReason } from '../../transfer/lifecycle/state'
 import type {
   PreparationDirectoryEntry,
   PreparationFileEntry,
   PreparationManifestEntry,
-} from '../workspace/preparation'
+} from '../../transfer/preparation'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -22,7 +22,7 @@ import {
   canonicalU32,
   canonicalU64,
   concatCanonicalBytes,
-} from '../workspace/canonical'
+} from '../../transfer/encoding/canonical'
 import {
   planZipLayout,
   type SealedZipLayoutPlanV1,

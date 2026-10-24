@@ -1,6 +1,6 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { FSANamedContainerEntryReservation } from '../../transfer/intent'
-import { OutputDirectoryMutationError } from '../../transfer/output-session'
+import { OutputDirectoryMutationError } from '../../transfer/output/session'
 import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,

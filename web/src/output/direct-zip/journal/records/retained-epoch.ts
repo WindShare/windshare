@@ -1,6 +1,6 @@
 import { decodeBase64Url, encodeBase64Url } from '../../../../crypto/bytes'
 import { chainDirectZipEpochDigestV1, requireDirectZipFsaOffset } from '../../format'
-import { canonicalFrame, canonicalU8, canonicalU64, concatCanonicalBytes, type CanonicalBytes } from '../../../workspace/canonical'
+import { canonicalFrame, canonicalU8, canonicalU64, concatCanonicalBytes, type CanonicalBytes } from '../../../../transfer/encoding/canonical'
 import type { DirectZipRetainedEpochProofV1 } from '../model'
 import { fixedFrame, snapshotFixedBase64 } from './canonical-fields'
 

@@ -1,7 +1,7 @@
 import {
   canonicalIdentity,
   snapshotIdentity,
-} from './canonical'
+} from '../../transfer/encoding/canonical'
 
 export interface WorkspaceOwnedObjectCleanupTarget {
   readonly ownedObjectId: string

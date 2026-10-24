@@ -72,7 +72,7 @@ import {
 } from '../../src/output/workspace/state-codec'
 import {
   type ReceiveLifecycleState,
-} from '../../src/output/workspace/state'
+} from '../../src/transfer/lifecycle/state'
 import { identity } from './planning/fixture'
 
 const WORKSPACE_CAPACITY = Object.freeze({

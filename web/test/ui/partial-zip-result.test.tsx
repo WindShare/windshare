@@ -1,10 +1,10 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../src/output/workspace/state'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { validatePersistedReceiveRecord } from '../../src/output/workspace/records'
-import { snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../src/output/workspace/lifecycle/content-warning'
+import { snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../src/transfer/lifecycle/content-warning'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { TaskCard, TaskDetails } from '../../src/ui/tasks/TaskView'
 
