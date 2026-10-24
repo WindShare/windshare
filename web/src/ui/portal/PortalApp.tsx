@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { V2ReceiverController } from '../v2-controller'
+import type { ReceiverController } from '../controller'
 import { P2PMeshBackground } from './background/P2PMeshBackground'
 import { PortalHeader } from './PortalHeader'
 import { HeroSection } from './HeroSection'
@@ -11,7 +11,7 @@ import { composeTasks } from '../experience/task-composition'
 import { TaskDownloads } from '../experience/TaskDownloads'
 import './portal.css'
 
-export function PortalApp({ controller }: { readonly controller: V2ReceiverController }) {
+export function PortalApp({ controller }: { readonly controller: ReceiverController }) {
   const snapshot = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,

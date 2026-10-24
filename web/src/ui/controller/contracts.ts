@@ -1,15 +1,15 @@
-import type { V2CapturedLocation } from '../capability/location'
-import type { V2DiagnosticFormatter, V2SecurityMilestone } from '../../application/browser-share/capability-lifecycle'
-import type { V2ReceiveCompositionPort } from '../../application/receive/contracts'
+import type { CapturedLocation } from '../capability/location'
+import type { DiagnosticFormatter, SecurityMilestone } from '../../application/browser-share/capability-lifecycle'
+import type { ReceiveCompositionPort } from '../../application/receive/contracts'
 import type { ReceiveObservationOptions } from '../../application/receive/observation/contracts'
 
 export interface CapabilityIntakePort {
-  accept(captured: V2CapturedLocation): void
+  accept(captured: CapturedLocation): void
 }
 
-export interface V2ReceiverControllerOptions extends ReceiveObservationOptions {
+export interface ReceiverControllerOptions extends ReceiveObservationOptions {
   readonly capabilityIntake?: CapabilityIntakePort
-  readonly diagnosticFormatter?: V2DiagnosticFormatter
-  readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
-  readonly receive: V2ReceiveCompositionPort
+  readonly diagnosticFormatter?: DiagnosticFormatter
+  readonly onSecurityMilestone?: (milestone: SecurityMilestone) => void
+  readonly receive: ReceiveCompositionPort
 }

@@ -14,30 +14,30 @@ import (
 )
 
 const (
-	windowsV3PlacementDirectory = "guarded"
-	windowsV3PlacementFile      = windowsV3PlacementDirectory + "/file.bin"
+	windowsPlacementDirectory = "guarded"
+	windowsPlacementFile      = windowsPlacementDirectory + "/file.bin"
 )
 
-func TestWindowsV3PublicDirectoryPlacementGuardPinsCompleteAncestry(t *testing.T) {
+func TestWindowsPublicDirectoryPlacementGuardPinsCompleteAncestry(t *testing.T) {
 	base := t.TempDir()
 	rootPath := filepath.Join(base, "root")
 	if err := os.Mkdir(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer platform.Close()
 
-	parent, err := platform.root.openDirectory(windowsV3PlacementDirectory, false, windows.FILE_CREATE)
+	parent, err := platform.root.openDirectory(windowsPlacementDirectory, false, windows.FILE_CREATE)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer parent.Close()
-	parentPath := filepath.Join(rootPath, windowsV3PlacementDirectory)
+	parentPath := filepath.Join(rootPath, windowsPlacementDirectory)
 	displacedPath := filepath.Join(base, "displaced")
-	if err := os.Rename(parentPath, displacedPath); !windowsV3IsBlockedAncestorReplacement(err) {
+	if err := os.Rename(parentPath, displacedPath); !windowsIsBlockedAncestorReplacement(err) {
 		t.Fatalf("move live public directory error = %v, want placement denial", err)
 	}
 
@@ -49,7 +49,7 @@ func TestWindowsV3PublicDirectoryPlacementGuardPinsCompleteAncestry(t *testing.T
 	if err := parent.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(parentPath, displacedPath); !windowsV3IsBlockedAncestorReplacement(err) {
+	if err := os.Rename(parentPath, displacedPath); !windowsIsBlockedAncestorReplacement(err) {
 		t.Fatalf("move ancestor of live public descendant error = %v, want placement denial", err)
 	}
 	if err := child.Close(); err != nil {
@@ -60,19 +60,19 @@ func TestWindowsV3PublicDirectoryPlacementGuardPinsCompleteAncestry(t *testing.T
 	}
 }
 
-func TestWindowsV3GuardedPublicationCannotFollowDisplacedParent(t *testing.T) {
+func TestWindowsGuardedPublicationCannotFollowDisplacedParent(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "root")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(root)
+	platform, err := openWindowsOutputPlatform(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer platform.Close()
 
-	parent, err := platform.root.openDirectory(windowsV3PlacementDirectory, false, windows.FILE_CREATE)
+	parent, err := platform.root.openDirectory(windowsPlacementDirectory, false, windows.FILE_CREATE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,9 +89,9 @@ func TestWindowsV3GuardedPublicationCannotFollowDisplacedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parentPath := filepath.Join(root, windowsV3PlacementDirectory)
+	parentPath := filepath.Join(root, windowsPlacementDirectory)
 	displaced := filepath.Join(base, "publication-displaced")
-	if err := os.Rename(parentPath, displaced); !windowsV3IsBlockedAncestorReplacement(err) {
+	if err := os.Rename(parentPath, displaced); !windowsIsBlockedAncestorReplacement(err) {
 		t.Fatalf("move immediately before publication error = %v, want placement denial", err)
 	}
 	published, err := parent.LinkRegularFileNoReplace(source, "file.bin")
@@ -101,12 +101,12 @@ func TestWindowsV3GuardedPublicationCannotFollowDisplacedParent(t *testing.T) {
 	if err := published.Close(); err != nil {
 		t.Fatal(err)
 	}
-	windowsV3RequirePlacementResult(t, root, displaced, []byte("data"))
+	windowsRequirePlacementResult(t, root, displaced, []byte("data"))
 }
 
-func windowsV3RequirePlacementResult(t *testing.T, root, displaced string, expected []byte) {
+func windowsRequirePlacementResult(t *testing.T, root, displaced string, expected []byte) {
 	t.Helper()
-	actual, err := os.ReadFile(filepath.Join(root, windowsV3PlacementFile))
+	actual, err := os.ReadFile(filepath.Join(root, windowsPlacementFile))
 	if err != nil || !bytes.Equal(actual, expected) {
 		t.Fatalf("published bytes = %q, err=%v, want %q", actual, err, expected)
 	}

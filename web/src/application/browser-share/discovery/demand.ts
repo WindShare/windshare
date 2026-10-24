@@ -1,9 +1,9 @@
-import type { V2CatalogEntry } from '../../../catalog/v2-records'
-import type { V2CanonicalSelectionRule, V2FrozenSelectionPolicy } from '../../../catalog/v2-selection'
+import type { CatalogEntry } from '../../../catalog/records'
+import type { CanonicalSelectionRule, FrozenSelectionPolicy } from '../../../catalog/selection'
 import { encodeBase64Url } from '../../../crypto/bytes'
 
 interface RuleTarget {
-  readonly rule: V2CanonicalSelectionRule
+  readonly rule: CanonicalSelectionRule
   readonly ancestry?: readonly string[]
 }
 
@@ -11,7 +11,7 @@ interface RuleTarget {
 export class ProjectionDemand {
   readonly #remaining = new Map<string, RuleTarget>()
 
-  constructor(selection: V2FrozenSelectionPolicy) {
+  constructor(selection: FrozenSelectionPolicy) {
     for (const rule of selection.canonicalRules) {
       const id = encodeBase64Url(rule.id)
       const hint = selection.draftRules?.find(candidate =>
@@ -26,7 +26,7 @@ export class ProjectionDemand {
 
   get settled(): boolean { return this.#remaining.size === 0 }
 
-  observe(entry: V2CatalogEntry, ancestry: readonly string[]): void {
+  observe(entry: CatalogEntry, ancestry: readonly string[]): void {
     const target = this.#remaining.get(entry.idText)
     if (target === undefined) return
     if (target.rule.kind !== entry.kind || (target.ancestry !== undefined &&

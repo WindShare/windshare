@@ -6,13 +6,13 @@ import {
   requireUnsigned,
   requireText,
 } from './cbor'
-export const V2_PEER_PATH_CONTROL_KIND = Object.freeze({
+export const PEER_PATH_CONTROL_KIND = Object.freeze({
   demand: 1,
   revoke: 2,
   mappingReady: 3,
   networkChanged: 4,
 } as const)
-export const V2_MAXIMUM_PATH_CONTROL_LIFETIME_MS = 120_000
+export const MAXIMUM_PATH_CONTROL_LIFETIME_MS = 120_000
 const SCHEMA_VERSION = 2
 const IDENTITY_BYTES = 16
 const FIELD_COUNT = 8
@@ -20,7 +20,7 @@ const MAXIMUM_PROVIDER_PROFILE_LENGTH = 64
 const MAXIMUM_BODY_BYTES = 256
 const MAXIMUM_SEQUENCE = 0xffff_ffff_ffff_ffffn
 
-export interface V2PeerPathControl {
+export interface PeerPathControl {
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly networkGenerationId: Uint8Array<ArrayBuffer>
   readonly controlSequence: bigint
@@ -30,7 +30,7 @@ export interface V2PeerPathControl {
   readonly providerProfile?: string
 }
 
-export function encodeV2PeerPathControl(value: V2PeerPathControl): Uint8Array<ArrayBuffer> {
+export function encodePeerPathControl(value: PeerPathControl): Uint8Array<ArrayBuffer> {
   validate(value)
   return encodeCanonicalCbor([
     SCHEMA_VERSION, value.peerPathId, value.networkGenerationId, value.controlSequence,
@@ -38,7 +38,7 @@ export function encodeV2PeerPathControl(value: V2PeerPathControl): Uint8Array<Ar
   ])
 }
 
-export function decodeV2PeerPathControl(body: Uint8Array): V2PeerPathControl {
+export function decodePeerPathControl(body: Uint8Array): PeerPathControl {
   const fields = requireArray(
     decodeCanonicalCbor(body, MAXIMUM_BODY_BYTES, 'peer path control'),
     FIELD_COUNT,
@@ -60,7 +60,7 @@ export function decodeV2PeerPathControl(body: Uint8Array): V2PeerPathControl {
   return value
 }
 
-function validate(value: V2PeerPathControl): void {
+function validate(value: PeerPathControl): void {
   const profile = value.providerProfile ?? ''
   if (typeof profile !== 'string' || profile.length > MAXIMUM_PROVIDER_PROFILE_LENGTH || /[^a-z0-9.-]/u.test(profile)) {
     throw new Error('invalid provider profile')
@@ -71,7 +71,7 @@ function validate(value: V2PeerPathControl): void {
     typeof value.controlSequence !== 'bigint' ||
     value.controlSequence <= 0n || value.controlSequence > MAXIMUM_SEQUENCE ||
     !Number.isInteger(value.kind) ||
-    value.kind < V2_PEER_PATH_CONTROL_KIND.demand || value.kind > V2_PEER_PATH_CONTROL_KIND.networkChanged
+    value.kind < PEER_PATH_CONTROL_KIND.demand || value.kind > PEER_PATH_CONTROL_KIND.networkChanged
   ) {
     throw new Error('invalid path control identity or kind')
   }
@@ -79,11 +79,11 @@ function validate(value: V2PeerPathControl): void {
   // remote clock skew capable of extending a local reachability lease.
   if (
     !Number.isInteger(value.validForMilliseconds) || value.validForMilliseconds < 0 ||
-    value.validForMilliseconds > V2_MAXIMUM_PATH_CONTROL_LIFETIME_MS ||
+    value.validForMilliseconds > MAXIMUM_PATH_CONTROL_LIFETIME_MS ||
     !Number.isInteger(value.holdForMilliseconds) || value.holdForMilliseconds < 0 ||
     value.holdForMilliseconds > value.validForMilliseconds ||
-    (value.kind === V2_PEER_PATH_CONTROL_KIND.revoke) !== (value.validForMilliseconds === 0) ||
-    (value.kind !== V2_PEER_PATH_CONTROL_KIND.demand && value.holdForMilliseconds !== 0)
+    (value.kind === PEER_PATH_CONTROL_KIND.revoke) !== (value.validForMilliseconds === 0) ||
+    (value.kind !== PEER_PATH_CONTROL_KIND.demand && value.holdForMilliseconds !== 0)
   ) {
     throw new Error('invalid path control lifetime or hold')
   }

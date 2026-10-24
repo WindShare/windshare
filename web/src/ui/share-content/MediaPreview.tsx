@@ -1,4 +1,4 @@
-import type { V2PreviewSnapshot } from '../v2-model'
+import type { PreviewSnapshot } from '../model'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 import { VideoFrame } from './VideoFrame'
 
@@ -10,7 +10,7 @@ export interface PreviewActions {
 }
 
 export function MediaPreview({ preview, actions, inline = false }: {
-  readonly preview: V2PreviewSnapshot
+  readonly preview: PreviewSnapshot
   readonly actions: PreviewActions
   readonly inline?: boolean
 }) {

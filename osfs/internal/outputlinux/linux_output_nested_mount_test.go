@@ -25,7 +25,7 @@ func TestLinuxDirectoryOpenRejectsNestedMountIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	platform := opened.(*linuxV3Platform)
+	platform := opened.(*linuxPlatform)
 	defer platform.Close()
 
 	system := *platform.root.native.system

@@ -1,5 +1,5 @@
-import type { LifecycleActionPresentation } from '../v2-lifecycle-presentation'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { LifecycleActionPresentation } from '../lifecycle-presentation'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 import type { TaskAction, TaskRecoveryReadiness } from './model'
 
 export function activeTaskAction(action: LifecycleActionPresentation, planKind: string): TaskAction {
@@ -27,8 +27,8 @@ function activeConsequence(action: LifecycleActionPresentation, planKind: string
 }
 
 export function retainedTaskAction(
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
   readiness: TaskRecoveryReadiness,
 ): TaskAction {
   const remote = action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)
@@ -61,8 +61,8 @@ function stopConsequence(planKind: string): string {
 }
 
 function retainedLabel(
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
   readiness: TaskRecoveryReadiness,
 ): string {
   switch (action) {
@@ -83,7 +83,7 @@ function retainedLabel(
   }
 }
 
-function continuationLabel(operation: V2RetainedReceiveOperation, readiness: TaskRecoveryReadiness): string {
+function continuationLabel(operation: RetainedReceiveOperation, readiness: TaskRecoveryReadiness): string {
   if (operation.continuation === 'resume-start') return operation.lifecycle.kind === 'resumable-start' &&
     operation.lifecycle.reason === 'paused' ? 'Continue' : 'Retry download'
   if (readiness === 'destination-authorization-required') return 'Authorize destination and continue'
@@ -94,7 +94,7 @@ function continuationLabel(operation: V2RetainedReceiveOperation, readiness: Tas
   return operation.recoverySummary === undefined ? 'Continue' : 'Continue and preserve partial files'
 }
 
-function retainedConsequence(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): string | null {
+function retainedConsequence(operation: RetainedReceiveOperation, action: RetainedReceiveAction): string | null {
   switch (action) {
     case 'save-staged-files': return 'Copies complete retained files to the chosen folder without receiving them again.'
     case 'cleanup-staging': return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'

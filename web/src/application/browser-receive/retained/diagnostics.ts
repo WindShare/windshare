@@ -1,4 +1,4 @@
-import type { V2BoundReceiveOperation } from '../../receive/contracts'
+import type { BoundReceiveOperation } from '../../receive/contracts'
 import type {
   OutputFailureBinding,
   OutputDiagnosticBackend,
@@ -30,14 +30,14 @@ export function diagnosticsFor(
 }
 
 export function bindRuntimeOutputFailures(
-  runtime: V2BoundReceiveOperation,
+  runtime: BoundReceiveOperation,
   binding: OutputFailureBinding | undefined,
   display = runtime.display,
-): V2BoundReceiveOperation {
+): BoundReceiveOperation {
   const bindOutputFailures = binding === undefined
     ? runtime.bindOutputFailures?.bind(runtime)
     : (failures: OutputFailureSinks | undefined) => binding.bind(failures)
-  const bound: V2BoundReceiveOperation = {
+  const bound: BoundReceiveOperation = {
     intent: runtime.intent,
     ...(display === undefined ? {} : { display }),
     get plans() {
@@ -64,7 +64,7 @@ export function bindRuntimeOutputFailures(
       : {
           subscribeRepairProjectionActivation: (
             listener: Parameters<NonNullable<
-              V2BoundReceiveOperation['subscribeRepairProjectionActivation']
+              BoundReceiveOperation['subscribeRepairProjectionActivation']
             >>[0],
           ) => runtime.subscribeRepairProjectionActivation!(listener),
         }),

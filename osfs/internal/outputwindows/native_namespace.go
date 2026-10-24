@@ -17,23 +17,23 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3LinkRenameInformation struct {
+type windowsLinkRenameInformation struct {
 	Flags          uint32
 	RootDirectory  windows.Handle
 	FileNameLength uint32
 	FileName       [1]uint16
 }
 
-func windowsV3LinkRenameBuffer(flags uint32, root windows.Handle, name string) ([]byte, error) {
+func windowsLinkRenameBuffer(flags uint32, root windows.Handle, name string) ([]byte, error) {
 	encoded, err := windows.UTF16FromString(name)
 	if err != nil {
 		return nil, err
 	}
 	encoded = encoded[:len(encoded)-1]
-	var layout windowsV3LinkRenameInformation
+	var layout windowsLinkRenameInformation
 	headerSize := int(unsafe.Offsetof(layout.FileName))
 	buffer := make([]byte, headerSize+len(encoded)*2)
-	information := (*windowsV3LinkRenameInformation)(unsafe.Pointer(&buffer[0]))
+	information := (*windowsLinkRenameInformation)(unsafe.Pointer(&buffer[0]))
 	information.Flags = flags
 	information.RootDirectory = root
 	information.FileNameLength = uint32(len(encoded) * 2)
@@ -41,17 +41,17 @@ func windowsV3LinkRenameBuffer(flags uint32, root windows.Handle, name string) (
 	return buffer, nil
 }
 
-func (directory *windowsV3Directory) RemoveRegularLink(relative string, expected *windowsV3File) error {
+func (directory *windowsDirectory) RemoveRegularLink(relative string, expected *windowsFile) error {
 	return directory.removeRegularLink(relative, expected, directory.private)
 }
 
-func (directory *windowsV3Directory) RemoveOrdinaryProfileLink(relative string, expected *windowsV3File) error {
+func (directory *windowsDirectory) RemoveOrdinaryProfileLink(relative string, expected *windowsFile) error {
 	return directory.removeRegularLink(relative, expected, false)
 }
 
-func (directory *windowsV3Directory) removeRegularLink(
+func (directory *windowsDirectory) removeRegularLink(
 	relative string,
-	expected *windowsV3File,
+	expected *windowsFile,
 	private bool,
 ) error {
 	current, err := directory.openFileForDelete(relative, private)
@@ -61,16 +61,16 @@ func (directory *windowsV3Directory) removeRegularLink(
 	if err != nil {
 		return err
 	}
-	same, compareErr := sameWindowsV3OpenedObject(current, expected)
+	same, compareErr := sameWindowsOpenedObject(current, expected)
 	if compareErr != nil || !same {
-		return errors.Join(windowsV3Failure("remove output link", relative, errWindowsV3OutputUnsafe,
+		return errors.Join(windowsFailure("remove output link", relative, errWindowsOutputUnsafe,
 			errors.New("current directory entry differs from the expected open object")), compareErr, current.Close())
 	}
-	removeErr := windowsV3RemoveHandle(current.handle())
+	removeErr := windowsRemoveHandle(current.handle())
 	return errors.Join(removeErr, current.Close())
 }
 
-func (directory *windowsV3Directory) RemoveDirectory(relative string, expected *windowsV3Directory) error {
+func (directory *windowsDirectory) RemoveDirectory(relative string, expected *windowsDirectory) error {
 	// The child's authority decides its security and placement policy. A private
 	// probe directly beneath the public root must remain movable for cleanup,
 	// while an arbitrary public child must never be silently downgraded.
@@ -85,74 +85,74 @@ func (directory *windowsV3Directory) RemoveDirectory(relative string, expected *
 	if err != nil {
 		return err
 	}
-	same, compareErr := sameWindowsV3OpenedDirectory(current, expected)
+	same, compareErr := sameWindowsOpenedDirectory(current, expected)
 	if compareErr != nil || !same {
-		return errors.Join(windowsV3Failure("remove output directory", relative, errWindowsV3OutputUnsafe,
+		return errors.Join(windowsFailure("remove output directory", relative, errWindowsOutputUnsafe,
 			errors.New("current directory entry differs from the expected open directory")), compareErr, current.Close())
 	}
-	removeErr := windowsV3RemoveHandle(current.handle())
+	removeErr := windowsRemoveHandle(current.handle())
 	return errors.Join(removeErr, current.Close())
 }
 
-type windowsV3DispositionInformation struct{ Flags uint32 }
+type windowsDispositionInformation struct{ Flags uint32 }
 
-func windowsV3RemoveHandle(handle windows.Handle) error {
-	information := windowsV3DispositionInformation{Flags: windows.FILE_DISPOSITION_DELETE |
+func windowsRemoveHandle(handle windows.Handle) error {
+	information := windowsDispositionInformation{Flags: windows.FILE_DISPOSITION_DELETE |
 		windows.FILE_DISPOSITION_POSIX_SEMANTICS | windows.FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE}
 	err := windows.SetFileInformationByHandle(
 		handle, windows.FileDispositionInfoEx, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)),
 	)
 	if err != nil {
-		return windowsV3NativeOperationFailure("remove opened output object", "", err)
+		return windowsNativeOperationFailure("remove opened output object", "", err)
 	}
 	return nil
 }
 
-type windowsV3StableLock struct {
+type windowsStableLock struct {
 	mu         sync.Mutex
-	file       *windowsV3File
+	file       *windowsFile
 	overlapped windows.Overlapped
 	closed     bool
 }
 
-func (directory *windowsV3Directory) AcquireStableLock(relative string) (*windowsV3StableLock, bool, error) {
+func (directory *windowsDirectory) AcquireStableLock(relative string) (*windowsStableLock, bool, error) {
 	file, created, err := directory.openOrCreatePrivateFile(relative)
 	if err != nil {
 		return nil, false, err
 	}
-	lock, err := windowsV3LockStableFile(file, relative)
+	lock, err := windowsLockStableFile(file, relative)
 	return lock, created, err
 }
 
-func (directory *windowsV3Directory) AcquireExistingStableLock(relative string) (*windowsV3StableLock, error) {
+func (directory *windowsDirectory) AcquireExistingStableLock(relative string) (*windowsStableLock, error) {
 	file, err := directory.OpenPrivateFile(relative)
 	if err != nil {
 		return nil, err
 	}
-	lock, err := windowsV3LockStableFile(file, relative)
+	lock, err := windowsLockStableFile(file, relative)
 	return lock, err
 }
 
-func windowsV3LockStableFile(file *windowsV3File, relative string) (*windowsV3StableLock, error) {
-	lock := &windowsV3StableLock{file: file}
+func windowsLockStableFile(file *windowsFile, relative string) (*windowsStableLock, error) {
+	lock := &windowsStableLock{file: file}
 	err := windows.LockFileEx(
 		file.handle(), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
 		0, 1, 0, &lock.overlapped,
 	)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
-			return nil, errors.Join(windowsV3Failure(
-				"lock stable output authority", relative, errWindowsV3OutputLockBusy, err,
+			return nil, errors.Join(windowsFailure(
+				"lock stable output authority", relative, errWindowsOutputLockBusy, err,
 			), file.Close())
 		}
-		return nil, errors.Join(windowsV3NativeOperationFailure(
+		return nil, errors.Join(windowsNativeOperationFailure(
 			"lock stable output authority", relative, err,
 		), file.Close())
 	}
 	return lock, nil
 }
 
-func (lock *windowsV3StableLock) Close() error {
+func (lock *windowsStableLock) Close() error {
 	if lock == nil {
 		return nil
 	}
@@ -171,7 +171,7 @@ func (lock *windowsV3StableLock) Close() error {
 	return errors.Join(unlockErr, closeErr)
 }
 
-func windowsV3OpenNative(
+func windowsOpenNative(
 	root windows.Handle,
 	name string,
 	access uint32,
@@ -180,7 +180,7 @@ func windowsV3OpenNative(
 	attributes uint32,
 	descriptor *windows.SECURITY_DESCRIPTOR,
 ) (windows.Handle, uintptr, error) {
-	return windowsV3OpenNativeWithOptions(
+	return windowsOpenNativeWithOptions(
 		root,
 		name,
 		access,
@@ -193,7 +193,7 @@ func windowsV3OpenNative(
 	)
 }
 
-func windowsV3OpenNativeWithOptions(
+func windowsOpenNativeWithOptions(
 	root windows.Handle,
 	name string,
 	access uint32,
@@ -226,10 +226,10 @@ func windowsV3OpenNativeWithOptions(
 		0, 0,
 	)
 	runtime.KeepAlive(descriptor)
-	return handle, status.Information, normalizeWindowsV3NTError(err)
+	return handle, status.Information, normalizeWindowsNTError(err)
 }
 
-func windowsV3NTPath(path string) string {
+func windowsNTPath(path string) string {
 	clean := filepath.Clean(path)
 	switch {
 	case strings.HasPrefix(clean, `\\?\UNC\`):
@@ -243,7 +243,7 @@ func windowsV3NTPath(path string) string {
 	}
 }
 
-func normalizeWindowsV3NTError(err error) error {
+func normalizeWindowsNTError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -253,28 +253,28 @@ func normalizeWindowsV3NTError(err error) error {
 	return err
 }
 
-func windowsV3DirectoryAccess() uint32 {
-	return windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windowsV3DirectoryAddFile |
-		windowsV3DirectoryAddSubdirectory | windowsV3DirectoryDeleteChild | windows.FILE_READ_ATTRIBUTES |
+func windowsDirectoryAccess() uint32 {
+	return windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windowsDirectoryAddFile |
+		windowsDirectoryAddSubdirectory | windowsDirectoryDeleteChild | windows.FILE_READ_ATTRIBUTES |
 		windows.FILE_WRITE_ATTRIBUTES | windows.READ_CONTROL | windows.DELETE | windows.SYNCHRONIZE
 }
 
-func windowsV3PublicDirectoryAccess() uint32 {
+func windowsPublicDirectoryAccess() uint32 {
 	// Public containers keep their ordinary inherited ACL. Admission asks only
 	// for the rights used by public traversal and no-replace publication, so
 	// unrelated metadata or delete policy cannot disable safe output.
-	return windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windowsV3DirectoryAddFile |
-		windowsV3DirectoryAddSubdirectory | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	return windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windowsDirectoryAddFile |
+		windowsDirectoryAddSubdirectory | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
 }
 
-func windowsV3OpenedDirectoryAccess(placementGuard bool) uint32 {
+func windowsOpenedDirectoryAccess(placementGuard bool) uint32 {
 	if placementGuard {
-		return windowsV3PublicDirectoryAccess()
+		return windowsPublicDirectoryAccess()
 	}
-	return windowsV3DirectoryAccess()
+	return windowsDirectoryAccess()
 }
 
-func windowsV3DirectoryShareMode(placementGuard bool) uint32 {
+func windowsDirectoryShareMode(placementGuard bool) uint32 {
 	share := uint32(windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE)
 	if !placementGuard {
 		share |= windows.FILE_SHARE_DELETE
@@ -282,34 +282,34 @@ func windowsV3DirectoryShareMode(placementGuard bool) uint32 {
 	return share
 }
 
-func windowsV3RootDirectoryAccess() uint32 {
-	return windowsV3PublicDirectoryAccess()
+func windowsRootDirectoryAccess() uint32 {
+	return windowsPublicDirectoryAccess()
 }
 
-func windowsV3PrivatePublicationRootAccess() uint32 {
+func windowsPrivatePublicationRootAccess() uint32 {
 	// The retained root must mutate children but never itself. Omitting DELETE
 	// avoids rejecting ordinary readers that request delete sharing while the
 	// no-delete-share handle still pins this exact private placement.
-	return windowsV3DirectoryAccess() &^ windows.DELETE
+	return windowsDirectoryAccess() &^ windows.DELETE
 }
 
-func windowsV3PrivateRootParentAccess() uint32 {
+func windowsPrivateRootParentAccess() uint32 {
 	// The child starts delete-on-close and carries its own DELETE authority, so
 	// rollback never needs ambient FILE_DELETE_CHILD. Excluding FILE_ADD_FILE as
 	// well keeps this capability unable to create any non-directory entry.
-	return windowsV3PublicDirectoryAccess() &^ windowsV3DirectoryAddFile
+	return windowsPublicDirectoryAccess() &^ windowsDirectoryAddFile
 }
 
-func windowsV3PrivateFileAccess() uint32 {
+func windowsPrivateFileAccess() uint32 {
 	return windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_READ_ATTRIBUTES |
 		windows.FILE_WRITE_ATTRIBUTES | windows.READ_CONTROL | windows.DELETE | windows.SYNCHRONIZE
 }
 
-func windowsV3ReadFileAccess() uint32 {
+func windowsReadFileAccess() uint32 {
 	return windows.FILE_GENERIC_READ | windows.READ_CONTROL | windows.SYNCHRONIZE
 }
 
-func windowsV3RecoveryDurabilityFileAccess() uint32 {
+func windowsRecoveryDurabilityFileAccess() uint32 {
 	// FlushFileBuffers requires one write-class right. Append authority is the
 	// narrowest NTFS right that permits the flush while withholding arbitrary
 	// offset writes, truncation, deletion, and metadata mutation.
@@ -317,27 +317,27 @@ func windowsV3RecoveryDurabilityFileAccess() uint32 {
 		windows.READ_CONTROL | windows.SYNCHRONIZE
 }
 
-func windowsV3DeleteFileAccess() uint32 {
+func windowsDeleteFileAccess() uint32 {
 	return windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.SYNCHRONIZE
 }
 
-func windowsV3CreationStatus(disposition uint32, status uintptr) (bool, error) {
+func windowsCreationStatus(disposition uint32, status uintptr) (bool, error) {
 	switch disposition {
 	case windows.FILE_CREATE:
-		if status != windowsV3FileCreated {
+		if status != windowsFileCreated {
 			return false, fmt.Errorf("exclusive create returned status %d", status)
 		}
 		return true, nil
 	case windows.FILE_OPEN:
-		if status != windowsV3FileOpened {
+		if status != windowsFileOpened {
 			return false, fmt.Errorf("open returned status %d", status)
 		}
 		return false, nil
 	case windows.FILE_OPEN_IF:
 		switch status {
-		case windowsV3FileCreated:
+		case windowsFileCreated:
 			return true, nil
-		case windowsV3FileOpened:
+		case windowsFileOpened:
 			return false, nil
 		default:
 			return false, fmt.Errorf("open-or-create returned status %d", status)
@@ -347,7 +347,7 @@ func windowsV3CreationStatus(disposition uint32, status uintptr) (bool, error) {
 	}
 }
 
-func windowsV3RelativePath(path string, leafOnly bool) (string, error) {
+func windowsRelativePath(path string, leafOnly bool) (string, error) {
 	if path == "" || strings.ContainsRune(path, 0) || strings.Contains(path, ":") {
 		return "", errors.New("empty, NUL, and alternate-stream paths are forbidden")
 	}
@@ -355,7 +355,7 @@ func windowsV3RelativePath(path string, leafOnly bool) (string, error) {
 	if !filepath.IsLocal(native) || filepath.IsAbs(native) || native == "." || filepath.Clean(native) != native {
 		return "", errors.New("path is not a canonical root-relative name")
 	}
-	if len(utf16.Encode([]rune(native))) > windowsV3MaximumNTNameUTF16Units {
+	if len(utf16.Encode([]rune(native))) > windowsMaximumNTNameUTF16Units {
 		return "", errors.New("path exceeds the NT object-name UTF-16 limit")
 	}
 	components := strings.Split(native, string(filepath.Separator))
@@ -366,17 +366,17 @@ func windowsV3RelativePath(path string, leafOnly bool) (string, error) {
 		if component == "" || component == "." || component == ".." || strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") {
 			return "", errors.New("path component has an unsafe Win32 alias")
 		}
-		if len(utf16.Encode([]rune(component))) > windowsV3MaximumComponentUTF16Units {
+		if len(utf16.Encode([]rune(component))) > windowsMaximumComponentUTF16Units {
 			return "", errors.New("path component exceeds the certified NTFS UTF-16 limit")
 		}
-		if windowsV3ReservedComponent(component) {
+		if windowsReservedComponent(component) {
 			return "", errors.New("path component is reserved or not representable through Win32")
 		}
 	}
 	return native, nil
 }
 
-func windowsV3ReservedComponent(component string) bool {
+func windowsReservedComponent(component string) bool {
 	for _, character := range component {
 		if character < 0x20 || strings.ContainsRune(`<>"|?*`, character) {
 			return true
@@ -394,14 +394,14 @@ func windowsV3ReservedComponent(component string) bool {
 	}
 }
 
-func windowsV3IsCollision(err error) bool {
+func windowsIsCollision(err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS)
 }
 
-func windowsV3IsUnsupportedNative(err error) bool {
+func windowsIsUnsupportedNative(err error) bool {
 	return errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
 		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED)
 }
 
-var _ io.ReaderAt = (*windowsV3File)(nil)
-var _ io.WriterAt = (*windowsV3File)(nil)
+var _ io.ReaderAt = (*windowsFile)(nil)
+var _ io.WriterAt = (*windowsFile)(nil)

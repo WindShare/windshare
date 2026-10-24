@@ -25,7 +25,7 @@ import type { ReceiveOperationResumeDescriptor } from '../../src/output/resume/d
 import type {
   AuthorityOwnedReceiveOperationMutationResult,
 } from '../../src/output/resume/reopen-authority'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { createSelectionSpec } from '../../src/transfer/intent'
 
 import {
@@ -745,7 +745,7 @@ describe('browser output attempt ownership', () => {
     const objectURLCallsBeforeAttempt = createObjectURL.mock.calls.length
     const result = await transferJobFixture({
       catalog,
-      selection: new V2SelectionPolicy(true),
+      selection: new SelectionPolicy(true),
       intent: runtime.intent,
       plans: runtime.plans,
       revisions: readers.revisions,

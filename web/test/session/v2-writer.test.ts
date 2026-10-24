@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { V2EnvelopeSealer } from '../../src/session/v2-envelope'
-import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import { V2_SESSION_SEND_TIMEOUT_MILLISECONDS, V2SessionWriter } from '../../src/session/v2-writer'
+import { EnvelopeSealer } from '../../src/session/envelope'
+import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import { SESSION_SEND_TIMEOUT_MILLISECONDS, SessionWriter } from '../../src/session/writer'
 import { BackpressuredChannel, BINDING, deferred, id, KEY, openSent } from './v2-send-fixture'
 
 afterEach(() => vi.useRealTimers())
 
-const message = (seed: number) => encodeV2Message(V2_MESSAGE_KIND.listChildren, id(seed), encodeV2Body([]))
+const message = (seed: number) => encodeMessage(MESSAGE_KIND.listChildren, id(seed), encodeBody([]))
 
 describe('session writer delivery ownership', () => {
   it('withdraws queued work without consuming a sequence or closing the lane', async () => {
     const channel = new BackpressuredChannel()
     const failure = vi.fn()
-    const writer = new V2SessionWriter(channel, new V2EnvelopeSealer(KEY, BINDING), { onFailure: failure })
+    const writer = new SessionWriter(channel, new EnvelopeSealer(KEY, BINDING), { onFailure: failure })
     const first = writer.send(message(1))
     await channel.sending.promise
     const signal = new AbortController()
@@ -32,19 +32,19 @@ describe('session writer delivery ownership', () => {
 
   it('withdraws queued followups while preserving the operation cancellation notification', async () => {
     const channel = new BackpressuredChannel()
-    const writer = new V2SessionWriter(channel, new V2EnvelopeSealer(KEY, BINDING), { onFailure: () => undefined })
+    const writer = new SessionWriter(channel, new EnvelopeSealer(KEY, BINDING), { onFailure: () => undefined })
     const reason = new Error('operation cancelled')
     const first = expect(writer.send(message(1))).rejects.toBe(reason)
     await channel.sending.promise
     const followup = expect(writer.send(message(1))).rejects.toBe(reason)
-    const cancellation = writer.send(encodeV2Message(V2_MESSAGE_KIND.cancel, id(1), encodeV2Body([1])))
+    const cancellation = writer.send(encodeMessage(MESSAGE_KIND.cancel, id(1), encodeBody([1])))
     const other = writer.send(message(2))
     writer.cancelPendingMessages(id(1), reason)
     await Promise.all([first, followup])
     channel.unblock()
     await Promise.all([cancellation, other])
     expect((await openSent(channel)).map(value => value.message.kind)).toEqual([
-      V2_MESSAGE_KIND.listChildren, V2_MESSAGE_KIND.cancel, V2_MESSAGE_KIND.listChildren,
+      MESSAGE_KIND.listChildren, MESSAGE_KIND.cancel, MESSAGE_KIND.listChildren,
     ])
   })
 
@@ -52,9 +52,9 @@ describe('session writer delivery ownership', () => {
     const channel = new BackpressuredChannel()
     channel.unblock()
     const seal = deferred<void>()
-    const sealer = new V2EnvelopeSealer(KEY, BINDING)
+    const sealer = new EnvelopeSealer(KEY, BINDING)
     let calls = 0
-    const writer = new V2SessionWriter(channel, {
+    const writer = new SessionWriter(channel, {
       seal: async plaintext => { calls += 1; await seal.promise; return sealer.seal(plaintext) },
     }, { onFailure: () => undefined })
     const first = writer.enqueue(message(1))
@@ -73,14 +73,14 @@ describe('session writer delivery ownership', () => {
     vi.useFakeTimers()
     const channel = new BackpressuredChannel()
     const failure = vi.fn(() => { channel.close().catch(() => undefined) })
-    const writer = new V2SessionWriter(channel, new V2EnvelopeSealer(KEY, BINDING), { onFailure: failure })
+    const writer = new SessionWriter(channel, new EnvelopeSealer(KEY, BINDING), { onFailure: failure })
     const active = writer.enqueue(message(1))
     await channel.sending.promise
     const reason = new Error('cancel while sending')
     active.cancel(reason)
     await expect(active.completion).rejects.toBe(reason)
     const queued = expect(writer.send(message(2))).rejects.toMatchObject({ scope: 'lane' })
-    await vi.advanceTimersByTimeAsync(V2_SESSION_SEND_TIMEOUT_MILLISECONDS)
+    await vi.advanceTimersByTimeAsync(SESSION_SEND_TIMEOUT_MILLISECONDS)
     await queued
     expect(failure).toHaveBeenCalledOnce()
     expect(channel.state).toBe('closed')
@@ -93,7 +93,7 @@ describe('session writer delivery ownership', () => {
     const channel = new BackpressuredChannel()
     channel.unblock()
     const sealed = deferred<Uint8Array<ArrayBuffer>>()
-    const writer = new V2SessionWriter(channel, { seal: () => sealed.promise }, { onFailure: () => undefined })
+    const writer = new SessionWriter(channel, { seal: () => sealed.promise }, { onFailure: () => undefined })
     const active = writer.send(message(1))
     const reason = new Error('lane closed during encryption')
     writer.fail(reason)
@@ -107,7 +107,7 @@ describe('session writer delivery ownership', () => {
   it('retires on send failure instead of attempting a later sequence', async () => {
     const channel = new BackpressuredChannel()
     const failure = vi.fn()
-    const writer = new V2SessionWriter(channel, new V2EnvelopeSealer(KEY, BINDING), { onFailure: failure })
+    const writer = new SessionWriter(channel, new EnvelopeSealer(KEY, BINDING), { onFailure: failure })
     const physicalFailure = { scope: 'lane', cause: expect.objectContaining({ message: 'Channel closed' }) }
     const first = expect(writer.send(message(1))).rejects.toMatchObject(physicalFailure)
     await channel.sending.promise

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { recordOutputException } from '../../src/output/diagnostics'
-import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
-import { V2TransferAdmissionFailureError } from '../../src/transfer/v2-job'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
+import { normalizeFileTransferFailure } from '../../src/transfer/job/failures'
+import { TransferAdmissionFailureError } from '../../src/transfer/job'
+import { ReceiverController } from '../../src/ui/controller'
+import type { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import {
   FakeGateway,
   FakeJoinedShare,
@@ -185,7 +185,7 @@ describe('v2 receiver active operation orchestration', () => {
     const first = new FakeJoinedShare(true)
     const second = new FakeJoinedShare(true)
     const gateway = new FakeGateway([first, second])
-    const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, {
+    const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, {
       receive,
     })
     controller.initialize({ capabilityInput: 'first', pageUrl: 'https://receiver.invalid/s/share' })
@@ -274,12 +274,12 @@ describe('v2 receiver active operation orchestration', () => {
     const run = joined.transferRuns[0]
     if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
     const failure = new Error('transfer job could not validate its session')
-    const normalized = normalizeV2FileTransferFailure(failure)
+    const normalized = normalizeFileTransferFailure(failure)
     if (normalized.kind !== 'fault') throw new Error('expected reviewed admission failure')
     const classification = normalized.diagnostic.classification
     runtime.admissionSettlementError = new Error('secondary lifecycle settlement failed')
 
-    run.reject(new V2TransferAdmissionFailureError({
+    run.reject(new TransferAdmissionFailureError({
       kind: 'fault',
       classification,
     }))
@@ -302,11 +302,11 @@ describe('v2 receiver active operation orchestration', () => {
     if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
     const priorError = controller.getSnapshot().error
 
-    run.reject(new V2TransferAdmissionFailureError({ kind: 'canceled' }))
+    run.reject(new TransferAdmissionFailureError({ kind: 'canceled' }))
     await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'restart-required')
 
     expect(controller.getSnapshot().error).toBe(priorError)
-    expect(runtime.admissionFailures[0]).toBeInstanceOf(V2TransferAdmissionFailureError)
+    expect(runtime.admissionFailures[0]).toBeInstanceOf(TransferAdmissionFailureError)
     await controller.dispose()
   })
 
@@ -328,7 +328,7 @@ describe('v2 receiver active operation orchestration', () => {
   })
 })
 
-function choosePrimary(controller: V2ReceiverController): void {
+function choosePrimary(controller: ReceiverController): void {
   const offers = controller.getSnapshot().output.offers
   if (offers?.kind !== 'artifact-actions') throw new Error('primary artifact choice is unavailable')
   controller.chooseArtifact(offers.primary.choice.choiceId)

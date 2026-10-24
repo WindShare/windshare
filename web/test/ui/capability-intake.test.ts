@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserCapabilityIntake } from '../../src/ui/capability/intake'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
+import { ReceiverController } from '../../src/ui/controller'
+import { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 describe('capability presentation intake', () => {
@@ -9,7 +9,7 @@ describe('capability presentation intake', () => {
     const start = vi.fn()
     const intake = new BrowserCapabilityIntake(start)
     const observed: number[] = []
-    const controller = new V2ReceiverController(new V2BrowserReceiverGateway(), {
+    const controller = new ReceiverController(new BrowserReceiverGateway(), {
       receive: INERT_TEST_RECEIVE_COMPOSITION,
       capabilityIntake: intake,
       trace: { current: event => {
@@ -33,7 +33,7 @@ describe('capability presentation intake', () => {
   })
 
   it('does not let unavailable presentation consumers prevent joining', async () => {
-    const controller = new V2ReceiverController(new V2BrowserReceiverGateway(), {
+    const controller = new ReceiverController(new BrowserReceiverGateway(), {
       receive: INERT_TEST_RECEIVE_COMPOSITION,
       capabilityIntake: { accept() { throw new Error('presentation unavailable') } },
     })

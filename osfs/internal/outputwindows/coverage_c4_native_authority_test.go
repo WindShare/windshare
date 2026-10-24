@@ -28,7 +28,7 @@ const (
 )
 
 func TestCoverageC4WindowsBatchNameAuthorityUsesOnePinnedEnumeration(t *testing.T) {
-	rootPath := windowsV3NativeTestTempDir(t)
+	rootPath := windowsNativeTestTempDir(t)
 	platform, err := Open(rootPath, false)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestCoverageC4WindowsBatchNameAuthorityUsesOnePinnedEnumeration(t *testing.
 }
 
 func TestCoverageC4WindowsRootBindingSurvivesRestartWithoutCreationInference(t *testing.T) {
-	rootPath := windowsV3NativeTestTempDir(t)
+	rootPath := windowsNativeTestTempDir(t)
 	first, err := Open(rootPath, true)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestCoverageC4WindowsRootBindingSurvivesRestartWithoutCreationInference(t *
 }
 
 func TestCoverageC4WindowsRootOpenFailureDoesNotCreateAuthority(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+	base := windowsNativeTestTempDir(t)
 	missing := filepath.Join(base, "missing-root")
 	if platform, err := Open(missing, false); platform != nil || !errors.Is(err, fs.ErrNotExist) {
 		if platform != nil {
@@ -249,7 +249,7 @@ func TestCoverageC4WindowsRootOpenFailureDoesNotCreateAuthority(t *testing.T) {
 
 func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *testing.T) {
 	const payload = "restart-stable private publication"
-	rootPath := filepath.Join(windowsV3NativeTestTempDir(t), "private-publication")
+	rootPath := filepath.Join(windowsNativeTestTempDir(t), "private-publication")
 	platform, err := OpenPrivatePublicationRoot(rootPath, true)
 	if err != nil {
 		t.Fatal(err)
@@ -472,7 +472,7 @@ func TestCoverageC4WindowsPrivatePublicationIsNoReplaceAcrossGuardedRestart(t *t
 }
 
 func TestCoverageC4WindowsMetadataAuthorityMapsNativeFailures(t *testing.T) {
-	if _, err := windowsV3OutputLocatorKey("folder/CON"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := windowsOutputLocatorKey("folder/CON"); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("reserved locator error = %v", err)
 	}
 	fractionalTick, err := catalog.NewModifiedTime(0, 1, catalog.TimePrecisionNanoseconds)
@@ -480,7 +480,7 @@ func TestCoverageC4WindowsMetadataAuthorityMapsNativeFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeFiletimeEpoch, err := catalog.NewModifiedTime(
-		-windowsV3UnixEpochFiletimeSeconds-1, 0, catalog.TimePrecisionSeconds,
+		-windowsUnixEpochFiletimeSeconds-1, 0, catalog.TimePrecisionSeconds,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -497,16 +497,16 @@ func TestCoverageC4WindowsMetadataAuthorityMapsNativeFailures(t *testing.T) {
 		"beyond FILETIME range": beyondFiletimeRange,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := (&windowsOutputV3Platform{}).ValidateModifiedTime(modified); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
+			if err := (&windowsOutputPlatform{}).ValidateModifiedTime(modified); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 				t.Fatalf("modified-time error = %v", err)
 			}
-			if windowsV3ModifiedTimeMatches(0, modified) {
+			if windowsModifiedTimeMatches(0, modified) {
 				t.Fatal("unrepresentable modified time matched native metadata")
 			}
 		})
 	}
 
-	platform := openWindowsV3TestPlatform(t)
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	file, err := platform.Root().CreatePrivateFile("metadata-authority.bin")
 	if err != nil {
@@ -516,39 +516,39 @@ func TestCoverageC4WindowsMetadataAuthorityMapsNativeFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3VerifyOpenedPlacementLeafAuthority(file.handle(), "different.bin", false); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := windowsVerifyOpenedPlacementLeafAuthority(file.handle(), "different.bin", false); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("placement mismatch error = %v", err)
 	}
-	if err := windowsV3VerifyOpenedPlacementLeafAuthority(file.handle(), "../escape", false); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := windowsVerifyOpenedPlacementLeafAuthority(file.handle(), "../escape", false); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("unsafe placement name error = %v", err)
 	}
-	if err := windowsV3VerifyOpenedPlacementLeafAuthority(windows.InvalidHandle, "metadata-authority.bin", false); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := windowsVerifyOpenedPlacementLeafAuthority(windows.InvalidHandle, "metadata-authority.bin", false); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed placement handle error = %v", err)
 	}
 	for _, exact := range []bool{false, true} {
-		if err := windowsV3VerifyOpenedLeafAuthority(file.handle(), "different.bin", exact); !errors.Is(err, errWindowsV3OutputUnsafe) {
+		if err := windowsVerifyOpenedLeafAuthority(file.handle(), "different.bin", exact); !errors.Is(err, errWindowsOutputUnsafe) {
 			t.Fatalf("leaf mismatch exact=%t error=%v", exact, err)
 		}
 	}
-	if err := windowsV3VerifyOpenedLeafAuthority(file.handle(), "../escape", true); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := windowsVerifyOpenedLeafAuthority(file.handle(), "../escape", true); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("unsafe leaf name error = %v", err)
 	}
-	if err := windowsV3VerifyOpenedLeafAuthority(windows.InvalidHandle, "metadata-authority.bin", true); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := windowsVerifyOpenedLeafAuthority(windows.InvalidHandle, "metadata-authority.bin", true); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed leaf handle error = %v", err)
 	}
-	if err := windowsV3SetHandleModifiedTime(windows.InvalidHandle, "metadata-authority.bin", valid); err == nil {
+	if err := windowsSetHandleModifiedTime(windows.InvalidHandle, "metadata-authority.bin", valid); err == nil {
 		t.Fatal("closed metadata handle accepted a timestamp")
 	}
-	if err := windowsV3SetHandleModifiedTime(windows.InvalidHandle, "metadata-authority.bin", catalog.ModifiedTime{}); err != nil {
+	if err := windowsSetHandleModifiedTime(windows.InvalidHandle, "metadata-authority.bin", catalog.ModifiedTime{}); err != nil {
 		t.Fatalf("absent metadata should not touch a closed handle: %v", err)
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := file.setModifiedTime(valid); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := file.setModifiedTime(valid); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed file modified-time error = %v", err)
 	}
-	if matches, err := file.metadataMatches(0, valid); matches || !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if matches, err := file.metadataMatches(0, valid); matches || !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed file metadata = %t, %v", matches, err)
 	}
 
@@ -559,24 +559,24 @@ func TestCoverageC4WindowsMetadataAuthorityMapsNativeFailures(t *testing.T) {
 	if err := directory.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := directory.setModifiedTime(valid); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := directory.setModifiedTime(valid); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed directory modified-time error = %v", err)
 	}
 }
 
 type coverageC4ObjectIDProvider struct{ err error }
 
-func (provider coverageC4ObjectIDProvider) CreateOrGet(windows.Handle) (windowsV3PersistentObjectID, error) {
-	return windowsV3PersistentObjectID{}, provider.err
+func (provider coverageC4ObjectIDProvider) CreateOrGet(windows.Handle) (windowsPersistentObjectID, error) {
+	return windowsPersistentObjectID{}, provider.err
 }
 
 func TestCoverageC4WindowsRootBindingMapsIdentityPreparationFailure(t *testing.T) {
-	native := openWindowsV3TestPlatform(t)
+	native := openWindowsTestPlatform(t)
 	injected := errors.New("injected persistent identity failure")
 	native.root.objectIDs = coverageC4ObjectIDProvider{err: injected}
-	platform := &windowsOutputV3Platform{
+	platform := &windowsOutputPlatform{
 		native: native,
-		root:   &windowsOutputV3Directory{native: native.root},
+		root:   &windowsOutputDirectory{native: native.root},
 	}
 	defer platform.Close()
 	if binding, err := platform.RootBinding(); !binding.IsZero() ||
@@ -586,15 +586,15 @@ func TestCoverageC4WindowsRootBindingMapsIdentityPreparationFailure(t *testing.T
 }
 
 func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
 
-	if err := cleanupWindowsV3PrivatePublicationRoot(nil, nil, "target", root.path, nil); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := cleanupWindowsPrivatePublicationRoot(nil, nil, "target", root.path, nil); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("missing cleanup parent error = %v", err)
 	}
 	absentPath := filepath.Join(root.path, "already-absent")
-	if err := cleanupWindowsV3PrivatePublicationRoot(root, nil, "already-absent", absentPath, []byte{1}); err != nil {
+	if err := cleanupWindowsPrivatePublicationRoot(root, nil, "already-absent", absentPath, []byte{1}); err != nil {
 		t.Fatalf("already-absent cleanup = %v", err)
 	}
 
@@ -611,7 +611,7 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 	if err := exact.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupWindowsV3PrivatePublicationRoot(
+	if err := cleanupWindowsPrivatePublicationRoot(
 		root, nil, exactName, filepath.Join(root.path, exactName), exactClaim,
 	); err != nil {
 		t.Fatalf("exact reopened cleanup = %v", err)
@@ -644,9 +644,9 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 	if err := foreign.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupWindowsV3PrivatePublicationRoot(
+	if err := cleanupWindowsPrivatePublicationRoot(
 		root, nil, foreignName, filepath.Join(root.path, foreignName), ownedClaim,
-	); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("foreign cleanup error = %v", err)
 	}
 	if info, err := os.Stat(filepath.Join(root.path, foreignName)); err != nil || !info.IsDir() {
@@ -661,7 +661,7 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 	if err := wrongKind.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupWindowsV3PrivatePublicationRoot(
+	if err := cleanupWindowsPrivatePublicationRoot(
 		root, nil, wrongKindName, filepath.Join(root.path, wrongKindName), []byte{1},
 	); err == nil {
 		t.Fatal("cleanup accepted a non-directory replacement")
@@ -672,14 +672,14 @@ func TestCoverageC4WindowsPrivateRootCleanupPreservesUnprovenTargets(t *testing.
 }
 
 func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.T) {
-	if retained, err := retainWindowsV3PrivatePublicationRoot(nil); retained != nil ||
+	if retained, err := retainWindowsPrivatePublicationRoot(nil); retained != nil ||
 		!errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("nil private-root retention = %v, %v", retained, err)
 	}
-	base := windowsV3NativeTestTempDir(t)
+	base := windowsNativeTestTempDir(t)
 	volumeRoot := filepath.VolumeName(base) + string(filepath.Separator)
-	if created, err := createWindowsV3PrivatePublicationRootWithObserver(volumeRoot, nil); created != nil ||
-		!errors.Is(err, errWindowsV3OutputUnsafe) {
+	if created, err := createWindowsPrivatePublicationRootWithObserver(volumeRoot, nil); created != nil ||
+		!errors.Is(err, errWindowsOutputUnsafe) {
 		if created != nil {
 			_ = created.Close()
 		}
@@ -688,13 +688,13 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 
 	injectedPlacement := errors.New("injected placement failure")
 	privateTarget := filepath.Join(base, "private-placement-cut")
-	privateObserver := windowsV3OutputRootCreateObserverFunc(func(_ string, cut windowsV3OutputRootCreateCut) error {
-		if cut == windowsV3OutputRootCreatePlacementPinned {
+	privateObserver := windowsOutputRootCreateObserverFunc(func(_ string, cut windowsOutputRootCreateCut) error {
+		if cut == windowsOutputRootCreatePlacementPinned {
 			return injectedPlacement
 		}
 		return nil
 	})
-	if created, err := createWindowsV3PrivatePublicationRootWithObserver(privateTarget, privateObserver); created != nil || !errors.Is(err, injectedPlacement) {
+	if created, err := createWindowsPrivatePublicationRootWithObserver(privateTarget, privateObserver); created != nil || !errors.Is(err, injectedPlacement) {
 		if created != nil {
 			_ = created.Close()
 		}
@@ -705,7 +705,7 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 	}
 
 	collisionTarget := filepath.Join(base, "preexisting-private-root")
-	preexisting, err := createWindowsV3PrivatePublicationRootWithObserver(collisionTarget, nil)
+	preexisting, err := createWindowsPrivatePublicationRootWithObserver(collisionTarget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,8 +716,8 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := createWindowsV3PrivatePublicationRootWithObserver(collisionTarget, nil); created != nil ||
-		!errors.Is(err, errWindowsV3OutputCollision) {
+	if created, err := createWindowsPrivatePublicationRootWithObserver(collisionTarget, nil); created != nil ||
+		!errors.Is(err, errWindowsOutputCollision) {
 		if created != nil {
 			_ = created.Close()
 		}
@@ -741,8 +741,8 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 
 	injectedComponent := errors.New("injected component failure")
 	componentTarget := filepath.Join(base, "completed-component", "unfinished-root")
-	componentObserver := windowsV3OutputRootCreateObserverFunc(func(_ string, cut windowsV3OutputRootCreateCut) error {
-		if cut == windowsV3OutputRootCreateComponentPinned {
+	componentObserver := windowsOutputRootCreateObserverFunc(func(_ string, cut windowsOutputRootCreateCut) error {
+		if cut == windowsOutputRootCreateComponentPinned {
 			return injectedComponent
 		}
 		return nil
@@ -764,14 +764,14 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ancestor, _, err := windowsV3FindCertifiedOutputAncestor(filepath.Join(blocker, "child")); ancestor != nil || err == nil {
+	if ancestor, _, err := windowsFindCertifiedOutputAncestor(filepath.Join(blocker, "child")); ancestor != nil || err == nil {
 		if ancestor != nil {
 			_ = ancestor.Close()
 		}
 		t.Fatalf("regular-file ancestor = %v, %v", ancestor, err)
 	}
 
-	native := openWindowsV3TestPlatform(t)
+	native := openWindowsTestPlatform(t)
 	existing, err := native.Root().openDirectory("component-collision", false, windows.FILE_CREATE)
 	if err != nil {
 		_ = native.Close()
@@ -781,9 +781,9 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 		_ = native.Close()
 		t.Fatal(err)
 	}
-	if current, created, err := windowsV3CreateMissingOutputComponents(
+	if current, created, err := windowsCreateMissingOutputComponents(
 		native.Root(), []string{"component-collision"}, nil,
-	); current != nil || len(created) != 0 || !errors.Is(err, errWindowsV3OutputCollision) {
+	); current != nil || len(created) != 0 || !errors.Is(err, errWindowsOutputCollision) {
 		_ = native.Close()
 		t.Fatalf("component collision = current=%v created=%d error=%v", current, len(created), err)
 	}
@@ -791,13 +791,13 @@ func TestCoverageC4WindowsRootCreationFailuresReleasePinnedAuthority(t *testing.
 		t.Fatal(err)
 	}
 
-	var nilPlatform *windowsOutputV3Platform
+	var nilPlatform *windowsOutputPlatform
 	if nilPlatform.RootOpenDisposition() != "" {
 		t.Fatal("nil platform reported a root disposition")
 	}
-	incomplete := &windowsOutputV3Platform{
-		native: &windowsV3OutputPlatform{root: &windowsV3Directory{}},
-		root:   &windowsOutputV3Directory{native: &windowsV3Directory{}},
+	incomplete := &windowsOutputPlatform{
+		native: &nativeOutputPlatform{root: &windowsDirectory{}},
+		root:   &windowsOutputDirectory{native: &windowsDirectory{}},
 	}
 	if guard, err := incomplete.AcquirePublicOperationGuard(); guard != nil ||
 		!errors.Is(err, outputcap.ErrUnsafeNamespace) {
@@ -823,7 +823,7 @@ func TestCoverageC4WindowsEnumerationRejectsAuthorityLoss(t *testing.T) {
 				call int
 			}{{name: "before scan", call: 1}, {name: "after scan", call: 2}} {
 				t.Run(failure.name, func(t *testing.T) {
-					platform := openWindowsV3TestPlatform(t)
+					platform := openWindowsTestPlatform(t)
 					defer platform.Close()
 					root := platform.Root()
 					file, err := root.CreatePrivateFile("enumerated.bin")
@@ -833,13 +833,13 @@ func TestCoverageC4WindowsEnumerationRejectsAuthorityLoss(t *testing.T) {
 					if err := file.Close(); err != nil {
 						t.Fatal(err)
 					}
-					delegate := nativeWindowsV3ObjectInspector{}
+					delegate := nativeWindowsObjectInspector{}
 					injected := errors.New("injected enumeration inspection failure")
 					calls := 0
-					root.inspector = windowsV3ObjectInspectorFunc(func(handle windows.Handle) (windowsV3ObjectFacts, error) {
+					root.inspector = windowsObjectInspectorFunc(func(handle windows.Handle) (windowsObjectFacts, error) {
 						calls++
 						if calls == failure.call {
-							return windowsV3ObjectFacts{}, injected
+							return windowsObjectFacts{}, injected
 						}
 						return delegate.Inspect(handle)
 					})
@@ -856,14 +856,14 @@ func TestCoverageC4WindowsEnumerationRejectsAuthorityLoss(t *testing.T) {
 		})
 	}
 
-	platform := openWindowsV3TestPlatform(t)
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	withoutEnumeration := *platform.Root()
 	withoutEnumeration.enumerate = nil
-	if _, err := withoutEnumeration.names(1); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := withoutEnumeration.names(1); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("missing name-enumeration authority error = %v", err)
 	}
-	if err := withoutEnumeration.validatePublicEntryNames([]string{"entry"}); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := withoutEnumeration.validatePublicEntryNames([]string{"entry"}); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("missing alias-enumeration authority error = %v", err)
 	}
 }

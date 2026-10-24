@@ -1,28 +1,28 @@
-import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from '../../application/browser-share/gateway'
-import type { V2SelectionDraft, V2ShareIdentity } from '../v2-model'
+import type { BrowseDirectory, BrowsePage, JoinedBrowserShare } from '../../application/browser-share/gateway'
+import type { SelectionDraft, ShareIdentity } from '../model'
 import { projectDraft, scopeSelection, shareIdentityFromRoot } from './model'
 
-type DraftScopeSource = Pick<V2JoinedBrowserShare,
+type DraftScopeSource = Pick<JoinedBrowserShare,
   'descriptor' | 'selection' | 'replaceSelection' | 'childDirectory'>
 
 interface DraftScopeUpdate {
-  readonly share: V2ShareIdentity | null
-  readonly draft: V2SelectionDraft
+  readonly share: ShareIdentity | null
+  readonly draft: SelectionDraft
   readonly transition: 'scope-initialized' | 'scope-changed' | 'page-updated'
 }
 
 export class SelectionDraftScope {
-  #directory: V2BrowseDirectory | undefined
+  #directory: BrowseDirectory | undefined
 
-  get directory(): V2BrowseDirectory | undefined { return this.#directory }
+  get directory(): BrowseDirectory | undefined { return this.#directory }
 
   reset(): void { this.#directory = undefined }
 
   commitPage(
     joined: DraftScopeSource,
-    page: V2BrowsePage,
-    mode: V2SelectionDraft['mode'],
-    currentShare: V2ShareIdentity | null,
+    page: BrowsePage,
+    mode: SelectionDraft['mode'],
+    currentShare: ShareIdentity | null,
   ): DraftScopeUpdate {
     const share = page.directory.idText === joined.descriptor.syntheticRootId
       ? shareIdentityFromRoot(page, joined.descriptor.shareInstanceId)

@@ -15,8 +15,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsV3DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsDirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -58,7 +58,7 @@ func TestWindowsV3DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	if regular.kind != outputcap.EntryRegularFile {
 		t.Fatalf("pinned regular kind=%v", regular.kind)
 	}
-	if err := root.removePinnedEntry(strings.ToLower(regularName), regular); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.removePinnedEntry(strings.ToLower(regularName), regular); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("pinned removal accepted a case alias: %v", err)
 	}
 	if got, err := os.ReadFile(regularPath); err != nil || string(got) != "keep" {
@@ -87,7 +87,7 @@ func TestWindowsV3DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	if err := os.WriteFile(racePath, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.removePinnedEntry(raceName, race); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.removePinnedEntry(raceName, race); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("pinned removal accepted a replacement object: %v", err)
 	}
 	if got, err := os.ReadFile(racePath); err != nil || string(got) != "replacement" {
@@ -137,7 +137,7 @@ func TestWindowsV3DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	if opaque.kind != outputcap.EntryOther {
 		t.Fatalf("pinned reparse-point kind=%v", opaque.kind)
 	}
-	if err := root.removePinnedEntry(strings.ToLower(linkName), opaque); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.removePinnedEntry(strings.ToLower(linkName), opaque); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("pinned removal accepted a case alias: %v", err)
 	}
 	if _, err := os.Lstat(linkPath); err != nil {
@@ -154,24 +154,24 @@ func TestWindowsV3DirectoryClaimsAndPinnedRemovalAreHandleBound(t *testing.T) {
 	}
 }
 
-type mutableWindowsV3ObjectIDProvider struct {
-	identity windowsV3PersistentObjectID
+type mutableWindowsObjectIDProvider struct {
+	identity windowsPersistentObjectID
 }
 
-func (provider *mutableWindowsV3ObjectIDProvider) CreateOrGet(
+func (provider *mutableWindowsObjectIDProvider) CreateOrGet(
 	windows.Handle,
-) (windowsV3PersistentObjectID, error) {
+) (windowsPersistentObjectID, error) {
 	return provider.identity, nil
 }
 
-func TestWindowsV3PersistentObjectIDDetectsIncarnationChangeOnSameHandle(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsPersistentObjectIDDetectsIncarnationChangeOnSameHandle(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
-	first := windowsV3PersistentObjectID{1}
-	second := windowsV3PersistentObjectID{2}
-	provider := &mutableWindowsV3ObjectIDProvider{identity: first}
+	first := windowsPersistentObjectID{1}
+	second := windowsPersistentObjectID{2}
+	provider := &mutableWindowsObjectIDProvider{identity: first}
 	platform.root.objectIDs = provider
-	platform.root.objectIDState = newWindowsV3PersistentObjectIDState()
+	platform.root.objectIDState = newWindowsPersistentObjectIDState()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
 		t.Fatal(err)
@@ -182,21 +182,21 @@ func TestWindowsV3PersistentObjectIDDetectsIncarnationChangeOnSameHandle(t *test
 		t.Fatalf("fix first persistent identity: claim=%x error=%v", claim, err)
 	}
 	provider.identity = second
-	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("same raw handle accepted changed persistent incarnation: %v", err)
 	}
-	provider.identity = windowsV3PersistentObjectID{}
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
-	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	provider.identity = windowsPersistentObjectID{}
+	root.objectIDState = newWindowsPersistentObjectIDState()
+	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("zero persistent incarnation was accepted: %v", err)
 	}
 }
 
-func TestWindowsV3UnknownDirectoryNeverReceivesPersistentObjectID(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsUnknownDirectoryNeverReceivesPersistentObjectID(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
-	trap := &windowsV3ObjectIDMutationTrap{}
+	trap := &windowsObjectIDMutationTrap{}
 	root.objectIDs = trap
 	if err := os.Mkdir(filepath.Join(root.path, "foreign"), 0o700); err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestWindowsV3UnknownDirectoryNeverReceivesPersistentObjectID(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	root.objectIDs = nativeWindowsV3PersistentObjectIDProvider{}
+	root.objectIDs = nativeWindowsPersistentObjectIDProvider{}
 	private, err := root.CreatePrivateDirectory("private-authority")
 	if err != nil {
 		t.Fatal(err)
@@ -233,8 +233,8 @@ func TestWindowsV3UnknownDirectoryNeverReceivesPersistentObjectID(t *testing.T) 
 	}
 }
 
-func TestWindowsV3PinnedDescendantPreventsAncestorRename(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsPinnedDescendantPreventsAncestorRename(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -272,12 +272,12 @@ func TestWindowsV3PinnedDescendantPreventsAncestorRename(t *testing.T) {
 	defer moved.Close()
 }
 
-func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
-	platform := &windowsOutputV3Platform{}
-	directory := &windowsOutputV3Directory{}
-	entry := &windowsOutputV3EntryRef{}
-	file := &windowsOutputV3MutableFile{state: &windowsOutputV3FileState{}}
-	lock := &windowsOutputV3Lock{}
+func TestWindowsAdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
+	platform := &windowsOutputPlatform{}
+	directory := &windowsOutputDirectory{}
+	entry := &windowsOutputEntryRef{}
+	file := &windowsOutputMutableFile{state: &windowsOutputFileState{}}
+	lock := &windowsOutputLock{}
 
 	checks := []struct {
 		name string
@@ -323,33 +323,33 @@ func TestWindowsV3AdapterAuthoritiesFailClosedAfterClose(t *testing.T) {
 		})
 	}
 
-	if platform.Root() != nil || (*windowsOutputV3Platform)(nil).Root() != nil ||
-		(&windowsOutputV3Platform{root: &windowsOutputV3Directory{}}).Root() != nil {
+	if platform.Root() != nil || (*windowsOutputPlatform)(nil).Root() != nil ||
+		(&windowsOutputPlatform{root: &windowsOutputDirectory{}}).Root() != nil {
 		t.Fatal("closed platform exposed a root authority")
 	}
-	if entry.Kind() != outputcap.EntryAbsent || (*windowsOutputV3EntryRef)(nil).Kind() != outputcap.EntryAbsent {
+	if entry.Kind() != outputcap.EntryAbsent || (*windowsOutputEntryRef)(nil).Kind() != outputcap.EntryAbsent {
 		t.Fatal("closed pinned entry did not collapse to absent")
 	}
-	if lock.File() != nil || (*windowsOutputV3Lock)(nil).File() != nil {
+	if lock.File() != nil || (*windowsOutputLock)(nil).File() != nil {
 		t.Fatal("closed lock exposed a file authority")
 	}
 	if err := errors.Join(platform.Close(), directory.Close(), entry.Close(), file.Close(), lock.Close()); err != nil {
 		t.Fatalf("idempotent close = %v", err)
 	}
-	closed := newWindowsOutputV3Lock(nil)
+	closed := newWindowsOutputLock(nil)
 	if closed.File() != nil || closed.file.state.native != nil || !closed.file.state.borrowed {
 		t.Fatal("empty native lock exposed a non-live file authority")
 	}
-	live := newWindowsOutputV3Lock(&windowsV3StableLock{file: &windowsV3File{}})
+	live := newWindowsOutputLock(&windowsStableLock{file: &windowsFile{}})
 	if live.File() == nil {
 		t.Fatal("live native lock did not expose its borrowed file authority")
 	}
 }
 
-func openWindowsV3TestPlatform(t *testing.T) *windowsV3OutputPlatform {
+func openWindowsTestPlatform(t *testing.T) *nativeOutputPlatform {
 	t.Helper()
-	platform, err := openWindowsV3OutputPlatform(windowsV3NativeTestTempDir(t))
-	if errors.Is(err, errWindowsV3OutputUnsupported) {
+	platform, err := openWindowsOutputPlatform(windowsNativeTestTempDir(t))
+	if errors.Is(err, errWindowsOutputUnsupported) {
 		t.Skipf("test volume is outside the local NTFS matrix: %v", err)
 	}
 	if err != nil {

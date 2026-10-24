@@ -1,14 +1,14 @@
-import { V2SelectionPolicy } from '../../catalog/v2-selection'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../application/browser-share/gateway'
-import type { V2SelectionDraft, V2ShareIdentity } from '../v2-model'
+import { SelectionPolicy } from '../../catalog/selection'
+import type { BrowseDirectory, BrowsePage } from '../../application/browser-share/gateway'
+import type { SelectionDraft, ShareIdentity } from '../model'
 
-export const EMPTY_SELECTION_DRAFT: V2SelectionDraft = Object.freeze({
+export const EMPTY_SELECTION_DRAFT: SelectionDraft = Object.freeze({
   mode: 'scope', scope: 'whole-share', label: 'Shared files', summary: 'All shared items', empty: false,
 })
 
-export function scopeSelection(directory: V2BrowseDirectory): V2SelectionPolicy {
+export function scopeSelection(directory: BrowseDirectory): SelectionPolicy {
   const root = directory.path.length === 0
-  const selection = new V2SelectionPolicy(root)
+  const selection = new SelectionPolicy(root)
   if (!root) {
     // The directory identity and ancestry came from the authenticated navigation route.
     selection.set({ kind: 'directory', id: directory.id, idText: directory.idText, name: directory.name },
@@ -18,11 +18,11 @@ export function scopeSelection(directory: V2BrowseDirectory): V2SelectionPolicy 
 }
 
 export function projectDraft(
-  mode: V2SelectionDraft['mode'],
-  directory: V2BrowseDirectory,
-  selection: V2SelectionPolicy,
-  share: V2ShareIdentity | null,
-): V2SelectionDraft {
+  mode: SelectionDraft['mode'],
+  directory: BrowseDirectory,
+  selection: SelectionPolicy,
+  share: ShareIdentity | null,
+): SelectionDraft {
   if (mode === 'scope') {
     const root = directory.path.length === 0
     return Object.freeze({
@@ -51,7 +51,7 @@ function filePresentationKind(name: string): 'photo' | 'video' | 'file' {
   return 'file'
 }
 
-export function shareIdentityFromRoot(page: V2BrowsePage, shareInstance: string): V2ShareIdentity {
+export function shareIdentityFromRoot(page: BrowsePage, shareInstance: string): ShareIdentity {
   const sole = page.entryCount === 1 && page.omittedCount === 0n && page.entries.length === 1
     ? page.entries[0] : undefined
   if (sole?.kind === 'file') {

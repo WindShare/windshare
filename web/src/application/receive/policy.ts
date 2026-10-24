@@ -6,12 +6,12 @@ import type {
 } from '../../transfer/lifecycle/recovery-summary'
 import type { BrowserDeliveryResumeSummary } from '../../output/browser-delivery/retained'
 import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
-import type { LifecycleUserAction, V2ActiveReceiveControl, ReceiveSettlementWait } from './actions'
+import type { LifecycleUserAction, ActiveReceiveControl, ReceiveSettlementWait } from './actions'
 
 export interface ReceiveActionFacts {
   readonly state: ReceiveLifecycleState
   readonly plan: MaterializationPlan
-  readonly activeControls?: readonly V2ActiveReceiveControl[]
+  readonly activeControls?: readonly ActiveReceiveControl[]
   readonly interruption?: ReceiveSettlementWait | null
   readonly recoverySummary?: RecoverySummary | null
   readonly browserDelivery?: BrowserDeliveryResumeSummary | null

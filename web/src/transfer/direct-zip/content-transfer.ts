@@ -1,10 +1,10 @@
-import type { V2ShareDescriptor } from '../../catalog/v2-records'
+import type { ShareDescriptor } from '../../catalog/records'
 import { bigintToSafeNumber, byteRange } from '../../content/geometry'
 import {
-  V2_BLOCK_BROKER_PARALLEL_READS,
-  type V2BlockRangeReader,
-} from '../../content/v2-broker'
-import type { V2OpenedRevision, V2RevisionReader } from '../../content/v2-session-services'
+  BLOCK_BROKER_PARALLEL_READS,
+  type BlockRangeReader,
+} from '../../content/broker'
+import type { OpenedRevision, RevisionReader } from '../../content/session-services'
 import {
   canonicalDigest, canonicalFrame, canonicalRecord, canonicalText, canonicalU64,
 } from '../encoding/canonical'
@@ -12,9 +12,9 @@ import { validateOpenedFileRevision } from '../job/file-authority'
 import type { DirectZipOrderedFileV1, DirectZipOutputSessionV1 } from './model'
 
 export interface DirectZipContentTransferOptionsV1 {
-  readonly descriptor: V2ShareDescriptor
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
+  readonly descriptor: ShareDescriptor
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
   readonly output: DirectZipOutputSessionV1
   readonly signal: AbortSignal
   readonly onInitialDurable: (bytes: bigint) => void
@@ -27,7 +27,7 @@ export async function transferDirectZipFileV1(
   options: DirectZipContentTransferOptionsV1,
   file: DirectZipOrderedFileV1,
 ): Promise<void> {
-  let opened: V2OpenedRevision | undefined
+  let opened: OpenedRevision | undefined
   let primaryFailure: unknown
   try {
     opened = validateOpenedFileRevision(
@@ -83,7 +83,7 @@ export async function transferDirectZipFileV1(
 
 async function* readAtomicBlocks(
   options: DirectZipContentTransferOptionsV1,
-  opened: V2OpenedRevision,
+  opened: OpenedRevision,
   start: bigint,
 ): AsyncGenerator<{ readonly data: Uint8Array<ArrayBuffer>; readonly end: bigint }> {
   const { exactSize, geometry } = opened.descriptor
@@ -96,7 +96,7 @@ async function* readAtomicBlocks(
   // member writes and checkpoint observations ordered and bounded in memory.
   for await (const slice of options.broker.readRange(
     opened.descriptor, opened.leaseId, byteRange(start, exactSize),
-    { signal: options.signal, maximumParallel: V2_BLOCK_BROKER_PARALLEL_READS, priority: 'download' },
+    { signal: options.signal, maximumParallel: BLOCK_BROKER_PARALLEL_READS, priority: 'download' },
   )) {
     options.signal.throwIfAborted()
     if (!(slice.data instanceof Uint8Array) || slice.data.byteLength === 0 ||

@@ -10,9 +10,9 @@ import (
 
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func TestSamePathInDifferentSessionsHasIndependentSocketOwnership(t *testing.T) {
@@ -98,9 +98,9 @@ func TestMappedCandidateCannotClaimSTUNSuccessOrHostDelay(t *testing.T) {
 	h := newHarness(t)
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
 	emit := h.requests[0].Observe
-	emit(provider.Event{At: h.now, Candidate: &provider.CandidateFacts{Type: "host", Origin: "ordinary"}})
-	emit(provider.Event{At: h.now.Add(time.Second), Candidate: &provider.CandidateFacts{Type: "srflx", Origin: "mapped"}})
-	emit(provider.Event{At: h.now.Add(2 * time.Second), Milestone: "gathering_complete"})
+	emit(pionpeer.Event{At: h.now, Candidate: &pionpeer.CandidateFacts{Type: "host", Origin: "ordinary"}})
+	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "mapped"}})
+	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Milestone: "gathering_complete"})
 	facts := h.native.facts.Snapshot()
 	if len(facts.Profiles) != 1 || facts.Profiles[0].ServerReflexiveProduced || facts.Profiles[0].FirstCandidateDelay != 0 || len(facts.Endpoints) != 0 {
 		t.Fatal(facts)
@@ -110,9 +110,9 @@ func TestObservationQueueFreezesProviderFactsAndReportsExactLossCut(t *testing.T
 	n := newTestConnectivity(t, Config{ObservationCapacity: 1, Side: SideReceiver})
 	defer n.Close(context.Background())
 	subject := Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "profile", Side: SideReceiver}
-	candidate := &provider.CandidateFacts{Type: "host"}
-	pair := &provider.PairFacts{LocalAddress: "192.0.2.1"}
-	n.observeProvider(subject, provider.Event{Candidate: candidate, Pair: pair})
+	candidate := &pionpeer.CandidateFacts{Type: "host"}
+	pair := &pionpeer.PairFacts{LocalAddress: "192.0.2.1"}
+	n.observeProvider(subject, pionpeer.Event{Candidate: candidate, Pair: pair})
 	candidate.Type = "mutated"
 	pair.LocalAddress = "mutated"
 	n.observeReachability(reachability.Event{Endpoint: reachability.Endpoint{Generation: 9}})

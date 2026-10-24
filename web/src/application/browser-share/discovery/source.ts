@@ -1,8 +1,8 @@
-import { V2DirectoryFailureError, type V2CatalogClient } from '../../../catalog/v2-client'
-import type { V2CatalogEntry, V2ShareDescriptor } from '../../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../../catalog/v2-selection'
+import { DirectoryFailureError, type CatalogClient } from '../../../catalog/client'
+import type { CatalogEntry, ShareDescriptor } from '../../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../../catalog/selection'
 import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
-import { projectAuthenticatedV2Generation } from '../../../transfer/discovery/v2-projection-evidence'
+import { projectAuthenticatedGeneration } from '../../../transfer/discovery/projection-evidence'
 import {
   RetryableProjectionDiscoveryError,
   createAuthenticatedProjectionEvidence,
@@ -28,10 +28,10 @@ interface ProjectionDirectoryCursor {
   }>
 }
 
-export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
-  readonly #descriptor: V2ShareDescriptor
-  readonly #catalog: V2CatalogClient
-  readonly #selection: V2FrozenSelectionPolicy
+export class JoinedProjectionSource implements AuthenticatedDiscoverySource {
+  readonly #descriptor: ShareDescriptor
+  readonly #catalog: CatalogClient
+  readonly #selection: FrozenSelectionPolicy
   readonly #protocolSessionId: () => string
   readonly #capturedProtocolSessionId: string
   readonly #explicitRetry: boolean
@@ -40,9 +40,9 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
   #bounded = false
 
   constructor(options: {
-    readonly descriptor: V2ShareDescriptor
-    readonly catalog: V2CatalogClient
-    readonly selection: V2FrozenSelectionPolicy
+    readonly descriptor: ShareDescriptor
+    readonly catalog: CatalogClient
+    readonly selection: FrozenSelectionPolicy
     readonly protocolSessionId: () => string
     readonly explicitRetry: boolean
   }) {
@@ -141,7 +141,7 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
       this.#requireSameProtocolSession()
       return committed
     } catch (error) {
-      if (error instanceof V2DirectoryFailureError && error.failure.retryable) {
+      if (error instanceof DirectoryFailureError && error.failure.retryable) {
         throw new RetryableProjectionDiscoveryError('catalog-temporarily-unavailable', {
           cause: error,
         })
@@ -151,12 +151,12 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
   }
 
   #projectDirectory(
-    committed: Awaited<ReturnType<V2CatalogClient['loadDirectory']>>,
+    committed: Awaited<ReturnType<CatalogClient['loadDirectory']>>,
     cursor: ProjectionDirectoryCursor,
     request: AuthenticatedDiscoveryRequest,
     summary: ProjectionDiscoverySummary,
   ): Promise<AuthenticatedProjectionEvidence> {
-    return projectAuthenticatedV2Generation({
+    return projectAuthenticatedGeneration({
       committed,
       pages: this.#authenticatedPages(committed, cursor, request, summary),
       selection: this.#selection,
@@ -169,7 +169,7 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
   }
 
   async *#authenticatedPages(
-    committed: Awaited<ReturnType<V2CatalogClient['loadDirectory']>>,
+    committed: Awaited<ReturnType<CatalogClient['loadDirectory']>>,
     cursor: ProjectionDirectoryCursor,
     request: AuthenticatedDiscoveryRequest,
     summary: ProjectionDiscoverySummary,
@@ -187,7 +187,7 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
   }
 
   async *#discoverableChildren(
-    committed: Awaited<ReturnType<V2CatalogClient['loadDirectory']>>,
+    committed: Awaited<ReturnType<CatalogClient['loadDirectory']>>,
     cursor: ProjectionDirectoryCursor,
     request: AuthenticatedDiscoveryRequest,
     summary: ProjectionDiscoverySummary,
@@ -205,7 +205,7 @@ export class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
 
   #projectionChild(
     cursor: ProjectionDirectoryCursor,
-    entry: V2CatalogEntry,
+    entry: CatalogEntry,
     summary: ProjectionDiscoverySummary,
     selected: boolean,
   ): ProjectionDirectoryCursor | undefined {

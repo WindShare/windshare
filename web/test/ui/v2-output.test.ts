@@ -26,15 +26,15 @@ import { PersistentWriterOpenPauseRequestedError } from '../../src/output/execut
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
 import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
-  V2AuthorityActivationSnapshot,
-  V2LiveAuthorityActivationSnapshot,
+  AuthorityActivationSnapshot,
+  LiveAuthorityActivationSnapshot,
 } from '../../src/application/receive/activation/model'
 import {
   activationLocksSelection,
   presentArtifactOffers,
-} from '../../src/ui/v2-artifact-presentation'
+} from '../../src/ui/artifact-presentation'
 import { ReceiveSettlementDeadline } from '../../src/application/receive/active/settlement-wait'
-import { V2OutputPresentationController } from '../../src/ui/v2-output'
+import { OutputPresentationController } from '../../src/ui/output'
 import {
   COMPLETE_DISCOVERY,
   directZipTarget,
@@ -163,7 +163,7 @@ describe('derived output presentation', () => {
     const first = await singleFileObservation(1n)
     const second = await singleFileObservation(2n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     const listener = vi.fn()
     outputs.subscribe(listener)
 
@@ -190,7 +190,7 @@ describe('derived output presentation', () => {
     )
     const offered = requireOfferedChoice(firstOffers)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(
       1,
       state(firstProjection, { kind: 'discovering' }),
@@ -235,10 +235,10 @@ describe('derived output presentation', () => {
   it('derives waiting, retry, commit, and lock state from coordinator snapshots', async () => {
     const observation = await singleFileObservation(4n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
 
-    const waiting: V2AuthorityActivationSnapshot = Object.freeze({
+    const waiting: AuthorityActivationSnapshot = Object.freeze({
       ...liveActivation(observation.offered, observation.action, 1),
       kind: 'waiting-authority',
       resolution: Object.freeze({ kind: 'resolved', action: observation.action }),
@@ -299,7 +299,7 @@ describe('derived output presentation', () => {
     expect(outputs.getSnapshot().offerPresentation?.interactive).toBe(true)
 
     const boundState = new ReceiveRuntimeState()
-    const boundOutputs = new V2OutputPresentationController(boundState)
+    const boundOutputs = new OutputPresentationController(boundState)
     boundState.updateProjection(1, observation.state, observation.offers)
     boundState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 5),
@@ -319,7 +319,7 @@ describe('derived output presentation', () => {
   it('adopts a matching coordinator choice across epoch and session replacement', async () => {
     const observation = await singleFileObservation(5n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(waitingResolution(
       observation.offered,
@@ -377,7 +377,7 @@ describe('receive interruption presentation', () => {
     try {
       const observation = await singleFileObservation(19n)
       const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
       receiveState.updateProjection(1, observation.state, observation.offers)
       receiveState.updateActivation(waitingResolution(observation.offered, observation.state.projection, 1))
       const intent = receiveIntent(observation.action)
@@ -411,7 +411,7 @@ describe('receive interruption presentation', () => {
     try {
       const observation = await singleFileObservation(19n)
       const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
       receiveState.updateProjection(1, observation.state, observation.offers)
       receiveState.updateActivation(waitingResolution(
         observation.offered,
@@ -470,7 +470,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('publishes the validated recovery summary from a live DirectTree pause result', async () => {
     const observation = await directTreeObservation(9n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(waitingResolution(
       observation.offered,
@@ -521,7 +521,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('retains the exact preserving-open failure and modeled cost in the paused presentation', async () => {
     const observation = await directTreeObservation(10n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(waitingResolution(
       observation.offered,
@@ -590,7 +590,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('keeps compatible-name repair separate, persistent, monotonic, and terminally qualified', async () => {
     const observation = await singleFileObservation(7n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(waitingResolution(
       observation.offered,
@@ -662,7 +662,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('treats an absent terminal repair summary as verified empty-cleanup authority', async () => {
     const observation = await singleFileObservation(8n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(waitingResolution(
       observation.offered,
@@ -714,7 +714,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('publishes a receive intent only after its prepared owner is installed', async () => {
     const observation = await singleFileObservation(7n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     receiveState.updateProjection(1, observation.state, observation.offers)
     receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 1),
@@ -739,7 +739,7 @@ describe('derived output lifecycle and recovery presentation', () => {
   it('rejects mismatched projection facts without mutating visible state', async () => {
     const observation = await singleFileObservation(8n)
     const receiveState = new ReceiveRuntimeState()
-    const outputs = new V2OutputPresentationController(receiveState)
+    const outputs = new OutputPresentationController(receiveState)
     const mismatched = Object.freeze({
       ...observation.offers,
       selectionDigest: identity(90, 32),
@@ -825,7 +825,7 @@ function waitingResolution(
   offered: OfferedArtifactChoice,
   projected: SelectionProjectionState['projection'],
   revision: number,
-): V2AuthorityActivationSnapshot {
+): AuthorityActivationSnapshot {
   return Object.freeze({
     activationId: 'activation-1',
     authenticatedShareInstanceId: identity(70),
@@ -846,7 +846,7 @@ function liveActivation(
   offered: OfferedArtifactChoice,
   action: ResolvedArtifactAction,
   revision: number,
-): V2LiveAuthorityActivationSnapshot {
+): LiveAuthorityActivationSnapshot {
   return Object.freeze({
     activationId: 'activation-1',
     authenticatedShareInstanceId: identity(70),

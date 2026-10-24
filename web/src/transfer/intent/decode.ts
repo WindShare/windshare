@@ -1,4 +1,4 @@
-import { V2_CATALOG_PATH_BYTES } from '../../catalog/path-policy'
+import { CATALOG_PATH_BYTES } from '../../catalog/path-policy'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import {
   ARTIFACT_SPEC_DOMAIN,
@@ -167,7 +167,7 @@ function decodePathSelectionRulesBytes(
   const paths: string[] = []
   let totalBytes = 0
   for (let index = 0; index < pathCount; index += 1) {
-    const pathBytes = cursor.readFrame(V2_CATALOG_PATH_BYTES)
+    const pathBytes = cursor.readFrame(CATALOG_PATH_BYTES)
     totalBytes += pathBytes.byteLength
     if (totalBytes > MAX_SELECTION_TARGET_UTF8_BYTES) invalidDecodedCanonicalBytes()
     paths.push(decodeCanonicalText(pathBytes))

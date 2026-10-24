@@ -71,13 +71,13 @@ import {
   type ArtifactChoiceID,
 } from '../../../transfer/intent'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2LifecycleMutation,
-  V2OwnedActivationAuthority,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
+  ArtifactPresentationAuthority,
+  LifecycleMutation,
+  OwnedActivationAuthority,
+  RouteCommitInput,
+  RouteCommitResult,
 } from '../../receive/contracts'
-import { V2PresentationSourceError } from '../../receive/contracts'
+import { PresentationSourceError } from '../../receive/contracts'
 import {
   FSAReceiveOperation,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
@@ -130,7 +130,7 @@ export interface FSAArtifactPresentationAuthorityOptions {
 
 type FSAActivationState = 'open' | 'committing' | 'transferred' | 'released'
 
-export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationAuthority {
+export class FSAArtifactPresentationAuthority implements ArtifactPresentationAuthority {
   readonly ready: Promise<void>
   readonly #offered: OfferedFSAChoice
   readonly #installedRouteId: string
@@ -167,7 +167,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
     this.ready.catch(() => undefined)
   }
 
-  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+  async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     this.#claimCommit()
     let repository: FSARouteRepository | undefined
     let rootLease: FSARootMutationLease | undefined
@@ -427,7 +427,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
   #requireCommitting(signal: AbortSignal): void {
     signal.throwIfAborted()
     if (this.#state !== 'committing') {
-      throw new V2PresentationSourceError(
+      throw new PresentationSourceError(
         'stale_replacement',
         this.#releaseReason ?? new DOMException(
           'FSA presentation authority was released',
@@ -438,7 +438,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
   }
 }
 
-class FSAOwnedActivationAuthority implements V2OwnedActivationAuthority {
+class FSAOwnedActivationAuthority implements OwnedActivationAuthority {
   readonly intent: BoundReceiveIntent['intent']
   readonly lifecycle: ReceiveLifecycleState
   readonly #resources: FSAResourceOwner
@@ -462,7 +462,7 @@ class FSAOwnedActivationAuthority implements V2OwnedActivationAuthority {
     return this.#settlement
   }
 
-  async settleActivationFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  async settleActivationFailure(reason: unknown): Promise<LifecycleMutation> {
     const lifecycle = await this.settlementAuthority().settleExecutionAdmissionFailure(
       this.intent,
       reason,
@@ -609,7 +609,7 @@ function observeReservationFailure(
 
 function pickerError(error: unknown): unknown {
   return error instanceof DOMException && error.name === 'AbortError'
-    ? new V2PresentationSourceError('picker_refused', error)
+    ? new PresentationSourceError('picker_refused', error)
     : error
 }
 

@@ -2,22 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   RelayHeartbeat,
   RelayHeartbeatError,
-  V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS as INTERVAL,
-  V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS as TIMEOUT,
+  RELAY_HEARTBEAT_INTERVAL_MILLISECONDS as INTERVAL,
+  RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS as TIMEOUT,
 } from '../../src/transport/relay/heartbeat'
 import {
-  decodeV2ConnectionProbe,
-  decodeV2ConnectionProbeAck,
-  encodeV2ConnectionProbe,
-  encodeV2ConnectionProbeAck,
-} from '../../src/transport/relay/v2-protocol'
+  decodeConnectionProbe,
+  decodeConnectionProbeAck,
+  encodeConnectionProbe,
+  encodeConnectionProbeAck,
+} from '../../src/transport/relay/protocol'
 
 afterEach(() => vi.useRealTimers())
 
 describe('connection probe wire contract', () => {
   it.each([
-    [encodeV2ConnectionProbe, decodeV2ConnectionProbe, 72],
-    [encodeV2ConnectionProbeAck, decodeV2ConnectionProbeAck, 65],
+    [encodeConnectionProbe, decodeConnectionProbe, 72],
+    [encodeConnectionProbeAck, decodeConnectionProbeAck, 65],
   ] as const)('preserves the canonical nonce and rejects malformed controls', (encode, decode, magic) => {
     const encoded = encode(0x0102030405060708n)
     expect([...encoded]).toEqual([87, 83, 50, magic, 2, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8])
@@ -46,7 +46,7 @@ describe('relay heartbeat ownership', () => {
     const heartbeat = new RelayHeartbeat(socket, failed, trace)
     await vi.advanceTimersByTimeAsync(TIMEOUT - 1)
     expect(failed).not.toHaveBeenCalled()
-    expect(socket.send.mock.calls.map(call => decodeV2ConnectionProbe(call[0] as Uint8Array)))
+    expect(socket.send.mock.calls.map(call => decodeConnectionProbe(call[0] as Uint8Array)))
       .toEqual([1n, 2n])
     await vi.advanceTimersByTimeAsync(1)
     expect(failed).toHaveBeenCalledWith(expect.any(RelayHeartbeatError))
@@ -71,7 +71,7 @@ describe('relay heartbeat ownership', () => {
     const sent = socket.send.mock.calls.length
     expect(sent).toBe((4 * TIMEOUT) / INTERVAL)
     // One coalesced acknowledgement covers every earlier probe.
-    expect(heartbeat.receive(encodeV2ConnectionProbeAck(BigInt(sent)))).toBe(true)
+    expect(heartbeat.receive(encodeConnectionProbeAck(BigInt(sent)))).toBe(true)
     const acknowledged = trace.mock.calls.filter(call => call[0].stage === 'acknowledged').map(call => call[0].round)
     expect(acknowledged).toEqual([BigInt(sent)])
     heartbeat.close()
@@ -82,10 +82,10 @@ describe('relay heartbeat ownership', () => {
     vi.useFakeTimers()
     const socket = { bufferedAmount: 0, send: vi.fn() }
     const heartbeat = new RelayHeartbeat(socket, vi.fn())
-    expect(() => heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
+    expect(() => heartbeat.receive(encodeConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
     await vi.advanceTimersByTimeAsync(INTERVAL)
-    expect(heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toBe(true)
-    expect(() => heartbeat.receive(encodeV2ConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
+    expect(heartbeat.receive(encodeConnectionProbeAck(1n))).toBe(true)
+    expect(() => heartbeat.receive(encodeConnectionProbeAck(1n))).toThrow(/no outstanding probe/)
     expect(heartbeat.receive(new TextEncoder().encode('WS2Ocontent'))).toBe(false)
     expect(heartbeat.receive(new Uint8Array(1))).toBe(false)
     heartbeat.close()

@@ -1,4 +1,4 @@
-import { advanceV2DirectoryFrame } from '../discovery/v2-directory-stack'
+import { advanceDirectoryFrame } from '../discovery/directory-stack'
 import {
   DirectorySettlementKind,
   validateDirectorySettlement,
@@ -7,22 +7,22 @@ import {
 } from '../directory-admission'
 import type { IncrementalDirectoryOutput } from '../output/session'
 import type { DirectoryWork } from './contract'
-import type { V2DirectoryReplay } from '../discovery/v2-directory-replay'
+import type { DirectoryReplay } from '../discovery/directory-replay'
 import type { AsyncBoundedQueue } from './scheduler'
 
-export interface V2DirectoryTransferRunner {
+export interface DirectoryTransferRunner {
   readonly signal: AbortSignal
   readonly discoverDirectory: (
     work: DirectoryWork,
-    replays: AsyncBoundedQueue<V2DirectoryReplay>,
+    replays: AsyncBoundedQueue<DirectoryReplay>,
   ) => AsyncGenerator<DirectoryWork, void>
   readonly isolateDirectory: (directoryId: string, error: unknown) => void
 }
 
-export async function runV2DirectoryTransferWorker(
+export async function runDirectoryTransferWorker(
   directories: AsyncBoundedQueue<DirectoryWork>,
-  replays: AsyncBoundedQueue<V2DirectoryReplay>,
-  runner: V2DirectoryTransferRunner,
+  replays: AsyncBoundedQueue<DirectoryReplay>,
+  runner: DirectoryTransferRunner,
 ): Promise<void> {
   while (true) {
     const work = await directories.pop(runner.signal)
@@ -38,8 +38,8 @@ export async function runV2DirectoryTransferWorker(
 async function runDirectoryStack(
   initial: DirectoryWork,
   directories: AsyncBoundedQueue<DirectoryWork>,
-  replays: AsyncBoundedQueue<V2DirectoryReplay>,
-  runner: V2DirectoryTransferRunner,
+  replays: AsyncBoundedQueue<DirectoryReplay>,
+  runner: DirectoryTransferRunner,
 ): Promise<void> {
   const stack: Array<{
     readonly work: DirectoryWork
@@ -49,7 +49,7 @@ async function runDirectoryStack(
     while (stack.length > 0) {
       const frame = stack[stack.length - 1]
       if (frame === undefined) throw new Error('Directory discovery stack lost its active frame')
-      const next = await advanceV2DirectoryFrame(frame, runner.isolateDirectory)
+      const next = await advanceDirectoryFrame(frame, runner.isolateDirectory)
       if (next === undefined) {
         stack.pop()
         continue
@@ -72,7 +72,7 @@ async function runDirectoryStack(
   }
 }
 
-export interface V2DirectoryFinalization {
+export interface DirectoryFinalization {
   readonly admissions: readonly DirectoryAdmission[]
   readonly output: IncrementalDirectoryOutput
   readonly signal: AbortSignal
@@ -83,7 +83,7 @@ export interface V2DirectoryFinalization {
   readonly failed: (admission: DirectoryAdmission, error: unknown) => void
 }
 
-export async function finalizeV2Directories(finalization: V2DirectoryFinalization): Promise<void> {
+export async function finalizeDirectories(finalization: DirectoryFinalization): Promise<void> {
   const ordered = [...finalization.admissions].sort((left, right) =>
     right.path.length - left.path.length)
   for (const admission of ordered) {

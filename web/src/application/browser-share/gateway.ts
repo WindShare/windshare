@@ -1,50 +1,50 @@
 import {
-  V2CatalogClient,
-  type V2CatalogScanProgressListener,
-} from '../../catalog/v2-client'
-import { IndexedDbV2CatalogPageStore } from '../../catalog/v2-page-store'
-import { type V2CatalogEntry, type V2ShareDescriptor } from '../../catalog/v2-records'
+  CatalogClient,
+  type CatalogScanProgressListener,
+} from '../../catalog/client'
+import { IndexedDbCatalogPageStore } from '../../catalog/page-store'
+import { type CatalogEntry, type ShareDescriptor } from '../../catalog/records'
 import {
-  V2SelectionPolicy,
-  type V2FrozenSelectionPolicy,
-} from '../../catalog/v2-selection'
+  SelectionPolicy,
+  type FrozenSelectionPolicy,
+} from '../../catalog/selection'
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import type { OfferChannelFactory } from '../../connectivity/peer-offer'
-import type { V2ConnectivityTraceSource } from '../../connectivity/diagnostics'
-import type { V2PeerRecoveryDependencies } from '../../connectivity/peer-set/path'
+import type { ConnectivityTraceSource } from '../../connectivity/diagnostics'
+import type { PeerRecoveryDependencies } from '../../connectivity/peer-set/path'
 import type {
-  V2ConnectivityActivation,
-  V2ContentLaneAdmissionObservation,
-  V2ContentLaneDetachmentObservation,
-} from '../../connectivity/v2-receiver-policy'
+  ConnectivityActivation,
+  ContentLaneAdmissionObservation,
+  ContentLaneDetachmentObservation,
+} from '../../connectivity/receiver-policy'
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { capabilityFromInput } from './capability-input'
 import { encodeBase64Url } from '../../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../../output/diagnostics'
-import { V2BrowserSessionFactory } from '../../receiver/v2-session-factory'
+import { BrowserSessionFactory } from '../../receiver/session-factory'
 import { joinBrowserRelays } from '../../receiver/browser-join'
 import type { InitialJoinOptions } from '../../receiver/initial-join'
 import { receiverRelayBases } from '../../receiver/relay-race'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
-import type { V2ConnectivityPolicy } from '../../connectivity/v2-receiver-policy'
-import { V2ReceiverReconnectSupervisor } from '../../receiver/v2-supervisor'
-import type { V2ProtocolGenerationListener } from '../../receiver/v2-supervisor'
-import type { V2ProtocolTraceSource } from '../../session/v2-diagnostics'
-import type { V2ProtocolSessionIdentity } from '../../session/v2-identities'
-import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
+import type { ConnectivityPolicy } from '../../connectivity/receiver-policy'
+import { ReceiverReconnectSupervisor } from '../../receiver/supervisor'
+import type { ProtocolGenerationListener } from '../../receiver/supervisor'
+import type { ProtocolTraceSource } from '../../session/diagnostics'
+import type { ProtocolSessionIdentity } from '../../session/identities'
+import type { ReceiverSessionRuntime } from '../../session/runtime'
 import type {
-  V2BlockDispatchObservation,
-  V2BlockRouteObservation,
-} from '../../content/v2-broker'
-import { V2FilePreview } from '../../preview/v2-preview'
-import { TransferJob, type TransferJobOptions } from '../../transfer/v2-job'
+  BlockDispatchObservation,
+  BlockRouteObservation,
+} from '../../content/broker'
+import { FilePreview } from '../../preview/preview'
+import { TransferJob, type TransferJobOptions } from '../../transfer/job'
 import { type ReceiveIntent } from '../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../transfer/output/session'
+import type { PlanExecutionAuthority } from '../../transfer/output/session'
 import type { AuthenticatedDiscoverySource } from '../../transfer/projection'
-import { type V2RelayReceiverConnection } from '../../transport/relay/v2-receiver'
-import { V2JoinedProjectionSource } from './discovery/source'
+import { type RelayReceiverConnection } from '../../transport/relay/receiver'
+import { JoinedProjectionSource } from './discovery/source'
 
-export interface V2BrowseDirectory {
+export interface BrowseDirectory {
   readonly id: Uint8Array<ArrayBuffer>
   readonly idText: string
   readonly name: string
@@ -52,47 +52,47 @@ export interface V2BrowseDirectory {
   readonly ancestry: readonly string[]
 }
 
-export interface V2BrowsePage {
-  readonly directory: V2BrowseDirectory
+export interface BrowsePage {
+  readonly directory: BrowseDirectory
   readonly pageIndex: number
   readonly pageCount: number
   readonly entryCount: number
   readonly omittedCount: bigint
-  readonly entries: readonly V2CatalogEntry[]
+  readonly entries: readonly CatalogEntry[]
 }
 
-export class V2BrowseNavigationError extends Error {
+export class BrowseNavigationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
-    this.name = 'V2BrowseNavigationError'
+    this.name = 'BrowseNavigationError'
   }
 }
 
-export class V2JoinedBrowserShare {
-  readonly descriptor: V2ShareDescriptor
+export class JoinedBrowserShare {
+  readonly descriptor: ShareDescriptor
   readonly recoveryIdentity: string
-  #selection = new V2SelectionPolicy(true)
+  #selection = new SelectionPolicy(true)
 
-  get selection(): V2SelectionPolicy { return this.#selection }
+  get selection(): SelectionPolicy { return this.#selection }
 
-  replaceSelection(selection: V2SelectionPolicy): void {
+  replaceSelection(selection: SelectionPolicy): void {
     this.#selection = selection
   }
 
-  selectOnlyFile(entry: V2CatalogEntry, ancestry: readonly string[]): void {
+  selectOnlyFile(entry: CatalogEntry, ancestry: readonly string[]): void {
     if (entry.kind !== 'file') throw new TypeError('Single-file selection requires a file')
-    const selection = new V2SelectionPolicy(false)
+    const selection = new SelectionPolicy(false)
     selection.toggle(entry, ancestry)
     this.#selection = selection
   }
-  readonly #supervisor: V2ReceiverReconnectSupervisor
-  readonly #catalog: V2CatalogClient
+  readonly #supervisor: ReceiverReconnectSupervisor
+  readonly #catalog: CatalogClient
   #closeTask: Promise<void> | undefined
 
   constructor(options: {
-    readonly descriptor: V2ShareDescriptor
-    readonly supervisor: V2ReceiverReconnectSupervisor
-    readonly catalog: V2CatalogClient
+    readonly descriptor: ShareDescriptor
+    readonly supervisor: ReceiverReconnectSupervisor
+    readonly catalog: CatalogClient
     readonly recoveryIdentity: string
   }) {
     this.descriptor = options.descriptor
@@ -111,7 +111,7 @@ export class V2JoinedBrowserShare {
     return this.#supervisor.pathActivity.subscribe(listener)
   }
 
-  rootDirectory(): V2BrowseDirectory {
+  rootDirectory(): BrowseDirectory {
     return Object.freeze({
       id: this.descriptor.syntheticRoot.slice(),
       idText: this.descriptor.syntheticRootId,
@@ -121,10 +121,10 @@ export class V2JoinedBrowserShare {
     })
   }
 
-  childDirectory(parent: V2BrowseDirectory, entry: V2CatalogEntry): V2BrowseDirectory {
+  childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
     if (entry.kind !== 'directory') throw new TypeError('Catalog entry is not a directory')
     if (parent.ancestry.includes(entry.idText)) {
-      throw new V2BrowseNavigationError('Catalog path contains an ancestor identity cycle')
+      throw new BrowseNavigationError('Catalog path contains an ancestor identity cycle')
     }
     let path: readonly string[]
     try {
@@ -132,7 +132,7 @@ export class V2JoinedBrowserShare {
       // Checking before I/O keeps an over-depth or over-byte route unpublished.
       path = snapshotPortableCatalogPath([...parent.path, entry.name])
     } catch (error) {
-      throw new V2BrowseNavigationError('Catalog path exceeds portable path admission', {
+      throw new BrowseNavigationError('Catalog path exceeds portable path admission', {
         cause: error,
       })
     }
@@ -145,15 +145,15 @@ export class V2JoinedBrowserShare {
     })
   }
 
-  subscribeCatalogScanProgress(listener: V2CatalogScanProgressListener): () => void {
+  subscribeCatalogScanProgress(listener: CatalogScanProgressListener): () => void {
     return this.#catalog.subscribeScanProgress(listener)
   }
 
   async page(
-    directory: V2BrowseDirectory,
+    directory: BrowseDirectory,
     pageIndex: number,
     options: { readonly signal?: AbortSignal; readonly explicitRetry?: boolean } = {},
-  ): Promise<V2BrowsePage> {
+  ): Promise<BrowsePage> {
     const committed = await this.#catalog.loadDirectory(directory.id, options)
     const page = await this.#catalog.page(committed, pageIndex, options.signal)
     return Object.freeze({
@@ -166,11 +166,11 @@ export class V2JoinedBrowserShare {
     })
   }
 
-  beginPreviewConnectivity(): V2ConnectivityActivation {
+  beginPreviewConnectivity(): ConnectivityActivation {
     return this.#supervisor.beginConnectivity('preview')
   }
 
-  beginDownloadConnectivity(): V2ConnectivityActivation {
+  beginDownloadConnectivity(): ConnectivityActivation {
     return this.#supervisor.beginConnectivity('download')
   }
 
@@ -178,19 +178,19 @@ export class V2JoinedBrowserShare {
     return this.#supervisor.protocolSessionId
   }
 
-  get protocolSessionIdentity(): V2ProtocolSessionIdentity {
+  get protocolSessionIdentity(): ProtocolSessionIdentity {
     return this.#supervisor.protocolSessionIdentity
   }
 
-  subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
+  subscribeProtocolGeneration(listener: ProtocolGenerationListener): () => void {
     return this.#supervisor.subscribeProtocolGeneration(listener)
   }
 
   projectionSource(
-    selection: V2FrozenSelectionPolicy,
+    selection: FrozenSelectionPolicy,
     explicitRetry = false,
   ): AuthenticatedDiscoverySource {
-    return new V2JoinedProjectionSource({
+    return new JoinedProjectionSource({
       descriptor: this.descriptor,
       catalog: this.#catalog,
       selection,
@@ -200,9 +200,9 @@ export class V2JoinedBrowserShare {
   }
 
   transferJob(
-    plans: V2PlanExecutionAuthority,
+    plans: PlanExecutionAuthority,
     intent: ReceiveIntent,
-    connectivity: V2ConnectivityActivation,
+    connectivity: ConnectivityActivation,
     callbacks: Partial<Pick<
       TransferJobOptions,
       | 'onProgress'
@@ -212,7 +212,7 @@ export class V2JoinedBrowserShare {
       | 'incidentScope'
       | 'outputSettlementDeadline'
     >> & {
-      readonly selection?: V2FrozenSelectionPolicy
+      readonly selection?: FrozenSelectionPolicy
     } = {},
   ): TransferJob {
     const protocolGeneration = this.#supervisor.generationId
@@ -251,21 +251,21 @@ export class V2JoinedBrowserShare {
   }
 
   preview(
-    entry: V2CatalogEntry,
-    connectivity: V2ConnectivityActivation,
+    entry: CatalogEntry,
+    connectivity: ConnectivityActivation,
     signal: AbortSignal,
-  ): Promise<V2FilePreview> {
+  ): Promise<FilePreview> {
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
-    return V2FilePreview.open(entry, content.revisions, content.broker, signal)
+    return FilePreview.open(entry, content.revisions, content.broker, signal)
   }
 
   automaticPhotoPreview(
-    entry: V2CatalogEntry,
-    connectivity: V2ConnectivityActivation,
+    entry: CatalogEntry,
+    connectivity: ConnectivityActivation,
     signal: AbortSignal,
-  ): Promise<V2FilePreview> {
+  ): Promise<FilePreview> {
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
-    return V2FilePreview.openAutomaticPhoto(entry, content.revisions, content.broker, signal)
+    return FilePreview.openAutomaticPhoto(entry, content.revisions, content.broker, signal)
   }
 
   close(): Promise<void> {
@@ -288,38 +288,38 @@ export class V2JoinedBrowserShare {
   }
 }
 
-export interface V2BrowserReceiverGatewayOptions {
+export interface BrowserReceiverGatewayOptions {
   readonly relayBases?: readonly string[]
-  readonly policy?: V2ConnectivityPolicy
+  readonly policy?: ConnectivityPolicy
   readonly offersFactory?: () => OfferChannelFactory
   readonly nativePeerUsable?: () => boolean
-  readonly protocolTrace?: V2ProtocolTraceSource
-  readonly connectivityTrace?: V2ConnectivityTraceSource
-  readonly peerRecovery?: V2PeerRecoveryDependencies
-  readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
-  readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
-  readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
-  readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
+  readonly protocolTrace?: ProtocolTraceSource
+  readonly connectivityTrace?: ConnectivityTraceSource
+  readonly peerRecovery?: PeerRecoveryDependencies
+  readonly onBlockDispatched?: (observation: BlockDispatchObservation) => void
+  readonly onBlockFetched?: (observation: BlockRouteObservation) => void
+  readonly onContentLaneAdmitted?: (observation: ContentLaneAdmissionObservation) => void
+  readonly onContentLaneDetached?: (observation: ContentLaneDetachmentObservation) => void
 }
 
-export class V2BrowserReceiverGateway {
+export class BrowserReceiverGateway {
   readonly #relayBases: readonly string[] | undefined
-  readonly #policy: V2ConnectivityPolicy
+  readonly #policy: ConnectivityPolicy
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
-  readonly #protocolTrace: V2ProtocolTraceSource | undefined
-  readonly #connectivityTrace: V2ConnectivityTraceSource | undefined
-  readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
-  readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
-  readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
+  readonly #protocolTrace: ProtocolTraceSource | undefined
+  readonly #connectivityTrace: ConnectivityTraceSource | undefined
+  readonly #peerRecovery: PeerRecoveryDependencies | undefined
+  readonly #onBlockDispatched: ((observation: BlockDispatchObservation) => void) | undefined
+  readonly #onBlockFetched: ((observation: BlockRouteObservation) => void) | undefined
   readonly #onContentLaneAdmitted: (
-    (observation: V2ContentLaneAdmissionObservation) => void
+    (observation: ContentLaneAdmissionObservation) => void
   ) | undefined
   readonly #onContentLaneDetached: (
-    (observation: V2ContentLaneDetachmentObservation) => void
+    (observation: ContentLaneDetachmentObservation) => void
   ) | undefined
 
-  constructor(options: V2BrowserReceiverGatewayOptions = {}) {
+  constructor(options: BrowserReceiverGatewayOptions = {}) {
     this.#relayBases = options.relayBases === undefined ? undefined : receiverRelayBases(options.relayBases)
     this.#policy = options.policy ?? 'auto'
     this.#offersFactory = options.offersFactory
@@ -333,14 +333,14 @@ export class V2BrowserReceiverGateway {
     this.#onContentLaneDetached = options.onContentLaneDetached
   }
 
-  async join(input: string, pageUrl: string, signal?: AbortSignal, recovery: InitialJoinOptions = {}): Promise<V2JoinedBrowserShare> {
+  async join(input: string, pageUrl: string, signal?: AbortSignal, recovery: InitialJoinOptions = {}): Promise<JoinedBrowserShare> {
     signal?.throwIfAborted()
     let capability: Suite02CapabilityLink | undefined
-    let relay: V2RelayReceiverConnection | undefined
-    let session: V2ReceiverSessionRuntime | undefined
-    let catalog: V2CatalogClient | undefined
-    let supervisor: V2ReceiverReconnectSupervisor | undefined
-    let sessionFactory: V2BrowserSessionFactory | undefined
+    let relay: RelayReceiverConnection | undefined
+    let session: ReceiverSessionRuntime | undefined
+    let catalog: CatalogClient | undefined
+    let supervisor: ReceiverReconnectSupervisor | undefined
+    let sessionFactory: BrowserSessionFactory | undefined
     try {
       capability = await capabilityFromInput(input, pageUrl)
       signal?.throwIfAborted()
@@ -356,14 +356,14 @@ export class V2BrowserReceiverGateway {
         encodeBase64Url(capability.pkHash),
         descriptor.shareInstanceId,
       ].join('.')
-      sessionFactory = new V2BrowserSessionFactory({
+      sessionFactory = new BrowserSessionFactory({
         relayBases,
         capability,
         descriptor,
         descriptorObject: relay.descriptorObject,
         ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       })
-      supervisor = new V2ReceiverReconnectSupervisor({
+      supervisor = new ReceiverReconnectSupervisor({
         descriptor,
         initial,
         policy: this.#policy,
@@ -380,8 +380,8 @@ export class V2BrowserReceiverGateway {
           this.#onContentLaneDetached,
         ),
       })
-      const store = await IndexedDbV2CatalogPageStore.open(recoveryIdentity)
-      catalog = new V2CatalogClient({
+      const store = await IndexedDbCatalogPageStore.open(recoveryIdentity)
+      catalog = new CatalogClient({
         descriptor,
         readSecret: capability.readSecret,
         operations: supervisor.catalogOperations,
@@ -389,7 +389,7 @@ export class V2BrowserReceiverGateway {
         storageIdentity: recoveryIdentity,
       })
       signal?.throwIfAborted()
-      return new V2JoinedBrowserShare({
+      return new JoinedBrowserShare({
         descriptor,
         supervisor,
         catalog,
@@ -418,14 +418,14 @@ export class V2BrowserReceiverGateway {
 function gatewayConnectivityOptions(
   offersFactory: (() => OfferChannelFactory) | undefined,
   nativePeerUsable: (() => boolean) | undefined,
-  connectivityTrace: V2ConnectivityTraceSource | undefined,
-  peerRecovery: V2PeerRecoveryDependencies | undefined,
-  onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined,
-  onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
+  connectivityTrace: ConnectivityTraceSource | undefined,
+  peerRecovery: PeerRecoveryDependencies | undefined,
+  onBlockDispatched: ((observation: BlockDispatchObservation) => void) | undefined,
+  onBlockFetched: ((observation: BlockRouteObservation) => void) | undefined,
   onContentLaneAdmitted:
-    ((observation: V2ContentLaneAdmissionObservation) => void) | undefined,
+    ((observation: ContentLaneAdmissionObservation) => void) | undefined,
   onContentLaneDetached:
-    ((observation: V2ContentLaneDetachmentObservation) => void) | undefined,
+    ((observation: ContentLaneDetachmentObservation) => void) | undefined,
 ) {
   return {
     ...(offersFactory === undefined ? {} : { offersFactory }),

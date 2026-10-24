@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import type { V2CatalogClient } from '../../src/catalog/v2-client'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import type { CatalogClient } from '../../src/catalog/client'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
 import type { FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import type {
@@ -24,7 +24,7 @@ import {
   type PersistentOutputStageMilestone,
 } from '../../src/output/persistent-tree/stage-diagnostics'
 import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/failure/fault'
-import type { TransferTraceEvent } from '../../src/transfer/v2-job'
+import type { TransferTraceEvent } from '../../src/transfer/job'
 import {
   disabledOutputExecutionProfile,
   outputSessionIdentity,
@@ -275,7 +275,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
       })
 
       try {
-        const selection = new V2SelectionPolicy(true)
+        const selection = new SelectionPolicy(true)
         const catalog = catalogFixture([
           { id: identity(2), entries: [directoryEntry(identity(70), 'photos')] },
           { id: identity(70), entries: [file] },
@@ -623,7 +623,7 @@ async function expectTreeStageFailure(
   armed = true
 
   try {
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const file = fileEntry(identity(73), 'report.bin', 2n)
     const coordinates = await createDirectTreeCoordinateContract(session.intent)
     const root = requireMaterializedFixtureRoot(coordinates)
@@ -826,7 +826,7 @@ function requireMaterializedFixtureRoot(
 
 function catalogWithSiblingAuthority(
   directories: readonly CatalogDirectoryFixture[],
-): V2CatalogClient {
+): CatalogClient {
   const fixture = catalogFixture(directories)
   const entriesByDirectory = new Map(directories.map(directory => [
     encodeBase64Url(directory.id),
@@ -843,7 +843,7 @@ function catalogWithSiblingAuthority(
       return entriesByDirectory.get(directory.directoryIdText)
         ?.some(entry => entry.name === name) === true
     },
-  }) as unknown as V2CatalogClient
+  }) as unknown as CatalogClient
 }
 
 function expectFSAFacts(

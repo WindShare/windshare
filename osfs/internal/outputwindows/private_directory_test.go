@@ -21,15 +21,15 @@ const (
 
 var errWindowsPrivateCreateCutInjected = errors.New("injected Windows private-directory create cut")
 
-func TestWindowsV3PrivateDirectoryCreateCutsLeaveOnlyClassifiableState(t *testing.T) {
+func TestWindowsPrivateDirectoryCreateCutsLeaveOnlyClassifiableState(t *testing.T) {
 	cuts := windowsPrivateDirectoryCreateCuts()
 	for _, cut := range cuts {
 		t.Run(cut.String(), func(t *testing.T) {
-			platform := openWindowsV3TestPlatform(t)
+			platform := openWindowsTestPlatform(t)
 			defer platform.Close()
 			target := "private-" + cut.String()
-			platform.root.createObserver = windowsV3PrivateDirectoryCreateObserverFunc(
-				func(_, observedTarget string, observedCut windowsV3PrivateDirectoryCreateCut) error {
+			platform.root.createObserver = windowsPrivateDirectoryCreateObserverFunc(
+				func(_, observedTarget string, observedCut windowsPrivateDirectoryCreateCut) error {
 					if observedTarget == target && observedCut == cut {
 						return errWindowsPrivateCreateCutInjected
 					}
@@ -49,13 +49,13 @@ func TestWindowsV3PrivateDirectoryCreateCutsLeaveOnlyClassifiableState(t *testin
 	}
 }
 
-func TestWindowsV3PrivateDirectoryCreateProtocolPropagatesToNestedStateParents(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsPrivateDirectoryCreateProtocolPropagatesToNestedStateParents(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	const target = "aa"
-	platform.root.createObserver = windowsV3PrivateDirectoryCreateObserverFunc(
-		func(parent, observedTarget string, cut windowsV3PrivateDirectoryCreateCut) error {
-			if filepath.Base(parent) == "session-shell" && observedTarget == target && cut == windowsV3PrivateDirectoryCutCreated {
+	platform.root.createObserver = windowsPrivateDirectoryCreateObserverFunc(
+		func(parent, observedTarget string, cut windowsPrivateDirectoryCreateCut) error {
+			if filepath.Base(parent) == "session-shell" && observedTarget == target && cut == windowsPrivateDirectoryCutCreated {
 				return errWindowsPrivateCreateCutInjected
 			}
 			return nil
@@ -77,8 +77,8 @@ func TestWindowsV3PrivateDirectoryCreateProtocolPropagatesToNestedStateParents(t
 	}
 }
 
-func TestWindowsV3PrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsPrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	const target = "existing-private"
 	existing, err := platform.root.CreatePrivateDirectory(target)
@@ -86,7 +86,7 @@ func TestWindowsV3PrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T)
 		t.Fatal(err)
 	}
 	defer existing.Close()
-	if created, err := platform.root.CreatePrivateDirectory(target); !errors.Is(err, errWindowsV3OutputCollision) {
+	if created, err := platform.root.CreatePrivateDirectory(target); !errors.Is(err, errWindowsOutputCollision) {
 		if created != nil {
 			_ = created.Close()
 		}
@@ -97,7 +97,7 @@ func TestWindowsV3PrivateDirectoryCreateNeverDeletesExistingTarget(t *testing.T)
 		t.Fatalf("existing target was removed: %v", err)
 	}
 	defer reopened.Close()
-	same, compareErr := sameWindowsV3OpenedDirectory(existing, reopened)
+	same, compareErr := sameWindowsOpenedDirectory(existing, reopened)
 	if compareErr != nil || !same {
 		t.Fatalf("existing target changed: same=%v error=%v", same, compareErr)
 	}
@@ -125,7 +125,7 @@ func TestWindowsNTFSPrivateDirectoryCreateSurvivesRealProcessKillAtEveryCut(t *t
 				nativeOutputCrashRootEnvironment + "=" + rootPath,
 				nativeOutputCrashReadyEnvironment + "=" + readyPath,
 			})
-			platform, err := openWindowsV3OutputPlatform(rootPath)
+			platform, err := openWindowsOutputPlatform(rootPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,12 +143,12 @@ func runWindowsPrivateCreateCrashChild(t *testing.T) {
 	if err != nil || rootPath == "" || readyPath == "" || target == "" {
 		t.Fatalf("invalid private-create crash child parameters: %v", err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	platform.root.createObserver = windowsV3PrivateDirectoryCreateObserverFunc(
-		func(_, observedTarget string, observedCut windowsV3PrivateDirectoryCreateCut) error {
+	platform.root.createObserver = windowsPrivateDirectoryCreateObserverFunc(
+		func(_, observedTarget string, observedCut windowsPrivateDirectoryCreateCut) error {
 			if observedTarget != target || observedCut != cut {
 				return nil
 			}
@@ -166,7 +166,7 @@ func runWindowsPrivateCreateCrashChild(t *testing.T) {
 
 func assertWindowsPrivateCreateCutState(
 	t *testing.T,
-	root *windowsV3Directory,
+	root *windowsDirectory,
 	target string,
 	present bool,
 ) {
@@ -197,21 +197,21 @@ func assertWindowsPrivateCreateCutState(
 	}
 }
 
-func windowsPrivateDirectoryCreateCuts() []windowsV3PrivateDirectoryCreateCut {
-	return []windowsV3PrivateDirectoryCreateCut{
-		windowsV3PrivateDirectoryCutCreated,
-		windowsV3PrivateDirectoryCutACLHidden,
-		windowsV3PrivateDirectoryCutSynced,
-		windowsV3PrivateDirectoryCutCommitted,
-		windowsV3PrivateDirectoryCutClosed,
+func windowsPrivateDirectoryCreateCuts() []windowsPrivateDirectoryCreateCut {
+	return []windowsPrivateDirectoryCreateCut{
+		windowsPrivateDirectoryCutCreated,
+		windowsPrivateDirectoryCutACLHidden,
+		windowsPrivateDirectoryCutSynced,
+		windowsPrivateDirectoryCutCommitted,
+		windowsPrivateDirectoryCutClosed,
 	}
 }
 
-func windowsPrivateCreateCutCommitted(cut windowsV3PrivateDirectoryCreateCut) bool {
-	return cut == windowsV3PrivateDirectoryCutCommitted || cut == windowsV3PrivateDirectoryCutClosed
+func windowsPrivateCreateCutCommitted(cut windowsPrivateDirectoryCreateCut) bool {
+	return cut == windowsPrivateDirectoryCutCommitted || cut == windowsPrivateDirectoryCutClosed
 }
 
-func parseWindowsPrivateDirectoryCreateCut(raw string) (windowsV3PrivateDirectoryCreateCut, error) {
+func parseWindowsPrivateDirectoryCreateCut(raw string) (windowsPrivateDirectoryCreateCut, error) {
 	for _, cut := range windowsPrivateDirectoryCreateCuts() {
 		if cut.String() == raw {
 			return cut, nil

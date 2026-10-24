@@ -1,24 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockBroker, V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
-import { V2SessionBlockLane, type V2RevisionService } from '../../src/content/v2-session-services'
-import { encodeV2Body, V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
-import { V2_SESSION_SEND_TIMEOUT_MILLISECONDS } from '../../src/session/v2-writer'
+import { BlockBroker, LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
+import { SessionBlockLane, type RevisionService } from '../../src/content/session-services'
+import { encodeBody, MESSAGE_KIND } from '../../src/session/message'
+import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
+import { SESSION_SEND_TIMEOUT_MILLISECONDS } from '../../src/session/writer'
 import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { id, openSent, runtimeFixture, SHARE } from './v2-send-fixture'
 
 afterEach(() => vi.useRealTimers())
-const BODY = encodeV2Body([])
+const BODY = encodeBody([])
 
 describe('request cancellation across send backpressure', () => {
   it('snapshots the request before asynchronous admission can yield to its caller', async () => {
     const { runtime, channel } = runtimeFixture()
     try {
-      const body = encodeV2Body([1])
+      const body = encodeBody([1])
       const original = body.slice()
-      const pending = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, body)
+      const pending = runtime.beginOperation(MESSAGE_KIND.listChildren, body)
       body.fill(0)
       channel.unblock()
       const operation = await pending
@@ -32,19 +32,19 @@ describe('request cancellation across send backpressure', () => {
   it('withdraws an unsent request and does not send a CANCEL for an unknown peer operation', async () => {
     const { runtime, channel, events } = runtimeFixture()
     try {
-      const first = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY)
+      const first = runtime.beginOperation(MESSAGE_KIND.listChildren, BODY)
       await channel.sending.promise
       const controller = new AbortController()
-      const second = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY, { signal: controller.signal })
+      const second = runtime.beginOperation(MESSAGE_KIND.listChildren, BODY, { signal: controller.signal })
       await Promise.resolve()
       controller.abort(new Error('queued request cancelled'))
       await expect(second).rejects.toThrow('queued request cancelled')
       channel.unblock()
       await first
-      await runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY)
+      await runtime.beginOperation(MESSAGE_KIND.listChildren, BODY)
       const sent = await openSent(channel)
       expect(sent.map(value => value.message.kind)).toEqual([
-        V2_MESSAGE_KIND.listChildren, V2_MESSAGE_KIND.listChildren,
+        MESSAGE_KIND.listChildren, MESSAGE_KIND.listChildren,
       ])
       expect(events).toContainEqual(expect.objectContaining({ transition: 'send_withdrawn' }))
       for (const event of events) {
@@ -57,19 +57,19 @@ describe('request cancellation across send backpressure', () => {
     const { runtime, channel } = runtimeFixture()
     try {
       const controller = new AbortController()
-      const pending = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY, { signal: controller.signal })
+      const pending = runtime.beginOperation(MESSAGE_KIND.listChildren, BODY, { signal: controller.signal })
       await channel.sending.promise
       const reason = new Error('pause')
       controller.abort(reason)
       await expect(pending).rejects.toBe(reason)
       expect(channel.state).toBe('open')
       expect(channel.sent).toHaveLength(0)
-      const next = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY)
+      const next = runtime.beginOperation(MESSAGE_KIND.listChildren, BODY)
       channel.unblock()
       await next
       const sent = await openSent(channel)
       expect(sent.map(value => [value.sequence, value.message.kind])).toEqual([
-        [0n, V2_MESSAGE_KIND.listChildren], [1n, V2_MESSAGE_KIND.cancel], [2n, V2_MESSAGE_KIND.listChildren],
+        [0n, MESSAGE_KIND.listChildren], [1n, MESSAGE_KIND.cancel], [2n, MESSAGE_KIND.listChildren],
       ])
       expect(sent[0]!.message.operationId).toEqual(sent[1]!.message.operationId)
     } finally { await runtime.close() }
@@ -78,15 +78,15 @@ describe('request cancellation across send backpressure', () => {
   it('completes explicit cancellation of a sent operation without awaiting its remote notification', async () => {
     const { runtime, channel } = runtimeFixture()
     channel.unblock()
-    const operation = await runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY)
+    const operation = await runtime.beginOperation(MESSAGE_KIND.listChildren, BODY)
     channel.block()
-    const pending = expect(runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY)).rejects.toMatchObject({
+    const pending = expect(runtime.beginOperation(MESSAGE_KIND.listChildren, BODY)).rejects.toMatchObject({
       scope: 'lane',
     })
     try {
       await channel.sending.promise
       const reason = new Error('stop sent operation')
-      await runtime.cancelOperation(operation, { cause: reason, protocolReason: V2_OPERATION_CANCEL_REASON.user })
+      await runtime.cancelOperation(operation, { cause: reason, protocolReason: OPERATION_CANCEL_REASON.user })
       await expect(operation.next()).rejects.toBe(reason)
       expect(channel.state).toBe('open')
       expect(channel.sent).toHaveLength(1)
@@ -100,10 +100,10 @@ describe('request cancellation across send backpressure', () => {
     vi.useFakeTimers()
     const { runtime, channel, events } = runtimeFixture()
     try {
-      const pending = expect(runtime.beginOperation(V2_MESSAGE_KIND.listChildren, BODY))
+      const pending = expect(runtime.beginOperation(MESSAGE_KIND.listChildren, BODY))
         .rejects.toMatchObject({ scope: 'lane' })
       await channel.sending.promise
-      await vi.advanceTimersByTimeAsync(V2_SESSION_SEND_TIMEOUT_MILLISECONDS)
+      await vi.advanceTimersByTimeAsync(SESSION_SEND_TIMEOUT_MILLISECONDS)
       await pending
       expect(runtime.laneIds()).toEqual([])
       expect(runtime.isClosed).toBe(false)
@@ -119,11 +119,11 @@ describe('request cancellation across send backpressure', () => {
   it('releases a cancelled upstream slot and its lease barrier before transport unblocks', async () => {
     const { runtime, channel } = runtimeFixture()
     const dispatched = vi.fn()
-    const lanes = new V2LaneSet({ onBlockDispatched: dispatched })
-    const revisions = { leaseError: () => undefined } as unknown as V2RevisionService
-    lanes.add(new V2SessionBlockLane(1, runtime, SHARE, KEY_BYTES, revisions), 'direct')
-    const broker = new V2BlockBroker(lanes, { maximumUpstreamReads: 1 })
-    const routes: V2BlockRouteEligibility = {
+    const lanes = new LaneSet({ onBlockDispatched: dispatched })
+    const revisions = { leaseError: () => undefined } as unknown as RevisionService
+    lanes.add(new SessionBlockLane(1, runtime, SHARE, KEY_BYTES, revisions), 'direct')
+    const broker = new BlockBroker(lanes, { maximumUpstreamReads: 1 })
+    const routes: BlockRouteEligibility = {
       active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
     }
     const descriptor = {

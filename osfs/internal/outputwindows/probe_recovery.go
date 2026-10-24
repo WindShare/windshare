@@ -18,44 +18,44 @@ import (
 )
 
 const (
-	windowsV3OutputProbeLockName         = ".windshare-output.probe.lock"
-	windowsV3OutputProbeReservedPrefix   = ".windshare-output.probe"
-	windowsV3OutputProbeMaximumLeftovers = 64
-	windowsV3OutputProbeMaximumEntries   = 7
-	windowsV3OutputProbeMutexDomain      = "windshare/output-probe-mutex/v1"
-	windowsV3OutputProbeMutexPrefix      = `Global\WindShare.OutputProbe.`
-	windowsV3WaitObject                  = uint32(0)
-	windowsV3WaitAbandoned               = uint32(0x80)
-	windowsV3WaitTimeout                 = uint32(0x102)
+	windowsOutputProbeLockName         = ".windshare-output.probe.lock"
+	windowsOutputProbeReservedPrefix   = ".windshare-output.probe"
+	windowsOutputProbeMaximumLeftovers = 64
+	windowsOutputProbeMaximumEntries   = 7
+	windowsOutputProbeMutexDomain      = "windshare/output-probe-mutex/v1"
+	windowsOutputProbeMutexPrefix      = `Global\WindShare.OutputProbe.`
+	windowsWaitObject                  = uint32(0)
+	windowsWaitAbandoned               = uint32(0x80)
+	windowsWaitTimeout                 = uint32(0x102)
 )
 
-var windowsV3OutputProbeRegularNames = map[string]struct{}{
+var windowsOutputProbeRegularNames = map[string]struct{}{
 	"stage": {}, "anchor": {}, "publication": {}, "record": {}, "record.tmp": {},
 }
 
-var windowsV3OutputProbeDirectoryNames = map[string]struct{}{
+var windowsOutputProbeDirectoryNames = map[string]struct{}{
 	"candidate": {}, "installed": {},
 }
 
-type windowsV3OutputProbeLock struct {
+type windowsOutputProbeLock struct {
 	handle       windows.Handle
 	held         bool
 	threadPinned bool
 	threadID     uint32
 }
 
-func (directory *windowsV3Directory) currentObjectClaim() ([]byte, error) {
+func (directory *windowsDirectory) currentObjectClaim() ([]byte, error) {
 	if err := directory.usable(); err != nil {
 		return nil, err
 	}
 	facts, err := directory.inspector.Inspect(directory.handle())
 	if err != nil {
-		return nil, windowsV3Failure("claim current Windows output object", directory.path,
-			errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure("claim current Windows output object", directory.path,
+			errWindowsOutputUnsafe, err)
 	}
-	if err := windowsV3ValidateOpenedObject(facts, directory.volume, true); err != nil {
-		return nil, windowsV3Failure("claim current Windows output object", directory.path,
-			errWindowsV3OutputUnsafe, err)
+	if err := windowsValidateOpenedObject(facts, directory.volume, true); err != nil {
+		return nil, windowsFailure("claim current Windows output object", directory.path,
+			errWindowsOutputUnsafe, err)
 	}
 	// This claim only keys an in-process probe mutex while the root is pinned.
 	// It is deliberately not a restart identity and therefore must not enroll an
@@ -69,7 +69,7 @@ func (directory *windowsV3Directory) currentObjectClaim() ([]byte, error) {
 	return claim, nil
 }
 
-func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProbeLock, resultErr error) {
+func (root *windowsDirectory) acquireOutputProbeLock() (_ *windowsOutputProbeLock, resultErr error) {
 	const operation = "lock Windows output feature probe"
 	if err := root.verify(false); err != nil {
 		return nil, err
@@ -79,17 +79,17 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 		return nil, err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte(windowsV3OutputProbeMutexDomain))
+	_, _ = hash.Write([]byte(windowsOutputProbeMutexDomain))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(rootClaim)
-	mutexName := windowsV3OutputProbeMutexPrefix + hex.EncodeToString(hash.Sum(nil))
+	mutexName := windowsOutputProbeMutexPrefix + hex.EncodeToString(hash.Sum(nil))
 	nativeName, err := windows.UTF16PtrFromString(mutexName)
 	if err != nil {
-		return nil, windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, mutexName, errWindowsOutputUnsafe, err)
 	}
 	descriptor, err := root.policy.descriptor(false)
 	if err != nil {
-		return nil, windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, mutexName, errWindowsOutputUnsafe, err)
 	}
 	attributes := windows.SecurityAttributes{
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
@@ -108,15 +108,15 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 	handle, createErr := windows.CreateMutex(&attributes, false, nativeName)
 	runtime.KeepAlive(descriptor)
 	if createErr != nil && !errors.Is(createErr, windows.ERROR_ALREADY_EXISTS) {
-		return nil, windowsV3NativeOperationFailure(operation, mutexName, createErr)
+		return nil, windowsNativeOperationFailure(operation, mutexName, createErr)
 	}
 	if handle == windows.InvalidHandle || handle == 0 {
-		return nil, windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, mutexName, errWindowsOutputUnsafe,
 			errors.New("kernel returned an invalid feature-probe mutex handle"))
 	}
 	if err := root.policy.verifyKernelMutex(handle); err != nil {
 		return nil, errors.Join(
-			windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, mutexName, errWindowsOutputUnsafe,
 				errors.New("root-bound feature-probe mutex has a non-canonical security envelope")),
 			err,
 			windows.CloseHandle(handle),
@@ -125,21 +125,21 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 	wait, waitErr := windows.WaitForSingleObject(handle, 0)
 	if waitErr != nil {
 		return nil, errors.Join(
-			windowsV3NativeOperationFailure(operation, mutexName, waitErr),
+			windowsNativeOperationFailure(operation, mutexName, waitErr),
 			windows.CloseHandle(handle),
 		)
 	}
 	switch wait {
-	case windowsV3WaitTimeout:
+	case windowsWaitTimeout:
 		return nil, errors.Join(
-			windowsV3Failure(operation, mutexName, errWindowsV3OutputLockBusy,
+			windowsFailure(operation, mutexName, errWindowsOutputLockBusy,
 				errors.New("root-bound feature-probe mutex is already held")),
 			windows.CloseHandle(handle),
 		)
-	case windowsV3WaitObject, windowsV3WaitAbandoned:
+	case windowsWaitObject, windowsWaitAbandoned:
 	default:
 		return nil, errors.Join(
-			windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, mutexName, errWindowsOutputUnsafe,
 				fmt.Errorf("kernel returned unexpected mutex wait status %#x", wait)),
 			windows.CloseHandle(handle),
 		)
@@ -147,7 +147,7 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 	currentClaim, claimErr := root.currentObjectClaim()
 	if claimErr != nil || !bytes.Equal(rootClaim, currentClaim) {
 		return nil, errors.Join(
-			windowsV3Failure(operation, mutexName, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, mutexName, errWindowsOutputUnsafe,
 				errors.New("output root changed while its feature-probe mutex was acquired")),
 			claimErr,
 			windows.ReleaseMutex(handle),
@@ -155,19 +155,19 @@ func (root *windowsV3Directory) acquireOutputProbeLock() (_ *windowsV3OutputProb
 		)
 	}
 	committed = true
-	return &windowsV3OutputProbeLock{
+	return &windowsOutputProbeLock{
 		handle: handle, held: true, threadPinned: true, threadID: windows.GetCurrentThreadId(),
 	}, nil
 }
 
-func (root *windowsV3Directory) releaseOutputProbeLock(lock *windowsV3OutputProbeLock) error {
+func (root *windowsDirectory) releaseOutputProbeLock(lock *windowsOutputProbeLock) error {
 	const operation = "release Windows output feature probe"
 	if lock == nil || !lock.held || lock.handle == windows.InvalidHandle || lock.handle == 0 {
-		return windowsV3Failure(operation, windowsV3OutputProbeMutexPrefix, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, windowsOutputProbeMutexPrefix, errWindowsOutputUnsafe,
 			errors.New("feature-probe lock authority is absent"))
 	}
 	if !lock.threadPinned || lock.threadID == 0 || lock.threadID != windows.GetCurrentThreadId() {
-		return windowsV3Failure(operation, windowsV3OutputProbeMutexPrefix, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, windowsOutputProbeMutexPrefix, errWindowsOutputUnsafe,
 			errors.New("feature-probe mutex release moved away from its owning OS thread"))
 	}
 	defer runtime.UnlockOSThread()
@@ -178,21 +178,21 @@ func (root *windowsV3Directory) releaseOutputProbeLock(lock *windowsV3OutputProb
 	lock.handle = windows.InvalidHandle
 	releaseErr := windows.ReleaseMutex(handle)
 	if releaseErr != nil {
-		releaseErr = windowsV3NativeOperationFailure(operation, windowsV3OutputProbeMutexPrefix, releaseErr)
+		releaseErr = windowsNativeOperationFailure(operation, windowsOutputProbeMutexPrefix, releaseErr)
 	}
 	return errors.Join(releaseErr, windows.CloseHandle(handle))
 }
 
-func (root *windowsV3Directory) recoverOutputProbeLeftovers() error {
+func (root *windowsDirectory) recoverOutputProbeLeftovers() error {
 	const operation = "recover Windows output feature probe"
 	names, err := root.namesWithPrefix(
-		windowsV3OutputProbeReservedPrefix,
-		windowsV3OutputProbeMaximumLeftovers+1,
+		windowsOutputProbeReservedPrefix,
+		windowsOutputProbeMaximumLeftovers+1,
 	)
 	if err != nil {
 		return err
 	}
-	leftovers := make([]*windowsV3OutputProbeLeftover, 0, len(names))
+	leftovers := make([]*windowsOutputProbeLeftover, 0, len(names))
 	closeAll := func() error {
 		var closeErr error
 		for _, leftover := range leftovers {
@@ -201,36 +201,36 @@ func (root *windowsV3Directory) recoverOutputProbeLeftovers() error {
 		return closeErr
 	}
 	for _, name := range names {
-		if !windowsV3CanonicalProbeName(name) {
-			return errors.Join(windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+		if !windowsCanonicalProbeName(name) {
+			return errors.Join(windowsFailure(operation, name, errWindowsOutputUnsafe,
 				errors.New("malformed reserved probe name blocks the output root")), closeAll())
 		}
-		if len(leftovers) == windowsV3OutputProbeMaximumLeftovers {
-			return errors.Join(windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+		if len(leftovers) == windowsOutputProbeMaximumLeftovers {
+			return errors.Join(windowsFailure(operation, name, errWindowsOutputUnsafe,
 				errors.New("probe leftover count exceeds its safety bound")), closeAll())
 		}
 		leftover, inspectErr := root.inspectOutputProbeLeftover(name)
 		if inspectErr != nil {
-			return errors.Join(windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+			return errors.Join(windowsFailure(operation, name, errWindowsOutputUnsafe,
 				errors.New("probe leftover does not match the strict temporary schema")), inspectErr, closeAll())
 		}
 		leftovers = append(leftovers, leftover)
 	}
 	for _, leftover := range leftovers {
 		if err := leftover.remove(); err != nil {
-			return errors.Join(windowsV3Failure(operation, leftover.name, errWindowsV3OutputUnsafe,
+			return errors.Join(windowsFailure(operation, leftover.name, errWindowsOutputUnsafe,
 				errors.New("fixed probe leftover could not be reduced safely")), err, closeAll())
 		}
 	}
 	return closeAll()
 }
 
-func windowsV3CanonicalProbeName(name string) bool {
-	if !strings.HasPrefix(name, windowsV3OutputProbePrefix) ||
-		len(name) != len(windowsV3OutputProbePrefix)+windowsV3OutputProbeRandomBytes*2 {
+func windowsCanonicalProbeName(name string) bool {
+	if !strings.HasPrefix(name, windowsOutputProbePrefix) ||
+		len(name) != len(windowsOutputProbePrefix)+windowsOutputProbeRandomBytes*2 {
 		return false
 	}
-	for _, character := range name[len(windowsV3OutputProbePrefix):] {
+	for _, character := range name[len(windowsOutputProbePrefix):] {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
@@ -238,33 +238,33 @@ func windowsV3CanonicalProbeName(name string) bool {
 	return true
 }
 
-type windowsV3OutputProbeLeftover struct {
-	root        *windowsV3Directory
+type windowsOutputProbeLeftover struct {
+	root        *windowsDirectory
 	name        string
-	directory   *windowsV3Directory
-	regular     map[string]*windowsV3File
-	directories map[string]*windowsV3Directory
+	directory   *windowsDirectory
+	regular     map[string]*windowsFile
+	directories map[string]*windowsDirectory
 }
 
-func (root *windowsV3Directory) inspectOutputProbeLeftover(name string) (*windowsV3OutputProbeLeftover, error) {
+func (root *windowsDirectory) inspectOutputProbeLeftover(name string) (*windowsOutputProbeLeftover, error) {
 	directory, err := root.OpenPrivateDirectory(name)
 	if err != nil {
 		return nil, err
 	}
-	leftover := &windowsV3OutputProbeLeftover{
+	leftover := &windowsOutputProbeLeftover{
 		root: root, name: name, directory: directory,
-		regular: make(map[string]*windowsV3File), directories: make(map[string]*windowsV3Directory),
+		regular: make(map[string]*windowsFile), directories: make(map[string]*windowsDirectory),
 	}
 	var observation outputprobe.Observation
-	fail := func(cause error) (*windowsV3OutputProbeLeftover, error) {
+	fail := func(cause error) (*windowsOutputProbeLeftover, error) {
 		return nil, errors.Join(cause, leftover.close())
 	}
-	names, err := directory.names(windowsV3OutputProbeMaximumEntries)
+	names, err := directory.names(windowsOutputProbeMaximumEntries)
 	if err != nil {
 		return fail(err)
 	}
 	for _, entry := range names {
-		if _, ok := windowsV3OutputProbeRegularNames[entry]; ok {
+		if _, ok := windowsOutputProbeRegularNames[entry]; ok {
 			file, openErr := directory.OpenPrivateFile(entry)
 			if openErr != nil {
 				return fail(openErr)
@@ -279,7 +279,7 @@ func (root *windowsV3Directory) inspectOutputProbeLeftover(name string) (*window
 			leftover.regular[entry] = file
 			continue
 		}
-		if _, ok := windowsV3OutputProbeDirectoryNames[entry]; ok {
+		if _, ok := windowsOutputProbeDirectoryNames[entry]; ok {
 			child, openErr := directory.OpenPrivateDirectory(entry)
 			if openErr != nil {
 				return fail(openErr)
@@ -305,8 +305,8 @@ func (root *windowsV3Directory) inspectOutputProbeLeftover(name string) (*window
 	return leftover, nil
 }
 
-func (leftover *windowsV3OutputProbeLeftover) validateDataLinks() error {
-	var witness *windowsV3File
+func (leftover *windowsOutputProbeLeftover) validateDataLinks() error {
+	var witness *windowsFile
 	for _, name := range []string{"stage", "anchor", "publication"} {
 		file := leftover.regular[name]
 		if file == nil {
@@ -316,7 +316,7 @@ func (leftover *windowsV3OutputProbeLeftover) validateDataLinks() error {
 			witness = file
 			continue
 		}
-		same, err := sameWindowsV3OpenedObject(witness, file)
+		same, err := sameWindowsOpenedObject(witness, file)
 		if err != nil || !same {
 			return errors.Join(errors.New("probe stage, anchor, and publication are not one object"), err)
 		}
@@ -324,7 +324,7 @@ func (leftover *windowsV3OutputProbeLeftover) validateDataLinks() error {
 	return nil
 }
 
-func (leftover *windowsV3OutputProbeLeftover) remove() error {
+func (leftover *windowsOutputProbeLeftover) remove() error {
 	for _, name := range []string{"stage", "publication", "anchor", "record.tmp", "record"} {
 		file := leftover.regular[name]
 		if file == nil {
@@ -361,7 +361,7 @@ func (leftover *windowsV3OutputProbeLeftover) remove() error {
 	return leftover.directory.Close()
 }
 
-func (leftover *windowsV3OutputProbeLeftover) closeChildren() error {
+func (leftover *windowsOutputProbeLeftover) closeChildren() error {
 	var result error
 	for name, file := range leftover.regular {
 		result = errors.Join(result, file.Close())
@@ -374,7 +374,7 @@ func (leftover *windowsV3OutputProbeLeftover) closeChildren() error {
 	return result
 }
 
-func (leftover *windowsV3OutputProbeLeftover) close() error {
+func (leftover *windowsOutputProbeLeftover) close() error {
 	if leftover == nil {
 		return nil
 	}

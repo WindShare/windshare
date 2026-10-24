@@ -1,10 +1,10 @@
 import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
-import type { V2CatalogClient } from '../../src/catalog/v2-client'
+import type { CatalogClient } from '../../src/catalog/client'
 import {
-  V2_CATALOG_PAGE_ENTRIES,
-  type V2CatalogEntry,
-} from '../../src/catalog/v2-records'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+  CATALOG_PAGE_ENTRIES,
+  type CatalogEntry,
+} from '../../src/catalog/records'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
@@ -34,15 +34,15 @@ import {
   type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
 } from '../../src/transfer/output/session'
 import {
   createPersistentDirectTreeExecution,
   type PersistentDirectTreeSettlementAuthority,
   type PersistentDirectTreeMaterializationEvidence,
 } from '../../src/output/execution/persistent-execution'
-import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
-import { TransferJob } from '../../src/transfer/v2-job'
+import { createPlanExecutionAuthority } from '../../src/transfer/settlement/plan-authority'
+import { TransferJob } from '../../src/transfer/job'
 import {
   reopenFileSystemAccessOutput,
   type FSAFileCheckpointRepositoryFactory,
@@ -163,7 +163,7 @@ export interface FSAProductionPersistenceObservation {
 interface ProductionScenario {
   readonly artifact: DirectoryTreeArtifact
   readonly catalogDirectories: readonly CatalogDirectoryFixture[]
-  readonly files: readonly Extract<V2CatalogEntry, { kind: 'file' }>[]
+  readonly files: readonly Extract<CatalogEntry, { kind: 'file' }>[]
 }
 
 interface AdmissionRecorder {
@@ -554,7 +554,7 @@ async function productionPlanAuthority(input: Readonly<{
   diagnostics?: OutputDiagnosticsPorts
   maximumConcurrentFilePipelines?: number
   recoveryPausedFile?: 'preserve' | 'restart-owned-file'
-}>): Promise<V2PlanExecutionAuthority> {
+}>): Promise<PlanExecutionAuthority> {
   const settlement = await createFileSystemAccessSettlementAuthority({
     intent: input.intent,
     repository: input.repository,
@@ -562,7 +562,7 @@ async function productionPlanAuthority(input: Readonly<{
     transferJobId: input.transferJobId,
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
-  return createV2PlanExecutionAuthority({
+  return createPlanExecutionAuthority({
     intent: input.intent,
     routes: {
       directTree: {
@@ -837,10 +837,10 @@ async function productionScenario(
         `payload-${ordinal.toString().padStart(4, '0')}.bin`,
         1n,
       ))
-      const rootEntries: V2CatalogEntry[] = []
+      const rootEntries: CatalogEntry[] = []
       const catalogDirectories: CatalogDirectoryFixture[] = []
-      for (let offset = 0; offset < files.length; offset += V2_CATALOG_PAGE_ENTRIES) {
-        const ordinal = offset / V2_CATALOG_PAGE_ENTRIES
+      for (let offset = 0; offset < files.length; offset += CATALOG_PAGE_ENTRIES) {
+        const ordinal = offset / CATALOG_PAGE_ENTRIES
         const directoryId = performanceDirectoryIdentity(ordinal)
         rootEntries.push(directoryEntry(
           directoryId,
@@ -848,7 +848,7 @@ async function productionScenario(
         ))
         catalogDirectories.push(Object.freeze({
           id: directoryId,
-          entries: Object.freeze(files.slice(offset, offset + V2_CATALOG_PAGE_ENTRIES)),
+          entries: Object.freeze(files.slice(offset, offset + CATALOG_PAGE_ENTRIES)),
         }))
       }
       return Object.freeze({
@@ -883,10 +883,10 @@ function performanceDirectoryIdentity(ordinal: number): Uint8Array<ArrayBuffer> 
 }
 
 function productionTransferJob(input: Readonly<{
-  catalog: V2CatalogClient
+  catalog: CatalogClient
   revisions: ReturnType<typeof readerFixture>['revisions']
   broker: ReturnType<typeof readerFixture>['broker']
-  plans: V2PlanExecutionAuthority
+  plans: PlanExecutionAuthority
   intent: ReceiveIntent
   transferJobId: string
   scenarioOrdinal: number
@@ -900,7 +900,7 @@ function productionTransferJob(input: Readonly<{
       chunkSize: CATALOG_CHUNK_BYTES,
     } as never,
     catalog: input.catalog,
-    selection: new V2SelectionPolicy(true),
+    selection: new SelectionPolicy(true),
     revisions: input.revisions,
     broker: input.broker,
     lanes: { size: 1 },
@@ -1062,7 +1062,7 @@ function compatibleNamePreparation() {
 
 function catalogWithSiblingAuthority(
   directories: readonly CatalogDirectoryFixture[],
-): V2CatalogClient {
+): CatalogClient {
   const fixture = catalogFixture(directories)
   const entriesByDirectory = new Map(directories.map(directory => [
     encodeBase64Url(directory.id),
@@ -1079,7 +1079,7 @@ function catalogWithSiblingAuthority(
       return entriesByDirectory.get(directory.directoryIdText)
         ?.some(entry => entry.name === name) === true
     },
-  }) as unknown as V2CatalogClient
+  }) as unknown as CatalogClient
 }
 
 async function physicalEntries(

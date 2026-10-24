@@ -1,13 +1,13 @@
 import type { ComponentProps } from 'react'
-import type { V2ReceiverSnapshot, V2ShareIdentity } from '../v2-model'
-import { formatBytes } from '../v2-progress-presentation'
+import type { ReceiverSnapshot, ShareIdentity } from '../model'
+import { formatBytes } from '../progress-presentation'
 import { Explorer } from './Explorer'
 import { MediaPreview, type PreviewActions } from './MediaPreview'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 
 function SingleFile({ share, preview, actions, openPreview }: {
-  readonly share: Exclude<V2ShareIdentity, { kind: 'browser' }>
-  readonly preview: V2ReceiverSnapshot['preview']
+  readonly share: Exclude<ShareIdentity, { kind: 'browser' }>
+  readonly preview: ReceiverSnapshot['preview']
   readonly actions: PreviewActions
   readonly openPreview: (id: string, invoker: HTMLButtonElement) => void
 }) {
@@ -26,8 +26,8 @@ function SingleFile({ share, preview, actions, openPreview }: {
 }
 
 export function ShareContent({ share, preview, previewActions, explorer }: {
-  readonly share: V2ShareIdentity | null
-  readonly preview: V2ReceiverSnapshot['preview']
+  readonly share: ShareIdentity | null
+  readonly preview: ReceiverSnapshot['preview']
   readonly previewActions: PreviewActions
   readonly explorer: ComponentProps<typeof Explorer>
 }) {

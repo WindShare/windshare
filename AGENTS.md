@@ -73,7 +73,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
 │   ├── v2peer/                   Peer negotiation/admission and demand-driven PeerSet orchestration
-│   ├── nativepeer/               Native connectivity resource assembly and lifecycle
+│   ├── nativepeer/, pionpeer/    Native resource ownership and Pion connection adaptation
 │   ├── networkstate/             Network snapshots and generation tracking
 │   ├── socketauthority/          UDP/TCP socket ownership and capability snapshots
 │   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
@@ -81,7 +81,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   └── senderrelay/, relayset/    Relay registration/recovery, independent lifecycles, and coordinated session admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
-│   └── webrtc/                   Pion FrameChannels, terminal lifecycle, and native provider adaptation
+│   └── webrtc/                   Pion FrameChannels and terminal lifecycle
 ├── relay/protocol/v2/            Go wire contracts, authenticated proofs, and opaque routes
 ├── relay-rust/                   Production relay Cargo workspace
 │   ├── crates/relay-access/      Service credential and device enrollment policy

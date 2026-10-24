@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  V2RelayProtocolError,
-  decodeV2Challenge,
-  decodeV2DescriptorUpload,
-  decodeV2Join,
-  decodeV2RegisterInit,
-  decodeV2RegisterProof,
-  decodeV2Registered,
-  decodeV2RelayError,
-  decodeV2ResumeCredential,
-  decodeV2StopInit,
-  decodeV2StopProof,
-  decodeV2Stopped,
-} from '../../src/transport/relay/v2-protocol'
+  RelayProtocolError,
+  decodeChallenge,
+  decodeDescriptorUpload,
+  decodeJoin,
+  decodeRegisterInit,
+  decodeRegisterProof,
+  decodeRegistered,
+  decodeRelayError,
+  decodeResumeCredential,
+  decodeStopInit,
+  decodeStopProof,
+  decodeStopped,
+} from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 interface DecodingCase extends VectorCase {
@@ -28,17 +28,17 @@ interface DecodingVector extends VectorCase {
 
 // The Go relay codec and the Rust relay kernel consume the same refusals.
 const decoders: Readonly<Record<string, (encoded: Uint8Array) => unknown>> = {
-  WS2R: (encoded) => decodeV2RegisterInit(encoded),
-  WS2Q: decodeV2Challenge,
-  WS2P: decodeV2RegisterProof,
-  WS2T: decodeV2ResumeCredential,
-  WS2U: decodeV2DescriptorUpload,
-  WS2K: decodeV2Registered,
-  WS2J: decodeV2Join,
-  WS2X: (encoded) => decodeV2StopInit(encoded),
-  WS2V: decodeV2StopProof,
-  WS2Y: decodeV2Stopped,
-  WS2E: decodeV2RelayError,
+  WS2R: (encoded) => decodeRegisterInit(encoded),
+  WS2Q: decodeChallenge,
+  WS2P: decodeRegisterProof,
+  WS2T: decodeResumeCredential,
+  WS2U: decodeDescriptorUpload,
+  WS2K: decodeRegistered,
+  WS2J: decodeJoin,
+  WS2X: (encoded) => decodeStopInit(encoded),
+  WS2V: decodeStopProof,
+  WS2Y: decodeStopped,
+  WS2E: decodeRelayError,
 }
 
 const vector = loadVectorFile(
@@ -54,7 +54,7 @@ describe('relay control frame decoding vectors', () => {
       if (test.accepted) {
         await expect(decoded).resolves.toBeDefined()
       } else {
-        await expect(decoded).rejects.toBeInstanceOf(V2RelayProtocolError)
+        await expect(decoded).rejects.toBeInstanceOf(RelayProtocolError)
       }
     })
   }

@@ -8,11 +8,11 @@ import (
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/turncontrol"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type peerPathControlSession interface {
@@ -444,7 +444,7 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	execution := newAttemptExecution(attempt, ctx, peer)
 	if lease := attempt.config.turnLease; lease != nil {
 		if measured, ok := peer.(interface {
-			TURNResources() (provider.TURNResourceSnapshot, bool)
+			TURNResources() (pionpeer.TURNResourceSnapshot, bool)
 		}); ok {
 			join := turnpath.WatchTransport(ctx, lease.Lease, func() turnpath.Usage {
 				snapshot, _ := measured.TURNResources()

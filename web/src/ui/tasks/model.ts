@@ -2,8 +2,8 @@ import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
 import type { LifecycleUserAction } from '../../application/receive/actions'
-import type { V2ReceiverProgress } from '../v2-model'
-import type { V2DirectZipProgressSnapshot, V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { ReceiverProgress } from '../model'
+import type { DirectZipProgressSnapshot, RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 
 export type TaskRecoveryReadiness = import('../../application/receive/retained/readiness').RetainedContinuationReadiness
 
@@ -14,7 +14,7 @@ export interface TaskBlocking {
 
 export type TaskActionTarget =
   | Readonly<{ kind: 'active'; action: LifecycleUserAction }>
-  | Readonly<{ kind: 'retained'; operation: V2RetainedReceiveOperation; action: V2RetainedReceiveAction }>
+  | Readonly<{ kind: 'retained'; operation: RetainedReceiveOperation; action: RetainedReceiveAction }>
 
 export interface TaskAction {
   readonly id: string
@@ -39,9 +39,9 @@ export interface TaskFacts {
   readonly readiness: TaskRecoveryReadiness
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
-  readonly progress: V2ReceiverProgress | null
+  readonly progress: ReceiverProgress | null
   readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
-  readonly directZipProgress: V2DirectZipProgressSnapshot | null
+  readonly directZipProgress: DirectZipProgressSnapshot | null
   readonly fidelity: CompatibleNameRepairPresentation | null
   readonly details: readonly string[]
   readonly interruption: 'pause' | 'stop' | 'finish' | null

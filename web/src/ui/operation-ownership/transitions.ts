@@ -1,23 +1,23 @@
-import type { V2ReceiverSnapshot } from '../v2-model'
-import type { V2JoinedBrowserShare } from '../../application/browser-share/gateway'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { ReceiverSnapshot } from '../model'
+import type { JoinedBrowserShare } from '../../application/browser-share/gateway'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 import type { LifecycleUserAction } from '../../application/receive/actions'
 import type { BrowserReceiveRuntime } from '../../application/receive/runtime'
 import type { BrowserNavigationCoordinator } from '../controller/navigation'
-import type { V2PreviewController } from '../v2-preview-controller'
+import type { PreviewController } from '../preview-controller'
 import type { ReceiverExperienceObservability } from '../experience/observability'
 import { findReplacementFile } from '../../application/browser-share/source-replacement'
 import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
 import { projectDraft } from '../draft/model'
 
 interface OperationTransitionOptions {
-  readonly runtime: BrowserReceiveRuntime<V2JoinedBrowserShare>
-  readonly snapshot: () => V2ReceiverSnapshot
-  readonly publish: (snapshot: V2ReceiverSnapshot) => void
+  readonly runtime: BrowserReceiveRuntime<JoinedBrowserShare>
+  readonly snapshot: () => ReceiverSnapshot
+  readonly publish: (snapshot: ReceiverSnapshot) => void
   readonly recordIntent: (action: string) => void
-  readonly beginProjection: (joined: V2JoinedBrowserShare) => void
+  readonly beginProjection: (joined: JoinedBrowserShare) => void
   readonly browse: Pick<BrowserNavigationCoordinator, 'loadPage'>
-  readonly previews: Pick<V2PreviewController, 'yieldToReceiving'>
+  readonly previews: Pick<PreviewController, 'yieldToReceiving'>
   readonly experienceTrace: Pick<ReceiverExperienceObservability, 'intent'>
 }
 
@@ -40,14 +40,14 @@ export class ReceiveOperationTransitions {
     return this.#options.runtime.retainCurrentOperation()
   }
 
-  performRetainedAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): void {
+  performRetainedAction(operation: RetainedReceiveOperation, action: RetainedReceiveAction): void {
     this.#options.experienceTrace.intent('retained-' + action, this.#options.snapshot(),
       { operationId: operation.operationId, generation: operation.lifecycleGeneration })
     if (action === 'continue') this.#options.previews.yieldToReceiving()
     this.#options.runtime.performRetainedAction(operation, action)
   }
 
-  prepareReplacementDownload(operation: V2RetainedReceiveOperation, failure: SourceRevisionFailure): void {
+  prepareReplacementDownload(operation: RetainedReceiveOperation, failure: SourceRevisionFailure): void {
     this.#options.runtime.prepareReplacement(operation, async (joined, signal, current) => {
       this.#options.publish({ ...this.#options.snapshot(), error: null,
         status: 'Finding the current version of ' + failure.path.join('/') + '…' })

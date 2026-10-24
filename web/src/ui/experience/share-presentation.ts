@@ -1,13 +1,13 @@
-import type { V2ReceiverSnapshot } from '../v2-model'
+import type { ReceiverSnapshot } from '../model'
 import type { TaskBlocking } from '../tasks'
 
-export function downloadScopeLabel(share: V2ReceiverSnapshot['share'], draft: V2ReceiverSnapshot['draft']): string {
+export function downloadScopeLabel(share: ReceiverSnapshot['share'], draft: ReceiverSnapshot['draft']): string {
   if (share !== null && share.kind !== 'browser') return share.kind === 'file' ? 'Download file' : 'Download original'
   if (draft.scope === 'selected') return 'Download selected'
   return draft.scope === 'current-folder' ? 'Download this folder' : 'Download all'
 }
 
-export function shareConnectionLabel(connection: V2ReceiverSnapshot['connection'], phase: V2ReceiverSnapshot['phase'], status: string): string {
+export function shareConnectionLabel(connection: ReceiverSnapshot['connection'], phase: ReceiverSnapshot['phase'], status: string): string {
   switch (connection.kind) {
     case 'connected': return 'Sender connected'
     case 'reconnecting': return connection.activity.kind === 'waiting' ? 'Waiting to reconnect automatically' : 'Reconnecting to the sender…'
@@ -29,7 +29,7 @@ export function initialJoinStatus(join: import('../../receiver/initial-join').In
   }
 }
 
-export function taskConnectionBlocking(connection: V2ReceiverSnapshot['connection']): TaskBlocking | null {
+export function taskConnectionBlocking(connection: ReceiverSnapshot['connection']): TaskBlocking | null {
   if (connection.kind === 'reconnecting') return { kind: 'reconnecting',
     description: 'Reconnection is automatic. Keep this page open to preserve the current download and its received progress.' }
   if (connection.kind === 'ended') return { kind: 'share-ended' }

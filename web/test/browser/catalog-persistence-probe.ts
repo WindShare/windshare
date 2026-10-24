@@ -1,21 +1,21 @@
 import {
   catalogPageMetadataCharge,
-  IndexedDbV2CatalogPageStore,
-  V2CatalogPageStoreError,
-  type V2CatalogCacheBudgetLimits,
-  type V2CommittedDirectory,
-} from '../../src/catalog/v2-page-store'
+  IndexedDbCatalogPageStore,
+  CatalogPageStoreError,
+  type CatalogCacheBudgetLimits,
+  type CommittedDirectory,
+} from '../../src/catalog/page-store'
 import {
-  V2CatalogClient,
-  V2CatalogClientError,
-  V2DirectoryFailureError,
-} from '../../src/catalog/v2-client'
+  CatalogClient,
+  CatalogClientError,
+  DirectoryFailureError,
+} from '../../src/catalog/client'
 import type {
-  V2CatalogEntry,
-  V2CatalogPage,
-  V2DirectoryFailure,
-} from '../../src/catalog/v2-records'
-import { waitForIndexedDbTransaction } from '../../src/catalog/v2-indexeddb-transaction'
+  CatalogEntry,
+  CatalogPage,
+  DirectoryFailure,
+} from '../../src/catalog/records'
+import { waitForIndexedDbTransaction } from '../../src/catalog/indexeddb-transaction'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createSignedRootCollisionFixture } from '../catalog/signed-root-collision-fixture'
 import { runSignedCatalogOwnershipProbe } from '../catalog/signed-catalog-ownership-probe'
@@ -30,7 +30,7 @@ const INDEXED_DB_HANG_CEILING_MILLISECONDS = 30_000
 
 export async function probeSamePageCollisions(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('same-page')
-  const store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+  const store = await IndexedDbCatalogPageStore.open('share', databaseName)
   try {
     await store.begin('root')
     const nodeCollisionRejected = await rejectsAuthenticatedOwnership(store, page(0, 'root', [
@@ -58,8 +58,8 @@ export async function probeSamePageCollisions(): Promise<Readonly<Record<string,
 
 export async function probeCrossPageOwnership(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('cross-page')
-  const store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
-  let otherShare: IndexedDbV2CatalogPageStore | undefined
+  const store = await IndexedDbCatalogPageStore.open('share', databaseName)
+  let otherShare: IndexedDbCatalogPageStore | undefined
   try {
     await store.begin('root')
     await store.stage(page(0, 'root', [entry('node-1', 'Straße')]))
@@ -83,7 +83,7 @@ export async function probeCrossPageOwnership(): Promise<Readonly<Record<string,
     )
     await store.stage(page(0, 'second', [entry('node-4', 'STRASSE')]))
 
-    otherShare = await IndexedDbV2CatalogPageStore.open('other-share', databaseName)
+    otherShare = await IndexedDbCatalogPageStore.open('other-share', databaseName)
     await otherShare.stage(page(0, 'root', [entry('node-1', 'Straße')]))
     return Object.freeze({
       crossPageNameRejected,
@@ -105,15 +105,15 @@ export async function probeCommitAbortAndReopen(): Promise<Readonly<Record<strin
   const databaseName = uniqueDatabaseName('lifecycle')
   const committed = directory('root')
   const storedPage = page(0, 'root', [entry('node-1', 'durable-name')])
-  let store: IndexedDbV2CatalogPageStore | undefined
+  let store: IndexedDbCatalogPageStore | undefined
   try {
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     await store.begin('root')
     await store.stage(storedPage)
     await store.commit(committed)
     store.close()
 
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     const reopenedDirectory = await store.loadDirectory('root')
     const reopenedPage = reopenedDirectory === undefined
       ? undefined
@@ -123,12 +123,12 @@ export async function probeCommitAbortAndReopen(): Promise<Readonly<Record<strin
     await store.abort('root')
     store.close()
 
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     const abortSurvivedReopen = await store.loadDirectory('root') === undefined
     await store.stage(storedPage)
     store.close()
 
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     const crashResidueRejected = await rejectsAuthenticatedOwnership(store, storedPage)
     await store.begin('root')
     await store.stage(storedPage)
@@ -153,10 +153,10 @@ export async function probeCommittedNameMembership(): Promise<Readonly<Record<st
     entry('node-1', 'Straße'),
     entry('node-2', 'durable-name'),
   ])
-  let store: IndexedDbV2CatalogPageStore | undefined
-  let reopened: IndexedDbV2CatalogPageStore | undefined
+  let store: IndexedDbCatalogPageStore | undefined
+  let reopened: IndexedDbCatalogPageStore | undefined
   try {
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     await store.begin('root')
     await store.stage(storedPage)
     const stagedGenerationUnavailable = await rejectsLocalStorage(
@@ -174,7 +174,7 @@ export async function probeCommittedNameMembership(): Promise<Readonly<Record<st
     store.close()
     store = undefined
 
-    reopened = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    reopened = await IndexedDbCatalogPageStore.open('share', databaseName)
     const reopenedDirectory = await reopened.loadDirectory('root')
     const reopenFound = reopenedDirectory !== undefined &&
       await reopened.hasCommittedName(reopenedDirectory, 'durable-name')
@@ -196,12 +196,12 @@ export async function probeCommittedNameMembership(): Promise<Readonly<Record<st
 export async function probeSignedRootCollision(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('root-collision')
   const fixture = await createSignedRootCollisionFixture()
-  const store = await IndexedDbV2CatalogPageStore.open(
+  const store = await IndexedDbCatalogPageStore.open(
     fixture.descriptor.shareInstanceId,
     databaseName,
   )
   const protocolFailures: unknown[] = []
-  const client = new V2CatalogClient({
+  const client = new CatalogClient({
     descriptor: fixture.descriptor,
     readSecret: fixture.readSecret,
     operations: {
@@ -210,20 +210,20 @@ export async function probeSignedRootCollision(): Promise<Readonly<Record<string
     },
     store,
   })
-  let reopened: IndexedDbV2CatalogPageStore | undefined
+  let reopened: IndexedDbCatalogPageStore | undefined
   try {
     let signedTrafficRejected = false
     try {
       await client.loadDirectory(fixture.descriptor.syntheticRoot)
     } catch (error) {
-      if (!(error instanceof V2CatalogClientError)) throw error
+      if (!(error instanceof CatalogClientError)) throw error
       signedTrafficRejected = true
     }
     const noCommitBeforeClose = await store.loadDirectory(
       fixture.descriptor.syntheticRootId,
     ) === undefined
     client.close()
-    reopened = await IndexedDbV2CatalogPageStore.open(
+    reopened = await IndexedDbCatalogPageStore.open(
       fixture.descriptor.shareInstanceId,
       databaseName,
     )
@@ -246,7 +246,7 @@ export async function probeSignedRootCollision(): Promise<Readonly<Record<string
 
 export async function probeSignedOwnershipCollisions() {
   const databaseName = uniqueDatabaseName('signed-ownership-collisions')
-  const store = await IndexedDbV2CatalogPageStore.open('signed-share', databaseName)
+  const store = await IndexedDbCatalogPageStore.open('signed-share', databaseName)
   try {
     return await runSignedCatalogOwnershipProbe(store)
   } finally {
@@ -257,8 +257,8 @@ export async function probeSignedOwnershipCollisions() {
 
 export async function probeCompositeKeyIsolation(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('composite-keys')
-  const first = await IndexedDbV2CatalogPageStore.open('share\0scope', databaseName)
-  const second = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+  const first = await IndexedDbCatalogPageStore.open('share\0scope', databaseName)
+  const second = await IndexedDbCatalogPageStore.open('share', databaseName)
   try {
     const firstPage = page(0, 'root', [entry('node\0id', 'same')])
     const secondPage = page(0, 'scope\0root', [entry('scope\0node\0id', 'same')])
@@ -294,19 +294,19 @@ export async function probeCompositeKeyIsolation(): Promise<Readonly<Record<stri
 export async function probeBlockedUpgrade(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('blocked-upgrade')
   const legacy = await openLegacyDatabase(databaseName)
-  let fresh: IndexedDbV2CatalogPageStore | undefined
+  let fresh: IndexedDbCatalogPageStore | undefined
   try {
     let blockedRejected = false
     let actionableMessage = false
     try {
-      await withHangCeiling(IndexedDbV2CatalogPageStore.open('share', databaseName))
+      await withHangCeiling(IndexedDbCatalogPageStore.open('share', databaseName))
     } catch (error) {
-      if (!(error instanceof V2CatalogPageStoreError)) throw error
+      if (!(error instanceof CatalogPageStoreError)) throw error
       blockedRejected = true
       actionableMessage = /blocked.*close.*retry/iu.test(error.message)
     }
     legacy.close()
-    fresh = await withHangCeiling(IndexedDbV2CatalogPageStore.open('share', databaseName))
+    fresh = await withHangCeiling(IndexedDbCatalogPageStore.open('share', databaseName))
     await fresh.stage(page(0, 'root', [entry('node-1', 'fresh')]))
     return Object.freeze({ blockedRejected, actionableMessage, freshOpenSucceeded: true })
   } finally {
@@ -319,7 +319,7 @@ export async function probeBlockedUpgrade(): Promise<Readonly<Record<string, boo
 export async function probeFailurePersistence(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('failures')
   const fixture = await createSignedRootCollisionFixture()
-  const store = await IndexedDbV2CatalogPageStore.open(
+  const store = await IndexedDbCatalogPageStore.open(
     fixture.descriptor.shareInstanceId,
     databaseName,
   )
@@ -331,7 +331,7 @@ export async function probeFailurePersistence(): Promise<Readonly<Record<string,
   await store.storeFailure({ failure: retryable, retryAtMilliseconds: 1_000 })
   let now = 999
   let fetches = 0
-  const client = new V2CatalogClient({
+  const client = new CatalogClient({
     descriptor: fixture.descriptor,
     readSecret: fixture.readSecret,
     operations: {
@@ -343,7 +343,7 @@ export async function probeFailurePersistence(): Promise<Readonly<Record<string,
     store,
     now: () => now,
   })
-  let reopened: IndexedDbV2CatalogPageStore | undefined
+  let reopened: IndexedDbCatalogPageStore | undefined
   try {
     const permanentReused = await rejectsDirectoryFailure(
       client.loadDirectory(permanentId, { explicitRetry: true }),
@@ -359,7 +359,7 @@ export async function probeFailurePersistence(): Promise<Readonly<Record<string,
       postCooldownFetch = error instanceof Error && error.message === 'post-cooldown fetch reached transport'
     }
     client.close()
-    reopened = await IndexedDbV2CatalogPageStore.open(
+    reopened = await IndexedDbCatalogPageStore.open(
       fixture.descriptor.shareInstanceId,
       databaseName,
     )
@@ -382,15 +382,15 @@ export async function probeFailurePersistence(): Promise<Readonly<Record<string,
 export async function probeAggregateBudgetAuthority(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('aggregate-budget')
   const charge = catalogPageMetadataCharge(page(0, 'root', [entry('node-1', 'first')]))
-  const limits: V2CatalogCacheBudgetLimits = {
+  const limits: CatalogCacheBudgetLimits = {
     entriesPerShare: 3,
     entriesPerProfile: 3,
     metadataBytesPerShare: charge * 3,
     metadataBytesPerProfile: charge * 3,
   }
-  const first = await IndexedDbV2CatalogPageStore.open('share-a', databaseName, limits)
-  const sameShare = await IndexedDbV2CatalogPageStore.open('share-a', databaseName, limits)
-  const otherShare = await IndexedDbV2CatalogPageStore.open('share-b', databaseName, limits)
+  const first = await IndexedDbCatalogPageStore.open('share-a', databaseName, limits)
+  const sameShare = await IndexedDbCatalogPageStore.open('share-a', databaseName, limits)
+  const otherShare = await IndexedDbCatalogPageStore.open('share-b', databaseName, limits)
   try {
     const sameShareRace = await Promise.allSettled([
       first.stage(page(0, 'first', [entry('node-1', 'first'), entry('node-2', 'second')])),
@@ -413,7 +413,7 @@ export async function probeAggregateBudgetAuthority(): Promise<Readonly<Record<s
     otherShare.close()
     await nextTask()
 
-    const reopened = await IndexedDbV2CatalogPageStore.open('share-b', databaseName, limits)
+    const reopened = await IndexedDbCatalogPageStore.open('share-b', databaseName, limits)
     try {
       const recoveredChargeRejected = await rejectsResourceLimit(
         reopened.stage(page(1, 'new', [
@@ -448,10 +448,10 @@ export async function probeAggregateBudgetAuthority(): Promise<Readonly<Record<s
 
 export async function probeInactiveShareEviction(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('inactive-eviction')
-  const candidate = await IndexedDbV2CatalogPageStore.open('candidate', databaseName)
-  const candidatePeer = await IndexedDbV2CatalogPageStore.open('candidate', databaseName)
-  const peer = await IndexedDbV2CatalogPageStore.open('peer', databaseName)
-  let reopened: IndexedDbV2CatalogPageStore | undefined
+  const candidate = await IndexedDbCatalogPageStore.open('candidate', databaseName)
+  const candidatePeer = await IndexedDbCatalogPageStore.open('candidate', databaseName)
+  const peer = await IndexedDbCatalogPageStore.open('peer', databaseName)
+  let reopened: IndexedDbCatalogPageStore | undefined
   try {
     await candidate.stage(page(0, 'root', [entry('node-1', 'first')]))
     await candidate.commit(directory('root'))
@@ -463,7 +463,7 @@ export async function probeInactiveShareEviction(): Promise<Readonly<Record<stri
     await nextTask()
     const firstEviction = await peer.evictOldestInactiveShare()
     const repeatedEviction = await peer.evictOldestInactiveShare()
-    reopened = await IndexedDbV2CatalogPageStore.open('candidate', databaseName)
+    reopened = await IndexedDbCatalogPageStore.open('candidate', databaseName)
     const committedRemoved = await reopened.loadDirectory('root') === undefined
     return Object.freeze({
       activeShareProtected,
@@ -484,7 +484,7 @@ export async function probeInactiveShareEviction(): Promise<Readonly<Record<stri
 
 export async function probeMalformedBudgetChargeFailsClosed(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('malformed-budget-charge')
-  const store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+  const store = await IndexedDbCatalogPageStore.open('share', databaseName)
   let database: IDBDatabase | undefined
   try {
     await store.stage(page(0, 'root', [entry('node-1', 'first')]))
@@ -500,7 +500,7 @@ export async function probeMalformedBudgetChargeFailsClosed(): Promise<Readonly<
     try {
       await withHangCeiling(store.abort('root'))
     } catch (error) {
-      if (!(error instanceof V2CatalogPageStoreError)) throw error
+      if (!(error instanceof CatalogPageStoreError)) throw error
       rejectedClosed = error.kind === 'local-storage' && /budget ledger/iu.test(error.message)
     }
     return Object.freeze({ rejectedClosed, didNotHang: true })
@@ -514,10 +514,10 @@ export async function probeMalformedBudgetChargeFailsClosed(): Promise<Readonly<
 
 export async function probeEvictionLifecycleRecovery(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('eviction-lifecycle')
-  const store = await IndexedDbV2CatalogPageStore.open('candidate', databaseName)
-  const observer = await IndexedDbV2CatalogPageStore.open('observer', databaseName)
+  const store = await IndexedDbCatalogPageStore.open('candidate', databaseName)
+  const observer = await IndexedDbCatalogPageStore.open('observer', databaseName)
   let database: IDBDatabase | undefined
-  let replacement: IndexedDbV2CatalogPageStore | undefined
+  let replacement: IndexedDbCatalogPageStore | undefined
   try {
     await store.stage(page(0, 'root', [entry('node-1', 'first')]))
     database = await openCurrentDatabase(databaseName)
@@ -537,7 +537,7 @@ export async function probeEvictionLifecycleRecovery(): Promise<Readonly<Record<
     await Promise.allSettled([racingEviction])
     const closedStoreRejected = await rejectsLocalStorage(store.loadDirectory('root'))
     await nextTask()
-    replacement = await IndexedDbV2CatalogPageStore.open('candidate', databaseName)
+    replacement = await IndexedDbCatalogPageStore.open('candidate', databaseName)
     return Object.freeze({
       injectedFailureRejected,
       failedEvictionReacquiredProtection,
@@ -562,10 +562,10 @@ export async function probeIncompatibleDatabaseRebuild(): Promise<Readonly<Recor
   // upgrade instead of trying to interpret records from that model.
   legacy.close()
 
-  let store: IndexedDbV2CatalogPageStore | undefined
-  let reopened: IndexedDbV2CatalogPageStore | undefined
+  let store: IndexedDbCatalogPageStore | undefined
+  let reopened: IndexedDbCatalogPageStore | undefined
   try {
-    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    store = await IndexedDbCatalogPageStore.open('share', databaseName)
     const rebuiltPage = page(0, 'rebuilt-root', [entry('legacy-node', 'legacy-name')])
     await store.stage(rebuiltPage)
     await store.commit({ ...directory('rebuilt-root'), entryCount: 1 })
@@ -574,7 +574,7 @@ export async function probeIncompatibleDatabaseRebuild(): Promise<Readonly<Recor
     store.close()
     store = undefined
 
-    reopened = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    reopened = await IndexedDbCatalogPageStore.open('share', databaseName)
     const reopenedDirectory = await reopened.loadDirectory('rebuilt-root')
     const reopenedPage = reopenedDirectory === undefined
       ? undefined
@@ -592,7 +592,7 @@ export async function probeIncompatibleDatabaseRebuild(): Promise<Readonly<Recor
   }
 }
 
-function entry(idText: string, name: string): V2CatalogEntry {
+function entry(idText: string, name: string): CatalogEntry {
   const id = new Uint8Array(16)
   id[0] = idText.charCodeAt(idText.length - 1)
   return Object.freeze({ kind: 'file', id, idText, name, expectedSize: 1n })
@@ -601,8 +601,8 @@ function entry(idText: string, name: string): V2CatalogEntry {
 function page(
   pageIndex: number,
   directoryIdText: string,
-  entries: readonly V2CatalogEntry[],
-): V2CatalogPage {
+  entries: readonly CatalogEntry[],
+): CatalogPage {
   return Object.freeze({
     shareInstance: identity(0x11),
     directoryId: identity(directoryIdText.charCodeAt(0)),
@@ -619,7 +619,7 @@ function page(
   })
 }
 
-function directory(directoryIdText: string): V2CommittedDirectory {
+function directory(directoryIdText: string): CommittedDirectory {
   const directoryId = identity(directoryIdText.charCodeAt(0))
   return Object.freeze({
     directoryId,
@@ -646,7 +646,7 @@ function fulfilledCount(results: readonly PromiseSettledResult<unknown>[]): numb
 function resourceLimitCount(results: readonly PromiseSettledResult<unknown>[]): number {
   return results.filter((result) =>
     result.status === 'rejected' &&
-    result.reason instanceof V2CatalogPageStoreError &&
+    result.reason instanceof CatalogPageStoreError &&
     result.reason.kind === 'resource-limit').length
 }
 
@@ -655,7 +655,7 @@ async function rejectsResourceLimit(operation: Promise<unknown>): Promise<boolea
     await operation
     return false
   } catch (error) {
-    if (!(error instanceof V2CatalogPageStoreError)) throw error
+    if (!(error instanceof CatalogPageStoreError)) throw error
     return error.kind === 'resource-limit'
   }
 }
@@ -665,7 +665,7 @@ async function rejectsLocalStorage(operation: Promise<unknown>): Promise<boolean
     await operation
     return false
   } catch (error) {
-    if (!(error instanceof V2CatalogPageStoreError)) throw error
+    if (!(error instanceof CatalogPageStoreError)) throw error
     return error.kind === 'local-storage'
   }
 }
@@ -690,7 +690,7 @@ function directoryFailure(
   shareInstance: Uint8Array<ArrayBuffer>,
   directoryId: Uint8Array<ArrayBuffer>,
   retryable: boolean,
-): V2DirectoryFailure {
+): DirectoryFailure {
   const attemptId = identity(retryable ? 0x71 : 0x72)
   return Object.freeze({
     shareInstance: shareInstance.slice(),
@@ -710,7 +710,7 @@ async function rejectsDirectoryFailure(promise: Promise<unknown>): Promise<boole
     await promise
     return false
   } catch (error) {
-    if (!(error instanceof V2DirectoryFailureError)) throw error
+    if (!(error instanceof DirectoryFailureError)) throw error
     return true
   }
 }
@@ -734,14 +734,14 @@ function withHangCeiling<T>(promise: Promise<T>): Promise<T> {
 }
 
 async function rejectsAuthenticatedOwnership(
-  store: IndexedDbV2CatalogPageStore,
-  candidate: V2CatalogPage,
+  store: IndexedDbCatalogPageStore,
+  candidate: CatalogPage,
 ): Promise<boolean> {
   try {
     await store.stage(candidate)
     return false
   } catch (error) {
-    if (!(error instanceof V2CatalogPageStoreError)) throw error
+    if (!(error instanceof CatalogPageStoreError)) throw error
     return error.kind === 'authenticated-ownership'
   }
 }

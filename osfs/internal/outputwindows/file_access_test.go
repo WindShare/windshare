@@ -15,8 +15,8 @@ import (
 
 func TestWindowsRecoveryDurabilityOrdinaryStageSync(t *testing.T) {
 	requireUnprivilegedWindowsNTFSCertification(t)
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 
 	const stageName = "recovery-durability-stage.bin"
 	created, err := root.CreateFile(stageName, true, 4)
@@ -104,7 +104,7 @@ func assertWindowsRecoveryFileMethodSet(t *testing.T, file outputcap.RecoveryDur
 }
 
 func TestWindowsRecoveryDurabilityFileAccessMask(t *testing.T) {
-	mask := windowsV3RecoveryDurabilityFileAccess()
+	mask := windowsRecoveryDurabilityFileAccess()
 	for name, required := range map[string]uint32{
 		"append":          windows.FILE_APPEND_DATA,
 		"read attributes": windows.FILE_READ_ATTRIBUTES,
@@ -143,8 +143,8 @@ func TestWindowsErrorTaxonomyFreezesClosedNativeClass(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := windowsV3NativeOperationFailure("native operation canary", "path canary", test.cause)
-			class, ok := outputcap.ClassifyNativeError(windowsOutputV3Error(err))
+			err := windowsNativeOperationFailure("native operation canary", "path canary", test.cause)
+			class, ok := outputcap.ClassifyNativeError(windowsOutputError(err))
 			if !ok || class != test.class {
 				t.Fatalf("class = %v, %t, want %v", class, ok, test.class)
 			}

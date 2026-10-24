@@ -1,8 +1,8 @@
 import { createEd25519Verifier } from '../../../src/crypto/ed25519'
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../../src/catalog/v2-records'
+import { PATH_POLICY, type ShareDescriptor } from '../../../src/catalog/records'
 import { FileGeometry } from '../../../src/content/geometry'
-import type { V2BlockRangeReader } from '../../../src/content/v2-broker'
-import type { V2OpenedRevision, V2RevisionReader } from '../../../src/content/v2-session-services'
+import type { BlockRangeReader } from '../../../src/content/broker'
+import type { OpenedRevision, RevisionReader } from '../../../src/content/session-services'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   DirectZipOrderedCoordinatorV1, transferDirectZipFileV1, type DirectZipOrderedFileV1,
@@ -26,11 +26,11 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
   const payloads = [FIRST_PAYLOAD, ACTIVE_PAYLOAD, LAST_PAYLOAD]
   const members = ['first.txt', 'active.txt', 'last.txt'].map((name, index) =>
     member(name, index + 10, BigInt(payloads[index]!.byteLength), rootId))
-  const descriptor: V2ShareDescriptor = {
+  const descriptor: ShareDescriptor = {
     wireVersion: 2, suite: 2, shareInstance: bytesId(3), shareInstanceId: textId(3),
     syntheticRoot: bytesId(2), syntheticRootId: rootId, chunkSize: MEMBER_ROLLBACK_BLOCK_BYTES,
     capabilities: 7n, sender: createEd25519Verifier(new Uint8Array(32).fill(1)), createdAtSeconds: 1n,
-    pathPolicy: V2_PATH_POLICY,
+    pathPolicy: PATH_POLICY,
   }
   const root = { directoryId: rootId, generation: textId(7),
     discoveryEvidence: new TextEncoder().encode('authenticated-root-generation') }
@@ -44,7 +44,7 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
       name: members[index]!.artifactPath.join('/'), bytes: Array.from(payload),
     })),
     run: (execution: DirectResumableZipExecution, phase: 'initial' | 'resumed', signal: AbortSignal) => {
-      const revisions: V2RevisionReader = {
+      const revisions: RevisionReader = {
         open: async fileId => {
           const index = members.findIndex(candidate => candidate.fileId === encodeBase64Url(fileId))
           if (index < 0) throw new Error('Requested a file outside the authenticated catalog')
@@ -54,7 +54,7 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
           return opened
         },
       }
-      const broker: V2BlockRangeReader = {
+      const broker: BlockRangeReader = {
         readRange: async function* (opened, _lease, range) {
           const index = members.findIndex(candidate => candidate.fileId === opened.fileIdText)
           if (index < 0) throw new Error('Requested content outside the authenticated catalog')
@@ -110,7 +110,7 @@ function member(name: string, fill: number, expectedSize: bigint, rootId: string
   }
 }
 
-function openedRevision(file: DirectZipOrderedFileV1, share: V2ShareDescriptor, revision: number): V2OpenedRevision {
+function openedRevision(file: DirectZipOrderedFileV1, share: ShareDescriptor, revision: number): OpenedRevision {
   return {
     descriptor: {
       shareInstance: share.shareInstance, shareInstanceId: share.shareInstanceId,

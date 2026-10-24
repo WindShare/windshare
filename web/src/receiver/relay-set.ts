@@ -1,5 +1,5 @@
-import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import type { V2AttachedRelay, V2ProtocolGenerationCore, V2ReceiverSessionFactory } from './v2-session-factory'
+import type { ReceiverSessionRuntime } from '../session/runtime'
+import type { AttachedRelay, ProtocolGenerationCore, ReceiverSessionFactory } from './session-factory'
 import { runGenerationRecovery } from './generation-recovery'
 import type { RecoveryObservation } from './recovery-observation'
 import { reconnectPhase } from './recovery-clock'
@@ -7,8 +7,8 @@ import { reconnectPhase } from './recovery-clock'
 const RELAY_ATTACH_ATTEMPT_MILLISECONDS = 45_000
 
 interface RelaySetOptions {
-  readonly initial: V2ProtocolGenerationCore
-  readonly factory: V2ReceiverSessionFactory
+  readonly initial: ProtocolGenerationCore
+  readonly factory: ReceiverSessionFactory
   readonly admit: (laneId: number) => void
   readonly sleep: (attempt: number, signal: AbortSignal, elapsed: number, error: unknown, relayBase: string) => Promise<void>
   readonly now: () => number
@@ -19,8 +19,8 @@ interface RelaySetOptions {
 /** One generation owns independent relay delivery lifetimes; none may replace session authority. */
 export class ReceiverRelaySet {
   readonly #options: RelaySetOptions
-  readonly #session: V2ReceiverSessionRuntime
-  readonly #connections = new Map<string, V2AttachedRelay>()
+  readonly #session: ReceiverSessionRuntime
+  readonly #connections = new Map<string, AttachedRelay>()
   readonly #tasks = new Map<string, Promise<void>>()
   readonly #disabled = new Set<string>()
   readonly #cleanup = new Set<Promise<void>>()
@@ -109,7 +109,7 @@ export class ReceiverRelaySet {
     }
   }
 
-  #release(attached: V2AttachedRelay): void {
+  #release(attached: AttachedRelay): void {
     const task = attached.relay.close().catch(() => undefined)
     this.#cleanup.add(task)
     task.finally(() => this.#cleanup.delete(task)).catch(() => undefined)

@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 const MaintenanceInterval = 250 * time.Millisecond
@@ -41,7 +41,7 @@ func (n *NativePeerConnectivity) ApplyControl(session [16]byte, body []byte) (pr
 	}
 	path.remoteSequence = control.ControlSequence
 	path.remoteGeneration = control.NetworkGenerationID
-	path.remoteProfile = provider.TCPProfile(control.ProviderProfile)
+	path.remoteProfile = pionpeer.TCPProfile(control.ProviderProfile)
 	path.remoteProfileExpires = n.config.Now().Add(control.ValidFor)
 	switch control.Kind {
 	case protocolsession.PeerPathDemand:
@@ -89,7 +89,7 @@ func (n *NativePeerConnectivity) Control(session [16]byte, pathID v2signal.PeerP
 	}
 	control := protocolsession.PeerPathControl{
 		PeerPathID: [16]byte(pathID), NetworkGenerationID: GenerationIdentity(generation), ControlSequence: path.localSequence,
-		Kind: kind, ProviderProfile: string(provider.LocalTCPProfile()),
+		Kind: kind, ProviderProfile: string(pionpeer.LocalTCPProfile()),
 	}
 	if kind != protocolsession.PeerPathRevoke {
 		control.ValidFor = ControlLifetime

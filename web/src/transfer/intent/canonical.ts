@@ -1,8 +1,8 @@
 import {
   canonicalizePortableCatalogPath,
-  V2_CATALOG_NAME_BYTES,
-  V2_CATALOG_PATH_BYTES,
-  V2_CATALOG_PATH_DEPTH,
+  CATALOG_NAME_BYTES,
+  CATALOG_PATH_BYTES,
+  CATALOG_PATH_DEPTH,
 } from '../../catalog/path-policy'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
@@ -17,7 +17,7 @@ import {
 export const TEXT_ENCODER = new TextEncoder()
 export const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
 export const MAX_CANONICAL_PATH_ENCODING_BYTES = 8 +
-  V2_CATALOG_PATH_DEPTH * 8 + V2_CATALOG_PATH_BYTES
+  CATALOG_PATH_DEPTH * 8 + CATALOG_PATH_BYTES
 export const INVALID_RECEIVE_INTENT_CANONICAL_BYTES = 'receive intent canonical bytes are invalid'
 export const SELECTION_SPEC_DOMAIN = 'windshare/selection-spec/v1'
 export const ARTIFACT_SPEC_DOMAIN = 'windshare/artifact-spec/v1'
@@ -124,13 +124,13 @@ export class CanonicalDecoder {
 
 export function decodeCanonicalPath(encoded: CanonicalBytes): string {
   const cursor = new CanonicalDecoder(encoded)
-  const segmentCount = decodedCount(cursor.readRawUint64(), 1, V2_CATALOG_PATH_DEPTH)
+  const segmentCount = decodedCount(cursor.readRawUint64(), 1, CATALOG_PATH_DEPTH)
   const segments: string[] = []
   let pathBytes = 0
   for (let index = 0; index < segmentCount; index += 1) {
-    const segmentBytes = cursor.readFrame(V2_CATALOG_NAME_BYTES)
+    const segmentBytes = cursor.readFrame(CATALOG_NAME_BYTES)
     pathBytes += segmentBytes.byteLength + (index === 0 ? 0 : 1)
-    if (pathBytes > V2_CATALOG_PATH_BYTES) invalidDecodedCanonicalBytes()
+    if (pathBytes > CATALOG_PATH_BYTES) invalidDecodedCanonicalBytes()
     segments.push(decodeCanonicalText(segmentBytes))
   }
   cursor.requireDone()

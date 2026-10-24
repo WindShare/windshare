@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { browserHandoffOffer } from '../../src/output/capability/acquisition'
 import type { FileSystemAccessOutputSession } from '../../src/output/file-system-access/session'
 import {
@@ -52,10 +52,10 @@ import {
 } from '../../src/transfer/outcome'
 import { createPersistentDirectTreeExecution } from '../../src/output/execution/persistent-execution'
 import {
-  V2PlanRouteUnavailableError,
-  createV2PlanExecutionAuthority,
-  type V2PlanExecutionRouteRegistry,
-} from '../../src/transfer/settlement/v2-plan-authority'
+  PlanRouteUnavailableError,
+  createPlanExecutionAuthority,
+  type PlanExecutionRouteRegistry,
+} from '../../src/transfer/settlement/plan-authority'
 import {
   digestIdentity,
   fileEntry,
@@ -96,7 +96,7 @@ describe('production plan execution authority', () => {
       backend: 'file-system-access',
       outputSessionId: identityText(103),
     })
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent,
       routes: fileSystemAccessRouteRegistry({ session, settlement, outputIdentity }),
     })
@@ -159,11 +159,11 @@ describe('production plan execution authority', () => {
       lifecycle: portableLifecycle,
       createZipSpool: () => { throw new Error('paused ZIP proof must not open a spool') },
     })
-    const originalAuthority = await createV2PlanExecutionAuthority({
+    const originalAuthority = await createPlanExecutionAuthority({
       intent: originalIntent,
       routes: portableRouteRegistry(originalIntent, originalRoutes),
     })
-    const zipAuthority = await createV2PlanExecutionAuthority({
+    const zipAuthority = await createPlanExecutionAuthority({
       intent: zipIntent,
       routes: portableRouteRegistry(zipIntent, zipRoutes),
     })
@@ -200,7 +200,7 @@ describe('production plan execution authority', () => {
     const directTreeIntent = await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     })
     const workspaceOriginalIntent = await receiveIntentFixture({
       planKind: 'workspace-then-publish',
@@ -228,7 +228,7 @@ describe('production plan execution authority', () => {
     })
     const routes: string[] = []
 
-    await (await createV2PlanExecutionAuthority({
+    await (await createPlanExecutionAuthority({
       intent: directTreeIntent,
       routes: routeRegistry({
         directTree: {
@@ -240,7 +240,7 @@ describe('production plan execution authority', () => {
       }),
     })).openDirectTree(asDirectTree(directTreeIntent), new AbortController().signal)
 
-    await (await createV2PlanExecutionAuthority({
+    await (await createPlanExecutionAuthority({
       intent: workspaceOriginalIntent,
       routes: routeRegistry({
         workspaceOriginal: {
@@ -256,7 +256,7 @@ describe('production plan execution authority', () => {
       new AbortController().signal,
     )
 
-    await (await createV2PlanExecutionAuthority({
+    await (await createPlanExecutionAuthority({
       intent: workspaceZipIntent,
       routes: routeRegistry({
         workspaceZip: {
@@ -271,7 +271,7 @@ describe('production plan execution authority', () => {
       new AbortController().signal,
     )
 
-    await (await createV2PlanExecutionAuthority({
+    await (await createPlanExecutionAuthority({
       intent: portableOriginalIntent,
       routes: routeRegistry({
         portableOriginal: {
@@ -287,7 +287,7 @@ describe('production plan execution authority', () => {
       new AbortController().signal,
     )
 
-    await (await createV2PlanExecutionAuthority({
+    await (await createPlanExecutionAuthority({
       intent: portableZipIntent,
       routes: routeRegistry({
         portableZip: {
@@ -309,14 +309,14 @@ describe('production plan execution authority', () => {
       selection,
       file,
     })
-    const atomicAuthority = await createV2PlanExecutionAuthority({
+    const atomicAuthority = await createPlanExecutionAuthority({
       intent: directAtomicIntent,
       routes: routeRegistry(),
     })
     await expect(atomicAuthority.openDirectAtomic(
       asDirectAtomic(directAtomicIntent),
       new AbortController().signal,
-    )).rejects.toBeInstanceOf(V2PlanRouteUnavailableError)
+    )).rejects.toBeInstanceOf(PlanRouteUnavailableError)
 
     expect(routes).toEqual([
       'direct-tree',
@@ -339,7 +339,7 @@ describe('production plan execution authority', () => {
     const admittedEvidence: string[][] = []
     const settleExecutionAdmissionFailure = vi.fn(async () => discardedState(intent))
     const recordSettlementUnknown = vi.fn(async () => needsAttentionState(intent))
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent,
       routes: {
         workspaceOriginal: {
@@ -392,9 +392,9 @@ describe('production plan execution authority', () => {
       file,
     })
     const open = vi.fn(async (
-      intent: Parameters<NonNullable<V2PlanExecutionRouteRegistry['directAtomic']>['open']>[0],
+      intent: Parameters<NonNullable<PlanExecutionRouteRegistry['directAtomic']>['open']>[0],
     ) => directAtomicExecution(intent))
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent: bound,
       routes: routeRegistry({ directAtomic: { open } }),
     })
@@ -417,7 +417,7 @@ describe('production plan execution authority', () => {
     const original = vi.fn(async () => directAtomicExecution(intent))
     const replacement = vi.fn(async () => directAtomicExecution(intent))
     const route = { open: original }
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent,
       routes: routeRegistry({ directAtomic: route }),
     })
@@ -433,11 +433,11 @@ function fileSystemAccessRouteRegistry(input: Readonly<{
   session: FileSystemAccessOutputSession
   settlement: FileSystemAccessOperationSettlementAuthority
   outputIdentity: OutputSessionIdentity
-}>): V2PlanExecutionRouteRegistry {
+}>): PlanExecutionRouteRegistry {
   return Object.freeze({
     directTree: Object.freeze({
       open: (
-        intent: Parameters<NonNullable<V2PlanExecutionRouteRegistry['directTree']>['open']>[0],
+        intent: Parameters<NonNullable<PlanExecutionRouteRegistry['directTree']>['open']>[0],
       ) => createPersistentDirectTreeExecution({
         ...createTestCheckpointAuthorities(),
         intent,
@@ -550,7 +550,7 @@ function fsaMaterializationPort(
 function portableRouteRegistry(
   intent: ReceiveIntent,
   routes: PortableExecutionRoutes,
-): V2PlanExecutionRouteRegistry {
+): PlanExecutionRouteRegistry {
   return Object.freeze({
     ...routes,
     lifecycle: Object.freeze({
@@ -688,8 +688,8 @@ function portableZipEvidence(
 }
 
 function routeRegistry(
-  routes: Partial<Omit<V2PlanExecutionRouteRegistry, 'lifecycle'>> = {},
-): V2PlanExecutionRouteRegistry {
+  routes: Partial<Omit<PlanExecutionRouteRegistry, 'lifecycle'>> = {},
+): PlanExecutionRouteRegistry {
   return {
     ...routes,
     lifecycle: {
@@ -838,41 +838,41 @@ function state(
 }
 
 function asDirectTree(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openDirectTree']
+  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectTree']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openDirectTree']
+    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectTree']
   >[0]
 }
 
 function asDirectAtomic(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openDirectAtomic']
+  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectAtomic']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openDirectAtomic']
+    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openDirectAtomic']
   >[0]
 }
 
 function asWorkspaceOriginal(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceOriginal']
+  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openWorkspaceOriginal']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceOriginal']
+    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openWorkspaceOriginal']
   >[0]
 }
 
 function asWorkspaceZip(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceZip']
+  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openWorkspaceZip']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceZip']
+    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['openWorkspaceZip']
   >[0]
 }
 
 function asPortable(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['preparePortable']
+  Awaited<ReturnType<typeof createPlanExecutionAuthority>>['preparePortable']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['preparePortable']
+    Awaited<ReturnType<typeof createPlanExecutionAuthority>>['preparePortable']
   >[0]
 }

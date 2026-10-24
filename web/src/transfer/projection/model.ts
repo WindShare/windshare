@@ -2,7 +2,7 @@ import {
   canonicalizePortableCatalogPath,
   isPortableCatalogName,
 } from '../../catalog/path-policy'
-import { V2_CATALOG_DIRECTORY_ENTRIES } from '../../catalog/v2-records'
+import { CATALOG_DIRECTORY_ENTRIES } from '../../catalog/records'
 import { decodeBase64Url } from '../../crypto/bytes'
 import type { FailureCorrelation } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
@@ -14,7 +14,7 @@ import {
 
 export const SELECTION_PROJECTION_VERSION = 1 as const
 export const MAX_PROJECTION_SELECTED_ROOT_FACTS = MAX_SELECTION_RULES
-export const MAX_PROJECTION_GENERATION_REFERENCES = V2_CATALOG_DIRECTORY_ENTRIES
+export const MAX_PROJECTION_GENERATION_REFERENCES = CATALOG_DIRECTORY_ENTRIES
 export const MAX_PROJECTION_UNSETTLED_TARGETS = MAX_SELECTION_RULES + 1
 
 const MAXIMUM_PROJECTION_EPOCH = (1n << 64n) - 1n

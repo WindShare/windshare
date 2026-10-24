@@ -1,14 +1,14 @@
 import { OutputCapacityBlockedError } from '../capacity-pressure/drain'
-import type { V2ShareDescriptor } from '../../catalog/v2-records'
+import type { ShareDescriptor } from '../../catalog/records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
 import {
-  V2_BLOCK_BROKER_PARALLEL_READS,
-  type V2BlockRangeReader,
-} from '../../content/v2-broker'
+  BLOCK_BROKER_PARALLEL_READS,
+  type BlockRangeReader,
+} from '../../content/broker'
 import type {
-  V2OpenedRevision,
-  V2RevisionReader,
-} from '../../content/v2-session-services'
+  OpenedRevision,
+  RevisionReader,
+} from '../../content/session-services'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import {
@@ -33,17 +33,17 @@ import {
   type OpenedOutputRevision,
   type OutputSession,
 } from '../output/session'
-import { V2OutputPausedError, type FileTransferSettlement, type PendingFile } from './contract'
+import { OutputPausedError, type FileTransferSettlement, type PendingFile } from './contract'
 import {
-  V2ClassifiedTransferFailureError,
+  ClassifiedTransferFailureError,
   type ClassifiedTransferFailure,
 } from '../failure/classification'
 import {
-  V2FileOutputError,
+  FileOutputError,
   materializeClassifiedTransferFailure,
-  normalizeV2FileTransferFailure,
-  normalizedV2FileTransferFault,
-  type NormalizedV2FileTransferFailure,
+  normalizeFileTransferFailure,
+  normalizedFileTransferFault,
+  type NormalizedFileTransferFailure,
 } from './failures'
 import {
   BoundaryFaultError,
@@ -57,28 +57,28 @@ import {
 } from '../failure/fault'
 import { validateOpenedFileRevision } from './file-authority'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
-import { withOutputSettlementTimeout } from '../settlement/v2-output'
+import { withOutputSettlementTimeout } from '../settlement/output'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 
-export class V2RangeReaderContractError extends Error {
+export class RangeReaderContractError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'V2RangeReaderContractError'
+    this.name = 'RangeReaderContractError'
   }
 }
 
 const UNCONFIRMED_FILE_SETTLEMENT: FileTransferSettlement = Object.freeze({ kind: 'unconfirmed' })
 
 interface SettledFileFailure {
-  readonly failure: NormalizedV2FileTransferFailure
+  readonly failure: NormalizedFileTransferFailure
   readonly settlement: FileTransferSettlement
   readonly capacityBlocked?: OutputCapacityBlockedError
 }
 
-export interface V2FileTransferOptions {
-  readonly descriptor: V2ShareDescriptor
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
+export interface FileTransferOptions {
+  readonly descriptor: ShareDescriptor
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
   readonly output: OutputSession
   readonly directTreeCoordinates?: DirectTreeCoordinateContract
   readonly signal: AbortSignal
@@ -99,18 +99,18 @@ export interface V2FileTransferOptions {
 type BoundOutputFileTransaction = ReturnType<typeof bindOutputFileTransaction>['transaction']
 
 /** Owns one revision lease and one output transaction from acquisition through settlement. */
-export async function transferV2File(
-  options: V2FileTransferOptions,
+export async function transferFile(
+  options: FileTransferOptions,
   pending: PendingFile,
 ): Promise<void> {
   const callerSignal = options.signal
   const checkpointFailure = new AbortController()
   options = { ...options, signal: AbortSignal.any([options.signal, checkpointFailure.signal]) }
   let checkpoint: FileCheckpointController | undefined
-  let acquired: V2OpenedRevision | undefined
-  let opened: V2OpenedRevision | undefined
+  let acquired: OpenedRevision | undefined
+  let opened: OpenedRevision | undefined
   let transaction: BoundOutputFileTransaction | undefined
-  let primaryFailure: NormalizedV2FileTransferFailure | undefined
+  let primaryFailure: NormalizedFileTransferFailure | undefined
   let capacityBlocked: OutputCapacityBlockedError | undefined
   let settlement = UNCONFIRMED_FILE_SETTLEMENT
   try {
@@ -250,7 +250,7 @@ export async function transferV2File(
 }
 
 function observeFileSettlement(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   settlement: FileTransferSettlement,
   checkpoint: FileCheckpointController | undefined,
 ): void {
@@ -272,7 +272,7 @@ async function drainCheckpointFailure(
 }
 
 async function settleTransferError(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction | undefined,
   error: unknown,
 ): Promise<SettledFileFailure> {
@@ -287,29 +287,29 @@ async function settleTransferError(
         settlement = Object.freeze({ kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()) })
       }
       return { capacityBlocked: error, settlement,
-        failure: normalizeV2FileTransferFailure(error, { stage: 'output_write' }) }
+        failure: normalizeFileTransferFailure(error, { stage: 'output_write' }) }
     } catch (settlementFailure) {
-      return { failure: normalizeV2FileTransferFailure(settlementFailure, { stage: 'settlement' }),
+      return { failure: normalizeFileTransferFailure(settlementFailure, { stage: 'settlement' }),
         settlement: UNCONFIRMED_FILE_SETTLEMENT }
     }
   }
   return settleFailedFileTransfer(options, transaction,
-    normalizeV2FileTransferFailure(error, {
+    normalizeFileTransferFailure(error, {
       signal: options.signal,
       ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
     }))
 }
 
 async function finishTransferFile(
-  options: V2FileTransferOptions,
-  acquired: V2OpenedRevision | undefined,
-  primaryFailure: NormalizedV2FileTransferFailure | undefined,
+  options: FileTransferOptions,
+  acquired: OpenedRevision | undefined,
+  primaryFailure: NormalizedFileTransferFailure | undefined,
   capacityBlocked: OutputCapacityBlockedError | undefined,
 ): Promise<void> {
   const releaseFailure = await releaseRevisionLease(acquired)
   if (capacityBlocked !== undefined && releaseFailure === undefined) {
     try { await capacityBlocked.waitForDrain(options.signal) } catch (error) {
-      primaryFailure = normalizeV2FileTransferFailure(error, { signal: options.signal })
+      primaryFailure = normalizeFileTransferFailure(error, { signal: options.signal })
     }
   }
   throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
@@ -320,24 +320,24 @@ function isWholeOutputFault(scope: FaultScope): boolean {
 }
 
 async function persistSourceFailure(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction,
-  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'fault' }>,
-): Promise<NormalizedV2FileTransferFailure | undefined> {
+  failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
+): Promise<NormalizedFileTransferFailure | undefined> {
   const fault = failure.fault
   if (fault.domain !== FaultDomain.Source || transaction.recordSourceFailure === undefined) return
   try {
     await withOutputSettlementTimeout('persist source revision failure', options.outputSettlementTimeoutMilliseconds,
       () => transaction.recordSourceFailure!(fault))
   } catch (error) {
-    return normalizeV2FileTransferFailure(error, { stage: 'settlement' })
+    return normalizeFileTransferFailure(error, { stage: 'settlement' })
   }
 }
 
 async function settleFailedFileTransfer(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction | undefined,
-  failure: NormalizedV2FileTransferFailure,
+  failure: NormalizedFileTransferFailure,
 ): Promise<SettledFileFailure> {
   if (transaction === undefined) return { failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
   if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
@@ -349,15 +349,15 @@ async function settleFailedFileTransfer(
 }
 
 async function settleFileFault(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction,
-  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'fault' }>,
-): Promise<NormalizedV2FileTransferFailure> {
+  failure: Extract<NormalizedFileTransferFailure, { kind: 'fault' }>,
+): Promise<NormalizedFileTransferFailure> {
   const authorization = authorizeFileRetirement(failure.fault)
   if (authorization === undefined) {
     if (isWholeOutputFault(failure.fault.scope)) return failure
     const promoted = promoteFaultScope(failure.fault, FaultScope.OutputPause)
-    return normalizedV2FileTransferFault(promoted, {
+    return normalizedFileTransferFault(promoted, {
       ...(options.incidentScope === undefined
         ? {}
         : { incidentScope: options.incidentScope }),
@@ -373,14 +373,14 @@ async function settleFileFault(
       () => retireOutputFileTransaction(transaction, authorization),
     )
   } catch (retirementFailure) {
-    normalizeV2FileTransferFailure(retirementFailure, {
+    normalizeFileTransferFailure(retirementFailure, {
       ...(options.incidentScope === undefined
         ? {}
         : { incidentScope: options.incidentScope }),
       relation: 'consequence',
       stage: 'settlement',
     })
-    return normalizedV2FileTransferFault(
+    return normalizedFileTransferFault(
       outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
       {
         ...(options.incidentScope === undefined
@@ -392,7 +392,7 @@ async function settleFileFault(
     )
   }
   return disposition === 'JobOutputCompromised'
-    ? normalizedV2FileTransferFault(
+    ? normalizedFileTransferFault(
         outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
         {
           ...(options.incidentScope === undefined
@@ -406,9 +406,9 @@ async function settleFileFault(
 }
 
 async function pauseCanceledFileTransfer(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction,
-  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'canceled' }>,
+  failure: Extract<NormalizedFileTransferFailure, { kind: 'canceled' }>,
 ): Promise<SettledFileFailure> {
   try {
     const durable = await withOutputSettlementTimeout(
@@ -420,7 +420,7 @@ async function pauseCanceledFileTransfer(
       kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()),
     }) }
   } catch (pauseFailure) {
-    normalizeV2FileTransferFailure(pauseFailure, {
+    normalizeFileTransferFailure(pauseFailure, {
       ...(options.incidentScope === undefined
         ? {}
         : { incidentScope: options.incidentScope }),
@@ -428,7 +428,7 @@ async function pauseCanceledFileTransfer(
       stage: 'settlement',
     })
     return {
-      failure: normalizedV2FileTransferFault(
+      failure: normalizedFileTransferFault(
         outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
         {
           ...(options.incidentScope === undefined
@@ -444,8 +444,8 @@ async function pauseCanceledFileTransfer(
 }
 
 async function releaseRevisionLease(
-  acquired: V2OpenedRevision | undefined,
-): Promise<NormalizedV2FileTransferFailure | undefined> {
+  acquired: OpenedRevision | undefined,
+): Promise<NormalizedFileTransferFailure | undefined> {
   if (acquired === undefined) return undefined
   try {
     // Release waits for shared-read safety and hands reclamation to the session.
@@ -453,14 +453,14 @@ async function releaseRevisionLease(
     await acquired.release()
     return undefined
   } catch (error) {
-    return normalizeV2FileTransferFailure(error, { stage: 'settlement' })
+    return normalizeFileTransferFailure(error, { stage: 'settlement' })
   }
 }
 
 function throwTransferOrReleaseFailure(
   incidentScope: IncidentScopeHandle | undefined,
-  primaryFailure: NormalizedV2FileTransferFailure | undefined,
-  releaseFailure: NormalizedV2FileTransferFailure | undefined,
+  primaryFailure: NormalizedFileTransferFailure | undefined,
+  releaseFailure: NormalizedFileTransferFailure | undefined,
 ): void {
   if (releaseFailure === undefined) {
     if (primaryFailure !== undefined) throw primaryFailure.diagnostic
@@ -496,7 +496,7 @@ function throwTransferOrReleaseFailure(
   )
   const governing = joinFaults(primaryFailure.fault, releaseFailure.fault)
   if (governing === undefined) throw primaryFailure.diagnostic
-  throw normalizedV2FileTransferFault(governing, {
+  throw normalizedFileTransferFault(governing, {
     ...(incidentScope === undefined ? {} : { incidentScope }),
     stage: 'settlement',
     materializationFailureReason: primaryFailure.materializationFailureReason,
@@ -505,8 +505,8 @@ function throwTransferOrReleaseFailure(
 
 function classifiedFailureError(
   classification: ClassifiedTransferFailure,
-): V2ClassifiedTransferFailureError {
-  return new V2ClassifiedTransferFailureError(classification)
+): ClassifiedTransferFailureError {
+  return new ClassifiedTransferFailureError(classification)
 }
 
 function outputFileFor(
@@ -535,15 +535,15 @@ function outputFileFor(
 }
 
 async function transferMissingRange(
-  options: V2FileTransferOptions,
-  opened: V2OpenedRevision,
+  options: FileTransferOptions,
+  opened: OpenedRevision,
   transaction: BoundOutputFileTransaction,
   requested: ByteRange,
   wrote: boolean,
   checkpoint: FileCheckpointController,
 ): Promise<boolean> {
   if (requested.start >= requested.end) {
-    throw new V2RangeReaderContractError('requested transfer range is empty')
+    throw new RangeReaderContractError('requested transfer range is empty')
   }
   const geometry = opened.descriptor.geometry
   let covered = requested.start
@@ -559,17 +559,17 @@ async function transferMissingRange(
     requested,
     {
       signal: options.signal,
-      maximumParallel: V2_BLOCK_BROKER_PARALLEL_READS,
+      maximumParallel: BLOCK_BROKER_PARALLEL_READS,
       priority: 'download',
     },
   )) {
     options.signal.throwIfAborted()
     if (typeof slice.offset !== 'bigint' || !(slice.data instanceof Uint8Array) || slice.data.byteLength === 0) {
-      throw new V2RangeReaderContractError('range reader returned an empty or malformed slice')
+      throw new RangeReaderContractError('range reader returned an empty or malformed slice')
     }
     const end = slice.offset + BigInt(slice.data.byteLength)
     if (slice.offset !== covered || end > requested.end) {
-      throw new V2RangeReaderContractError(
+      throw new RangeReaderContractError(
         'range reader slice escapes, overlaps, or leaves a gap in the requested interval',
       )
     }
@@ -599,13 +599,13 @@ async function transferMissingRange(
   }
   options.signal.throwIfAborted()
   if (covered !== requested.end || filled !== data.byteLength) {
-    throw new V2RangeReaderContractError('range reader returned before covering the requested interval')
+    throw new RangeReaderContractError('range reader returned before covering the requested interval')
   }
   return wrote
 }
 
 async function acceptAtomicOutputRange(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction,
   offset: bigint,
   data: Uint8Array<ArrayBuffer>,
@@ -627,14 +627,14 @@ async function acceptAtomicOutputRange(
 
 function atomicRangeAt(blockSize: bigint, offset: bigint, requestedEnd: bigint): ByteRange {
   if (blockSize <= 0n || offset < 0n || offset >= requestedEnd) {
-    throw new V2RangeReaderContractError('content geometry lost an atomic output range')
+    throw new RangeReaderContractError('content geometry lost an atomic output range')
   }
   const blockEnd = (offset / blockSize + 1n) * blockSize
   return byteRange(offset, blockEnd < requestedEnd ? blockEnd : requestedEnd)
 }
 
 async function writeAtomicRange(
-  options: V2FileTransferOptions,
+  options: FileTransferOptions,
   transaction: BoundOutputFileTransaction,
   offset: bigint,
   data: Uint8Array<ArrayBuffer>,
@@ -669,8 +669,8 @@ async function outputOperation<T>(
         cause instanceof TransferStopRequestedError ||
         cause instanceof OutputBudgetExceededError ||
         cause instanceof OutputSessionCompromisedError ||
-        cause instanceof V2OutputPausedError ||
+        cause instanceof OutputPausedError ||
         signal.aborted) throw cause
-    throw new V2FileOutputError(message, reason, cause)
+    throw new FileOutputError(message, reason, cause)
   }
 }

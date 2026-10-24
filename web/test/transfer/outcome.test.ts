@@ -11,7 +11,7 @@ import type { Fault } from '../../src/transfer/failure/fault'
 import type {
   MaterializationFailureReason,
 } from '../../src/transfer/failure/materialization'
-import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
+import { normalizedFileTransferFault } from '../../src/transfer/job/failures'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   MAXIMUM_RETAINED_TRANSFER_FAILURES,
@@ -164,7 +164,7 @@ function classification(
   fault: Fault,
   materializationFailureReason: MaterializationFailureReason = 'content-read-failed',
 ) {
-  return normalizedV2FileTransferFault(fault, {
+  return normalizedFileTransferFault(fault, {
     materializationFailureReason,
   }).diagnostic.classification
 }

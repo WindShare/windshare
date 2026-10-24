@@ -1,14 +1,14 @@
-import type { V2CatalogEntry } from '../../catalog/v2-records'
+import type { CatalogEntry } from '../../catalog/records'
 import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
-import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from './gateway'
-import type { V2RetainedReceiveOperation } from '../receive/contracts'
+import type { BrowseDirectory, BrowsePage, JoinedBrowserShare } from './gateway'
+import type { RetainedReceiveOperation } from '../receive/contracts'
 
-type ReplacementShare = Pick<V2JoinedBrowserShare, 'descriptor' | 'rootDirectory' | 'childDirectory' | 'page'>
+type ReplacementShare = Pick<JoinedBrowserShare, 'descriptor' | 'rootDirectory' | 'childDirectory' | 'page'>
 
 export async function findReplacementFile(
-  joined: ReplacementShare, operation: V2RetainedReceiveOperation,
+  joined: ReplacementShare, operation: RetainedReceiveOperation,
   failure: SourceRevisionFailure, signal: AbortSignal,
-): Promise<Readonly<{ entry: V2CatalogEntry; page: V2BrowsePage; directories: readonly V2BrowseDirectory[] }>> {
+): Promise<Readonly<{ entry: CatalogEntry; page: BrowsePage; directories: readonly BrowseDirectory[] }>> {
   const failures = operation.sourceRevisionFailures
   if (failures === undefined || !failures.files.includes(failure) ||
       failures.shareInstance !== joined.descriptor.shareInstanceId) {
@@ -30,8 +30,8 @@ export async function findReplacementFile(
 }
 
 async function findNamedEntry(
-  joined: ReplacementShare, directory: V2BrowseDirectory, name: string, signal: AbortSignal,
-): Promise<Readonly<{ entry: V2CatalogEntry; page: V2BrowsePage }>> {
+  joined: ReplacementShare, directory: BrowseDirectory, name: string, signal: AbortSignal,
+): Promise<Readonly<{ entry: CatalogEntry; page: BrowsePage }>> {
   let pageIndex = 0
   for (;;) {
     signal.throwIfAborted()

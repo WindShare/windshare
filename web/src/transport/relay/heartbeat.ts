@@ -1,16 +1,16 @@
 import {
-  decodeV2ConnectionProbeAck,
-  encodeV2ConnectionProbe,
-  V2_CONNECTION_PROBE_ACK_MAGIC,
-  V2RelayProtocolError,
-} from './v2-protocol'
+  decodeConnectionProbeAck,
+  encodeConnectionProbe,
+  CONNECTION_PROBE_ACK_MAGIC,
+  RelayProtocolError,
+} from './protocol'
 
 // Probes leave on this cadence whether or not earlier ones were acknowledged,
 // so an acknowledgement queued behind content never silences this direction.
-export const V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS = 15_000
+export const RELAY_HEARTBEAT_INTERVAL_MILLISECONDS = 15_000
 // Loss is a full timeout without any accepted inbound frame. Three intervals
 // absorb a relay reply delayed behind one bounded write plus network delay.
-export const V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS = 45_000
+export const RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS = 45_000
 // Acknowledgements can lag several probes on a slow downlink while content
 // keeps the connection alive; untracked probes lose only their round-trip trace.
 const MAXIMUM_TRACKED_PROBES = 8
@@ -63,7 +63,7 @@ export class RelayHeartbeat {
     this.#fail = fail
     this.#trace = trace
     this.#scheduleProbe()
-    this.#armSilence(V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS)
+    this.#armSilence(RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS)
   }
 
   /** Records a frame the connection accepted; the silence timer rereads it lazily. */
@@ -77,13 +77,13 @@ export class RelayHeartbeat {
    * already covered or never sent is a protocol violation.
    */
   receive(encoded: Uint8Array): boolean {
-    if (encoded.byteLength < 4 || String.fromCharCode(...encoded.subarray(0, 4)) !== V2_CONNECTION_PROBE_ACK_MAGIC) {
+    if (encoded.byteLength < 4 || String.fromCharCode(...encoded.subarray(0, 4)) !== CONNECTION_PROBE_ACK_MAGIC) {
       return false
     }
-    const nonce = decodeV2ConnectionProbeAck(encoded)
+    const nonce = decodeConnectionProbeAck(encoded)
     if (this.#closed) return true
     if (nonce <= this.#acknowledged || nonce > this.#round) {
-      throw new V2RelayProtocolError('identity', 'connection probe acknowledgement names no outstanding probe')
+      throw new RelayProtocolError('identity', 'connection probe acknowledgement names no outstanding probe')
     }
     this.#acknowledged = nonce
     const acknowledged = this.#tracked.find(probe => probe.round === nonce)
@@ -100,7 +100,7 @@ export class RelayHeartbeat {
   }
 
   #scheduleProbe(): void {
-    this.#probeTimer = globalThis.setTimeout(() => this.#probe(), V2_RELAY_HEARTBEAT_INTERVAL_MILLISECONDS)
+    this.#probeTimer = globalThis.setTimeout(() => this.#probe(), RELAY_HEARTBEAT_INTERVAL_MILLISECONDS)
   }
 
   #armSilence(delay: number): void {
@@ -117,7 +117,7 @@ export class RelayHeartbeat {
     // Append one tiny probe even during pressure: waiting for bufferedAmount to
     // drain first would leave a silent, permanently blocked socket undetectable.
     try {
-      this.#socket.send(encodeV2ConnectionProbe(this.#round))
+      this.#socket.send(encodeConnectionProbe(this.#round))
     } catch (error) {
       this.#failed(error, now - this.#lastInboundAt)
       return
@@ -128,12 +128,12 @@ export class RelayHeartbeat {
   #checkSilence(): void {
     if (this.#closed) return
     const silence = Date.now() - this.#lastInboundAt
-    if (silence >= V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS) {
+    if (silence >= RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS) {
       this.#failed(new RelayHeartbeatError(), silence)
       return
     }
     // Rearming once per timeout window, not per frame, keeps busy connections cheap.
-    this.#armSilence(V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS - silence)
+    this.#armSilence(RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS - silence)
   }
 
   #failed(error: unknown, silence: number): void {
@@ -147,7 +147,7 @@ export class RelayHeartbeat {
     try {
       this.#trace?.({
         connectionId: this.#connectionId, round, stage, bufferedBytes: this.#socket.bufferedAmount,
-        elapsedMilliseconds, timeoutMilliseconds: V2_RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS,
+        elapsedMilliseconds, timeoutMilliseconds: RELAY_HEARTBEAT_TIMEOUT_MILLISECONDS,
       })
     } catch {
       // Diagnostic consumers cannot suppress liveness detection.

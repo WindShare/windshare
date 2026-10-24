@@ -10,7 +10,7 @@ export interface ClassifiedTransferFailure {
   readonly materializationFailureReason: MaterializationFailureReason
 }
 
-export class V2ClassifiedTransferFailureError extends BoundaryFaultError {
+export class ClassifiedTransferFailureError extends BoundaryFaultError {
   readonly classification: ClassifiedTransferFailure
   readonly fileOutcomeEvidence: TransferFileOutcomeEvidence | undefined
 
@@ -19,7 +19,7 @@ export class V2ClassifiedTransferFailureError extends BoundaryFaultError {
     fileOutcomeEvidence?: TransferFileOutcomeEvidence,
   ) {
     super(classification.fault, 'File transfer failed at a classified boundary')
-    this.name = 'V2ClassifiedTransferFailureError'
+    this.name = 'ClassifiedTransferFailureError'
     this.classification = snapshotClassification(classification)
     this.fileOutcomeEvidence = fileOutcomeEvidence === undefined
       ? undefined

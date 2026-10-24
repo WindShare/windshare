@@ -9,21 +9,21 @@ import (
 )
 
 func TestLiveStageObserverAndAmbiguousPublishErrorRetainTheirCause(t *testing.T) {
-	var observed windowsV3LiveStageCreateCut
-	observer := windowsV3LiveStageCreateObserverFunc(func(cut windowsV3LiveStageCreateCut) error {
+	var observed windowsLiveStageCreateCut
+	observer := windowsLiveStageCreateObserverFunc(func(cut windowsLiveStageCreateCut) error {
 		observed = cut
 		return nil
 	})
-	if err := observer.ObserveLiveStageCreate(windowsV3LiveStageCutSynced); err != nil ||
-		observed != windowsV3LiveStageCutSynced {
+	if err := observer.ObserveLiveStageCreate(windowsLiveStageCutSynced); err != nil ||
+		observed != windowsLiveStageCutSynced {
 		t.Fatalf("live stage observation = (%d, %v)", observed, err)
 	}
 
 	cause := errors.New("parent durability unknown")
-	failure := &windowsV3PublishMutationError{cause: cause}
+	failure := &windowsPublishMutationError{cause: cause}
 	if !strings.Contains(failure.Error(), "may be visible") ||
 		!errors.Is(failure, cause) ||
-		!windowsV3PublicationMayBeVisible(failure) {
+		!windowsPublicationMayBeVisible(failure) {
 		t.Fatalf("ambiguous publication failure = %v", failure)
 	}
 }

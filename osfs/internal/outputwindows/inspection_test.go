@@ -11,31 +11,31 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3ObjectInspectorFunc func(windows.Handle) (windowsV3ObjectFacts, error)
+type windowsObjectInspectorFunc func(windows.Handle) (windowsObjectFacts, error)
 
-func (inspect windowsV3ObjectInspectorFunc) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
+func (inspect windowsObjectInspectorFunc) Inspect(handle windows.Handle) (windowsObjectFacts, error) {
 	return inspect(handle)
 }
 
-func (inspect windowsV3ObjectInspectorFunc) Identify(handle windows.Handle) (windowsV3ObjectIdentity, error) {
+func (inspect windowsObjectInspectorFunc) Identify(handle windows.Handle) (windowsObjectIdentity, error) {
 	facts, err := inspect(handle)
 	return facts.object, err
 }
 
-type windowsV3VolumeInspectorFunc func(windows.Handle) (windowsV3VolumeFacts, error)
+type windowsVolumeInspectorFunc func(windows.Handle) (windowsVolumeFacts, error)
 
-func (inspect windowsV3VolumeInspectorFunc) InspectVolume(handle windows.Handle) (windowsV3VolumeFacts, error) {
+func (inspect windowsVolumeInspectorFunc) InspectVolume(handle windows.Handle) (windowsVolumeFacts, error) {
 	return inspect(handle)
 }
 
-func TestWindowsV3VolumeCertificationIsScopedToOpenRoot(t *testing.T) {
-	path := windowsV3NativeTestTempDir(t)
+func TestWindowsVolumeCertificationIsScopedToOpenRoot(t *testing.T) {
+	path := windowsNativeTestTempDir(t)
 	volumeInspections := 0
-	volumes := windowsV3VolumeInspectorFunc(func(handle windows.Handle) (windowsV3VolumeFacts, error) {
+	volumes := windowsVolumeInspectorFunc(func(handle windows.Handle) (windowsVolumeFacts, error) {
 		volumeInspections++
-		return (nativeWindowsV3VolumeInspector{}).InspectVolume(handle)
+		return (nativeWindowsVolumeInspector{}).InspectVolume(handle)
 	})
-	platform, err := openWindowsV3OutputPlatformWithInspectors(path, nativeWindowsV3ObjectInspector{}, volumes)
+	platform, err := openWindowsOutputPlatformWithInspectors(path, nativeWindowsObjectInspector{}, volumes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +77,13 @@ func TestWindowsV3VolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 
 	const repeatedChecks = 3
 	for range repeatedChecks {
-		if same, err := sameWindowsV3OpenedObject(stage, anchor); err != nil || !same {
+		if same, err := sameWindowsOpenedObject(stage, anchor); err != nil || !same {
 			t.Fatalf("hard-link identity = %t, %v", same, err)
 		}
-		if same, err := sameWindowsV3OpenedObject(stage, other); err != nil || same {
+		if same, err := sameWindowsOpenedObject(stage, other); err != nil || same {
 			t.Fatalf("distinct file identity = %t, %v", same, err)
 		}
-		if same, err := sameWindowsV3OpenedDirectory(platform.Root(), guard.Root()); err != nil || !same {
+		if same, err := sameWindowsOpenedDirectory(platform.Root(), guard.Root()); err != nil || !same {
 			t.Fatalf("guarded directory identity = %t, %v", same, err)
 		}
 		if err := errors.Join(stage.verify(true), directory.Sync(), guard.Root().Sync()); err != nil {
@@ -99,7 +99,7 @@ func TestWindowsV3VolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 	if err := errors.Join(other.Close(), anchor.Close(), stage.Close(), directory.Close(), guard.Close(), platform.Close()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := openWindowsV3OutputPlatformWithInspectors(path, nativeWindowsV3ObjectInspector{}, volumes)
+	reopened, err := openWindowsOutputPlatformWithInspectors(path, nativeWindowsObjectInspector{}, volumes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,27 +109,27 @@ func TestWindowsV3VolumeCertificationIsScopedToOpenRoot(t *testing.T) {
 	}
 }
 
-func TestWindowsV3VolumeAdmissionFailureDoesNotCreateOutputState(t *testing.T) {
+func TestWindowsVolumeAdmissionFailureDoesNotCreateOutputState(t *testing.T) {
 	injected := errors.New("volume inspection unavailable")
 	for _, test := range []struct {
 		name    string
-		volumes windowsV3VolumeInspector
+		volumes windowsVolumeInspector
 	}{
 		{name: "missing volume inspector"},
-		{name: "volume inspection failure", volumes: windowsV3VolumeInspectorFunc(
-			func(windows.Handle) (windowsV3VolumeFacts, error) {
-				return windowsV3VolumeFacts{}, injected
+		{name: "volume inspection failure", volumes: windowsVolumeInspectorFunc(
+			func(windows.Handle) (windowsVolumeFacts, error) {
+				return windowsVolumeFacts{}, injected
 			},
 		)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := windowsV3NativeTestTempDir(t)
-			platform, err := openWindowsV3OutputPlatformWithInspectors(path, nativeWindowsV3ObjectInspector{}, test.volumes)
+			path := windowsNativeTestTempDir(t)
+			platform, err := openWindowsOutputPlatformWithInspectors(path, nativeWindowsObjectInspector{}, test.volumes)
 			if platform != nil {
 				_ = platform.Close()
 				t.Fatal("failed volume admission returned a platform")
 			}
-			if !errors.Is(err, errWindowsV3OutputUnsupported) {
+			if !errors.Is(err, errWindowsOutputUnsupported) {
 				t.Fatalf("volume admission = %v", err)
 			}
 			if test.volumes != nil && !errors.Is(err, injected) {
@@ -143,15 +143,15 @@ func TestWindowsV3VolumeAdmissionFailureDoesNotCreateOutputState(t *testing.T) {
 	}
 }
 
-func TestWindowsV3ObjectInspectionReadsLiveHandleFacts(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsObjectInspectionReadsLiveHandleFacts(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	file, err := platform.Root().CreatePrivateFile("live-facts")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	inspector := nativeWindowsV3ObjectInspector{}
+	inspector := nativeWindowsObjectInspector{}
 	before, err := inspector.Inspect(file.handle())
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestWindowsV3ObjectInspectionReadsLiveHandleFacts(t *testing.T) {
 	if _, err := inspector.Inspect(file.handle()); err == nil {
 		t.Fatal("closed handle retained cached object facts")
 	}
-	if _, err := (nativeWindowsV3VolumeInspector{}).InspectVolume(windows.InvalidHandle); err == nil {
+	if _, err := (nativeWindowsVolumeInspector{}).InspectVolume(windows.InvalidHandle); err == nil {
 		t.Fatal("invalid root handle was certified")
 	}
 }

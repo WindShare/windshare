@@ -1,9 +1,9 @@
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { vi } from 'vitest'
 
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2SelectionPolicy, type V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2ConnectivityActivation } from '../../src/connectivity/v2-receiver-policy'
+import type { CatalogEntry } from '../../src/catalog/records'
+import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
+import type { ConnectivityActivation } from '../../src/connectivity/receiver-policy'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createIncidentScopeIssuer,
@@ -39,41 +39,41 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
+import type { PlanExecutionAuthority } from '../../src/transfer/output/session'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
   type TransferWorkerSettlement,
 } from '../../src/transfer/outcome'
-import type { TransferJobResult } from '../../src/transfer/v2-job'
+import type { TransferJobResult } from '../../src/transfer/job'
 import {
   createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import { type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
+import { ReceiverController } from '../../src/ui/controller'
+import { type ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import type {
-  V2BrowseDirectory,
-  V2BrowsePage,
-  V2BrowserReceiverGateway,
-  V2JoinedBrowserShare,
+  BrowseDirectory,
+  BrowsePage,
+  BrowserReceiverGateway,
+  JoinedBrowserShare,
 } from '../../src/application/browser-share/gateway'
-import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../src/application/receive/actions'
+import type { LifecycleUserAction, ActiveReceiveControl, WorkspaceUsage } from '../../src/application/receive/actions'
 import type {
-  V2BoundReceiveOperation,
-  V2ArtifactPresentationAuthority,
-  V2LifecycleMutation,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
-  V2ReceiveCompositionPort,
-  V2RetainedReceiveAction,
-  V2RetainedReceiveActionResult,
-  V2RetainedReceiveInventory,
-  V2RetainedReceiveOperation,
+  BoundReceiveOperation,
+  ArtifactPresentationAuthority,
+  LifecycleMutation,
+  RouteCommitInput,
+  RouteCommitResult,
+  ReceiveCompositionPort,
+  RetainedReceiveAction,
+  RetainedReceiveActionResult,
+  RetainedReceiveInventory,
+  RetainedReceiveOperation,
 } from '../../src/application/receive/contracts'
-import type { V2ProtocolGenerationListener } from '../../src/receiver/v2-supervisor'
+import type { ProtocolGenerationListener } from '../../src/receiver/supervisor'
 import {
   environment,
   directZipTarget,
@@ -105,7 +105,7 @@ export const DIRECT_ZIP_ENVIRONMENT = environment({
   },
 })
 
-const FILE_ENTRY: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({
+const FILE_ENTRY: Extract<CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
   id: identityBytes(2),
   idText: FILE_ID,
@@ -118,27 +118,27 @@ export function resetOrchestrationTestEnvironment(): void {
   vi.unstubAllGlobals()
 }
 
-export class FakeReceiveComposition implements V2ReceiveCompositionPort {
+export class FakeReceiveComposition implements ReceiveCompositionPort {
   readonly startedChoices: OfferedArtifactChoice[] = []
   readonly startedAuthorities: FakeStartedAuthority[] = []
   readonly authorityStartStacks: boolean[] = []
   readonly retainedSignals: AbortSignal[] = []
   readonly retainedActionCalls: Array<Readonly<{
-    operation: V2RetainedReceiveOperation
-    action: V2RetainedReceiveAction
+    operation: RetainedReceiveOperation
+    action: RetainedReceiveAction
     signal: AbortSignal
   }>> = []
-  readonly retainedInventories: V2RetainedReceiveInventory[] = []
+  readonly retainedInventories: RetainedReceiveInventory[] = []
   readonly repairSummaries = new Map<string, CompatibleNameRepairSummary>()
-  retainedOperations: readonly V2RetainedReceiveOperation[] = Object.freeze([])
-  retainedGate: PromiseLike<V2RetainedReceiveInventory> | undefined
-  retainedActionGate: PromiseLike<V2RetainedReceiveActionResult> | undefined
+  retainedOperations: readonly RetainedReceiveOperation[] = Object.freeze([])
+  retainedGate: PromiseLike<RetainedReceiveInventory> | undefined
+  retainedActionGate: PromiseLike<RetainedReceiveActionResult> | undefined
   readonly retained = Object.freeze({
     readRepairSummary: (operationId: string, signal: AbortSignal) => {
       signal.throwIfAborted()
       return Promise.resolve(this.repairSummaries.get(operationId))
     },
-    list: (signal: AbortSignal): PromiseLike<V2RetainedReceiveInventory> => {
+    list: (signal: AbortSignal): PromiseLike<RetainedReceiveInventory> => {
       this.retainedSignals.push(signal)
       if (this.retainedGate !== undefined) return this.retainedGate
       const inventory = retainedInventory(
@@ -181,7 +181,7 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
     preClickRanking: readonly ArtifactChoiceID[],
     _failures?: OutputFailureSinks,
     display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
-  ): V2ArtifactPresentationAuthority {
+  ): ArtifactPresentationAuthority {
     this.startedChoices.push(offered)
     this.startedRankings.push(Object.freeze([...preClickRanking]))
     this.authorityStartStacks.push(this.clickStack())
@@ -199,7 +199,7 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
   }
 }
 
-export class FakeStartedAuthority implements V2ArtifactPresentationAuthority {
+export class FakeStartedAuthority implements ArtifactPresentationAuthority {
   readonly ready: Promise<void>
   readonly releaseReasons: unknown[] = []
   readonly commitActions: ResolvedArtifactAction[] = []
@@ -217,7 +217,7 @@ export class FakeStartedAuthority implements V2ArtifactPresentationAuthority {
     this.ready = ready
   }
 
-  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+  async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     input.signal.throwIfAborted()
     this.commitActions.push(input.action)
     const candidate = await candidateBindingForTest(input.action, this.#offered.suggestedName)
@@ -234,30 +234,30 @@ export class FakeStartedAuthority implements V2ArtifactPresentationAuthority {
 }
 
 class FakeTransferControlError extends DOMException {
-  readonly control: V2ActiveReceiveControl
+  readonly control: ActiveReceiveControl
 
-  constructor(control: V2ActiveReceiveControl) {
+  constructor(control: ActiveReceiveControl) {
     super(`${control} requested`, 'AbortError')
     this.control = control
   }
 }
 
-export class FakeBoundRuntime implements V2BoundReceiveOperation {
+export class FakeBoundRuntime implements BoundReceiveOperation {
   readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
   subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
     return this.lifecycleNotifications.subscribe(listener)
   }
   display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay
-  readonly plans = Object.freeze({}) as V2PlanExecutionAuthority
+  readonly plans = Object.freeze({}) as PlanExecutionAuthority
   readonly transferJobId = identityText(76)
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
-  readonly activeControls: readonly V2ActiveReceiveControl[] = Object.freeze(['pause', 'stop'])
+  readonly activeControls: readonly ActiveReceiveControl[] = Object.freeze(['pause', 'stop'])
   readonly initialWorkspaceUsage: WorkspaceUsage = Object.freeze({
     ownedBytes: 512n,
     maximumBytes: 4_096n,
   })
-  readonly interruptions: Array<{ control: V2ActiveReceiveControl; inClickStack: boolean }> = []
+  readonly interruptions: Array<{ control: ActiveReceiveControl; inClickStack: boolean }> = []
   readonly lifecycleActions: Array<{ action: LifecycleUserAction; inClickStack: boolean }> = []
   readonly detachments: unknown[] = []
   readonly admissionFailures: unknown[] = []
@@ -265,12 +265,12 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
   detachFailure: unknown
   controlStack: () => boolean = () => true
   lifecycleActionStack: () => boolean = () => true
-  lastControl: V2ActiveReceiveControl | undefined
+  lastControl: ActiveReceiveControl | undefined
   admissionSettlementError: unknown
   nextLifecycleAction: (
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ) => V2LifecycleMutation = defaultLifecycleAction
+  ) => LifecycleMutation = defaultLifecycleAction
 
   constructor(
     intent: ReceiveIntent = {} as ReceiveIntent,
@@ -292,16 +292,16 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
     })
   }
 
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
     this.lastControl = control
     this.interruptions.push({ control, inClickStack: this.controlStack() })
     transfer.abort(new FakeTransferControlError(control))
   }
 
   startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ): V2LifecycleMutation {
+  ): LifecycleMutation {
     this.lifecycleActions.push({ action, inClickStack: this.lifecycleActionStack() })
     return this.nextLifecycleAction(action, lifecycle)
   }
@@ -310,7 +310,7 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
     return this.initialWorkspaceUsage
   }
 
-  settleTransferAdmissionFailure(reason: unknown): V2LifecycleMutation {
+  settleTransferAdmissionFailure(reason: unknown): LifecycleMutation {
     this.admissionFailures.push(reason)
     if (this.admissionSettlementError !== undefined) throw this.admissionSettlementError
     if (this.lastControl === 'pause') {
@@ -358,13 +358,13 @@ export class FakeJoinedShare {
   })
   readonly recoveryIdentity = 'test-share'
   protocolSessionId = SESSION_ID
-  selection: V2SelectionPolicy
-  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
+  selection: SelectionPolicy
+  replaceSelection(selection: SelectionPolicy): void { this.selection = selection }
   readonly projectionRequests: Array<{ readonly signal: AbortSignal }> = []
   readonly transferRuns: FakeTransferRun[] = []
   readonly #projectionGates: Array<PromiseLike<void> | undefined>
   readonly #projectionShape: 'single-file' | 'tree'
-  readonly #generationListeners = new Set<V2ProtocolGenerationListener>()
+  readonly #generationListeners = new Set<ProtocolGenerationListener>()
   closeCount = 0
   reconnectCount = 0
   readonly #connectionListeners = new Set<(snapshot: import('../../src/receiver/connection-state').ReceiverConnectionSnapshot) => void>()
@@ -374,12 +374,12 @@ export class FakeJoinedShare {
     projectionGates: Array<PromiseLike<void> | undefined> = [],
     projectionShape: 'single-file' | 'tree' = 'single-file',
   ) {
-    this.selection = new V2SelectionPolicy(defaultSelected)
+    this.selection = new SelectionPolicy(defaultSelected)
     this.#projectionGates = [...projectionGates]
     this.#projectionShape = projectionShape
   }
 
-  rootDirectory(): V2BrowseDirectory {
+  rootDirectory(): BrowseDirectory {
     return Object.freeze({
       id: identityBytes(1),
       idText: ROOT_ID,
@@ -389,7 +389,7 @@ export class FakeJoinedShare {
     })
   }
 
-  async page(directory: V2BrowseDirectory): Promise<V2BrowsePage> {
+  async page(directory: BrowseDirectory): Promise<BrowsePage> {
     return Object.freeze({
       directory,
       pageIndex: 0,
@@ -422,7 +422,7 @@ export class FakeJoinedShare {
 
   subscribePathActivity(): () => void { return () => undefined }
 
-  subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
+  subscribeProtocolGeneration(listener: ProtocolGenerationListener): () => void {
     this.#generationListeners.add(listener)
     return () => this.#generationListeners.delete(listener)
   }
@@ -434,13 +434,13 @@ export class FakeJoinedShare {
         generationId: 2,
         protocolSessionId,
         protocolSessionIdentity: protocolSessionId as unknown as Parameters<
-          V2ProtocolGenerationListener
+          ProtocolGenerationListener
         >[0]['protocolSessionIdentity'],
       }))
     }
   }
 
-  projectionSource(selection: V2FrozenSelectionPolicy): AuthenticatedDiscoverySource {
+  projectionSource(selection: FrozenSelectionPolicy): AuthenticatedDiscoverySource {
     const gate = this.#projectionGates.shift()
     const requests = this.projectionRequests
     const projectionShape = this.#projectionShape
@@ -489,14 +489,14 @@ export class FakeJoinedShare {
     })
   }
 
-  beginDownloadConnectivity(): V2ConnectivityActivation {
+  beginDownloadConnectivity(): ConnectivityActivation {
     return {
       routes: Object.freeze({}) as never,
       close: () => undefined,
     }
   }
 
-  transferJob(plans: V2PlanExecutionAuthority, intent: ReceiveIntent) {
+  transferJob(plans: PlanExecutionAuthority, intent: ReceiveIntent) {
     const run = new FakeTransferRun(plans, intent)
     this.transferRuns.push(run)
     return Object.freeze({ run: (signal?: AbortSignal) => run.start(signal) })
@@ -508,12 +508,12 @@ export class FakeJoinedShare {
 }
 
 export class FakeTransferRun {
-  readonly plans: V2PlanExecutionAuthority
+  readonly plans: PlanExecutionAuthority
   readonly intent: ReceiveIntent
   readonly #result = deferred<TransferJobResult>()
   signal: AbortSignal | undefined
 
-  constructor(plans: V2PlanExecutionAuthority, intent: ReceiveIntent) {
+  constructor(plans: PlanExecutionAuthority, intent: ReceiveIntent) {
     this.plans = plans
     this.intent = intent
   }
@@ -583,22 +583,22 @@ export class FakeGateway {
     this.#joined = joined
   }
 
-  async join(): Promise<V2JoinedBrowserShare> {
+  async join(): Promise<JoinedBrowserShare> {
     const joined = this.#joined[this.joinCount]
     this.joinCount += 1
     if (joined === undefined) throw new Error('unexpected join')
-    return joined as unknown as V2JoinedBrowserShare
+    return joined as unknown as JoinedBrowserShare
   }
 }
 
 export function controllerFor(
   joined: FakeJoinedShare,
-  receive: V2ReceiveCompositionPort,
-  incidents?: V2ReceiverIncidentPort,
-  trace?: (event: V2ReceiverTraceEvent) => void,
-): V2ReceiverController {
+  receive: ReceiveCompositionPort,
+  incidents?: ReceiverIncidentPort,
+  trace?: (event: ReceiverTraceEvent) => void,
+): ReceiverController {
   const gateway = new FakeGateway([joined])
-  const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, {
+  const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, {
     receive,
     ...(incidents === undefined ? {} : { incidents }),
     ...(trace === undefined ? {} : { trace: { current: trace } }),
@@ -608,7 +608,7 @@ export function controllerFor(
 }
 
 export interface RecordingIncidents {
-  readonly port: V2ReceiverIncidentPort
+  readonly port: ReceiverIncidentPort
   readonly facts: Array<Readonly<{
     scopeKind: IncidentScopeKind
     scopeSequence: bigint
@@ -651,7 +651,7 @@ export function recordingIncidents(): RecordingIncidents {
 }
 
 export async function startTransfer(
-  controller: V2ReceiverController,
+  controller: ReceiverController,
   joined: FakeJoinedShare,
 ): Promise<void> {
   await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
@@ -744,7 +744,7 @@ export async function retainedWorkspaceIntent(joined: FakeJoinedShare): Promise<
 }
 
 export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
-  operation: V2RetainedReceiveOperation
+  operation: RetainedReceiveOperation
   runtime: FakeBoundRuntime
 }> {
   const initial = initialReceiveLifecycleState({
@@ -781,7 +781,7 @@ export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
   })
 }
 
-export function retainedOperation(): V2RetainedReceiveOperation {
+export function retainedOperation(): RetainedReceiveOperation {
   const lifecycle: ReceiveLifecycleState = Object.freeze({
     kind: 'needs-attention',
     operationId: identityText(80),
@@ -801,7 +801,7 @@ export function retainedOperation(): V2RetainedReceiveOperation {
   })
 }
 
-export function waitingRetainedOperation(): V2RetainedReceiveOperation {
+export function waitingRetainedOperation(): RetainedReceiveOperation {
   const lifecycle: ReceiveLifecycleState = Object.freeze({
     kind: 'waiting-to-save',
     operationId: identityText(83),
@@ -821,17 +821,17 @@ export function waitingRetainedOperation(): V2RetainedReceiveOperation {
 }
 
 export function retainedInventory(
-  operations: readonly V2RetainedReceiveOperation[],
-  act: V2RetainedReceiveInventory['act'] = () =>
+  operations: readonly RetainedReceiveOperation[],
+  act: RetainedReceiveInventory['act'] = () =>
     Promise.resolve(Object.freeze({ kind: 'completed' })),
-): V2RetainedReceiveInventory {
+): RetainedReceiveInventory {
   let open = true
   return Object.freeze({
     operations,
     presentationFailures: Object.freeze([]),
     act: (
-      operation: V2RetainedReceiveOperation,
-      action: V2RetainedReceiveAction,
+      operation: RetainedReceiveOperation,
+      action: RetainedReceiveAction,
       signal: AbortSignal,
     ) => {
       if (!open) return Promise.reject(new DOMException('Inventory is closed', 'InvalidStateError'))
@@ -878,9 +878,9 @@ export function stableLifecycle(
 }
 
 function defaultLifecycleAction(
-  action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+  action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
   lifecycle: ReceiveLifecycleState,
-): V2LifecycleMutation {
+): LifecycleMutation {
   switch (action) {
     case 'save-staged-files':
     case 'cleanup-staging':

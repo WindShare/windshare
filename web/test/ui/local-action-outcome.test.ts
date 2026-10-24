@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import {
   FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT, controllerFor,
   identityText, next, resetOrchestrationTestEnvironment, stableLifecycle, startTransfer, turns, waitFor,
@@ -11,7 +11,7 @@ describe('local action authority and outcome', () => {
   it('publishes the recovered lifecycle when only part of the requested local work succeeds', async () => {
     const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
-    const events: V2ReceiverTraceEvent[] = []
+    const events: ReceiverTraceEvent[] = []
     const controller = controllerFor(joined, receive, undefined, event => events.push(event))
     await startTransfer(controller, joined)
     const runtime = receive.startedAuthorities[0]!.runtime!
@@ -34,7 +34,7 @@ describe('local action authority and outcome', () => {
   it.each(['same-authority', 'equivalent-copy', 'changed-data'] as const)('accepts journal-only completion only with the same lifecycle authority: %s', async authority => {
     const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
-    const events: V2ReceiverTraceEvent[] = []
+    const events: ReceiverTraceEvent[] = []
     const controller = controllerFor(joined, receive, undefined, event => events.push(event))
     await startTransfer(controller, joined)
     const runtime = receive.startedAuthorities[0]!.runtime!

@@ -17,12 +17,12 @@ import {
   createPortablePlanID,
 } from '../../../transfer/intent'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
+  RouteCommitInput,
+  RouteCommitResult,
 } from '../../receive/contracts'
-import { V2PresentationSourceError } from '../../receive/contracts'
+import { PresentationSourceError } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import {
   createPortableReceiveOperation,
@@ -39,9 +39,9 @@ export interface PortableRouteDependencies {
     action: PortableResolvedArtifactAction,
     intent: BoundReceiveIntent['intent'],
     diagnostics?: OutputDiagnosticsPorts,
-    display?: V2RouteCommitInput['display'],
+    display?: RouteCommitInput['display'],
     preClickRanking?: readonly import('../../../transfer/intent').ArtifactChoiceID[],
-  ) => Promise<V2BoundReceiveOperation>
+  ) => Promise<BoundReceiveOperation>
 }
 
 export interface PortableArtifactPresentationAuthorityOptions {
@@ -59,7 +59,7 @@ export function startPortableArtifactAuthority(
   offered: OfferedArtifactChoice,
   diagnostics?: OutputDiagnosticsPorts,
   preClickRanking?: readonly import('../../../transfer/intent').ArtifactChoiceID[],
-): V2ArtifactPresentationAuthority {
+): ArtifactPresentationAuthority {
   return new PortableArtifactPresentationAuthority({
     windowPort,
     offered,
@@ -68,7 +68,7 @@ export function startPortableArtifactAuthority(
   })
 }
 
-export class PortableArtifactPresentationAuthority implements V2ArtifactPresentationAuthority {
+export class PortableArtifactPresentationAuthority implements ArtifactPresentationAuthority {
   readonly ready = Promise.resolve()
   readonly #window: BrowserReceiveWindow
   readonly #choice: ArtifactChoice
@@ -89,10 +89,10 @@ export class PortableArtifactPresentationAuthority implements V2ArtifactPresenta
     this.#dependencies = portableRouteDependencies(options.dependencies)
   }
 
-  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+  async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     this.#claimCommit()
     let receiverOperationId: string | undefined
-    let operation: V2BoundReceiveOperation | undefined
+    let operation: BoundReceiveOperation | undefined
     try {
       this.#requireCommitting(input.signal)
       const action = this.#requireCurrentAction(input.action)
@@ -163,7 +163,7 @@ export class PortableArtifactPresentationAuthority implements V2ArtifactPresenta
   #requireCommitting(signal: AbortSignal): void {
     signal.throwIfAborted()
     if (this.#state !== 'committing') {
-      throw new V2PresentationSourceError(
+      throw new PresentationSourceError(
         'stale_replacement',
         this.#releaseReason ?? new DOMException(
           'Portable presentation authority was released',
@@ -201,7 +201,7 @@ function portableRouteDependencies(
 }
 
 async function detachPreReturnOperation(
-  operation: V2BoundReceiveOperation | undefined,
+  operation: BoundReceiveOperation | undefined,
 ): Promise<unknown | undefined> {
   if (operation === undefined) return undefined
   try {

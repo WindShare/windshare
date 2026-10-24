@@ -1,4 +1,4 @@
-import type { V2OutputSettlementDeadline } from '../../src/transfer/settlement/v2-output'
+import type { OutputSettlementDeadline } from '../../src/transfer/settlement/output'
 
 export function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -6,7 +6,7 @@ export function deferred<T = void>() {
   return { promise, resolve }
 }
 
-export function manualSettlementDeadline(): V2OutputSettlementDeadline & { expire(): void } {
+export function manualSettlementDeadline(): OutputSettlementDeadline & { expire(): void } {
   let expiration: (() => void) | undefined
   return {
     schedule: (_milliseconds, expire) => {

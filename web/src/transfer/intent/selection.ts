@@ -4,9 +4,9 @@ import {
 } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
-  V2CanonicalSelectionRule,
-  V2FrozenSelectionPolicy,
-} from '../../catalog/v2-selection'
+  CanonicalSelectionRule,
+  FrozenSelectionPolicy,
+} from '../../catalog/selection'
 import {
   ARTIFACT_SPEC_DOMAIN,
   RESULT_ROOT_LAYOUT_DOMAIN,
@@ -53,7 +53,7 @@ import {
 } from './model'
 
 export function selectionRulesSpecFromPolicy(
-  policy: V2FrozenSelectionPolicy,
+  policy: FrozenSelectionPolicy,
 ): NodeIDSelectionRules {
   return snapshotSelectionRules({
     mode: 'node-id',
@@ -62,7 +62,7 @@ export function selectionRulesSpecFromPolicy(
   }) as NodeIDSelectionRules
 }
 
-function selectionRuleFromPolicy(rule: V2CanonicalSelectionRule): NodeSelectionRule {
+function selectionRuleFromPolicy(rule: CanonicalSelectionRule): NodeSelectionRule {
   return {
     kind: rule.kind,
     id: encodeBase64Url(rule.id),

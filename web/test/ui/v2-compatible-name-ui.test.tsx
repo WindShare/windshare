@@ -9,14 +9,14 @@ import type {
 } from '../../src/transfer/lifecycle/name-repair'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { ArtifactSpec } from '../../src/transfer/intent'
-import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
-import type { V2ReceiverController } from '../../src/ui/v2-controller'
-import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
-import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { ReceiverApp } from '../../src/ui/ReceiverApp'
+import type { ReceiverController } from '../../src/ui/controller'
+import { presentReceiveLifecycle } from '../../src/ui/lifecycle-presentation'
+import { EMPTY_PREVIEW, EMPTY_PROGRESS, type ReceiverSnapshot } from '../../src/ui/model'
 import {
-  EMPTY_V2_OUTPUT_PRESENTATION,
-  type V2OutputPresentationSnapshot,
-} from '../../src/ui/v2-output'
+  EMPTY_OUTPUT_PRESENTATION,
+  type OutputPresentationSnapshot,
+} from '../../src/ui/output'
 
 const TREE = {
   kind: 'directory-tree',
@@ -30,21 +30,21 @@ describe('compatible-name receiver UI', () => {
     const lifecyclePresentation = presentReceiveLifecycle({
       state: lifecycle,
       artifact: TREE,
-      plan: Object.freeze({ kind: 'direct-tree' }) as NonNullable<V2OutputPresentationSnapshot['plan']>,
+      plan: Object.freeze({ kind: 'direct-tree' }) as NonNullable<OutputPresentationSnapshot['plan']>,
       repairSummary,
     })
     const output = Object.freeze({
-      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      ...EMPTY_OUTPUT_PRESENTATION,
       resolvedArtifact: TREE,
       plan: Object.freeze({
         kind: 'direct-tree',
-      }) as V2OutputPresentationSnapshot['plan'],
+      }) as OutputPresentationSnapshot['plan'],
       lifecycle,
       repairSummary,
       lifecyclePresentation,
     })
     const html = renderToString(
-      <V2ReceiverApp controller={controller(snapshot({
+      <ReceiverApp controller={controller(snapshot({
         output,
         retained: {
           kind: 'ready', error: null, pending: null,
@@ -72,7 +72,7 @@ describe('compatible-name receiver UI', () => {
   it('reconstructs the routine restoration action from a retained terminal summary', () => {
     const lifecycle = receiveLifecycle('published')
     const repairSummary = summary('completed', false)
-    const retained: V2ReceiverSnapshot['retained'] = Object.freeze({
+    const retained: ReceiverSnapshot['retained'] = Object.freeze({
       kind: 'ready',
       error: null,
       pending: null,
@@ -99,7 +99,7 @@ describe('compatible-name receiver UI', () => {
   it('requires retained local catch-up without exposing restoration as a runnable command', () => {
     const lifecycle = receiveLifecycle('receiving')
     const repairSummary = summary('active', true)
-    const retained: V2ReceiverSnapshot['retained'] = Object.freeze({
+    const retained: ReceiverSnapshot['retained'] = Object.freeze({
       kind: 'ready',
       error: null,
       pending: null,
@@ -126,8 +126,8 @@ describe('compatible-name receiver UI', () => {
 })
 
 function snapshot(
-  patch: Partial<V2ReceiverSnapshot>,
-): V2ReceiverSnapshot {
+  patch: Partial<ReceiverSnapshot>,
+): ReceiverSnapshot {
   return Object.freeze({
     ...experienceSnapshot(),
     pathActivity: { lanes: [] },
@@ -143,9 +143,9 @@ function snapshot(
     selectedVisibleFiles: 0,
     selectedVisibleBytes: 0n,
     directoryRetryable: false,
-    progress: EMPTY_V2_PROGRESS,
-    preview: EMPTY_V2_PREVIEW,
-    output: EMPTY_V2_OUTPUT_PRESENTATION,
+    progress: EMPTY_PROGRESS,
+    preview: EMPTY_PREVIEW,
+    output: EMPTY_OUTPUT_PRESENTATION,
     retained: Object.freeze({
       kind: 'ready',
       operations: Object.freeze([]),
@@ -156,13 +156,13 @@ function snapshot(
   })
 }
 
-function controller(value: V2ReceiverSnapshot): V2ReceiverController {
+function controller(value: ReceiverSnapshot): ReceiverController {
   return {
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => value),
     retainedActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),
     activeLifecycleActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),
-  } as unknown as V2ReceiverController
+  } as unknown as ReceiverController
 }
 
 function receiveLifecycle(

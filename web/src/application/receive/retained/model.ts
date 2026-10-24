@@ -1,18 +1,18 @@
 import type {
   CompatibleNameRepairSummary,
 } from '../../../transfer/lifecycle/name-repair'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../contracts'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../contracts'
 
 export type RetainedReceiveOperationSnapshot = Readonly<
-  V2RetainedReceiveOperation & { readonly repairSummary?: CompatibleNameRepairSummary }
+  RetainedReceiveOperation & { readonly repairSummary?: CompatibleNameRepairSummary }
 >
 
-export interface V2PendingRetainedReceiveActionSnapshot {
+export interface PendingRetainedReceiveActionSnapshot {
   readonly operationId: string
-  readonly action: V2RetainedReceiveAction
+  readonly action: RetainedReceiveAction
 }
 
-export type V2RetainedReceiveInventorySnapshot =
+export type RetainedReceiveInventorySnapshot =
   | Readonly<{
       kind: 'loading'
       operations: readonly RetainedReceiveOperationSnapshot[]
@@ -23,7 +23,7 @@ export type V2RetainedReceiveInventorySnapshot =
       kind: 'ready'
       operations: readonly RetainedReceiveOperationSnapshot[]
       error: null
-      pending: V2PendingRetainedReceiveActionSnapshot | null
+      pending: PendingRetainedReceiveActionSnapshot | null
     }>
   | Readonly<{
       kind: 'failed'
@@ -32,7 +32,7 @@ export type V2RetainedReceiveInventorySnapshot =
       pending: null
     }>
 
-export const EMPTY_V2_RETAINED_INVENTORY: V2RetainedReceiveInventorySnapshot = Object.freeze({
+export const EMPTY_RETAINED_INVENTORY: RetainedReceiveInventorySnapshot = Object.freeze({
   kind: 'loading',
   operations: Object.freeze([]),
   error: null,

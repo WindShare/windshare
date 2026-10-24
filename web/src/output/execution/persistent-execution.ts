@@ -50,7 +50,7 @@ import {
   type OutputSessionIdentity,
   type WorkspaceExecution,
 } from '../../transfer/output/session'
-import { V2OutputPausedError } from '../../transfer/job/contract'
+import { OutputPausedError } from '../../transfer/job/contract'
 import {
   createDirectTreeCoordinateContract,
   type DirectTreeCoordinateContract,
@@ -58,7 +58,7 @@ import {
 } from '../../transfer/job/coordinate/direct-tree'
 import {
   snapshotExactSingleFileEvidence,
-} from '../../transfer/settlement/v2-plan-authority'
+} from '../../transfer/settlement/plan-authority'
 import {
   compareMaterializedEntries,
   persistentWorkspaceInterruption,
@@ -368,7 +368,7 @@ class PersistentMaterializationOutput implements OutputSession {
               .catch((cause: unknown) => {
                 // Directory writes need the same output-wide state-I/O boundary as file writes;
                 // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
-                throw new V2OutputPausedError('Persistent directory materialization failed', { cause })
+                throw new OutputPausedError('Persistent directory materialization failed', { cause })
               })
             durableDirectory = materialized
           },

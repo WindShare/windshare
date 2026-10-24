@@ -2,26 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import {
   catalogPageMetadataCharge,
-  MemoryV2CatalogPageStore,
-  V2_DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
-  type V2CommittedDirectory,
-} from '../../src/catalog/v2-page-store'
+  MemoryCatalogPageStore,
+  DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
+  type CommittedDirectory,
+} from '../../src/catalog/page-store'
 import {
-  type V2CatalogEntry,
-  type V2CatalogPage,
-  type V2DirectoryFailure,
-  V2_CATALOG_DIRECTORY_ENTRIES,
-  V2_CATALOG_PAGE_ENTRIES,
-  V2_CATALOG_PAGE_OBJECT_BYTES,
-} from '../../src/catalog/v2-records'
+  type CatalogEntry,
+  type CatalogPage,
+  type DirectoryFailure,
+  CATALOG_DIRECTORY_ENTRIES,
+  CATALOG_PAGE_ENTRIES,
+  CATALOG_PAGE_OBJECT_BYTES,
+} from '../../src/catalog/records'
 
-function entry(id: number, name: string): V2CatalogEntry {
+function entry(id: number, name: string): CatalogEntry {
   const identity = new Uint8Array(16)
   identity[0] = id
   return { kind: 'file', id: identity, idText: `node-${id}`, name, expectedSize: 1n }
 }
 
-function page(index: number, directory: string, entries: readonly V2CatalogEntry[]): V2CatalogPage {
+function page(index: number, directory: string, entries: readonly CatalogEntry[]): CatalogPage {
   const directoryId = new Uint8Array(16)
   directoryId[0] = directory.charCodeAt(0)
   const generation = new Uint8Array(16)
@@ -44,7 +44,7 @@ function page(index: number, directory: string, entries: readonly V2CatalogEntry
 
 describe('v2 catalog page store', () => {
   it('binds browser-profile budgets to the frozen cross-runtime limits', () => {
-    expect(V2_DEFAULT_CATALOG_CACHE_BUDGET_LIMITS).toEqual({
+    expect(DEFAULT_CATALOG_CACHE_BUDGET_LIMITS).toEqual({
       entriesPerShare: 4_194_304,
       entriesPerProfile: 16_777_216,
       metadataBytesPerShare: 2_147_483_648,
@@ -53,15 +53,15 @@ describe('v2 catalog page store', () => {
     expect(catalogPageMetadataCharge(page(0, 'root', [entry(1, 'first')]))).toBe(20_992)
     const maximumPageCharge = catalogPageMetadataCharge({
       ...page(0, 'root', Array.from(
-        { length: V2_CATALOG_PAGE_ENTRIES },
+        { length: CATALOG_PAGE_ENTRIES },
         () => entry(1, 'maximum'),
       )),
-      senderObjectBytes: V2_CATALOG_PAGE_OBJECT_BYTES,
+      senderObjectBytes: CATALOG_PAGE_OBJECT_BYTES,
     })
     expect(maximumPageCharge).toBe(393_216)
     expect(
-      maximumPageCharge * Math.ceil(V2_CATALOG_DIRECTORY_ENTRIES / V2_CATALOG_PAGE_ENTRIES),
-    ).toBeLessThanOrEqual(V2_DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.metadataBytesPerShare)
+      maximumPageCharge * Math.ceil(CATALOG_DIRECTORY_ENTRIES / CATALOG_PAGE_ENTRIES),
+    ).toBeLessThanOrEqual(DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.metadataBytesPerShare)
     expect(() => catalogPageMetadataCharge({
       ...page(0, 'root', []),
       senderObjectBytes: 0,
@@ -69,57 +69,57 @@ describe('v2 catalog page store', () => {
   })
 
   it('rejects full Unicode case-fold collisions across page boundaries', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     await store.begin('root')
     await store.stage(page(0, 'root', [entry(1, 'STRASSE')]))
 
     await expect(store.stage(page(1, 'root', [entry(2, 'Straße')])))
       .rejects.toMatchObject({
-        name: 'V2CatalogPageStoreError',
+        name: 'CatalogPageStoreError',
         kind: 'authenticated-ownership',
       })
   })
 
   it('scopes portable names to their owning directory', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     await store.stage(page(0, 'first', [entry(1, 'Straße')]))
     await expect(store.stage(page(0, 'second', [entry(2, 'STRASSE')])))
       .resolves.toBeUndefined()
   })
 
   it('answers portable-name membership only from the exact committed generation', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     const staged = page(0, 'root', [entry(1, 'Straße')])
     const committed = committedDirectory(staged)
     await store.begin('root')
     await store.stage(staged)
 
     await expect(store.hasCommittedName(committed, 'Straße')).rejects.toMatchObject({
-      name: 'V2CatalogPageStoreError',
+      name: 'CatalogPageStoreError',
       kind: 'local-storage',
     })
     await store.commit(committed)
     await expect(store.hasCommittedName(committed, 'STRASSE')).resolves.toBe(true)
     await expect(store.hasCommittedName(committed, 'missing')).resolves.toBe(false)
 
-    const staleGeneration: V2CommittedDirectory = {
+    const staleGeneration: CommittedDirectory = {
       ...committed,
       // The readable projection is deliberately unchanged: raw authenticated identity must win.
       generation: Uint8Array.from({ length: 16 }, (_, index) => index === 0 ? 2 : 0),
     }
     await expect(store.hasCommittedName(staleGeneration, 'Straße')).rejects.toMatchObject({
-      name: 'V2CatalogPageStoreError',
+      name: 'CatalogPageStoreError',
       kind: 'local-storage',
     })
     await store.begin('root')
     await expect(store.hasCommittedName(committed, 'Straße')).rejects.toMatchObject({
-      name: 'V2CatalogPageStoreError',
+      name: 'CatalogPageStoreError',
       kind: 'local-storage',
     })
   })
 
   it('atomically replaces staged ownership with persistent failure authority', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     await store.stage(page(0, 'root', [entry(1, 'first')]))
     await store.storeFailure({
       failure: directoryFailure('root', true),
@@ -147,7 +147,7 @@ describe('v2 catalog page store', () => {
   })
 
   it('keeps delimiter-bearing directory and generation scopes structurally distinct', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     const first = { ...page(0, 'a\0b', [entry(1, 'first')]), generationText: 'c' }
     const second = { ...page(0, 'a', [entry(2, 'second')]), generationText: 'b\0c' }
     await store.stage(first)
@@ -167,18 +167,18 @@ describe('v2 catalog page store', () => {
   })
 
   it('classifies invalid local cached state separately from authenticated ownership', async () => {
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     await expect(store.storeFailure({
       failure: directoryFailure('root', true),
       retryAtMilliseconds: null,
     })).rejects.toMatchObject({
-      name: 'V2CatalogPageStoreError',
+      name: 'CatalogPageStoreError',
       kind: 'local-storage',
     })
   })
 })
 
-function committedDirectory(staged: V2CatalogPage): V2CommittedDirectory {
+function committedDirectory(staged: CatalogPage): CommittedDirectory {
   return Object.freeze({
     directoryIdText: staged.directoryIdText,
     generationText: staged.generationText,
@@ -191,7 +191,7 @@ function committedDirectory(staged: V2CatalogPage): V2CommittedDirectory {
   })
 }
 
-function directoryFailure(directoryIdText: string, retryable: boolean): V2DirectoryFailure {
+function directoryFailure(directoryIdText: string, retryable: boolean): DirectoryFailure {
   return Object.freeze({
     shareInstance: new Uint8Array(16).fill(1),
     directoryId: new Uint8Array(16).fill(2),

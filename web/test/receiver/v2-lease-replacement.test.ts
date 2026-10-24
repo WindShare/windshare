@@ -1,35 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
-import type { V2BlockSlice, V2LaneSet } from '../../src/content/v2-broker'
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
-import type { V2FileRevisionDescriptor } from '../../src/content/v2-records'
+import type { BlockSlice, LaneSet } from '../../src/content/broker'
+import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
+import type { FileRevisionDescriptor } from '../../src/content/records'
 import {
-  V2RemoteOperationError,
-  V2RevisionChangedDuringRecoveryError,
-  V2RevisionLeaseExpiredError,
-  type V2RevisionService,
-} from '../../src/content/v2-session-services'
+  RemoteOperationError,
+  RevisionChangedDuringRecoveryError,
+  RevisionLeaseExpiredError,
+  type RevisionService,
+} from '../../src/content/session-services'
 import {
-  V2SupervisedContent,
-  type V2ContentGeneration,
-  type V2ContentGenerationProvider,
-} from '../../src/receiver/v2-supervised-content'
+  SupervisedContent,
+  type ContentGeneration,
+  type ContentGenerationProvider,
+} from '../../src/receiver/supervised-content'
 import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
-import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import { V2_REVISION_CODE_LEASE_EXPIRED } from '../../src/content/v2-flow'
+import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../src/session/identities'
+import { REVISION_CODE_LEASE_EXPIRED } from '../../src/content/flow'
 
 function id(n: number): Uint8Array<ArrayBuffer> { return new Uint8Array(16).fill(n) }
-function descriptor(): V2FileRevisionDescriptor {
+function descriptor(): FileRevisionDescriptor {
   return {
     shareInstance: id(1), shareInstanceId: 'share', fileId: id(2), fileIdText: 'file',
     fileRevision: id(3), fileRevisionText: 'revision', exactSize: 4n, geometry: new FileGeometry(4n, 4n),
   }
 }
-function remoteFailure(code = V2_REVISION_CODE_LEASE_EXPIRED): V2RemoteOperationError {
-  return new V2RemoteOperationError(createReceivedProtocolError({
+function remoteFailure(code = REVISION_CODE_LEASE_EXPIRED): RemoteOperationError {
+  return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'renew_lease', correlation: {
-      protocolSessionId: createV2ProtocolSessionIdentity(id(10)),
-      protocolOperationId: createV2ProtocolOperationIdentity(id(11))
+      protocolSessionId: createProtocolSessionIdentity(id(10)),
+      protocolOperationId: createProtocolOperationIdentity(id(11))
     }, content: {
       scope: 'revision', code: code, retryable: false
     }
@@ -41,15 +41,15 @@ function deferred() {
   return { promise, resolve }
 }
 function fixture(options: {
-  serve: (lease: number, range: ByteRange) => AsyncGenerator<V2BlockSlice>
-  open?: (count: number, signal?: AbortSignal) => Promise<V2FileRevisionDescriptor>
+  serve: (lease: number, range: ByteRange) => AsyncGenerator<BlockSlice>
+  open?: (count: number, signal?: AbortSignal) => Promise<FileRevisionDescriptor>
   release?: (lease: number) => Promise<void>
 }) {
   const stable = descriptor()
   let opens = 0
   let recoveries = 0
   const events: string[] = []
-  const generation: V2ContentGeneration = {
+  const generation: ContentGeneration = {
     id: 1,
     revisions: {
       open: async (_file: Uint8Array, _routes: unknown, signal?: AbortSignal) => {
@@ -61,13 +61,13 @@ function fixture(options: {
           release: async () => { events.push('release:' + lease); await options.release?.(lease) },
         }
       },
-    } as unknown as V2RevisionService,
+    } as unknown as RevisionService,
     broker: {
       readRouteAuthorizedRange: (_descriptor, lease, range) => options.serve(lease[0]!, range),
     },
-    lanes: { size: 1 } as V2LaneSet,
+    lanes: { size: 1 } as LaneSet,
   }
-  const provider: V2ContentGenerationProvider = {
+  const provider: ContentGenerationProvider = {
     execute: async (signal, operation) => {
       signal?.throwIfAborted()
       return { generation, value: await operation(generation) }
@@ -76,18 +76,18 @@ function fixture(options: {
     isCurrent: value => value === generation,
     contentLaneCount: () => 1,
   }
-  const content = new V2SupervisedContent(provider, () => id(99))
-  const scoped = content.forRoutes(new V2ConnectivityRouteAuthority())
+  const content = new SupervisedContent(provider, () => id(99))
+  const scoped = content.forRoutes(new ConnectivityRouteAuthority())
   return { stable, content, scoped, events, opens: () => opens, recoveries: () => recoveries }
 }
-async function collect(source: AsyncGenerator<V2BlockSlice>) {
-  const result: V2BlockSlice[] = []
+async function collect(source: AsyncGenerator<BlockSlice>) {
+  const result: BlockSlice[] = []
   for await (const value of source) result.push(value)
   return result
 }
 
 describe('lease replacement within a healthy protocol generation', () => {
-  it.each([new V2RevisionLeaseExpiredError(), remoteFailure(), remoteFailure(0x3008)])('continues after %s without repeating delivered bytes', async expiry => {
+  it.each([new RevisionLeaseExpiredError(), remoteFailure(), remoteFailure(0x3008)])('continues after %s without repeating delivered bytes', async expiry => {
     const ranges: ByteRange[] = []
     const f = fixture({ serve: async function* (lease, range) {
       ranges.push(range)
@@ -141,7 +141,7 @@ describe('lease replacement within a healthy protocol generation', () => {
     })
     const opened = await f.scoped.revisions.open(f.stable.fileId)
     await expect(collect(f.scoped.broker.readRange(opened.descriptor, opened.leaseId, byteRange(0n, 4n))))
-      .rejects.toBeInstanceOf(V2RevisionChangedDuringRecoveryError)
+      .rejects.toBeInstanceOf(RevisionChangedDuringRecoveryError)
     await opened.release()
     expect(f.events).toContain('release:2')
     expect(f.events).toContain('release:1')

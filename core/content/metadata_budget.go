@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/windshare/windshare/core/capacityledger"
 )
 
 const DefaultRevisionInvalidationEntries = 4_096
@@ -17,16 +19,15 @@ type RevisionMetadataSnapshot struct {
 // positively invalidated (FileID, FileRevision) tuples. Reservations are never
 // evicted because forgetting one would restore authority to known-stale data.
 type RevisionMetadataBudget struct {
-	mu       sync.Mutex
-	capacity uint64
-	used     uint64
+	mu     sync.Mutex
+	ledger *capacityledger.Ledger
 }
 
 func NewRevisionMetadataBudget(capacity uint64) (*RevisionMetadataBudget, error) {
 	if capacity == 0 {
 		return nil, errors.New("revision metadata budget requires positive capacity")
 	}
-	return &RevisionMetadataBudget{capacity: capacity}, nil
+	return &RevisionMetadataBudget{ledger: capacityledger.New(capacity)}, nil
 }
 
 func (b *RevisionMetadataBudget) Snapshot() RevisionMetadataSnapshot {
@@ -35,7 +36,8 @@ func (b *RevisionMetadataBudget) Snapshot() RevisionMetadataSnapshot {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return RevisionMetadataSnapshot{Capacity: b.capacity, Used: b.used}
+	snapshot := b.ledger.Snapshot()
+	return RevisionMetadataSnapshot{Capacity: snapshot.Limit, Used: snapshot.Used}
 }
 
 func (b *RevisionMetadataBudget) reserveInvalidation() (*revisionMetadataReservation, error) {
@@ -44,25 +46,23 @@ func (b *RevisionMetadataBudget) reserveInvalidation() (*revisionMetadataReserva
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.used == b.capacity {
+	hold, ok := b.ledger.Reserve(1)
+	if !ok {
 		return nil, fmt.Errorf("%w: revision invalidation metadata", ErrQuotaExceeded)
 	}
-	b.used++
-	return &revisionMetadataReservation{budget: b}, nil
+	return &revisionMetadataReservation{budget: b, hold: hold}, nil
 }
 
 type revisionMetadataReservation struct {
-	once   sync.Once
 	budget *RevisionMetadataBudget
+	hold   capacityledger.Hold
 }
 
 func (r *revisionMetadataReservation) release() {
 	if r == nil {
 		return
 	}
-	r.once.Do(func() {
-		r.budget.mu.Lock()
-		r.budget.used--
-		r.budget.mu.Unlock()
-	})
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	r.hold.Release()
 }

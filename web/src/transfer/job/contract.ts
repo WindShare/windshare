@@ -4,15 +4,15 @@ export type FileTransferSettlement =
   | Readonly<{ kind: 'paused'; retainedBytes: bigint }>
   | Readonly<{ kind: 'unconfirmed' }>
 
-import type { V2CatalogClient } from '../../catalog/v2-client'
+import type { CatalogClient } from '../../catalog/client'
 import type {
-  V2CatalogEntry,
-  V2CatalogModifiedTime,
-  V2ShareDescriptor,
-} from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy, V2SelectionPolicy } from '../../catalog/v2-selection'
-import type { V2BlockRangeReader, V2ContentLaneStatus } from '../../content/v2-broker'
-import type { V2RevisionReader } from '../../content/v2-session-services'
+  CatalogEntry,
+  CatalogModifiedTime,
+  ShareDescriptor,
+} from '../../catalog/records'
+import type { FrozenSelectionPolicy, SelectionPolicy } from '../../catalog/selection'
+import type { BlockRangeReader, ContentLaneStatus } from '../../content/broker'
+import type { RevisionReader } from '../../content/session-services'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type {
@@ -41,50 +41,50 @@ import type {
 import type {
   DurabilityLevel,
   ExactPreparationEvidence,
-  V2PlanExecutionAuthority,
+  PlanExecutionAuthority,
 } from '../output/session'
 import { MAXIMUM_OPEN_OUTPUT_FILES } from '../output/file'
 import { MAX_DIRECTORY_ADMISSIONS } from '../directory-admission-ledger'
-import type { V2OutputSettlementDeadline } from '../settlement/v2-output'
+import type { OutputSettlementDeadline } from '../settlement/output'
 import type { WorkerFamilyFailureSource } from '../worker-family/supervisor'
 import type {
-  V2RevisionCapacityPolicyOptions,
-  V2RevisionCapacitySurface,
+  RevisionCapacityPolicyOptions,
+  RevisionCapacitySurface,
 } from '../revision-capacity/public'
 
 /** Absolute process-safety ceiling; concrete output policy is bound after execution admission. */
-export const V2_MAXIMUM_CONCURRENT_FILES = MAXIMUM_OPEN_OUTPUT_FILES
-export const V2_MAXIMUM_CONCURRENT_DIRECTORIES = 4
-export const V2_MAXIMUM_PENDING_DIRECTORIES = 64
-export const V2_MAXIMUM_PENDING_FILES = 64
-export const V2_MAXIMUM_PENDING_FILE_METADATA_BYTES = 64n * 1024n * 1024n
-export const V2_MAXIMUM_CATALOG_NODE_CLAIMS = 1_000_000
-export const V2_MAXIMUM_DIRECTORY_ADMISSIONS = MAX_DIRECTORY_ADMISSIONS
+export const MAXIMUM_CONCURRENT_FILES = MAXIMUM_OPEN_OUTPUT_FILES
+export const MAXIMUM_CONCURRENT_DIRECTORIES = 4
+export const MAXIMUM_PENDING_DIRECTORIES = 64
+export const MAXIMUM_PENDING_FILES = 64
+export const MAXIMUM_PENDING_FILE_METADATA_BYTES = 64n * 1024n * 1024n
+export const MAXIMUM_CATALOG_NODE_CLAIMS = 1_000_000
+export const MAXIMUM_DIRECTORY_ADMISSIONS = MAX_DIRECTORY_ADMISSIONS
 
-export class V2CatalogTraversalError extends Error {
+export class CatalogTraversalError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
-    this.name = 'V2CatalogTraversalError'
+    this.name = 'CatalogTraversalError'
   }
 }
 
 /** A failure confined to one catalog subtree; global authority faults use the base type. */
-export class V2DirectoryTraversalError extends V2CatalogTraversalError {
+export class DirectoryTraversalError extends CatalogTraversalError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
-    this.name = 'V2DirectoryTraversalError'
+    this.name = 'DirectoryTraversalError'
   }
 }
 
-export class V2OutputPausedError extends Error {
+export class OutputPausedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
-    this.name = 'V2OutputPausedError'
+    this.name = 'OutputPausedError'
   }
 }
 
 /** Releases authenticated directory identities as soon as their discovery closes. */
-export class V2DirectoryAncestry {
+export class DirectoryAncestry {
   readonly #active = new Set<string>()
   #maximumDepth = 0
 
@@ -93,7 +93,7 @@ export class V2DirectoryAncestry {
 
   enter(directoryIdText: string): () => void {
     if (this.#active.has(directoryIdText)) {
-      throw new V2CatalogTraversalError('Catalog traversal revisited an ancestor identity')
+      throw new CatalogTraversalError('Catalog traversal revisited an ancestor identity')
     }
     this.#active.add(directoryIdText)
     this.#maximumDepth = Math.max(this.#maximumDepth, this.#active.size)
@@ -209,7 +209,7 @@ export type TransferTraceEvent =
         | 'capacity_wait_cancelled'
         | 'capacity_generation_replaced'
       capacityWaitId: string
-      capacitySurface: V2RevisionCapacitySurface
+      capacitySurface: RevisionCapacitySurface
       receiveOperationId: string
       transferJobId: string
       protocolSessionId: string
@@ -247,14 +247,14 @@ export interface TransferJobOptions {
   readonly checkpointClock?: import('../checkpoint/controller').CheckpointClock
   readonly onCheckpointObservation?: (event: import('../checkpoint/controller').CheckpointObservation &
     Readonly<{ operationId: string; transferJobId: string; fileId: string }>) => void
-  readonly descriptor: V2ShareDescriptor
-  readonly catalog: V2CatalogClient
-  readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
-  readonly revisionCapacity: V2RevisionCapacityPolicyOptions
-  readonly lanes: V2ContentLaneStatus
-  readonly plans: V2PlanExecutionAuthority
+  readonly descriptor: ShareDescriptor
+  readonly catalog: CatalogClient
+  readonly selection: FrozenSelectionPolicy | SelectionPolicy
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
+  readonly revisionCapacity: RevisionCapacityPolicyOptions
+  readonly lanes: ContentLaneStatus
+  readonly plans: PlanExecutionAuthority
   readonly intent: ReceiveIntent
   readonly transferJobId?: string
   readonly protocol?: Readonly<{
@@ -276,7 +276,7 @@ export interface TransferJobOptions {
   /** One terminal collaborator may consume at most this bounded settlement interval. */
   readonly outputSettlementTimeoutMilliseconds?: number
   /** Injectable deadline ownership keeps terminal-cut concurrency tests independent of wall time. */
-  readonly outputSettlementDeadline?: V2OutputSettlementDeadline
+  readonly outputSettlementDeadline?: OutputSettlementDeadline
 }
 
 export interface DirectoryCursor {
@@ -285,7 +285,7 @@ export interface DirectoryCursor {
   readonly path: readonly string[]
   readonly ancestry: readonly string[]
   readonly selected: boolean
-  readonly modifiedTime?: V2CatalogModifiedTime
+  readonly modifiedTime?: CatalogModifiedTime
 }
 
 interface AuthenticatedDirectoryBase {
@@ -323,12 +323,12 @@ export interface DirectoryWork {
 }
 
 export interface PendingFile {
-  readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
+  readonly entry: Extract<CatalogEntry, { kind: 'file' }>
   readonly sourceAuthenticationPath: SourceAuthenticationPath
   readonly logicalArtifactPath: LogicalArtifactPath
   readonly materializationRelativePath: MaterializationRootRelativePath
   readonly parent: AuthenticatedDirectory
-  readonly modifiedTime?: V2CatalogModifiedTime
+  readonly modifiedTime?: CatalogModifiedTime
   /** Producer trace publication must happen before a woken worker can start. */
   readonly ready: Promise<void>
 }

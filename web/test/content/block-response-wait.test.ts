@@ -38,7 +38,7 @@ describe('content lane response waits', () => {
     productive.progress()
     await vi.advanceTimersByTimeAsync(5_000)
     expect(waiting.signal.reason).toMatchObject({
-      name: 'V2BlockInactivityTimeoutError',
+      name: 'BlockInactivityTimeoutError',
       phase: scenario === 'active assembly' ? 'receiving_fragments' : 'awaiting_first_fragment',
       waitedMilliseconds: 15_000,
       queueProgress: 0,

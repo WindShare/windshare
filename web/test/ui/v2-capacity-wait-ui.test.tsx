@@ -2,13 +2,13 @@ import { experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
-import type { V2ReceiverController } from '../../src/ui/v2-controller'
-import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { ReceiverApp } from '../../src/ui/ReceiverApp'
+import type { ReceiverController } from '../../src/ui/controller'
+import { EMPTY_PREVIEW, EMPTY_PROGRESS, type ReceiverSnapshot } from '../../src/ui/model'
 import {
-  EMPTY_V2_OUTPUT_PRESENTATION,
-  type V2OutputPresentationSnapshot,
-} from '../../src/ui/v2-output'
+  EMPTY_OUTPUT_PRESENTATION,
+  type OutputPresentationSnapshot,
+} from '../../src/ui/output'
 
 describe('receiver capacity wait UI', () => {
   it('hides short waits and clears the notice after capacity becomes available', () => {
@@ -22,8 +22,8 @@ describe('receiver capacity wait UI', () => {
   })
 
   it('shows the same delayed notice beside Direct ZIP progress', () => {
-    const output: V2OutputPresentationSnapshot = Object.freeze({
-      ...EMPTY_V2_OUTPUT_PRESENTATION,
+    const output: OutputPresentationSnapshot = Object.freeze({
+      ...EMPTY_OUTPUT_PRESENTATION,
       directZipProgress: Object.freeze({
         kind: 'direct-zip',
         operationId: 'operation',
@@ -46,10 +46,10 @@ describe('receiver capacity wait UI', () => {
 })
 
 function render(
-  transferProgress: V2ReceiverSnapshot['progress'],
-  output: V2OutputPresentationSnapshot = EMPTY_V2_OUTPUT_PRESENTATION,
+  transferProgress: ReceiverSnapshot['progress'],
+  output: OutputPresentationSnapshot = EMPTY_OUTPUT_PRESENTATION,
 ): string {
-  const snapshot: V2ReceiverSnapshot = Object.freeze({
+  const snapshot: ReceiverSnapshot = Object.freeze({
     ...experienceSnapshot(),
     pathActivity: { lanes: [] },
     phase: 'browsing',
@@ -65,7 +65,7 @@ function render(
     selectedVisibleBytes: 0n,
     directoryRetryable: false,
     progress: transferProgress,
-    preview: EMPTY_V2_PREVIEW,
+    preview: EMPTY_PREVIEW,
     output: { ...output, lifecycle: { kind: 'receiving' as const, operationId: 'operation', receiveIntentDigest: 'intent', generation: 1n, activeLeaseId: 'lease' } },
     retained: Object.freeze({
       kind: 'ready',
@@ -77,15 +77,15 @@ function render(
   const controller = {
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => snapshot),
-  } as unknown as V2ReceiverController
-  return renderToString(<V2ReceiverApp controller={controller} />)
+  } as unknown as ReceiverController
+  return renderToString(<ReceiverApp controller={controller} />)
 }
 
 function progress(
-  patch: Partial<V2ReceiverSnapshot['progress']>,
-): V2ReceiverSnapshot['progress'] {
+  patch: Partial<ReceiverSnapshot['progress']>,
+): ReceiverSnapshot['progress'] {
   return Object.freeze({
-    ...EMPTY_V2_PROGRESS,
+    ...EMPTY_PROGRESS,
     transferJobId: 'job',
     ...patch,
   })

@@ -33,17 +33,17 @@ import {
 } from '../../src/transfer/intent'
 import { FSAReceiveOperation } from '../../src/application/browser-receive/fsa/operation'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type { ReceiverDiagnosticSnapshot } from '../../src/diagnostics/export/context'
 import type {
-  V2ReceiveCompositionPort,
-  V2RetainedReceiveInventory,
-  V2RetainedReceiveOperation,
+  ReceiveCompositionPort,
+  RetainedReceiveInventory,
+  RetainedReceiveOperation,
 } from '../../src/application/receive/contracts'
 import {
   createOutputTraceSource,
   createProtocolTraceSource,
-  createV2ReceiverTraceSource,
+  createReceiverTraceSource,
 } from '../../src/application/diagnostics/receive-trace'
 const EVIDENCE_CLOCK_MILLISECONDS = Date.parse('2026-08-19T09:00:00.000Z')
 const ACTION_TIMEOUT_MILLISECONDS = 5_000
@@ -173,12 +173,12 @@ export async function reconstructFSAContinuationFailure(
   const outputTrace = createOutputTraceSource(diagnostics.trace)
   const operation = retainedOperation(intent, stableLifecycle)
   let listCount = 0
-  const inventory: V2RetainedReceiveInventory = Object.freeze({
+  const inventory: RetainedReceiveInventory = Object.freeze({
     operations: Object.freeze([operation]),
     presentationFailures: Object.freeze([]),
     act: async (
-      _operation: V2RetainedReceiveOperation,
-      action: Parameters<V2RetainedReceiveInventory['act']>[1],
+      _operation: RetainedReceiveOperation,
+      action: Parameters<RetainedReceiveInventory['act']>[1],
       signal: AbortSignal,
       failures?: OutputFailureSinks,
     ) => {
@@ -229,7 +229,7 @@ export async function reconstructFSAContinuationFailure(
     },
     close: () => undefined,
   })
-  const emptyInventory: V2RetainedReceiveInventory = Object.freeze({
+  const emptyInventory: RetainedReceiveInventory = Object.freeze({
     operations: Object.freeze([]),
     presentationFailures: Object.freeze([]),
     act: () => Promise.reject(new TypeError('empty inventory has no actions')),
@@ -242,14 +242,14 @@ export async function reconstructFSAContinuationFailure(
         return listCount === 1 ? inventory : emptyInventory
       },
     }),
-  }) as unknown as V2ReceiveCompositionPort
+  }) as unknown as ReceiveCompositionPort
   const joined = Object.freeze({
     descriptor: Object.freeze({
       shareInstanceId: intent.selection.shareInstance,
       syntheticRootId: intent.selection.syntheticRoot,
     }),
     protocolSessionId: input.protocolSessionId,
-  }) as unknown as V2JoinedBrowserShare
+  }) as unknown as JoinedBrowserShare
   let actionError: unknown
   const coordinator = new RetainedInventoryCoordinator({
     receive,
@@ -259,7 +259,7 @@ export async function reconstructFSAContinuationFailure(
     adoptContinuation: () => Promise.reject(new Error('failed continuation cannot be adopted')),
     ownsRuntime: () => false,
     publish: () => undefined,
-    trace: createV2ReceiverTraceSource(diagnostics.trace),
+    trace: createReceiverTraceSource(diagnostics.trace),
     onActionError: error => { actionError = error },
     incidents: diagnostics.incidents,
   })
@@ -301,7 +301,7 @@ function protocolCorrelation(input: FSAReconstructionCorrelation) {
 function retainedOperation(
   intent: ReceiveIntent,
   lifecycle: ReturnType<typeof resumableReceive>,
-): V2RetainedReceiveOperation {
+): RetainedReceiveOperation {
   return Object.freeze({
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,

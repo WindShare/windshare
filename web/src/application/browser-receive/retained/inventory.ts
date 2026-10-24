@@ -36,11 +36,11 @@ import { recoverWorkspaceActivationCandidates } from '../../../output/workspace/
 import type { WorkspaceActivationJournalRepository } from '../../../output/workspace/repository'
 import { catchUpFileSystemAccessCompatibleNames } from '../../../output/file-system-access/settlement'
 import type {
-  V2BoundReceiveOperation,
-  V2RetainedReceiveAction,
-  V2RetainedReceiveActionResult,
-  V2RetainedReceiveInventory,
-  V2RetainedReceiveOperation,
+  BoundReceiveOperation,
+  RetainedReceiveAction,
+  RetainedReceiveActionResult,
+  RetainedReceiveInventory,
+  RetainedReceiveOperation,
 } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { FSAReceiveOperation } from '../fsa/operation'
@@ -83,7 +83,7 @@ const READ_ONLY_RESUME_MUTATIONS:
     )),
   })
 
-type RetainedContinuationAction = Extract<V2RetainedReceiveAction, 'save' | 'redownload'>
+type RetainedContinuationAction = Extract<RetainedReceiveAction, 'save' | 'redownload'>
 type DirectTreeCatchUpContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'direct-tree-catch-up' }
@@ -126,7 +126,7 @@ export interface BrowserRetainedContinuationExecutor {
     continuation: ReceiveContinuation,
     signal: AbortSignal,
     failures?: OutputFailureSinks,
-  ): Promise<V2BoundReceiveOperation>
+  ): Promise<BoundReceiveOperation>
   resumePackage(
     continuation: WorkspacePackageContinuation,
     signal: AbortSignal,
@@ -181,7 +181,7 @@ export async function listBrowserRetainedOperations(
   windowPort: BrowserReceiveWindow,
   options: BrowserRetainedCompositionOptions,
   signal: AbortSignal,
-): Promise<V2RetainedReceiveInventory> {
+): Promise<RetainedReceiveInventory> {
   signal.throwIfAborted()
   if (typeof windowPort.indexedDB?.open !== 'function') return emptyRetainedInventory()
 
@@ -232,7 +232,7 @@ export async function listBrowserRetainedOperations(
             reference.descriptor.operationId,
             locks,
           )))
-      const references = new WeakMap<V2RetainedReceiveOperation, ReceiveOperationResumeRef>()
+      const references = new WeakMap<RetainedReceiveOperation, ReceiveOperationResumeRef>()
       signal.throwIfAborted()
       const operations = Object.freeze(inventory.operations.filter((_, index) =>
         activities[index] === 'inactive').map((reference) => {
@@ -254,7 +254,7 @@ export async function listBrowserRetainedOperations(
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
           : presentation.unavailableReason
-        const operation: V2RetainedReceiveOperation = Object.freeze({
+        const operation: RetainedReceiveOperation = Object.freeze({
           operationId: descriptor.operationId,
           ...(descriptor.display === undefined ? {} : { display: descriptor.display }),
           ...(descriptor.shareInstance === undefined ? {} : { shareInstance: descriptor.shareInstance }),
@@ -284,8 +284,8 @@ export async function listBrowserRetainedOperations(
         operations,
         presentationFailures,
         act: async (
-          operation: V2RetainedReceiveOperation,
-          action: V2RetainedReceiveAction,
+          operation: RetainedReceiveOperation,
+          action: RetainedReceiveAction,
           actionSignal: AbortSignal,
           failures?: OutputFailureSinks,
         ) => {
@@ -327,7 +327,7 @@ export async function listBrowserRetainedOperations(
   }
 }
 
-function emptyRetainedInventory(): V2RetainedReceiveInventory {
+function emptyRetainedInventory(): RetainedReceiveInventory {
   return Object.freeze({
     operations: Object.freeze([]),
     presentationFailures: Object.freeze([]),
@@ -340,7 +340,7 @@ function emptyRetainedInventory(): V2RetainedReceiveInventory {
 }
 
 function retainedInventoryPresentationFailures(
-  operations: readonly V2RetainedReceiveOperation[],
+  operations: readonly RetainedReceiveOperation[],
 ): readonly FailureFact[] {
   return Object.freeze(operations.flatMap((operation) =>
     operation.lifecycle.kind === 'needs-attention'
@@ -358,11 +358,11 @@ async function performRetainedAction(
   options: BrowserRetainedCompositionOptions,
   authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
   reference: ReceiveOperationResumeRef,
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
-): Promise<V2RetainedReceiveActionResult> {
+): Promise<RetainedReceiveActionResult> {
   if (isBrowserFolderStorageAction(operation, action)) {
     await (options.runBrowserFolderLocalAction ?? runRetainedBrowserFolderAction)(
       windowPort, operation, browserFolderStorageAction(action), signal,
@@ -378,11 +378,11 @@ async function performOrdinaryRetainedAction(
   options: BrowserRetainedCompositionOptions,
   authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
   reference: ReceiveOperationResumeRef,
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
-): Promise<V2RetainedReceiveActionResult> {
+): Promise<RetainedReceiveActionResult> {
   const partialDestination = action === 'save-partial'
     ? await pickPartialExport(windowPort)
     : undefined
@@ -470,13 +470,13 @@ async function performOrdinaryRetainedAction(
   }
 }
 
-function isBrowserFolderStorageAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): boolean {
+function isBrowserFolderStorageAction(operation: RetainedReceiveOperation, action: RetainedReceiveAction): boolean {
   if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return true
   return (action === 'discard' || action === 'delete') && operation.browserDelivery !== undefined &&
     hasBrowserDeliveryStaging(operation.browserDelivery)
 }
 
-function browserFolderStorageAction(action: V2RetainedReceiveAction) {
+function browserFolderStorageAction(action: RetainedReceiveAction) {
   if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return action
   return 'discard-staging' as const
 }
@@ -486,7 +486,7 @@ function deleteRetainedDirectZip(
   continuation: DirectZipReceiveContinuation | DirectZipRetainedCleanupContinuation,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
-): Promise<V2RetainedReceiveActionResult> {
+): Promise<RetainedReceiveActionResult> {
   return withRetainedOperationClose(continuation.operation, async () => {
     if (directZip === undefined) throw unavailableRoute()
     signal.throwIfAborted()
@@ -501,11 +501,11 @@ function deleteRetainedDirectZip(
 async function continueRetainedReceive(
   executor: BrowserRetainedContinuationExecutor,
   continuation: ReceiveContinuation,
-  sourceContinuation: V2RetainedReceiveOperation['continuation'],
-  action: V2RetainedReceiveAction,
+  sourceContinuation: RetainedReceiveOperation['continuation'],
+  action: RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
-): Promise<V2RetainedReceiveActionResult> {
+): Promise<RetainedReceiveActionResult> {
   const directTreeRecovery = continuation.kind === 'direct-tree-receive' &&
     (action === 'continue' || action === 'redownload')
   if (action !== 'continue' && !directTreeRecovery) {
@@ -515,7 +515,7 @@ async function continueRetainedReceive(
   }
   // The resumed runtime becomes the sole live owner. Its detach path closes the
   // output-owned operation after transfer and lifecycle controls are finished.
-  let runtime: V2BoundReceiveOperation
+  let runtime: BoundReceiveOperation
   try {
     runtime = await (failures === undefined
       ? executor.resumeReceive(continuation, signal)
@@ -566,7 +566,7 @@ function browserRetainedContinuationExecutor(
       continuation: ReceiveContinuation,
       signal: AbortSignal,
       failures?: OutputFailureSinks,
-    ): Promise<V2BoundReceiveOperation> => {
+    ): Promise<BoundReceiveOperation> => {
       signal.throwIfAborted()
       const binding = createOutputFailureBinding(failures)
       switch (continuation.kind) {

@@ -10,7 +10,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-func TestWindowsOutputV3ErrorMapsNativeFailureClasses(t *testing.T) {
+func TestWindowsOutputErrorMapsNativeFailureClasses(t *testing.T) {
 	base := errors.New("native failure")
 	for _, test := range []struct {
 		name string
@@ -18,15 +18,15 @@ func TestWindowsOutputV3ErrorMapsNativeFailureClasses(t *testing.T) {
 		want error
 	}{
 		{name: "nil", in: nil, want: nil},
-		{name: "unsupported", in: errors.Join(errWindowsV3OutputUnsupported, base), want: outputcap.ErrRecoverableOutputUnsupported},
-		{name: "unsafe", in: errors.Join(errWindowsV3OutputUnsafe, base), want: outputcap.ErrUnsafeNamespace},
-		{name: "collision", in: errors.Join(errWindowsV3OutputCollision, base), want: outputcap.ErrNamespaceCollision},
-		{name: "lock busy", in: errors.Join(errWindowsV3OutputLockBusy, base), want: outputcap.ErrNamespaceLockBusy},
+		{name: "unsupported", in: errors.Join(errWindowsOutputUnsupported, base), want: outputcap.ErrRecoverableOutputUnsupported},
+		{name: "unsafe", in: errors.Join(errWindowsOutputUnsafe, base), want: outputcap.ErrUnsafeNamespace},
+		{name: "collision", in: errors.Join(errWindowsOutputCollision, base), want: outputcap.ErrNamespaceCollision},
+		{name: "lock busy", in: errors.Join(errWindowsOutputLockBusy, base), want: outputcap.ErrNamespaceLockBusy},
 		{name: "exists", in: fs.ErrExist, want: outputcap.ErrNamespaceCollision},
 		{name: "ordinary", in: base, want: base},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := windowsOutputV3Error(test.in)
+			got := windowsOutputError(test.in)
 			if test.want == nil {
 				if got != nil {
 					t.Fatalf("mapped nil error = %v", got)
@@ -40,12 +40,12 @@ func TestWindowsOutputV3ErrorMapsNativeFailureClasses(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PersistentObjectIDStateCurrentHandlesNilZeroAndIdentity(t *testing.T) {
-	var nilState *windowsV3PersistentObjectIDState
+func TestWindowsPersistentObjectIDStateCurrentHandlesNilZeroAndIdentity(t *testing.T) {
+	var nilState *windowsPersistentObjectIDState
 	if identity, ok := nilState.current(); ok || identity.valid() {
 		t.Fatalf("nil state current = %v, %t", identity, ok)
 	}
-	state := newWindowsV3PersistentObjectIDState()
+	state := newWindowsPersistentObjectIDState()
 	if identity, ok := state.current(); ok || identity.valid() {
 		t.Fatalf("zero state current = %v, %t", identity, ok)
 	}

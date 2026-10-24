@@ -1,20 +1,20 @@
 import type {
-  V2CatalogEntry,
-  V2CatalogModifiedTime,
-  V2ShareDescriptor,
-} from '../../catalog/v2-records'
-import { V2_CATALOG_IDENTITY_BYTES } from '../../catalog/v2-records'
+  CatalogEntry,
+  CatalogModifiedTime,
+  ShareDescriptor,
+} from '../../catalog/records'
+import { CATALOG_IDENTITY_BYTES } from '../../catalog/records'
 import { FileGeometry } from '../../content/geometry'
-import type { V2OpenedRevision } from '../../content/v2-session-services'
+import type { OpenedRevision } from '../../content/session-services'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
-import { V2FileRevisionChangedError } from './failures'
+import { FileRevisionChangedError } from './failures'
 
 /** Validates the untrusted revision adapter result before output or content I/O. */
 export function validateOpenedFileRevision(
-  share: V2ShareDescriptor,
-  entry: Extract<V2CatalogEntry, { readonly kind: 'file' }>,
-  opened: V2OpenedRevision,
-): V2OpenedRevision {
+  share: ShareDescriptor,
+  entry: Extract<CatalogEntry, { readonly kind: 'file' }>,
+  opened: OpenedRevision,
+): OpenedRevision {
   const descriptor = opened.descriptor
   if (!Number.isSafeInteger(share.chunkSize) || share.chunkSize <= 0 ||
       !isNonzeroIdentity(opened.leaseId) ||
@@ -25,7 +25,7 @@ export function validateOpenedFileRevision(
       descriptor.geometry.exactSize !== descriptor.exactSize ||
       descriptor.geometry.blockSize !== BigInt(share.chunkSize) ||
       !catalogModifiedTimeMatches(entry.modifiedTime, descriptor.modifiedTime)) {
-    throw new V2FileRevisionChangedError(
+    throw new FileRevisionChangedError(
       'Opened revision identity does not match its authenticated catalog entry',
     )
   }
@@ -53,12 +53,12 @@ export function validateOpenedFileRevision(
 }
 
 function isNonzeroIdentity(value: Uint8Array): boolean {
-  return value.byteLength === V2_CATALOG_IDENTITY_BYTES && value.some((byte) => byte !== 0)
+  return value.byteLength === CATALOG_IDENTITY_BYTES && value.some((byte) => byte !== 0)
 }
 
 function catalogModifiedTimeMatches(
-  expected: V2CatalogModifiedTime | undefined,
-  actual: V2CatalogModifiedTime | undefined,
+  expected: CatalogModifiedTime | undefined,
+  actual: CatalogModifiedTime | undefined,
 ): boolean {
   if (expected === undefined) return true
   return actual !== undefined &&

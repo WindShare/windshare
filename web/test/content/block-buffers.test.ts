@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
 import { BlockBufferPool } from '../../src/content/scheduling/block-buffers'
-import type { V2BlockRecord } from '../../src/content/v2-records'
+import type { BlockRecord } from '../../src/content/records'
 
 const BLOCK_BYTES = 1024
-function record(bytes = BLOCK_BYTES): V2BlockRecord {
+function record(bytes = BLOCK_BYTES): BlockRecord {
   return {
     descriptor: {
       shareInstance: new Uint8Array(16), shareInstanceId: 'share',

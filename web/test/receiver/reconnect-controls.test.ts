@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GenerationRecoveryBudget } from '../../src/receiver/generation-recovery'
 import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
-import type { V2ProtocolGenerationCore } from '../../src/receiver/v2-session-factory'
-import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
-import { V2RelayReceiverError } from '../../src/transport/relay/v2-receiver'
-import { V2_RELAY_ERROR } from '../../src/transport/relay/v2-protocol'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
+import type { ProtocolGenerationCore } from '../../src/receiver/session-factory'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { core, deferred, descriptor, FakeSession, FakeSessionFactory, TrackedRelay } from './v2-supervisor-fixture'
 
 afterEach(() => vi.useRealTimers())
@@ -17,8 +17,8 @@ function fixture(budget = new GenerationRecoveryBudget()) {
   const session = new FakeSession([1])
   const factory = new FakeSessionFactory()
   const states: ReceiverConnectionSnapshot[] = []
-  const traces: V2ProtocolTraceEvent[] = []
-  const supervisor = new V2ReceiverReconnectSupervisor({
+  const traces: ProtocolTraceEvent[] = []
+  const supervisor = new ReceiverReconnectSupervisor({
     descriptor: descriptor(), initial: core(session, new TrackedRelay(1)), sessionFactory: factory,
     policy: 'relay-only', generationRecovery: budget, generationBackoffMilliseconds: () => 5_000,
     clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
@@ -36,7 +36,7 @@ describe('reconnect control admission', () => {
     vi.stubGlobal('addEventListener', online.addEventListener.bind(online))
     vi.stubGlobal('removeEventListener', online.removeEventListener.bind(online))
     const { session, factory, supervisor, states, traces } = fixture(budget)
-    const connected = deferred<V2ProtocolGenerationCore>()
+    const connected = deferred<ProtocolGenerationCore>()
     factory.connectFreshImpl = () => connected.promise
     try {
       session.detach(1)
@@ -69,11 +69,11 @@ describe('reconnect control admission', () => {
 
   it('enforces the service cooldown and then lets a manual retry skip the remaining backoff', async () => {
     const { session, factory, supervisor, states } = fixture()
-    const connected = deferred<V2ProtocolGenerationCore>()
+    const connected = deferred<ProtocolGenerationCore>()
     factory.connectFreshImpl = async () => {
       if (factory.connectFreshCalls > 1) return connected.promise
-      throw new V2RelayReceiverError('Please retry later', { relayError: {
-        code: V2_RELAY_ERROR.admission, retryAfterMilliseconds: 2_000,
+      throw new RelayReceiverError('Please retry later', { relayError: {
+        code: RELAY_ERROR.admission, retryAfterMilliseconds: 2_000,
       } })
     }
     try {
@@ -125,8 +125,8 @@ describe('reconnect control admission', () => {
   it('cancels a required wait without starting another handshake', async () => {
     const { session, factory, supervisor } = fixture()
     factory.connectFreshImpl = async () => {
-      throw new V2RelayReceiverError('Please retry later', { relayError: {
-        code: V2_RELAY_ERROR.admission, retryAfterMilliseconds: 30_000,
+      throw new RelayReceiverError('Please retry later', { relayError: {
+        code: RELAY_ERROR.admission, retryAfterMilliseconds: 30_000,
       } })
     }
     session.detach(1)

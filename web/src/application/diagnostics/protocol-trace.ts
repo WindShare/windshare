@@ -4,7 +4,7 @@ import { projectContentScheduling } from '../../diagnostics/trace/content-schedu
 import { projectProtocolErrorContentV2 } from '../../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../../diagnostics/trace/lane-payload'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
-import type { V2LeaseRetirementTraceEvent, V2ProtocolTraceEvent, V2SenderVerificationTraceEvent } from '../../session/v2-diagnostics'
+import type { LeaseRetirementTraceEvent, ProtocolTraceEvent, SenderVerificationTraceEvent } from '../../session/diagnostics'
 import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../../diagnostics/trace/model'
 import { correlatedObservation, decimal, durationMilliseconds, requiredCorrelation } from '../../diagnostics/export/trace-observation'
 
@@ -15,7 +15,7 @@ const FAILURE_DETAIL_FORMAT = Object.freeze({
 })
 
 export function projectProtocolTraceEvent(
-  event: V2ProtocolTraceEvent,
+  event: ProtocolTraceEvent,
 ): TraceEventObservationV2 {
   switch (event.eventName) {
     case 'connection_recovery':
@@ -111,7 +111,7 @@ export function projectProtocolTraceEvent(
 }
 
 function projectRetiredOperation(
-  event: Extract<V2ProtocolTraceEvent, { transition: 'cancelled' | 'late_response_discarded' }>,
+  event: Extract<ProtocolTraceEvent, { transition: 'cancelled' | 'late_response_discarded' }>,
 ): TraceEventPayloadByNameV2['protocol_operation'] {
   const request = event.request === undefined ? {} : { request: {
     lease_id: event.request.leaseId,
@@ -135,7 +135,7 @@ function projectRetiredOperation(
   }
 }
 
-function projectLeaseRetirement(event: V2LeaseRetirementTraceEvent): TraceEventObservationV2 {
+function projectLeaseRetirement(event: LeaseRetirementTraceEvent): TraceEventObservationV2 {
   const correlation = requiredCorrelation(event.correlation)
   const identity = { lease_id: event.leaseId, attempt: event.attempt }
   if (event.transition === 'retrying' || event.transition === 'abandoned') {
@@ -151,7 +151,7 @@ function projectLeaseRetirement(event: V2LeaseRetirementTraceEvent): TraceEventO
   return correlatedObservation(event.eventName, correlation, { ...identity, transition: event.transition })
 }
 
-function projectSenderVerification(event: V2SenderVerificationTraceEvent): TraceEventObservationV2 {
+function projectSenderVerification(event: SenderVerificationTraceEvent): TraceEventObservationV2 {
   const correlation = projectCorrelationV1(event.correlation)
   return {
     eventName: event.eventName,

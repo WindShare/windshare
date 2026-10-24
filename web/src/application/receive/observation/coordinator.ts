@@ -1,4 +1,4 @@
-import { V2RemoteOperationError } from '../../../content/v2-session-operations'
+import { RemoteOperationError } from '../../../content/session-operations'
 import {
   faultFailureFact,
   unclassifiedFailureFact,
@@ -15,10 +15,10 @@ import {
   outputFault,
   type Fault,
 } from '../../../transfer/failure/fault'
-import { V2ActivationStateContractError } from '../activation/model'
+import { ActivationStateContractError } from '../activation/model'
 import type { ReceiveObservationOptions } from '../observation/contracts'
-import type { V2ReceiverTraceEvent } from './contracts'
-import { V2PresentationAttempt } from './attempt'
+import type { ReceiverTraceEvent } from './contracts'
+import { PresentationAttempt } from './attempt'
 
 type ControllerBoundary = Extract<PresentationBoundary, 'join' | 'projection_authority'>
 type ControllerScopeKind = 'join' | 'projection' | 'authority_activation'
@@ -27,7 +27,7 @@ type ControllerFailureStage = Extract<
   'join' | 'projection' | 'authority_activation'
 >
 type ControllerTraceEvent = Extract<
-  V2ReceiverTraceEvent,
+  ReceiverTraceEvent,
   { readonly name: 'join_transition' | 'authority_transition' }
 >
 
@@ -41,7 +41,7 @@ const ACTIVATION_CONTRACT_FAULT: Fault = outputFault(
  * themselves. Keeping the port here makes reporter failure and lazy trace lookup
  * uniform across join, projection, and activation owners.
  */
-export class V2ControllerObservability {
+export class ControllerObservability {
   readonly #incidents: ReceiveObservationOptions['incidents']
   readonly #traceSource: ReceiveObservationOptions['trace']
 
@@ -50,12 +50,12 @@ export class V2ControllerObservability {
     this.#traceSource = options.trace
   }
 
-  open(kind: ControllerScopeKind): V2PresentationAttempt {
-    return new V2PresentationAttempt(this.#incidents, kind)
+  open(kind: ControllerScopeKind): PresentationAttempt {
+    return new PresentationAttempt(this.#incidents, kind)
   }
 
   fail(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     boundary: ControllerBoundary,
     error: unknown,
     stage: ControllerFailureStage,
@@ -65,7 +65,7 @@ export class V2ControllerObservability {
   }
 
   exclude(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     boundary: ControllerBoundary,
     reason: PresentationExclusionReason,
   ): void {
@@ -73,14 +73,14 @@ export class V2ControllerObservability {
   }
 
   recordConsequence(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     stage: Extract<FailureStage, 'projection' | 'settlement' | 'detach' | 'cleanup'>,
   ): FailureFactRef | undefined {
     return attempt.recordUnclassified(stage, 'consequence', 'none')
   }
 
   record(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     stage: Extract<FailureStage, 'join' | 'projection' | 'authority_activation'>,
     relation: FailureFactRelation,
   ): FailureFactRef | undefined {
@@ -99,11 +99,11 @@ export class V2ControllerObservability {
 }
 
 function recordFailureTrigger(
-  attempt: V2PresentationAttempt,
+  attempt: PresentationAttempt,
   error: unknown,
   stage: ControllerFailureStage,
 ): FailureFactRef | undefined {
-  if (error instanceof V2RemoteOperationError) {
+  if (error instanceof RemoteOperationError) {
     return attempt.record(error.failureFact, 'contributor')
   }
   if (stage === 'authority_activation' && isActivationContractError(error)) {
@@ -120,7 +120,7 @@ function recordFailureTrigger(
 
 function isActivationContractError(
   error: unknown,
-): error is ArtifactPlanningContractError | V2ActivationStateContractError {
+): error is ArtifactPlanningContractError | ActivationStateContractError {
   return error instanceof ArtifactPlanningContractError ||
-    error instanceof V2ActivationStateContractError
+    error instanceof ActivationStateContractError
 }

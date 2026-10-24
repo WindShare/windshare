@@ -1,24 +1,24 @@
 import type {
-  V2RetainedReceiveAction,
-  V2RetainedReceiveOperation,
+  RetainedReceiveAction,
+  RetainedReceiveOperation,
 } from '../../receive/contracts'
 
 const RESUME_AUTHORITY_UNAVAILABLE =
   'Saved actions are unavailable because this browser has no persisted-operation authority.'
 
 function retainedActions(
-  ...actions: V2RetainedReceiveAction[]
-): readonly V2RetainedReceiveAction[] {
+  ...actions: RetainedReceiveAction[]
+): readonly RetainedReceiveAction[] {
   return Object.freeze(actions)
 }
 
 export function retainedOperationAuthority(
-  continuation: V2RetainedReceiveOperation['continuation'],
+  continuation: RetainedReceiveOperation['continuation'],
   hasMutationAuthority: boolean,
   hasDirectZipAuthority: boolean,
   hasDirectTreeRecoverySummary: boolean,
 ): Readonly<{
-  actions: readonly V2RetainedReceiveAction[]
+  actions: readonly RetainedReceiveAction[]
   unavailableReason?: string
 }> {
   if (!hasMutationAuthority) {

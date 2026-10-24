@@ -7,101 +7,101 @@ import { PeerProfilePlanner } from './profile-planner'
 import { PeerRecoveryWave as WaveBudget, type PeerPathNotice } from './wave'
 import type { PeerProviderFact } from './provider-facts'
 import {
-  createV2PeerPathIdentityValue,
-  createV2ProtocolSessionIdentity,
-  equalV2DiagnosticIdentities,
-  type V2PeerAttemptIdentity,
-  type V2PeerPathIdentity,
-  type V2ProtocolSessionIdentity,
-} from '../../session/v2-identities'
+  createPeerPathIdentityValue,
+  createProtocolSessionIdentity,
+  equalDiagnosticIdentities,
+  type PeerAttemptIdentity,
+  type PeerPathIdentity,
+  type ProtocolSessionIdentity,
+} from '../../session/identities'
 import type {
-  V2PeerRecoveryWaveTrigger,
+  PeerRecoveryWaveTrigger,
 } from '../diagnostics'
 import {
   isAttemptHandle,
 } from './attempt-result'
 import {
-  classifyV2PeerAttemptFailure,
-  type V2PeerAdmittedLane,
-  type V2PeerAttemptCancellationOwner,
-  type V2PeerAttemptPhase,
-  type V2PeerAttemptResult,
-  type V2PeerAttemptFailure,
-  type V2PeerFailureDecision,
-  type V2ProtocolSessionTerminalSnapshot,
-} from '../v2-peer-failure'
+  classifyPeerAttemptFailure,
+  type PeerAdmittedLane,
+  type PeerAttemptCancellationOwner,
+  type PeerAttemptPhase,
+  type PeerAttemptResult,
+  type PeerAttemptFailure,
+  type PeerFailureDecision,
+  type ProtocolSessionTerminalSnapshot,
+} from '../peer-failure'
 import {
-  browserV2PeerRecoveryClock,
-  createV2PeerRecoveryPolicy,
-  V2_PEER_BUDGET_REFILL_MILLISECONDS,
-  V2_PEER_BROWSE_RETENTION_MILLISECONDS,
-  requireV2PeerRecoveryCorrelation,
-  type V2PeerAttemptContext,
-  type V2PeerAttemptHandle,
-  type V2PeerLaneDetachment,
-  type V2PeerRecoveryActivation,
-  type V2PeerRecoveryAttemptFactory,
-  type V2PeerRecoveryAttemptRace as AttemptRace,
-  type V2PeerRecoveryClock,
-  type V2PeerRecoveryExhaustion as RecoveryExhaustion,
-  type V2PeerRecoveryPendingWave as PendingWave,
-  type V2PeerRecoveryPolicy,
-  type V2PeerRecoveryRearmSource,
-  type V2PeerRecoveryState,
-  type V2PeerRetryReason,
-  type V2PeerRecoverySupervisorOptions,
+  browserPeerRecoveryClock,
+  createPeerRecoveryPolicy,
+  PEER_BUDGET_REFILL_MILLISECONDS,
+  PEER_BROWSE_RETENTION_MILLISECONDS,
+  requirePeerRecoveryCorrelation,
+  type PeerAttemptContext,
+  type PeerAttemptHandle,
+  type PeerLaneDetachment,
+  type PeerRecoveryActivation,
+  type PeerRecoveryAttemptFactory,
+  type PeerRecoveryAttemptRace as AttemptRace,
+  type PeerRecoveryClock,
+  type PeerRecoveryExhaustion as RecoveryExhaustion,
+  type PeerRecoveryPendingWave as PendingWave,
+  type PeerRecoveryPolicy,
+  type PeerRecoveryRearmSource,
+  type PeerRecoveryState,
+  type PeerRetryReason,
+  type PeerRecoverySupervisorOptions,
 } from './contract'
 
 export * from './contract'
 
 
-export { BrowserV2PeerRecoveryRearmSource } from './rearm'
+export { BrowserPeerRecoveryRearmSource } from './rearm'
 
-export class V2PeerRecoverySupervisor {
-  readonly #protocolSessionId: V2ProtocolSessionIdentity
-  readonly #peerPathId: V2PeerPathIdentity
-  readonly #purpose: import('../v2-signaling-codec').ConnectionPurpose
-  readonly #attempts: V2PeerRecoveryAttemptFactory
+export class PeerRecoverySupervisor {
+  readonly #protocolSessionId: ProtocolSessionIdentity
+  readonly #peerPathId: PeerPathIdentity
+  readonly #purpose: import('../signaling-codec').ConnectionPurpose
+  readonly #attempts: PeerRecoveryAttemptFactory
   readonly #slot: PeerSlotLease
-  readonly #policy: V2PeerRecoveryPolicy
-  readonly #clock: V2PeerRecoveryClock
+  readonly #policy: PeerRecoveryPolicy
+  readonly #clock: PeerRecoveryClock
   readonly #backoff: PeerRetryBackoff
   readonly #trace: PeerRecoveryTrace
   readonly #budget: PeerAttemptBudget
   readonly #profiles: PeerProfilePlanner
   readonly #onUnavailable: () => void
-  readonly #observeState: ((state: V2PeerRecoveryState) => void) | undefined
+  readonly #observeState: ((state: PeerRecoveryState) => void) | undefined
   #lastNetworkHintAt = Number.NEGATIVE_INFINITY
-  readonly #releaseLane: ((lane: V2PeerAdmittedLane) => void) | undefined
+  readonly #releaseLane: ((lane: PeerAdmittedLane) => void) | undefined
   #activeWave: WaveBudget | undefined
   #browseCount = 0
   #prewarmed = false
   #idleTimer: AbortController | undefined
   #rearmTimer: AbortController | undefined
-  #state: V2PeerRecoveryState = Object.freeze({ kind: 'idle' })
+  #state: PeerRecoveryState = Object.freeze({ kind: 'idle' })
   #task: Promise<void> | undefined
   #waveController: AbortController | undefined
-  #currentAttempt: V2PeerAttemptHandle | undefined
-  #currentLane: V2PeerAdmittedLane | undefined
-  #detachedAdmission: (V2PeerLaneDetachment & { readonly attemptId: V2PeerAttemptIdentity }) | undefined
+  #currentAttempt: PeerAttemptHandle | undefined
+  #currentLane: PeerAdmittedLane | undefined
+  #detachedAdmission: (PeerLaneDetachment & { readonly attemptId: PeerAttemptIdentity }) | undefined
   #unsubscribeRearm: (() => void) | undefined
   #activationCount = 0
   #sessionAttempts = 0
   readonly #activity: PeerActivityClock
   #waveOrdinal = 0
-  #terminal: V2ProtocolSessionTerminalSnapshot | undefined
+  #terminal: ProtocolSessionTerminalSnapshot | undefined
   #pendingWave: PendingWave | undefined
 
-  constructor(options: V2PeerRecoverySupervisorOptions) {
-    requireV2PeerRecoveryCorrelation(options.protocolSessionId, options.peerPathId)
-    this.#protocolSessionId = createV2ProtocolSessionIdentity(options.protocolSessionId.copyBytes())
-    this.#peerPathId = createV2PeerPathIdentityValue(options.peerPathId.copyBytes())
+  constructor(options: PeerRecoverySupervisorOptions) {
+    requirePeerRecoveryCorrelation(options.protocolSessionId, options.peerPathId)
+    this.#protocolSessionId = createProtocolSessionIdentity(options.protocolSessionId.copyBytes())
+    this.#peerPathId = createPeerPathIdentityValue(options.peerPathId.copyBytes())
     this.#purpose = options.purpose ?? 'initial'
     this.#attempts = options.attempts
     this.#slot = options.slot
-    this.#policy = createV2PeerRecoveryPolicy(this.#purpose === 'throughput'
+    this.#policy = createPeerRecoveryPolicy(this.#purpose === 'throughput'
       ? { ...options.policy, waveMaxAttempts: 1 } : options.policy)
-    this.#clock = options.clock ?? browserV2PeerRecoveryClock
+    this.#clock = options.clock ?? browserPeerRecoveryClock
     this.#activity = new PeerActivityClock(() => this.#clock.now())
     this.#backoff = new PeerRetryBackoff(this.#policy, options.random ?? Math.random)
     this.#trace = new PeerRecoveryTrace(this.#protocolSessionId, this.#peerPathId, options.trace)
@@ -109,16 +109,16 @@ export class V2PeerRecoverySupervisor {
     this.#onUnavailable = options.onUnavailable ?? (() => undefined)
     this.#observeState = options.observeState
     this.#budget = (this.#purpose === 'throughput' ? undefined : options.budget) ?? new PeerAttemptBudget(this.#policy.sessionMaxAttempts,
-      this.#policy.sessionActiveElapsedBudgetMilliseconds, V2_PEER_BUDGET_REFILL_MILLISECONDS)
+      this.#policy.sessionActiveElapsedBudgetMilliseconds, PEER_BUDGET_REFILL_MILLISECONDS)
     this.#releaseLane = options.releaseLane
     this.#subscribeRearm(options.rearmSource)
   }
 
-  get state(): V2PeerRecoveryState {
+  get state(): PeerRecoveryState {
     return this.#state
   }
 
-  #setState(state: V2PeerRecoveryState): void {
+  #setState(state: PeerRecoveryState): void {
     this.#state = Object.freeze(state)
     try { this.#observeState?.(this.#state) } catch { /* Presentation cannot own recovery. */ }
   }
@@ -131,7 +131,7 @@ export class V2PeerRecoverySupervisor {
     return this.#activity.elapsed()
   }
 
-  activate(): V2PeerRecoveryActivation {
+  activate(): PeerRecoveryActivation {
     this.#idleTimer?.abort()
     const wasInactive = this.#activationCount === 0
     this.#activationCount += 1
@@ -177,7 +177,7 @@ export class V2PeerRecoverySupervisor {
   }
 
   /** Browsing owns one bounded opportunity, and content takes over that same attempt. */
-  browse(): V2PeerRecoveryActivation {
+  browse(): PeerRecoveryActivation {
     this.#browseCount += 1
     if (!this.#prewarmed && this.#state.kind === 'idle') {
       this.#prewarmed = true
@@ -195,12 +195,12 @@ export class V2PeerRecoverySupervisor {
     } })
   }
 
-  peerDetached(detachment: V2PeerLaneDetachment): boolean {
+  peerDetached(detachment: PeerLaneDetachment): boolean {
     if (this.#state.kind === 'attempting' && detachment.attemptId !== undefined &&
       this.#currentAttempt !== undefined &&
-      equalV2DiagnosticIdentities(detachment.protocolSessionId, this.#protocolSessionId) &&
-      equalV2DiagnosticIdentities(detachment.peerPathId, this.#peerPathId) &&
-      equalV2DiagnosticIdentities(detachment.attemptId, this.#currentAttempt.attemptId)) {
+      equalDiagnosticIdentities(detachment.protocolSessionId, this.#protocolSessionId) &&
+      equalDiagnosticIdentities(detachment.peerPathId, this.#peerPathId) &&
+      equalDiagnosticIdentities(detachment.attemptId, this.#currentAttempt.attemptId)) {
       // Publication can synchronously retire a lane before its attempt promise settles.
       // Keep that exact admission's terminal fact until the owner consumes the result.
       this.#detachedAdmission ??= { ...detachment, attemptId: detachment.attemptId }
@@ -221,13 +221,13 @@ export class V2PeerRecoverySupervisor {
     return true
   }
 
-  async sessionTerminated(terminal: V2ProtocolSessionTerminalSnapshot): Promise<void> {
+  async sessionTerminated(terminal: ProtocolSessionTerminalSnapshot): Promise<void> {
     if (this.#terminal !== undefined) {
       await this.join().catch(() => undefined)
       this.#stopSession(this.#terminal)
       return
     }
-    const decision = classifyV2PeerAttemptFailure({ kind: 'session-terminal', terminal })
+    const decision = classifyPeerAttemptFailure({ kind: 'session-terminal', terminal })
     if (decision.type !== 'stop-session') {
       this.#stopPath('untyped-failure')
       return
@@ -254,7 +254,7 @@ export class V2PeerRecoverySupervisor {
     return this.#task ?? Promise.resolve()
   }
 
-  #subscribeRearm(source: V2PeerRecoveryRearmSource | undefined): void {
+  #subscribeRearm(source: PeerRecoveryRearmSource | undefined): void {
     if (source === undefined) return
     try {
       this.#unsubscribeRearm = source.subscribe(() => this.networkChanged())
@@ -279,7 +279,7 @@ export class V2PeerRecoverySupervisor {
     if (this.#state.kind === 'quiescent') this.#setState({ kind: 'idle' })
   }
 
-  #scheduleWave(trigger: V2PeerRecoveryWaveTrigger, rearmed: boolean): void {
+  #scheduleWave(trigger: PeerRecoveryWaveTrigger, rearmed: boolean): void {
     if (this.#terminal !== undefined) return
     if (this.#purpose === 'throughput' && this.#sessionAttempts > 0) {
       this.#exhaust('wave-attempt-budget')
@@ -313,7 +313,7 @@ export class V2PeerRecoverySupervisor {
     this.#scheduleWave(pending.trigger, pending.rearmed)
   }
 
-  async #runWave(trigger: V2PeerRecoveryWaveTrigger, rearmed: boolean): Promise<void> {
+  async #runWave(trigger: PeerRecoveryWaveTrigger, rearmed: boolean): Promise<void> {
     const controller = new AbortController()
     this.#waveController = controller
     const wave = new WaveBudget(++this.#waveOrdinal, this.#activity.now(), this.#policy, this.#budget)
@@ -339,7 +339,7 @@ export class V2PeerRecoverySupervisor {
 
   async #attemptWave(wave: WaveBudget, signal: AbortSignal): Promise<void> {
     let retryOrdinal = 0
-    let previousAttemptId: V2PeerAttemptIdentity | undefined
+    let previousAttemptId: PeerAttemptIdentity | undefined
     if (!await this.#waitForRetainedNotBefore(wave, signal)) return
 
     while (!signal.aborted && this.#terminal === undefined && this.#hasAttemptDemand(wave)) {
@@ -394,7 +394,7 @@ export class V2PeerRecoverySupervisor {
     return this.#activationCount > 0 || (this.#browseCount > 0 && wave.attempts === 0)
   }
 
-  #reserveAttempt(wave: WaveBudget): V2PeerAttemptHandle | undefined {
+  #reserveAttempt(wave: WaveBudget): PeerAttemptHandle | undefined {
     if (!this.#budget.takeAttempt(this.#activity.now())) return undefined
     this.#detachedAdmission = undefined
     wave.attempts += 1
@@ -403,7 +403,7 @@ export class V2PeerRecoverySupervisor {
     const sessionAttemptOrdinal = this.#sessionAttempts
     const startedAt = this.#activity.now()
     const iceProfile = this.#profiles.select(wave.ordinal, sessionAttemptOrdinal, startedAt)
-    const context: V2PeerAttemptContext = Object.freeze({
+    const context: PeerAttemptContext = Object.freeze({
       ...this.#slot.next(),
       purpose: this.#purpose === 'initial' && sessionAttemptOrdinal > 1 ? 'recovery' : this.#purpose,
       admissionWaitBudgetMilliseconds: Math.max(0, Math.min(
@@ -419,7 +419,7 @@ export class V2PeerRecoverySupervisor {
       sessionAttemptOrdinal,
       negotiationBudgetMilliseconds: this.#policy.negotiationBudgetMilliseconds,
       admissionBudgetMilliseconds: this.#policy.admissionBudgetMilliseconds,
-      phaseChanged: (phase: V2PeerAttemptPhase) => this.#attemptPhaseChanged(
+      phaseChanged: (phase: PeerAttemptPhase) => this.#attemptPhaseChanged(
         wave.ordinal,
         waveAttemptOrdinal,
         sessionAttemptOrdinal,
@@ -448,7 +448,7 @@ export class V2PeerRecoverySupervisor {
     waveOrdinal: number,
     waveAttemptOrdinal: number,
     sessionAttemptOrdinal: number,
-    phase: V2PeerAttemptPhase,
+    phase: PeerAttemptPhase,
   ): void {
     if (phase !== 'negotiation' && phase !== 'admission') return
     if (
@@ -460,14 +460,14 @@ export class V2PeerRecoverySupervisor {
     this.#setState({ ...this.#state, phase })
   }
 
-  #raceAttempt(attempt: V2PeerAttemptHandle, wave: WaveBudget, signal: AbortSignal): Promise<AttemptRace> {
+  #raceAttempt(attempt: PeerAttemptHandle, wave: WaveBudget, signal: AbortSignal): Promise<AttemptRace> {
     return racePeerAttempt(attempt, this.#clock, wave.remaining(this.#activity.now()), signal,
       (candidate, owner) => cancelPeerAttempt(candidate, owner))
   }
 
   async #settleAttemptResult(
-    result: V2PeerAttemptResult,
-    attemptId: V2PeerAttemptIdentity,
+    result: PeerAttemptResult,
+    attemptId: PeerAttemptIdentity,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -479,7 +479,7 @@ export class V2PeerRecoverySupervisor {
       return false
     }
 
-    const decision = classifyV2PeerAttemptFailure(result.failure)
+    const decision = classifyPeerAttemptFailure(result.failure)
     this.#trace.emit(
       () => Object.freeze({
         stage: 'retry-decided',
@@ -519,14 +519,14 @@ export class V2PeerRecoverySupervisor {
     return this.#scheduleRetry(decision, result.failure, attemptId, wave, retryOrdinal, signal)
   }
 
-  #settleAdmission(lane: V2PeerAdmittedLane, attemptId: V2PeerAttemptIdentity, signal: AbortSignal): false {
+  #settleAdmission(lane: PeerAdmittedLane, attemptId: PeerAttemptIdentity, signal: AbortSignal): false {
       if (this.#admissionObsolete(signal)) {
         this.#releaseLane?.(lane)
         this.#settleOwnerCancellation()
         return false
       }
       const detached = this.#detachedAdmission
-      if (detached !== undefined && equalV2DiagnosticIdentities(detached.attemptId, attemptId) &&
+      if (detached !== undefined && equalDiagnosticIdentities(detached.attemptId, attemptId) &&
         detached.laneId === lane.laneId && detached.laneEpoch === lane.laneEpoch) {
         this.#setState({ kind: 'idle' })
         this.#trace.emit(() => Object.freeze({ stage: 'peer-detached' }), attemptId, detached)
@@ -544,9 +544,9 @@ export class V2PeerRecoverySupervisor {
   }
 
   async #scheduleRetry(
-    decision: Extract<V2PeerFailureDecision, { readonly type: 'retry-attempt' }>,
-    failure: V2PeerAttemptFailure,
-    attemptId: V2PeerAttemptIdentity,
+    decision: Extract<PeerFailureDecision, { readonly type: 'retry-attempt' }>,
+    failure: PeerAttemptFailure,
+    attemptId: PeerAttemptIdentity,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -587,7 +587,7 @@ export class V2PeerRecoverySupervisor {
 
   async #waitForRetry(
     delay: number,
-    reason: V2PeerRetryReason,
+    reason: PeerRetryReason,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -627,7 +627,7 @@ export class V2PeerRecoverySupervisor {
     return true
   }
 
-  #settleLifecycleCancellation(owner: V2PeerAttemptCancellationOwner): void {
+  #settleLifecycleCancellation(owner: PeerAttemptCancellationOwner): void {
     if (owner === 'runtime-stop' || owner === 'generation-replaced') {
       if (this.#terminal === undefined) {
         // Cancellation carries control ownership, not ProtocolSession authority.
@@ -706,7 +706,7 @@ export class V2PeerRecoverySupervisor {
     this.#idleTimer?.abort()
     const timer = new AbortController()
     this.#idleTimer = timer
-    this.#clock.sleep(V2_PEER_BROWSE_RETENTION_MILLISECONDS, timer.signal).then(() => {
+    this.#clock.sleep(PEER_BROWSE_RETENTION_MILLISECONDS, timer.signal).then(() => {
       if (!timer.signal.aborted && this.#activationCount === 0) this.#releaseIdleLane()
     }).catch(() => undefined)
   }
@@ -722,7 +722,7 @@ export class V2PeerRecoverySupervisor {
   }
 
   #stopPath(reason: Extract<
-    V2PeerFailureDecision,
+    PeerFailureDecision,
     { readonly type: 'stop-path' }
   >['reason']): void {
     if (this.#state.kind === 'path-stopped' && this.#state.reason === reason) return
@@ -734,7 +734,7 @@ export class V2PeerRecoverySupervisor {
     this.#waveController?.abort('runtime-stop')
   }
 
-  #stopSession(terminal: V2ProtocolSessionTerminalSnapshot): void {
+  #stopSession(terminal: ProtocolSessionTerminalSnapshot): void {
     if (this.#state.kind === 'session-stopped' && this.#state.reason === terminal.code) return
     this.#unsubscribeRearm?.()
     this.#unsubscribeRearm = undefined
@@ -743,14 +743,14 @@ export class V2PeerRecoverySupervisor {
     this.#trace.emit(() => Object.freeze({ stage: 'session-stopped', reason: terminal.code }))
   }
 
-  #cancelWave(owner: V2PeerAttemptCancellationOwner): void {
+  #cancelWave(owner: PeerAttemptCancellationOwner): void {
     cancelPeerAttempt(this.#currentAttempt, owner)
     this.#waveController?.abort(owner)
   }
 
-  #matchesCurrentLane(detachment: V2PeerLaneDetachment): boolean {
-    return equalV2DiagnosticIdentities(detachment.protocolSessionId, this.#protocolSessionId) &&
-      equalV2DiagnosticIdentities(detachment.peerPathId, this.#peerPathId) &&
+  #matchesCurrentLane(detachment: PeerLaneDetachment): boolean {
+    return equalDiagnosticIdentities(detachment.protocolSessionId, this.#protocolSessionId) &&
+      equalDiagnosticIdentities(detachment.peerPathId, this.#peerPathId) &&
       detachment.laneId === this.#currentLane?.laneId &&
       detachment.laneEpoch === this.#currentLane.laneEpoch
   }

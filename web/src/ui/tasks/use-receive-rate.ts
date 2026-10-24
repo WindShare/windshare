@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react'
-import { formatBytes } from '../v2-progress-presentation'
+import { formatBytes } from '../progress-presentation'
 import type { TaskPresentation } from './model'
 import { TransferRateSampler, type ReceiveRate } from './receive-rate'
 

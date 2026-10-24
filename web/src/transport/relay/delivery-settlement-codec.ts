@@ -1,5 +1,5 @@
 import { decodeDeliveryTotals, encodeDeliveryTotals, type RelayDeliveryTotals } from './delivery-totals-codec'
-import { V2RelayProtocolError } from './v2-protocol'
+import { RelayProtocolError } from './protocol'
 
 const NOTICE_MAGIC = 'WS2N'
 const ACK_MAGIC = 'WS2S'
@@ -16,7 +16,7 @@ export interface RelaySettlementAck extends RelayDeliveryTotals {
 
 export function encodeSettlementNotice(notice: RelaySettlementNotice): Uint8Array<ArrayBuffer> {
   if (notice.kind !== 'settlement-notice') {
-    throw new V2RelayProtocolError('malformed', 'Expected a settlement notice')
+    throw new RelayProtocolError('malformed', 'Expected a settlement notice')
   }
   return encodeDeliveryTotals(notice, NOTICE_MAGIC)
 }
@@ -27,7 +27,7 @@ export function decodeSettlementNotice(encoded: Uint8Array): RelaySettlementNoti
 
 export function encodeSettlementAck(ack: RelaySettlementAck): Uint8Array<ArrayBuffer> {
   if (ack.kind !== 'settlement-ack') {
-    throw new V2RelayProtocolError('malformed', 'Expected a settlement acknowledgement')
+    throw new RelayProtocolError('malformed', 'Expected a settlement acknowledgement')
   }
   return encodeDeliveryTotals(ack, ACK_MAGIC)
 }

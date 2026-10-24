@@ -23,8 +23,8 @@ func TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment(t *testin
 	requireUnprivilegedWindowsNTFSCertification(t)
 
 	root := t.TempDir()
-	platform, err := openWindowsV3OutputPlatform(root)
-	if errors.Is(err, errWindowsV3OutputUnsupported) {
+	platform, err := openWindowsOutputPlatform(root)
+	if errors.Is(err, errWindowsOutputUnsupported) {
 		t.Skipf("test volume is outside the local NTFS matrix: %v", err)
 	}
 	if err != nil {
@@ -76,7 +76,7 @@ func TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment(t *testin
 		lockErr = errors.Join(lockErr, busyRoot.releaseOutputProbeLock(lock))
 	}
 	busyGuardCloseErr := busyGuard.Close()
-	if !errors.Is(lockErr, errWindowsV3OutputLockBusy) || busyGuardCloseErr != nil {
+	if !errors.Is(lockErr, errWindowsOutputLockBusy) || busyGuardCloseErr != nil {
 		t.Fatalf("second process acquired held feature-probe mutex: %v", errors.Join(lockErr, busyGuardCloseErr))
 	}
 	if err := command.Process.Kill(); err != nil {
@@ -101,8 +101,8 @@ func TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment(t *testin
 
 func prepareWindowsNativeProbeGuard(
 	t *testing.T,
-	platform *windowsV3OutputPlatform,
-) *windowsV3PublicOperationGuard {
+	platform *nativeOutputPlatform,
+) *windowsPublicOperationGuard {
 	t.Helper()
 	if platform == nil {
 		t.Fatal("Windows feature-probe platform is absent")
@@ -130,7 +130,7 @@ func runWindowsNativeProbeMutexChild(t *testing.T) {
 	if root == "" || readyPath == "" {
 		t.Fatal("feature-probe mutex child parameters are absent")
 	}
-	platform, err := openWindowsV3OutputPlatform(root)
+	platform, err := openWindowsOutputPlatform(root)
 	if err != nil {
 		t.Fatal(err)
 	}

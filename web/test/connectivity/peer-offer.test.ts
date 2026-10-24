@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { V2CandidateCounts } from '../../src/connectivity/diagnostics'
+import type { CandidateCounts } from '../../src/connectivity/diagnostics'
 import { BrowserPeerConnections } from '../../src/connectivity/browser-peer/connections'
 import type { PeerProviderFact } from '../../src/connectivity/peer-set/provider-facts'
 
@@ -15,7 +15,7 @@ import {
   UnexpectedDataChannelError,
   type ConnectivitySignal,
   type SignalingRoute,
-  type V2PeerOfferAttemptObserver,
+  type PeerOfferAttemptObserver,
 } from '../../src/connectivity'
 import { TERMINAL_INTENT_CONTROL } from '../../src/transport/webrtc'
 import { FakeRTCDataChannel } from '../transport/webrtc/fakes'
@@ -206,11 +206,11 @@ describe('browser receive buffer negotiation recovery', () => {
 describe('browser offer lifecycle', () => {
   it('reports isolated negotiation milestones without collecting network endpoints', async () => {
     const fixture = negotiationFixture()
-    const milestones: Array<{ readonly stage: string; readonly counts: V2CandidateCounts }> = []
+    const milestones: Array<{ readonly stage: string; readonly counts: CandidateCounts }> = []
     const snapshotCounts = (
-      counts: V2CandidateCounts | (() => V2CandidateCounts),
-    ): V2CandidateCounts => typeof counts === 'function' ? counts() : counts
-    const observer: V2PeerOfferAttemptObserver = {
+      counts: CandidateCounts | (() => CandidateCounts),
+    ): CandidateCounts => typeof counts === 'function' ? counts() : counts
+    const observer: PeerOfferAttemptObserver = {
       offerCreated: (counts) => milestones.push({
         stage: 'offer-created',
         counts: snapshotCounts(counts),
@@ -748,7 +748,7 @@ function assistedRecoveryFixture() {
     createPeerConnection: () => [first, second][created++]!.asPeer(),
   })
   const facts: PeerProviderFact[] = []
-  const observer: V2PeerOfferAttemptObserver = {
+  const observer: PeerOfferAttemptObserver = {
     offerCreated() {}, offerSent() {}, answerReceived() {}, dataChannelOpened() {},
     providerFact: (fact) => { facts.push(fact) },
   }

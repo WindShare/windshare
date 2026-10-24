@@ -1,10 +1,10 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import type { V2ReceiverController } from '../v2-controller'
+import type { ReceiverController } from '../controller'
 
 function ReceiveTab({
   controller,
 }: {
-  readonly controller: V2ReceiverController
+  readonly controller: ReceiverController
 }) {
   const [keyInput, setKeyInput] = useState('')
 
@@ -202,7 +202,7 @@ export function HeroSection({
   controller,
   downloads,
 }: {
-  readonly controller: V2ReceiverController
+  readonly controller: ReceiverController
   readonly downloads: ReactNode
 }) {
   const [activeTab, setActiveTab] = useState<'receive' | 'cli' | 'desktop'>('receive')

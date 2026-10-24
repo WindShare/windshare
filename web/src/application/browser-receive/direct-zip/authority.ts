@@ -3,7 +3,7 @@ import type { DirectZipRuntimeFactsV1 } from '../../../output/direct-zip/session
 import { sameRuntimeDirectZipSupport, type OfferedArtifactChoice } from '../../../output/planning'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { snapshotPreClickRanking, unavailableRoute } from '../route-contract'
-import type { V2ArtifactPresentationAuthority } from '../../receive/contracts'
+import type { ArtifactPresentationAuthority } from '../../receive/contracts'
 import { BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID } from './support'
 import type { BrowserDirectZipCompositionPort } from './contracts'
 
@@ -18,7 +18,7 @@ export function startBrowserDirectZipAuthority(
   offered: OfferedArtifactChoice,
   preClickRanking: readonly ArtifactChoiceID[],
   installed: InstalledBrowserDirectZipRoute | undefined,
-): V2ArtifactPresentationAuthority {
+): ArtifactPresentationAuthority {
   if (installed === undefined || offered.route.kind !== 'direct-resumable-zip' ||
       offered.route.target.routeId !== BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID ||
       !sameRuntimeDirectZipSupport(offered.route.target.support, installed.facts.support)) {

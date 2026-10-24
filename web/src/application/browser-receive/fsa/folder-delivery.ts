@@ -3,7 +3,7 @@ import type { BrowserRecoveryPreference } from '../../../output/browser-delivery
 import type { BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
 import type { BrowserStagingStorageFacts } from '../../../output/planning/staging-storage'
 import type { OriginPrivateStorageManager } from '../../../output/browser/environment'
-import type { V2BrowserFolderProgressSnapshot, V2BrowserFolderProgressSource } from '../../receive/contracts'
+import type { BrowserFolderProgressSnapshot, BrowserFolderProgressSource } from '../../receive/contracts'
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { inspectBrowserStagingStorage } from '../../../output/capability/staging-storage'
@@ -51,12 +51,12 @@ export async function reopenFolderDeliveryContext(windowPort: BrowserReceiveWind
 }
 
 /** One operation-owned stream survives receive attempts; journal cuts supply its facts. */
-export class BrowserFolderDeliveryProgress implements V2BrowserFolderProgressSource {
-  readonly #listeners = new Set<(snapshot: V2BrowserFolderProgressSnapshot) => void>()
-  #snapshot: V2BrowserFolderProgressSnapshot | undefined
+export class BrowserFolderDeliveryProgress implements BrowserFolderProgressSource {
+  readonly #listeners = new Set<(snapshot: BrowserFolderProgressSnapshot) => void>()
+  #snapshot: BrowserFolderProgressSnapshot | undefined
   #generation = 0n
 
-  getSnapshot(): V2BrowserFolderProgressSnapshot {
+  getSnapshot(): BrowserFolderProgressSnapshot {
     if (this.#snapshot === undefined) throw new DOMException('Folder delivery is not initialized', 'InvalidStateError')
     return this.#snapshot
   }
@@ -71,7 +71,7 @@ export class BrowserFolderDeliveryProgress implements V2BrowserFolderProgressSou
     }
   }
 
-  subscribe(listener: (snapshot: V2BrowserFolderProgressSnapshot) => void): () => void {
+  subscribe(listener: (snapshot: BrowserFolderProgressSnapshot) => void): () => void {
     this.#listeners.add(listener)
     return () => { this.#listeners.delete(listener) }
   }

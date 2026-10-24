@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func windowsV3NativeTestTempDir(t *testing.T) string {
+func windowsNativeTestTempDir(t *testing.T) string {
 	t.Helper()
 	root, err := os.MkdirTemp("", ".windshare-osfs-native-")
 	if err != nil {
@@ -27,9 +27,9 @@ func windowsV3NativeTestTempDir(t *testing.T) string {
 	return root
 }
 
-func TestWindowsV3PublicGuardAcceptsOrdinaryCrossPrincipalDACL(t *testing.T) {
+func TestWindowsPublicGuardAcceptsOrdinaryCrossPrincipalDACL(t *testing.T) {
 	rootPath := t.TempDir()
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +45,10 @@ func TestWindowsV3PublicGuardAcceptsOrdinaryCrossPrincipalDACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(rootPath, descriptor, policy); err != nil {
+	if err := windowsSetTestDirectoryDACL(rootPath, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +62,9 @@ func TestWindowsV3PublicGuardAcceptsOrdinaryCrossPrincipalDACL(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PublicGuardReportsDeniedNativeAuthority(t *testing.T) {
+func TestWindowsPublicGuardReportsDeniedNativeAuthority(t *testing.T) {
 	rootPath := t.TempDir()
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,42 +79,42 @@ func TestWindowsV3PublicGuardReportsDeniedNativeAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(rootPath, denied, policy); err != nil {
+	if err := windowsSetTestDirectoryDACL(rootPath, denied, policy); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := windowsV3SetTestDirectoryDACL(rootPath, restore, policy); err != nil {
+		if err := windowsSetTestDirectoryDACL(rootPath, restore, policy); err != nil {
 			t.Errorf("restore test directory DACL: %v", err)
 		}
 	}()
 
-	if platform, err := openWindowsV3OutputPlatform(rootPath); platform != nil {
+	if platform, err := openWindowsOutputPlatform(rootPath); platform != nil {
 		_ = platform.Close()
 		t.Fatal("read-only destination unexpectedly admitted mutation authority")
 	} else if !errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||
-		!errors.Is(err, errWindowsV3OutputUnsafe) ||
+		!errors.Is(err, errWindowsOutputUnsafe) ||
 		!errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		t.Fatalf("denied native authority error = %v", err)
 	}
 }
 
-func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	external := filepath.Join(base, "external")
 	moved := filepath.Join(base, "external-moved")
 	if err := os.Mkdir(external, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(
-		external, windowsV3HostileExternalDescriptor(t, policy), policy,
+	if err := windowsSetTestDirectoryDACL(
+		external, windowsHostileExternalDescriptor(t, policy), policy,
 	); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(external)
+	platform, err := openWindowsOutputPlatform(external)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,61 +129,61 @@ func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(external, moved); !windowsV3IsBlockedAncestorReplacement(err) {
+	if err := os.Rename(external, moved); !windowsIsBlockedAncestorReplacement(err) {
 		_ = guard.Close()
 		t.Fatalf("external placement guard allowed rename: %v", err)
 	}
 	if err := guard.Close(); err != nil {
 		t.Fatal(err)
 	}
-	windowsV3RequireReleasedRename(t, external, moved, "external placement after guard close")
+	windowsRequireReleasedRename(t, external, moved, "external placement after guard close")
 	if err := platform.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestWindowsV3ExternalPlacementDoesNotApplyOutputLookupPolicy(t *testing.T) {
-	facts := validWindowsV3ObjectFacts()
+func TestWindowsExternalPlacementDoesNotApplyOutputLookupPolicy(t *testing.T) {
+	facts := validWindowsObjectFacts()
 	facts.caseSensitive = true
-	if err := validateWindowsV3RootShape(facts); !errors.Is(err, errWindowsV3OutputUnsupported) {
+	if err := validateWindowsRootShape(facts); !errors.Is(err, errWindowsOutputUnsupported) {
 		t.Fatalf("case-sensitive output-root certification = %v", err)
 	}
-	if err := validateWindowsV3ExternalPlacement(facts, facts.object.volume); err != nil {
+	if err := validateWindowsExternalPlacement(facts, facts.object.volume); err != nil {
 		t.Fatalf("case-sensitive external placement was rejected: %v", err)
 	}
 	mismatched := facts.object.volume
 	mismatched.serial++
-	if err := validateWindowsV3ExternalPlacement(facts, mismatched); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := validateWindowsExternalPlacement(facts, mismatched); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("cross-volume external placement error = %v", err)
 	}
 }
 
-type windowsV3RecordedAncestryOpen struct {
+type windowsRecordedAncestryOpen struct {
 	root             windows.Handle
 	path             string
 	objectAttributes uint32
 	result           windows.Handle
 }
 
-type windowsV3RecordingAncestryOpener struct {
-	delegate windowsV3AncestryDirectoryOpener
-	records  []windowsV3RecordedAncestryOpen
+type windowsRecordingAncestryOpener struct {
+	delegate windowsAncestryDirectoryOpener
+	records  []windowsRecordedAncestryOpen
 }
 
-func (opener *windowsV3RecordingAncestryOpener) Open(
+func (opener *windowsRecordingAncestryOpener) Open(
 	root windows.Handle,
 	path string,
 	access uint32,
 	objectAttributes uint32,
 ) (windows.Handle, uintptr, error) {
 	handle, status, err := opener.delegate.Open(root, path, access, objectAttributes)
-	opener.records = append(opener.records, windowsV3RecordedAncestryOpen{
+	opener.records = append(opener.records, windowsRecordedAncestryOpen{
 		root: root, path: path, objectAttributes: objectAttributes, result: handle,
 	})
 	return handle, status, err
 }
 
-func TestWindowsV3PlacementLeafAuthorityAcceptsHandleReportedDOSAlias(t *testing.T) {
+func TestWindowsPlacementLeafAuthorityAcceptsHandleReportedDOSAlias(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		caseSensitive bool
@@ -193,7 +193,7 @@ func TestWindowsV3PlacementLeafAuthorityAcceptsHandleReportedDOSAlias(t *testing
 		{name: "case-sensitive", caseSensitive: true, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			match, err := windowsV3PlacementLeafNamesMatch(
+			match, err := windowsPlacementLeafNamesMatch(
 				"RUNNER~1", "runneradmin", "RUNNER~1", test.caseSensitive,
 			)
 			if err != nil || match != test.want {
@@ -201,31 +201,31 @@ func TestWindowsV3PlacementLeafAuthorityAcceptsHandleReportedDOSAlias(t *testing
 			}
 		})
 	}
-	match, err := windowsV3PlacementLeafNamesMatch("RUNNER~1", "runneradmin", "different", false)
+	match, err := windowsPlacementLeafNamesMatch("RUNNER~1", "runneradmin", "different", false)
 	if err != nil || match {
 		t.Fatalf("unreported placement alias match = (%t, %v), want false", match, err)
 	}
 }
 
-func TestWindowsV3AncestryGuardResolvesOnlyDriveRootAbsolutely(t *testing.T) {
-	rootPath := filepath.Join(windowsV3NativeTestTempDir(t), "external", "output")
+func TestWindowsAncestryGuardResolvesOnlyDriveRootAbsolutely(t *testing.T) {
+	rootPath := filepath.Join(windowsNativeTestTempDir(t), "external", "output")
 	if err := os.MkdirAll(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer platform.Close()
-	opener := &windowsV3RecordingAncestryOpener{delegate: nativeWindowsV3AncestryDirectoryOpener{}}
+	opener := &windowsRecordingAncestryOpener{delegate: nativeWindowsAncestryDirectoryOpener{}}
 	guard, err := platform.acquireDirectoryAncestryGuardWithOpener(
-		windowsV3GuardPublicOutputRoot, opener,
+		windowsGuardPublicOutputRoot, opener,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer guard.Close()
-	paths, err := windowsV3AbsoluteDirectoryAncestry(rootPath)
+	paths, err := windowsAbsoluteDirectoryAncestry(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestWindowsV3AncestryGuardResolvesOnlyDriveRootAbsolutely(t *testing.T) {
 			t.Fatalf("ancestry open %d omitted OBJ_DONT_REPARSE", index)
 		}
 		if index == 0 {
-			if record.root != 0 || record.path != windowsV3NTPath(paths[index]) {
+			if record.root != 0 || record.path != windowsNTPath(paths[index]) {
 				t.Fatalf("drive-root open root=%#x path=%q", record.root, record.path)
 			}
 			continue
@@ -252,9 +252,9 @@ func TestWindowsV3AncestryGuardResolvesOnlyDriveRootAbsolutely(t *testing.T) {
 	}
 }
 
-func windowsV3HostileExternalDescriptor(
+func windowsHostileExternalDescriptor(
 	t *testing.T,
-	policy *windowsV3PrivatePolicy,
+	policy *windowsPrivatePolicy,
 ) *windows.SECURITY_DESCRIPTOR {
 	t.Helper()
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
@@ -274,12 +274,12 @@ func windowsV3HostileExternalDescriptor(
 	return descriptor
 }
 
-func windowsV3IsBlockedAncestorReplacement(err error) bool {
+func windowsIsBlockedAncestorReplacement(err error) bool {
 	return errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
 		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
-func windowsV3RequireReleasedRename(t *testing.T, path, moved, authority string) {
+func windowsRequireReleasedRename(t *testing.T, path, moved, authority string) {
 	t.Helper()
 	if err := os.Rename(path, moved); err != nil {
 		t.Fatalf("%s remained pinned: %v", authority, err)
@@ -288,14 +288,14 @@ func windowsV3RequireReleasedRename(t *testing.T, path, moved, authority string)
 	// unrelated rename that Windows can transiently deny while nested closes settle.
 }
 
-func TestWindowsV3PublicGuardPinsRootAndEveryExternalAncestor(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsPublicGuardPinsRootAndEveryExternalAncestor(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	externalParent := filepath.Join(base, "external-parent")
 	rootPath := filepath.Join(externalParent, "output")
 	if err := os.MkdirAll(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,11 +318,11 @@ func TestWindowsV3PublicGuardPinsRootAndEveryExternalAncestor(t *testing.T) {
 	if err := guard.Close(); err != nil {
 		t.Fatal(err)
 	}
-	windowsV3RequireReleasedRename(t, rootPath, rootMoved, "root after guard close")
+	windowsRequireReleasedRename(t, rootPath, rootMoved, "root after guard close")
 	if err := platform.Close(); err != nil {
 		t.Fatal(err)
 	}
-	windowsV3RequireReleasedRename(
+	windowsRequireReleasedRename(
 		t, externalParent, externalMoved, "external ancestor after all authorities closed",
 	)
 }

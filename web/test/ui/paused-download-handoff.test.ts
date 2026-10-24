@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { composeTasks } from '../../src/ui/experience/task-composition'
-import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import {
   FakeReceiveComposition, FakeJoinedShare, WORKSPACE_ENVIRONMENT, controllerFor,
   startTransfer, next, identityText, waitFor, turns, deferred, resetOrchestrationTestEnvironment,
@@ -23,7 +23,7 @@ it('retains a paused ZIP through authority release and exposes the same native p
   joined.transferRuns[0]!.resolve(paused)
   await waitFor(() => controller.canRetainCurrentOperation)
   await turns()
-  const operation: V2RetainedReceiveOperation = Object.freeze({
+  const operation: RetainedReceiveOperation = Object.freeze({
     operationId: runtime.intent.operationId, receiveIntentDigest: runtime.intent.digest,
     shareInstance: joined.descriptor.shareInstanceId, lifecycleGeneration: paused.generation,
     lifecycle: paused, continuation: 'resume-receive',

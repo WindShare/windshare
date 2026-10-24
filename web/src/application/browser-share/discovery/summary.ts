@@ -1,4 +1,4 @@
-import type { V2CatalogEntry } from '../../../catalog/v2-records'
+import type { CatalogEntry } from '../../../catalog/records'
 import { WorkspaceCostObservationAccumulatorV1 } from '../../../output/planning/workspace-cost-observation'
 import {
   DEFAULT_RESULT_ROOT_NAME,
@@ -58,7 +58,7 @@ export class ProjectionDiscoverySummary {
 
   observeCatalogEntry(
     sourcePath: readonly string[],
-    entry: V2CatalogEntry,
+    entry: CatalogEntry,
     selected: boolean,
   ): void {
     if (!selected || this.#costFailed) return
@@ -122,7 +122,7 @@ export class ProjectionDiscoverySummary {
   }
 }
 
-function costSpec(entry: V2CatalogEntry, path: readonly string[]) {
+function costSpec(entry: CatalogEntry, path: readonly string[]) {
   return entry.kind === 'file'
     ? Object.freeze({
         kind: 'file' as const,

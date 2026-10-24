@@ -1,7 +1,7 @@
-import type { V2PeerFailureDecision } from '../v2-peer-failure'
-import { calculateV2PeerRetryDelay, type V2PeerRecoveryPolicy } from './contract'
+import type { PeerFailureDecision } from '../peer-failure'
+import { calculatePeerRetryDelay, type PeerRecoveryPolicy } from './contract'
 
-type RetryDecision = Extract<V2PeerFailureDecision, { readonly type: 'retry-attempt' }>
+type RetryDecision = Extract<PeerFailureDecision, { readonly type: 'retry-attempt' }>
 
 export interface PeerRetryDelay {
   readonly localDelayMilliseconds: number
@@ -11,11 +11,11 @@ export interface PeerRetryDelay {
 
 /** Authenticated admission limits survive cancellation and replacement of a recovery wave. */
 export class PeerRetryBackoff {
-  readonly #policy: V2PeerRecoveryPolicy
+  readonly #policy: PeerRecoveryPolicy
   readonly #random: () => number
   #authenticatedNotBefore = 0
 
-  constructor(policy: V2PeerRecoveryPolicy, random: () => number) {
+  constructor(policy: PeerRecoveryPolicy, random: () => number) {
     this.#policy = policy
     this.#random = random
   }
@@ -34,7 +34,7 @@ export class PeerRetryBackoff {
   }
 
   schedule(now: number, retryOrdinal: number, delayedOpportunityMilliseconds: number): PeerRetryDelay {
-    const localDelayMilliseconds = calculateV2PeerRetryDelay(this.#policy, retryOrdinal, this.#random())
+    const localDelayMilliseconds = calculatePeerRetryDelay(this.#policy, retryOrdinal, this.#random())
     const authenticatedRetryAfterMilliseconds = this.retainedDelay(now)
     return Object.freeze({
       localDelayMilliseconds,

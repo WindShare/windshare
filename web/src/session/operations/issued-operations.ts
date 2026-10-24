@@ -1,16 +1,16 @@
 import { equalBytes } from '../../crypto/bytes'
-import { V2_MESSAGE_KIND, type V2MessageKind } from '../v2-message'
-import { V2SessionRuntimeError } from '../v2-runtime-types'
+import { MESSAGE_KIND, type MessageKind } from '../message'
+import { SessionRuntimeError } from '../runtime-types'
 
 const PREFIX_BYTES = 8
 const ID_BYTES = 16
 const KIND_SHIFT = 56n
 const MAXIMUM_SEQUENCE = (1n << KIND_SHIFT) - 1n
 const PREFIX_ATTEMPTS = 4
-const REQUEST_KINDS = new Set<V2MessageKind>([
-  V2_MESSAGE_KIND.listChildren, V2_MESSAGE_KIND.openRevisions,
-  V2_MESSAGE_KIND.renewLease, V2_MESSAGE_KIND.releaseLease,
-  V2_MESSAGE_KIND.requestBlocks, V2_MESSAGE_KIND.laneAttach, V2_MESSAGE_KIND.peerOffer,
+const REQUEST_KINDS = new Set<MessageKind>([
+  MESSAGE_KIND.listChildren, MESSAGE_KIND.openRevisions,
+  MESSAGE_KIND.renewLease, MESSAGE_KIND.releaseLease,
+  MESSAGE_KIND.requestBlocks, MESSAGE_KIND.laneAttach, MESSAGE_KIND.peerOffer,
 ])
 
 /**
@@ -18,19 +18,19 @@ const REQUEST_KINDS = new Set<V2MessageKind>([
  * receiver recognize its own abandoned work after detailed replay state expires,
  * without retaining one record per request for the entire session.
  */
-export class V2IssuedOperations {
+export class IssuedOperations {
   readonly #randomBytes: (length: number) => Uint8Array
-  readonly #issued = new Map<V2MessageKind, bigint>()
+  readonly #issued = new Map<MessageKind, bigint>()
   #prefix: Uint8Array<ArrayBuffer> | undefined
 
   constructor(randomBytes: (length: number) => Uint8Array = length => crypto.getRandomValues(new Uint8Array(length))) {
     this.#randomBytes = randomBytes
   }
 
-  issue(kind: V2MessageKind): Uint8Array<ArrayBuffer> {
-    if (!REQUEST_KINDS.has(kind)) throw new V2SessionRuntimeError('operation', 'Message kind cannot begin a receiver operation')
+  issue(kind: MessageKind): Uint8Array<ArrayBuffer> {
+    if (!REQUEST_KINDS.has(kind)) throw new SessionRuntimeError('operation', 'Message kind cannot begin a receiver operation')
     const sequence = (this.#issued.get(kind) ?? 0n) + 1n
-    if (sequence > MAXIMUM_SEQUENCE) throw new V2SessionRuntimeError('session', 'Operation identity space is exhausted')
+    if (sequence > MAXIMUM_SEQUENCE) throw new SessionRuntimeError('session', 'Operation identity space is exhausted')
     this.#prefix ??= this.#newPrefix()
     const id = new Uint8Array(ID_BYTES)
     id.set(this.#prefix)
@@ -39,11 +39,11 @@ export class V2IssuedOperations {
     return id
   }
 
-  requestKind(id: Uint8Array): V2MessageKind | undefined {
+  requestKind(id: Uint8Array): MessageKind | undefined {
     if (id.byteLength !== ID_BYTES || this.#prefix === undefined ||
       !equalBytes(id.subarray(0, PREFIX_BYTES), this.#prefix)) return undefined
     const encoded = new DataView(id.buffer, id.byteOffset, id.byteLength).getBigUint64(PREFIX_BYTES)
-    const kind = Number(encoded >> KIND_SHIFT) as V2MessageKind
+    const kind = Number(encoded >> KIND_SHIFT) as MessageKind
     const sequence = encoded & MAXIMUM_SEQUENCE
     const issued = this.#issued.get(kind)
     return sequence > 0n && issued !== undefined && sequence <= issued ? kind : undefined
@@ -54,6 +54,6 @@ export class V2IssuedOperations {
       const prefix = this.#randomBytes(PREFIX_BYTES)
       if (prefix.byteLength === PREFIX_BYTES && prefix.some(value => value !== 0)) return new Uint8Array(prefix)
     }
-    throw new V2SessionRuntimeError('session', 'Random identity source returned invalid bytes')
+    throw new SessionRuntimeError('session', 'Random identity source returned invalid bytes')
   }
 }

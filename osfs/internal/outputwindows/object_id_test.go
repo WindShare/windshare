@@ -9,13 +9,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3ObjectIDMutationTrap struct {
+type windowsObjectIDMutationTrap struct {
 	calls atomic.Int64
 }
 
-func (trap *windowsV3ObjectIDMutationTrap) CreateOrGet(
+func (trap *windowsObjectIDMutationTrap) CreateOrGet(
 	windows.Handle,
-) (windowsV3PersistentObjectID, error) {
+) (windowsPersistentObjectID, error) {
 	trap.calls.Add(1)
-	return windowsV3PersistentObjectID{}, errors.New("unexpected object ID mutation")
+	return windowsPersistentObjectID{}, errors.New("unexpected object ID mutation")
 }

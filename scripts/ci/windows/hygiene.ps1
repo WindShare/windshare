@@ -83,6 +83,8 @@ Invoke-Step 'Browser workspace ZIP review contracts' {
 Invoke-Step 'Frozen Unicode Go tables' { node scripts/unicode15/generate-go.mjs --check }
 Invoke-Step 'Core production dependency boundary tests' { go test ./scripts/ci/_coreboundary }
 Invoke-Step 'Core production dependency boundary' { go run ./scripts/ci/_coreboundary }
+Invoke-Step 'Transport dependency boundary tests' { go test ./scripts/ci/_transportboundary }
+Invoke-Step 'Transport dependency boundary' { go run ./scripts/ci/_transportboundary }
 Invoke-Step 'Engine application dependency boundary tests' { go test ./scripts/ci/_engineboundary }
 Invoke-Step 'Engine application dependency boundary' { go run ./scripts/ci/_engineboundary }
 Invoke-Step 'Go validation package ownership tests' { go test ./scripts/ci/_gopackages }

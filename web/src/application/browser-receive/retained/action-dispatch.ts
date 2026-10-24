@@ -4,7 +4,7 @@ import type {
   AuthorityOwnedReceiveOperationContinuation,
   AuthorityOwnedReceiveOperationMutationResult,
 } from '../../../output/resume/reopen-authority'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../receive/contracts'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../receive/contracts'
 
 type RetainedActionAuthority = Pick<
   ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
@@ -23,8 +23,8 @@ type RetainedAuthorityDispatch =
 export async function dispatchRetainedAuthorityAction(
   authority: RetainedActionAuthority,
   reference: ReceiveOperationResumeRef,
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<RetainedAuthorityDispatch> {
@@ -62,15 +62,15 @@ export async function dispatchRetainedAuthorityAction(
 }
 
 function retainedFileRecoveryFor(
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
+  operation: RetainedReceiveOperation,
+  action: RetainedReceiveAction,
 ): 'preserve' | 'restart-owned-file' | undefined {
   if (operation.recoverySummary === undefined) return undefined
   return action === 'redownload' ? 'restart-owned-file' : 'preserve'
 }
 
 function isDirectZipContinuation(
-  continuation: V2RetainedReceiveOperation['continuation'],
+  continuation: RetainedReceiveOperation['continuation'],
 ): boolean {
   return continuation === 'resume-direct-zip' || continuation === 'reauthorize-direct-zip' ||
     continuation === 'verify-direct-zip-target' || continuation === 'verify-direct-zip-completion' ||

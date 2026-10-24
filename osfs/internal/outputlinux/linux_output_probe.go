@@ -66,7 +66,7 @@ func linuxDestinationCapabilitiesFromResults(
 			continue
 		}
 		if errors.Is(fact.err, errLinuxOutputUnsafe) {
-			return outputcap.DestinationCapabilities{}, linuxV3Error(fact.err)
+			return outputcap.DestinationCapabilities{}, linuxError(fact.err)
 		}
 		evidence[index], _ = outputcap.UnsupportedCapability(fact.reason)
 	}

@@ -15,10 +15,10 @@ import type {
   RestartRequiredReason,
 } from '../../transfer/lifecycle/state'
 import {
-  V2_CONNECTIVITY_FAILURE_SCOPES,
-  V2_TYPED_PEER_ERROR_CODES,
-  type V2ConnectivityFailureScope,
-  type V2TypedPeerErrorCode,
+  CONNECTIVITY_FAILURE_SCOPES,
+  TYPED_PEER_ERROR_CODES,
+  type ConnectivityFailureScope,
+  type TypedPeerErrorCode,
 } from '../../connectivity/diagnostics'
 import {
   createFailureCorrelation,
@@ -141,8 +141,8 @@ export interface FailureFactByKind {
   readonly protocol_failure: Readonly<{ protocolFailure: ReceivedProtocolError }>
   readonly peer_failure: Readonly<{
     peerFailure: Readonly<{
-      scope: V2ConnectivityFailureScope
-      code: V2TypedPeerErrorCode
+      scope: ConnectivityFailureScope
+      code: TypedPeerErrorCode
       retryable: boolean
     }>
   }>
@@ -259,14 +259,14 @@ export function protocolFailureFact(input: {
 export function peerFailureFact(input: {
   readonly stage: FailureStage
   readonly recoveryDisposition: RecoveryDisposition
-  readonly scope: V2ConnectivityFailureScope
-  readonly code: V2TypedPeerErrorCode
+  readonly scope: ConnectivityFailureScope
+  readonly code: TypedPeerErrorCode
   readonly retryable: boolean
   readonly correlation?: FailureCorrelation
 }): FailureFact<'peer_failure'> {
   if (
-    !isMember(V2_CONNECTIVITY_FAILURE_SCOPES, input.scope) ||
-    !isMember(V2_TYPED_PEER_ERROR_CODES, input.code)
+    !isMember(CONNECTIVITY_FAILURE_SCOPES, input.scope) ||
+    !isMember(TYPED_PEER_ERROR_CODES, input.code)
   ) {
     throw new TypeError('Peer failure is invalid')
   }
@@ -407,8 +407,8 @@ export function isFailureFact(value: unknown): value is FailureFact {
         isRecord(value.payload.peerFailure) &&
         Object.isFrozen(value.payload.peerFailure) &&
         hasExactKeys(value.payload.peerFailure, ['scope', 'code', 'retryable']) &&
-        isMember(V2_CONNECTIVITY_FAILURE_SCOPES, value.payload.peerFailure.scope) &&
-        isMember(V2_TYPED_PEER_ERROR_CODES, value.payload.peerFailure.code) &&
+        isMember(CONNECTIVITY_FAILURE_SCOPES, value.payload.peerFailure.scope) &&
+        isMember(TYPED_PEER_ERROR_CODES, value.payload.peerFailure.code) &&
         typeof value.payload.peerFailure.retryable === 'boolean'
       )
     case 'native_output_failure':

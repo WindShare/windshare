@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { V2CatalogPage, V2CatalogEntry, V2ShareDescriptor } from '../../src/catalog/v2-records'
-import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import type { CatalogPage, CatalogEntry, ShareDescriptor } from '../../src/catalog/records'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { createSelectionSpec, selectionRulesSpecFromPolicy } from '../../src/transfer/intent'
 import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
-import { V2JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/application/browser-share/discovery/source'
+import { JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/application/browser-share/discovery/source'
 import { offerArtifacts, reconcileArtifactChoice, materializationRouteIdentity } from '../../src/output/planning'
 import { environment, fsaTarget } from '../output/planning/fixture'
 
@@ -17,26 +17,26 @@ function identity(seed: number): Uint8Array<ArrayBuffer> {
 const rootId = identity(1)
 const shareInstance = identity(2)
 const rootText = encodeBase64Url(rootId)
-function folder(seed: number, name = `folder-${seed}`): V2CatalogEntry {
+function folder(seed: number, name = `folder-${seed}`): CatalogEntry {
   const id = identity(seed)
   return { kind: 'directory', id, idText: encodeBase64Url(id), name }
 }
-function file(seed: number): V2CatalogEntry {
+function file(seed: number): CatalogEntry {
   const id = identity(seed)
   return { kind: 'file', id, idText: encodeBase64Url(id), name: `file-${seed}`, expectedSize: 64n }
 }
 
-function fixture(directories: readonly { id: Uint8Array<ArrayBuffer>; entries: readonly V2CatalogEntry[] }[]) {
+function fixture(directories: readonly { id: Uint8Array<ArrayBuffer>; entries: readonly CatalogEntry[] }[]) {
   const generations = new Map(directories.map(({ id, entries }) => {
     const directoryIdText = encodeBase64Url(id)
     const generation = identity(90)
     const generationText = encodeBase64Url(generation)
     const terminalCommitment = new Uint8Array(32).fill(7)
-    const committed: V2CommittedDirectory = {
+    const committed: CommittedDirectory = {
       directoryId: id, directoryIdText, generation, generationText, pageCount: 1,
       entryCount: entries.length, omittedCount: 0n, terminalCommitment,
     }
-    const page: V2CatalogPage = {
+    const page: CatalogPage = {
       shareInstance, directoryId: id, directoryIdText, generation, generationText,
       pageIndex: 0, terminal: true, previousCommitment: new Uint8Array(32), entries,
       omittedCount: 0n, objectCommitment: terminalCommitment, senderObjectBytes: 128,
@@ -50,23 +50,23 @@ function fixture(directories: readonly { id: Uint8Array<ArrayBuffer>; entries: r
   })
   const catalog = {
     loadDirectory,
-    async *pages(committed: V2CommittedDirectory) { yield generations.get(committed.directoryIdText)!.page },
+    async *pages(committed: CommittedDirectory) { yield generations.get(committed.directoryIdText)!.page },
   }
   const descriptor = {
     shareInstance, shareInstanceId: encodeBase64Url(shareInstance), syntheticRoot: rootId,
     syntheticRootId: rootText,
-  } as V2ShareDescriptor
+  } as ShareDescriptor
   return { catalog, descriptor, loadDirectory }
 }
 
-async function project(input: ReturnType<typeof fixture>, policy: V2SelectionPolicy, signal = new AbortController().signal) {
+async function project(input: ReturnType<typeof fixture>, policy: SelectionPolicy, signal = new AbortController().signal) {
   const selection = policy.snapshot()
   const controller = new SelectionProjectionController()
   controller.beginSelection(await createSelectionSpec({
     shareInstance: input.descriptor.shareInstanceId, syntheticRoot: rootText,
     rules: selectionRulesSpecFromPolicy(selection),
   }))
-  const source = new V2JoinedProjectionSource({
+  const source = new JoinedProjectionSource({
     descriptor: input.descriptor, catalog: input.catalog as never, selection,
     protocolSessionId: () => 'session', explicitRetry: false,
   })
@@ -84,7 +84,7 @@ describe('bounded authenticated selection discovery', () => {
       { id: shared.id, entries: branches },
       ...branches.map(branch => ({ id: branch.id, entries: [file(20)] })),
     ])
-    const states = await project(input, new V2SelectionPolicy(true))
+    const states = await project(input, new SelectionPolicy(true))
     const final = states.at(-1)!
     expect(input.loadDirectory).toHaveBeenCalledTimes(1 + DRAFT_PREFETCH_DIRECTORY_LIMIT)
     expect(final.discovery.kind).toBe('bounded')
@@ -116,7 +116,7 @@ describe('bounded authenticated selection discovery', () => {
       { id: rootId, entries: [unrelated, selected] },
       { id: selected.id, entries: [target] },
     ])
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     policy.set(target, [rootText, selected.idText], true)
     const final = (await project(input, policy)).at(-1)!
     expect(input.loadDirectory).toHaveBeenCalledTimes(2)
@@ -128,7 +128,7 @@ describe('bounded authenticated selection discovery', () => {
     const forged = folder(4)
     const target = file(5)
     const input = fixture([{ id: rootId, entries: [actual] }])
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     policy.set(target, [rootText, forged.idText], true)
     await expect(project(input, policy)).rejects.toThrow('Selection target path was not found')
   })
@@ -145,7 +145,7 @@ describe('bounded authenticated selection discovery', () => {
       { id: identity(7), entries: [] },
       { id: identity(8), entries: [] },
     ])
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     policy.set(selected, [rootText], true)
     policy.set(excluded, [rootText, selected.idText], false)
     policy.set(kept, [rootText, selected.idText, excluded.idText], true)
@@ -158,7 +158,7 @@ describe('bounded authenticated selection discovery', () => {
 
   it('keeps explicit empty selection empty without catalog I/O and honors cancellation', async () => {
     const input = fixture([])
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     policy.set(file(3), [rootText], false)
     expect((await project(input, policy)).at(-1)).toMatchObject({
       discovery: { kind: 'complete' }, projection: { proof: { kind: 'none' } },

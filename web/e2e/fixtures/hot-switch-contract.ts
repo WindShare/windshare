@@ -1,9 +1,9 @@
 import type {
-  V2PeerAttemptTraceEvent,
-  V2PeerRecoveryTraceEvent,
+  PeerAttemptTraceEvent,
+  PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
-import type { V2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
-import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
+import type { PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
+import { BLOCK_BROKER_PARALLEL_READS } from '../../src/content/broker'
 import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
 import type {
   ClassifiedTransferFailure,
@@ -11,7 +11,7 @@ import type {
 
 // The yielded block retains its window reservation until the writer advances.
 export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =
-  V2_BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR
+  BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR
 
 // Every relay-cut route must retain fresh network demand after releasing output.
 export const HOT_SWITCH_TRANSFER_BLOCKS = HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + 1
@@ -63,7 +63,7 @@ export interface HotSwitchRuntimeTerminal {
 }
 
 export interface HotSwitchRecoveryControl {
-  readonly policy: V2PeerRecoveryPolicy
+  readonly policy: PeerRecoveryPolicy
 }
 
 type WithoutCorrelation<Event> = Event extends unknown ? Omit<Event, 'correlation'> : never
@@ -77,7 +77,7 @@ type RecoveryBridgePayload<Event> = Event extends {
     }>
   : WithoutCorrelation<Event>
 
-export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<V2PeerAttemptTraceEvent> & Readonly<{
+export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<PeerAttemptTraceEvent> & Readonly<{
   protocolSessionIdBytes: readonly number[]
   peerPathIdBytes: readonly number[]
   attemptIdBytes: readonly number[]
@@ -85,7 +85,7 @@ export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<V2PeerAttemptTrace
   lane?: Readonly<{ laneId: number; laneEpoch: number }>
 }>
 
-export type HotSwitchPeerRecoveryEvidence = RecoveryBridgePayload<V2PeerRecoveryTraceEvent> & Readonly<{
+export type HotSwitchPeerRecoveryEvidence = RecoveryBridgePayload<PeerRecoveryTraceEvent> & Readonly<{
   protocolSessionIdBytes: readonly number[]
   peerPathIdBytes: readonly number[]
   attemptIdBytes?: readonly number[]

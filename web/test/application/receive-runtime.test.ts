@@ -1,11 +1,11 @@
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import { BrowserReceiveRuntime } from '../../src/application/receive/runtime'
-import { V2OutputPresentationController } from '../../src/ui/v2-output'
+import { OutputPresentationController } from '../../src/ui/output'
 import {
   FakeBoundRuntime, FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT,
   deferred, retainedWorkspaceIntent, stableLifecycle, turns, waitFor, waitingRetainedOperation,
@@ -90,7 +90,7 @@ describe('browser receive authority without presentation', () => {
   it('keeps admission independent of a detached, stale presentation snapshot', async () => {
     const f = await fixture()
     f.start()
-    const view = new V2OutputPresentationController(f.state)
+    const view = new OutputPresentationController(f.state)
     const stale = view.getSnapshot()
     view.close()
     f.runtime.performLifecycleAction('pause')
@@ -168,7 +168,7 @@ describe('browser receive authority without presentation', () => {
   it('evaluates new-task admission from selection and connection facts', async () => {
     const f = await fixture()
     expect(f.runtime.startBlockedReason()).toBeNull()
-    f.joined.replaceSelection(new V2SelectionPolicy(false))
+    f.joined.replaceSelection(new SelectionPolicy(false))
     expect(f.runtime.startBlockedReason()).not.toBeNull()
     f.runtime.observeConnection({ kind: 'ended', reason: 'share-stopped' })
     expect(f.runtime.remoteContinuationUnavailable()).not.toBeNull()

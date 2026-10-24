@@ -1,20 +1,20 @@
 import type { FailureCorrelation } from '../../diagnostics/incident/failure-correlation'
-import type { V2PeerAttemptIdentity, V2PeerPathIdentity, V2ProtocolSessionIdentity } from '../../session/v2-identities'
-import type { V2ConnectivityTraceSource, V2PeerRecoveryTraceEvent } from '../diagnostics'
-export type V2PeerRecoveryTracePayload<Event = V2PeerRecoveryTraceEvent> =
-  Event extends V2PeerRecoveryTraceEvent ? Omit<Event, 'eventName' | 'correlation'> : never
+import type { PeerAttemptIdentity, PeerPathIdentity, ProtocolSessionIdentity } from '../../session/identities'
+import type { ConnectivityTraceSource, PeerRecoveryTraceEvent } from '../diagnostics'
+export type PeerRecoveryTracePayload<Event = PeerRecoveryTraceEvent> =
+  Event extends PeerRecoveryTraceEvent ? Omit<Event, 'eventName' | 'correlation'> : never
 export class PeerRecoveryTrace {
-  readonly #protocolSessionId: V2ProtocolSessionIdentity
-  readonly #peerPathId: V2PeerPathIdentity
-  readonly #trace: V2ConnectivityTraceSource | undefined
-  constructor(session: V2ProtocolSessionIdentity, path: V2PeerPathIdentity, trace?: V2ConnectivityTraceSource) {
+  readonly #protocolSessionId: ProtocolSessionIdentity
+  readonly #peerPathId: PeerPathIdentity
+  readonly #trace: ConnectivityTraceSource | undefined
+  constructor(session: ProtocolSessionIdentity, path: PeerPathIdentity, trace?: ConnectivityTraceSource) {
     this.#protocolSessionId = session
     this.#peerPathId = path
     this.#trace = trace
   }
   emit(
-    createPayload: () => V2PeerRecoveryTracePayload,
-    attemptId?: V2PeerAttemptIdentity,
+    createPayload: () => PeerRecoveryTracePayload,
+    attemptId?: PeerAttemptIdentity,
     lane?: { readonly laneId: number; readonly laneEpoch: number },
   ): void {
     try {
@@ -32,7 +32,7 @@ export class PeerRecoveryTrace {
         eventName: 'peer_recovery',
         correlation,
         ...createPayload(),
-      }) as V2PeerRecoveryTraceEvent)
+      }) as PeerRecoveryTraceEvent)
     } catch {
       // Trace loss cannot perturb retry, budget, or session authority.
     }

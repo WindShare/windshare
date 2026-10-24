@@ -15,7 +15,7 @@ import {
 } from '../../transfer/directory-admission'
 import { FaultDomain, SourceFaultCode } from '../../transfer/failure/fault'
 import { MAX_CONTENT_WARNING_FILES, type MissingContentFile } from '../../transfer/lifecycle/content-warning'
-import { normalizeV2FileTransferFailure } from '../../transfer/job/failures'
+import { normalizeFileTransferFailure } from '../../transfer/job/failures'
 import type { ReceiveIntent } from '../../transfer/intent'
 import {
   ZIP_OBJECT_CHECKPOINT_PENDING_BYTES, ZIP_OBJECT_CHECKPOINT_PENDING_MILLISECONDS,
@@ -173,7 +173,7 @@ export async function createProgressiveZipOutput(input: {
 
 function recordMissingFile(files: Map<string, MissingContentFile>, entryId: string, path: readonly string[], error: unknown): void {
   if (files.size >= MAX_CONTENT_WARNING_FILES) return
-  const failure = normalizeV2FileTransferFailure(error)
+  const failure = normalizeFileTransferFailure(error)
   const fault = failure.kind === 'fault' ? failure.fault : undefined
   let reason: MissingContentFile['reason'] = 'file-failed'
   if (fault?.domain === FaultDomain.Source) {
@@ -208,7 +208,7 @@ async function openZipRevision(
     }
     return revision
   } catch (error) {
-    const failure = normalizeV2FileTransferFailure(error)
+    const failure = normalizeFileTransferFailure(error)
     if (failure.kind === 'fault' && failure.fault.domain === FaultDomain.Source &&
         await archive.findCommittedEntry(entryId) !== undefined) {
       await archive.markRevisionFailure(entryId, failure.fault.code)

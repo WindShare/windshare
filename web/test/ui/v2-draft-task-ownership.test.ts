@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import type { V2ConnectivityActivation } from '../../src/connectivity/v2-receiver-policy'
+import type { CatalogEntry } from '../../src/catalog/records'
+import type { ConnectivityActivation } from '../../src/connectivity/receiver-policy'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { ReceiveIntent } from '../../src/transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
-import type { TransferProgress } from '../../src/transfer/v2-job'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
-import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
+import type { PlanExecutionAuthority } from '../../src/transfer/output/session'
+import type { TransferProgress } from '../../src/transfer/job'
+import type { BrowseDirectory, BrowsePage } from '../../src/application/browser-share/gateway'
+import { EMPTY_PROGRESS } from '../../src/ui/model'
 import {
   FakeJoinedShare, FakeReceiveComposition, FILE_ID, MANAGED_ENVIRONMENT,
   controllerFor, deferred, identityText, next, resetOrchestrationTestEnvironment,
@@ -24,7 +24,7 @@ class BrowsableTransferShare extends FakeJoinedShare {
   soleFolder = false
   pageCalls: string[] = []
 
-  override async page(directory: V2BrowseDirectory): Promise<V2BrowsePage> {
+  override async page(directory: BrowseDirectory): Promise<BrowsePage> {
     this.pageCalls.push(directory.idText)
     const original = await super.page(directory)
     if (directory.path.length === 0) {
@@ -35,14 +35,14 @@ class BrowsableTransferShare extends FakeJoinedShare {
     return original
   }
 
-  childDirectory(parent: V2BrowseDirectory, entry: V2CatalogEntry): V2BrowseDirectory {
+  childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
     return { id: entry.id, idText: entry.idText, name: entry.name,
       path: [...parent.path, entry.name], ancestry: [...parent.ancestry, entry.idText] }
   }
 
   override transferJob(
-    plans: V2PlanExecutionAuthority, intent: ReceiveIntent,
-    _connectivity?: V2ConnectivityActivation,
+    plans: PlanExecutionAuthority, intent: ReceiveIntent,
+    _connectivity?: ConnectivityActivation,
     options?: { onProgress?: (progress: TransferProgress) => void },
   ) {
     this.onProgress = options?.onProgress
@@ -77,7 +77,7 @@ describe('draft, browsing and committed output ownership', () => {
     const committed = controller.getSnapshot().output
     const label = controller.getSnapshot().taskDisplay
     expect(label?.objectLabel).toBe('1 file')
-    joined.onProgress?.({ ...EMPTY_V2_PROGRESS, writtenBytes: 64n, discoveredBytes: 128n,
+    joined.onProgress?.({ ...EMPTY_PROGRESS, writtenBytes: 64n, discoveredBytes: 128n,
       discoveredFiles: 1, transferJobId: identityText(76) } as TransferProgress)
     const progress = controller.getSnapshot().progress
 

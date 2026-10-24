@@ -1,6 +1,6 @@
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
-import type { V2WebSocketPort } from '../../src/transport/relay/v2-receiver'
-import { decodeV2OpaqueRoute, encodeV2DescriptorDelivery, encodeV2SessionCredit } from '../../src/transport/relay/v2-protocol'
+import type { WebSocketPort } from '../../src/transport/relay/receiver'
+import { decodeOpaqueRoute, encodeDescriptorDelivery, encodeSessionCredit } from '../../src/transport/relay/protocol'
 
 export const relaySessionId = Uint8Array.of(1, 0, 0, 0, 0, 0, 0, 1)
 export const capability: Suite02CapabilityKey = Object.freeze({
@@ -11,7 +11,7 @@ export const capability: Suite02CapabilityKey = Object.freeze({
   shareId: 'share',
 })
 
-export class FakeSocket implements V2WebSocketPort {
+export class FakeSocket implements WebSocketPort {
   binaryType: BinaryType = 'arraybuffer'
   readyState = 1
   bufferedAmount = 0
@@ -32,7 +32,7 @@ export class FakeSocket implements V2WebSocketPort {
     this.sent.push(encoded.slice())
     if (String.fromCharCode(...encoded.subarray(0, 4)) !== 'WS2J' || !this.#descriptor) return
     queueMicrotask(() => {
-      this.message(encodeV2DescriptorDelivery({ relaySessionId, object: Uint8Array.of(1) }))
+      this.message(encodeDescriptorDelivery({ relaySessionId, object: Uint8Array.of(1) }))
       if (this.initialCredit !== undefined) this.grant(this.initialCredit.frames, this.initialCredit.bytes)
     })
   }
@@ -68,7 +68,7 @@ export class FakeSocket implements V2WebSocketPort {
   }
 
   grant(frames: number, bytes: number): void {
-    this.message(encodeV2SessionCredit({ relaySessionId, frames, bytes }))
+    this.message(encodeSessionCredit({ relaySessionId, frames, bytes }))
   }
 
   fail(): void {
@@ -78,7 +78,7 @@ export class FakeSocket implements V2WebSocketPort {
   get opaqueFrames(): Uint8Array[] {
     return this.sent
       .filter(encoded => String.fromCharCode(...encoded.subarray(0, 4)) === 'WS2O')
-      .map(encoded => decodeV2OpaqueRoute(encoded).ciphertext)
+      .map(encoded => decodeOpaqueRoute(encoded).ciphertext)
   }
 
   #emit(type: string, event: unknown): void {

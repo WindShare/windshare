@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
-import type { V2CommittedDirectory } from '../../../src/catalog/v2-page-store'
-import type { V2CatalogPage } from '../../../src/catalog/v2-records'
-import { frozenV2SelectionPolicy } from '../../../src/catalog/v2-selection'
+import type { CommittedDirectory } from '../../../src/catalog/page-store'
+import type { CatalogPage } from '../../../src/catalog/records'
+import { frozenSelectionPolicy } from '../../../src/catalog/selection'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
-import { projectAuthenticatedV2Generation } from '../../../src/transfer/discovery/v2-projection-evidence'
+import { projectAuthenticatedGeneration } from '../../../src/transfer/discovery/projection-evidence'
 
 describe('authenticated catalog generation projection adapter', () => {
   it('streams a committed generation into bounded shape evidence', async () => {
     const fixture = committedFixture()
-    const evidence = await projectAuthenticatedV2Generation({
+    const evidence = await projectAuthenticatedGeneration({
       committed: fixture.committed,
       pages: pages(fixture.page),
-      selection: frozenV2SelectionPolicy(true, []),
+      selection: frozenSelectionPolicy(true, []),
       directoryAncestry: [],
       directoryPath: [],
       containingDirectorySelected: false,
@@ -42,10 +42,10 @@ describe('authenticated catalog generation projection adapter', () => {
       generation: identityBytes(99),
       generationText: identityText(99),
     })
-    await expect(projectAuthenticatedV2Generation({
+    await expect(projectAuthenticatedGeneration({
       committed: fixture.committed,
       pages: pages(tampered),
-      selection: frozenV2SelectionPolicy(true, []),
+      selection: frozenSelectionPolicy(true, []),
       directoryAncestry: [],
       directoryPath: [],
       containingDirectorySelected: false,
@@ -55,13 +55,13 @@ describe('authenticated catalog generation projection adapter', () => {
 })
 
 function committedFixture(): Readonly<{
-  committed: V2CommittedDirectory
-  page: V2CatalogPage
+  committed: CommittedDirectory
+  page: CatalogPage
 }> {
   const directoryId = identityBytes(1)
   const generation = identityBytes(2)
   const terminalCommitment = commitment(3)
-  const entries: V2CatalogPage['entries'] = Object.freeze([
+  const entries: CatalogPage['entries'] = Object.freeze([
     Object.freeze({
       kind: 'file' as const,
       id: identityBytes(4),
@@ -76,7 +76,7 @@ function committedFixture(): Readonly<{
       name: 'empty',
     }),
   ])
-  const page: V2CatalogPage = Object.freeze({
+  const page: CatalogPage = Object.freeze({
     shareInstance: identityBytes(6),
     directoryId,
     directoryIdText: encodeBase64Url(directoryId),
@@ -105,7 +105,7 @@ function committedFixture(): Readonly<{
   })
 }
 
-async function* pages(page: V2CatalogPage): AsyncGenerator<V2CatalogPage> {
+async function* pages(page: CatalogPage): AsyncGenerator<CatalogPage> {
   yield page
 }
 

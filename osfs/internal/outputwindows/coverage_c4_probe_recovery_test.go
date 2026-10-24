@@ -20,11 +20,11 @@ const (
 )
 
 func TestCoverageC4WindowsProbeRecoversExactRestartLeftover(t *testing.T) {
-	opened, err := Open(windowsV3NativeTestTempDir(t), false)
+	opened, err := Open(windowsNativeTestTempDir(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	platform, ok := opened.(*windowsOutputV3Platform)
+	platform, ok := opened.(*windowsOutputPlatform)
 	if !ok {
 		_ = opened.Close()
 		t.Fatalf("Windows platform type = %T", opened)
@@ -39,18 +39,18 @@ func TestCoverageC4WindowsProbeRecoversExactRestartLeftover(t *testing.T) {
 
 	// Injected entropy fixes the fresh probe name so this test covers recovery,
 	// the mutex lifetime, and the normal feature proof without timing or chance.
-	nonce := bytes.Repeat([]byte{0x5c}, windowsV3OutputProbeRandomBytes)
+	nonce := bytes.Repeat([]byte{0x5c}, windowsOutputProbeRandomBytes)
 	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.probeRecoverableFeaturesWithRandom(nil); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.probeRecoverableFeaturesWithRandom(nil); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("missing probe entropy error = %v", err)
 	}
-	var closedRoot *windowsV3Directory
-	if err := closedRoot.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	var closedRoot *windowsDirectory
+	if err := closedRoot.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed probe root error = %v", err)
 	}
-	if err := closedRoot.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := closedRoot.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed recovery root error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root.path, coverageC4CompleteProbeName)); !errors.Is(err, fs.ErrNotExist) {
@@ -66,17 +66,17 @@ func TestCoverageC4WindowsProbeRecoversExactRestartLeftover(t *testing.T) {
 	if err := platform.ProbeRecoverableFeatures(); err != nil {
 		t.Fatalf("platform feature probe: %v", err)
 	}
-	if err := platform.native.root.releaseOutputProbeLock(nil); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := platform.native.root.releaseOutputProbeLock(nil); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("missing probe lock release error = %v", err)
 	}
-	moved := &windowsV3OutputProbeLock{handle: windows.Handle(1), held: true}
-	if err := platform.native.root.releaseOutputProbeLock(moved); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	moved := &windowsOutputProbeLock{handle: windows.Handle(1), held: true}
+	if err := platform.native.root.releaseOutputProbeLock(moved); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("unowned-thread probe lock release error = %v", err)
 	}
 }
 
 func TestCoverageC4WindowsProbeRecoveryPreservesWrongKindRoot(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -92,7 +92,7 @@ func TestCoverageC4WindowsProbeRecoveryPreservesWrongKindRoot(t *testing.T) {
 	if err := foreign.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("wrong-kind probe-root error = %v", err)
 	}
 	if info, err := os.Stat(filepath.Join(root.path, name)); err != nil || info.IsDir() {
@@ -101,14 +101,14 @@ func TestCoverageC4WindowsProbeRecoveryPreservesWrongKindRoot(t *testing.T) {
 }
 
 func TestCoverageC4WindowsProbeRecoveryPreservesUnownedState(t *testing.T) {
-	invalidCharacterName := windowsV3OutputProbePrefix + "gggggggggggggggggggggggggggggggg"
-	if windowsV3CanonicalProbeName(invalidCharacterName) {
+	invalidCharacterName := windowsOutputProbePrefix + "gggggggggggggggggggggggggggggggg"
+	if windowsCanonicalProbeName(invalidCharacterName) {
 		t.Fatal("probe name with non-hex nonce was canonical")
 	}
 	for _, test := range []struct {
 		name      string
 		probeName string
-		build     func(*testing.T, *windowsV3Directory)
+		build     func(*testing.T, *windowsDirectory)
 	}{
 		{
 			name:      "malformed reserved name",
@@ -117,7 +117,7 @@ func TestCoverageC4WindowsProbeRecoveryPreservesUnownedState(t *testing.T) {
 		{
 			name:      "foreign child in canonical namespace",
 			probeName: coverageC4ForeignProbeName,
-			build: func(t *testing.T, probe *windowsV3Directory) {
+			build: func(t *testing.T, probe *windowsDirectory) {
 				file, err := probe.CreatePrivateFile("foreign")
 				if err != nil {
 					t.Fatal(err)
@@ -129,7 +129,7 @@ func TestCoverageC4WindowsProbeRecoveryPreservesUnownedState(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			platform := openWindowsV3TestPlatform(t)
+			platform := openWindowsTestPlatform(t)
 			defer platform.Close()
 			guard, err := platform.acquirePublicOperationGuard()
 			if err != nil {
@@ -148,7 +148,7 @@ func TestCoverageC4WindowsProbeRecoveryPreservesUnownedState(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+			if err := root.recoverOutputProbeLeftovers(); !errors.Is(err, errWindowsOutputUnsafe) {
 				t.Fatalf("unsafe leftover error = %v", err)
 			}
 			if info, err := os.Stat(filepath.Join(root.path, test.probeName)); err != nil || !info.IsDir() {
@@ -162,15 +162,15 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		probeName string
-		build     func(*testing.T, *windowsV3Directory, string)
-		replace   func(*testing.T, *windowsV3OutputProbeLeftover)
+		build     func(*testing.T, *windowsDirectory, string)
+		replace   func(*testing.T, *windowsOutputProbeLeftover)
 		preserved string
 	}{
 		{
 			name:      "regular link",
 			probeName: ".windshare-output.probe-33333333333333333333333333333333",
 			build:     coverageC4BuildCompleteProbeLeftover,
-			replace: func(t *testing.T, leftover *windowsV3OutputProbeLeftover) {
+			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
 				if err := leftover.directory.RemoveRegularLink("stage", leftover.regular["stage"]); err != nil {
 					t.Fatal(err)
 				}
@@ -187,7 +187,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 		{
 			name:      "child directory",
 			probeName: ".windshare-output.probe-44444444444444444444444444444444",
-			build: func(t *testing.T, root *windowsV3Directory, name string) {
+			build: func(t *testing.T, root *windowsDirectory, name string) {
 				probe, err := root.CreatePrivateDirectory(name)
 				if err != nil {
 					t.Fatal(err)
@@ -201,7 +201,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			replace: func(t *testing.T, leftover *windowsV3OutputProbeLeftover) {
+			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
 				if err := leftover.directory.RemoveDirectory("candidate", leftover.directories["candidate"]); err != nil {
 					t.Fatal(err)
 				}
@@ -218,7 +218,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 		{
 			name:      "probe root",
 			probeName: ".windshare-output.probe-55555555555555555555555555555555",
-			build: func(t *testing.T, root *windowsV3Directory, name string) {
+			build: func(t *testing.T, root *windowsDirectory, name string) {
 				probe, err := root.CreatePrivateDirectory(name)
 				if err != nil {
 					t.Fatal(err)
@@ -227,7 +227,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			replace: func(t *testing.T, leftover *windowsV3OutputProbeLeftover) {
+			replace: func(t *testing.T, leftover *windowsOutputProbeLeftover) {
 				if err := leftover.root.RemoveDirectory(leftover.name, leftover.directory); err != nil {
 					t.Fatal(err)
 				}
@@ -242,7 +242,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			platform := openWindowsV3TestPlatform(t)
+			platform := openWindowsTestPlatform(t)
 			defer platform.Close()
 			guard, err := platform.acquirePublicOperationGuard()
 			if err != nil {
@@ -256,7 +256,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			test.replace(t, leftover)
-			if err := leftover.remove(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+			if err := leftover.remove(); !errors.Is(err, errWindowsOutputUnsafe) {
 				_ = leftover.close()
 				t.Fatalf("replacement removal error = %v", err)
 			}
@@ -274,7 +274,7 @@ func TestCoverageC4WindowsProbeRemovalStopsAtIdentityReplacement(t *testing.T) {
 	}
 }
 
-func coverageC4BuildCompleteProbeLeftover(t *testing.T, root *windowsV3Directory, name string) {
+func coverageC4BuildCompleteProbeLeftover(t *testing.T, root *windowsDirectory, name string) {
 	t.Helper()
 	probe, err := root.CreatePrivateDirectory(name)
 	if err != nil {

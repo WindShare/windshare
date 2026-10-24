@@ -12,36 +12,36 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3VolumeFacts struct {
+type windowsVolumeFacts struct {
 	filesystem string
 	path       string
 	driveType  uint32
 	flags      uint32
 }
 
-type windowsV3VolumeInspector interface {
-	InspectVolume(windows.Handle) (windowsV3VolumeFacts, error)
+type windowsVolumeInspector interface {
+	InspectVolume(windows.Handle) (windowsVolumeFacts, error)
 }
 
-type nativeWindowsV3VolumeInspector struct{}
+type nativeWindowsVolumeInspector struct{}
 
-func (nativeWindowsV3VolumeInspector) InspectVolume(handle windows.Handle) (windowsV3VolumeFacts, error) {
+func (nativeWindowsVolumeInspector) InspectVolume(handle windows.Handle) (windowsVolumeFacts, error) {
 	var filesystem [32]uint16
 	var flags uint32
 	if err := windows.GetVolumeInformationByHandle(
 		handle, nil, 0, nil, nil, &flags, &filesystem[0], uint32(len(filesystem)),
 	); err != nil {
-		return windowsV3VolumeFacts{}, err
+		return windowsVolumeFacts{}, err
 	}
-	path, err := windowsV3FinalPath(handle, 0)
+	path, err := windowsFinalPath(handle, 0)
 	if err != nil {
-		return windowsV3VolumeFacts{}, err
+		return windowsVolumeFacts{}, err
 	}
-	volumePath, err := windowsV3VolumePath(path)
+	volumePath, err := windowsVolumePath(path)
 	if err != nil {
-		return windowsV3VolumeFacts{}, err
+		return windowsVolumeFacts{}, err
 	}
-	return windowsV3VolumeFacts{
+	return windowsVolumeFacts{
 		filesystem: windows.UTF16ToString(filesystem[:]),
 		path:       path,
 		driveType:  windows.GetDriveType(&volumePath[0]),
@@ -53,56 +53,56 @@ func (nativeWindowsV3VolumeInspector) InspectVolume(handle windows.Handle) (wind
 // must be queried only at namespace boundaries, never as an identity side effect.
 // Mutable attributes are still observed afresh; no path or attribute cache grants
 // authority to a later operation.
-type windowsV3ObjectFacts struct {
+type windowsObjectFacts struct {
 	attributes    uint32
 	caseSensitive bool
-	object        windowsV3ObjectIdentity
+	object        windowsObjectIdentity
 }
 
-type windowsV3ObjectInspector interface {
-	Identify(windows.Handle) (windowsV3ObjectIdentity, error)
-	Inspect(windows.Handle) (windowsV3ObjectFacts, error)
+type windowsObjectInspector interface {
+	Identify(windows.Handle) (windowsObjectIdentity, error)
+	Inspect(windows.Handle) (windowsObjectFacts, error)
 }
 
-type nativeWindowsV3ObjectInspector struct{}
+type nativeWindowsObjectInspector struct{}
 
-type windowsV3FileIDInfo struct {
+type windowsFileIDInfo struct {
 	VolumeSerialNumber uint64
 	FileID             [16]byte
 }
 
-func (nativeWindowsV3ObjectInspector) Identify(handle windows.Handle) (windowsV3ObjectIdentity, error) {
+func (nativeWindowsObjectInspector) Identify(handle windows.Handle) (windowsObjectIdentity, error) {
 	// Resolve the actual volume GUID as well as the serial from this handle.
 	// An expected volume or a drive-letter cache is not evidence of membership.
-	volumeGUIDPath, err := windowsV3FinalPath(handle, windowsV3OutputVolumeNameGUID)
+	volumeGUIDPath, err := windowsFinalPath(handle, windowsOutputVolumeNameGUID)
 	if err != nil {
-		return windowsV3ObjectIdentity{}, err
+		return windowsObjectIdentity{}, err
 	}
 	volumeGUID := strings.ToLower(filepath.VolumeName(volumeGUIDPath))
 	if volumeGUID == "" {
-		return windowsV3ObjectIdentity{}, errors.New("windows volume GUID path has no volume name")
+		return windowsObjectIdentity{}, errors.New("windows volume GUID path has no volume name")
 	}
 
-	var fileID windowsV3FileIDInfo
+	var fileID windowsFileIDInfo
 	if err := windows.GetFileInformationByHandleEx(
 		handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&fileID)), uint32(unsafe.Sizeof(fileID)),
 	); err != nil {
-		return windowsV3ObjectIdentity{}, err
+		return windowsObjectIdentity{}, err
 	}
-	return windowsV3ObjectIdentity{
-		volume: windowsV3VolumeIdentity{guid: volumeGUID, serial: fileID.VolumeSerialNumber},
+	return windowsObjectIdentity{
+		volume: windowsVolumeIdentity{guid: volumeGUID, serial: fileID.VolumeSerialNumber},
 		fileID: fileID.FileID,
 	}, nil
 }
 
-func (inspector nativeWindowsV3ObjectInspector) Inspect(handle windows.Handle) (windowsV3ObjectFacts, error) {
+func (inspector nativeWindowsObjectInspector) Inspect(handle windows.Handle) (windowsObjectFacts, error) {
 	identity, err := inspector.Identify(handle)
 	if err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsObjectFacts{}, err
 	}
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsObjectFacts{}, err
 	}
 	caseSensitive := false
 	if information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
@@ -113,18 +113,18 @@ func (inspector nativeWindowsV3ObjectInspector) Inspect(handle windows.Handle) (
 			(*byte)(unsafe.Pointer(&sensitivity)),
 			uint32(unsafe.Sizeof(sensitivity)),
 		); err != nil {
-			return windowsV3ObjectFacts{}, err
+			return windowsObjectFacts{}, err
 		}
 		caseSensitive = sensitivity.Flags&windows.FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0
 	}
-	return windowsV3ObjectFacts{
+	return windowsObjectFacts{
 		attributes:    information.FileAttributes,
 		caseSensitive: caseSensitive,
 		object:        identity,
 	}, nil
 }
 
-func windowsV3FinalPath(handle windows.Handle, flags uint32) (string, error) {
+func windowsFinalPath(handle windows.Handle, flags uint32) (string, error) {
 	buffer := make([]uint16, 512)
 	for {
 		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), flags)
@@ -138,7 +138,7 @@ func windowsV3FinalPath(handle windows.Handle, flags uint32) (string, error) {
 	}
 }
 
-func windowsV3VolumePath(path string) ([]uint16, error) {
+func windowsVolumePath(path string) ([]uint16, error) {
 	encoded, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
@@ -150,74 +150,74 @@ func windowsV3VolumePath(path string) ([]uint16, error) {
 	return buffer, nil
 }
 
-func validateWindowsV3RootShape(facts windowsV3ObjectFacts) error {
-	if err := validateWindowsV3DirectoryShape(facts, "certify output root", "output root"); err != nil {
+func validateWindowsRootShape(facts windowsObjectFacts) error {
+	if err := validateWindowsDirectoryShape(facts, "certify output root", "output root"); err != nil {
 		return err
 	}
 	if facts.caseSensitive {
-		return windowsV3Failure("certify output root", "", errWindowsV3OutputUnsupported,
+		return windowsFailure("certify output root", "", errWindowsOutputUnsupported,
 			errors.New("case-sensitive NTFS output directories are not certified"))
 	}
 	return nil
 }
 
-func validateWindowsV3ExternalPlacement(
-	facts windowsV3ObjectFacts,
-	expected windowsV3VolumeIdentity,
+func validateWindowsExternalPlacement(
+	facts windowsObjectFacts,
+	expected windowsVolumeIdentity,
 ) error {
 	// The retained root already certified the volume. Each ancestry handle must
 	// independently prove that same GUID and serial before reusing its capabilities.
 	if facts.object.volume != expected {
-		return windowsV3Failure("certify external output placement", "", errWindowsV3OutputUnsafe,
+		return windowsFailure("certify external output placement", "", errWindowsOutputUnsafe,
 			errors.New("external placement crossed the certified NTFS volume boundary"))
 	}
 	// External components are spelling/placement authorities, not output lookup
 	// roots. Per-directory case-sensitive lookup therefore does not affect the
 	// handle-bound output namespace beneath them.
-	return validateWindowsV3DirectoryShape(
+	return validateWindowsDirectoryShape(
 		facts, "certify external output placement", "external output placement",
 	)
 }
 
-func validateWindowsV3VolumeCertification(facts windowsV3VolumeFacts) error {
+func validateWindowsVolumeCertification(facts windowsVolumeFacts) error {
 	switch {
-	case !strings.EqualFold(facts.filesystem, windowsV3OutputFilesystem):
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+	case !strings.EqualFold(facts.filesystem, windowsOutputFilesystem):
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			fmt.Errorf("filesystem %q is not NTFS", facts.filesystem))
 	case strings.HasPrefix(strings.TrimPrefix(facts.path, `\\?\`), `UNC\`):
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("network filesystems are not certified"))
 	case facts.driveType != windows.DRIVE_FIXED:
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			fmt.Errorf("drive type %d is not a certified fixed disk", facts.driveType))
 	case facts.flags&windows.FILE_SUPPORTS_HARD_LINKS == 0:
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report regular-file hard-link support"))
 	case facts.flags&windows.FILE_PERSISTENT_ACLS == 0:
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report persistent ACL support"))
-	case facts.flags&windowsV3FileSupportsPOSIXSemantics == 0:
-		return windowsV3Failure("certify output filesystem", facts.path, errWindowsV3OutputUnsupported,
+	case facts.flags&windowsFileSupportsPOSIXSemantics == 0:
+		return windowsFailure("certify output filesystem", facts.path, errWindowsOutputUnsupported,
 			errors.New("volume does not report handle-bound rename/unlink support"))
 	default:
 		return nil
 	}
 }
 
-func validateWindowsV3DirectoryShape(
-	facts windowsV3ObjectFacts,
+func validateWindowsDirectoryShape(
+	facts windowsObjectFacts,
 	operation string,
 	role string,
 ) error {
 	switch {
 	case facts.attributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0:
-		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+		return windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New(role+" is not a directory"))
-	case facts.attributes&windowsV3CloudAttributeMask != 0:
-		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+	case facts.attributes&windowsCloudAttributeMask != 0:
+		return windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("reparse, offline, and cloud-placeholder directories are not certified"))
 	case !facts.object.valid():
-		return windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+		return windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("volume or File ID identity is unavailable"))
 	default:
 		return nil

@@ -1,6 +1,6 @@
 import type { OutputDiagnosticsPorts } from '../../../output/diagnostics'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../../output/resume/reopen-authority'
-import type { V2RetainedReceiveActionResult } from '../../receive/contracts'
+import type { RetainedReceiveActionResult } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { WorkspaceReceiveOperation } from '../workspace/operation'
 import { handoffRetainedWorkspacePackage } from '../workspace/publication'
@@ -11,7 +11,7 @@ type ProgressiveOperation = Extract<AuthorityOwnedReceiveOperationContinuation,
 export async function continueProgressiveZip(
   windowPort: BrowserReceiveWindow, operation: ProgressiveOperation, signal: AbortSignal,
   diagnostics?: OutputDiagnosticsPorts,
-): Promise<V2RetainedReceiveActionResult> {
+): Promise<RetainedReceiveActionResult> {
   const { backend, requirement } = operation.progressiveContinuation
   if (requirement === 'remote-content-needed') {
     try {

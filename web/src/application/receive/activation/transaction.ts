@@ -8,9 +8,9 @@ import {
 } from '../../../output/planning'
 import type { ArtifactChoiceID, ReceiveIntent, SelectionSpec } from '../../../transfer/intent'
 import type { ReceivePlanningShare } from '../joined-share'
-import type { V2BoundReceiveOperation } from '../contracts'
+import type { BoundReceiveOperation } from '../contracts'
 import type { ActiveReceiveAdoption } from '../active/coordinator'
-import { V2ActivationStateContractError } from './model'
+import { ActivationStateContractError } from './model'
 import {
   AuthorityCommitTransaction,
   type AuthorityCommitOutcome,
@@ -23,12 +23,12 @@ import {
 } from './lifecycle'
 import { planningSubject, type AuthorityPlanningPipeline } from './planning'
 import { StaleReceiveBoundaryError } from '../observation/contracts'
-import type { V2ActiveProjection } from '../discovery'
-import type { V2PresentationAttempt } from '../observation/attempt'
+import type { ActiveProjection } from '../discovery'
+import type { PresentationAttempt } from '../observation/attempt'
 
 export interface FrozenAuthorityCommitContext {
   readonly currentActivation: () => AuthorityActivationRecord | undefined
-  readonly currentProjection: () => V2ActiveProjection | undefined
+  readonly currentProjection: () => ActiveProjection | undefined
   readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly joinSuspended: () => boolean
   readonly planning: AuthorityPlanningPipeline
@@ -36,7 +36,7 @@ export interface FrozenAuthorityCommitContext {
 }
 
 export interface FrozenBoundOperation {
-  readonly runtime: V2BoundReceiveOperation
+  readonly runtime: BoundReceiveOperation
   readonly intent: ReceiveIntent
   readonly adoption: ActiveReceiveAdoption
 }
@@ -44,11 +44,11 @@ export interface FrozenBoundOperation {
 /** Constructs the record the coordinator installs before invoking reentrant presentation authority. */
 export function createProvisionalAuthorityActivation(input: Readonly<{
   activationId: string
-  active: V2ActiveProjection
+  active: ActiveProjection
   offered: OfferedArtifactChoice
   preClickRanking: readonly ArtifactChoiceID[]
   observationRevision: number
-  attempt: V2PresentationAttempt
+  attempt: PresentationAttempt
 }>): AuthorityActivationRecord {
   return createAuthorityActivationRecord({
     activationId: input.activationId,
@@ -76,7 +76,7 @@ export function offeredArtifactChoiceRanking(
         .filter(candidate => candidate.choice.artifactKind !== 'zip-archive')
   const ranking = displayed.map(candidate => candidate.choice.choiceId)
   if (!ranking.includes(selected.choiceId) || new Set(ranking).size !== ranking.length) {
-    throw new V2ActivationStateContractError(
+    throw new ActivationStateContractError(
       'displayed artifact ranking does not own the selected choice',
     )
   }
@@ -143,7 +143,7 @@ export function frozenBoundOperation(
   record: AuthorityActivationRecord,
   attempt: AuthorityCommitTransaction,
   result: Extract<AuthorityCommitOutcome, { kind: 'bound-operation' }>,
-  active: V2ActiveProjection,
+  active: ActiveProjection,
 ): FrozenBoundOperation | undefined {
   const resolution = record.resolution
   if (resolution === undefined ||

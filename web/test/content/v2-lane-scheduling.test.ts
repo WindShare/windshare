@@ -1,35 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockBroker, type V2BlockPriority } from '../../src/content/v2-broker'
-import { V2LaneSet, type V2BlockDemand, type V2BlockLane, type V2BlockSchedulingObservation } from '../../src/content/v2-lane-set'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
+import { BlockBroker, type BlockPriority } from '../../src/content/broker'
+import { LaneSet, type BlockDemand, type BlockLane, type BlockSchedulingObservation } from '../../src/content/lane-set'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
 import { LanePerformance } from '../../src/content/scheduling/performance'
 import { completionCost } from '../../src/content/scheduling/completion'
 import { LaneRescues, PROBE_INTERVAL_MILLISECONDS, rescueDue } from '../../src/content/scheduling/exploration'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 
 const BLOCK_BYTES = 1024
 const BLOCK_COUNT = 96
-const descriptor: V2FileRevisionDescriptor = {
+const descriptor: FileRevisionDescriptor = {
   shareInstance: new Uint8Array(16), shareInstanceId: 'share',
   fileId: new Uint8Array(16), fileIdText: 'file',
   fileRevision: new Uint8Array(16), fileRevisionText: 'revision',
   exactSize: BigInt(BLOCK_BYTES * BLOCK_COUNT),
   geometry: new FileGeometry(BigInt(BLOCK_BYTES * BLOCK_COUNT), BigInt(BLOCK_BYTES)),
 }
-const routes: V2BlockRouteEligibility = {
+const routes: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
 }
-function demand(index = 0n): V2BlockDemand {
+function demand(index = 0n): BlockDemand {
   return { descriptor, leaseId: new Uint8Array(16), localBlockIndex: index }
 }
-function record(input: V2BlockDemand): V2BlockRecord {
+function record(input: BlockDemand): BlockRecord {
   return { descriptor: input.descriptor, localBlockIndex: input.localBlockIndex, data: new Uint8Array(BLOCK_BYTES).fill(Number(input.localBlockIndex)) }
 }
 
 /** All requests share a lane's finite bandwidth; more in-flight blocks cannot manufacture capacity. */
-class BandwidthLane implements V2BlockLane {
+class BandwidthLane implements BlockLane {
   readonly id: number
   readonly millisecondsPerBlock: number
   readonly calls: bigint[] = []
@@ -40,7 +40,7 @@ class BandwidthLane implements V2BlockLane {
     this.id = id
     this.millisecondsPerBlock = millisecondsPerBlock
   }
-  fetchBlock(input: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand, signal: AbortSignal): Promise<BlockRecord> {
     this.calls.push(input.localBlockIndex)
     const due = Math.max(Date.now(), this.#tail) + this.millisecondsPerBlock
     this.#tail = due
@@ -55,7 +55,7 @@ class BandwidthLane implements V2BlockLane {
     })
   }
 }
-async function download(broker: V2BlockBroker, count: number, maximumParallel = 8): Promise<bigint[]> {
+async function download(broker: BlockBroker, count: number, maximumParallel = 8): Promise<bigint[]> {
   const emitted: bigint[] = []
   for await (const slice of broker.readRouteAuthorizedRange(
     descriptor, demand().leaseId, { start: 0n, end: BigInt(BLOCK_BYTES * count) },
@@ -66,13 +66,13 @@ async function download(broker: V2BlockBroker, count: number, maximumParallel = 
   }
   return emitted
 }
-async function warm(lanes: V2LaneSet, route: 'direct' | 'application-relay', milliseconds: number): Promise<void> {
+async function warm(lanes: LaneSet, route: 'direct' | 'application-relay', milliseconds: number): Promise<void> {
   const sample = lanes.fetch(demand(), { ...routes, allows: value => value === route }, new AbortController().signal)
   await vi.advanceTimersByTimeAsync(milliseconds)
   await sample
 }
 
-async function downloadFiles(broker: V2BlockBroker, count: number, priority: V2BlockPriority = 'download'): Promise<string[]> {
+async function downloadFiles(broker: BlockBroker, count: number, priority: BlockPriority = 'download'): Promise<string[]> {
   let next = 0
   const finished: string[] = []
   await Promise.all(Array.from({ length: Math.min(count, 8) }, async () => {
@@ -95,13 +95,13 @@ describe('independent file allocation', () => {
   afterEach(() => vi.useRealTimers())
 
   it('learns a lane attached during single-block file downloads and uses its independent capacity', async () => {
-    const observations: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
+    const observations: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
     const direct = new BandwidthLane(1, 10)
     const relay = new BandwidthLane(2, 15)
     lanes.add(direct, 'direct')
     await warm(lanes, 'direct', 10)
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const started = Date.now()
     let elapsed = 0
     const transfer = downloadFiles(broker, 800).then(files => { elapsed = Date.now() - started; return files })
@@ -121,13 +121,13 @@ describe('independent file allocation', () => {
   })
 
   it('bounds slow-lane exploration across a sustained file batch', async () => {
-    const observations: (V2BlockSchedulingObservation & { at: number })[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push({ ...value, at: Date.now() }) })
+    const observations: (BlockSchedulingObservation & { at: number })[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push({ ...value, at: Date.now() }) })
     const relay = new BandwidthLane(2, 10_000)
     lanes.add(new BandwidthLane(1, 10), 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const started = Date.now()
     let elapsed = 0
     const transfer = downloadFiles(broker, 1200).then(files => { elapsed = Date.now() - started; return files })
@@ -147,12 +147,12 @@ describe('independent file allocation', () => {
   })
 
   it('rescues a slow sampled file before it becomes the batch completion tail', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     const relay = new BandwidthLane(2, 10_000)
     lanes.add(new BandwidthLane(1, 10), 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     let elapsed = 0
     const started = Date.now()
     const transfer = downloadFiles(broker, 8).then(files => { elapsed = Date.now() - started; return files })
@@ -167,12 +167,12 @@ describe('independent file allocation', () => {
   })
 
   it('keeps concurrent preview frontiers on the measured fast path', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     const relay = new BandwidthLane(2, 10_000)
     lanes.add(new BandwidthLane(1, 10), 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const transfer = downloadFiles(broker, 16, 'preview')
     await vi.advanceTimersByTimeAsync(160)
     expect(await transfer).toHaveLength(16)
@@ -181,13 +181,13 @@ describe('independent file allocation', () => {
   })
 
   it('does not use the only queued file as a probe while another read is active', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     const relay = new BandwidthLane(2, 10_000)
     lanes.add(new BandwidthLane(1, 10), 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
     const active = lanes.fetch(demand(), routes, new AbortController().signal)
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const transfer = downloadFiles(broker, 1)
     await vi.advanceTimersByTimeAsync(20)
     expect(await transfer).toHaveLength(1)
@@ -236,11 +236,11 @@ describe('receiver content allocation', () => {
   afterEach(() => vi.useRealTimers())
 
   it.each([2, 3])('adds useful capacity from %i lanes by assigning different blocks', async laneCount => {
-    const observations: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
+    const observations: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
     const paths = Array.from({ length: laneCount }, (_, index) => new BandwidthLane(index + 1, 10 + index * 5))
     paths.forEach((lane, index) => lanes.add(lane, index === 0 ? 'direct' : 'application-relay'))
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     let elapsed = 0
     const transfer = download(broker, BLOCK_COUNT).then(offsets => { elapsed = Date.now(); return offsets })
     await vi.advanceTimersByTimeAsync(1500)
@@ -255,14 +255,14 @@ describe('receiver content allocation', () => {
   })
 
   it('gives a newly attached lane an independent block that can finish after a faster lane', async () => {
-    const observations: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
+    const observations: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
     const direct = new BandwidthLane(1, 10)
     const relay = new BandwidthLane(2, 15)
     lanes.add(direct, 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const transfer = download(broker, BLOCK_COUNT)
     await vi.advanceTimersByTimeAsync(1000)
     await transfer
@@ -275,14 +275,14 @@ describe('receiver content allocation', () => {
   })
 
   it('rescues a slow exploratory block when output reaches it without filling an unbounded window', async () => {
-    const observations: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
+    const observations: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
     const direct = new BandwidthLane(1, 10)
     const relay = new BandwidthLane(2, 10_000)
     lanes.add(direct, 'direct')
     await warm(lanes, 'direct', 10)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes, { maximumRangeBufferBytes: BLOCK_BYTES * 16 })
+    const broker = new BlockBroker(lanes, { maximumRangeBufferBytes: BLOCK_BYTES * 16 })
     const started = Date.now()
     let elapsed = 0
     const transfer = download(broker, 16, 4).then(value => { elapsed = Date.now() - started; return value })
@@ -297,8 +297,8 @@ describe('receiver content allocation', () => {
   })
 
   it('rescues already dispatched slow content when a direct path appears', async () => {
-    const observations: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
+    const observations: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: value => observations.push(value) })
     const relay = new BandwidthLane(1, 10_000)
     lanes.add(relay, 'application-relay')
     const read = lanes.fetch(demand(), routes, new AbortController().signal)
@@ -313,12 +313,12 @@ describe('receiver content allocation', () => {
   })
 
   it('retries a physically failed independent allocation without failing healthy content', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     lanes.add(new BandwidthLane(1, 10), 'direct')
     await warm(lanes, 'direct', 10)
-    const failed = vi.fn(async () => { throw new V2SessionRuntimeError('lane', 'standby disconnected') })
+    const failed = vi.fn(async () => { throw new SessionRuntimeError('lane', 'standby disconnected') })
     lanes.add({ id: 2, fetchBlock: failed }, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const transfer = download(broker, 16)
     await vi.advanceTimersByTimeAsync(500)
     expect(await transfer).toHaveLength(16)
@@ -327,7 +327,7 @@ describe('receiver content allocation', () => {
   })
 
   it('does not explore forbidden routes or keep timers after caller cancellation', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     const relay = new BandwidthLane(2, 5)
     lanes.add(new BandwidthLane(1, 10_000), 'direct')
     lanes.add(relay, 'application-relay')
@@ -343,8 +343,8 @@ describe('receiver content allocation', () => {
   })
 
   it('holds lease authority until a canceled losing attempt actually settles', async () => {
-    const lanes = new V2LaneSet({ now: Date.now })
-    let finish!: (value: V2BlockRecord) => void
+    const lanes = new LaneSet({ now: Date.now })
+    let finish!: (value: BlockRecord) => void
     let losingSignal!: AbortSignal
     lanes.add({ id: 1, fetchBlock: (_demand, signal) => {
       losingSignal = signal
@@ -367,7 +367,7 @@ describe('receiver content allocation', () => {
   })
 
   it('isolates observers from content and clears active reads on close', async () => {
-    const lanes = new V2LaneSet({ now: Date.now, onBlockScheduled: () => { throw new Error('observer failed') } })
+    const lanes = new LaneSet({ now: Date.now, onBlockScheduled: () => { throw new Error('observer failed') } })
     lanes.add(new BandwidthLane(1, 5), 'direct')
     const read = lanes.fetch(demand(), routes, new AbortController().signal)
     await vi.advanceTimersByTimeAsync(5)

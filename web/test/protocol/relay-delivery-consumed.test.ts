@@ -4,7 +4,7 @@ import {
   decodeDeliveryConsumed, encodeDeliveryConsumed, type RelayDeliveryConsumed,
 } from '../../src/transport/relay/delivery-consumed-codec'
 import { decodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
-import { V2RelayProtocolError } from '../../src/transport/relay/v2-protocol'
+import { RelayProtocolError } from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 interface CountCase {
@@ -39,17 +39,17 @@ describe('cumulative relay delivery feedback', () => {
       if (test.accepted) {
         expect(encodeDeliveryConsumed(feedback)).toEqual(encoded)
         expect(decodeDeliveryConsumed(encoded)).toEqual(feedback)
-        expect(() => decodeReceiveCredit(encoded)).toThrow(V2RelayProtocolError)
+        expect(() => decodeReceiveCredit(encoded)).toThrow(RelayProtocolError)
       } else {
-        expect(() => encodeDeliveryConsumed(feedback)).toThrow(V2RelayProtocolError)
-        expect(() => decodeDeliveryConsumed(encoded)).toThrow(V2RelayProtocolError)
+        expect(() => encodeDeliveryConsumed(feedback)).toThrow(RelayProtocolError)
+        expect(() => decodeDeliveryConsumed(encoded)).toThrow(RelayProtocolError)
       }
     })
   }
 
   for (const test of vector.malformed) {
     it(test.name, () => {
-      expect(() => decodeDeliveryConsumed(b64ToBytes(test.encodedB64))).toThrow(V2RelayProtocolError)
+      expect(() => decodeDeliveryConsumed(b64ToBytes(test.encodedB64))).toThrow(RelayProtocolError)
     })
   }
 
@@ -58,11 +58,11 @@ describe('cumulative relay delivery feedback', () => {
     for (const value of [-1n, 1n << 64n, 1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       for (const field of ['totalFrames', 'totalEncodedBytes'] as const) {
         const malformed = { ...valid, [field]: value } as RelayDeliveryConsumed
-        expect(() => encodeDeliveryConsumed(malformed)).toThrow(V2RelayProtocolError)
+        expect(() => encodeDeliveryConsumed(malformed)).toThrow(RelayProtocolError)
       }
     }
     for (const id of [new Uint8Array(8), new Uint8Array(7).fill(1), new Uint8Array(9).fill(1)]) {
-      expect(() => encodeDeliveryConsumed({ ...valid, relaySessionId: id })).toThrow(V2RelayProtocolError)
+      expect(() => encodeDeliveryConsumed({ ...valid, relaySessionId: id })).toThrow(RelayProtocolError)
     }
   })
 

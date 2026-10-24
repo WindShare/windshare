@@ -1,4 +1,4 @@
-import type { V2LifecycleMutation } from '../../../src/application/receive/contracts'
+import type { LifecycleMutation } from '../../../src/application/receive/contracts'
 import { createMemberRollbackFixture, readMemberRollbackState, MEMBER_ROLLBACK_SIGNAL } from './member-rollback-fixture'
 import { finishMemberRollbackFixture } from './member-rollback-probe'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'
@@ -44,7 +44,7 @@ export async function prepareAuthorizationProbe(databaseName: string) {
   const button = document.createElement('button')
   button.textContent = 'Authorize and continue'
   document.body.append(button)
-  const summarize = (mutation: V2LifecycleMutation) => ({
+  const summarize = (mutation: LifecycleMutation) => ({
     lifecycle: mutation.lifecycle.kind, resumeTransfer: mutation.resumeTransfer, error: undefined as string | undefined,
   })
   let attempt: Promise<ReturnType<typeof summarize>> | undefined

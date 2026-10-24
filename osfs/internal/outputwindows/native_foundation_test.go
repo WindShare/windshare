@@ -16,52 +16,52 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func validWindowsV3ObjectFacts() windowsV3ObjectFacts {
+func validWindowsObjectFacts() windowsObjectFacts {
 	var fileID [16]byte
 	fileID[0] = 1
-	return windowsV3ObjectFacts{
+	return windowsObjectFacts{
 		attributes: windows.FILE_ATTRIBUTE_DIRECTORY,
-		object: windowsV3ObjectIdentity{
-			volume: windowsV3VolumeIdentity{guid: `\\?\volume{test}`, serial: 1},
+		object: windowsObjectIdentity{
+			volume: windowsVolumeIdentity{guid: `\\?\volume{test}`, serial: 1},
 			fileID: fileID,
 		},
 	}
 }
 
-func validWindowsV3VolumeFacts() windowsV3VolumeFacts {
-	return windowsV3VolumeFacts{
-		filesystem: windowsV3OutputFilesystem,
+func validWindowsVolumeFacts() windowsVolumeFacts {
+	return windowsVolumeFacts{
+		filesystem: windowsOutputFilesystem,
 		path:       `\\?\C:\output`,
 		driveType:  windows.DRIVE_FIXED,
 		flags: windows.FILE_SUPPORTS_HARD_LINKS | windows.FILE_PERSISTENT_ACLS |
-			windowsV3FileSupportsPOSIXSemantics,
+			windowsFileSupportsPOSIXSemantics,
 	}
 }
 
-func TestWindowsV3CertificationIsNTFSLocalAndFailClosed(t *testing.T) {
-	if err := validateWindowsV3VolumeCertification(validWindowsV3VolumeFacts()); err != nil {
+func TestWindowsCertificationIsNTFSLocalAndFailClosed(t *testing.T) {
+	if err := validateWindowsVolumeCertification(validWindowsVolumeFacts()); err != nil {
 		t.Fatalf("valid NTFS facts: %v", err)
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*windowsV3VolumeFacts)
+		mutate func(*windowsVolumeFacts)
 	}{
-		{name: "ReFS", mutate: func(facts *windowsV3VolumeFacts) { facts.filesystem = "ReFS" }},
-		{name: "FAT", mutate: func(facts *windowsV3VolumeFacts) { facts.filesystem = "FAT32" }},
-		{name: "remote", mutate: func(facts *windowsV3VolumeFacts) { facts.path = `\\?\UNC\host\share\output` }},
-		{name: "removable", mutate: func(facts *windowsV3VolumeFacts) { facts.driveType = windows.DRIVE_REMOVABLE }},
-		{name: "no hard links", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS }},
-		{name: "no persistent ACL", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windows.FILE_PERSISTENT_ACLS }},
-		{name: "no POSIX namespace", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windowsV3FileSupportsPOSIXSemantics }},
+		{name: "ReFS", mutate: func(facts *windowsVolumeFacts) { facts.filesystem = "ReFS" }},
+		{name: "FAT", mutate: func(facts *windowsVolumeFacts) { facts.filesystem = "FAT32" }},
+		{name: "remote", mutate: func(facts *windowsVolumeFacts) { facts.path = `\\?\UNC\host\share\output` }},
+		{name: "removable", mutate: func(facts *windowsVolumeFacts) { facts.driveType = windows.DRIVE_REMOVABLE }},
+		{name: "no hard links", mutate: func(facts *windowsVolumeFacts) { facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS }},
+		{name: "no persistent ACL", mutate: func(facts *windowsVolumeFacts) { facts.flags &^= windows.FILE_PERSISTENT_ACLS }},
+		{name: "no POSIX namespace", mutate: func(facts *windowsVolumeFacts) { facts.flags &^= windowsFileSupportsPOSIXSemantics }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			facts := validWindowsV3VolumeFacts()
+			facts := validWindowsVolumeFacts()
 			test.mutate(&facts)
-			err := validateWindowsV3VolumeCertification(facts)
-			if !errors.Is(err, errWindowsV3OutputUnsupported) {
+			err := validateWindowsVolumeCertification(facts)
+			if !errors.Is(err, errWindowsOutputUnsupported) {
 				t.Fatalf("error=%v", err)
 			}
-			var typed *windowsV3OutputError
+			var typed *nativeOutputError
 			if !errors.As(err, &typed) || typed.Operation == "" {
 				t.Fatalf("typed error=%#v", typed)
 			}
@@ -69,33 +69,33 @@ func TestWindowsV3CertificationIsNTFSLocalAndFailClosed(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RootShapeRequiresCurrentSafeDirectory(t *testing.T) {
-	if err := validateWindowsV3RootShape(validWindowsV3ObjectFacts()); err != nil {
+func TestWindowsRootShapeRequiresCurrentSafeDirectory(t *testing.T) {
+	if err := validateWindowsRootShape(validWindowsObjectFacts()); err != nil {
 		t.Fatalf("valid directory facts: %v", err)
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*windowsV3ObjectFacts)
+		mutate func(*windowsObjectFacts)
 	}{
-		{name: "reparse", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT }},
-		{name: "offline", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_OFFLINE }},
-		{name: "recall", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= 0x00400000 }},
-		{name: "case sensitive", mutate: func(facts *windowsV3ObjectFacts) { facts.caseSensitive = true }},
-		{name: "missing volume", mutate: func(facts *windowsV3ObjectFacts) { facts.object.volume = windowsV3VolumeIdentity{} }},
-		{name: "missing File ID", mutate: func(facts *windowsV3ObjectFacts) { facts.object.fileID = [16]byte{} }},
+		{name: "reparse", mutate: func(facts *windowsObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT }},
+		{name: "offline", mutate: func(facts *windowsObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_OFFLINE }},
+		{name: "recall", mutate: func(facts *windowsObjectFacts) { facts.attributes |= 0x00400000 }},
+		{name: "case sensitive", mutate: func(facts *windowsObjectFacts) { facts.caseSensitive = true }},
+		{name: "missing volume", mutate: func(facts *windowsObjectFacts) { facts.object.volume = windowsVolumeIdentity{} }},
+		{name: "missing File ID", mutate: func(facts *windowsObjectFacts) { facts.object.fileID = [16]byte{} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			facts := validWindowsV3ObjectFacts()
+			facts := validWindowsObjectFacts()
 			test.mutate(&facts)
-			if err := validateWindowsV3RootShape(facts); !errors.Is(err, errWindowsV3OutputUnsupported) {
+			if err := validateWindowsRootShape(facts); !errors.Is(err, errWindowsOutputUnsupported) {
 				t.Fatalf("error=%v", err)
 			}
 		})
 	}
 }
 
-func TestWindowsV3CurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) {
-	left := validWindowsV3ObjectFacts().object
+func TestWindowsCurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) {
+	left := validWindowsObjectFacts().object
 	right := left
 	if !left.same(right) {
 		t.Fatal("same current object was not equal")
@@ -114,15 +114,15 @@ func TestWindowsV3CurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) 
 	}
 }
 
-func TestWindowsV3CertificationPrecedesAnyResumeMutation(t *testing.T) {
+func TestWindowsCertificationPrecedesAnyResumeMutation(t *testing.T) {
 	root := t.TempDir()
-	volumes := windowsV3VolumeInspectorFunc(func(windows.Handle) (windowsV3VolumeFacts, error) {
-		facts := validWindowsV3VolumeFacts()
+	volumes := windowsVolumeInspectorFunc(func(windows.Handle) (windowsVolumeFacts, error) {
+		facts := validWindowsVolumeFacts()
 		facts.filesystem = "ReFS"
 		return facts, nil
 	})
-	platform, err := openWindowsV3OutputPlatformWithInspectors(root, nativeWindowsV3ObjectInspector{}, volumes)
-	if platform != nil || !errors.Is(err, errWindowsV3OutputUnsupported) {
+	platform, err := openWindowsOutputPlatformWithInspectors(root, nativeWindowsObjectInspector{}, volumes)
+	if platform != nil || !errors.Is(err, errWindowsOutputUnsupported) {
 		if platform != nil {
 			_ = platform.Close()
 		}
@@ -134,7 +134,7 @@ func TestWindowsV3CertificationPrecedesAnyResumeMutation(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RelativeNamesRejectAliasesAndEscapes(t *testing.T) {
+func TestWindowsRelativeNamesRejectAliasesAndEscapes(t *testing.T) {
 	valid := []struct {
 		path string
 		leaf bool
@@ -143,7 +143,7 @@ func TestWindowsV3RelativeNamesRejectAliasesAndEscapes(t *testing.T) {
 		{path: "header.state", leaf: true},
 	}
 	for _, test := range valid {
-		if _, err := windowsV3RelativePath(test.path, test.leaf); err != nil {
+		if _, err := windowsRelativePath(test.path, test.leaf); err != nil {
 			t.Fatalf("valid path %q: %v", test.path, err)
 		}
 	}
@@ -165,34 +165,34 @@ func TestWindowsV3RelativeNamesRejectAliasesAndEscapes(t *testing.T) {
 		{path: "a//b", leaf: false},
 	}
 	for _, test := range invalid {
-		if _, err := windowsV3RelativePath(test.path, test.leaf); err == nil {
+		if _, err := windowsRelativePath(test.path, test.leaf); err == nil {
 			t.Fatalf("unsafe path %q was accepted", test.path)
 		}
 	}
 }
 
-func TestWindowsV3RelativeNamesPrevalidateNTFSLimits(t *testing.T) {
-	if _, err := windowsV3RelativePath(strings.Repeat("a", windowsV3MaximumComponentUTF16Units), true); err != nil {
+func TestWindowsRelativeNamesPrevalidateNTFSLimits(t *testing.T) {
+	if _, err := windowsRelativePath(strings.Repeat("a", windowsMaximumComponentUTF16Units), true); err != nil {
 		t.Fatalf("maximum NTFS component was rejected: %v", err)
 	}
 	invalid := []string{
-		strings.Repeat("a", windowsV3MaximumComponentUTF16Units+1),
-		strings.Repeat("\U0001F600", windowsV3MaximumComponentUTF16Units/2+1),
-		strings.Repeat("a/", windowsV3MaximumNTNameUTF16Units/2) + "a",
+		strings.Repeat("a", windowsMaximumComponentUTF16Units+1),
+		strings.Repeat("\U0001F600", windowsMaximumComponentUTF16Units/2+1),
+		strings.Repeat("a/", windowsMaximumNTNameUTF16Units/2) + "a",
 	}
 	for _, path := range invalid {
-		if _, err := windowsV3RelativePath(path, false); err == nil {
+		if _, err := windowsRelativePath(path, false); err == nil {
 			t.Fatalf("over-limit NTFS path was accepted (UTF-8 bytes=%d)", len(path))
 		}
 	}
 }
 
-func TestWindowsV3LocatorKeyUsesWindowsOrdinalUpcase(t *testing.T) {
-	lower, err := windowsV3OutputLocatorKey("Folder/\u00e9cho")
+func TestWindowsLocatorKeyUsesWindowsOrdinalUpcase(t *testing.T) {
+	lower, err := windowsOutputLocatorKey("Folder/\u00e9cho")
 	if err != nil {
 		t.Fatalf("canonicalize lowercase locator: %v", err)
 	}
-	upper, err := windowsV3OutputLocatorKey("FOLDER/\u00c9CHO")
+	upper, err := windowsOutputLocatorKey("FOLDER/\u00c9CHO")
 	if err != nil {
 		t.Fatalf("canonicalize uppercase locator: %v", err)
 	}
@@ -201,8 +201,8 @@ func TestWindowsV3LocatorKeyUsesWindowsOrdinalUpcase(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PinnedDirectoryEnumerationRestarts(t *testing.T) {
-	platform, err := openWindowsV3OutputPlatform(t.TempDir())
+func TestWindowsPinnedDirectoryEnumerationRestarts(t *testing.T) {
+	platform, err := openWindowsOutputPlatform(t.TempDir())
 	if err != nil {
 		t.Fatalf("open NTFS root: %v", err)
 	}
@@ -234,8 +234,8 @@ func TestWindowsV3PinnedDirectoryEnumerationRestarts(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
-	platform, err := openWindowsV3OutputPlatform(t.TempDir())
+func TestWindowsPrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
+	platform, err := openWindowsOutputPlatform(t.TempDir())
 	if err != nil {
 		t.Fatalf("open NTFS root: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestWindowsV3PrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
 		t.Fatalf("create uppercase control alias: %v", err)
 	}
 	defer control.Close()
-	if opened, err := platform.Root().OpenPrivateDirectory(".windshare-output"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if opened, err := platform.Root().OpenPrivateDirectory(".windshare-output"); !errors.Is(err, errWindowsOutputUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -258,7 +258,7 @@ func TestWindowsV3PrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
 		t.Fatalf("create uppercase shard alias: %v", err)
 	}
 	defer shard.Close()
-	if opened, err := control.OpenPrivateDirectory("ab"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if opened, err := control.OpenPrivateDirectory("ab"); !errors.Is(err, errWindowsOutputUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -270,7 +270,7 @@ func TestWindowsV3PrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
 		t.Fatalf("create uppercase record alias: %v", err)
 	}
 	defer record.Close()
-	if opened, err := control.OpenPrivateFile("record"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if opened, err := control.OpenPrivateFile("record"); !errors.Is(err, errWindowsOutputUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -278,13 +278,13 @@ func TestWindowsV3PrivateNamespaceRejectsCaseAliasesAtEveryLevel(t *testing.T) {
 	}
 }
 
-func TestWindowsV3LinkRenameBufferUsesPinnedParent(t *testing.T) {
+func TestWindowsLinkRenameBufferUsesPinnedParent(t *testing.T) {
 	const root windows.Handle = 123
-	buffer, err := windowsV3LinkRenameBuffer(windows.FILE_RENAME_REPLACE_IF_EXISTS, root, "header.state")
+	buffer, err := windowsLinkRenameBuffer(windows.FILE_RENAME_REPLACE_IF_EXISTS, root, "header.state")
 	if err != nil {
 		t.Fatal(err)
 	}
-	information := (*windowsV3LinkRenameInformation)(unsafe.Pointer(&buffer[0]))
+	information := (*windowsLinkRenameInformation)(unsafe.Pointer(&buffer[0]))
 	if information.Flags != windows.FILE_RENAME_REPLACE_IF_EXISTS || information.RootDirectory != root {
 		t.Fatalf("information=%+v", information)
 	}
@@ -297,10 +297,10 @@ func TestWindowsV3LinkRenameBufferUsesPinnedParent(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PrivateNamespaceAndNativePrimitives(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsPrivateNamespaceAndNativePrimitives(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
-	if platform.Durability() != windowsV3OutputProcessRestart {
+	if platform.Durability() != windowsOutputProcessRestart {
 		t.Fatalf("durability=%d", platform.Durability())
 	}
 
@@ -339,11 +339,11 @@ func TestWindowsV3PrivateNamespaceAndNativePrimitives(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer anchor.Close()
-	same, err := sameWindowsV3OpenedObject(stage, anchor)
+	same, err := sameWindowsOpenedObject(stage, anchor)
 	if err != nil || !same {
 		t.Fatalf("stage/anchor same=%v error=%v", same, err)
 	}
-	if _, err := control.LinkRegularFileNoReplace(stage, "anchor.link"); !errors.Is(err, errWindowsV3OutputCollision) {
+	if _, err := control.LinkRegularFileNoReplace(stage, "anchor.link"); !errors.Is(err, errWindowsOutputCollision) {
 		t.Fatalf("second link error=%v", err)
 	}
 
@@ -383,8 +383,8 @@ func TestWindowsV3PrivateNamespaceAndNativePrimitives(t *testing.T) {
 	}
 }
 
-func TestWindowsV3AtomicPrivateStateReplacement(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsAtomicPrivateStateReplacement(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	control, _, err := platform.Root().OpenOrCreatePrivateDirectory(".windshare-output")
 	if err != nil {
@@ -426,8 +426,8 @@ func TestWindowsV3AtomicPrivateStateReplacement(t *testing.T) {
 	}
 }
 
-func TestWindowsV3StableLockIsNeverReallocatedForContention(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsStableLockIsNeverReallocatedForContention(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	control, _, err := platform.Root().OpenOrCreatePrivateDirectory(".windshare-output")
 	if err != nil {
@@ -439,7 +439,7 @@ func TestWindowsV3StableLockIsNeverReallocatedForContention(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("first lock created=%v error=%v", created, err)
 	}
-	if second, _, err := control.AcquireStableLock("coordinator.lock"); !errors.Is(err, errWindowsV3OutputLockBusy) {
+	if second, _, err := control.AcquireStableLock("coordinator.lock"); !errors.Is(err, errWindowsOutputLockBusy) {
 		if second != nil {
 			_ = second.Close()
 		}
@@ -457,8 +457,8 @@ func TestWindowsV3StableLockIsNeverReallocatedForContention(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RemovalRequiresCurrentOpenIdentity(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsRemovalRequiresCurrentOpenIdentity(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	control, _, err := platform.Root().OpenOrCreatePrivateDirectory(".windshare-output")
 	if err != nil {
@@ -476,7 +476,7 @@ func TestWindowsV3RemovalRequiresCurrentOpenIdentity(t *testing.T) {
 	}
 	defer second.Close()
 
-	if err := control.RemoveRegularLink("first.stage", second); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := control.RemoveRegularLink("first.stage", second); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("mismatched removal error=%v", err)
 	}
 	reopened, err := control.OpenPrivateFile("first.stage")
@@ -488,8 +488,8 @@ func TestWindowsV3RemovalRequiresCurrentOpenIdentity(t *testing.T) {
 	}
 }
 
-func TestWindowsV3DirectoryInstallationIsAtomicNoReplace(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsDirectoryInstallationIsAtomicNoReplace(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	installed, _, err := platform.Root().OpenOrCreatePrivateDirectory(".windshare-output")
 	if err != nil {
@@ -502,7 +502,7 @@ func TestWindowsV3DirectoryInstallationIsAtomicNoReplace(t *testing.T) {
 	}
 	defer candidate.Close()
 
-	if opened, err := platform.Root().InstallPrivateDirectoryNoReplace(candidate, ".windshare-output"); !errors.Is(err, errWindowsV3OutputCollision) {
+	if opened, err := platform.Root().InstallPrivateDirectoryNoReplace(candidate, ".windshare-output"); !errors.Is(err, errWindowsOutputCollision) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -513,27 +513,27 @@ func TestWindowsV3DirectoryInstallationIsAtomicNoReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer current.Close()
-	same, err := sameWindowsV3OpenedDirectory(current, installed)
+	same, err := sameWindowsOpenedDirectory(current, installed)
 	if err != nil || !same {
 		t.Fatalf("installed directory changed same=%v error=%v", same, err)
 	}
 }
 
-func TestWindowsV3ExistingPrivateNamespaceFailsWithoutMutation(t *testing.T) {
+func TestWindowsExistingPrivateNamespaceFailsWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "broad-control")
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(root)
-	if errors.Is(err, errWindowsV3OutputUnsupported) {
+	platform, err := openWindowsOutputPlatform(root)
+	if errors.Is(err, errWindowsOutputUnsupported) {
 		t.Skipf("test volume is outside the local NTFS matrix: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer platform.Close()
-	if opened, err := platform.Root().OpenPrivateDirectory("broad-control"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if opened, err := platform.Root().OpenPrivateDirectory("broad-control"); !errors.Is(err, errWindowsOutputUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -552,8 +552,8 @@ func TestWindowsV3ExistingPrivateNamespaceFailsWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestWindowsV3NoFollowDirectoryOpenRejectsReparse(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsNoFollowDirectoryOpenRejectsReparse(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	target := filepath.Join(platform.Root().path, "target")
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -563,7 +563,7 @@ func TestWindowsV3NoFollowDirectoryOpenRejectsReparse(t *testing.T) {
 	if err := os.Symlink("target", alias); err != nil {
 		t.Skipf("directory symlink unavailable: %v", err)
 	}
-	if opened, err := platform.Root().OpenDirectory("alias"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if opened, err := platform.Root().OpenDirectory("alias"); !errors.Is(err, errWindowsOutputUnsafe) {
 		if opened != nil {
 			_ = opened.Close()
 		}
@@ -571,8 +571,8 @@ func TestWindowsV3NoFollowDirectoryOpenRejectsReparse(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RecoverableFeatureProbeExercisesAndCleansNativeNamespace(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsRecoverableFeatureProbeExercisesAndCleansNativeNamespace(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -580,7 +580,7 @@ func TestWindowsV3RecoverableFeatureProbeExercisesAndCleansNativeNamespace(t *te
 	}
 	defer guard.Close()
 	root := guard.Root()
-	nonce := bytes.Repeat([]byte{0x5a}, windowsV3OutputProbeRandomBytes)
+	nonce := bytes.Repeat([]byte{0x5a}, windowsOutputProbeRandomBytes)
 	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nonce)); err != nil {
 		t.Fatal(err)
 	}
@@ -593,8 +593,8 @@ func TestWindowsV3RecoverableFeatureProbeExercisesAndCleansNativeNamespace(t *te
 	}
 }
 
-func TestWindowsV3FeatureProbeRejectsMissingEntropyBeforeMutation(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsFeatureProbeRejectsMissingEntropyBeforeMutation(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -610,8 +610,8 @@ func TestWindowsV3FeatureProbeRejectsMissingEntropyBeforeMutation(t *testing.T) 
 	}
 }
 
-func TestWindowsV3FeatureProbeNeverAdoptsPreexistingReservedLockFile(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsFeatureProbeNeverAdoptsPreexistingReservedLockFile(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	guard, err := platform.acquirePublicOperationGuard()
 	if err != nil {
@@ -619,7 +619,7 @@ func TestWindowsV3FeatureProbeNeverAdoptsPreexistingReservedLockFile(t *testing.
 	}
 	defer guard.Close()
 	root := guard.Root()
-	path := filepath.Join(platform.Root().path, windowsV3OutputProbeLockName)
+	path := filepath.Join(platform.Root().path, windowsOutputProbeLockName)
 	want := []byte("not WindShare control metadata")
 	if err := os.WriteFile(path, want, 0o600); err != nil {
 		t.Fatal(err)
@@ -628,7 +628,7 @@ func TestWindowsV3FeatureProbeNeverAdoptsPreexistingReservedLockFile(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nil)); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := root.probeRecoverableFeaturesWithRandom(bytes.NewReader(nil)); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("preexisting reserved lock error=%v", err)
 	}
 	after, err := os.Lstat(path)
@@ -643,14 +643,14 @@ func TestWindowsV3FeatureProbeNeverAdoptsPreexistingReservedLockFile(t *testing.
 		t.Fatalf("preexisting reserved lock was adopted or mutated: identity=%v content=%q", os.SameFile(before, after), got)
 	}
 	entries, err := os.ReadDir(platform.Root().path)
-	if err != nil || len(entries) != 1 || entries[0].Name() != windowsV3OutputProbeLockName {
+	if err != nil || len(entries) != 1 || entries[0].Name() != windowsOutputProbeLockName {
 		t.Fatalf("failed probe mutated unrelated namespace entries=%v error=%v", entries, err)
 	}
 }
 
-func TestWindowsV3ProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
+func TestWindowsProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 	rootPath := t.TempDir()
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,12 +686,12 @@ func TestWindowsV3ProbeCleanupStopsAtFirstUnverifiedCut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	probe := windowsV3OutputProbe{
+	probe := windowsOutputProbe{
 		root: platform.root, rootName: probeName, directory: directory, rootPresent: true,
 		stage: stage, anchor: anchor, publication: publication,
 		stageMayExist: true, anchorMayExist: true, publicationMayExist: true,
 	}
-	if err := probe.cleanup(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := probe.cleanup(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("cleanup mismatch error = %v", err)
 	}
 

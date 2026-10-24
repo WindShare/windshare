@@ -1,6 +1,6 @@
 import type { ChannelState, Frame, FrameChannel } from '../../../contracts/channel'
 import { equalBytes } from '../../../crypto/bytes'
-import { decodeV2OpaqueRoute, encodeV2OpaqueRoute } from '../v2-protocol'
+import { decodeOpaqueRoute, encodeOpaqueRoute } from '../protocol'
 import { decodeSettlementNotice } from '../delivery-settlement-codec'
 import type { RelayReceiveCapacity } from '../delivery-handshake-codec'
 import type { ReceiveLedgerEvent } from '../../../contracts/relay-delivery-observation'
@@ -8,17 +8,17 @@ import { RelayHeartbeat, type RelayHeartbeatTrace } from '../heartbeat'
 import { ReceiverCredit } from '../receiver-credit'
 import { RelayReceiveBuffer } from './receive-buffer'
 import {
-  V2RelayReceiverError, V2_RELAY_HEARTBEAT_CLOSE_CODE, V2_RELAY_PROTOCOL_CLOSE_CODE,
+  RelayReceiverError, RELAY_HEARTBEAT_CLOSE_CODE, RELAY_PROTOCOL_CLOSE_CODE,
   WEBSOCKET_CLOSING, WEBSOCKET_CLOSED, awaitSocketClose, decodeRelayErrorIfPresent,
-  relayErrorMessage, waitForSendTurn, waitForBufferCapacity, waitForBufferDrain, type V2WebSocketPort,
+  relayErrorMessage, waitForSendTurn, waitForBufferCapacity, waitForBufferDrain, type WebSocketPort,
 } from './socket'
 
-export const V2_RELAY_CLOSE_TIMEOUT_MILLISECONDS = 2_000
+export const RELAY_CLOSE_TIMEOUT_MILLISECONDS = 2_000
 let nextReceiveConnectionId = 0n
 
-export class V2OpaqueRelayFrameChannel implements FrameChannel {
+export class OpaqueRelayFrameChannel implements FrameChannel {
   readonly frames: ReadableStream<Frame>
-  readonly #socket: V2WebSocketPort
+  readonly #socket: WebSocketPort
   readonly #relaySessionId: Uint8Array<ArrayBuffer>
   readonly #receiveQueue: RelayReceiveBuffer
   readonly #heartbeat: RelayHeartbeat
@@ -31,7 +31,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
   #feedbackTask: Promise<void> | undefined
   #feedbackRequested = false
 
-  constructor(socket: V2WebSocketPort, relaySessionId: Uint8Array, capacity: RelayReceiveCapacity,
+  constructor(socket: WebSocketPort, relaySessionId: Uint8Array, capacity: RelayReceiveCapacity,
     heartbeatTrace?: (event: RelayHeartbeatTrace) => void, receiveTrace?: (event: ReceiveLedgerEvent) => void) {
     this.#socket = socket
     this.#relaySessionId = relaySessionId.slice()
@@ -45,7 +45,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
     socket.addEventListener('message', this.#onMessage)
     socket.addEventListener('close', this.#onClose)
     socket.addEventListener('error', this.#onError)
-    this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, V2_RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
+    this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
   }
 
   get state(): ChannelState {
@@ -68,7 +68,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
   #enqueue(frame: Frame, terminal: boolean, signal?: AbortSignal): Promise<void> {
     let encoded: Uint8Array<ArrayBuffer>
     try {
-      encoded = encodeV2OpaqueRoute({ relaySessionId: this.#relaySessionId, ciphertext: frame })
+      encoded = encodeOpaqueRoute({ relaySessionId: this.#relaySessionId, ciphertext: frame })
     } catch (error) {
       return Promise.reject(error)
     }
@@ -103,7 +103,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
     if (this.#socketLifetime.signal.aborted) return
     try {
       if (!(event.data instanceof ArrayBuffer)) {
-        throw new V2RelayReceiverError('Relay delivered a non-binary frame')
+        throw new RelayReceiverError('Relay delivered a non-binary frame')
       }
       this.#dispatch(new Uint8Array(event.data))
       // Every accepted frame proves the relay alive, so liveness never waits on
@@ -118,23 +118,23 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
     if (this.#heartbeat.receive(encoded) || this.#credit.receive(encoded)) return
     const relayError = decodeRelayErrorIfPresent(encoded)
     if (relayError !== undefined) {
-      throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
+      throw new RelayReceiverError(relayErrorMessage(relayError), { relayError })
     }
     if (String.fromCharCode(...encoded.subarray(0, 4)) === 'WS2N') {
       const notice = decodeSettlementNotice(encoded)
       if (!equalBytes(notice.relaySessionId, this.#relaySessionId)) {
-        throw new V2RelayReceiverError('Relay settled another receiver session')
+        throw new RelayReceiverError('Relay settled another receiver session')
       }
       this.#receiveQueue.notice(notice)
       // Application sends stop now, but the socket remains authoritative until
       // the accepted prefix has drained and its settlement is submitted.
       this.#state = 'closed'
-      this.#lifetime.abort(new V2RelayReceiverError('Relay frame channel is closed'))
+      this.#lifetime.abort(new RelayReceiverError('Relay frame channel is closed'))
       return
     }
-    const routed = decodeV2OpaqueRoute(encoded)
+    const routed = decodeOpaqueRoute(encoded)
     if (!equalBytes(routed.relaySessionId, this.#relaySessionId)) {
-      throw new V2RelayReceiverError('Relay delivered another receiver session')
+      throw new RelayReceiverError('Relay delivered another receiver session')
     }
     this.#receiveQueue.receiveOwned(routed.ciphertext, encoded.byteLength)
   }
@@ -147,10 +147,10 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
   }
 
   readonly #onError = (): void => {
-    this.#fail(new V2RelayReceiverError('Relay WebSocket failed'))
+    this.#fail(new RelayReceiverError('Relay WebSocket failed'))
   }
 
-  #fail(reason: unknown, code = V2_RELAY_PROTOCOL_CLOSE_CODE, closeReason = 'invalid relay frame'): void {
+  #fail(reason: unknown, code = RELAY_PROTOCOL_CLOSE_CODE, closeReason = 'invalid relay frame'): void {
     if (this.#socketLifetime.signal.aborted) return
     this.#state = 'closed'
     this.#removeListeners(reason)
@@ -175,7 +175,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
     }
     if (this.#socket.readyState < WEBSOCKET_CLOSING) this.#socket.close(1000, 'receiver closed')
     if (this.#socket.readyState !== WEBSOCKET_CLOSED) {
-      await awaitSocketClose(this.#socket, V2_RELAY_CLOSE_TIMEOUT_MILLISECONDS)
+      await awaitSocketClose(this.#socket, RELAY_CLOSE_TIMEOUT_MILLISECONDS)
     }
   }
 
@@ -204,7 +204,7 @@ export class V2OpaqueRelayFrameChannel implements FrameChannel {
     })
   }
 
-  #removeListeners(reason: unknown = new V2RelayReceiverError('Relay frame channel is closed')): void {
+  #removeListeners(reason: unknown = new RelayReceiverError('Relay frame channel is closed')): void {
     this.#lifetime.abort(reason)
     this.#socketLifetime.abort(reason)
     this.#heartbeat.close()

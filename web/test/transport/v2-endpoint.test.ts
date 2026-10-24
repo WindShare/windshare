@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { canonicalV2RelayEndpoint, v2RelayEndpointForShare } from '../../src/transport/relay/v2-endpoint'
+import { canonicalRelayEndpoint, relayEndpointForShare } from '../../src/transport/relay/endpoint'
 import { b64ToBytes, loadVectorFile } from '../vectors'
 
 interface ShareRoutingCase {
@@ -20,7 +20,7 @@ if (routing === undefined) throw new Error('missing relay share routing vectors'
 describe('relay share routing contract', () => {
   for (const vector of routing.cases as ShareRoutingCase[]) {
     it(vector.name, async () => {
-      const pending = v2RelayEndpointForShare(vector.relayBaseUrl, b64ToBytes(vector.shareIdRawB64))
+      const pending = relayEndpointForShare(vector.relayBaseUrl, b64ToBytes(vector.shareIdRawB64))
       if (!vector.accepted) {
         await expect(pending).rejects.toThrow(TypeError)
         return
@@ -29,7 +29,7 @@ describe('relay share routing contract', () => {
       expect(endpoint.dialEndpoint).toBe(vector.dialEndpoint)
       expect(endpoint.relayIdentityEndpoint).toBe(vector.relayIdentityEndpoint)
       expect(endpoint.relayIdentity).toEqual(b64ToBytes(vector.relayIdentityB64!))
-      const base = await canonicalV2RelayEndpoint(vector.relayBaseUrl)
+      const base = await canonicalRelayEndpoint(vector.relayBaseUrl)
       expect(endpoint.relayIdentity).toEqual(base.relayIdentity)
       expect(endpoint.relayIdentityEndpoint).toBe(base.relayIdentityEndpoint)
     })

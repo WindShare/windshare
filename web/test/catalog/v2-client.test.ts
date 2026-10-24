@@ -2,21 +2,21 @@ import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
 
 import {
-  V2CatalogClient,
-  V2CatalogClientError,
-  withV2CatalogLoadLock,
-} from '../../src/catalog/v2-client'
+  CatalogClient,
+  CatalogClientError,
+  withCatalogLoadLock,
+} from '../../src/catalog/client'
 import {
-  MemoryV2CatalogPageStore,
-  V2CatalogPageStoreError,
-  type V2CatalogPageStore,
-  type V2CommittedDirectory,
-} from '../../src/catalog/v2-page-store'
+  MemoryCatalogPageStore,
+  CatalogPageStoreError,
+  type CatalogPageStore,
+  type CommittedDirectory,
+} from '../../src/catalog/page-store'
 import {
-  V2_PATH_POLICY,
-  type V2CatalogPage,
-  type V2ShareDescriptor,
-} from '../../src/catalog/v2-records'
+  PATH_POLICY,
+  type CatalogPage,
+  type ShareDescriptor,
+} from '../../src/catalog/records'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { createSignedRootCollisionFixture } from './signed-root-collision-fixture'
 import { runSignedCatalogOwnershipProbe } from './signed-catalog-ownership-probe'
@@ -38,7 +38,7 @@ function bytes(encoded: string): Uint8Array<ArrayBuffer> {
 
 describe('v2 catalog multi-receiver ownership', () => {
   it('reports signed cross-page and cross-directory ownership collisions as protocol failures', async () => {
-    await expect(runSignedCatalogOwnershipProbe(new MemoryV2CatalogPageStore())).resolves.toEqual({
+    await expect(runSignedCatalogOwnershipProbe(new MemoryCatalogPageStore())).resolves.toEqual({
       crossPageNameRejected: true,
       crossPageNodeRejected: true,
       crossDirectoryNodeRejected: true,
@@ -49,9 +49,9 @@ describe('v2 catalog multi-receiver ownership', () => {
 
   it('rejects an authenticated page that reintroduces the synthetic root as a child', async () => {
     const fixture = await createSignedRootCollisionFixture()
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     const protocolFailures: unknown[] = []
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: {
@@ -62,7 +62,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     })
     try {
       await expect(client.loadDirectory(fixture.descriptor.syntheticRoot))
-        .rejects.toBeInstanceOf(V2CatalogClientError)
+        .rejects.toBeInstanceOf(CatalogClientError)
       expect(protocolFailures).toHaveLength(1)
       expect(protocolFailures[0]).toMatchObject({
         message: 'Catalog entry reuses the synthetic-root identity',
@@ -80,7 +80,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const fetchStarted = deferred<void>()
     const lateFetch = deferred<Uint8Array<ArrayBuffer>>()
     const store = new ObservedCatalogStore()
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: {
@@ -112,7 +112,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const fetchStarted = deferred<void>()
     const lateFetch = deferred<Uint8Array<ArrayBuffer>>()
     const store = new ObservedCatalogStore()
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: {
@@ -141,7 +141,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     const fixture = catalogVectorFixture()
     const stageGate = deferred<void>()
     const store = new ObservedCatalogStore(stageGate.promise)
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: { fetchPage: async () => fixture.catalogObject },
@@ -163,18 +163,18 @@ describe('v2 catalog multi-receiver ownership', () => {
   it('keeps a committed directory published when its last waiter cancels at the commit boundary', async () => {
     const fixture = catalogVectorFixture()
     const cancellation = new AbortController()
-    let observerLoad: Promise<V2CommittedDirectory> | undefined
+    let observerLoad: Promise<CommittedDirectory> | undefined
     const store = new ObservedCatalogStore(undefined, undefined, () => {
       observerLoad = observer.loadDirectory(fixture.directoryId)
       cancellation.abort(new DOMException('receiver left after publication', 'AbortError'))
     })
-    const publisher = new V2CatalogClient({
+    const publisher = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: { fetchPage: async () => fixture.catalogObject },
       store,
     })
-    const observer = new V2CatalogClient({
+    const observer = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: { fetchPage: async () => { throw new Error('committed directory was refetched') } },
@@ -197,13 +197,13 @@ describe('v2 catalog multi-receiver ownership', () => {
 
   it('keeps a local page-store failure out of authenticated protocol failure handling', async () => {
     const fixture = catalogVectorFixture()
-    const localFailure = new V2CatalogPageStoreError(
+    const localFailure = new CatalogPageStoreError(
       'local-storage',
       'IndexedDB quota unavailable',
     )
     const store = new ObservedCatalogStore(undefined, localFailure)
     const protocolFailures: unknown[] = []
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: {
@@ -227,7 +227,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
       'windshare/v2 object/catalog-page') as SenderObjectVector
     const directoryId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
-    const descriptor: V2ShareDescriptor = Object.freeze({
+    const descriptor: ShareDescriptor = Object.freeze({
       wireVersion: 2,
       suite: 2,
       shareInstance: bytes(identity.shareInstanceB64),
@@ -238,9 +238,9 @@ describe('v2 catalog multi-receiver ownership', () => {
       capabilities: 0n,
       sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
-      pathPolicy: V2_PATH_POLICY,
+      pathPolicy: PATH_POLICY,
     })
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     let fetches = 0
     const operations = {
       fetchPage: async () => {
@@ -256,8 +256,8 @@ describe('v2 catalog multi-receiver ownership', () => {
       store,
       storageIdentity: 'capability-authority',
     }
-    const first = new V2CatalogClient(options)
-    const second = new V2CatalogClient(options)
+    const first = new CatalogClient(options)
+    const second = new CatalogClient(options)
 
     const [left, right] = await Promise.all([
       first.loadDirectory(directoryId),
@@ -272,9 +272,9 @@ describe('v2 catalog multi-receiver ownership', () => {
 
   it('exposes committed-generation name membership without refetching the directory', async () => {
     const fixture = catalogVectorFixture()
-    const store = new MemoryV2CatalogPageStore()
+    const store = new MemoryCatalogPageStore()
     let fetches = 0
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor: fixture.descriptor,
       readSecret: fixture.readSecret,
       operations: {
@@ -302,7 +302,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       releaseFirst = resolve
     })
     const entries: string[] = []
-    const first = withV2CatalogLoadLock(
+    const first = withCatalogLoadLock(
       'cancel-safe-lock',
       new AbortController().signal,
       async () => {
@@ -313,7 +313,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     )
     await Promise.resolve()
     const cancelledController = new AbortController()
-    const cancelled = withV2CatalogLoadLock(
+    const cancelled = withCatalogLoadLock(
       'cancel-safe-lock',
       cancelledController.signal,
       async () => {
@@ -322,7 +322,7 @@ describe('v2 catalog multi-receiver ownership', () => {
       },
     )
     const cancelledRejection = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
-    const third = withV2CatalogLoadLock(
+    const third = withCatalogLoadLock(
       'cancel-safe-lock',
       new AbortController().signal,
       async () => {
@@ -350,7 +350,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     ).cases.find((candidate) => (candidate as SenderObjectVector).domain ===
       'windshare/v2 object/catalog-page') as SenderObjectVector
     const directoryId = Uint8Array.from({ length: 16 }, (_, index) => 0x50 + index)
-    const descriptor: V2ShareDescriptor = Object.freeze({
+    const descriptor: ShareDescriptor = Object.freeze({
       wireVersion: 2,
       suite: 2,
       shareInstance: bytes(identity.shareInstanceB64),
@@ -361,9 +361,9 @@ describe('v2 catalog multi-receiver ownership', () => {
       capabilities: 0n,
       sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
-      pathPolicy: V2_PATH_POLICY,
+      pathPolicy: PATH_POLICY,
     })
-    const client = new V2CatalogClient({
+    const client = new CatalogClient({
       descriptor,
       readSecret: bytes(identity.readSecretB64),
       operations: {
@@ -376,7 +376,7 @@ describe('v2 catalog multi-receiver ownership', () => {
           return bytes(catalogObject.objectB64)
         },
       },
-      store: new MemoryV2CatalogPageStore(),
+      store: new MemoryCatalogPageStore(),
     })
     client.subscribeScanProgress((progress) => {
       progress.directoryId[0] = 0
@@ -392,7 +392,7 @@ describe('v2 catalog multi-receiver ownership', () => {
 })
 
 function catalogVectorFixture(): {
-  readonly descriptor: V2ShareDescriptor
+  readonly descriptor: ShareDescriptor
   readonly readSecret: Uint8Array<ArrayBuffer>
   readonly directoryId: Uint8Array<ArrayBuffer>
   readonly catalogObject: Uint8Array<ArrayBuffer>
@@ -417,7 +417,7 @@ function catalogVectorFixture(): {
       capabilities: 0n,
       sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)),
       createdAtSeconds: 1n,
-      pathPolicy: V2_PATH_POLICY,
+      pathPolicy: PATH_POLICY,
     }),
     readSecret: bytes(identity.readSecretB64),
     directoryId,
@@ -425,8 +425,8 @@ function catalogVectorFixture(): {
   })
 }
 
-class ObservedCatalogStore implements V2CatalogPageStore {
-  readonly #inner = new MemoryV2CatalogPageStore()
+class ObservedCatalogStore implements CatalogPageStore {
+  readonly #inner = new MemoryCatalogPageStore()
   readonly #stageGate: Promise<void> | undefined
   readonly #stageFailure: unknown
   readonly #afterCommit: (() => void) | undefined
@@ -444,7 +444,7 @@ class ObservedCatalogStore implements V2CatalogPageStore {
     this.#afterCommit = afterCommit
   }
 
-  loadDirectory(directoryIdText: string): Promise<V2CommittedDirectory | undefined> {
+  loadDirectory(directoryIdText: string): Promise<CommittedDirectory | undefined> {
     return this.#inner.loadDirectory(directoryIdText)
   }
 
@@ -452,11 +452,11 @@ class ObservedCatalogStore implements V2CatalogPageStore {
     return this.#inner.loadFailure(directoryIdText)
   }
 
-  loadPage(directory: V2CommittedDirectory, pageIndex: number): Promise<V2CatalogPage | undefined> {
+  loadPage(directory: CommittedDirectory, pageIndex: number): Promise<CatalogPage | undefined> {
     return this.#inner.loadPage(directory, pageIndex)
   }
 
-  hasCommittedName(directory: V2CommittedDirectory, name: string): Promise<boolean> {
+  hasCommittedName(directory: CommittedDirectory, name: string): Promise<boolean> {
     return this.#inner.hasCommittedName(directory, name)
   }
 
@@ -464,7 +464,7 @@ class ObservedCatalogStore implements V2CatalogPageStore {
     return this.#inner.begin(directoryIdText)
   }
 
-  async stage(page: V2CatalogPage): Promise<void> {
+  async stage(page: CatalogPage): Promise<void> {
     this.stages += 1
     if (this.#stageFailure !== undefined) throw this.#stageFailure
     await this.#inner.stage(page)
@@ -472,13 +472,13 @@ class ObservedCatalogStore implements V2CatalogPageStore {
     await this.#stageGate
   }
 
-  async commit(directory: V2CommittedDirectory): Promise<void> {
+  async commit(directory: CommittedDirectory): Promise<void> {
     this.commits += 1
     await this.#inner.commit(directory)
     this.#afterCommit?.()
   }
 
-  storeFailure(cached: Parameters<V2CatalogPageStore['storeFailure']>[0]): Promise<void> {
+  storeFailure(cached: Parameters<CatalogPageStore['storeFailure']>[0]): Promise<void> {
     return this.#inner.storeFailure(cached)
   }
 

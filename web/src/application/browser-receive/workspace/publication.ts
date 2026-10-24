@@ -13,11 +13,11 @@ import type {
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import {
-  createV2PlanExecutionAuthority,
-  type V2PlanExecutionRouteRegistry,
-} from '../../../transfer/settlement/v2-plan-authority'
+  createPlanExecutionAuthority,
+  type PlanExecutionRouteRegistry,
+} from '../../../transfer/settlement/plan-authority'
 import { createOperationID, type ReceiveIntent } from '../../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../../transfer/output/session'
+import type { PlanExecutionAuthority } from '../../../transfer/output/session'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { unavailableRoute } from '../route-contract'
 import type { WorkspaceReceiveOperation } from './operation'
@@ -86,8 +86,8 @@ export async function handoffRetainedWorkspacePackage(
 export async function workspacePlanAuthority(
   intent: ReceiveIntent,
   owner: WorkspaceReceiveOperation,
-): Promise<V2PlanExecutionAuthority> {
-  const routes: V2PlanExecutionRouteRegistry = {
+): Promise<PlanExecutionAuthority> {
+  const routes: PlanExecutionRouteRegistry = {
     ...(intent.artifact.kind === 'original-file'
       ? {
           workspaceOriginal: {
@@ -104,7 +104,7 @@ export async function workspacePlanAuthority(
       : {}),
     lifecycle: owner,
   }
-  return createV2PlanExecutionAuthority({ intent, routes })
+  return createPlanExecutionAuthority({ intent, routes })
 }
 
 export class NamespaceOnlyCleanupPort implements WorkspaceOwnedCleanupPort {

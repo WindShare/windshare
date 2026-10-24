@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { WorkspaceSettlementOwner } from '../../src/output/execution/workspace-settlement-owner'
-import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
+import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/output'
 import { deferred, manualSettlementDeadline } from './settlement-deadline'
 
 const stable: ReceiveLifecycleState = {

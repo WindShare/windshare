@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { DomainTraceSource, TraceObserver } from '../../src/diagnostics/trace/ports'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import type { TransferTraceEvent } from '../../src/transfer/job/contract'
-import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
-import { V2TransferObservers } from '../../src/transfer/job/observers'
+import { TransferProgressLedger } from '../../src/transfer/progress/ledger'
+import { TransferObservers } from '../../src/transfer/job/observers'
 import { observeTransferContent } from '../../src/transfer/progress/content'
 import { byteRange } from '../../src/content/geometry'
 import { fileEntry, identity, readerFixture } from './v2-job-fixture'
@@ -11,9 +11,9 @@ import { fileEntry, identity, readerFixture } from './v2-job-fixture'
 describe('transfer observer separation', () => {
   it('coalesces fragment bursts while retaining every byte and preserving output authority', async () => {
     let now = 0
-    const ledger = new V2TransferProgressLedger()
+    const ledger = new TransferProgressLedger()
     const values: Array<{ receivedObjectBytes: bigint; writtenBytes: bigint; recoverableBytes: bigint }> = []
-    const observers = new V2TransferObservers({
+    const observers = new TransferObservers({
       intent: minimalIntent(), transferJobId: 'receipt-job', lanes: { size: 1 },
       onProgress: value => values.push(value),
     })
@@ -59,7 +59,7 @@ describe('transfer observer separation', () => {
       },
     }
     const progress: unknown[] = []
-    const observers = new V2TransferObservers({
+    const observers = new TransferObservers({
       intent: minimalIntent(),
       transferJobId: 'product-job-id',
       lanes: { size: 2 },

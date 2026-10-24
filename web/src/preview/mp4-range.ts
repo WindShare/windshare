@@ -2,24 +2,24 @@ import type { ISOFile, Movie, MP4BoxBuffer, Sample, Track } from 'mp4box'
 
 import { bigintToSafeNumber, byteRange, type ByteRange } from '../content/geometry'
 
-export const V2_VIDEO_EDGE_METADATA_BYTES = 256 * 1024
-export const V2_VIDEO_METADATA_BYTES = 4 * 1024 * 1024
-export const V2_VIDEO_SAMPLE_BYTES = 8 * 1024 * 1024
-export const V2_VIDEO_DECODED_BYTES = 128 * 1024 * 1024
-export const V2_VIDEO_MAXIMUM_DIMENSION = 8_192
-export const V2_VIDEO_MAXIMUM_SECONDS = 24 * 60 * 60
-export const V2_VIDEO_MAXIMUM_SAMPLES = 1_000_000
+export const VIDEO_EDGE_METADATA_BYTES = 256 * 1024
+export const VIDEO_METADATA_BYTES = 4 * 1024 * 1024
+export const VIDEO_SAMPLE_BYTES = 8 * 1024 * 1024
+export const VIDEO_DECODED_BYTES = 128 * 1024 * 1024
+export const VIDEO_MAXIMUM_DIMENSION = 8_192
+export const VIDEO_MAXIMUM_SECONDS = 24 * 60 * 60
+export const VIDEO_MAXIMUM_SAMPLES = 1_000_000
 
 const TOP_LEVEL_BOX_LIMIT = 64
 const MP4_HEADER_BYTES = 16
 const SUPPORTED_VIDEO_CODEC = /^(?:avc1|avc3|hvc1|hev1|vp09|av01)\./u
 
-export interface V2PreviewRangeSource {
+export interface PreviewRangeSource {
   readonly exactSize: bigint
   read(range: ByteRange, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>>
 }
 
-export interface V2Mp4Metadata {
+export interface Mp4Metadata {
   readonly durationSeconds: number
   readonly width: number
   readonly height: number
@@ -27,7 +27,7 @@ export interface V2Mp4Metadata {
   readonly mimeType: string
 }
 
-export interface V2Mp4Segment {
+export interface Mp4Segment {
   readonly bytes: Blob
   readonly positionSeconds: number
 }
@@ -47,42 +47,42 @@ interface TopLevelBox extends BoxLocation {
 }
 
 interface ParsedMetadata {
-  readonly metadata: V2Mp4Metadata
+  readonly metadata: Mp4Metadata
   readonly trackId: number
   readonly parts: readonly MetadataPart[]
 }
 
-export class V2VideoPreviewError extends Error {
+export class VideoPreviewError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
-    this.name = 'V2VideoPreviewError'
+    this.name = 'VideoPreviewError'
   }
 }
 
-export class V2Mp4RangePreview {
-  readonly metadata: V2Mp4Metadata
-  readonly #source: V2PreviewRangeSource
+export class Mp4RangePreview {
+  readonly metadata: Mp4Metadata
+  readonly #source: PreviewRangeSource
   readonly #trackId: number
   readonly #parts: readonly MetadataPart[]
 
-  private constructor(source: V2PreviewRangeSource, parsed: ParsedMetadata) {
+  private constructor(source: PreviewRangeSource, parsed: ParsedMetadata) {
     this.#source = source
     this.metadata = parsed.metadata
     this.#trackId = parsed.trackId
     this.#parts = parsed.parts
   }
 
-  static async open(source: V2PreviewRangeSource, signal: AbortSignal): Promise<V2Mp4RangePreview> {
+  static async open(source: PreviewRangeSource, signal: AbortSignal): Promise<Mp4RangePreview> {
     signal.throwIfAborted()
-    if (source.exactSize < 16n) throw new V2VideoPreviewError('MP4 file is too small')
+    if (source.exactSize < 16n) throw new VideoPreviewError('MP4 file is too small')
     const parsed = await parseMetadata(source, signal)
-    return new V2Mp4RangePreview(source, parsed)
+    return new Mp4RangePreview(source, parsed)
   }
 
-  async segmentAt(seconds: number, signal: AbortSignal): Promise<V2Mp4Segment> {
+  async segmentAt(seconds: number, signal: AbortSignal): Promise<Mp4Segment> {
     signal.throwIfAborted()
     if (!Number.isFinite(seconds) || seconds < 0 || seconds > this.metadata.durationSeconds) {
-      throw new V2VideoPreviewError('Video seek is outside the authenticated duration')
+      throw new VideoPreviewError('Video seek is outside the authenticated duration')
     }
     const file = await metadataFile(this.#parts)
     const info = requireMovie(file)
@@ -94,8 +94,8 @@ export class V2Mp4RangePreview {
     })
     const initialization = file.initializeSegmentation('per-track')
       .find((candidate) => candidate.id === track.id)
-    if (initialization === undefined || initialization.buffer.byteLength > V2_VIDEO_METADATA_BYTES) {
-      throw new V2VideoPreviewError('MP4 initialization segment exceeds the preview limit')
+    if (initialization === undefined || initialization.buffer.byteLength > VIDEO_METADATA_BYTES) {
+      throw new VideoPreviewError('MP4 initialization segment exceeds the preview limit')
     }
     file.seek(seconds, true)
     const fragmented = file.fragmentedTracks.find((candidate) => candidate.id === track.id)
@@ -108,7 +108,7 @@ export class V2Mp4RangePreview {
       signal,
     )
     if (sampleData.byteLength !== sample.size) {
-      throw new V2VideoPreviewError('Video sample range was not read exactly')
+      throw new VideoPreviewError('Video sample range was not read exactly')
     }
     const segmentController = new AbortController()
     const unlink = forwardAbort(signal, segmentController)
@@ -119,8 +119,8 @@ export class V2Mp4RangePreview {
       file.flush()
       const segment = await segmentPromise
       const total = initialization.buffer.byteLength + segment.byteLength
-      if (total > V2_VIDEO_METADATA_BYTES + V2_VIDEO_SAMPLE_BYTES) {
-        throw new V2VideoPreviewError('Video preview segment exceeds its memory limit')
+      if (total > VIDEO_METADATA_BYTES + VIDEO_SAMPLE_BYTES) {
+        throw new VideoPreviewError('Video preview segment exceeds its memory limit')
       }
       return Object.freeze({
         bytes: new Blob([initialization.buffer, segment], { type: 'video/mp4' }),
@@ -136,12 +136,12 @@ export class V2Mp4RangePreview {
 }
 
 async function parseMetadata(
-  source: V2PreviewRangeSource,
+  source: PreviewRangeSource,
   signal: AbortSignal,
 ): Promise<ParsedMetadata> {
   const size = bigintToSafeNumber(source.exactSize, 'video file size')
-  const headEnd = Math.min(size, V2_VIDEO_EDGE_METADATA_BYTES)
-  const tailStart = Math.max(0, size - V2_VIDEO_EDGE_METADATA_BYTES)
+  const headEnd = Math.min(size, VIDEO_EDGE_METADATA_BYTES)
+  const tailStart = Math.max(0, size - VIDEO_EDGE_METADATA_BYTES)
   const head = await source.read(byteRange(0n, BigInt(headEnd)), signal)
   const tail = tailStart === 0
     ? head
@@ -151,8 +151,8 @@ async function parseMetadata(
     ...(tailStart === 0 ? [] : [{ start: tailStart, data: tail }]),
   ]
   const moov = await locateMoov(source, windows, signal)
-  if (moov.end - moov.start > V2_VIDEO_METADATA_BYTES) {
-    throw new V2VideoPreviewError('MP4 metadata exceeds the preview limit')
+  if (moov.end - moov.start > VIDEO_METADATA_BYTES) {
+    throw new VideoPreviewError('MP4 metadata exceeds the preview limit')
   }
   const moovData = contains(windows[0]!, moov)
     ? windows[0]!.data.slice(moov.start, moov.end)
@@ -187,7 +187,7 @@ async function parseMetadata(
 }
 
 async function locateMoov(
-  source: V2PreviewRangeSource,
+  source: PreviewRangeSource,
   windows: readonly MetadataPart[],
   signal: AbortSignal,
 ): Promise<BoxLocation> {
@@ -198,30 +198,30 @@ async function locateMoov(
     const header = await bytesAt(source, windows, offset, Math.min(size, offset + MP4_HEADER_BYTES), signal)
     const box = decodeTopLevelBox(header, offset, size)
     if (count === 0 && (box.type !== 'ftyp' || box.end - box.start < 16)) {
-      throw new V2VideoPreviewError('MP4 does not begin with a valid file type box')
+      throw new VideoPreviewError('MP4 does not begin with a valid file type box')
     }
     if (box.type === 'ftyp') sawFtyp = true
     if (box.type === 'moov') {
-      if (!sawFtyp) throw new V2VideoPreviewError('MP4 metadata precedes its file type box')
+      if (!sawFtyp) throw new VideoPreviewError('MP4 metadata precedes its file type box')
       return { start: box.start, end: box.end }
     }
     offset = box.end
   }
-  throw new V2VideoPreviewError('MP4 metadata was not found within the bounded box scan')
+  throw new VideoPreviewError('MP4 metadata was not found within the bounded box scan')
 }
 
 function decodeTopLevelBox(header: Uint8Array, offset: number, fileSize: number): TopLevelBox {
-  if (header.byteLength < 8) throw new V2VideoPreviewError('MP4 top-level box header is truncated')
+  if (header.byteLength < 8) throw new VideoPreviewError('MP4 top-level box header is truncated')
   const size32 = uint32(header, 0)
   let headerSize = 8
   let boxSize = size32 === 0 ? fileSize - offset : size32
   if (size32 === 1) {
-    if (header.byteLength < 16) throw new V2VideoPreviewError('MP4 extended box header is truncated')
+    if (header.byteLength < 16) throw new VideoPreviewError('MP4 extended box header is truncated')
     headerSize = 16
     boxSize = uint64Safe(header, 8)
   }
   if (!Number.isSafeInteger(boxSize) || boxSize < headerSize || offset + boxSize > fileSize) {
-    throw new V2VideoPreviewError('MP4 top-level box has an invalid size')
+    throw new VideoPreviewError('MP4 top-level box has an invalid size')
   }
   return { type: ascii(header, 4, 8), start: offset, end: offset + boxSize }
 }
@@ -242,25 +242,25 @@ function appendPart(file: ISOFile<number, unknown>, part: MetadataPart): void {
   try {
     file.appendBuffer(buffer)
   } catch (cause) {
-    throw new V2VideoPreviewError('MP4 parser rejected a bounded byte range', { cause })
+    throw new VideoPreviewError('MP4 parser rejected a bounded byte range', { cause })
   }
 }
 
 function requireMovie(file: ISOFile<number, unknown>): Movie {
-  if (!file.readySent) throw new V2VideoPreviewError('MP4 metadata is incomplete')
+  if (!file.readySent) throw new VideoPreviewError('MP4 metadata is incomplete')
   return file.getInfo()
 }
 
 function requireVideoTrack(info: Movie): Track {
   if (info.videoTracks.length !== 1) {
-    throw new V2VideoPreviewError('MP4 preview requires exactly one video track')
+    throw new VideoPreviewError('MP4 preview requires exactly one video track')
   }
   return info.videoTracks[0]!
 }
 
 function requireTrack(info: Movie, trackId: number): Track {
   const track = info.videoTracks.find((candidate) => candidate.id === trackId)
-  if (track === undefined) throw new V2VideoPreviewError('MP4 video track identity changed')
+  if (track === undefined) throw new VideoPreviewError('MP4 video track identity changed')
   return track
 }
 
@@ -269,33 +269,33 @@ function validateTrack(track: Track, samples: readonly Sample[], exactSize: bigi
   const height = track.video?.height ?? 0
   const duration = track.movie_duration / track.movie_timescale
   if (!SUPPORTED_VIDEO_CODEC.test(track.codec) || !Number.isFinite(duration) ||
-      duration <= 0 || duration > V2_VIDEO_MAXIMUM_SECONDS) {
-    throw new V2VideoPreviewError('MP4 codec or duration is outside the preview policy')
+      duration <= 0 || duration > VIDEO_MAXIMUM_SECONDS) {
+    throw new VideoPreviewError('MP4 codec or duration is outside the preview policy')
   }
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 ||
-      width > V2_VIDEO_MAXIMUM_DIMENSION || height > V2_VIDEO_MAXIMUM_DIMENSION ||
-      BigInt(width) * BigInt(height) * 4n > BigInt(V2_VIDEO_DECODED_BYTES)) {
-    throw new V2VideoPreviewError('Video dimensions exceed the decoded-frame limit')
+      width > VIDEO_MAXIMUM_DIMENSION || height > VIDEO_MAXIMUM_DIMENSION ||
+      BigInt(width) * BigInt(height) * 4n > BigInt(VIDEO_DECODED_BYTES)) {
+    throw new VideoPreviewError('Video dimensions exceed the decoded-frame limit')
   }
-  if (samples.length === 0 || samples.length > V2_VIDEO_MAXIMUM_SAMPLES) {
-    throw new V2VideoPreviewError('MP4 sample count exceeds the preview limit')
+  if (samples.length === 0 || samples.length > VIDEO_MAXIMUM_SAMPLES) {
+    throw new VideoPreviewError('MP4 sample count exceeds the preview limit')
   }
   for (const sample of samples) requireSample(sample, exactSize)
 }
 
 function requireSample(sample: Sample | undefined, exactSize: bigint): asserts sample is Sample {
   if (sample === undefined || !Number.isSafeInteger(sample.offset) || !Number.isSafeInteger(sample.size) ||
-      sample.offset < 0 || sample.size <= 0 || sample.size > V2_VIDEO_SAMPLE_BYTES ||
+      sample.offset < 0 || sample.size <= 0 || sample.size > VIDEO_SAMPLE_BYTES ||
       BigInt(sample.offset) + BigInt(sample.size) > exactSize ||
       !Number.isSafeInteger(sample.cts) || sample.cts < 0 ||
       !Number.isSafeInteger(sample.dts) || sample.dts < 0 ||
       !Number.isSafeInteger(sample.duration) || sample.duration <= 0 ||
       !Number.isSafeInteger(sample.timescale) || sample.timescale <= 0) {
-    throw new V2VideoPreviewError('MP4 sample geometry exceeds the preview limits')
+    throw new VideoPreviewError('MP4 sample geometry exceeds the preview limits')
   }
   const sampleEnd = BigInt(sample.cts) + BigInt(sample.duration)
-  if (sampleEnd > BigInt(V2_VIDEO_MAXIMUM_SECONDS) * BigInt(sample.timescale)) {
-    throw new V2VideoPreviewError('MP4 sample timing exceeds the preview limits')
+  if (sampleEnd > BigInt(VIDEO_MAXIMUM_SECONDS) * BigInt(sample.timescale)) {
+    throw new VideoPreviewError('MP4 sample timing exceeds the preview limits')
   }
 }
 
@@ -313,7 +313,7 @@ function nextSegment(
     signal.addEventListener('abort', aborted, { once: true })
     file.onError = (module, message) => {
       signal.removeEventListener('abort', aborted)
-      reject(new V2VideoPreviewError(`MP4 ${module} error: ${message}`))
+      reject(new VideoPreviewError(`MP4 ${module} error: ${message}`))
     }
     file.onSegment = (id, _user, buffer) => {
       if (id !== trackId) return
@@ -324,7 +324,7 @@ function nextSegment(
 }
 
 async function bytesAt(
-  source: V2PreviewRangeSource,
+  source: PreviewRangeSource,
   windows: readonly MetadataPart[],
   start: number,
   end: number,
@@ -351,7 +351,7 @@ function uint32(bytes: Uint8Array, offset: number): number {
 function uint64Safe(bytes: Uint8Array, offset: number): number {
   const value = new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigUint64(0, false)
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new V2VideoPreviewError('MP4 box size exceeds browser integer precision')
+    throw new VideoPreviewError('MP4 box size exceeds browser integer precision')
   }
   return Number(value)
 }

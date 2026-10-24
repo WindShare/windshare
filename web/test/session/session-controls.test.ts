@@ -3,17 +3,17 @@ import { expect, it } from 'vitest'
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { equalBytes } from '../../src/crypto/bytes'
 import { decodeTurnControl, encodeTurnControl } from '../../src/protocol/turn-control'
-import { decodeV2PeerPathControl, encodeV2PeerPathControl } from '../../src/protocol/peer-path-control'
+import { decodePeerPathControl, encodePeerPathControl } from '../../src/protocol/peer-path-control'
 import {
-  decodeV2Message, encodeV2Message, V2_MESSAGE_KIND, validateV2SenderControlBody, verifyV2SenderControl,
-  type V2ControlBinding, type V2MessageKind,
-} from '../../src/session/v2-message'
-import { V2OperationRouter } from '../../src/session/v2-operation-router'
+  decodeMessage, encodeMessage, MESSAGE_KIND, validateSenderControlBody, verifySenderControl,
+  type ControlBinding, type MessageKind,
+} from '../../src/session/message'
+import { OperationRouter } from '../../src/session/operation-router'
 import { openSent, runtimeFixture } from './v2-send-fixture'
 
 interface ControlVector {
   readonly name: string
-  readonly kind: V2MessageKind
+  readonly kind: MessageKind
   readonly direction: number
   readonly bodyB64: string
   readonly plaintextB64: string
@@ -32,41 +32,41 @@ const bytes = (value: string) => Uint8Array.from(Buffer.from(value, 'base64'))
 
 it.each(cases)('reconstructs the Go $name session message and verifies its authority', async (vector) => {
   const body = bytes(vector.bodyB64)
-  const message = decodeV2Message(bytes(vector.plaintextB64))
+  const message = decodeMessage(bytes(vector.plaintextB64))
   expect(message.kind).toBe(vector.kind)
   expect(message.operationId).toBeUndefined()
-  expect(equalBytes(encodeV2Message(message.kind, undefined, message.body).plaintext, message.plaintext)).toBe(true)
-  expect(() => encodeV2Message(message.kind, new Uint8Array(16).fill(1), message.body)).toThrow()
-  validateV2SenderControlBody(message.kind, body)
-  if (message.kind === V2_MESSAGE_KIND.turnControl) {
+  expect(equalBytes(encodeMessage(message.kind, undefined, message.body).plaintext, message.plaintext)).toBe(true)
+  expect(() => encodeMessage(message.kind, new Uint8Array(16).fill(1), message.body)).toThrow()
+  validateSenderControlBody(message.kind, body)
+  if (message.kind === MESSAGE_KIND.turnControl) {
     expect(equalBytes(encodeTurnControl(decodeTurnControl(body)), body)).toBe(true)
   } else {
-    expect(equalBytes(encodeV2PeerPathControl(decodeV2PeerPathControl(body)), body)).toBe(true)
+    expect(equalBytes(encodePeerPathControl(decodePeerPathControl(body)), body)).toBe(true)
   }
   if (vector.direction === 0) {
     expect(equalBytes(message.body, body)).toBe(true)
     return
   }
-  const binding: V2ControlBinding = {
+  const binding: ControlBinding = {
     shareInstance: bytes(vector.shareInstanceB64), protocolSessionId: bytes(vector.protocolSessionIdB64),
     laneId: vector.laneId, laneEpoch: vector.laneEpoch, direction: 1, sequence: BigInt(vector.sequence),
   }
   const verifier = createEd25519Verifier(bytes(vector.senderPublicKeyB64))
-  expect(equalBytes(await verifyV2SenderControl(message, binding, verifier), body)).toBe(true)
-  const otherKind = message.kind === V2_MESSAGE_KIND.turnControl ? V2_MESSAGE_KIND.peerPathControl : V2_MESSAGE_KIND.turnControl
-  const substituted = encodeV2Message(otherKind, undefined, message.body)
-  await expect(verifyV2SenderControl(substituted, binding, verifier)).rejects.toThrow(/signature/)
-  const unsigned = encodeV2Message(message.kind, undefined, body)
-  await expect(verifyV2SenderControl(unsigned, binding, verifier)).rejects.toThrow()
+  expect(equalBytes(await verifySenderControl(message, binding, verifier), body)).toBe(true)
+  const otherKind = message.kind === MESSAGE_KIND.turnControl ? MESSAGE_KIND.peerPathControl : MESSAGE_KIND.turnControl
+  const substituted = encodeMessage(otherKind, undefined, message.body)
+  await expect(verifySenderControl(substituted, binding, verifier)).rejects.toThrow(/signature/)
+  const unsigned = encodeMessage(message.kind, undefined, body)
+  await expect(verifySenderControl(unsigned, binding, verifier)).rejects.toThrow()
 })
 
 it('rejects another control family or an unsupported schema without changing decoders', () => {
   for (const vector of cases) {
-    const otherKind = vector.kind === V2_MESSAGE_KIND.turnControl ? V2_MESSAGE_KIND.peerPathControl : V2_MESSAGE_KIND.turnControl
-    expect(() => validateV2SenderControlBody(otherKind, bytes(vector.bodyB64))).toThrow()
+    const otherKind = vector.kind === MESSAGE_KIND.turnControl ? MESSAGE_KIND.peerPathControl : MESSAGE_KIND.turnControl
+    expect(() => validateSenderControlBody(otherKind, bytes(vector.bodyB64))).toThrow()
     const future = bytes(vector.bodyB64)
     future[1] = future[1]! + 1
-    expect(() => validateV2SenderControlBody(vector.kind, future)).toThrow(/schema/i)
+    expect(() => validateSenderControlBody(vector.kind, future)).toThrow(/schema/i)
   }
 })
 
@@ -81,8 +81,8 @@ it('sends each control through its own outer kind on the existing session lane',
     await runtime.sendTurnControl(turn)
     const sent = await openSent(channel)
     expect(sent.map(({ message }) => [message.kind, message.operationId, message.body])).toEqual([
-      [V2_MESSAGE_KIND.peerPathControl, undefined, path],
-      [V2_MESSAGE_KIND.turnControl, undefined, turn],
+      [MESSAGE_KIND.peerPathControl, undefined, path],
+      [MESSAGE_KIND.turnControl, undefined, turn],
     ])
     await expect(runtime.sendPeerPathControl(turn)).rejects.toThrow()
     await expect(runtime.sendTurnControl(path)).rejects.toThrow()
@@ -97,15 +97,15 @@ it('sends each control through its own outer kind on the existing session lane',
 })
 
 it('isolates subscriptions and keeps TURN independent of path handler and operation lifetimes', async () => {
-  const router = new V2OperationRouter(() => undefined)
+  const router = new OperationRouter(() => undefined)
   const paths: Uint8Array[] = []
   const turns: Uint8Array[] = []
   const unsubscribePath = router.subscribePeerPathControls((body) => paths.push(body))
   const unsubscribeTurn = router.subscribeTurnControls((body) => turns.push(body))
   const path = cases.find((vector) => vector.name === 'peer-path-mapping-ready')!
   const turn = cases.find((vector) => vector.name === 'turn-grant')!
-  const pathMessage = encodeV2Message(path.kind, undefined, bytes(path.bodyB64))
-  const turnMessage = encodeV2Message(turn.kind, undefined, bytes(turn.bodyB64))
+  const pathMessage = encodeMessage(path.kind, undefined, bytes(path.bodyB64))
+  const turnMessage = encodeMessage(turn.kind, undefined, bytes(turn.bodyB64))
   await router.route(pathMessage)
   await router.route(turnMessage)
   expect(paths).toEqual([pathMessage.body])

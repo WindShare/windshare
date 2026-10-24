@@ -3,8 +3,8 @@ package nativepeer
 import (
 	"slices"
 
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func (n *NativePeerConnectivity) pathEndpointsLocked(path *pathResources) []reachability.Endpoint {
@@ -52,8 +52,8 @@ func (n *NativePeerConnectivity) mappingFactsLocked(path *pathResources) []reach
 	}
 	return facts
 }
-func (n *NativePeerConnectivity) mappedLocked(path *pathResources) []provider.MappedEndpoint {
-	var mapped []provider.MappedEndpoint
+func (n *NativePeerConnectivity) mappedLocked(path *pathResources) []pionpeer.MappedEndpoint {
+	var mapped []pionpeer.MappedEndpoint
 	for _, fact := range n.mappingFactsLocked(path) {
 		if fact.External == fact.Endpoint.Local {
 			continue
@@ -62,7 +62,7 @@ func (n *NativePeerConnectivity) mappedLocked(path *pathResources) []provider.Ma
 		if fact.Endpoint.Protocol == reachability.TCP {
 			protocol = "tcp"
 		}
-		mapped = append(mapped, provider.MappedEndpoint{Local: fact.Endpoint.Local, External: fact.External, Protocol: protocol})
+		mapped = append(mapped, pionpeer.MappedEndpoint{Local: fact.Endpoint.Local, External: fact.External, Protocol: protocol})
 	}
 	return mapped
 }

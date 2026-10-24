@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
-import type { V2ProtocolTraceEvent, V2ProtocolTraceObserver } from '../../src/session/v2-diagnostics'
-import { V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import type { ProtocolTraceEvent, ProtocolTraceObserver } from '../../src/session/diagnostics'
+import { MESSAGE_KIND } from '../../src/session/message'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 import { FakeSession, FakeSessionFactory, TrackedRelay, core, deferred, identity, supervisorFixture } from './v2-supervisor-fixture'
 
 afterEach(() => vi.useRealTimers())
@@ -13,8 +13,8 @@ function fixture(laneIds = [1, 2, 3, 4]) {
   factory.attachRelayImpl = async (_session, signal) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true })
   })
-  const trace: V2ProtocolTraceEvent[] = []
-  const protocolTrace: { current: V2ProtocolTraceObserver | undefined } = {
+  const trace: ProtocolTraceEvent[] = []
+  const protocolTrace: { current: ProtocolTraceObserver | undefined } = {
     current: event => trace.push(event),
   }
   return { session, trace, protocolTrace,
@@ -34,11 +34,11 @@ it('finishes a catalog request on the surviving fourth lane without replacing th
     attempted.push(laneId)
     return { next: async () => {
       if (laneId !== 4) {
-        const error = new V2SessionRuntimeError('lane', 'Physical lane failed')
+        const error = new SessionRuntimeError('lane', 'Physical lane failed')
         session.detach(laneId, error)
         throw error
       }
-      return { kind: V2_MESSAGE_KIND.catalogResult, body: encodeCanonicalCbor(new Map<number, number | Uint8Array>([
+      return { kind: MESSAGE_KIND.catalogResult, body: encodeCanonicalCbor(new Map<number, number | Uint8Array>([
         [0, 1], [1, page],
       ])) }
     } }
@@ -69,7 +69,7 @@ it('finishes a catalog request on the surviving fourth lane without replacing th
 it('bounds retries when availability stays unchanged and preserves the original error', async () => {
   vi.useFakeTimers()
   const { supervisor, factory, trace } = fixture([1])
-  const failure = new V2SessionRuntimeError('lane', 'Session writer queue is full')
+  const failure = new SessionRuntimeError('lane', 'Session writer queue is full')
   const operation = vi.fn(async () => { throw failure })
   let outcome: unknown
   const request = supervisor.execute(undefined, operation).catch(error => { outcome = error })
@@ -100,7 +100,7 @@ it('retries temporary lane pressure after backoff without requiring a lane event
   vi.useFakeTimers()
   const { supervisor } = fixture([1])
   const operation = vi.fn()
-    .mockRejectedValueOnce(new V2SessionRuntimeError('lane', 'Queue full'))
+    .mockRejectedValueOnce(new SessionRuntimeError('lane', 'Queue full'))
     .mockResolvedValue('ready')
   const request = supervisor.execute(undefined, operation)
   try {
@@ -118,7 +118,7 @@ it.each(['attached', 'detached', 'reattached'] as const)(
     vi.useFakeTimers()
     const { supervisor, session } = fixture([1, 2])
     const operation = vi.fn()
-      .mockRejectedValueOnce(new V2SessionRuntimeError('lane', 'Lane unavailable'))
+      .mockRejectedValueOnce(new SessionRuntimeError('lane', 'Lane unavailable'))
       .mockResolvedValue('ready')
     let value: unknown
     const request = supervisor.execute(undefined, operation).then(result => { value = result.value })
@@ -142,7 +142,7 @@ it.each(['attached', 'detached', 'reattached'] as const)(
 it('resets the unchanged-availability retry budget after connection progress', async () => {
   vi.useFakeTimers()
   const { supervisor, session } = fixture([1, 2])
-  const failure = new V2SessionRuntimeError('lane', 'Queue full')
+  const failure = new SessionRuntimeError('lane', 'Queue full')
   const operation = vi.fn()
     .mockRejectedValueOnce(failure)
     .mockRejectedValueOnce(failure)
@@ -172,7 +172,7 @@ it('waits for a replacement only when the last lane is lost', async () => {
   const operation = vi.fn(async () => {
     if (supervisor.generationId === 1) {
       session.detach(1)
-      throw new V2SessionRuntimeError('lane', 'Last lane failed')
+      throw new SessionRuntimeError('lane', 'Last lane failed')
     }
     return 'ready'
   })
@@ -192,8 +192,8 @@ it.each(['cancel', 'close', 'terminal'] as const)(
     vi.useFakeTimers()
     const { supervisor, session } = fixture([1, 2])
     const controller = new AbortController()
-    const operation = vi.fn(async () => { throw new V2SessionRuntimeError('lane', 'Queue full') })
-    const reason = new V2SessionRuntimeError('session', 'Authenticated failure')
+    const operation = vi.fn(async () => { throw new SessionRuntimeError('lane', 'Queue full') })
+    const reason = new SessionRuntimeError('session', 'Authenticated failure')
     let error: unknown
     const request = supervisor.execute(controller.signal, operation).catch(cause => { error = cause })
     await flush()
@@ -216,7 +216,7 @@ it('retries on an already installed generation when an old operation fails late'
   const operation = vi.fn(async () => {
     if (operation.mock.calls.length === 1) {
       await releaseFailure.promise
-      throw new V2SessionRuntimeError('lane', 'Late old-session failure')
+      throw new SessionRuntimeError('lane', 'Late old-session failure')
     }
     return 'ready'
   })
@@ -238,7 +238,7 @@ it('keeps retry budgets independent and ignores a failing trace observer', async
   vi.useFakeTimers()
   const { supervisor, protocolTrace } = fixture([1])
   protocolTrace.current = () => { throw new Error('Observer failed') }
-  const failure = new V2SessionRuntimeError('lane', 'Queue full')
+  const failure = new SessionRuntimeError('lane', 'Queue full')
   const busy = vi.fn(async () => { throw failure })
   const ready = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue('ready')
   const failed = expect(supervisor.execute(undefined, busy)).rejects.toBe(failure)
@@ -253,7 +253,7 @@ it('keeps retry budgets independent and ignores a failing trace observer', async
 
 it('does not retry operation failures that are not connection failures', async () => {
   const { supervisor, factory } = fixture([1])
-  const failure = new V2SessionRuntimeError('operation', 'Operation rejected')
+  const failure = new SessionRuntimeError('operation', 'Operation rejected')
   const operation = vi.fn(async () => { throw failure })
   try {
     await expect(supervisor.execute(undefined, operation)).rejects.toBe(failure)

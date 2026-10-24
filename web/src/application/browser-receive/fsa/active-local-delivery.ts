@@ -8,7 +8,7 @@ import type { ReceiveOperationRepository } from '../../../output/workspace/repos
 import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { canonicalReceiveLifecycleStateBytes } from '../../../output/workspace/state-codec'
 import type { ReceiveIntent } from '../../../transfer/intent'
-import type { V2LifecycleActionOutcome, V2LifecycleMutation } from '../../receive/contracts'
+import type { LifecycleActionOutcome, LifecycleMutation } from '../../receive/contracts'
 import type { FSAResourceOwner } from '../../../output/file-system-access/execution/resource-owner'
 import { readLifecycle } from '../../../output/workspace/lifecycle/repository'
 import { unavailableRoute } from '../route-contract'
@@ -32,7 +32,7 @@ export async function runActiveBrowserFolderAction(
   input: ActiveBrowserFolderLocalAuthority,
   action: BrowserDeliveryLocalAction,
   lifecycle: ReceiveLifecycleState,
-): Promise<V2LifecycleMutation> {
+): Promise<LifecycleMutation> {
   const context = input.context
   if (context === undefined || !isBrowserDeliveryLocalLifecycle(lifecycle) ||
       (action === 'discard-incomplete-staging' && !isTerminalLifecycleState(lifecycle)) ||
@@ -54,7 +54,7 @@ async function disposeStaging(
   context: BrowserFolderDeliveryContext,
   action: Exclude<BrowserDeliveryLocalAction, 'save-staged-files'>,
   lifecycle: ReceiveLifecycleState,
-): Promise<V2LifecycleMutation> {
+): Promise<LifecycleMutation> {
   const cleanup = await openFolderCleanupAttempt(context, {
     intent: input.intent, operationLease: input.lease,
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
@@ -77,7 +77,7 @@ async function saveStagedFiles(
   input: ActiveBrowserFolderLocalAuthority,
   context: BrowserFolderDeliveryContext,
   lifecycle: ReceiveLifecycleState,
-): Promise<V2LifecycleMutation> {
+): Promise<LifecycleMutation> {
   const localAuthority = { repository: input.repository, lease: input.lease }
   await beginBrowserDeliveryLocalMutation(localAuthority)
   let session: FileSystemAccessOutputSession | undefined
@@ -119,7 +119,7 @@ async function saveStagedFiles(
     ...(recoverySummary === undefined ? {} : { recoverySummary }) })
 }
 
-function localDeliveryOutcome(failures: readonly unknown[]): V2LifecycleActionOutcome {
+function localDeliveryOutcome(failures: readonly unknown[]): LifecycleActionOutcome {
   if (failures.length === 0) return Object.freeze({ kind: 'completed' })
   const error = failures.length === 1 ? failures[0] : new AggregateError(failures,
     'Local folder saving could not release output authority', { cause: failures[0] })

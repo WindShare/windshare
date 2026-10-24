@@ -163,7 +163,9 @@ func TestRevisionMetadataBudgetBoundariesAndIdempotentRelease(t *testing.T) {
 	if extra, reserveErr := budget.reserveInvalidation(); !errors.Is(reserveErr, ErrQuotaExceeded) || extra != nil {
 		t.Fatalf("over-capacity reservation = %v, %v", extra, reserveErr)
 	}
+	copiedReservation := *reservation
 	reservation.release()
+	copiedReservation.release()
 	reservation.release()
 	if got := budget.Snapshot(); got != (RevisionMetadataSnapshot{Capacity: 1}) {
 		t.Fatalf("idempotent release snapshot = %+v", got)

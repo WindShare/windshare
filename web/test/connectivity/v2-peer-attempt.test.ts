@@ -1,27 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
-import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
-import { V2BrowserPeerAttemptExecutor } from '../../src/connectivity/v2-peer-attempt'
+import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
+import { BrowserPeerAttemptExecutor } from '../../src/connectivity/peer-attempt'
 import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import type {
-  V2PeerAttemptContext,
-  V2PeerRecoveryClock,
+  PeerAttemptContext,
+  PeerRecoveryClock,
 } from '../../src/connectivity/peer-set/path'
 import {
-  V2LaneAdmissionRejectedError,
-  V2LaneAdmissionTransportError,
-  V2LaneInstallationError,
-  type V2ReceiverSessionRuntime,
-} from '../../src/session/v2-runtime'
+  LaneAdmissionRejectedError,
+  LaneAdmissionTransportError,
+  LaneInstallationError,
+  type ReceiverSessionRuntime,
+} from '../../src/session/runtime'
 import {
-  createV2PeerPathIdentityValue,
-  createV2ProtocolOperationIdentity,
-  createV2ProtocolSessionIdentity,
-} from '../../src/session/v2-identities'
-import { type V2LaneRejection, V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
+  createPeerPathIdentityValue,
+  createProtocolOperationIdentity,
+  createProtocolSessionIdentity,
+} from '../../src/session/identities'
+import { type LaneRejection, LANE_REJECT } from '../../src/session/lane-codec'
 
-class ManualClock implements V2PeerRecoveryClock {
+class ManualClock implements PeerRecoveryClock {
   readonly sleeps: Array<{
     readonly milliseconds: number
     readonly resolve: () => void
@@ -56,7 +56,7 @@ class ManualClock implements V2PeerRecoveryClock {
 
 class FakeSession {
   readonly keys = Object.freeze({ protocolSessionId: identity(90) })
-  readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(identity(90))
+  readonly protocolSessionIdentity = createProtocolSessionIdentity(identity(90))
   readonly grant = Object.freeze({
     laneId: 2,
     laneEpoch: 1,
@@ -69,7 +69,7 @@ class FakeSession {
   adoptGate: Promise<void> | undefined
   installationGate: Promise<void> | undefined
   adoptFailure: unknown
-  authenticatedRejection: V2LaneRejection | undefined
+  authenticatedRejection: LaneRejection | undefined
   adoptionClosesPeer = false
   adoptionIgnoresSignal = false
 
@@ -104,7 +104,7 @@ class FakeSession {
     options: { readonly signal?: AbortSignal },
   ) {
     const correlation = {
-      grantOperationId: createV2ProtocolOperationIdentity(grant.grantOperationId),
+      grantOperationId: createProtocolOperationIdentity(grant.grantOperationId),
       laneId: grant.laneId,
       laneEpoch: grant.laneEpoch,
     }
@@ -119,7 +119,7 @@ class FakeSession {
       throw error
     }
     if (this.authenticatedRejection !== undefined) {
-      const error = new V2LaneAdmissionRejectedError(this.authenticatedRejection)
+      const error = new LaneAdmissionRejectedError(this.authenticatedRejection)
       if (this.adoptionClosesPeer) await peer.close()
       return Object.freeze({
         ...correlation,
@@ -129,7 +129,7 @@ class FakeSession {
         error,
       })
     }
-    if (this.adoptFailure !== undefined && !(this.adoptFailure instanceof V2LaneInstallationError)) {
+    if (this.adoptFailure !== undefined && !(this.adoptFailure instanceof LaneInstallationError)) {
       if (this.adoptionClosesPeer) await peer.close()
       throw this.adoptFailure
     }
@@ -140,7 +140,7 @@ class FakeSession {
         await optionalGate(this.installationGate, options.signal)
       }
     } catch (cause) {
-      const error = new V2LaneInstallationError({ cause })
+      const error = new LaneInstallationError({ cause })
       if (this.adoptionClosesPeer) await peer.close()
       return Object.freeze({
         ...correlation,
@@ -149,7 +149,7 @@ class FakeSession {
         error,
       })
     }
-    if (this.adoptFailure instanceof V2LaneInstallationError) {
+    if (this.adoptFailure instanceof LaneInstallationError) {
       if (this.adoptionClosesPeer) await peer.close()
       return Object.freeze({
         ...correlation,
@@ -212,12 +212,12 @@ function fixture(tabAdmission?: PeerTabAdmission) {
   const session = new FakeSession()
   const offers = new ControlledOffers()
   const clock = new ManualClock()
-  const diagnostics: V2ConnectivityTraceEvent[] = []
+  const diagnostics: ConnectivityTraceEvent[] = []
   const publications: unknown[] = []
   let randomSeed = 10
-  const executor = new V2BrowserPeerAttemptExecutor({
+  const executor = new BrowserPeerAttemptExecutor({
     tabAdmission: tabAdmission ?? new PeerTabAdmission({}, clock),
-    session: session as unknown as V2ReceiverSessionRuntime,
+    session: session as unknown as ReceiverSessionRuntime,
     offers,
     peerPathIdentity: identity(7),
     clock,
@@ -231,10 +231,10 @@ function fixture(tabAdmission?: PeerTabAdmission) {
   return { clock, diagnostics, executor, offers, publications, session }
 }
 
-function attemptContext(phases: string[] = []): V2PeerAttemptContext {
+function attemptContext(phases: string[] = []): PeerAttemptContext {
   return Object.freeze({
-    protocolSessionId: createV2ProtocolSessionIdentity(identity(90)),
-    peerPathId: createV2PeerPathIdentityValue(identity(7)),
+    protocolSessionId: createProtocolSessionIdentity(identity(90)),
+    peerPathId: createPeerPathIdentityValue(identity(7)),
     waveOrdinal: 1,
     waveAttemptOrdinal: 1,
     sessionAttemptOrdinal: 1, purpose: 'initial' as const,
@@ -242,7 +242,7 @@ function attemptContext(phases: string[] = []): V2PeerAttemptContext {
     negotiationBudgetMilliseconds: 10,
     admissionBudgetMilliseconds: 20,
     phaseChanged: (phase: string) => phases.push(phase),
-  }) as V2PeerAttemptContext
+  }) as PeerAttemptContext
 }
 
 describe('browser peer attempt phase executor', () => {
@@ -367,7 +367,7 @@ describe('browser peer attempt phase executor', () => {
     const { clock, executor, offers, session } = fixture()
     const peer = new CountingPeer()
     const rejection = Object.freeze({
-      code: V2_LANE_REJECT.admissionLimited,
+      code: LANE_REJECT.admissionLimited,
       retryAfterMilliseconds: 1_000,
     })
     session.authenticatedRejection = rejection
@@ -388,7 +388,7 @@ describe('browser peer attempt phase executor', () => {
     const { clock, diagnostics, executor, offers, publications, session } = fixture()
     const peer = new CountingPeer()
     const installation = deferred<void>()
-    const installationError = new V2LaneInstallationError({ cause: new Error('install failed') })
+    const installationError = new LaneInstallationError({ cause: new Error('install failed') })
     session.installationGate = installation.promise
     session.adoptionIgnoresSignal = true
     session.adoptFailure = installationError
@@ -422,7 +422,7 @@ describe('browser peer attempt phase executor', () => {
     const { executor, offers, publications, session } = fixture()
     const peer = new CountingPeer()
     const installation = deferred<void>()
-    const installationError = new V2LaneInstallationError({ cause: new Error('install failed') })
+    const installationError = new LaneInstallationError({ cause: new Error('install failed') })
     session.installationGate = installation.promise
     session.adoptionIgnoresSignal = true
     session.adoptFailure = installationError
@@ -451,7 +451,7 @@ describe('browser peer attempt phase executor', () => {
     const { executor, offers, session } = fixture()
     const peer = new CountingPeer()
     session.adoptionClosesPeer = true
-    session.adoptFailure = new V2LaneAdmissionTransportError('synthetic transport loss')
+    session.adoptFailure = new LaneAdmissionTransportError('synthetic transport loss')
     const attempt = executor.createAttempt(attemptContext())
     offers.opened.resolve(peer)
 

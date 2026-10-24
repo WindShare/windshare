@@ -1,34 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { encodeV2BlockRequest } from '../../src/content/v2-flow'
-import { decodeV2Message, encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import { V2OperationRouter, V2_MAXIMUM_TRACKED_OPERATIONS, V2_OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/v2-operation-router'
-import { V2IssuedOperations } from '../../src/session/operations/issued-operations'
-import { V2EnvelopeSealer } from '../../src/session/v2-envelope'
-import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
+import { encodeBlockRequest } from '../../src/content/flow'
+import { decodeMessage, encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import { OperationRouter, MAXIMUM_TRACKED_OPERATIONS, OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/operation-router'
+import { IssuedOperations } from '../../src/session/operations/issued-operations'
+import { EnvelopeSealer } from '../../src/session/envelope'
+import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import { fragmentRecord } from '../content/v2-fragment-fixture'
 import { BINDING, KEY, id, runtimeFixture } from './v2-send-fixture'
 
-const BODY = encodeV2BlockRequest(id(7), [0n])
+const BODY = encodeBlockRequest(id(7), [0n])
 const PAUSE = new DOMException('User paused', 'AbortError')
 const STALLED_MILLISECONDS = 31_500
 const RECORD = new Uint8Array([1, 2, 3, 4])
-const fragment = (operationId: Uint8Array) => decodeV2Message(fragmentRecord(operationId, RECORD)[0]!)
+const fragment = (operationId: Uint8Array) => decodeMessage(fragmentRecord(operationId, RECORD)[0]!)
 
 afterEach(() => vi.useRealTimers())
 
 describe('issued operation history outlives replay detail', () => {
   it.each([29_999, 30_000, STALLED_MILLISECONDS, 86_400_000])('discards cancelled block responses after %i ms', async elapsed => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
-    const live = router.create(V2_MESSAGE_KIND.requestBlocks, BODY)
-    const cancelled = router.create(V2_MESSAGE_KIND.requestBlocks, BODY)
+    const router = new OperationRouter(() => undefined, () => now)
+    const live = router.create(MESSAGE_KIND.requestBlocks, BODY)
+    const cancelled = router.create(MESSAGE_KIND.requestBlocks, BODY)
     cancelled.cancel(PAUSE)
     now = elapsed
     await expect(router.route(fragment(cancelled.id))).resolves.toBeUndefined()
-    await expect(router.route(encodeV2Message(V2_MESSAGE_KIND.operationComplete, cancelled.id,
-      encodeV2Body(new Map([[0, 1], [1, 0]]))))).resolves.toBeUndefined()
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationComplete, cancelled.id,
+      encodeBody(new Map([[0, 1], [1, 0]]))))).resolves.toBeUndefined()
     expect(router.active()).toEqual([live])
     const current = fragment(live.id)
     await router.route(current)
@@ -39,8 +39,8 @@ describe('issued operation history outlives replay detail', () => {
 
   it('rejects never-issued, other-session, wrong-kind and wrong-scope responses after collection', async () => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
-    const operation = router.create(V2_MESSAGE_KIND.requestBlocks, BODY)
+    const router = new OperationRouter(() => undefined, () => now)
+    const operation = router.create(MESSAGE_KIND.requestBlocks, BODY)
     operation.cancel(PAUSE)
     now = STALLED_MILLISECONDS
     const future = operation.id.slice()
@@ -48,34 +48,34 @@ describe('issued operation history outlives replay detail', () => {
     const otherSession = operation.id.slice()
     otherSession[0] = otherSession[0]! ^ 1
     const unissuedKind = operation.id.slice()
-    unissuedKind[8] = V2_MESSAGE_KIND.listChildren
+    unissuedKind[8] = MESSAGE_KIND.listChildren
     for (const unknown of [future, otherSession, unissuedKind]) {
       await expect(router.route(fragment(unknown))).rejects.toMatchObject({ scope: 'session' })
     }
-    await expect(router.route(encodeV2Message(V2_MESSAGE_KIND.openResults, operation.id, encodeV2Body([]))))
+    await expect(router.route(encodeMessage(MESSAGE_KIND.openResults, operation.id, encodeBody([]))))
       .rejects.toMatchObject({ scope: 'session' })
-    const wrongScope = encodeV2Message(V2_MESSAGE_KIND.operationError, operation.id,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, 2], [2, 0x2001], [3, false], [4, null], [5, 'directory failed']])))
+    const wrongScope = encodeMessage(MESSAGE_KIND.operationError, operation.id,
+      encodeBody(new Map<number, unknown>([[0, 1], [1, 2], [2, 0x2001], [3, false], [4, null], [5, 'directory failed']])))
     await expect(router.route(wrongScope)).rejects.toMatchObject({ scope: 'session' })
-    await expect(router.route(encodeV2Message(V2_MESSAGE_KIND.operationError, operation.id, encodeV2Body([]))))
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationError, operation.id, encodeBody([]))))
       .rejects.toMatchObject({ scope: 'session' })
     router.terminate(PAUSE)
   })
 
   it('reclaims detailed capacity while preserving old identities through repeated full budgets', async () => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
-    const first = router.create(V2_MESSAGE_KIND.requestBlocks, BODY)
+    const router = new OperationRouter(() => undefined, () => now)
+    const first = router.create(MESSAGE_KIND.requestBlocks, BODY)
     first.cancel(PAUSE)
     for (let generation = 0; generation < 2; generation += 1) {
-      now += V2_OPERATION_TOMBSTONE_MILLISECONDS
-      for (let index = 0; index < V2_MAXIMUM_TRACKED_OPERATIONS; index += 1) {
-        router.create(V2_MESSAGE_KIND.requestBlocks, BODY).cancel(PAUSE)
+      now += OPERATION_TOMBSTONE_MILLISECONDS
+      for (let index = 0; index < MAXIMUM_TRACKED_OPERATIONS; index += 1) {
+        router.create(MESSAGE_KIND.requestBlocks, BODY).cancel(PAUSE)
       }
       await expect(router.route(fragment(first.id))).resolves.toBeUndefined()
     }
-    now += V2_OPERATION_TOMBSTONE_MILLISECONDS
-    const admitted = await router.admit(V2_MESSAGE_KIND.requestBlocks, BODY)
+    now += OPERATION_TOMBSTONE_MILLISECONDS
+    const admitted = await router.admit(MESSAGE_KIND.requestBlocks, BODY)
     expect(admitted.id).not.toEqual(first.id)
     router.terminate(PAUSE)
   })
@@ -86,11 +86,11 @@ describe('issued operation history outlives replay detail', () => {
     const harness = runtimeFixture()
     harness.channel.unblock()
     try {
-      const live = await harness.runtime.beginOperation(V2_MESSAGE_KIND.requestBlocks, BODY)
-      const cancelled = await harness.runtime.beginOperation(V2_MESSAGE_KIND.requestBlocks, BODY)
-      await harness.runtime.cancelOperation(cancelled, { protocolReason: V2_OPERATION_CANCEL_REASON.user, cause: PAUSE })
+      const live = await harness.runtime.beginOperation(MESSAGE_KIND.requestBlocks, BODY)
+      const cancelled = await harness.runtime.beginOperation(MESSAGE_KIND.requestBlocks, BODY)
+      await harness.runtime.cancelOperation(cancelled, { protocolReason: OPERATION_CANCEL_REASON.user, cause: PAUSE })
       vi.setSystemTime(started + STALLED_MILLISECONDS)
-      const sealer = new V2EnvelopeSealer(KEY, { ...BINDING, direction: 1 })
+      const sealer = new EnvelopeSealer(KEY, { ...BINDING, direction: 1 })
       for (let copy = 0; copy < 3; copy += 1) {
         harness.channel.receive(await sealer.seal(fragment(cancelled.id).plaintext))
       }
@@ -110,20 +110,20 @@ describe('issued operation history outlives replay detail', () => {
   it('keeps kind-specific issuance immutable and rejects invalid identity sources', () => {
     const prefix = new Uint8Array(8).fill(3)
     const random = vi.fn(() => prefix)
-    const issued = new V2IssuedOperations(random)
-    const first = issued.issue(V2_MESSAGE_KIND.requestBlocks)
+    const issued = new IssuedOperations(random)
+    const first = issued.issue(MESSAGE_KIND.requestBlocks)
     const saved = first.slice()
     first.fill(0)
     prefix.fill(0)
-    const second = issued.issue(V2_MESSAGE_KIND.releaseLease)
-    expect(issued.requestKind(saved)).toBe(V2_MESSAGE_KIND.requestBlocks)
-    expect(issued.requestKind(second)).toBe(V2_MESSAGE_KIND.releaseLease)
+    const second = issued.issue(MESSAGE_KIND.releaseLease)
+    expect(issued.requestKind(saved)).toBe(MESSAGE_KIND.requestBlocks)
+    expect(issued.requestKind(second)).toBe(MESSAGE_KIND.releaseLease)
     expect(issued.requestKind(first)).toBeUndefined()
     expect(issued.requestKind(saved.subarray(1))).toBeUndefined()
     expect(random).toHaveBeenCalledTimes(1)
-    expect(() => issued.issue(V2_MESSAGE_KIND.blockFragment)).toThrow('cannot begin')
+    expect(() => issued.issue(MESSAGE_KIND.blockFragment)).toThrow('cannot begin')
     for (const bad of [new Uint8Array(8), new Uint8Array(7).fill(1)]) {
-      expect(() => new V2IssuedOperations(() => bad).issue(V2_MESSAGE_KIND.requestBlocks))
+      expect(() => new IssuedOperations(() => bad).issue(MESSAGE_KIND.requestBlocks))
         .toThrow('invalid bytes')
     }
   })

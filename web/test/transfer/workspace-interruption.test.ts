@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { V2RemoteRevisionError } from '../../src/content/v2-session-services'
+import { RemoteRevisionError } from '../../src/content/session-services'
 import { createFailureIdentity } from '../../src/diagnostics/incident'
 import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
-import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
+import { normalizeFileTransferFailure } from '../../src/transfer/job/failures'
 import { TransferPauseRequestedError, type PlanPauseRequest } from '../../src/transfer/output/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
 import { persistentWorkspaceInterruption } from '../../src/output/execution/persistent-evidence'
@@ -14,7 +14,7 @@ const SOURCE_UNREADABLE = 0x3003
 describe('persistent workspace interruption semantics', () => {
   it.each([SOURCE_STALE, SOURCE_DRIFT])('ends an invalidated source revision (0x%s) without advertising continuation', code => {
     const source = revisionFailure(code)
-    const normalized = normalizeV2FileTransferFailure(source)
+    const normalized = normalizeFileTransferFailure(source)
     expect(normalized.kind).toBe('fault')
     expect(persistentWorkspaceInterruption(request(source))).toEqual({ kind: 'source-invalidated' })
     expect(persistentWorkspaceInterruption(request(normalized.diagnostic))).toEqual({ kind: 'source-invalidated' })
@@ -43,8 +43,8 @@ function request(reason: unknown): PlanPauseRequest {
   }
 }
 
-function revisionFailure(code: number): V2RemoteRevisionError {
-  return new V2RemoteRevisionError({
+function revisionFailure(code: number): RemoteRevisionError {
+  return new RemoteRevisionError({
     requestKind: 'open_revisions',
     content: { scope: 'revision', code, retryable: false },
     correlation: {

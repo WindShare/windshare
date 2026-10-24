@@ -1,24 +1,24 @@
-import { openV2ShareDescriptor, type V2ShareDescriptor } from '../catalog/v2-records'
+import { openShareDescriptor, type ShareDescriptor } from '../catalog/records'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
-import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
-import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import { dialV2RelayReceiver } from '../transport/relay/v2-receiver'
-import type { V2ProtocolGenerationCore } from './v2-session-factory'
+import type { ProtocolTraceSource } from '../session/diagnostics'
+import { ReceiverSessionRuntime } from '../session/runtime'
+import { dialRelayReceiver } from '../transport/relay/receiver'
+import type { ProtocolGenerationCore } from './session-factory'
 import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
 import { observeRecovery } from './recovery-observation'
 import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
 
-export interface BrowserRelayJoin extends V2ProtocolGenerationCore {
-  readonly descriptor: V2ShareDescriptor
+export interface BrowserRelayJoin extends ProtocolGenerationCore {
+  readonly descriptor: ShareDescriptor
 }
 
 export function joinBrowserRelays(
   relayBases: readonly string[],
   capability: Suite02CapabilityKey,
   signal: AbortSignal,
-  protocolTrace?: V2ProtocolTraceSource,
+  protocolTrace?: ProtocolTraceSource,
   options: InitialJoinOptions = {},
 ): Promise<BrowserRelayJoin> {
   const disabled = new Map<string, RelayEndpointFailure>()
@@ -40,8 +40,8 @@ export function joinBrowserRelays(
     // Losing joins may settle after publication; they never borrow the winner's erased secret.
     const ownedCapability = { ...capability, readSecret: capability.readSecret.slice() }
     try {
-      let session: V2ReceiverSessionRuntime | undefined
-      const relay = await dialV2RelayReceiver(relayBase, ownedCapability, { signal: attemptSignal,
+      let session: ReceiverSessionRuntime | undefined
+      const relay = await dialRelayReceiver(relayBase, ownedCapability, { signal: attemptSignal,
         receiveTrace: event => emitRelayDelivery(protocolTrace, event, relayBase, () => ({
           correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: capability.shareId,
@@ -52,14 +52,14 @@ export function joinBrowserRelays(
         })),
       })
       try {
-        const descriptor = await openV2ShareDescriptor(relay.descriptorObject, ownedCapability, {
+        const descriptor = await openShareDescriptor(relay.descriptorObject, ownedCapability, {
           observe: event => protocolTrace?.current?.({
             ...event, eventName: 'sender_verification', shareId: capability.shareId,
             correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           }),
         })
         attemptSignal.throwIfAborted()
-        session = await V2ReceiverSessionRuntime.connect({
+        session = await ReceiverSessionRuntime.connect({
           descriptor,
           readSecret: ownedCapability.readSecret,
           initialChannel: relay.channel,

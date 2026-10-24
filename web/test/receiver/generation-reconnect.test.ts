@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
-import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { core, descriptor, FakeSession, FakeSessionFactory, TrackedRelay } from './v2-supervisor-fixture'
 
 afterEach(() => vi.useRealTimers())
@@ -12,8 +12,8 @@ function fixture(jitter = 0.5) {
   vi.spyOn(Math, 'random').mockReturnValue(jitter)
   const session = new FakeSession([1])
   const factory = new FakeSessionFactory()
-  const traces: V2ProtocolTraceEvent[] = []
-  const supervisor = new V2ReceiverReconnectSupervisor({
+  const traces: ProtocolTraceEvent[] = []
+  const supervisor = new ReceiverReconnectSupervisor({
     descriptor: descriptor(), initial: core(session, new TrackedRelay(1)), sessionFactory: factory,
     policy: 'relay-only', clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
     protocolTrace: { current: event => traces.push(event) },

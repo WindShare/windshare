@@ -1,8 +1,8 @@
 import { offerArtifacts } from '../../../src/output/planning'
 import { createSelectionSpec, createZipArchiveArtifact, createCompleteDirectoryResultRoot, createWorkspaceBinding, createWorkspaceThenPublishPlan } from '../../../src/transfer/intent'
-import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../../src/ui/v2-output'
-import { EMPTY_V2_PREVIEW, EMPTY_V2_PROGRESS, type V2BrowseRow, type V2PreviewSnapshot, type V2ReceiverSnapshot } from '../../../src/ui/v2-model'
-import { presentReceiveLifecycle } from '../../../src/ui/v2-lifecycle-presentation'
+import { EMPTY_OUTPUT_PRESENTATION } from '../../../src/ui/output'
+import { EMPTY_PREVIEW, EMPTY_PROGRESS, type BrowseRow, type PreviewSnapshot, type ReceiverSnapshot } from '../../../src/ui/model'
+import { presentReceiveLifecycle } from '../../../src/ui/lifecycle-presentation'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import { COMPLETE_DISCOVERY, environment, fsaTarget, handoffTarget, identity, portableOffer, projection, singleFileProof, treeProof, workspaceOffer } from '../../output/planning/fixture'
 
@@ -10,10 +10,10 @@ export const SCENARIOS = ['portal', 'portal-empty', 'portal-loading', 'portal-fa
 export type Scenario = typeof SCENARIOS[number]
 export type CompletedDownloadScenario = 'published' | 'download-started' | 'workspace'
 
-export const ROOT_ROWS: readonly V2BrowseRow[] = [
+export const ROOT_ROWS: readonly BrowseRow[] = [
   { id: 'photos', kind: 'directory', name: 'Summer photos', selection: 'mixed' },
   { id: 'notes', kind: 'file', name: 'A very long project notes filename describing the entire summer holiday and its carefully preserved original details.txt', expectedSize: 16_384n, selection: 'selected' },
-  ...Array.from({ length: 7 }, (_, index): V2BrowseRow => ({
+  ...Array.from({ length: 7 }, (_, index): BrowseRow => ({
     id: 'item-' + index, kind: 'file', name: 'Landscape ' + (index + 1) + '.png',
     expectedSize: 524_288n, selection: 'unselected',
   })),
@@ -22,7 +22,7 @@ export const ROOT_ROWS: readonly V2BrowseRow[] = [
 export const LONG_NAME = '????????? ? ' + 'UnbrokenProjectName'.repeat(7) + '.txt'
 
 const CATALOG_PAGE_ENTRY_LIMIT = 256
-export const FULL_DIRECTORY_ROWS: readonly V2BrowseRow[] = Array.from({ length: CATALOG_PAGE_ENTRY_LIMIT }, (_, index) => ({
+export const FULL_DIRECTORY_ROWS: readonly BrowseRow[] = Array.from({ length: CATALOG_PAGE_ENTRY_LIMIT }, (_, index) => ({
   id: 'full-item-' + index, kind: 'file', name: 'Document ' + (index + 1) + '.txt',
   expectedSize: 16_384n, selection: 'unselected',
 }))
@@ -49,23 +49,23 @@ export function syntheticPhoto(width: number, height: number): string {
   return canvas.toDataURL('image/png')
 }
 
-export function photoPreview(portrait: boolean, fileId = 'photo'): V2PreviewSnapshot {
+export function photoPreview(portrait: boolean, fileId = 'photo'): PreviewSnapshot {
   const width = portrait ? 400 : 800
   const height = portrait ? 700 : 450
   return { state: 'image', fileId, name: portrait ? 'Portrait.png' : 'Landscape.png',
     url: syntheticPhoto(width, height), presentationId: 1, mimeType: 'image/png', width, height }
 }
 
-async function portalInventorySnapshot(scenario: Scenario): Promise<V2ReceiverSnapshot> {
+async function portalInventorySnapshot(scenario: Scenario): Promise<ReceiverSnapshot> {
   const snapshot = await gallerySnapshot(scenario === 'portal-saved' ? 'saved-cleanup' : 'folder')
-  let retained: V2ReceiverSnapshot['retained'] = { kind: 'ready', operations: [], pending: null, error: null }
+  let retained: ReceiverSnapshot['retained'] = { kind: 'ready', operations: [], pending: null, error: null }
   if (scenario === 'portal-saved') return { ...snapshot, retained }
   if (scenario === 'portal-loading') retained = { ...retained, kind: 'loading', pending: null }
   if (scenario === 'portal-failed') retained = { ...retained, kind: 'failed', pending: null, error: 'Stored receive tasks could not be loaded.' }
-  return { ...snapshot, retained, output: EMPTY_V2_OUTPUT_PRESENTATION, taskDisplay: null, progress: EMPTY_V2_PROGRESS }
+  return { ...snapshot, retained, output: EMPTY_OUTPUT_PRESENTATION, taskDisplay: null, progress: EMPTY_PROGRESS }
 }
 
-export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSnapshot> {
+export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnapshot> {
   if (scenario.startsWith('portal-')) return portalInventorySnapshot(scenario)
   const single = ['portrait', 'landscape', 'video', 'unsupported'].includes(scenario)
   const selection = await createSelectionSpec({
@@ -79,7 +79,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
   const offers = await offerArtifacts(projection(selection, proof, 128n), COMPLETE_DISCOVERY,
     environment({ targets: [fsaTarget(), handoffTarget()], portable: portableOffer(), workspace: single ? null : workspaceOffer() }))
   const facts = TASK_FIXTURES[scenario === 'capacity' ? 'sender-capacity' : scenario] ?? TASK_FIXTURES['open-discovery']!
-  const file: V2BrowseRow = { id: 'photo', kind: 'file',
+  const file: BrowseRow = { id: 'photo', kind: 'file',
     name,
     expectedSize: 524_288n, selection: 'selected' }
   const artifact = await createZipArchiveArtifact(createCompleteDirectoryResultRoot(identity(30), 'Summer photos'))
@@ -95,8 +95,8 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
       latestObservedFooter: { committedCount: 1, state: 'completed' },
     } : null,
   })
-  const output = single ? { ...EMPTY_V2_OUTPUT_PRESENTATION, offers } : {
-    ...EMPTY_V2_OUTPUT_PRESENTATION, offers, lifecycle: facts.lifecycle, directZipProgress: facts.directZipProgress,
+  const output = single ? { ...EMPTY_OUTPUT_PRESENTATION, offers } : {
+    ...EMPTY_OUTPUT_PRESENTATION, offers, lifecycle: facts.lifecycle, directZipProgress: facts.directZipProgress,
     plan, resolvedArtifact: artifact, lifecyclePresentation,
   }
   const regularRows = scenario === 'long-names' ? ROOT_ROWS.map(row => row.id === 'notes' ? { ...row, name: LONG_NAME } : row) : ROOT_ROWS
@@ -123,11 +123,11 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
     pageIndex: 0, pageCount: single || scenario === 'full-directory' ? 1 : 2,
     entryCount: single ? 1 : directoryEntryCount,
     omittedCount: 0n, selectedVisibleFiles: 1, selectedVisibleBytes: 16_384n, directoryRetryable: false,
-    progress: { ...EMPTY_V2_PROGRESS, ...facts.progress,
+    progress: { ...EMPTY_PROGRESS, ...facts.progress,
       ...(scenario === 'exact-progress' ? { discovery: 'complete' as const } : {}),
       ...(scenario === 'capacity' ? { capacityWaitVisible: true, capacityWaitingFiles: 2 } : {}),
       ...(scenario === 'partial-ready' ? { fileErrors: 1 } : {}) },
-    preview: scenario === 'portrait' || scenario === 'landscape' ? photoPreview(scenario === 'portrait') : EMPTY_V2_PREVIEW,
+    preview: scenario === 'portrait' || scenario === 'landscape' ? photoPreview(scenario === 'portrait') : EMPTY_PREVIEW,
     output,
     retained: { kind: 'ready', pending: null, error: null, operations: [0, 1].map(index => ({
       operationId: 'saved-gallery-' + index, receiveIntentDigest: 'fixture-intent', lifecycleGeneration: 1n,

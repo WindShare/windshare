@@ -13,21 +13,21 @@ import { initialReceiveLifecycleState } from '../../src/output/workspace'
 import { createSelectionSpec } from '../../src/transfer/intent'
 import type { SelectionProjectionState } from '../../src/transfer/projection'
 import {
-  V2AuthorityActivationCoordinator,
+  AuthorityActivationCoordinator,
   type AuthorityActivationOptions,
 } from '../../src/application/receive/activation/coordinator'
-import type { V2AuthorityProjectionPublication } from '../../src/application/receive/activation/planning'
-import type { V2ActiveProjection } from '../../src/application/receive/discovery'
+import type { AuthorityProjectionPublication } from '../../src/application/receive/activation/planning'
+import type { ActiveProjection } from '../../src/application/receive/discovery'
 import type { ActiveReceiveAdoption } from '../../src/application/receive/active/coordinator'
-import { StaleReceiveBoundaryError, type V2ControllerWorkflowTraceEvent, type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
-import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { StaleReceiveBoundaryError, type ControllerWorkflowTraceEvent, type ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
-  V2OwnedActivationAuthority,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
+  OwnedActivationAuthority,
 } from '../../src/application/receive/contracts'
-import { V2PresentationSourceError } from '../../src/application/receive/contracts'
+import { PresentationSourceError } from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
   projection,
@@ -150,8 +150,8 @@ describe('authority activation coordinator', () => {
     const cause = new Error('route retained durable effects')
     const settlements: unknown[] = []
     const detachments: string[] = []
-    let owned: V2OwnedActivationAuthority | undefined
-    const authority: V2ArtifactPresentationAuthority = {
+    let owned: OwnedActivationAuthority | undefined
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       async commit(input) {
         const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -220,7 +220,7 @@ describe('authority activation transactionality', () => {
   it('reuses one presentation authority after a replacement aborts a pre-fence commit', async () => {
     let starts = 0
     let commits = 0
-    const authority: V2ArtifactPresentationAuthority = {
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
         commits += 1
@@ -265,7 +265,7 @@ describe('authority activation transactionality', () => {
     const returnBound = deferred<void>()
     let runtime: FakeBoundRuntime | undefined
     let starts = 0
-    const authority: V2ArtifactPresentationAuthority = {
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
         const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -318,7 +318,7 @@ describe('authority activation transactionality', () => {
       const cause = new Error('owned effects')
       let settlementCalls = 0
       let detachCalls = 0
-      const authority: V2ArtifactPresentationAuthority = {
+      const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
           const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -377,7 +377,7 @@ describe('authority activation transactionality', () => {
     async (_name, failSettlement, failDetach) => {
       let settlementCalls = 0
       let detachCalls = 0
-      const authority: V2ArtifactPresentationAuthority = {
+      const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
           const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -415,7 +415,7 @@ describe('authority activation transactionality', () => {
   )
 
   it('classifies synchronous picker refusal without an incident-facing action error', async () => {
-    const refusal = new V2PresentationSourceError('picker_refused', 'picker refused')
+    const refusal = new PresentationSourceError('picker_refused', 'picker refused')
     const harness = await createHarness({ startAuthority: () => { throw refusal } })
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
@@ -451,7 +451,7 @@ describe('post-fence activation ownership', () => {
       const fenceReached = deferred<void>()
       const returnBound = deferred<void>()
       let runtime: FakeBoundRuntime | undefined
-      const authority: V2ArtifactPresentationAuthority = {
+      const authority: ArtifactPresentationAuthority = {
         ready: Promise.resolve(),
         commit: async input => {
           const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -524,23 +524,23 @@ describe('post-fence activation ownership', () => {
 })
 
 interface PlannedObservation {
-  readonly active: V2ActiveProjection
+  readonly active: ActiveProjection
   readonly offers: ArtifactOffers
   readonly outcome: ArtifactChoiceReconcileOutcome
 }
 
 interface CoordinatorHarness {
-  readonly coordinator: V2AuthorityActivationCoordinator
+  readonly coordinator: AuthorityActivationCoordinator
   readonly receive: FakeReceiveComposition
   readonly observations: readonly PlannedObservation[]
   readonly planning: Deferred<ArtifactOffers>[]
   readonly reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[]
-  readonly publications: V2AuthorityProjectionPublication[]
+  readonly publications: AuthorityProjectionPublication[]
   readonly activeAdoptions: ActiveReceiveAdoption[]
-  readonly retries: V2ActiveProjection[]
+  readonly retries: ActiveProjection[]
   readonly outputAdoptions: Array<Readonly<{
     choice: OfferedArtifactChoice['choice']
-    runtime: V2BoundReceiveOperation
+    runtime: BoundReceiveOperation
   }>>
   readonly actionErrors: unknown[]
   readonly retainedRefreshes: string[]
@@ -558,7 +558,7 @@ async function createHarness(options: Readonly<{
   authorityReady?: Promise<void>
   adoptOutput?: boolean
   binder?: NonNullable<AuthorityActivationOptions['binder']>
-  startAuthority?: (offered: OfferedArtifactChoice) => V2ArtifactPresentationAuthority
+  startAuthority?: (offered: OfferedArtifactChoice) => ArtifactPresentationAuthority
 }> = {}): Promise<CoordinatorHarness> {
   const joined = new FakeJoinedShare(true)
   const selection = await createSelectionSpec({
@@ -595,7 +595,7 @@ async function createHarness(options: Readonly<{
       outcome,
       active: {
         revision,
-        joined: joined as unknown as V2JoinedBrowserShare,
+        joined: joined as unknown as JoinedBrowserShare,
         selection,
         frozenSelection: joined.selection.snapshot(),
         epoch: projected.epoch,
@@ -614,18 +614,18 @@ async function createHarness(options: Readonly<{
   }
   const planning: Deferred<ArtifactOffers>[] = []
   const reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[] = []
-  const publications: V2AuthorityProjectionPublication[] = []
+  const publications: AuthorityProjectionPublication[] = []
   const activeAdoptions: ActiveReceiveAdoption[] = []
-  const retries: V2ActiveProjection[] = []
+  const retries: ActiveProjection[] = []
   const outputAdoptions: CoordinatorHarness['outputAdoptions'][number][] = []
   const actionErrors: unknown[] = []
   const retainedRefreshes: string[] = []
-  const traces: V2ControllerWorkflowTraceEvent[] = []
-  let current: V2ActiveProjection | undefined
-  const observability = new V2ControllerObservability({
+  const traces: ControllerWorkflowTraceEvent[] = []
+  let current: ActiveProjection | undefined
+  const observability = new ControllerObservability({
     trace: Object.freeze({
       get current() {
-        return (event: V2ReceiverTraceEvent) => {
+        return (event: ReceiverTraceEvent) => {
           if (event.name === 'join_transition' ||
               (event.name === 'authority_transition' && 'activationId' in event)) {
             traces.push(event)
@@ -634,7 +634,7 @@ async function createHarness(options: Readonly<{
       },
     }),
   })
-  const coordinator = new V2AuthorityActivationCoordinator({
+  const coordinator = new AuthorityActivationCoordinator({
     receive,
     activeReceive: {
       prepareAdoption: adoption => Object.freeze({
@@ -692,7 +692,7 @@ async function createHarness(options: Readonly<{
       if (current === undefined) throw new Error('missing replacement observation')
     },
     transitions: () => traces
-      .filter((event): event is Extract<V2ControllerWorkflowTraceEvent, { name: 'authority_transition' }> =>
+      .filter((event): event is Extract<ControllerWorkflowTraceEvent, { name: 'authority_transition' }> =>
         event.name === 'authority_transition' && 'activationId' in event)
       .map(event => event.transition),
   }

@@ -8,10 +8,10 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type mappedGateway struct{ deletes atomic.Int32 }
@@ -55,7 +55,7 @@ func TestMappingFactsAreFrozenOnlyIntoFreshAttemptAndRetainedOnlyForSelectedLane
 	if len(second.MappedEndpoints) != 1 || second.MappedEndpoints[0].Local != second.SocketLease.Endpoints()[0] {
 		t.Fatal(second.MappedEndpoints)
 	}
-	second.Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "udp"}})
+	second.Observe(pionpeer.Event{Pair: &pionpeer.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "udp"}})
 	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	if len(h.native.config.Reachability.Facts()) != 1 {
 		t.Fatal("admitted mapping lost its lease")
@@ -134,7 +134,7 @@ func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGeneratio
 	if err := h.native.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	automatic := newTestConnectivity(t, Config{Monitor: h.monitor, Now: func() time.Time { return h.now }, Pool: h.native.config.Pool, Connect: func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error) {
+	automatic := newTestConnectivity(t, Config{Monitor: h.monitor, Now: func() time.Time { return h.now }, Pool: h.native.config.Pool, Connect: func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
 		return nil, context.Canceled
 	}})
 	_, _ = automatic.NewPeerConnection(context.Background(), request(1))

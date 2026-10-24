@@ -16,7 +16,7 @@ let server
 try {
   const { modules } = JSON.parse(await readFile(join(root, 'third_party/pion/manifest.json'), 'utf8'))
   const pion = Object.fromEntries(modules.map(({ name, version }) => [name, version]))
-  await promisify(execFile)('go', ['build', '-o', executable, './transport/webrtc/provider/testdata/tcpserver'], {
+  await promisify(execFile)('go', ['build', '-o', executable, './connectivity/pionpeer/testdata/tcpserver'], {
     cwd: root, windowsHide: true, timeout: 60_000,
     env: { ...process.env, GOWORK: 'off', GOTOOLCHAIN: 'local' },
   })

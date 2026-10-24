@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
 import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/failure/fault'
-import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../../src/catalog/selection'
 import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { createProgressiveZipOutput } from '../../../src/output/progressive-zip/output'
 import { catalogFixture, directoryEntry, fileEntry, identity, planAuthorityFixture, readerFixture,
@@ -120,7 +120,7 @@ const admit = (archive: ProgressiveZipArchive, id: string, size: bigint) => arch
 describe('progressive ZIP settlement and cancellation', () => {
   it('drains a timed-out finalization before pausing and resumes locally without losing payload', async () => {
     const file = fileEntry(identity(19), 'file.bin', 6n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
     const archive = await f.open()
@@ -183,7 +183,7 @@ describe('progressive ZIP settlement and cancellation', () => {
   })
 
   it('retains a committed result when publication drains after the deadline', async () => {
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
     const archive = await f.open()
@@ -257,7 +257,7 @@ describe('progressive native ZIP missing-file results', () => {
   ] as const)('retains first-open $code omissions across recovery (rejected commit: $rejectWarning)', async test => {
     const files = [fileEntry(identity(61), 'a.txt', 3n), fileEntry(identity(62), 'b.txt', 4n),
       fileEntry(identity(63), 'c.txt', 5n)]
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
     const archive = await f.open()
@@ -326,7 +326,7 @@ describe('progressive native ZIP missing-file results', () => {
 describe('progressive native ZIP archive', () => {
   it('receives through the production OutputSession adapter with authenticated directory and revision ports', async () => {
     const file = fileEntry(identity(14), 'file.bin', 6n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({
       planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection,
     })
@@ -366,7 +366,7 @@ describe('progressive native ZIP archive', () => {
 
   it('settles native ZIP directory receipts incrementally beyond the FSA retained-admission budget', async () => {
     const directories = Array.from({ length: 20 }, (_, index) => directoryEntry(identity(30 + index), `empty-${index}`))
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
     const archive = await f.open()
@@ -396,7 +396,7 @@ describe('progressive native ZIP archive', () => {
   it.each(Object.values(SourceFaultCode))('persists %s with partial ranges and resumes complete siblings without reopening their remote revision', async code => {
     const a = fileEntry(identity(16), 'a.bin', 2n)
     const b = fileEntry(identity(17), 'b.bin', 6n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
     let archive = await f.open()
@@ -444,7 +444,7 @@ describe('progressive native ZIP archive', () => {
 
   it('retains the committed task cut after a real V2Job native flush failure without claiming a forced file cut', async () => {
     const file = fileEntry(identity(15), 'file.bin', 6n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({
       planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection,
     })

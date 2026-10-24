@@ -2,9 +2,9 @@ import {
   createWindShareFrameChannel,
   type WebRTCFrameChannel,
 } from '../transport/webrtc'
-import { V2_MAXIMUM_PEER_CANDIDATES } from '../session/v2-operation-continuation'
+import { MAXIMUM_PEER_CANDIDATES } from '../session/operation-continuation'
 import { abortReason } from './clock'
-import type { V2CandidateCounts } from './diagnostics'
+import type { CandidateCounts } from './diagnostics'
 import { NegotiationEventQueue } from './negotiation-event-queue'
 import {
   PeerNegotiationError,
@@ -33,7 +33,7 @@ import { candidateFact, selectedPairFact, type PeerProviderFact } from './peer-s
 import { BrowserPeerConnections, closeBrowserPeer, type BrowserPeerConnection } from './browser-peer/connections'
 
 export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
-export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
+export const MAX_ICE_CANDIDATES_PER_PEER = MAXIMUM_PEER_CANDIDATES
 
 // Lifecycle and description events need their own reserve because candidate limits
 // alone must not let a candidate burst hide cancellation or terminal settlement.
@@ -45,20 +45,20 @@ export interface OfferChannelFactory {
   offer(
     route: SignalingRoute,
     signal: AbortSignal,
-    observer?: V2PeerOfferAttemptObserver,
+    observer?: PeerOfferAttemptObserver,
     profile?: AttemptICEProfile,
   ): Promise<PeerChannel>
 }
 
 /** Consumer-side milestone port; implementations never receive attempt authority. */
-export interface V2PeerOfferAttemptObserver {
+export interface PeerOfferAttemptObserver {
   providerFact?(fact: PeerProviderFact): void
   phaseChanged?(phase: 'signaling' | 'ice-check' | 'dtls-datachannel'): void
-  offerCreated(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
-  offerSent(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
-  answerReceived(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
+  offerCreated(candidateCounts: CandidateCounts | (() => CandidateCounts)): void
+  offerSent(candidateCounts: CandidateCounts | (() => CandidateCounts)): void
+  answerReceived(candidateCounts: CandidateCounts | (() => CandidateCounts)): void
   dataChannelOpened(
-    candidateCounts: V2CandidateCounts | (() => V2CandidateCounts),
+    candidateCounts: CandidateCounts | (() => CandidateCounts),
     ...unusedLegacyArguments: readonly unknown[]
   ): void
 }
@@ -107,7 +107,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
   async offer(
     route: SignalingRoute,
     signal: AbortSignal,
-    observer?: V2PeerOfferAttemptObserver,
+    observer?: PeerOfferAttemptObserver,
     profile?: AttemptICEProfile,
   ): Promise<PeerChannel> {
     signal.throwIfAborted()
@@ -171,7 +171,7 @@ class OfferNegotiation {
   readonly #providerFacts: PeerProviderFact[] = []
   #providerFactsScheduled = false
   #providerFactsLost = 0
-  readonly #observer: V2PeerOfferAttemptObserver | undefined
+  readonly #observer: PeerOfferAttemptObserver | undefined
   readonly #remote: RemoteNegotiationState
   readonly #events: NegotiationEventQueue<NegotiationEvent>
   readonly #opened = deferred<PeerChannel>()
@@ -194,7 +194,7 @@ class OfferNegotiation {
     channel: WebRTCFrameChannel,
     route: SignalingRoute,
     maximumCandidates: number,
-    observer: V2PeerOfferAttemptObserver | undefined,
+    observer: PeerOfferAttemptObserver | undefined,
   ) {
     this.#connection = connection
     this.#peer = connection.peer
@@ -386,14 +386,14 @@ class OfferNegotiation {
     }
   }
 
-  #candidateCounts(): V2CandidateCounts {
+  #candidateCounts(): CandidateCounts {
     return Object.freeze({
       localEmitted: this.#localCandidateFingerprints.size,
       remoteAccepted: this.#remote.acceptedCandidates,
     })
   }
 
-  #observe(report: (observer: V2PeerOfferAttemptObserver) => void): void {
+  #observe(report: (observer: PeerOfferAttemptObserver) => void): void {
     if (this.#observer === undefined) return
     try {
       report(this.#observer)

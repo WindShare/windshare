@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
+import type { CatalogEntry } from '../../src/catalog/records'
+import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
-  V2BlockBroker,
-  V2LaneSet,
-  type V2BlockDemand,
-  type V2BlockLane,
-  type V2BlockRangeReader,
-} from '../../src/content/v2-broker'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import type { V2RevisionReader } from '../../src/content/v2-session-services'
-import type { V2Mp4Segment, V2PreviewRangeSource } from '../../src/preview/mp4-range'
+  BlockBroker,
+  LaneSet,
+  type BlockDemand,
+  type BlockLane,
+  type BlockRangeReader,
+} from '../../src/content/broker'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
+import type { RevisionReader } from '../../src/content/session-services'
+import type { Mp4Segment, PreviewRangeSource } from '../../src/preview/mp4-range'
 import {
-  V2FilePreview,
-  type V2PreviewPorts,
-  type V2VideoRangePort,
-} from '../../src/preview/v2-preview'
+  FilePreview,
+  type PreviewPorts,
+  type VideoRangePort,
+} from '../../src/preview/preview'
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -25,11 +25,11 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-function fileEntry(size: bigint, name = 'preview.bin'): Extract<V2CatalogEntry, { kind: 'file' }> {
+function fileEntry(size: bigint, name = 'preview.bin'): Extract<CatalogEntry, { kind: 'file' }> {
   return Object.freeze({ kind: 'file', id: identity(2), idText: 'file', name, expectedSize: size })
 }
 
-class ByteLane implements V2BlockLane {
+class ByteLane implements BlockLane {
   readonly id = 1
   readonly calls: bigint[] = []
   readonly #bytes: Uint8Array<ArrayBuffer>
@@ -38,7 +38,7 @@ class ByteLane implements V2BlockLane {
     this.#bytes = bytes
   }
 
-  async fetchBlock(demand: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
+  async fetchBlock(demand: BlockDemand, signal: AbortSignal): Promise<BlockRecord> {
     signal.throwIfAborted()
     this.calls.push(demand.localBlockIndex)
     const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
@@ -51,7 +51,7 @@ class ByteLane implements V2BlockLane {
 }
 
 function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
-  const descriptor: V2FileRevisionDescriptor = Object.freeze({
+  const descriptor: FileRevisionDescriptor = Object.freeze({
     shareInstance: identity(1),
     shareInstanceId: 'share',
     fileId: identity(2),
@@ -62,16 +62,16 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
     geometry: new FileGeometry(BigInt(bytes.byteLength), blockSize),
   })
   const lane = new ByteLane(bytes)
-  const lanes = new V2LaneSet()
+  const lanes = new LaneSet()
   lanes.add(lane, 'application-relay')
-  const upstreamBroker = new V2BlockBroker(lanes)
-  const routes = new V2ConnectivityRouteAuthority()
-  const broker: V2BlockRangeReader = Object.freeze({
+  const upstreamBroker = new BlockBroker(lanes)
+  const routes = new ConnectivityRouteAuthority()
+  const broker: BlockRangeReader = Object.freeze({
     readRange: (
-      revision: V2FileRevisionDescriptor,
+      revision: FileRevisionDescriptor,
       leaseId: Uint8Array,
       range: ByteRange,
-      options: NonNullable<Parameters<V2BlockRangeReader['readRange']>[3]> = {},
+      options: NonNullable<Parameters<BlockRangeReader['readRange']>[3]> = {},
     ) => upstreamBroker.readRouteAuthorizedRange(
       revision,
       leaseId,
@@ -86,7 +86,7 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
       leaseId: identity(4),
       release: async () => { releases += 1 },
     }),
-  } satisfies V2RevisionReader
+  } satisfies RevisionReader
   return { broker, descriptor, lane, releases: () => releases, revisions }
 }
 
@@ -109,11 +109,11 @@ function mp4ShapedFile(size: number): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
-function urlPorts(extra: V2PreviewPorts = {}) {
+function urlPorts(extra: PreviewPorts = {}) {
   const created: Blob[] = []
   const revoked: string[] = []
   let next = 1
-  const ports: V2PreviewPorts = {
+  const ports: PreviewPorts = {
     ...extra,
     createObjectUrl: (blob) => {
       created.push(blob)
@@ -128,7 +128,7 @@ describe('v2 file preview runtime', () => {
   it('rejects oversized automatic candidates before opening a revision', async () => {
     const fixture = runtime(new Uint8Array(1), 1n)
     const revisions = { open: vi.fn(fixture.revisions.open) }
-    await expect(V2FilePreview.openAutomaticPhoto(
+    await expect(FilePreview.openAutomaticPhoto(
       fileEntry(4n * 1024n * 1024n + 1n, 'large.png'),
       revisions, fixture.broker, new AbortController().signal,
     )).rejects.toThrow('Use Preview')
@@ -142,13 +142,13 @@ describe('v2 file preview runtime', () => {
     const decodeImage = vi.fn(async () => ({ width: 4000, height: 3000 }))
     const urls = urlPorts({ decodeImage })
     const entry = fileEntry(BigInt(bytes.byteLength), 'portrait.png')
-    await expect(V2FilePreview.openAutomaticPhoto(
+    await expect(FilePreview.openAutomaticPhoto(
       entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
     )).rejects.toThrow('larger image')
     expect(fixture.lane.calls).toEqual([0n, 1n])
     expect(decodeImage).not.toHaveBeenCalled()
     expect(fixture.releases()).toBe(1)
-    const manual = await V2FilePreview.open(
+    const manual = await FilePreview.open(
       entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
     )
     expect(manual.current.kind).toBe('image')
@@ -160,7 +160,7 @@ describe('v2 file preview runtime', () => {
     const bytes = mp4ShapedFile(100 * 1024)
     const fixture = runtime(bytes, 64n * 1024n)
     const openVideo = vi.fn()
-    await expect(V2FilePreview.openAutomaticPhoto(
+    await expect(FilePreview.openAutomaticPhoto(
       fileEntry(BigInt(bytes.byteLength), 'disguised.png'),
       fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
     )).rejects.toThrow('Use Preview')
@@ -177,7 +177,7 @@ describe('v2 file preview runtime', () => {
       controller.abort(new DOMException('Download admitted', 'AbortError'))
       return { width: 20, height: 10 }
     } })
-    await expect(V2FilePreview.openAutomaticPhoto(
+    await expect(FilePreview.openAutomaticPhoto(
       fileEntry(128n, 'photo.png'), fixture.revisions, fixture.broker, controller.signal, urls.ports,
     )).rejects.toMatchObject({ name: 'AbortError' })
     expect(urls.created).toEqual([])
@@ -194,7 +194,7 @@ describe('v2 file preview runtime', () => {
         return { width: 320, height: 200 }
       },
     })
-    const preview = await V2FilePreview.open(
+    const preview = await FilePreview.open(
       fileEntry(BigInt(bytes.byteLength), 'still.png'),
       fixture.revisions,
       fixture.broker,
@@ -220,7 +220,7 @@ describe('v2 file preview runtime', () => {
     const bytes = mp4ShapedFile(1 << 20)
     const fixture = runtime(bytes, 64n * 1024n)
     const pending: AbortSignal[] = []
-    const openVideo = async (source: V2PreviewRangeSource): Promise<V2VideoRangePort> => {
+    const openVideo = async (source: PreviewRangeSource): Promise<VideoRangePort> => {
       await source.read(byteRange(0n, 16n), new AbortController().signal)
       await source.read(byteRange(source.exactSize - 16n, source.exactSize), new AbortController().signal)
       return {
@@ -231,7 +231,7 @@ describe('v2 file preview runtime', () => {
           codec: 'avc1.42001e',
           mimeType: 'video/mp4; codecs="avc1.42001e"',
         },
-        segmentAt: async (seconds, signal): Promise<V2Mp4Segment> => {
+        segmentAt: async (seconds, signal): Promise<Mp4Segment> => {
           if (seconds === 1) {
             pending.push(signal)
             return await new Promise((_resolve, reject) => {
@@ -247,7 +247,7 @@ describe('v2 file preview runtime', () => {
       }
     }
     const urls = urlPorts({ openVideo, supportsVideo: () => true })
-    const preview = await V2FilePreview.open(
+    const preview = await FilePreview.open(
       fileEntry(BigInt(bytes.byteLength), 'clip.mp4'),
       fixture.revisions,
       fixture.broker,
@@ -276,7 +276,7 @@ describe('v2 file preview runtime', () => {
     const bytes = pngFile(128, 20, 10)
     const fixture = runtime(bytes, 64n)
     const urls = urlPorts({ decodeImage: async () => ({ width: 21, height: 10 }) })
-    await expect(V2FilePreview.open(
+    await expect(FilePreview.open(
       fileEntry(BigInt(bytes.byteLength), 'forged.png'),
       fixture.revisions,
       fixture.broker,
@@ -307,7 +307,7 @@ describe('v2 file preview runtime', () => {
       }),
       supportsVideo: () => false,
     })
-    await expect(V2FilePreview.open(
+    await expect(FilePreview.open(
       fileEntry(BigInt(bytes.byteLength), 'unsupported.mp4'),
       fixture.revisions,
       fixture.broker,

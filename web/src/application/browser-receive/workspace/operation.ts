@@ -28,7 +28,7 @@ import {
 import { openOriginPrivateProgressiveZipBackend, type OriginPrivateProgressiveZipBackend } from '../../../output/origin-private/progressive-backend'
 import { createProgressiveWorkspaceExecution } from '../../../output/execution/progressive-workspace-execution'
 import { createPersistentWorkspaceExecution } from '../../../output/execution/persistent-execution'
-import type { V2ExecutionAdmissionLifecycle } from '../../../transfer/settlement/v2-plan-authority'
+import type { ExecutionAdmissionLifecycle } from '../../../transfer/settlement/plan-authority'
 import {
   createOutputSessionID,
   createTransferJobID,
@@ -39,11 +39,11 @@ import {
   outputSessionIdentity,
   type ExactSingleFileEvidence,
   type ExecutionAdmissionResult,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
   type WorkspaceExecution,
 } from '../../../transfer/output/session'
-import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../receive/actions'
-import type { V2BoundReceiveOperation, V2LifecycleMutation } from '../../receive/contracts'
+import type { LifecycleUserAction, ActiveReceiveControl, WorkspaceUsage } from '../../receive/actions'
+import type { BoundReceiveOperation, LifecycleMutation } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import {
   WorkspaceExecutionAdmissionSettlement,
@@ -63,7 +63,7 @@ type WorkspaceReceiveContinuation = Extract<
   { readonly kind: 'workspace-receive' }
 >
 
-export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2ExecutionAdmissionLifecycle {
+export class WorkspaceReceiveOperation implements BoundReceiveOperation, ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
   readonly #lifecycle: ReceiveLifecycleObservation
   readonly #unsubscribeLifecycle: () => void
@@ -78,7 +78,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #closeAuthority: (() => Promise<void>) | undefined
   readonly #packaging: WorkspaceReceivePackaging
-  #plans!: V2PlanExecutionAuthority
+  #plans!: PlanExecutionAuthority
   #transferJobId: string
   #backend: OriginPrivateWorkspaceBackend | undefined
   #admitted: AdmittedWorkspaceContent | undefined
@@ -249,7 +249,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return owner
   }
 
-  get plans(): V2PlanExecutionAuthority {
+  get plans(): PlanExecutionAuthority {
     return this.#plans
   }
 
@@ -263,15 +263,15 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return this.#transferJobId
   }
 
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
     if (control !== 'pause') throw unavailableRoute()
     transfer.abort(new TransferPauseRequestedError())
   }
 
   async startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     this.#requireAttached()
     if (action === 'continue' && lifecycle.kind === 'resumable-start') return this.#continueStart()
     if (action === 'continue' && lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'workspace-archive') {
@@ -289,7 +289,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return this.#packaging.resolveWorkspaceUsage(lifecycle)
   }
 
-  settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  settleTransferAdmissionFailure(reason: unknown): Promise<LifecycleMutation> {
     this.#requireAttached()
     return this.#admissionSettlement.settle(reason)
   }
@@ -422,7 +422,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
 
   async #continueProgressive(
     lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-receive'; payloadKind: 'workspace-archive' }>,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     const previous = this.#backend
     const content = this.#admitted
     const claim = this.#budgetClaim
@@ -586,7 +586,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       ) =>
         this.#admissionSettlement.beginContinuation(() => this.#stages.restoreReceiveContinuation(lifecycle)),
       installTransferAttempt: (
-        plans: V2PlanExecutionAuthority,
+        plans: PlanExecutionAuthority,
         transferJobId: string,
       ) => {
         this.#transferJobId = transferJobId
@@ -595,7 +595,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     })
   }
 
-  async #retainStart(reason?: unknown): Promise<V2LifecycleMutation> {
+  async #retainStart(reason?: unknown): Promise<LifecycleMutation> {
     await this.#backend?.close()
     await this.#budgetClaim?.release()
     this.#backend = undefined
@@ -605,7 +605,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return Object.freeze({ lifecycle, workspaceUsage: this.resolveWorkspaceUsage(lifecycle) })
   }
 
-  async #continueStart(): Promise<V2LifecycleMutation> {
+  async #continueStart(): Promise<LifecycleMutation> {
     const plans = await workspacePlanAuthority(this.intent, this)
     const lifecycle = await this.#stages.startup.retry()
     this.#admissionSettlement.beginStart()

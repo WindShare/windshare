@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { V2BlockBroker } from '../../src/content/v2-broker'
-import { V2LaneSet, type V2BlockDemand, type V2BlockReadObserver } from '../../src/content/v2-lane-set'
+import { BlockBroker } from '../../src/content/broker'
+import { LaneSet, type BlockDemand, type BlockReadObserver } from '../../src/content/lane-set'
 import { FileGeometry } from '../../src/content/geometry'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../../src/content/v2-route-policy'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
+import type { BlockRouteEligibility, BlockTransportRoute } from '../../src/content/route-policy'
 
 const MIB = 1024 * 1024
 const leaseId = new Uint8Array(16)
-const routes = (...allowed: V2BlockTransportRoute[]): V2BlockRouteEligibility => ({
+const routes = (...allowed: BlockTransportRoute[]): BlockRouteEligibility => ({
   active: true, allows: route => allowed.includes(route), assertActive() {}, subscribe: () => () => {},
 })
 const direct = routes('direct')
 const relay = routes('application-relay')
-function descriptor(name: string, blocks = 1, bytes = MIB): V2FileRevisionDescriptor {
+function descriptor(name: string, blocks = 1, bytes = MIB): FileRevisionDescriptor {
   const size = BigInt(blocks * bytes)
   return { shareInstance: new Uint8Array(16), shareInstanceId: 'share', fileId: new Uint8Array(16),
     fileIdText: name, fileRevision: new Uint8Array(16), fileRevisionText: 'revision',
     exactSize: size, geometry: new FileGeometry(size, BigInt(bytes)) }
 }
-function demand(file: V2FileRevisionDescriptor, index = 0n): V2BlockDemand {
+function demand(file: FileRevisionDescriptor, index = 0n): BlockDemand {
   return { descriptor: file, leaseId, localBlockIndex: index }
 }
 async function flush() { for (let step = 0; step < 48; step++) await Promise.resolve() }
@@ -26,7 +26,7 @@ class Lane {
   readonly id = 1
   readonly calls: string[] = []
   readonly pending = new Map<string, () => void>()
-  fetchBlock(input: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand, signal: AbortSignal, observer?: BlockReadObserver): Promise<BlockRecord> {
     const key = input.descriptor.fileIdText + ':' + input.localBlockIndex
     const range = input.descriptor.geometry.blockPlaintext(input.localBlockIndex)
     this.calls.push(key)
@@ -52,11 +52,11 @@ class Lane {
 describe('receiver allocation ownership', () => {
   it('reports the cold attempt estimate captured before reserving its bytes', async () => {
     const expected: number[] = []
-    const lanes = new V2LaneSet({ now: () => 1,
+    const lanes = new LaneSet({ now: () => 1,
       onBlockScheduled: observation => expected.push(observation.expectedMilliseconds) })
     const lane = new Lane()
     lanes.add(lane, 'direct')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     try {
       const read = broker.readBlock(demand(descriptor('cold')), { routes: direct })
       await flush()
@@ -70,12 +70,12 @@ describe('receiver allocation ownership', () => {
   })
 
   it('does not attach a new consumer to an abandoned attempt that is still settling', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const replies: Array<() => void> = []
     lanes.add({ id: 1, fetchBlock: input => new Promise(resolve => replies.push(() => resolve({
       descriptor: input.descriptor, localBlockIndex: input.localBlockIndex, data: new Uint8Array(MIB),
     }))) }, 'direct')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const block = demand(descriptor('same'))
     const controller = new AbortController()
     const leaving = broker.readBlock(block, { routes: direct, signal: controller.signal })
@@ -96,10 +96,10 @@ describe('receiver allocation ownership', () => {
   })
 
   it('admits a later preview immediately after the cold request instead of eight privately queued downloads', async () => {
-    const lanes = new V2LaneSet({ now: () => 1 })
+    const lanes = new LaneSet({ now: () => 1 })
     const lane = new Lane()
     lanes.add(lane, 'direct')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const bulk = descriptor('bulk', 8)
     const controller = new AbortController()
     const downloads = Array.from({ length: 8 }, (_, index) =>
@@ -120,10 +120,10 @@ describe('receiver allocation ownership', () => {
   })
 
   it('does not charge dispatch slots to work whose authorized route is absent', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const lane = new Lane()
     lanes.add(lane, 'direct')
-    const broker = new V2BlockBroker(lanes, { maximumUpstreamReads: 1 })
+    const broker = new BlockBroker(lanes, { maximumUpstreamReads: 1 })
     const controller = new AbortController()
     const waiting = broker.readBlock(demand(descriptor('waiting')), { routes: relay, signal: controller.signal }).catch(() => undefined)
     await flush()
@@ -137,10 +137,10 @@ describe('receiver allocation ownership', () => {
   })
 
   it('keeps one supported 4 MiB preview frontier available while bulk output is stalled', async () => {
-    const lanes = new V2LaneSet({ now: () => 1 })
+    const lanes = new LaneSet({ now: () => 1 })
     const lane = new Lane()
     lanes.add(lane, 'direct')
-    const broker = new V2BlockBroker(lanes, { maximumRangeBufferBytes: 8 * MIB })
+    const broker = new BlockBroker(lanes, { maximumRangeBufferBytes: 8 * MIB })
     const file = descriptor('bulk', 8, 4 * MIB)
     const bulk = broker.readRouteAuthorizedRange(file, leaseId, { start: 0n, end: file.exactSize },
       { routes: direct })

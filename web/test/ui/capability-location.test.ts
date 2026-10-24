@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { captureV2Location, observeV2Location } from '../../src/ui/capability/location'
+import { captureLocation, observeLocation } from '../../src/ui/capability/location'
 import { PORTAL_SECTIONS } from '../../src/ui/portal/navigation'
 
 describe('document capability intake', () => {
@@ -7,8 +7,8 @@ describe('document capability intake', () => {
     for (const section of Object.values(PORTAL_SECTIONS)) {
       const port = locationPort(`https://receiver.invalid/s/share#${section.id}`)
       const accepted = vi.fn()
-      expect(captureV2Location(port).capabilityInput).toBeNull()
-      const close = observeV2Location(port, accepted)
+      expect(captureLocation(port).capabilityInput).toBeNull()
+      const close = observeLocation(port, accepted)
       port.dispatchEvent(new Event('hashchange'))
       expect(port.location.href).toContain(`#${section.id}`)
       expect(accepted).not.toHaveBeenCalled()
@@ -19,11 +19,11 @@ describe('document capability intake', () => {
 
   it('erases each incoming capability before handoff and consumes queued events only once', () => {
     const port = locationPort('https://receiver.invalid/s/share')
-    const accepted = vi.fn((captured: ReturnType<typeof captureV2Location>) => {
+    const accepted = vi.fn((captured: ReturnType<typeof captureLocation>) => {
       expect(new URL(port.location.href).hash).toBe('')
       expect(captured.capabilityInput).toBe('https://receiver.invalid/s/share#new-key')
     })
-    const close = observeV2Location(port, accepted)
+    const close = observeLocation(port, accepted)
     port.location.href += '#old-key'
     // The browser can queue multiple events before the application handles the latest URL.
     port.location.href = 'https://receiver.invalid/s/share#new-key'
@@ -40,7 +40,7 @@ describe('document capability intake', () => {
   it('captures a restored page location and ignores empty fragments', () => {
     const port = locationPort('https://receiver.invalid/s/share')
     const accepted = vi.fn()
-    const close = observeV2Location(port, accepted)
+    const close = observeLocation(port, accepted)
     port.dispatchEvent(new Event('hashchange'))
     expect(accepted).not.toHaveBeenCalled()
     port.location.href += '#restored-key'
@@ -55,30 +55,30 @@ describe('document capability intake', () => {
   it('consumes diagnostic activation before connection without changing relay hints or keys', () => {
     const input = 'https://receiver.invalid/s/share?r=https%3A%2F%2Fa.example&r=https%3A%2F%2Fb.example&trace=1#secret-key'
     const port = locationPort(input)
-    const captured = captureV2Location(port)
+    const captured = captureLocation(port)
     expect(captured.diagnosticsRequested).toBe(true)
     expect(captured.capabilityInput).toBe(input)
     const sanitized = new URL(port.location.href)
     expect(sanitized.searchParams.has('trace')).toBe(false)
     expect(sanitized.searchParams.getAll('r')).toEqual(['https://a.example', 'https://b.example'])
     expect(sanitized.hash).toBe('')
-    expect(captureV2Location(port).diagnosticsRequested).toBe(false)
+    expect(captureLocation(port).diagnosticsRequested).toBe(false)
   })
 
   it('preserves portal anchors while consuming an activation request', () => {
     const port = locationPort('https://receiver.invalid/?trace=1#features')
-    expect(captureV2Location(port)).toMatchObject({ capabilityInput: null, diagnosticsRequested: true })
+    expect(captureLocation(port)).toMatchObject({ capabilityInput: null, diagnosticsRequested: true })
     expect(port.location.href).toBe('https://receiver.invalid/#features')
   })
 
   it.each(['0', 'true', 'yes', ''])('does not enable capture for trace=%s', value => {
     const port = locationPort('https://receiver.invalid/?trace=' + value)
-    expect(captureV2Location(port).diagnosticsRequested).toBe(false)
+    expect(captureLocation(port).diagnosticsRequested).toBe(false)
   })
 
   it('keeps credential erasure authoritative when an observer fails', () => {
     const port = locationPort('https://receiver.invalid/s/share#invalid-key')
-    const captured = captureV2Location(port, { onSecurityMilestone: () => { throw new Error('observer failed') } })
+    const captured = captureLocation(port, { onSecurityMilestone: () => { throw new Error('observer failed') } })
     expect(captured.capabilityInput).not.toBeNull()
     expect(new URL(port.location.href).hash).toBe('')
   })

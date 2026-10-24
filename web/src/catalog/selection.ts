@@ -1,0 +1,301 @@
+import type { CatalogEntry } from './records'
+import { CATALOG_PATH_DEPTH } from './path-policy'
+import { encodeBase64Url } from '../crypto/bytes'
+
+export type SelectionState = 'selected' | 'unselected' | 'mixed'
+export type SelectionDecision = 'explicit-node-rule' | 'ancestor-directory-rule' | 'default-rule'
+
+interface SelectionOverride {
+  readonly selected: boolean
+  readonly ancestry: readonly string[]
+  readonly id: Uint8Array<ArrayBuffer>
+}
+
+export const MAXIMUM_SELECTION_RULE_OVERRIDES = 4_096
+
+export interface CanonicalSelectionRule {
+  readonly kind: 'directory' | 'file'
+  readonly id: Uint8Array<ArrayBuffer>
+  readonly selected: boolean
+}
+
+export interface FrozenSelectionPolicy {
+  readonly defaultSelected: boolean
+  readonly canonicalRules: readonly CanonicalSelectionRule[]
+  /** Draft paths are hints; discovery must validate every edge against authenticated pages. */
+  readonly draftRules?: readonly (CanonicalSelectionRule & { readonly ancestry: readonly string[] })[]
+  selected(entry: CatalogEntry, directoryAncestry: readonly string[]): boolean
+  directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean
+  decision(entry: CatalogEntry, directoryAncestry: readonly string[]): SelectionDecision
+  shouldDiscover(directoryId: string, directoryAncestry: readonly string[]): boolean
+}
+
+export function frozenSelectionPolicy(
+  defaultSelected: boolean,
+  rules: readonly CanonicalSelectionRule[],
+): FrozenSelectionPolicy {
+  if (rules.length > MAXIMUM_SELECTION_RULE_OVERRIDES) {
+    throw new RangeError('Catalog selection rule count exceeds the protocol limit')
+  }
+  const directories = new Map<string, SelectionOverride>()
+  const files = new Map<string, SelectionOverride>()
+  for (const rule of rules) {
+    const identity = encodeBase64Url(rule.id)
+    const target = rule.kind === 'directory' ? directories : files
+    if (target.has(identity) || directories.has(identity) || files.has(identity)) {
+      throw new TypeError('Catalog selection contains a duplicate node identity')
+    }
+    target.set(identity, Object.freeze({
+      selected: rule.selected,
+      ancestry: Object.freeze([]),
+      id: rule.id.slice(),
+    }))
+  }
+  return new SelectionSnapshot(defaultSelected, directories, files)
+}
+
+/**
+ * Directory overrides are semantic rules, not snapshots of discovered children.
+ * A child discovered later therefore inherits the same decision as one already on screen.
+ */
+class SelectionPolicyEvaluator {
+  readonly defaultSelected: boolean
+  protected readonly directoryOverrides: Map<string, SelectionOverride>
+  protected readonly fileOverrides: Map<string, SelectionOverride>
+  protected selectedOverrideCount: number
+
+  constructor(
+    defaultSelected: boolean,
+    directoryOverrides: Map<string, SelectionOverride>,
+    fileOverrides: Map<string, SelectionOverride>,
+  ) {
+    this.defaultSelected = defaultSelected
+    this.directoryOverrides = directoryOverrides
+    this.fileOverrides = fileOverrides
+    this.selectedOverrideCount = [...directoryOverrides.values(), ...fileOverrides.values()]
+      .filter((override) => override.selected).length
+  }
+
+  selected(entry: CatalogEntry, directoryAncestry: readonly string[]): boolean {
+    if (entry.kind === 'file') {
+      const file = this.fileOverrides.get(entry.idText)
+      if (file !== undefined) return file.selected
+    }
+    return entry.kind === 'directory'
+      ? this.directorySelected(entry.idText, directoryAncestry)
+      : this.selectedByDirectories(directoryAncestry)
+  }
+
+  directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean {
+    return this.selectedByDirectories([...directoryAncestry, directoryId])
+  }
+
+  decision(entry: CatalogEntry, directoryAncestry: readonly string[]): SelectionDecision {
+    if ((entry.kind === 'file' && this.fileOverrides.has(entry.idText)) ||
+        (entry.kind === 'directory' && this.directoryOverrides.has(entry.idText))) {
+      return 'explicit-node-rule'
+    }
+    for (let index = directoryAncestry.length - 1; index >= 0; index -= 1) {
+      const identity = directoryAncestry[index]
+      if (identity !== undefined && this.directoryOverrides.has(identity)) {
+        return 'ancestor-directory-rule'
+      }
+    }
+    return 'default-rule'
+  }
+
+  shouldDiscover(directoryId: string, directoryAncestry: readonly string[]): boolean {
+    if (this.directorySelected(directoryId, directoryAncestry)) return true
+    // Opaque node identities cannot authenticate a caller-captured ancestry
+    // chain. Keep that chain for UI presentation, but never use it to prune a
+    // selected target that may live below this directory.
+    return this.selectedOverrideCount > 0
+  }
+
+  protected selectedByDirectories(directoryAncestry: readonly string[]): boolean {
+    for (let index = directoryAncestry.length - 1; index >= 0; index -= 1) {
+      const id = directoryAncestry[index]
+      if (id === undefined) continue
+      const override = this.directoryOverrides.get(id)
+      if (override !== undefined) return override.selected
+    }
+    return this.defaultSelected
+  }
+}
+
+export class SelectionPolicy extends SelectionPolicyEvaluator {
+
+  constructor(defaultSelected = true) {
+    super(defaultSelected, new Map(), new Map())
+  }
+
+  get explicitRuleCount(): number {
+    return this.directoryOverrides.size + this.fileOverrides.size
+  }
+
+  state(entry: CatalogEntry, directoryAncestry: readonly string[]): SelectionState {
+    const selected = this.selected(entry, directoryAncestry)
+    if (entry.kind === 'file') return selected ? 'selected' : 'unselected'
+    for (const [id, override] of this.directoryOverrides) {
+      if (id !== entry.idText && override.selected !== selected &&
+          override.ancestry.includes(entry.idText)) {
+        return 'mixed'
+      }
+    }
+    for (const override of this.fileOverrides.values()) {
+      if (override.selected !== selected && override.ancestry.includes(entry.idText)) return 'mixed'
+    }
+    return selected ? 'selected' : 'unselected'
+  }
+
+  toggle(entry: CatalogEntry, directoryAncestry: readonly string[]): void {
+    this.set(entry, directoryAncestry, this.state(entry, directoryAncestry) !== 'selected')
+  }
+
+  set(entry: CatalogEntry, directoryAncestry: readonly string[], selected: boolean): void {
+    const ancestry = snapshotSelectionAncestry(entry.kind === 'directory'
+      ? [...directoryAncestry, entry.idText] : directoryAncestry)
+    if (entry.kind === 'directory') this.clearDescendantOverrides(entry.idText)
+    const overrides = entry.kind === 'directory' ? this.directoryOverrides : this.fileOverrides
+    if (selected === this.selectedByDirectories(directoryAncestry)) {
+      this.removeOverride(overrides, entry.idText)
+      return
+    }
+    if (!overrides.has(entry.idText) && this.explicitRuleCount >= MAXIMUM_SELECTION_RULE_OVERRIDES) {
+      throw new RangeError('Catalog selection rule count exceeds the protocol limit')
+    }
+    this.replaceOverride(overrides, entry.idText, Object.freeze({
+      selected, ancestry, id: entry.id.slice(),
+    }))
+  }
+
+  private clearDescendantOverrides(directoryId: string): void {
+    for (const overrides of [this.directoryOverrides, this.fileOverrides]) {
+      for (const [identity, override] of overrides) {
+        if (identity !== directoryId && override.ancestry.includes(directoryId)) {
+          this.removeOverride(overrides, identity)
+        }
+      }
+    }
+  }
+
+  private removeOverride(overrides: Map<string, SelectionOverride>, identity: string): void {
+    if (overrides.get(identity)?.selected === true) this.selectedOverrideCount -= 1
+    overrides.delete(identity)
+  }
+
+  private replaceOverride(
+    overrides: Map<string, SelectionOverride>,
+    identity: string,
+    replacement: SelectionOverride,
+  ): void {
+    const previous = overrides.get(identity)
+    if (previous?.selected === true) this.selectedOverrideCount -= 1
+    if (replacement.selected) this.selectedOverrideCount += 1
+    overrides.set(identity, replacement)
+  }
+
+  intentSummary(): Readonly<{
+    allSelected: boolean
+    selectedFiles: number
+    selectedFolders: number
+    excludedItems: number
+    empty: boolean
+  }> {
+    const selectedCounts = { file: 0, directory: 0 }
+    let excludedItems = 0
+    for (const [kind, overrides] of [
+      ['directory', this.directoryOverrides], ['file', this.fileOverrides],
+    ] as const) {
+      for (const [identity, override] of overrides) {
+        const ancestry = override.ancestry.filter(id => id !== identity)
+        const inherited = this.selectedByDirectories(ancestry)
+        if (override.selected === inherited) continue
+        if (!override.selected) excludedItems += 1
+        else if (this.isSelectionRoot(ancestry)) {
+          selectedCounts[kind] += 1
+        }
+      }
+    }
+    return Object.freeze({
+      allSelected: this.defaultSelected,
+      selectedFiles: selectedCounts.file,
+      selectedFolders: selectedCounts.directory,
+      excludedItems,
+      empty: !this.defaultSelected && this.selectedOverrideCount === 0,
+    })
+  }
+
+  private isSelectionRoot(ancestry: readonly string[]): boolean {
+    return !this.defaultSelected &&
+      !ancestry.some(id => this.directoryOverrides.get(id)?.selected === true)
+  }
+
+  snapshot(): FrozenSelectionPolicy {
+    return new SelectionSnapshot(
+      this.defaultSelected,
+      new Map(this.directoryOverrides),
+      new Map(this.fileOverrides),
+    )
+  }
+}
+
+class SelectionSnapshot extends SelectionPolicyEvaluator implements FrozenSelectionPolicy {
+  readonly canonicalRules: readonly CanonicalSelectionRule[]
+  /** Draft paths are hints; discovery must validate every edge against authenticated pages. */
+  readonly draftRules?: readonly (CanonicalSelectionRule & { readonly ancestry: readonly string[] })[]
+
+  constructor(
+    defaultSelected: boolean,
+    directories: ReadonlyMap<string, SelectionOverride>,
+    files: ReadonlyMap<string, SelectionOverride>,
+  ) {
+    const frozenDirectories = snapshotOverrides(directories)
+    const frozenFiles = snapshotOverrides(files)
+    super(defaultSelected, frozenDirectories, frozenFiles)
+    this.draftRules = Object.freeze([
+      ...[...frozenDirectories.values()].map(override => Object.freeze({
+        kind: 'directory' as const, id: override.id.slice(), selected: override.selected,
+        ancestry: override.ancestry,
+      })),
+      ...[...frozenFiles.values()].map(override => Object.freeze({
+        kind: 'file' as const, id: override.id.slice(), selected: override.selected,
+        ancestry: override.ancestry,
+      })),
+    ])
+    this.canonicalRules = Object.freeze([
+      ...[...frozenDirectories.values()].map((override) => Object.freeze({
+        kind: 'directory' as const,
+        id: override.id.slice(),
+        selected: override.selected,
+      })),
+      ...[...frozenFiles.values()].map((override) => Object.freeze({
+        kind: 'file' as const,
+        id: override.id.slice(),
+        selected: override.selected,
+      })),
+    ])
+  }
+
+}
+
+function snapshotOverrides(
+  source: ReadonlyMap<string, SelectionOverride>,
+): Map<string, SelectionOverride> {
+  return new Map([...source].map(([identity, override]) => [identity, Object.freeze({
+    selected: override.selected,
+    ancestry: Object.freeze([...override.ancestry]),
+    id: override.id.slice(),
+  })]))
+}
+
+function snapshotSelectionAncestry(ancestry: readonly string[]): readonly string[] {
+  if (ancestry.length === 0 || ancestry.length > CATALOG_PATH_DEPTH + 1) {
+    throw new RangeError('Catalog selection ancestry exceeds the protocol path depth')
+  }
+  const identities = new Set(ancestry)
+  if (identities.size !== ancestry.length || ancestry.some((identity) => identity.length === 0)) {
+    throw new Error('Catalog selection ancestry contains an invalid identity cycle')
+  }
+  return Object.freeze([...ancestry])
+}

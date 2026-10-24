@@ -67,7 +67,7 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	root := t.TempDir()
 	owned := []string{
 		"core/session/new_test.go",
-		"transport/webrtc/provider/adapter.go",
+		"connectivity/pionpeer/adapter.go",
 		"scripts/ci/_piondeps/maintained.go",
 		"spikes/webrtc/main.go",
 		"third_party/other/adapter.go",

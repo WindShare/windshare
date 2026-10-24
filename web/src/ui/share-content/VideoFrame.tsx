@@ -1,5 +1,5 @@
 import { useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import type { V2PreviewSnapshot } from '../v2-model'
+import type { PreviewSnapshot } from '../model'
 import type { PreviewActions } from './MediaPreview'
 import { observeVideoFrame } from './video-frame-presentation'
 
@@ -15,7 +15,7 @@ function time(seconds: number): string {
 }
 
 export function VideoFrame({ preview, actions }: {
-  readonly preview: Extract<V2PreviewSnapshot, { state: 'video' }>
+  readonly preview: Extract<PreviewSnapshot, { state: 'video' }>
   readonly actions: PreviewActions
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)

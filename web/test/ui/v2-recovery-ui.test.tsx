@@ -7,12 +7,12 @@ import type {
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { TaskDetails } from '../../src/ui/tasks/TaskView'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
-import { type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { type ReceiverSnapshot } from '../../src/ui/model'
 
 describe('DirectTree recovery UI', () => {
   it('renders reload-safe recovery costs for retained actions', () => {
     const lifecycle = pausedLifecycle()
-    const retained: V2ReceiverSnapshot['retained'] = Object.freeze({
+    const retained: ReceiverSnapshot['retained'] = Object.freeze({
       kind: 'ready',
       error: null,
       pending: null,

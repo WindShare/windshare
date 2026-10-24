@@ -180,7 +180,7 @@ func TestLinuxSemanticFilePublicationIsNoCopyAndNoReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	t.Cleanup(func() { _ = control.Close() })
 
 	source, err := control.CreateFile("source", true, 9)
@@ -227,7 +227,7 @@ func TestLinuxSemanticPublicationReportsPreMutationFailureWithZeroOutcome(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	source, err := control.CreateFile("source", true, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestLinuxSemanticFilePublicationReportsPostLinkIndeterminate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	source, err := control.CreateFile("source", true, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +371,7 @@ func TestLinuxLiveCleanupTicketCreatesAndRemovesOnlyExactStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	ticket := newLinuxLiveCleanupTicket(t, 7, checkpointmodel.LiveCleanupTicketCommitted)
 	originalOpenat2 := root.native.system.openat2
 	var requestedMode uint64
@@ -396,14 +396,14 @@ func TestLinuxLiveCleanupTicketCreatesAndRemovesOnlyExactStage(t *testing.T) {
 	if size, sizeErr := stage.Size(); sizeErr != nil || size != ticket.ExactSize() {
 		t.Fatalf("stage size=%d error=%v", size, sizeErr)
 	}
-	facts, err := stage.(*linuxV3MutableFile).state.native.currentIdentity()
+	facts, err := stage.(*linuxMutableFile).state.native.currentIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.mode&linuxOutputPermissionMask == linuxOutputStateFileMode ||
-		stage.(*linuxV3MutableFile).state.native.requireExactPermissions {
+		stage.(*linuxMutableFile).state.native.requireExactPermissions {
 		t.Fatalf("stage inherited private mode/profile: mode=%o exact=%t",
-			facts.mode&linuxOutputPermissionMask, stage.(*linuxV3MutableFile).state.native.requireExactPermissions)
+			facts.mode&linuxOutputPermissionMask, stage.(*linuxMutableFile).state.native.requireExactPermissions)
 	}
 
 	if err := root.CreateLiveCleanupStage(control, ticket); !errors.Is(err, outputcap.ErrNamespaceCollision) {
@@ -454,7 +454,7 @@ func TestLinuxNestedLiveStageInheritsExactParentDefaultACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	defer control.Close()
 
 	rootACL := linuxTestDefaultACL(uint32(unix.Geteuid()+1), linuxTestACLRead)
@@ -463,7 +463,7 @@ func TestLinuxNestedLiveStageInheritsExactParentDefaultACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nested := nestedValue.(*linuxV3Directory)
+	nested := nestedValue.(*linuxDirectory)
 	defer nested.Close()
 	nestedPath := filepath.Join(rootPath, "nested-parent")
 	nestedACL := linuxTestDefaultACL(uint32(unix.Geteuid()+2), linuxTestACLWrite)
@@ -584,7 +584,7 @@ func TestLinuxLiveCleanupPreservesUnknownReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	ticket := newLinuxLiveCleanupTicket(t, 3, checkpointmodel.LiveCleanupTicketCommitted)
 	if err := root.CreateLiveCleanupStage(control, ticket); err != nil {
 		t.Fatal(err)
@@ -594,8 +594,8 @@ func TestLinuxLiveCleanupPreservesUnknownReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	displacedName := "displaced-stage"
-	if err := owned.(*linuxV3MutableFile).state.origin.parent.renameRegularFile(
-		ticket.StageName(), owned.(*linuxV3MutableFile).state.native,
+	if err := owned.(*linuxMutableFile).state.origin.parent.renameRegularFile(
+		ticket.StageName(), owned.(*linuxMutableFile).state.native,
 		control.native, displacedName, linuxRenameReplace,
 	); err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestLinuxLiveCleanupRejectsUncommittedTicketAndPublicProofNamespace(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 	createdState := newLinuxLiveCleanupTicket(t, 1, checkpointmodel.LiveCleanupStageCreated)
 	if err := root.CreateLiveCleanupStage(control, createdState); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("uncommitted ticket created cleanup stage: %v", err)

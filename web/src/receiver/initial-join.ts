@@ -1,5 +1,5 @@
 import { runGenerationRecovery } from './generation-recovery'
-import { defaultReconnectBackoff, systemReconnectClock, waitingReconnectBackoff, type V2ReconnectClock } from './recovery-clock'
+import { defaultReconnectBackoff, systemReconnectClock, waitingReconnectBackoff, type ReconnectClock } from './recovery-clock'
 import { isTerminalRecoveryFailure, recoveryRetryAfter } from './recovery-failure'
 import { RecoveryWake } from './recovery-wake'
 import type { RecoveryObservation } from './recovery-observation'
@@ -27,7 +27,7 @@ export class InitialJoinControl {
     this.#wake.request()
   }
 
-  sleep(clock: V2ReconnectClock, milliseconds: number, signal: AbortSignal): Promise<void> {
+  sleep(clock: ReconnectClock, milliseconds: number, signal: AbortSignal): Promise<void> {
     return this.#wake.sleep(clock, milliseconds, signal)
   }
 
@@ -49,7 +49,7 @@ export class InitialJoinControl {
 }
 
 export interface InitialJoinOptions {
-  readonly clock?: V2ReconnectClock
+  readonly clock?: ReconnectClock
   readonly windowMilliseconds?: number
   readonly control?: InitialJoinControl
   readonly onState?: (state: InitialJoinState) => void
@@ -68,7 +68,7 @@ export async function runInitialJoin<T>(options: InitialJoinAttemptOptions<T>): 
 
 class InitialJoinRecovery<T> {
   readonly #options: InitialJoinAttemptOptions<T>
-  readonly #clock: V2ReconnectClock
+  readonly #clock: ReconnectClock
   readonly #window: number
   #deadline: number
   #continuous = false

@@ -23,7 +23,7 @@ const SENDER_OBJECT_NONCE_BYTES = 12
 const SENDER_OBJECT_SIGNATURE_BYTES = 64
 const OPERATION_HEADER_BYTES = 16
 const OPERATION_NONCE_BYTES = 12
-const V2_RELAY_WEBSOCKET_PATH = '/v2/ws'
+const RELAY_WEBSOCKET_PATH = '/v2/ws'
 const OBJECT_DOMAIN_PREFIX = 'windshare/v2 object/'
 const CONTROL_OPERATION_DOMAIN = 'windshare/v2 control/operation'
 const CONTROL_TERMINAL_DOMAIN = 'windshare/v2 control/session-terminal'
@@ -682,7 +682,7 @@ export function canonicalV2RelayEndpoints(raw: string): {
   const basePath = endpoint.pathname.endsWith('/')
     ? endpoint.pathname.slice(0, -1)
     : endpoint.pathname
-  endpoint.pathname = `${basePath}${V2_RELAY_WEBSOCKET_PATH}`
+  endpoint.pathname = `${basePath}${RELAY_WEBSOCKET_PATH}`
   const dialEndpoint = endpoint.toString()
   endpoint.search = ''
   const relayIdentityEndpoint = endpoint.toString()

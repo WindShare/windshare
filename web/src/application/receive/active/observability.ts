@@ -9,7 +9,7 @@ import {
 } from '../../../diagnostics/incident'
 import type { ReceiveLifecycleState } from '../../../output/workspace'
 import { TransferPauseRequestedError } from '../../../transfer/output/session'
-import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
+import { TransferFailureSettlementError } from '../../../transfer/settlement/output'
 import {
   classificationForTransferFailure,
   materializeClassifiedTransferFailure,
@@ -19,12 +19,12 @@ import {
 } from '../../../transfer/failure/classification'
 import type { LifecycleUserAction } from '../actions'
 import type { ReceiveObservationOptions } from '../observation/contracts'
-import type { V2ReceiverTraceEvent } from '../observation/contracts'
-import { V2PresentationAttempt } from '../observation/attempt'
+import type { ReceiverTraceEvent } from '../observation/contracts'
+import { PresentationAttempt } from '../observation/attempt'
 
 export type ReceiveFailureTrigger = ClassifiedTransferFailure | FailureFactRef
 
-export class V2ReceivePresentationAttempt extends V2PresentationAttempt {
+export class ReceivePresentationAttempt extends PresentationAttempt {
   interruptionExclusion?: Extract<
     PresentationExclusionReason,
     'user_paused' | 'user_stopped'
@@ -45,16 +45,16 @@ export class ActiveReceiveObservability {
     this.#traceSource = options.trace
   }
 
-  openReceive(): V2ReceivePresentationAttempt {
-    return new V2ReceivePresentationAttempt(this.#incidents, 'receive')
+  openReceive(): ReceivePresentationAttempt {
+    return new ReceivePresentationAttempt(this.#incidents, 'receive')
   }
 
-  openLifecycleAction(): V2PresentationAttempt {
-    return new V2PresentationAttempt(this.#incidents, 'lifecycle_action')
+  openLifecycleAction(): PresentationAttempt {
+    return new PresentationAttempt(this.#incidents, 'lifecycle_action')
   }
 
   transferTrigger(
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     error: unknown,
     provided: ClassifiedTransferFailure | undefined,
   ): ReceiveFailureTrigger | undefined {
@@ -62,7 +62,7 @@ export class ActiveReceiveObservability {
     if (provided !== undefined) {
       return materializeClassifiedTransferFailure(provided, attempt.handle)
     }
-    if (error instanceof V2TransferFailureSettlementError) {
+    if (error instanceof TransferFailureSettlementError) {
       return materializeClassifiedTransferFailure(error.trigger, attempt.handle)
     }
     if (error === undefined || error instanceof TransferPauseRequestedError) {
@@ -72,7 +72,7 @@ export class ActiveReceiveObservability {
   }
 
   classifyTransferFailure(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     error: unknown,
     relation: FailureFactRelation,
     stage: FailureStage,
@@ -89,7 +89,7 @@ export class ActiveReceiveObservability {
   }
 
   receiveIncident(
-    attempt: V2PresentationAttempt | undefined,
+    attempt: PresentationAttempt | undefined,
     classification: ReceiveFailureTrigger,
     outcome: PresentationOutcome,
   ): void {
@@ -101,14 +101,14 @@ export class ActiveReceiveObservability {
   }
 
   receiveExclusion(
-    attempt: V2PresentationAttempt | undefined,
+    attempt: PresentationAttempt | undefined,
     reason: PresentationExclusionReason,
   ): void {
     attempt?.excluded('receive', reason)
   }
 
   lifecycleIncident(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     trigger: FailureFactRef,
     outcome: Extract<PresentationOutcome, 'failed' | 'restart_required' | 'needs_attention'>,
   ): void {
@@ -116,14 +116,14 @@ export class ActiveReceiveObservability {
   }
 
   lifecycleExclusion(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     reason: PresentationExclusionReason,
   ): void {
     attempt.excluded('lifecycle_action', reason)
   }
 
   decideLifecycleMutation(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     lifecycle: ReceiveLifecycleState,
   ): void {
     const outcome = lifecycleActionOutcome(lifecycle)
@@ -134,7 +134,7 @@ export class ActiveReceiveObservability {
   }
 
   recordUnclassified(
-    attempt: V2PresentationAttempt | undefined,
+    attempt: PresentationAttempt | undefined,
     stage: 'content_read' | 'settlement' | 'detach' | 'cleanup' | 'lifecycle_action',
     relation: FailureFactRelation,
   ): FailureFactRef | undefined {
@@ -147,7 +147,7 @@ export class ActiveReceiveObservability {
   }
 
   emitLifecycleTrace(
-    transition: Extract<V2ReceiverTraceEvent, {
+    transition: Extract<ReceiverTraceEvent, {
       name: 'lifecycle_action_transition'
     }>['transition'],
     action: LifecycleUserAction,
@@ -194,7 +194,7 @@ export class ActiveReceiveObservability {
   }
 
   #triggerRef(
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
     classification: ClassifiedTransferFailure,
   ): FailureFactRef | undefined {
     const scope = attempt.handle

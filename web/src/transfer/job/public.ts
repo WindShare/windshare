@@ -1,15 +1,15 @@
 export {
-  V2CatalogTraversalError,
-  V2DirectoryTraversalError,
-  V2DirectoryAncestry,
-  V2OutputPausedError,
-  V2_MAXIMUM_CATALOG_NODE_CLAIMS,
-  V2_MAXIMUM_CONCURRENT_DIRECTORIES,
-  V2_MAXIMUM_CONCURRENT_FILES,
-  V2_MAXIMUM_DIRECTORY_ADMISSIONS,
-  V2_MAXIMUM_PENDING_DIRECTORIES,
-  V2_MAXIMUM_PENDING_FILES,
-  V2_MAXIMUM_PENDING_FILE_METADATA_BYTES,
+  CatalogTraversalError,
+  DirectoryTraversalError,
+  DirectoryAncestry,
+  OutputPausedError,
+  MAXIMUM_CATALOG_NODE_CLAIMS,
+  MAXIMUM_CONCURRENT_DIRECTORIES,
+  MAXIMUM_CONCURRENT_FILES,
+  MAXIMUM_DIRECTORY_ADMISSIONS,
+  MAXIMUM_PENDING_DIRECTORIES,
+  MAXIMUM_PENDING_FILES,
+  MAXIMUM_PENDING_FILE_METADATA_BYTES,
 } from './contract'
 export type {
   TransferJobOptions,
@@ -18,38 +18,38 @@ export type {
   TransferTraceEvent,
 } from './contract'
 export {
-  V2ClassifiedTransferFailureError,
+  ClassifiedTransferFailureError,
   isClassifiedTransferFailure,
   type ClassifiedTransferFailure,
 } from '../failure/classification'
 export {
-  isV2FileScopedTransferFailure,
+  isFileScopedTransferFailure,
 } from './failures'
 export {
-  V2TransferAdmissionFailureError,
-  type V2TransferAdmissionFailureAuthority,
+  TransferAdmissionFailureError,
+  type TransferAdmissionFailureAuthority,
 } from './admission-error'
-export { V2RangeReaderContractError } from './file-transfer'
+export { RangeReaderContractError } from './file-transfer'
 export {
-  V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
-  V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
-  V2OutputSettlementTimeoutError,
-  V2TransferFailureSettlementError,
-} from '../settlement/v2-output'
+  DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
+  MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
+  OutputSettlementTimeoutError,
+  TransferFailureSettlementError,
+} from '../settlement/output'
 export {
-  V2PlanRouteUnavailableError,
-  createV2PlanExecutionAuthority,
+  PlanRouteUnavailableError,
+  createPlanExecutionAuthority,
   snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
-} from '../settlement/v2-plan-authority'
+} from '../settlement/plan-authority'
 
 export type {
-  V2DirectAtomicExecutionRoute,
-  V2DirectTreeExecutionRoute,
-  V2PlanExecutionRouteRegistry,
-  V2PortableOriginalExecutionRoute,
-  V2PortableZipExecutionRoute,
-  V2ExecutionAdmissionLifecycle,
-  V2WorkspaceOriginalExecutionRoute,
-  V2WorkspaceZipExecutionRoute,
-} from '../settlement/v2-plan-authority'
+  DirectAtomicExecutionRoute,
+  DirectTreeExecutionRoute,
+  PlanExecutionRouteRegistry,
+  PortableOriginalExecutionRoute,
+  PortableZipExecutionRoute,
+  ExecutionAdmissionLifecycle,
+  WorkspaceOriginalExecutionRoute,
+  WorkspaceZipExecutionRoute,
+} from '../settlement/plan-authority'

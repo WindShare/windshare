@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import * as progressiveBackend from '../../src/output/origin-private/progressive-backend'
 import type { OriginPrivateProgressiveZipBackend } from '../../src/output/origin-private/progressive-backend'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../src/output/resume/reopen-authority'
@@ -10,7 +10,7 @@ import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications } from '../../src/output/workspace/lifecycle/observation'
 import { WorkspaceReceiveOperation } from '../../src/application/browser-receive/workspace/operation'
 import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
-import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
+import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/output'
 import * as progressiveExecution from '../../src/output/execution/progressive-workspace-execution'
 import {
   catalogFixture, digestIdentity, identity, identityText, readerFixture,
@@ -22,7 +22,7 @@ type Operation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'wo
 
 async function fixture() {
   const intent = await receiveIntentFixture({
-    planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection: new V2SelectionPolicy(true),
+    planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection: new SelectionPolicy(true),
   })
   let lifecycle: ReceiveLifecycleState = {
     kind: 'receiving', operationId: intent.operationId, receiveIntentDigest: intent.digest,
@@ -88,7 +88,7 @@ describe('reopened ZIP admission ownership', () => {
       })
     try {
       const result = await transferJobFixture({
-        catalog: catalog.catalog, selection: new V2SelectionPolicy(true),
+        catalog: catalog.catalog, selection: new SelectionPolicy(true),
         intent: runtime.intent, plans: runtime.plans,
         revisions: readers.revisions, broker: readers.broker,
       }).run(controller.signal)

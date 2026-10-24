@@ -5,10 +5,10 @@ import {
   catalogNameCollisionKey,
   catalogPathCollisionKey,
   isPortableCatalogName,
-  V2_CATALOG_PATH_BYTES,
-  V2_CATALOG_PATH_DEPTH,
-  V2_PATH_POLICY,
-  V2_PATH_POLICY_UNICODE_VERSION,
+  CATALOG_PATH_BYTES,
+  CATALOG_PATH_DEPTH,
+  PATH_POLICY,
+  PATH_POLICY_UNICODE_VERSION,
 } from '../../src/catalog/path-policy'
 import { loadVectorFile } from '../vectors'
 
@@ -30,8 +30,8 @@ const vectors = loadVectorFile(
 describe('v2 catalog path policy', () => {
   it('pins Unicode 15 NFC and full-fold collision identity', () => {
     const version = vectors.find((vector) => vector.name === 'policy-version')
-    expect(V2_PATH_POLICY).toBe(version?.policyVersion)
-    expect(V2_PATH_POLICY_UNICODE_VERSION).toBe(version?.unicodeVersion)
+    expect(PATH_POLICY).toBe(version?.policyVersion)
+    expect(PATH_POLICY_UNICODE_VERSION).toBe(version?.unicodeVersion)
     expect(isPortableCatalogName('Ångström')).toBe(true)
     expect(catalogNameCollisionKey('Straße')).toBe(catalogNameCollisionKey('STRASSE'))
     expect(catalogNameCollisionKey('Ångström')).toBe('ångström')
@@ -90,7 +90,7 @@ describe('v2 catalog path policy', () => {
   })
 
   it('enforces the shared protocol path depth and byte boundaries', () => {
-    const maximumDepth = Array.from({ length: V2_CATALOG_PATH_DEPTH }, () => 'a').join('/')
+    const maximumDepth = Array.from({ length: CATALOG_PATH_DEPTH }, () => 'a').join('/')
     expect(canonicalizePortableCatalogPath(maximumDepth)).toBe(maximumDepth)
     expect(() => canonicalizePortableCatalogPath(`${maximumDepth}/a`)).toThrow(TypeError)
 
@@ -100,7 +100,7 @@ describe('v2 catalog path policy', () => {
       'b',
       'c',
     ].join('/')
-    expect(new TextEncoder().encode(maximumBytes)).toHaveLength(V2_CATALOG_PATH_BYTES)
+    expect(new TextEncoder().encode(maximumBytes)).toHaveLength(CATALOG_PATH_BYTES)
     expect(canonicalizePortableCatalogPath(maximumBytes)).toBe(maximumBytes)
     const overBytes = [
       ...Array.from({ length: 127 }, () => 'a'.repeat(255)),

@@ -1,4 +1,4 @@
-import { EMPTY_V2_PROGRESS } from '../v2-model'
+import { EMPTY_PROGRESS } from '../model'
 import type { ReceiveLifecycleState, ReceiveLifecycleStatePayload } from '../../transfer/lifecycle/state'
 import type { TaskFacts } from './model'
 
@@ -27,7 +27,7 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
     completeness: 'unknown',
     publication: 'unpublished',
     progress: Object.freeze({
-      ...EMPTY_V2_PROGRESS, discoveredFiles: 12, discoveredBytes: 6_710_886n,
+      ...EMPTY_PROGRESS, discoveredFiles: 12, discoveredBytes: 6_710_886n,
       writtenBytes: 2_000_000n, materializedBytes: 2_000_000n, completedFiles: 3, completedBytes: 1_500_000n,
     }),
     directZipProgress: null,

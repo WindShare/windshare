@@ -2,7 +2,7 @@ import type { FailureCorrelation } from '../incident/fact'
 import { projectCorrelationV1 } from '../export/correlation-v1'
 import { decimal, durationMilliseconds } from '../export/trace-observation'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
-import type { V2ConnectionRecoveryTraceEvent, V2ProtocolTraceSource, V2RelayHeartbeatTraceEvent, V2RelayDeliveryTraceEvent } from '../../session/v2-diagnostics'
+import type { ConnectionRecoveryTraceEvent, ProtocolTraceSource, RelayHeartbeatTraceEvent, RelayDeliveryTraceEvent } from '../../session/diagnostics'
 import type { RelayHeartbeatTrace } from '../../transport/relay/heartbeat'
 import type { ReceiveCounts, ReceiveLedgerEvent } from '../../contracts/relay-delivery-observation'
 import type { TraceEventObservationV2 } from './model'
@@ -67,7 +67,7 @@ type ConnectionContext = Readonly<{
 }>
 
 export function emitRelayHeartbeat(
-  source: V2ProtocolTraceSource | undefined,
+  source: ProtocolTraceSource | undefined,
   event: RelayHeartbeatTrace,
   relayBase: string,
   context: () => ConnectionContext,
@@ -82,7 +82,7 @@ export function emitRelayHeartbeat(
 }
 
 export function emitRelayDelivery(
-  source: V2ProtocolTraceSource | undefined,
+  source: ProtocolTraceSource | undefined,
   event: ReceiveLedgerEvent,
   relayBase: string,
   context: () => ConnectionContext,
@@ -95,7 +95,7 @@ export function emitRelayDelivery(
   }
 }
 
-export function projectRelayDeliveryTrace(event: V2RelayDeliveryTraceEvent): TraceEventObservationV2 {
+export function projectRelayDeliveryTrace(event: RelayDeliveryTraceEvent): TraceEventObservationV2 {
   const correlation = projectCorrelationV1(event.correlation)
   const progress = event.progress
   return {
@@ -122,7 +122,7 @@ function deliveryCounts(counts: ReceiveCounts): { frames: string; encoded_bytes:
 }
 
 export function projectConnectionTrace(
-  event: V2ConnectionRecoveryTraceEvent | V2RelayHeartbeatTraceEvent,
+  event: ConnectionRecoveryTraceEvent | RelayHeartbeatTraceEvent,
 ): TraceEventObservationV2 {
   const correlation = projectCorrelationV1(event.correlation)
   const identity = {

@@ -10,16 +10,16 @@ import type { ArtifactChoiceID } from '../../../transfer/intent'
 import type { ProjectionEpoch } from '../../../transfer/projection'
 import type { ReceivePlanningShare } from '../joined-share'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
-  V2ReceiveCompositionPort,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
+  ReceiveCompositionPort,
 } from '../contracts'
 import type { ActiveReceiveCoordinator } from '../active/coordinator'
 import type {
-  V2AuthorityActivationSnapshot,
-  V2ActivationCleanupStage,
-  V2AuthorityActivationTerminalOutcome,
-  V2LiveAuthorityActivationSnapshot,
+  AuthorityActivationSnapshot,
+  ActivationCleanupStage,
+  AuthorityActivationTerminalOutcome,
+  LiveAuthorityActivationSnapshot,
 } from './model'
 import {
   advanceActivationCleanup,
@@ -27,31 +27,31 @@ import {
   type AuthorityCommitTransaction,
   type ReceiveIntentBinder,
 } from './commit'
-import type { V2AuthorityActivationTraceEvent, V2ControllerWorkflowTraceEvent } from '../observation/contracts'
-import type { V2ControllerObservability } from '../observation/coordinator'
-import type { V2PresentationAttempt } from '../observation/attempt'
-import type { V2ActiveProjection } from '../discovery'
+import type { AuthorityActivationTraceEvent, ControllerWorkflowTraceEvent } from '../observation/contracts'
+import type { ControllerObservability } from '../observation/coordinator'
+import type { PresentationAttempt } from '../observation/attempt'
+import type { ActiveProjection } from '../discovery'
 import type {
   ArtifactChoiceReconciler,
   ArtifactOfferPlanner,
-  V2AuthorityProjectionPublication,
+  AuthorityProjectionPublication,
 } from './planning'
 
 const ACTIVATION_ID_BYTES = 16
 
 export interface AuthorityActivationOptions {
-  readonly receive: V2ReceiveCompositionPort
+  readonly receive: ReceiveCompositionPort
   readonly activeReceive: Pick<ActiveReceiveCoordinator, 'prepareAdoption'>
-  readonly observability: V2ControllerObservability
-  readonly currentProjection: () => V2ActiveProjection | undefined
+  readonly observability: ControllerObservability
+  readonly currentProjection: () => ActiveProjection | undefined
   readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly choiceBlocked: () => boolean
-  readonly retryProjection: (projection: V2ActiveProjection) => void
-  readonly publishProjection: (publication: V2AuthorityProjectionPublication) => void
+  readonly retryProjection: (projection: ActiveProjection) => void
+  readonly publishProjection: (publication: AuthorityProjectionPublication) => void
   readonly adoptReceiveIntent: (
     choice: OfferedArtifactChoice['choice'],
     intent: ReceiveIntent,
-    runtime: V2BoundReceiveOperation,
+    runtime: BoundReceiveOperation,
     commitOwnership: () => void,
   ) => boolean
   readonly refreshRetainedInventory: () => void
@@ -76,19 +76,19 @@ export interface AuthorityActivationRecord {
   readonly installedRoute: MaterializationRouteIdentity
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly controller: AbortController
-  readonly attempt: V2PresentationAttempt
+  readonly attempt: PresentationAttempt
   joined: ReceivePlanningShare
   observationRevision: number
   protocolSessionId: string
   projectionEpoch: ProjectionEpoch
   observationReplacementPending: boolean
-  authority?: V2ArtifactPresentationAuthority
+  authority?: ArtifactPresentationAuthority
   authorityReady: boolean
   resolution?: ResolvedArtifactAction
   retryReason?: Extract<ArtifactChoiceReconcileOutcome, { kind: 'retry-required' }>['reason']
   commitAttempt?: AuthorityCommitTransaction
   cleanup?: ActivationCleanupOwner
-  terminal?: V2AuthorityActivationTerminalOutcome
+  terminal?: AuthorityActivationTerminalOutcome
   failureReported: boolean
   released: boolean
   attemptClosed: boolean
@@ -109,11 +109,11 @@ type WithoutAuthorityTraceContext<Event> = Event extends unknown
   ? Omit<Event, AuthorityTraceContextKey>
   : never
 
-export type AuthorityTraceDetail = WithoutAuthorityTraceContext<V2AuthorityActivationTraceEvent>
+export type AuthorityTraceDetail = WithoutAuthorityTraceContext<AuthorityActivationTraceEvent>
 
 export interface ActivationCleanupHooks {
   readonly completed: () => void
-  readonly pending: (stage: V2ActivationCleanupStage) => void
+  readonly pending: (stage: ActivationCleanupStage) => void
 }
 
 export function createAuthorityActivationRecord(input: Readonly<{
@@ -127,7 +127,7 @@ export function createAuthorityActivationRecord(input: Readonly<{
   observationRevision: number
   protocolSessionId: string
   projectionEpoch: ProjectionEpoch
-  attempt: V2PresentationAttempt
+  attempt: PresentationAttempt
 }>): AuthorityActivationRecord {
   return {
     ...input,
@@ -142,9 +142,9 @@ export function createAuthorityActivationRecord(input: Readonly<{
 
 export function observationMatchesActivation(
   record: AuthorityActivationRecord,
-  active: V2ActiveProjection | undefined,
+  active: ActiveProjection | undefined,
   joined: ReceivePlanningShare | undefined,
-): active is V2ActiveProjection {
+): active is ActiveProjection {
   return active !== undefined && joined !== undefined && active.joined === record.joined &&
     joined === record.joined &&
     active.selection.shareInstance === record.authenticatedShareInstanceId &&
@@ -153,7 +153,7 @@ export function observationMatchesActivation(
 }
 
 export function projectLiveActivation(record: AuthorityActivationRecord): Readonly<{
-  snapshot: V2AuthorityActivationSnapshot
+  snapshot: AuthorityActivationSnapshot
   waitingFor?: 'authority' | 'resolution' | 'authority-and-resolution'
 }> {
   const live = liveAuthoritySnapshot(record)
@@ -193,7 +193,7 @@ export function projectLiveActivation(record: AuthorityActivationRecord): Readon
 
 export function terminalAuthoritySnapshot(
   record: AuthorityActivationRecord,
-): V2AuthorityActivationSnapshot {
+): AuthorityActivationSnapshot {
   if (record.terminal === undefined) throw new TypeError('terminal activation lacks an outcome')
   return Object.freeze({
     ...liveAuthoritySnapshot(record),
@@ -204,8 +204,8 @@ export function terminalAuthoritySnapshot(
 
 export function cleanupRequiredSnapshot(
   record: AuthorityActivationRecord,
-  failedStage: V2ActivationCleanupStage,
-): V2AuthorityActivationSnapshot {
+  failedStage: ActivationCleanupStage,
+): AuthorityActivationSnapshot {
   const cleanup = record.cleanup
   if (cleanup === undefined) throw new TypeError('cleanup projection lacks an owner')
   return Object.freeze({
@@ -222,7 +222,7 @@ export function cleanupRequiredSnapshot(
 export function runActivationCleanup(
   record: AuthorityActivationRecord,
   cleanup: ActivationCleanupOwner,
-  observability: V2ControllerObservability,
+  observability: ControllerObservability,
   refreshRetainedInventory: () => void,
   hooks: ActivationCleanupHooks,
 ): boolean {
@@ -256,7 +256,7 @@ export function runActivationCleanup(
 
 export async function releaseActivationAuthority(
   record: AuthorityActivationRecord,
-  observability: V2ControllerObservability,
+  observability: ControllerObservability,
   reason: unknown,
 ): Promise<void> {
   if (record.released) return
@@ -271,7 +271,7 @@ export async function releaseActivationAuthority(
 
 export function closeActivationAttempt(
   record: AuthorityActivationRecord,
-  observability: V2ControllerObservability,
+  observability: ControllerObservability,
 ): void {
   if (record.attemptClosed) return
   record.attemptClosed = true
@@ -282,7 +282,7 @@ export function closeActivationAttempt(
 }
 
 export function traceAuthorityTransition(
-  observability: V2ControllerObservability,
+  observability: ControllerObservability,
   record: AuthorityActivationRecord,
   detail: AuthorityTraceDetail,
 ): void {
@@ -297,7 +297,7 @@ export function traceAuthorityTransition(
     artifactKind: record.choice.artifactKind,
     planKind: record.choice.plan.kind,
     ...detail,
-  }) as Extract<V2ControllerWorkflowTraceEvent, { name: 'authority_transition' }>)
+  }) as Extract<ControllerWorkflowTraceEvent, { name: 'authority_transition' }>)
 }
 
 export function createActivationId(): string {
@@ -310,7 +310,7 @@ export function createActivationId(): string {
   return encodeBase64Url(value)
 }
 
-function liveAuthoritySnapshot(record: AuthorityActivationRecord): V2LiveAuthorityActivationSnapshot {
+function liveAuthoritySnapshot(record: AuthorityActivationRecord): LiveAuthorityActivationSnapshot {
   return Object.freeze({
     activationId: record.activationId,
     authenticatedShareInstanceId: record.authenticatedShareInstanceId,

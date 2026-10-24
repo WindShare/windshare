@@ -1,0 +1,289 @@
+import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
+import type { PeerProviderFact } from './peer-set/provider-facts'
+import type { ProtocolOperationIdentity } from '../session/identities'
+import {
+  BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
+  typedErrorForPeerOperationCode,
+  type CandidateCounts,
+  type ConnectivityTraceSource,
+  type LaneIdentity,
+  type PeerAttemptCorrelation,
+  type PeerAttemptTraceEvent,
+  type ConnectivityFailureScope,
+} from './diagnostics'
+import {
+  classifyPeerAttemptFailure,
+  type PeerAttemptFailure,
+  type PeerFailureDecision,
+} from './peer-failure'
+
+const BROWSER_LINEAR_STAGES = BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
+  (stage) => stage !== 'negotiation-deadline-expired' &&
+    stage !== 'admission-deadline-expired' &&
+    stage !== 'failed',
+)
+
+type LinearAttemptStage = (typeof BROWSER_LINEAR_STAGES)[number]
+type PeerAttemptTracePayload<Event = PeerAttemptTraceEvent> =
+  Event extends PeerAttemptTraceEvent
+    ? Omit<
+        Event,
+        'eventName' | 'correlation' | 'waveOrdinal' |
+        'waveAttemptOrdinal' | 'sessionAttemptOrdinal'
+      >
+    : never
+
+/** Owns one linear peer-attempt trace stream without owning peer policy. */
+export class BrowserAttemptLifecycle {
+  readonly #trace: ConnectivityTraceSource | undefined
+  readonly #correlation: () => PeerAttemptCorrelation
+  readonly #now: () => number
+  readonly #startedAt: number
+  #lastCompletedAt: number
+  #deadlineExpired = false
+  #nextStageIndex = 1
+  #terminal = false
+  #offerOperationId: ProtocolOperationIdentity | undefined
+  #grantOperationId: ProtocolOperationIdentity | undefined
+  #lane: LaneIdentity | undefined
+
+  constructor(
+    correlation: () => PeerAttemptCorrelation,
+    trace?: ConnectivityTraceSource,
+    now: () => number = () => performance.now(),
+  ) {
+    this.#now = now
+    this.#startedAt = this.#readNow(0)
+    this.#lastCompletedAt = this.#startedAt
+    this.#trace = trace
+    this.#correlation = correlation
+    this.#emit(() => this.#event({ stage: 'started' }))
+  }
+
+  setOfferOperationId(operationId: ProtocolOperationIdentity): void {
+    if (!this.#terminal) this.#offerOperationId ??= operationId
+  }
+
+  providerFact(fact: PeerProviderFact): void {
+    this.#emit(() => this.#event({ stage: 'provider-fact', fact }, this.#offerOperationId, this.#lane))
+  }
+
+  offerMilestone(
+    stage: 'offer-created' | 'offer-sent' | 'answer-received' | 'datachannel-open',
+    candidateCounts: CandidateCounts | (() => CandidateCounts),
+  ): void {
+    this.#advance(stage, () => {
+      const counts = typeof candidateCounts === 'function' ? candidateCounts() : candidateCounts
+      return this.#event({
+        stage,
+        candidateCounts: Object.freeze({ ...counts }),
+      }, this.#offerOperationId)
+    })
+  }
+
+  phaseDeadlineArmed(
+    phase: 'negotiation' | 'admission',
+    deadlineBudgetMilliseconds: number,
+  ): void {
+    if (phase === 'negotiation') {
+      this.#advance('negotiation-deadline-armed', () => this.#event({
+        stage: 'negotiation-deadline-armed',
+        phase: 'negotiation',
+        deadlineBudgetMilliseconds,
+      }, this.#offerOperationId))
+      return
+    }
+    this.#advance('admission-deadline-armed', () => this.#event({
+      stage: 'admission-deadline-armed',
+      phase: 'admission',
+      deadlineBudgetMilliseconds,
+    }, this.#offerOperationId))
+  }
+
+  phaseDeadlineExpired(
+    phase: 'negotiation' | 'admission',
+    deadlineBudgetMilliseconds: number,
+  ): void {
+    if (this.#terminal) return
+    this.#deadlineExpired = true
+    if (phase === 'negotiation') {
+      this.#emit(() => this.#event({
+        stage: 'negotiation-deadline-expired',
+        phase: 'negotiation',
+        deadlineBudgetMilliseconds,
+      }, this.#offerOperationId))
+      return
+    }
+    this.#emit(() => this.#event({
+      stage: 'admission-deadline-expired',
+      phase: 'admission',
+      deadlineBudgetMilliseconds,
+    }, this.#offerOperationId))
+  }
+
+  grantRequested(
+    grantOperationId: ProtocolOperationIdentity,
+    requestedLaneId: number,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#advance('grant-requested', () => this.#event({
+      stage: 'grant-requested',
+      phase: 'admission',
+      requestedLaneId,
+    }, grantOperationId))
+  }
+
+  grantMilestone(
+    stage: 'grant-received' | 'lane-hello-sent' | 'admission-response-received' |
+      'lane-attached' | 'admitted',
+    grantOperationId: ProtocolOperationIdentity,
+    lane: LaneIdentity,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#lane = lane
+    this.#advance(stage, () => this.#event({
+      stage,
+      phase: 'admission',
+    }, grantOperationId, lane))
+  }
+
+  admissionResponseSettled(
+    grantOperationId: ProtocolOperationIdentity,
+    lane: LaneIdentity,
+    settlement:
+      | Readonly<{ disposition: 'accepted' }>
+      | Readonly<{
+          disposition: 'rejected'
+          rejectionCode: number
+          retryAfterMilliseconds: number
+        }>,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#lane = lane
+    this.#advance('admission-response-settled', () => this.#event({
+      stage: 'admission-response-settled',
+      phase: 'admission',
+      settlement: Object.freeze({ ...settlement }),
+    }, grantOperationId, lane))
+  }
+
+  failed(failure: PeerAttemptFailure): void {
+    if (this.#terminal) return
+    const failedAtStage = BROWSER_LINEAR_STAGES[this.#nextStageIndex]
+    if (failedAtStage === undefined || failedAtStage === 'started') return
+    this.#terminal = true
+    this.#emit(() => {
+      const decision = classifyPeerAttemptFailure(failure)
+      return this.#event({
+        stage: 'failed',
+        failedAtStage,
+        failure: snapshotFailure(failure),
+        failureScope: decisionScope(decision),
+        typedErrorCode: diagnosticTypedErrorCode(failure),
+        retryable: decision.type === 'retry-attempt',
+      }, this.#grantOperationId ?? this.#offerOperationId, this.#lane)
+    })
+  }
+
+  #advance(
+    stage: LinearAttemptStage,
+    createEvent: () => PeerAttemptTraceEvent,
+  ): void {
+    if (this.#terminal || BROWSER_LINEAR_STAGES[this.#nextStageIndex] !== stage) return
+    this.#nextStageIndex += 1
+    this.#lastCompletedAt = this.#readNow(this.#lastCompletedAt)
+    this.#emit(createEvent)
+    if (stage === 'admitted') this.#terminal = true
+  }
+
+  #event(
+    payload: PeerAttemptTracePayload,
+    operationId?: ProtocolOperationIdentity,
+    lane?: LaneIdentity,
+  ): PeerAttemptTraceEvent {
+    const attemptCorrelation = this.#correlation()
+    const correlation: FailureCorrelation = Object.freeze({
+      protocolSessionId: attemptCorrelation.protocolSessionId,
+      ...(operationId === undefined ? {} : { protocolOperationId: operationId }),
+      peerPathId: attemptCorrelation.peerPathId,
+      peerAttemptId: attemptCorrelation.attemptId,
+      ...(lane === undefined
+        ? {}
+        : { lane: Object.freeze({ id: lane.laneId, epoch: lane.laneEpoch }) }),
+    })
+    return Object.freeze({
+      eventName: 'peer_attempt',
+      correlation,
+      waveOrdinal: attemptCorrelation.waveOrdinal,
+      waveAttemptOrdinal: attemptCorrelation.waveAttemptOrdinal,
+      sessionAttemptOrdinal: attemptCorrelation.sessionAttemptOrdinal,
+      ...payload,
+      ...(payload.stage === 'failed' || payload.stage === 'admitted'
+        ? { summary: this.#summary() } : {}),
+    }) as PeerAttemptTraceEvent
+  }
+
+  #readNow(fallback: number): number {
+    try {
+      const now = this.#now()
+      return Number.isFinite(now) ? Math.max(fallback, now) : fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  #summary() {
+    const now = this.#readNow(this.#lastCompletedAt)
+    return Object.freeze({
+      lastCompletedStage: BROWSER_LINEAR_STAGES[this.#nextStageIndex - 1] ?? 'started',
+      attemptElapsedMilliseconds: Math.max(0, Math.floor(now - this.#startedAt)),
+      stageElapsedMilliseconds: Math.max(0, Math.floor(now - this.#lastCompletedAt)),
+      deadlineExpired: this.#deadlineExpired,
+    })
+  }
+
+  #emit(createEvent: () => PeerAttemptTraceEvent): void {
+    try {
+      const observer = this.#trace?.current
+      if (observer === undefined) return
+      observer(createEvent())
+    } catch {
+      // Trace loss cannot alter phase, authenticated settlement, or cleanup.
+    }
+  }
+}
+
+function snapshotFailure(failure: PeerAttemptFailure): PeerAttemptFailure {
+  if (failure.kind === 'authenticated-lane-rejection') {
+    return Object.freeze({
+      kind: failure.kind,
+      rejection: Object.freeze({ ...failure.rejection }),
+    })
+  }
+  if (failure.kind === 'session-terminal') {
+    return Object.freeze({ kind: failure.kind, terminal: Object.freeze({ ...failure.terminal }) })
+  }
+  return Object.freeze({ ...failure })
+}
+
+function diagnosticTypedErrorCode(failure: PeerAttemptFailure) {
+  if (failure.kind === 'session-terminal') return 'runtime-stopped' as const
+  if (failure.kind === 'authenticated-peer-operation') {
+    return typedErrorForPeerOperationCode(failure.code) ?? 'unexpected'
+  }
+  if (failure.kind === 'authenticated-lane-rejection') return 'peer-admission' as const
+  if (failure.kind === 'local-contract') return 'signaling-contract' as const
+  if (failure.kind === 'local-policy') {
+    return failure.code === 'candidate-limit' ? 'peer-candidates' as const : 'unexpected' as const
+  }
+  if (failure.reason === 'negotiation-timeout' || failure.reason === 'admission-timeout') {
+    return 'peer-timeout' as const
+  }
+  return failure.phase === 'admission' ? 'peer-admission' as const : 'peer-negotiation' as const
+}
+
+function decisionScope(decision: PeerFailureDecision): ConnectivityFailureScope {
+  if (decision.type === 'stop-session') return 'session-terminal'
+  if (decision.type === 'stop-path') return 'path-terminal'
+  return decision.reason === 'resource-deferred' ? 'resource-deferred' : 'attempt-transient'
+}

@@ -24,11 +24,11 @@ vi.mock('../../src/crypto/bytes', async (importOriginal) => {
   }
 })
 
-vi.mock('../../src/catalog/v2-records', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/catalog/v2-records')>()
+vi.mock('../../src/catalog/records', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/catalog/records')>()
   return {
     ...actual,
-    openV2ShareDescriptor: vi.fn(async () => ({
+    openShareDescriptor: vi.fn(async () => ({
       shareInstanceId: 'share-instance',
       syntheticRoot: new Uint8Array(16),
       syntheticRootId: 'root',
@@ -36,28 +36,28 @@ vi.mock('../../src/catalog/v2-records', async (importOriginal) => {
   }
 })
 
-vi.mock('../../src/catalog/v2-page-store', () => ({
-  IndexedDbV2CatalogPageStore: {
+vi.mock('../../src/catalog/page-store', () => ({
+  IndexedDbCatalogPageStore: {
     open: vi.fn(async () => ({})),
   },
 }))
 
-vi.mock('../../src/catalog/v2-client', () => ({
-  V2CatalogClient: class {
+vi.mock('../../src/catalog/client', () => ({
+  CatalogClient: class {
     close(): void {}
   },
 }))
 
-vi.mock('../../src/transport/relay/v2-receiver', () => ({
-  dialV2RelayReceiver: vi.fn(async () => ({
+vi.mock('../../src/transport/relay/receiver', () => ({
+  dialRelayReceiver: vi.fn(async () => ({
     channel: {},
     descriptorObject: new Uint8Array([1]),
     close: async () => undefined,
   })),
 }))
 
-vi.mock('../../src/session/v2-runtime', () => ({
-  V2ReceiverSessionRuntime: class {
+vi.mock('../../src/session/runtime', () => ({
+  ReceiverSessionRuntime: class {
     static async connect(options: Record<string, unknown>) {
       captured.sessionOptions.push(options)
       return {
@@ -68,8 +68,8 @@ vi.mock('../../src/session/v2-runtime', () => ({
   },
 }))
 
-vi.mock('../../src/receiver/v2-session-factory', () => ({
-  V2BrowserSessionFactory: class {
+vi.mock('../../src/receiver/session-factory', () => ({
+  BrowserSessionFactory: class {
     constructor(options: Record<string, unknown>) {
       captured.factoryOptions.push(options)
     }
@@ -78,8 +78,8 @@ vi.mock('../../src/receiver/v2-session-factory', () => ({
   },
 }))
 
-vi.mock('../../src/receiver/v2-supervisor', () => ({
-  V2ReceiverReconnectSupervisor: class {
+vi.mock('../../src/receiver/supervisor', () => ({
+  ReceiverReconnectSupervisor: class {
     readonly catalogOperations = {}
 
     constructor(options: Record<string, unknown>) {
@@ -91,18 +91,18 @@ vi.mock('../../src/receiver/v2-supervisor', () => ({
 }))
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import type { V2CatalogPage } from '../../src/catalog/v2-records'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
+import type { CatalogPage } from '../../src/catalog/records'
 import { offerArtifacts } from '../../src/output/planning'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
 } from '../../src/transfer/intent'
 import {
-  V2BrowseNavigationError,
-  V2BrowserReceiverGateway,
-  V2JoinedBrowserShare,
-  type V2BrowseDirectory,
+  BrowseNavigationError,
+  BrowserReceiverGateway,
+  JoinedBrowserShare,
+  type BrowseDirectory,
 } from '../../src/application/browser-share/gateway'
 import {
   discoverAuthenticatedSelection,
@@ -136,7 +136,7 @@ describe('v2 browser gateway connectivity injection', () => {
     const onBlockFetched = vi.fn()
     const onContentLaneAdmitted = vi.fn()
     const onContentLaneDetached = vi.fn()
-    const gateway = new V2BrowserReceiverGateway({
+    const gateway = new BrowserReceiverGateway({
       offersFactory,
       nativePeerUsable,
       protocolTrace,
@@ -167,7 +167,7 @@ describe('v2 browser gateway connectivity injection', () => {
 })
 
 describe('v2 joined-share path admission', () => {
-  const joined = new V2JoinedBrowserShare({
+  const joined = new JoinedBrowserShare({
     descriptor: {
       syntheticRoot: identity(1),
       syntheticRootId: 'root',
@@ -180,9 +180,9 @@ describe('v2 joined-share path admission', () => {
   it('rejects synthetic-root and ancestor identity cycles before constructing a child route', () => {
     const parent = browseDirectory('parent', ['Parent'], ['root', 'parent'])
     expect(() => joined.childDirectory(parent, directoryEntry('root', 'root-loop')))
-      .toThrow(V2BrowseNavigationError)
+      .toThrow(BrowseNavigationError)
     expect(() => joined.childDirectory(parent, directoryEntry('parent', 'parent-loop')))
-      .toThrow(V2BrowseNavigationError)
+      .toThrow(BrowseNavigationError)
   })
 
   it('applies the shared 256-component and 32-KiB prospective path admission', () => {
@@ -193,7 +193,7 @@ describe('v2 joined-share path admission', () => {
       ['root', ...deepPath.map((_name, index) => `depth-id-${index}`)],
     )
     expect(() => joined.childDirectory(deepParent, directoryEntry('too-deep', 'child')))
-      .toThrow(V2BrowseNavigationError)
+      .toThrow(BrowseNavigationError)
 
     const maximumParentPath = Array.from({ length: 128 }, () => 'a'.repeat(255))
     const byteParent = browseDirectory(
@@ -202,7 +202,7 @@ describe('v2 joined-share path admission', () => {
       ['root', ...maximumParentPath.map((_name, index) => `byte-id-${index}`)],
     )
     expect(() => joined.childDirectory(byteParent, directoryEntry('too-large', 'b')))
-      .toThrow(V2BrowseNavigationError)
+      .toThrow(BrowseNavigationError)
   })
 })
 
@@ -210,7 +210,7 @@ describe('v2 joined-share projection authority', () => {
   it('forwards ProtocolSession generation subscriptions without synthesizing an initial event', () => {
     const unsubscribe = vi.fn()
     const subscribeProtocolGeneration = vi.fn(() => unsubscribe)
-    const joined = new V2JoinedBrowserShare({
+    const joined = new JoinedBrowserShare({
       descriptor: {} as never,
       supervisor: { subscribeProtocolGeneration } as never,
       catalog: {} as never,
@@ -229,7 +229,7 @@ describe('v2 joined-share projection authority', () => {
 
   it('turns a reconnect generation change into an explicit retryable projection fence', async () => {
     const supervisor = { protocolSessionId: 'session-1' }
-    const joined = new V2JoinedBrowserShare({
+    const joined = new JoinedBrowserShare({
       descriptor: {
         syntheticRoot: identity(4),
         syntheticRootId: 'root',
@@ -258,7 +258,7 @@ describe('v2 joined-share projection authority', () => {
   it('preserves the sole shared folder identity and recommends its single-object workspace ZIP', async () => {
     const fixture = projectionCatalogFixture()
     const supervisor = { protocolSessionId: 'session-1' }
-    const joined = new V2JoinedBrowserShare({
+    const joined = new JoinedBrowserShare({
       descriptor: {
         shareInstance: fixture.shareInstance,
         shareInstanceId: fixture.shareInstanceId,
@@ -388,7 +388,7 @@ function projectionCatalogFixture() {
       if (generation === undefined) throw new Error('unexpected projection directory')
       return generation.committed
     },
-    pages: (committed: V2CommittedDirectory) => {
+    pages: (committed: CommittedDirectory) => {
       const generation = generations.get(committed.directoryIdText)
       if (generation === undefined) throw new Error('unexpected committed projection generation')
       return catalogPages(generation.page)
@@ -408,12 +408,12 @@ function committedCatalogGeneration(input: {
   readonly directoryId: Uint8Array<ArrayBuffer>
   readonly generation: Uint8Array<ArrayBuffer>
   readonly commitmentSeed: number
-  readonly entries: V2CatalogPage['entries']
-}): Readonly<{ committed: V2CommittedDirectory; page: V2CatalogPage }> {
+  readonly entries: CatalogPage['entries']
+}): Readonly<{ committed: CommittedDirectory; page: CatalogPage }> {
   const terminalCommitment = commitment(input.commitmentSeed)
   const directoryIdText = encodeBase64Url(input.directoryId)
   const generationText = encodeBase64Url(input.generation)
-  const page: V2CatalogPage = Object.freeze({
+  const page: CatalogPage = Object.freeze({
     shareInstance: input.shareInstance,
     directoryId: input.directoryId,
     directoryIdText,
@@ -442,7 +442,7 @@ function committedCatalogGeneration(input: {
   })
 }
 
-async function* catalogPages(page: V2CatalogPage): AsyncGenerator<V2CatalogPage> {
+async function* catalogPages(page: CatalogPage): AsyncGenerator<CatalogPage> {
   yield page
 }
 
@@ -457,7 +457,7 @@ function browseDirectory(
   idText: string,
   path: readonly string[],
   ancestry: readonly string[],
-): V2BrowseDirectory {
+): BrowseDirectory {
   return Object.freeze({
     id: identity(2),
     idText,

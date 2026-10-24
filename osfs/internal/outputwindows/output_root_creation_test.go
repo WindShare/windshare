@@ -15,31 +15,31 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsV3CreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsCreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	external := filepath.Join(base, "external")
 	if err := os.Mkdir(external, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(
-		external, windowsV3HostileExternalDescriptor(t, policy), policy,
+	if err := windowsSetTestDirectoryDACL(
+		external, windowsHostileExternalDescriptor(t, policy), policy,
 	); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(external, "missing-parent", "output")
 	var placementCuts, componentCuts int
-	observer := windowsV3OutputRootCreateObserverFunc(func(
+	observer := windowsOutputRootCreateObserverFunc(func(
 		pinned string,
-		cut windowsV3OutputRootCreateCut,
+		cut windowsOutputRootCreateCut,
 	) error {
 		switch cut {
-		case windowsV3OutputRootCreatePlacementPinned:
+		case windowsOutputRootCreatePlacementPinned:
 			placementCuts++
-		case windowsV3OutputRootCreateComponentPinned:
+		case windowsOutputRootCreateComponentPinned:
 			componentCuts++
 		default:
 			return fmt.Errorf("unexpected output-root creation cut %d", cut)
@@ -51,7 +51,7 @@ func TestWindowsV3CreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
 				_ = os.Rename(moved, path)
 				return fmt.Errorf("creation cut %d allowed rename of pinned path %q", cut, path)
 			}
-			if !windowsV3IsBlockedAncestorReplacement(err) {
+			if !windowsIsBlockedAncestorReplacement(err) {
 				return fmt.Errorf("creation cut %d rename of %q failed ambiguously: %w", cut, path, err)
 			}
 		}
@@ -78,51 +78,51 @@ func TestWindowsV3CreateRootPinsEveryExternalAndCreatedComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	externalMoved := external + "-moved"
-	windowsV3RequireReleasedRename(t, external, externalMoved, "created-root ancestry after cleanup")
+	windowsRequireReleasedRename(t, external, externalMoved, "created-root ancestry after cleanup")
 }
 
-func TestWindowsV3PrivatePublicationRootCreationPinsHostileInheritedParent(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsPrivatePublicationRootCreationPinsHostileInheritedParent(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	parentPath := filepath.Join(base, "hostile-parent")
 	if err := os.Mkdir(parentPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, foreign := windowsV3HostileInheritedParentDescriptor(t, policy)
-	if err := windowsV3SetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
+	descriptor, foreign := windowsHostileInheritedParentDescriptor(t, policy)
+	if err := windowsSetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 
 	target := filepath.Join(parentPath, ".guard-uploads")
 	var placementCuts, componentCuts int
-	observer := windowsV3OutputRootCreateObserverFunc(func(
+	observer := windowsOutputRootCreateObserverFunc(func(
 		pinned string,
-		cut windowsV3OutputRootCreateCut,
+		cut windowsOutputRootCreateCut,
 	) error {
-		if err := windowsV3AssertRenameBlocked(parentPath); err != nil {
+		if err := windowsAssertRenameBlocked(parentPath); err != nil {
 			return fmt.Errorf("creation cut %d: %w", cut, err)
 		}
 		switch cut {
-		case windowsV3OutputRootCreatePlacementPinned:
+		case windowsOutputRootCreatePlacementPinned:
 			placementCuts++
 			if pinned != parentPath {
 				return fmt.Errorf("placement cut pinned %q, want %q", pinned, parentPath)
 			}
-			if err := windowsV3AssertRemoveBlocked(parentPath); err != nil {
+			if err := windowsAssertRemoveBlocked(parentPath); err != nil {
 				return fmt.Errorf("placement cut: %w", err)
 			}
-		case windowsV3OutputRootCreateComponentPinned:
+		case windowsOutputRootCreateComponentPinned:
 			componentCuts++
 			if pinned != target {
 				return fmt.Errorf("component cut pinned %q, want %q", pinned, target)
 			}
-			if err := windowsV3AssertRenameBlocked(target); err != nil {
+			if err := windowsAssertRenameBlocked(target); err != nil {
 				return fmt.Errorf("component cut: %w", err)
 			}
-			if err := windowsV3AssertRemoveBlocked(target); err != nil {
+			if err := windowsAssertRemoveBlocked(target); err != nil {
 				return fmt.Errorf("component cut: %w", err)
 			}
 		default:
@@ -130,7 +130,7 @@ func TestWindowsV3PrivatePublicationRootCreationPinsHostileInheritedParent(t *te
 		}
 		return nil
 	})
-	platform, err := createWindowsV3PrivatePublicationRootWithObserver(target, observer)
+	platform, err := createWindowsPrivatePublicationRootWithObserver(target, observer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestWindowsV3PrivatePublicationRootCreationPinsHostileInheritedParent(t *te
 		_ = platform.Close()
 		t.Fatal(err)
 	}
-	inherited, err := windowsV3DescriptorHasInheritedAllowForSID(installed, foreign)
+	inherited, err := windowsDescriptorHasInheritedAllowForSID(installed, foreign)
 	if err != nil {
 		_ = platform.Close()
 		t.Fatal(err)
@@ -175,32 +175,32 @@ func TestWindowsV3PrivatePublicationRootCreationPinsHostileInheritedParent(t *te
 	}
 }
 
-func TestWindowsV3PrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsPrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	parentPath := filepath.Join(base, "hostile-parent")
 	if err := os.Mkdir(parentPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, _ := windowsV3HostileInheritedParentDescriptor(t, policy)
-	if err := windowsV3SetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
+	descriptor, _ := windowsHostileInheritedParentDescriptor(t, policy)
+	if err := windowsSetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(parentPath, ".guard-uploads")
 	injected := errors.New("injected post-certification failure")
-	observer := windowsV3OutputRootCreateObserverFunc(func(
+	observer := windowsOutputRootCreateObserverFunc(func(
 		_ string,
-		cut windowsV3OutputRootCreateCut,
+		cut windowsOutputRootCreateCut,
 	) error {
-		if cut == windowsV3OutputRootCreateComponentPinned {
+		if cut == windowsOutputRootCreateComponentPinned {
 			return injected
 		}
 		return nil
 	})
-	platform, err := createWindowsV3PrivatePublicationRootWithObserver(target, observer)
+	platform, err := createWindowsPrivatePublicationRootWithObserver(target, observer)
 	if platform != nil {
 		_ = platform.Close()
 		t.Fatal("failed private publication-root creation transferred a live platform")
@@ -215,21 +215,21 @@ func TestWindowsV3PrivatePublicationRootFailureRemovesOwnedTarget(t *testing.T) 
 		t.Fatalf("failed private publication-root creation left entries=%v error=%v", entries, readErr)
 	}
 	movedParent := parentPath + "-moved"
-	windowsV3RequireReleasedRename(t, parentPath, movedParent, "failed creation parent placement")
+	windowsRequireReleasedRename(t, parentPath, movedParent, "failed creation parent placement")
 }
 
-func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRepair(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsPrivatePublicationRootRejectsUnprotectedExistingRootWithoutRepair(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	parentPath := filepath.Join(base, "hostile-parent")
 	if err := os.Mkdir(parentPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, foreign := windowsV3HostileInheritedParentDescriptor(t, policy)
-	if err := windowsV3SetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
+	descriptor, foreign := windowsHostileInheritedParentDescriptor(t, policy)
+	if err := windowsSetTestDirectoryDACL(parentPath, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(parentPath, ".guard-uploads")
@@ -244,7 +244,7 @@ func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRep
 	if err != nil {
 		t.Fatal(err)
 	}
-	inherited, err := windowsV3DescriptorHasInheritedAllowForSID(before, foreign)
+	inherited, err := windowsDescriptorHasInheritedAllowForSID(before, foreign)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRep
 	if beforeSDDL == "" {
 		t.Fatal("encode unsafe existing-root descriptor")
 	}
-	native, err := openWindowsV3OutputPlatform(target)
+	native, err := openWindowsOutputPlatform(target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,11 +301,11 @@ func TestWindowsV3PrivatePublicationRootRejectsUnprotectedExistingRootWithoutRep
 	}
 }
 
-func TestWindowsV3OutputRootCreateTransfersResultOnlyAfterCleanPinRelease(t *testing.T) {
+func TestWindowsOutputRootCreateTransfersResultOnlyAfterCleanPinRelease(t *testing.T) {
 	cleanupErr := errors.New("injected creation-pin cleanup failure")
 	closeErr := errors.New("injected returned-platform close failure")
 	closeCalls := 0
-	keep, err := finishWindowsV3OutputRootCreate(nil, cleanupErr, func() error {
+	keep, err := finishWindowsOutputRootCreate(nil, cleanupErr, func() error {
 		closeCalls++
 		return closeErr
 	})
@@ -314,7 +314,7 @@ func TestWindowsV3OutputRootCreateTransfersResultOnlyAfterCleanPinRelease(t *tes
 	}
 
 	closeCalls = 0
-	keep, err = finishWindowsV3OutputRootCreate(nil, nil, func() error {
+	keep, err = finishWindowsOutputRootCreate(nil, nil, func() error {
 		closeCalls++
 		return closeErr
 	})
@@ -323,16 +323,16 @@ func TestWindowsV3OutputRootCreateTransfersResultOnlyAfterCleanPinRelease(t *tes
 	}
 }
 
-func windowsV3HostileInheritedParentDescriptor(
+func windowsHostileInheritedParentDescriptor(
 	t *testing.T,
-	policy *windowsV3PrivatePolicy,
+	policy *windowsPrivatePolicy,
 ) (*windows.SECURITY_DESCRIPTOR, *windows.SID) {
 	t.Helper()
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := windowsV3InheritableFullAccessEntries([]*windows.SID{
+	entries := windowsInheritableFullAccessEntries([]*windows.SID{
 		policy.userSID,
 		policy.systemSID,
 		policy.administratorsSID,
@@ -347,7 +347,7 @@ func windowsV3HostileInheritedParentDescriptor(
 	return descriptor, users
 }
 
-func windowsV3DescriptorHasInheritedAllowForSID(
+func windowsDescriptorHasInheritedAllowForSID(
 	descriptor *windows.SECURITY_DESCRIPTOR,
 	principal *windows.SID,
 ) (bool, error) {
@@ -375,25 +375,25 @@ func windowsV3DescriptorHasInheritedAllowForSID(
 	return false, nil
 }
 
-func windowsV3AssertRenameBlocked(path string) error {
+func windowsAssertRenameBlocked(path string) error {
 	moved := path + "-moved"
 	err := os.Rename(path, moved)
 	if err == nil {
 		_ = os.Rename(moved, path)
 		return fmt.Errorf("pinned path %q was renameable", path)
 	}
-	if !windowsV3IsBlockedAncestorReplacement(err) {
+	if !windowsIsBlockedAncestorReplacement(err) {
 		return fmt.Errorf("rename pinned path %q failed ambiguously: %w", path, err)
 	}
 	return nil
 }
 
-func windowsV3AssertRemoveBlocked(path string) error {
+func windowsAssertRemoveBlocked(path string) error {
 	err := os.Remove(path)
 	if err == nil {
 		return fmt.Errorf("pinned path %q was removable", path)
 	}
-	if !windowsV3IsBlockedAncestorReplacement(err) {
+	if !windowsIsBlockedAncestorReplacement(err) {
 		return fmt.Errorf("remove pinned path %q failed ambiguously: %w", path, err)
 	}
 	return nil

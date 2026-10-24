@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { wireFixture } from './lease-retirement-wire-fixture'
 import { identity, catalogFixture, selectOnlyFile, planAuthorityFixture, receiveIntentFixture, testOutput, transferJobFixture } from './v2-job-fixture'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import type { BlockRangeReader } from '../../src/content/broker'
 
 it.each(['complete', 'pause'] as const)('settles local %s before a remote release response arrives', async action => {
   const wire = await wireFixture()
@@ -15,7 +15,7 @@ it.each(['complete', 'pause'] as const)('settles local %s before a remote releas
   const intent = await receiveIntentFixture({
     planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
   })
-  const broker: V2BlockRangeReader = {
+  const broker: BlockRangeReader = {
     readRange: async function* (_descriptor, _lease, range) {
       const bytes = action === 'pause' ? 2 : Number(range.end - range.start)
       yield { offset: range.start, data: new Uint8Array(bytes).fill(7), authenticatedRoute: 'direct' }

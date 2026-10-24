@@ -1,5 +1,5 @@
 import type { PeerAttemptBudget } from './budget'
-import type { V2PeerRecoveryExhaustion, V2PeerRecoveryPolicy } from './contract'
+import type { PeerRecoveryExhaustion, PeerRecoveryPolicy } from './contract'
 
 export const PEER_DELAYED_OPPORTUNITY_MILLISECONDS = 10_000
 export type PeerPathNotice = 'mapping-ready' | 'network-changed'
@@ -12,11 +12,11 @@ export class PeerRecoveryWave {
 
   readonly ordinal: number
   readonly startedAt: number
-  readonly policy: V2PeerRecoveryPolicy
+  readonly policy: PeerRecoveryPolicy
   readonly budget: PeerAttemptBudget
 
   constructor(ordinal: number, startedAt: number,
-    policy: V2PeerRecoveryPolicy, budget: PeerAttemptBudget) {
+    policy: PeerRecoveryPolicy, budget: PeerAttemptBudget) {
     this.ordinal = ordinal
     this.startedAt = startedAt
     this.policy = policy
@@ -49,7 +49,7 @@ export class PeerRecoveryWave {
     }
   }
 
-  exhaustion(now: number, reserve = false): V2PeerRecoveryExhaustion | undefined {
+  exhaustion(now: number, reserve = false): PeerRecoveryExhaustion | undefined {
     if (reserve) {
       if (this.budget.available(now).attempts === 0) return 'session-attempt-budget'
       if (this.attempts >= this.policy.waveMaxAttempts) return 'wave-attempt-budget'

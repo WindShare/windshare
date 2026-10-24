@@ -13,32 +13,32 @@ import (
 )
 
 const (
-	windowsV3OutputProbePrefix             = ".windshare-output.probe-"
-	windowsV3OutputProbeRandomBytes        = 16
-	windowsV3OutputProbeAllocationAttempts = 16
+	windowsOutputProbePrefix             = ".windshare-output.probe-"
+	windowsOutputProbeRandomBytes        = 16
+	windowsOutputProbeAllocationAttempts = 16
 )
 
-func (root *windowsV3Directory) probeRecoverableFeatures() error {
+func (root *windowsDirectory) probeRecoverableFeatures() error {
 	return root.probeRecoverableFeaturesWithRandom(rand.Reader)
 }
 
-func (root *windowsV3Directory) destinationCapabilities() (outputcap.DestinationCapabilities, error) {
+func (root *windowsDirectory) destinationCapabilities() (outputcap.DestinationCapabilities, error) {
 	results, err := root.probeDestinationCapabilitiesWithRandom(rand.Reader)
 	if err != nil {
 		return outputcap.DestinationCapabilities{}, err
 	}
-	return windowsV3DestinationCapabilitiesFromResults(results)
+	return windowsDestinationCapabilitiesFromResults(results)
 }
 
-type windowsV3CapabilityProbeResults struct {
+type windowsCapabilityProbeResults struct {
 	safePublish       error
 	operationRecovery error
 	rangeRecovery     error
 	crashCleanup      error
 }
 
-func windowsV3DestinationCapabilitiesFromResults(
-	results windowsV3CapabilityProbeResults,
+func windowsDestinationCapabilitiesFromResults(
+	results windowsCapabilityProbeResults,
 ) (outputcap.DestinationCapabilities, error) {
 	facts := []struct {
 		err    error
@@ -55,15 +55,15 @@ func windowsV3DestinationCapabilitiesFromResults(
 			evidence[index] = outputcap.SupportedCapability()
 			continue
 		}
-		if errors.Is(fact.err, errWindowsV3OutputUnsafe) {
-			return outputcap.DestinationCapabilities{}, windowsOutputV3Error(fact.err)
+		if errors.Is(fact.err, errWindowsOutputUnsafe) {
+			return outputcap.DestinationCapabilities{}, windowsOutputError(fact.err)
 		}
 		evidence[index], _ = outputcap.UnsupportedCapability(fact.reason)
 	}
 	return outputcap.NewDestinationCapabilities(evidence[0], evidence[1], evidence[2], evidence[3])
 }
 
-func (root *windowsV3Directory) probeRecoverableFeaturesWithRandom(random io.Reader) error {
+func (root *windowsDirectory) probeRecoverableFeaturesWithRandom(random io.Reader) error {
 	results, err := root.probeDestinationCapabilitiesWithRandom(random)
 	if err != nil {
 		return err
@@ -76,9 +76,9 @@ func (root *windowsV3Directory) probeRecoverableFeaturesWithRandom(random io.Rea
 	)
 }
 
-func (root *windowsV3Directory) probeDestinationCapabilitiesWithRandom(
+func (root *windowsDirectory) probeDestinationCapabilitiesWithRandom(
 	random io.Reader,
-) (results windowsV3CapabilityProbeResults, resultErr error) {
+) (results windowsCapabilityProbeResults, resultErr error) {
 	const operation = "probe Windows output filesystem"
 	if err := root.usable(); err != nil {
 		return results, err
@@ -92,68 +92,68 @@ func (root *windowsV3Directory) probeDestinationCapabilitiesWithRandom(
 		return results, err
 	}
 	if random == nil {
-		return results, windowsV3Failure(operation, "", errWindowsV3OutputUnsafe, errors.New("random source is absent"))
+		return results, windowsFailure(operation, "", errWindowsOutputUnsafe, errors.New("random source is absent"))
 	}
-	for range windowsV3OutputProbeAllocationAttempts {
-		name, err := newWindowsV3OutputProbeName(random)
+	for range windowsOutputProbeAllocationAttempts {
+		name, err := newWindowsOutputProbeName(random)
 		if err != nil {
-			return results, windowsV3Failure(operation, "", errWindowsV3OutputUnsafe, err)
+			return results, windowsFailure(operation, "", errWindowsOutputUnsafe, err)
 		}
 		directory, err := root.CreatePrivateDirectory(name)
-		if errors.Is(err, errWindowsV3OutputCollision) {
+		if errors.Is(err, errWindowsOutputCollision) {
 			continue
 		}
 		if err != nil {
 			return results, err
 		}
-		probe := windowsV3OutputProbe{root: root, rootName: name, directory: directory, rootPresent: true}
+		probe := windowsOutputProbe{root: root, rootName: name, directory: directory, rootPresent: true}
 		if err := errors.Join(directory.Sync(), root.Sync()); err != nil {
 			results.safePublish = err
-			results.operationRecovery = windowsV3ProbeDependencyFailure("private probe namespace", err)
-			results.rangeRecovery = windowsV3ProbeDependencyFailure("private probe namespace", err)
-			results.crashCleanup = windowsV3ProbeDependencyFailure("private probe namespace", err)
+			results.operationRecovery = windowsProbeDependencyFailure("private probe namespace", err)
+			results.rangeRecovery = windowsProbeDependencyFailure("private probe namespace", err)
+			results.crashCleanup = windowsProbeDependencyFailure("private probe namespace", err)
 		} else {
 			results = probe.runCapabilityFacts()
 		}
 		cleanupErr := probe.cleanup()
 		if cleanupErr != nil {
-			return results, windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+			return results, windowsFailure(operation, name, errWindowsOutputUnsafe,
 				errors.Join(errors.New("probe fixed namespace could not be removed"), cleanupErr))
 		}
 		if results.operationRecovery == nil {
 			results.operationRecovery = root.preparePersistentRootIdentity()
 			if results.operationRecovery != nil && results.rangeRecovery == nil {
-				results.rangeRecovery = windowsV3ProbeDependencyFailure(
+				results.rangeRecovery = windowsProbeDependencyFailure(
 					"persistent root identity", results.operationRecovery,
 				)
 			}
 		}
 		return results, nil
 	}
-	return results, windowsV3Failure(operation, "", errWindowsV3OutputUnsafe,
+	return results, windowsFailure(operation, "", errWindowsOutputUnsafe,
 		errors.New("could not allocate a unique fixed probe namespace"))
 }
 
-func newWindowsV3OutputProbeName(random io.Reader) (string, error) {
-	var nonce [windowsV3OutputProbeRandomBytes]byte
+func newWindowsOutputProbeName(random io.Reader) (string, error) {
+	var nonce [windowsOutputProbeRandomBytes]byte
 	if _, err := io.ReadFull(random, nonce[:]); err != nil {
 		return "", err
 	}
-	return windowsV3OutputProbePrefix + hex.EncodeToString(nonce[:]), nil
+	return windowsOutputProbePrefix + hex.EncodeToString(nonce[:]), nil
 }
 
-type windowsV3OutputProbe struct {
-	root      *windowsV3Directory
+type windowsOutputProbe struct {
+	root      *windowsDirectory
 	rootName  string
-	directory *windowsV3Directory
+	directory *windowsDirectory
 
-	stage       *windowsV3File
-	anchor      *windowsV3File
-	publication *windowsV3File
-	oldRecord   *windowsV3File
-	newRecord   *windowsV3File
-	installed   *windowsV3Directory
-	collision   *windowsV3Directory
+	stage       *windowsFile
+	anchor      *windowsFile
+	publication *windowsFile
+	oldRecord   *windowsFile
+	newRecord   *windowsFile
+	installed   *windowsDirectory
+	collision   *windowsDirectory
 
 	rootPresent         bool
 	stageMayExist       bool
@@ -166,37 +166,37 @@ type windowsV3OutputProbe struct {
 	collisionMayExist   bool
 }
 
-func (probe *windowsV3OutputProbe) runCapabilityFacts() (results windowsV3CapabilityProbeResults) {
+func (probe *windowsOutputProbe) runCapabilityFacts() (results windowsCapabilityProbeResults) {
 	results.safePublish = probe.probeSafePublish()
 	if results.safePublish != nil {
-		results.operationRecovery = windowsV3ProbeDependencyFailure("safe publication", results.safePublish)
-		results.rangeRecovery = windowsV3ProbeDependencyFailure("safe publication", results.safePublish)
-		results.crashCleanup = windowsV3ProbeDependencyFailure("private stage creation", results.safePublish)
+		results.operationRecovery = windowsProbeDependencyFailure("safe publication", results.safePublish)
+		results.rangeRecovery = windowsProbeDependencyFailure("safe publication", results.safePublish)
+		results.crashCleanup = windowsProbeDependencyFailure("private stage creation", results.safePublish)
 		return results
 	}
 	results.rangeRecovery = probe.probeRangeRecovery()
 	if results.rangeRecovery != nil {
-		results.operationRecovery = windowsV3ProbeDependencyFailure("private record replacement", results.rangeRecovery)
-		results.crashCleanup = windowsV3ProbeDependencyFailure("fixed private records", results.rangeRecovery)
+		results.operationRecovery = windowsProbeDependencyFailure("private record replacement", results.rangeRecovery)
+		results.crashCleanup = windowsProbeDependencyFailure("fixed private records", results.rangeRecovery)
 		return results
 	}
 	results.operationRecovery = probe.probeOperationRecovery()
 	if results.operationRecovery != nil {
-		results.crashCleanup = windowsV3ProbeDependencyFailure("fixed operation state", results.operationRecovery)
+		results.crashCleanup = windowsProbeDependencyFailure("fixed operation state", results.operationRecovery)
 		return results
 	}
 	results.crashCleanup = probe.probeCrashCleanup()
 	return results
 }
 
-func windowsV3ProbeDependencyFailure(dependency string, cause error) error {
-	return windowsV3Failure(
-		"probe Windows destination capability", "", errWindowsV3OutputUnsupported,
+func windowsProbeDependencyFailure(dependency string, cause error) error {
+	return windowsFailure(
+		"probe Windows destination capability", "", errWindowsOutputUnsupported,
 		errors.Join(errors.New("required dependency could not be proven: "+dependency), cause),
 	)
 }
 
-func (probe *windowsV3OutputProbe) probeSafePublish() error {
+func (probe *windowsOutputProbe) probeSafePublish() error {
 	const operation = "probe Windows safe publication"
 	stage, err := probe.directory.CreatePrivateFile("stage")
 	if err != nil {
@@ -225,17 +225,17 @@ func (probe *windowsV3OutputProbe) probeSafePublish() error {
 	if err := probe.directory.Sync(); err != nil {
 		return err
 	}
-	if unexpected, err := probe.directory.LinkRegularFileNoReplace(anchor, "publication"); !errors.Is(err, errWindowsV3OutputCollision) {
+	if unexpected, err := probe.directory.LinkRegularFileNoReplace(anchor, "publication"); !errors.Is(err, errWindowsOutputCollision) {
 		if unexpected != nil {
 			_ = unexpected.Close()
 		}
-		return windowsV3Failure(operation, "publication", errWindowsV3OutputUnsupported,
+		return windowsFailure(operation, "publication", errWindowsOutputUnsupported,
 			errors.Join(errors.New("hard-link publication is not atomic no-replace"), err))
 	}
 	return nil
 }
 
-func (probe *windowsV3OutputProbe) probeRangeRecovery() error {
+func (probe *windowsOutputProbe) probeRangeRecovery() error {
 	oldRecord, err := probe.directory.CreatePrivateFile("record")
 	if err != nil {
 		return err
@@ -273,7 +273,7 @@ func (probe *windowsV3OutputProbe) probeRangeRecovery() error {
 	return nil
 }
 
-func (probe *windowsV3OutputProbe) probeOperationRecovery() error {
+func (probe *windowsOutputProbe) probeOperationRecovery() error {
 	const operation = "probe Windows operation recovery"
 	installed, err := probe.directory.CreatePrivateDirectory("candidate")
 	if err != nil {
@@ -301,22 +301,22 @@ func (probe *windowsV3OutputProbe) probeOperationRecovery() error {
 		return err
 	}
 	probe.collision, probe.collisionMayExist = collision, true
-	if unexpected, err := probe.directory.InstallPrivateDirectoryNoReplace(collision, "installed"); !errors.Is(err, errWindowsV3OutputCollision) {
+	if unexpected, err := probe.directory.InstallPrivateDirectoryNoReplace(collision, "installed"); !errors.Is(err, errWindowsOutputCollision) {
 		if unexpected != nil {
 			_ = unexpected.Close()
 		}
-		return windowsV3Failure(operation, "installed", errWindowsV3OutputUnsupported,
+		return windowsFailure(operation, "installed", errWindowsOutputUnsupported,
 			errors.Join(errors.New("directory installation is not atomic no-replace"), err))
 	}
 	return nil
 }
 
-func (probe *windowsV3OutputProbe) probeCrashCleanup() error {
+func (probe *windowsOutputProbe) probeCrashCleanup() error {
 	const operation = "probe Windows crash cleanup"
 	if err := probe.directory.verify(true); err != nil {
 		return err
 	}
-	for name, file := range map[string]*windowsV3File{
+	for name, file := range map[string]*windowsFile{
 		"stage": probe.stage, "anchor": probe.anchor, "publication": probe.publication,
 		"record": probe.newRecord,
 	} {
@@ -324,11 +324,11 @@ func (probe *windowsV3OutputProbe) probeCrashCleanup() error {
 		if err != nil {
 			return err
 		}
-		same, compareErr := sameWindowsV3OpenedObject(current, file)
+		same, compareErr := sameWindowsOpenedObject(current, file)
 		closeErr := current.Close()
 		if compareErr != nil || closeErr != nil || !same {
 			return errors.Join(
-				windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+				windowsFailure(operation, name, errWindowsOutputUnsafe,
 					errors.New("private cleanup name does not identify its fixed owned object")),
 				compareErr, closeErr,
 			)
@@ -337,7 +337,7 @@ func (probe *windowsV3OutputProbe) probeCrashCleanup() error {
 	return nil
 }
 
-func (probe *windowsV3OutputProbe) cleanup() error {
+func (probe *windowsOutputProbe) cleanup() error {
 	if probe == nil {
 		return nil
 	}
@@ -345,25 +345,25 @@ func (probe *windowsV3OutputProbe) cleanup() error {
 		return probe.closeChildHandles()
 	}
 	if err := probe.cleanupEntries(); err != nil {
-		return errors.Join(err, probe.closeChildHandles(), closeWindowsV3ProbeDirectory(probe.directory))
+		return errors.Join(err, probe.closeChildHandles(), closeWindowsProbeDirectory(probe.directory))
 	}
 	if err := probe.closeChildHandles(); err != nil {
-		return errors.Join(err, closeWindowsV3ProbeDirectory(probe.directory))
+		return errors.Join(err, closeWindowsProbeDirectory(probe.directory))
 	}
 	if probe.rootPresent && probe.root != nil {
 		if err := probe.root.RemoveDirectory(probe.rootName, probe.directory); err != nil {
-			return errors.Join(err, closeWindowsV3ProbeDirectory(probe.directory))
+			return errors.Join(err, closeWindowsProbeDirectory(probe.directory))
 		}
 		if err := probe.root.Sync(); err != nil {
-			return errors.Join(err, closeWindowsV3ProbeDirectory(probe.directory))
+			return errors.Join(err, closeWindowsProbeDirectory(probe.directory))
 		}
 		probe.rootPresent = false
 	}
-	return closeWindowsV3ProbeDirectory(probe.directory)
+	return closeWindowsProbeDirectory(probe.directory)
 }
 
-func (probe *windowsV3OutputProbe) cleanupEntries() error {
-	removeRegular := func(present *bool, name string, candidates ...*windowsV3File) error {
+func (probe *windowsOutputProbe) cleanupEntries() error {
+	removeRegular := func(present *bool, name string, candidates ...*windowsFile) error {
 		if !*present {
 			return nil
 		}
@@ -373,7 +373,7 @@ func (probe *windowsV3OutputProbe) cleanupEntries() error {
 		*present = false
 		return probe.directory.Sync()
 	}
-	removeDirectory := func(present *bool, name string, candidates ...*windowsV3Directory) error {
+	removeDirectory := func(present *bool, name string, candidates ...*windowsDirectory) error {
 		if !*present {
 			return nil
 		}
@@ -409,9 +409,9 @@ func (probe *windowsV3OutputProbe) cleanupEntries() error {
 	return removeDirectory(&probe.installedMayExist, "installed", probe.installed, probe.collision)
 }
 
-func (probe *windowsV3OutputProbe) removeKnownRegular(
+func (probe *windowsOutputProbe) removeKnownRegular(
 	name string,
-	candidates ...*windowsV3File,
+	candidates ...*windowsFile,
 ) (resultErr error) {
 	current, err := probe.directory.OpenRegularFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -425,7 +425,7 @@ func (probe *windowsV3OutputProbe) removeKnownRegular(
 		if candidate == nil || candidate.file == nil {
 			continue
 		}
-		same, compareErr := sameWindowsV3OpenedObject(current, candidate)
+		same, compareErr := sameWindowsOpenedObject(current, candidate)
 		if compareErr != nil {
 			return compareErr
 		}
@@ -433,13 +433,13 @@ func (probe *windowsV3OutputProbe) removeKnownRegular(
 			return probe.directory.RemoveRegularLink(name, candidate)
 		}
 	}
-	return windowsV3Failure("clean Windows output probe", name, errWindowsV3OutputUnsafe,
+	return windowsFailure("clean Windows output probe", name, errWindowsOutputUnsafe,
 		errors.New("entry does not match any probe-created regular file"))
 }
 
-func (probe *windowsV3OutputProbe) removeKnownDirectory(
+func (probe *windowsOutputProbe) removeKnownDirectory(
 	name string,
-	candidates ...*windowsV3Directory,
+	candidates ...*windowsDirectory,
 ) (resultErr error) {
 	current, err := probe.directory.OpenDirectory(name)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -453,7 +453,7 @@ func (probe *windowsV3OutputProbe) removeKnownDirectory(
 		if candidate == nil || candidate.file == nil {
 			continue
 		}
-		same, compareErr := sameWindowsV3OpenedDirectory(current, candidate)
+		same, compareErr := sameWindowsOpenedDirectory(current, candidate)
 		if compareErr != nil {
 			return compareErr
 		}
@@ -461,30 +461,30 @@ func (probe *windowsV3OutputProbe) removeKnownDirectory(
 			return probe.directory.RemoveDirectory(name, candidate)
 		}
 	}
-	return windowsV3Failure("clean Windows output probe", name, errWindowsV3OutputUnsafe,
+	return windowsFailure("clean Windows output probe", name, errWindowsOutputUnsafe,
 		errors.New("entry does not match any probe-created directory"))
 }
 
-func (probe *windowsV3OutputProbe) closeChildHandles() error {
+func (probe *windowsOutputProbe) closeChildHandles() error {
 	return errors.Join(
-		closeWindowsV3ProbeFile(probe.stage),
-		closeWindowsV3ProbeFile(probe.anchor),
-		closeWindowsV3ProbeFile(probe.publication),
-		closeWindowsV3ProbeFile(probe.oldRecord),
-		closeWindowsV3ProbeFile(probe.newRecord),
-		closeWindowsV3ProbeDirectory(probe.installed),
-		closeWindowsV3ProbeDirectory(probe.collision),
+		closeWindowsProbeFile(probe.stage),
+		closeWindowsProbeFile(probe.anchor),
+		closeWindowsProbeFile(probe.publication),
+		closeWindowsProbeFile(probe.oldRecord),
+		closeWindowsProbeFile(probe.newRecord),
+		closeWindowsProbeDirectory(probe.installed),
+		closeWindowsProbeDirectory(probe.collision),
 	)
 }
 
-func closeWindowsV3ProbeFile(file *windowsV3File) error {
+func closeWindowsProbeFile(file *windowsFile) error {
 	if file == nil {
 		return nil
 	}
 	return file.Close()
 }
 
-func closeWindowsV3ProbeDirectory(directory *windowsV3Directory) error {
+func closeWindowsProbeDirectory(directory *windowsDirectory) error {
 	if directory == nil {
 		return nil
 	}

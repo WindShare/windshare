@@ -1,9 +1,9 @@
-import { V2OperationCancellationError, V2_OPERATION_CANCEL_REASON } from '../../session/v2-runtime-types'
+import { OperationCancellationError, OPERATION_CANCEL_REASON } from '../../session/runtime-types'
 // Host wake cadence is independent of the shared rescue eligibility rule.
 const RESCUE_POLL_MILLISECONDS = 10
 
-export class ContentRaceWon extends V2OperationCancellationError {
-  constructor() { super(V2_OPERATION_CANCEL_REASON.laneRace, 'Another authenticated content attempt won') }
+export class ContentRaceWon extends OperationCancellationError {
+  constructor() { super(OPERATION_CANCEL_REASON.laneRace, 'Another authenticated content attempt won') }
 }
 export class ContentRaceFailures extends AggregateError {
   constructor(errors: readonly unknown[]) { super(errors, 'Content race failed') }

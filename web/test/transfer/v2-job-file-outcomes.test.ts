@@ -6,7 +6,7 @@ import {
 } from '../../src/output/persistent-tree/errors'
 import {
   transferFileOutcomeEvidence,
-  V2FileRevisionChangedError,
+  FileRevisionChangedError,
 } from '../../src/transfer/job/failures'
 import { projectTransferFileOutcome } from '../../src/transfer/outcome'
 
@@ -16,7 +16,7 @@ describe('v2 file outcome handoff', () => {
     ['owned-object-unknown', new CheckpointLineageDecisionError('ownership-conflict')],
     ['checkpoint-invalid', new CheckpointLineageDecisionError('invalid')],
     ['destination-collision', new DestinationCollisionError()],
-    ['source-drift', new V2FileRevisionChangedError('authenticated revision changed')],
+    ['source-drift', new FileRevisionChangedError('authenticated revision changed')],
   ] as const)('projects %s from the typed collaborator decision', (expected, decision) => {
     const evidence = transferFileOutcomeEvidence(new Error('adapter boundary', { cause: decision }))
     expect(evidence).toBeDefined()

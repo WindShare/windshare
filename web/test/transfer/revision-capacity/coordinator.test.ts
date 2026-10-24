@@ -1,36 +1,36 @@
 import { describe, expect, it } from 'vitest'
 
 import { byteRange } from '../../../src/content/geometry'
-import type { V2BlockRangeReader } from '../../../src/content/v2-broker'
+import type { BlockRangeReader } from '../../../src/content/broker'
 import {
-  V2RevisionCapacityBusyError,
-  type V2OpenedRevision,
-  type V2RevisionReader,
-} from '../../../src/content/v2-session-services'
+  RevisionCapacityBusyError,
+  type OpenedRevision,
+  type RevisionReader,
+} from '../../../src/content/session-services'
 import {
-  V2_REVISION_CODE_QUOTA,
-  type V2RevisionFailure,
-} from '../../../src/content/v2-flow'
+  REVISION_CODE_QUOTA,
+  type RevisionFailure,
+} from '../../../src/content/flow'
 import {
   createFailureIdentity,
   createReceivedProtocolError,
 } from '../../../src/diagnostics/incident'
 import {
-  V2RevisionCapacityCoordinator,
-  V2RevisionCapacityWaitBudgetError,
-  type V2ProtocolSessionReplacementWaiter,
-  type V2RevisionCapacityClock,
-  type V2RevisionCapacityTrace,
-  type V2RevisionCapacityWaitSnapshot,
+  RevisionCapacityCoordinator,
+  RevisionCapacityWaitBudgetError,
+  type ProtocolSessionReplacementWaiter,
+  type RevisionCapacityClock,
+  type RevisionCapacityTrace,
+  type RevisionCapacityWaitSnapshot,
 } from '../../../src/transfer/revision-capacity/public'
 
 describe('browser revision capacity coordinator', () => {
   it('uses sender hint plus bounded additive jitter and retries successfully', async () => {
     const clock = new ManualClock()
-    const traces: V2RevisionCapacityTrace[] = []
-    const progress: V2RevisionCapacityWaitSnapshot[] = []
+    const traces: RevisionCapacityTrace[] = []
+    const progress: RevisionCapacityWaitSnapshot[] = []
     let opens = 0
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: {
         open: async () => {
           opens += 1
@@ -79,7 +79,7 @@ describe('browser revision capacity coordinator', () => {
   it('preserves cancellation reason and removes both timer and generation waiters', async () => {
     const clock = new ManualClock()
     const generations = new ManualGenerationWaiter()
-    const traces: V2RevisionCapacityTrace[] = []
+    const traces: RevisionCapacityTrace[] = []
     const controller = new AbortController()
     const reason = new DOMException('user paused', 'AbortError')
     const coordinator = coordinatorWithAlwaysBusy(clock, generations, traces)
@@ -103,9 +103,9 @@ describe('browser revision capacity coordinator', () => {
   it('cancels the old timer and retries immediately after ProtocolSession replacement', async () => {
     const clock = new ManualClock()
     const generations = new ManualGenerationWaiter()
-    const traces: V2RevisionCapacityTrace[] = []
+    const traces: RevisionCapacityTrace[] = []
     let opens = 0
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: {
         open: async () => {
           opens += 1
@@ -135,7 +135,7 @@ describe('browser revision capacity coordinator', () => {
   it('pauses when the shared receive wait budget ends without issuing an early retry', async () => {
     const clock = new ManualClock()
     const generations = new ManualGenerationWaiter()
-    const traces: V2RevisionCapacityTrace[] = []
+    const traces: RevisionCapacityTrace[] = []
     const coordinator = coordinatorWithAlwaysBusy(clock, generations, traces, 50)
 
     const running = coordinator.revisions.open(Uint8Array.of(1))
@@ -144,8 +144,8 @@ describe('browser revision capacity coordinator', () => {
     clock.advance(50)
 
     const error = await running.catch(reason => reason as unknown)
-    expect(error).toBeInstanceOf(V2RevisionCapacityWaitBudgetError)
-    expect((error as V2RevisionCapacityWaitBudgetError).failureFact).toMatchObject({
+    expect(error).toBeInstanceOf(RevisionCapacityWaitBudgetError)
+    expect((error as RevisionCapacityWaitBudgetError).failureFact).toMatchObject({
       kind: 'protocol_failure',
       stage: 'protocol_operation',
       recoveryDisposition: 'resumable_receive',
@@ -161,7 +161,7 @@ describe('browser revision capacity coordinator', () => {
     const clock = new ManualClock()
     const generations = new ManualGenerationWaiter()
     let opens = 0
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: {
         open: async () => {
           opens += 1
@@ -182,7 +182,7 @@ describe('browser revision capacity coordinator', () => {
     const results = await Promise.allSettled([first, second])
     expect(results.every(result =>
       result.status === 'rejected' &&
-      result.reason instanceof V2RevisionCapacityWaitBudgetError)).toBe(true)
+      result.reason instanceof RevisionCapacityWaitBudgetError)).toBe(true)
     expect(opens).toBe(2)
     expect(coordinator.snapshot()).toMatchObject({
       activeWaiters: 0,
@@ -196,7 +196,7 @@ describe('browser revision capacity coordinator', () => {
     const generations = new ManualGenerationWaiter()
     const ranges: Array<readonly [bigint, bigint]> = []
     let reads = 0
-    const broker: V2BlockRangeReader = {
+    const broker: BlockRangeReader = {
       readRange: async function* (_descriptor, _lease, range) {
         ranges.push([range.start, range.end])
         reads += 1
@@ -207,7 +207,7 @@ describe('browser revision capacity coordinator', () => {
         yield { offset: 2n, data: Uint8Array.of(3, 4) }
       },
     }
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: neverOpenedRevisions(),
       broker,
     }, policy(clock, generations, []))
@@ -230,9 +230,9 @@ describe('browser revision capacity coordinator', () => {
 
   it('charges only capacity-blocked range segments across multiple mid-range denials', async () => {
     const clock = new ManualClock()
-    const traces: V2RevisionCapacityTrace[] = []
+    const traces: RevisionCapacityTrace[] = []
     let reads = 0
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: neverOpenedRevisions(),
       broker: {
         readRange: async function* (_descriptor, _lease, range) {
@@ -285,7 +285,7 @@ describe('browser revision capacity coordinator', () => {
       activeWaiters: 1,
     })
     clock.advance(40)
-    await expect(nextSlice).rejects.toBeInstanceOf(V2RevisionCapacityWaitBudgetError)
+    await expect(nextSlice).rejects.toBeInstanceOf(RevisionCapacityWaitBudgetError)
     expect(coordinator.snapshot()).toMatchObject({
       activeWaiters: 0,
       accumulatedWaitMilliseconds: 50,
@@ -296,7 +296,7 @@ describe('browser revision capacity coordinator', () => {
   it('does not retry generic errors and hides sub-threshold waits without flicker', async () => {
     const generic = new Error('ordinary source failure')
     let genericAttempts = 0
-    const direct = new V2RevisionCapacityCoordinator({
+    const direct = new RevisionCapacityCoordinator({
       revisions: { open: async () => { genericAttempts += 1; throw generic } },
       broker: emptyBroker(),
     }, policy(new ManualClock(), new ManualGenerationWaiter(), []))
@@ -304,9 +304,9 @@ describe('browser revision capacity coordinator', () => {
     expect(genericAttempts).toBe(1)
 
     const clock = new ManualClock()
-    const progress: V2RevisionCapacityWaitSnapshot[] = []
+    const progress: RevisionCapacityWaitSnapshot[] = []
     let attempts = 0
-    const short = new V2RevisionCapacityCoordinator({
+    const short = new RevisionCapacityCoordinator({
       revisions: {
         open: async () => {
           attempts += 1
@@ -331,10 +331,10 @@ describe('browser revision capacity coordinator', () => {
 function coordinatorWithAlwaysBusy(
   clock: ManualClock,
   generations: ManualGenerationWaiter,
-  traces: V2RevisionCapacityTrace[],
+  traces: RevisionCapacityTrace[],
   waitBudgetMilliseconds = 1_000,
-): V2RevisionCapacityCoordinator {
-  return new V2RevisionCapacityCoordinator({
+): RevisionCapacityCoordinator {
+  return new RevisionCapacityCoordinator({
     revisions: { open: async () => { throw capacityError(100) } },
     broker: emptyBroker(),
   }, {
@@ -345,8 +345,8 @@ function coordinatorWithAlwaysBusy(
 
 function policy(
   clock: ManualClock,
-  generation: V2ProtocolSessionReplacementWaiter,
-  traces: V2RevisionCapacityTrace[],
+  generation: ProtocolSessionReplacementWaiter,
+  traces: RevisionCapacityTrace[],
 ) {
   return {
     generation,
@@ -355,13 +355,13 @@ function policy(
     randomBytes: waitIdentity,
     additiveJitterLimitMilliseconds: 0,
     visibilityThresholdMilliseconds: 500,
-    onTrace: (event: V2RevisionCapacityTrace) => traces.push(event),
+    onTrace: (event: RevisionCapacityTrace) => traces.push(event),
   } as const
 }
 
-function capacityError(retryAfterMilliseconds: number): V2RevisionCapacityBusyError {
-  const failure: V2RevisionFailure = Object.freeze({
-    code: V2_REVISION_CODE_QUOTA,
+function capacityError(retryAfterMilliseconds: number): RevisionCapacityBusyError {
+  const failure: RevisionFailure = Object.freeze({
+    code: REVISION_CODE_QUOTA,
     retryable: true,
     retryAfterMilliseconds,
   })
@@ -373,10 +373,10 @@ function capacityError(retryAfterMilliseconds: number): V2RevisionCapacityBusyEr
       scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
     }
   })
-  return new V2RevisionCapacityBusyError(protocolFailure)
+  return new RevisionCapacityBusyError(protocolFailure)
 }
 
-function openedRevision(): V2OpenedRevision {
+function openedRevision(): OpenedRevision {
   return Object.freeze({
     descriptor: {} as never,
     leaseId: Uint8Array.of(9),
@@ -384,11 +384,11 @@ function openedRevision(): V2OpenedRevision {
   })
 }
 
-function emptyBroker(): V2BlockRangeReader {
+function emptyBroker(): BlockRangeReader {
   return { readRange: async function* () { /* no content */ } }
 }
 
-function neverOpenedRevisions(): V2RevisionReader {
+function neverOpenedRevisions(): RevisionReader {
   return { open: async () => { throw new Error('not used') } }
 }
 
@@ -402,7 +402,7 @@ function identity(first: number): Uint8Array {
   return bytes
 }
 
-class ManualClock implements V2RevisionCapacityClock {
+class ManualClock implements RevisionCapacityClock {
   #now = 0
   readonly #sleeps = new Set<{
     readonly deadline: number
@@ -440,7 +440,7 @@ class ManualClock implements V2RevisionCapacityClock {
   }
 }
 
-class ManualGenerationWaiter implements V2ProtocolSessionReplacementWaiter {
+class ManualGenerationWaiter implements ProtocolSessionReplacementWaiter {
   readonly #waiters = new Set<{
     readonly resolve: () => void
     readonly reject: (reason: unknown) => void
@@ -452,7 +452,7 @@ class ManualGenerationWaiter implements V2ProtocolSessionReplacementWaiter {
 
   waitForProtocolSessionReplacement(
     _identity: Parameters<
-      V2ProtocolSessionReplacementWaiter['waitForProtocolSessionReplacement']
+      ProtocolSessionReplacementWaiter['waitForProtocolSessionReplacement']
     >[0],
     signal: AbortSignal,
   ): Promise<void> {

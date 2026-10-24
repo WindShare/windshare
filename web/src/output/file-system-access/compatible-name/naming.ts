@@ -1,7 +1,7 @@
 import {
   isPortableCatalogName,
   snapshotPortableCatalogPath,
-  V2_CATALOG_NAME_BYTES,
+  CATALOG_NAME_BYTES,
 } from '../../../catalog/path-policy'
 import { sha256 } from '../../../crypto/digest'
 import type { CryptoRuntime } from '../../../crypto/webcrypto'
@@ -31,7 +31,7 @@ export const COMPATIBLE_NAME_COLLISION_RETRY_LIMIT = 7
 export const COMPATIBLE_NAME_FIXED_SUFFIX_UTF8_BYTES =
   TEXT_ENCODER.encode(COMPATIBLE_NAME_SUFFIX).byteLength + COMPATIBLE_NAME_TOKEN_CHARACTERS
 export const COMPATIBLE_NAME_READABLE_PREFIX_MAX_UTF8_BYTES =
-  V2_CATALOG_NAME_BYTES - COMPATIBLE_NAME_FIXED_SUFFIX_UTF8_BYTES
+  CATALOG_NAME_BYTES - COMPATIBLE_NAME_FIXED_SUFFIX_UTF8_BYTES
 export const COMPATIBLE_NAME_READABLE_PREFIX_FALLBACK = 'entry'
 export const COMPATIBLE_NAME_FALLBACK_TOKEN_DOMAIN =
   'windshare/compatible-name-fallback/v1'

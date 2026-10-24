@@ -193,7 +193,7 @@ type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
  */
 type SnakeStage<Value extends string> = Value extends `${infer Head}-${infer Tail}` ? `${Head}_${SnakeStage<Tail>}` : Value
 interface PeerAttemptSummaryV1 {
-  readonly last_completed_stage: SnakeStage<import('../../connectivity/diagnostics').V2BrowserConnectivityAttemptStage>
+  readonly last_completed_stage: SnakeStage<import('../../connectivity/diagnostics').BrowserConnectivityAttemptStage>
   readonly attempt_elapsed_ms: number
   readonly stage_elapsed_ms: number
   readonly deadline_expired: boolean
@@ -378,7 +378,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     | Readonly<{
         stage: 'failed'
         summary?: PeerAttemptSummaryV1
-        failure?: import('../../connectivity/v2-peer-failure').V2PeerAttemptFailure
+        failure?: import('../../connectivity/peer-failure').PeerAttemptFailure
         failed_at_stage:
           | 'negotiation_deadline_armed'
           | 'negotiation_deadline_expired'

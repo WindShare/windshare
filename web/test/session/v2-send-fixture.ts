@@ -1,12 +1,12 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import type { FrameChannel, ChannelState } from '../../src/contracts/channel'
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
-import { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import type { V2ReceiverSessionOptions } from '../../src/session/v2-runtime-types'
-import type { V2SessionKeys } from '../../src/session/v2-transcript'
-import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
-import { V2EnvelopeOpener } from '../../src/session/v2-envelope'
-import { decodeV2Message } from '../../src/session/v2-message'
+import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
+import { ReceiverSessionRuntime } from '../../src/session/runtime'
+import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
+import type { SessionKeys } from '../../src/session/transcript'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
+import { EnvelopeOpener } from '../../src/session/envelope'
+import { decodeMessage } from '../../src/session/message'
 
 export function deferred<T>() {
   let resolve!: (value: T) => void
@@ -19,11 +19,11 @@ export function id(seed: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(16).fill(seed)
 }
 
-export const SHARE: V2ShareDescriptor = {
+export const SHARE: ShareDescriptor = {
   wireVersion: 2, suite: 2, shareInstance: id(1), shareInstanceId: 'share',
   syntheticRoot: id(2), syntheticRootId: 'root', chunkSize: 65_536,
   capabilities: 0n, sender: createEd25519Verifier(new Uint8Array(32).fill(3)),
-  createdAtSeconds: 1n, pathPolicy: V2_PATH_POLICY,
+  createdAtSeconds: 1n, pathPolicy: PATH_POLICY,
 }
 export const KEY = new Uint8Array(32).fill(4)
 export const BINDING = {
@@ -90,31 +90,31 @@ export class BackpressuredChannel implements FrameChannel {
 
 export function runtimeFixture() {
   const channel = new BackpressuredChannel()
-  const events: V2ProtocolTraceEvent[] = []
+  const events: ProtocolTraceEvent[] = []
   let seed = 10
-  const options: V2ReceiverSessionOptions = {
+  const options: ReceiverSessionOptions = {
     descriptor: SHARE, readSecret: new Uint8Array(32), initialChannel: channel,
     randomBytes: length => new Uint8Array(length).fill(++seed),
     protocolTrace: { current: event => events.push(event) },
   }
-  const keys: V2SessionKeys = {
+  const keys: SessionKeys = {
     protocolSessionId: BINDING.protocolSessionId, transcriptHash: new Uint8Array(32),
     receiverToSenderKey: KEY.slice(), senderToReceiverKey: KEY.slice(),
     initialLaneId: 1, initialLaneEpoch: 0,
   }
-  const Runtime = V2ReceiverSessionRuntime as unknown as new (
-    options: V2ReceiverSessionOptions, keys: V2SessionKeys,
+  const Runtime = ReceiverSessionRuntime as unknown as new (
+    options: ReceiverSessionOptions, keys: SessionKeys,
     receiverInstanceId: Uint8Array, reader: ReadableStreamDefaultReader<Uint8Array>,
-  ) => V2ReceiverSessionRuntime
+  ) => ReceiverSessionRuntime
   return { runtime: new Runtime(options, keys, id(6), channel.frames.getReader()), channel, events }
 }
 
 export async function openSent(channel: BackpressuredChannel) {
-  const opener = new V2EnvelopeOpener(KEY, BINDING)
+  const opener = new EnvelopeOpener(KEY, BINDING)
   const messages = []
   for (const frame of channel.sent) {
     const envelope = await opener.open(frame)
-    messages.push({ sequence: envelope.sequence, message: decodeV2Message(envelope.plaintext) })
+    messages.push({ sequence: envelope.sequence, message: decodeMessage(envelope.plaintext) })
   }
   return messages
 }

@@ -21,17 +21,17 @@ import {
 import type {
   CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'
-import type { V2RetainedCompatibleNameRepairSource } from '../../src/application/receive/observation/contracts'
+import type { RetainedCompatibleNameRepairSource } from '../../src/application/receive/observation/contracts'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import type { RetainedReceiveOperationSnapshot } from '../../src/application/receive/retained/model'
 import type {
-  V2BoundReceiveOperation,
-  V2ReceiveCompositionPort,
-  V2RetainedReceiveAction,
-  V2RetainedReceiveActionResult,
-  V2RetainedReceiveInventory,
-  V2RetainedReceiveOperation,
+  BoundReceiveOperation,
+  ReceiveCompositionPort,
+  RetainedReceiveAction,
+  RetainedReceiveActionResult,
+  RetainedReceiveInventory,
+  RetainedReceiveOperation,
 } from '../../src/application/receive/contracts'
 
 describe('retained inventory local finalization and identity admission', () => {
@@ -39,7 +39,7 @@ describe('retained inventory local finalization and identity admission', () => {
     'admits %s without a share or access to the busy destination', async action => {
       const original = operation([action], 'restoration-available')
       const started = deferred<void>()
-      const finished = deferred<V2RetainedReceiveActionResult>()
+      const finished = deferred<RetainedReceiveActionResult>()
       const harness = retainedHarness(() => Promise.resolve(testInventory([original], async (_candidate, dispatched) => {
         expect(dispatched).toBe(action)
         started.resolve(undefined)
@@ -71,12 +71,12 @@ describe('retained inventory local finalization and identity admission', () => {
       receiveIntentDigest: intent.digest })
     const runtime = { intent, lifecycle: { kind: 'receiving', generation: 4n,
       operationId: intent.operationId, receiveIntentDigest: intent.digest, activeLeaseId: id(16, 10) },
-      detach: async () => undefined } as unknown as V2BoundReceiveOperation
+      detach: async () => undefined } as unknown as BoundReceiveOperation
     const inventory = testInventory([original], async () => ({ kind: 'receive-continuation', runtime }))
     let adopted = false
     const harness = retainedHarness(() => Promise.resolve(inventory), {
       descriptor: { shareInstanceId: intent.shareInstance, syntheticRootId: intent.syntheticRoot },
-    } as V2JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
+    } as JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
     await harness.coordinator.load()
     harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
     for (let index = 0; index < 32 && !adopted; index += 1) {
@@ -97,11 +97,11 @@ describe('retained inventory local finalization and identity admission', () => {
       const runtime = { intent, lifecycle: { kind: 'receiving', generation,
         operationId: intent.operationId, receiveIntentDigest: intent.digest,
         activeLeaseId: encodeBase64Url(new Uint8Array(16).fill(10)) },
-        detach: async () => { detached = true } } as unknown as V2BoundReceiveOperation
+        detach: async () => { detached = true } } as unknown as BoundReceiveOperation
       const inventory = testInventory([original], async () => ({ kind: 'receive-continuation', runtime }))
       const harness = retainedHarness(() => Promise.resolve(inventory), {
         descriptor: { shareInstanceId: intent.shareInstance, syntheticRootId: intent.syntheticRoot },
-      } as V2JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
+      } as JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
       await harness.coordinator.load()
       harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
       for (let index = 0; index < 32 && !adopted && harness.actionErrors.length === 0; index += 1) {
@@ -134,7 +134,7 @@ describe('retained inventory local finalization and identity admission', () => {
     const original = operation(['continue'], 'resume-local-finalization')
     let blocked = true
     let dispatches = 0
-    const action = deferred<V2RetainedReceiveActionResult>()
+    const action = deferred<RetainedReceiveActionResult>()
     const inventory = testInventory([original], candidate => {
       expect(candidate).toBe(original)
       dispatches += 1
@@ -198,7 +198,7 @@ describe('retained inventory local finalization and identity admission', () => {
     const harness = retainedHarness(() => Promise.resolve(testInventory([original], async () => {
       dispatches += 1
       return { kind: 'completed' }
-    })), { descriptor: { shareInstanceId: 'different-share' } } as V2JoinedBrowserShare)
+    })), { descriptor: { shareInstanceId: 'different-share' } } as JoinedBrowserShare)
     await harness.coordinator.load()
     const projected = harness.publications.at(-1)!.operations[0]!
     harness.coordinator.perform({ ...projected }, 'continue')
@@ -280,8 +280,8 @@ describe('retained inventory incident ownership', () => {
   })
 
   it('closes a replaced load as stale without sharing its scope or quota', async () => {
-    const first = deferred<V2RetainedReceiveInventory>()
-    const second = deferred<V2RetainedReceiveInventory>()
+    const first = deferred<RetainedReceiveInventory>()
+    const second = deferred<RetainedReceiveInventory>()
     let loadCount = 0
     const harness = retainedHarness(() => {
       loadCount += 1
@@ -452,9 +452,9 @@ describe('retained inventory incident ownership', () => {
   it('reconstructs a durable first-target notice without replacing inventory action authority', async () => {
     const ordinary = operation([], 'needs-attention', 'ordinary-operation')
     const repairedAuthority = operation(['save'], 'save-artifact', 'repaired-operation')
-    const action = deferred<V2RetainedReceiveActionResult>()
+    const action = deferred<RetainedReceiveActionResult>()
     const reads: string[] = []
-    let actedWith: V2RetainedReceiveOperation | undefined
+    let actedWith: RetainedReceiveOperation | undefined
     let durableSummary = repairSummary(0, [], 'active')
     const inventory = testInventory([ordinary, repairedAuthority], (candidate) => {
       actedWith = candidate
@@ -589,8 +589,8 @@ describe('retained repair and incompatible record authority', () => {
   it('exposes catch-up only for a durable pending repair and preserves source action authority', async () => {
     const ordinaryActive = operation(['catch-up'], 'pending-catch-up', 'ordinary-active')
     const pendingRepair = operation(['catch-up'], 'pending-catch-up', 'pending-repair')
-    let actedWith: V2RetainedReceiveOperation | undefined
-    const action = deferred<V2RetainedReceiveActionResult>()
+    let actedWith: RetainedReceiveOperation | undefined
+    const action = deferred<RetainedReceiveActionResult>()
     const inventory = testInventory([ordinaryActive, pendingRepair], (candidate) => {
       actedWith = candidate
       return action.promise
@@ -642,8 +642,8 @@ describe('retained terminal repair presentation', () => {
       continuation: 'retry-cleanup' as const,
       actions: Object.freeze(['catch-up', 'delete'] as const),
     })
-    let actedWith: V2RetainedReceiveOperation | undefined
-    const action = deferred<V2RetainedReceiveActionResult>()
+    let actedWith: RetainedReceiveOperation | undefined
+    const action = deferred<RetainedReceiveActionResult>()
     const inventory = testInventory([source], candidate => {
       actedWith = candidate
       return action.promise
@@ -700,7 +700,7 @@ describe('retained action incident ownership', () => {
     'publishes pending %s authority before invoking the retained inventory',
     async (action, continuation) => {
       const retained = operation([action], continuation)
-      const actionGate = deferred<V2RetainedReceiveActionResult>()
+      const actionGate = deferred<RetainedReceiveActionResult>()
       let latestPublished: RetainedHarness['publications'][number] | undefined
       let snapshotDuringAct: RetainedHarness['publications'][number] | undefined
       const inventory = testInventory([retained], () => {
@@ -708,7 +708,7 @@ describe('retained action incident ownership', () => {
         return actionGate.promise
       })
       const joined = action === 'continue'
-        ? ({ protocolSessionId: 'session' } as unknown as V2JoinedBrowserShare)
+        ? ({ protocolSessionId: 'session' } as unknown as JoinedBrowserShare)
         : undefined
       const harness = retainedHarness(
         () => Promise.resolve(inventory),
@@ -739,7 +739,7 @@ describe('retained action incident ownership', () => {
 
   it('aborts and clears a pending action before replacing its inventory', async () => {
     const retained = operation(['save'], 'save-artifact')
-    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    const actionGate = deferred<RetainedReceiveActionResult>()
     let actionSignal: AbortSignal | undefined
     const inventory = testInventory([retained], (_operation, _action, signal) => {
       actionSignal = signal
@@ -838,7 +838,7 @@ describe('retained action incident ownership', () => {
 
   it('names cancellation on the pending retained action owner', async () => {
     const retained = operation(['save'], 'save-artifact')
-    const action = deferred<V2RetainedReceiveActionResult>()
+    const action = deferred<RetainedReceiveActionResult>()
     const inventory = testInventory(
       [retained],
       () => action.promise,
@@ -881,7 +881,7 @@ describe('retained action incident ownership', () => {
     const runtime = {
       intent: Object.freeze({}),
       detach: () => detach.promise,
-    } as unknown as V2BoundReceiveOperation
+    } as unknown as BoundReceiveOperation
     const inventory = testInventory(
       [retained],
       () => Promise.resolve(Object.freeze({
@@ -895,7 +895,7 @@ describe('retained action incident ownership', () => {
         syntheticRootId: 'root',
       },
       protocolSessionId: 'session',
-    } as unknown as V2JoinedBrowserShare
+    } as unknown as JoinedBrowserShare
     const harness = retainedHarness(
       () => Promise.resolve(inventory),
       joined,
@@ -931,7 +931,7 @@ describe('retained action incident ownership', () => {
     const runtime = {
       intent: Object.freeze({}),
       detach: () => Promise.reject(new Error('detach failed')),
-    } as unknown as V2BoundReceiveOperation
+    } as unknown as BoundReceiveOperation
     const inventory = testInventory(
       [retained],
       () => Promise.resolve(Object.freeze({
@@ -945,7 +945,7 @@ describe('retained action incident ownership', () => {
         syntheticRootId: 'root',
       },
       protocolSessionId: 'session',
-    } as unknown as V2JoinedBrowserShare
+    } as unknown as JoinedBrowserShare
     const harness = retainedHarness(
       () => Promise.resolve(inventory),
       joined,
@@ -996,14 +996,14 @@ type RetainedInventoryCoordinatorOptions =
   ConstructorParameters<typeof RetainedInventoryCoordinator>[0]
 
 function retainedHarness(
-  list: (signal: AbortSignal) => PromiseLike<V2RetainedReceiveInventory>,
-  joined?: V2JoinedBrowserShare,
+  list: (signal: AbortSignal) => PromiseLike<RetainedReceiveInventory>,
+  joined?: JoinedBrowserShare,
   options: Readonly<{
     traceEnabled?: boolean
     localFinalizationBlocked?: () => boolean
     adoptContinuation?: RetainedInventoryCoordinatorOptions['adoptContinuation']
     onPublish?: (retained: Parameters<RetainedInventoryCoordinatorOptions['publish']>[0]) => void
-    repairSource?: V2RetainedCompatibleNameRepairSource
+    repairSource?: RetainedCompatibleNameRepairSource
   }> = {},
 ): RetainedHarness {
   const incidents = new RecordingRetainedIncidents()
@@ -1014,7 +1014,7 @@ function retainedHarness(
   const traceEvents: unknown[] = []
   const receive = {
     retained: { list },
-  } as V2ReceiveCompositionPort
+  } as ReceiveCompositionPort
   const coordinator = new RetainedInventoryCoordinator({
     receive,
     isDisposed: () => false,
@@ -1040,10 +1040,10 @@ function retainedHarness(
 }
 
 function operation(
-  actions: readonly V2RetainedReceiveAction[],
-  continuation: V2RetainedReceiveOperation['continuation'],
+  actions: readonly RetainedReceiveAction[],
+  continuation: RetainedReceiveOperation['continuation'],
   operationId = 'operation',
-): V2RetainedReceiveOperation {
+): RetainedReceiveOperation {
   return Object.freeze({
     operationId,
     receiveIntentDigest: 'intent',
@@ -1051,7 +1051,7 @@ function operation(
     lifecycle: Object.freeze({ kind: 'needs-attention' }),
     continuation,
     actions: Object.freeze([...actions]),
-  }) as V2RetainedReceiveOperation
+  }) as RetainedReceiveOperation
 }
 
 function repairSummary(
@@ -1074,16 +1074,16 @@ function repairSummary(
 }
 
 function testInventory(
-  operations: readonly V2RetainedReceiveOperation[],
+  operations: readonly RetainedReceiveOperation[],
   act: (
-    operation: V2RetainedReceiveOperation,
-    action: V2RetainedReceiveAction,
+    operation: RetainedReceiveOperation,
+    action: RetainedReceiveAction,
     signal: AbortSignal,
-    failures?: Parameters<V2RetainedReceiveInventory['act']>[3],
-  ) => PromiseLike<V2RetainedReceiveActionResult> = () =>
+    failures?: Parameters<RetainedReceiveInventory['act']>[3],
+  ) => PromiseLike<RetainedReceiveActionResult> = () =>
     Promise.reject(new Error('action was not expected')),
   presentationFailures: readonly FailureFact[] = Object.freeze([]),
-): V2RetainedReceiveInventory {
+): RetainedReceiveInventory {
   return Object.freeze({
     operations: Object.freeze([...operations]),
     presentationFailures: Object.freeze([...presentationFailures]),

@@ -17,22 +17,22 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3CountingObjectIDProvider struct {
-	identity windowsV3PersistentObjectID
+type windowsCountingObjectIDProvider struct {
+	identity windowsPersistentObjectID
 	err      error
 	calls    atomic.Int64
 }
 
-func (provider *windowsV3CountingObjectIDProvider) CreateOrGet(
+func (provider *windowsCountingObjectIDProvider) CreateOrGet(
 	windows.Handle,
-) (windowsV3PersistentObjectID, error) {
+) (windowsPersistentObjectID, error) {
 	provider.calls.Add(1)
 	return provider.identity, provider.err
 }
 
-func windowsV3OpenGuardedTestRoot(t *testing.T) (*windowsV3OutputPlatform, *windowsV3PublicOperationGuard) {
+func windowsOpenGuardedTestRoot(t *testing.T) (*nativeOutputPlatform, *windowsPublicOperationGuard) {
 	t.Helper()
-	platform, err := openWindowsV3OutputPlatform(windowsV3NativeTestTempDir(t))
+	platform, err := openWindowsOutputPlatform(windowsNativeTestTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,14 +53,14 @@ func windowsV3OpenGuardedTestRoot(t *testing.T) (*windowsV3OutputPlatform, *wind
 	return platform, guard
 }
 
-func TestWindowsV3IdentityPreparationIsTheOnlyObjectIDMutationBoundary(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsIdentityPreparationIsTheOnlyObjectIDMutationBoundary(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	provider := &windowsV3CountingObjectIDProvider{identity: windowsV3PersistentObjectID{0x41}}
+	provider := &windowsCountingObjectIDProvider{identity: windowsPersistentObjectID{0x41}}
 	root.objectIDs = provider
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
+	root.objectIDState = newWindowsPersistentObjectIDState()
 
-	if _, err := root.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := root.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("unprepared read-only claim error = %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 0 {
@@ -70,7 +70,7 @@ func TestWindowsV3IdentityPreparationIsTheOnlyObjectIDMutationBoundary(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claim) == 0 || len(claim) > windowsV3DirectoryClaimMaxBytes {
+	if len(claim) == 0 || len(claim) > windowsDirectoryClaimMaxBytes {
 		t.Fatalf("prepared claim length = %d", len(claim))
 	}
 	if calls := provider.calls.Load(); calls != 1 {
@@ -92,38 +92,38 @@ func TestWindowsV3IdentityPreparationIsTheOnlyObjectIDMutationBoundary(t *testin
 	}
 }
 
-func TestWindowsV3IdentityPreparationValidatesBeforeAndAfterCreateOrGet(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsIdentityPreparationValidatesBeforeAndAfterCreateOrGet(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	provider := &windowsV3CountingObjectIDProvider{identity: windowsV3PersistentObjectID{0x42}}
+	provider := &windowsCountingObjectIDProvider{identity: windowsPersistentObjectID{0x42}}
 	root.objectIDs = provider
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
+	root.objectIDState = newWindowsPersistentObjectIDState()
 
 	injected := errors.New("injected ancestry authority failure")
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return injected })
-	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) || !errors.Is(err, injected) {
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return injected })
+	if _, err := root.prepareIdentityClaim(); !errors.Is(err, errWindowsOutputUnsafe) || !errors.Is(err, injected) {
 		t.Fatalf("pre-authority failure = %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 0 {
 		t.Fatalf("failed pre-authority check invoked CreateOrGet %d times", calls)
 	}
 
-	nativeInspector := nativeWindowsV3ObjectInspector{}
+	nativeInspector := nativeWindowsObjectInspector{}
 	facts, err := nativeInspector.Inspect(root.handle())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var inspections atomic.Int64
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	root.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
+	root.inspector = windowsObjectInspectorFunc(func(windows.Handle) (windowsObjectFacts, error) {
 		if inspections.Add(1) >= 3 {
-			return windowsV3ObjectFacts{}, nil
+			return windowsObjectFacts{}, nil
 		}
 		return facts, nil
 	})
 	_, err = root.prepareIdentityClaim()
-	mapped := windowsOutputV3Error(err)
-	if !errors.Is(err, errWindowsV3OutputUnsafe) ||
+	mapped := windowsOutputError(err)
+	if !errors.Is(err, errWindowsOutputUnsafe) ||
 		errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||
 		!errors.Is(mapped, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("post-CreateOrGet incarnation failure = %v", mapped)
@@ -137,21 +137,21 @@ func TestWindowsV3IdentityPreparationValidatesBeforeAndAfterCreateOrGet(t *testi
 	}
 }
 
-func TestWindowsV3ReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	provider := &windowsV3CountingObjectIDProvider{identity: windowsV3PersistentObjectID{0x45}}
+	provider := &windowsCountingObjectIDProvider{identity: windowsPersistentObjectID{0x45}}
 	root.objectIDs = provider
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
+	root.objectIDState = newWindowsPersistentObjectIDState()
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
 	if _, err := root.prepareIdentityClaim(); err != nil {
 		t.Fatal(err)
 	}
 
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error {
-		return errors.Join(errWindowsV3OutputUnsupported, errors.New("injected ACL ambiguity"))
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error {
+		return errors.Join(errWindowsOutputUnsupported, errors.New("injected ACL ambiguity"))
 	})
-	if _, err := root.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsupported) {
+	if _, err := root.identityClaim(); !errors.Is(err, errWindowsOutputUnsupported) {
 		t.Fatalf("read-only authority trace taxonomy = %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 1 {
@@ -159,12 +159,12 @@ func TestWindowsV3ReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testin
 	}
 
 	structural := errors.New("injected handle inspection failure")
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	root.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
-		return windowsV3ObjectFacts{}, structural
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
+	root.inspector = windowsObjectInspectorFunc(func(windows.Handle) (windowsObjectFacts, error) {
+		return windowsObjectFacts{}, structural
 	})
 	_, err := root.identityClaim()
-	mapped := windowsOutputV3Error(err)
+	mapped := windowsOutputError(err)
 	if !errors.Is(err, structural) ||
 		errors.Is(err, outputfault.ErrAncestryAuthorityDenied) ||
 		!errors.Is(mapped, outputcap.ErrUnsafeNamespace) {
@@ -172,13 +172,13 @@ func TestWindowsV3ReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testin
 	}
 }
 
-func TestWindowsV3IdentityClaimsAreRaceSafeAndDeterministic(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsIdentityClaimsAreRaceSafeAndDeterministic(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	provider := &windowsV3CountingObjectIDProvider{identity: windowsV3PersistentObjectID{0x43}}
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
+	provider := &windowsCountingObjectIDProvider{identity: windowsPersistentObjectID{0x43}}
 	root.objectIDs = provider
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
+	root.objectIDState = newWindowsPersistentObjectIDState()
 	want, err := root.prepareIdentityClaim()
 	if err != nil {
 		t.Fatal(err)
@@ -210,13 +210,13 @@ func TestWindowsV3IdentityClaimsAreRaceSafeAndDeterministic(t *testing.T) {
 	}
 }
 
-func TestWindowsV3FreshWrapperMustPrepareDespiteSameFileID(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsFreshWrapperMustPrepareDespiteSameFileID(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	provider := &windowsV3CountingObjectIDProvider{identity: windowsV3PersistentObjectID{0x44}}
+	root.ancestryAuthority = windowsAncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
+	provider := &windowsCountingObjectIDProvider{identity: windowsPersistentObjectID{0x44}}
 	root.objectIDs = provider
-	root.objectIDState = newWindowsV3PersistentObjectIDState()
+	root.objectIDState = newWindowsPersistentObjectIDState()
 	const name = "fresh-selected-directory"
 	if err := os.Mkdir(filepath.Join(root.path, name), 0o700); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestWindowsV3FreshWrapperMustPrepareDespiteSameFileID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reopened.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := reopened.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("fresh wrapper inherited FileID-keyed authority: %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 1 {
@@ -264,7 +264,7 @@ func TestWindowsV3FreshWrapperMustPrepareDespiteSameFileID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer replacement.Close()
-	if _, err := replacement.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := replacement.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("replacement FileID inherited cached claim: %v", err)
 	}
 	if calls := provider.calls.Load(); calls != 2 {
@@ -272,8 +272,8 @@ func TestWindowsV3FreshWrapperMustPrepareDespiteSameFileID(t *testing.T) {
 	}
 }
 
-func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T) {
-	rootPath := windowsV3NativeTestTempDir(t)
+func TestWindowsGuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T) {
+	rootPath := windowsNativeTestTempDir(t)
 	platform, err := Open(rootPath, false)
 	if err != nil {
 		t.Fatal(err)
@@ -293,8 +293,8 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 		}
 	})
 	root := guard.Root()
-	assertWindowsV3DirectoryProvenance(t, "guard root", root, false)
-	rootNative := root.(*windowsOutputV3Directory).native
+	assertWindowsDirectoryProvenance(t, "guard root", root, false)
+	rootNative := root.(*windowsOutputDirectory).native
 	rootClaim, err := rootNative.prepareIdentityClaim()
 	if err != nil {
 		t.Fatal(err)
@@ -304,8 +304,8 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "duplicate", duplicate, false)
-	duplicateNative := duplicate.(*windowsOutputV3Directory).native
+	assertWindowsDirectoryProvenance(t, "duplicate", duplicate, false)
+	duplicateNative := duplicate.(*windowsOutputDirectory).native
 	if duplicateNative.objectIDState != rootNative.objectIDState {
 		t.Fatal("true duplicate did not share the prepared handle-local identity state")
 	}
@@ -321,8 +321,8 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "created public directory", created, false)
-	createdNative := created.(*windowsOutputV3Directory).native
+	assertWindowsDirectoryProvenance(t, "created public directory", created, false)
+	createdNative := created.(*windowsOutputDirectory).native
 	createdClaim, err := createdNative.prepareIdentityClaim()
 	if err != nil {
 		t.Fatal(err)
@@ -335,9 +335,9 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "reopened public directory", reopened, false)
-	reopenedNative := reopened.(*windowsOutputV3Directory).native
-	if _, err := reopenedNative.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	assertWindowsDirectoryProvenance(t, "reopened public directory", reopened, false)
+	reopenedNative := reopened.(*windowsOutputDirectory).native
+	if _, err := reopenedNative.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("fresh public reopen inherited prepared identity state: %v", err)
 	}
 	reopenedClaim, err := reopenedNative.prepareIdentityClaim()
@@ -357,9 +357,9 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 		_ = entry.Close()
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "pinned public reopen", pinned, false)
-	pinnedNative := pinned.(*windowsOutputV3Directory).native
-	if _, err := pinnedNative.identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	assertWindowsDirectoryProvenance(t, "pinned public reopen", pinned, false)
+	pinnedNative := pinned.(*windowsOutputDirectory).native
+	if _, err := pinnedNative.identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("pinned public reopen inherited prepared identity state: %v", err)
 	}
 	pinnedClaim, err := pinnedNative.prepareIdentityClaim()
@@ -374,26 +374,26 @@ func TestWindowsV3GuardedDirectoryProvenanceSurvivesEveryReopenLane(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "created private directory", privateCandidate, true)
+	assertWindowsDirectoryProvenance(t, "created private directory", privateCandidate, true)
 	installed, err := root.InstallDirectoryNoReplace(privateCandidate, "private-provenance-installed")
 	if err != nil {
 		_ = privateCandidate.Close()
 		t.Fatal(err)
 	}
-	assertWindowsV3DirectoryProvenance(t, "installed private directory", installed, true)
+	assertWindowsDirectoryProvenance(t, "installed private directory", installed, true)
 	if err := errors.Join(installed.Close(), privateCandidate.Close()); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func assertWindowsV3DirectoryProvenance(
+func assertWindowsDirectoryProvenance(
 	t *testing.T,
 	label string,
 	directory outputcap.Directory,
 	wantPrivate bool,
 ) {
 	t.Helper()
-	wrapper, ok := directory.(*windowsOutputV3Directory)
+	wrapper, ok := directory.(*windowsOutputDirectory)
 	if !ok || wrapper == nil || wrapper.native == nil {
 		t.Fatalf("%s type = %T", label, directory)
 	}
@@ -412,9 +412,9 @@ func assertWindowsV3DirectoryProvenance(
 	}
 }
 
-func TestWindowsV3ObjectIDClaimSurvivesReopenOnlyAfterPreparation(t *testing.T) {
-	rootPath := windowsV3NativeTestTempDir(t)
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+func TestWindowsObjectIDClaimSurvivesReopenOnlyAfterPreparation(t *testing.T) {
+	rootPath := windowsNativeTestTempDir(t)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestWindowsV3ObjectIDClaimSurvivesReopenOnlyAfterPreparation(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	reopened, err := openWindowsV3OutputPlatform(rootPath)
+	reopened, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestWindowsV3ObjectIDClaimSurvivesReopenOnlyAfterPreparation(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer reopenedGuard.Close()
-	if _, err := reopenedGuard.Root().identityClaim(); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := reopenedGuard.Root().identityClaim(); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("reopened authority read an unprepared claim: %v", err)
 	}
 	recovered, err := reopenedGuard.Root().prepareIdentityClaim()
@@ -449,14 +449,14 @@ func TestWindowsV3ObjectIDClaimSurvivesReopenOnlyAfterPreparation(t *testing.T) 
 	}
 }
 
-func TestWindowsV3GuardDetectsRootReplacementGapAndNewObjectID(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+func TestWindowsGuardDetectsRootReplacementGapAndNewObjectID(t *testing.T) {
+	base := windowsNativeTestTempDir(t)
 	rootPath := filepath.Join(base, "output")
 	retiredPath := filepath.Join(base, "retired-output")
 	if err := os.Mkdir(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,9 +477,9 @@ func TestWindowsV3GuardDetectsRootReplacementGapAndNewObjectID(t *testing.T) {
 	if err := os.Mkdir(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	trap := &windowsV3ObjectIDMutationTrap{}
+	trap := &windowsObjectIDMutationTrap{}
 	platform.root.objectIDs = trap
-	if replacementGuard, err := platform.acquirePublicOperationGuard(); err == nil || !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if replacementGuard, err := platform.acquirePublicOperationGuard(); err == nil || !errors.Is(err, errWindowsOutputUnsafe) {
 		if replacementGuard != nil {
 			_ = replacementGuard.Close()
 		}
@@ -495,7 +495,7 @@ func TestWindowsV3GuardDetectsRootReplacementGapAndNewObjectID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	replacement, err := openWindowsV3OutputPlatform(rootPath)
+	replacement, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}

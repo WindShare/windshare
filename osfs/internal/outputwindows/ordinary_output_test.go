@@ -20,10 +20,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsV3ObjectIDFailurePreservesLiveOnlyCapabilityFacts(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsObjectIDFailurePreservesLiveOnlyCapabilityFacts(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
 	root := guard.Root()
-	trap := &windowsV3ObjectIDMutationTrap{}
+	trap := &windowsObjectIDMutationTrap{}
 	root.objectIDs = trap
 
 	capabilities, err := root.destinationCapabilities()
@@ -44,37 +44,37 @@ func TestWindowsV3ObjectIDFailurePreservesLiveOnlyCapabilityFacts(t *testing.T) 
 	}
 }
 
-func TestWindowsV3DestinationCapabilityFactsFailIndependently(t *testing.T) {
+func TestWindowsDestinationCapabilityFactsFailIndependently(t *testing.T) {
 	failures := []struct {
 		name   string
 		reason outputcap.CapabilityReason
 		read   func(outputcap.DestinationCapabilities) outputcap.CapabilityEvidence
-		set    func(*windowsV3CapabilityProbeResults, error)
+		set    func(*windowsCapabilityProbeResults, error)
 	}{
 		{"safe-publish", outputcap.CapabilityReasonUnsafePublication,
 			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence { return value.SafePublish() },
-			func(value *windowsV3CapabilityProbeResults, err error) { value.safePublish = err }},
+			func(value *windowsCapabilityProbeResults, err error) { value.safePublish = err }},
 		{"operation-recovery", outputcap.CapabilityReasonUnverifiableOperationRecovery,
 			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
 				return value.OperationRecovery()
 			},
-			func(value *windowsV3CapabilityProbeResults, err error) { value.operationRecovery = err }},
+			func(value *windowsCapabilityProbeResults, err error) { value.operationRecovery = err }},
 		{"range-recovery", outputcap.CapabilityReasonUnverifiableRangeRecovery,
 			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
 				return value.RangeRecovery()
 			},
-			func(value *windowsV3CapabilityProbeResults, err error) { value.rangeRecovery = err }},
+			func(value *windowsCapabilityProbeResults, err error) { value.rangeRecovery = err }},
 		{"crash-cleanup", outputcap.CapabilityReasonUnverifiableCrashCleanup,
 			func(value outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
 				return value.CrashCleanup()
 			},
-			func(value *windowsV3CapabilityProbeResults, err error) { value.crashCleanup = err }},
+			func(value *windowsCapabilityProbeResults, err error) { value.crashCleanup = err }},
 	}
 	for index, failure := range failures {
 		t.Run(failure.name, func(t *testing.T) {
-			var results windowsV3CapabilityProbeResults
-			failure.set(&results, errors.Join(errWindowsV3OutputUnsupported, errors.New("injected proof failure")))
-			capabilities, err := windowsV3DestinationCapabilitiesFromResults(results)
+			var results windowsCapabilityProbeResults
+			failure.set(&results, errors.Join(errWindowsOutputUnsupported, errors.New("injected proof failure")))
+			capabilities, err := windowsDestinationCapabilitiesFromResults(results)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,24 +92,24 @@ func TestWindowsV3DestinationCapabilityFactsFailIndependently(t *testing.T) {
 			}
 		})
 	}
-	_, err := windowsV3DestinationCapabilitiesFromResults(windowsV3CapabilityProbeResults{
-		safePublish: errors.Join(errWindowsV3OutputUnsafe, errors.New("injected unsafe namespace")),
+	_, err := windowsDestinationCapabilitiesFromResults(windowsCapabilityProbeResults{
+		safePublish: errors.Join(errWindowsOutputUnsafe, errors.New("injected unsafe namespace")),
 	})
 	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("unsafe probe result = %v", err)
 	}
 }
 
-func TestWindowsV3SemanticFilePublishIsNoCopyNoReplace(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsSemanticFilePublishIsNoCopyNoReplace(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	stageDirectory, err := root.CreateDirectory("publish-stages", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stageDirectory.Close()
-	stages := stageDirectory.(*windowsOutputV3Directory)
-	ticket := windowsV3TestLiveCleanupTicket(t, 4, checkpointmodel.LiveCleanupTicketCommitted)
+	stages := stageDirectory.(*windowsOutputDirectory)
+	ticket := windowsTestLiveCleanupTicket(t, 4, checkpointmodel.LiveCleanupTicketCommitted)
 	if err := root.CreateLiveCleanupStage(stages, ticket); err != nil {
 		t.Fatal(err)
 	}
@@ -147,19 +147,19 @@ func TestWindowsV3SemanticFilePublishIsNoCopyNoReplace(t *testing.T) {
 	}
 }
 
-func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsSemanticFilePublishRaceHasOneWinner(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	stagesValue, err := root.CreateDirectory("race-stages", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stagesValue.Close()
-	stages := stagesValue.(*windowsOutputV3Directory)
+	stages := stagesValue.(*windowsOutputDirectory)
 	const contenders = 8
 	files := make([]outputcap.MutableFile, contenders)
 	for index := range files {
-		ticket := windowsV3TestLiveCleanupTicketWithNonce(
+		ticket := windowsTestLiveCleanupTicketWithNonce(
 			t, byte(index+1), 1, checkpointmodel.LiveCleanupTicketCommitted,
 		)
 		if err := root.CreateLiveCleanupStage(stages, ticket); err != nil {
@@ -211,15 +211,15 @@ func TestWindowsV3SemanticFilePublishRaceHasOneWinner(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PublicDirectoryMetadataUsesOptionalIdentityCheckedHandle(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsPublicDirectoryMetadataUsesOptionalIdentityCheckedHandle(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	childValue, err := root.CreateDirectory("metadata-child", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer childValue.Close()
-	child := childValue.(*windowsOutputV3Directory)
+	child := childValue.(*windowsOutputDirectory)
 	if err := child.ValidateMetadataAuthority(); err != nil {
 		t.Fatal(err)
 	}
@@ -233,15 +233,15 @@ func TestWindowsV3PublicDirectoryMetadataUsesOptionalIdentityCheckedHandle(t *te
 	if matches, err := child.MetadataMatches(modified); err != nil || !matches {
 		t.Fatalf("directory metadata match = %t, %v", matches, err)
 	}
-	closed := &windowsOutputV3Directory{}
+	closed := &windowsOutputDirectory{}
 	if err := closed.ValidateMetadataAuthority(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("closed metadata authority = %v", err)
 	}
 }
 
-func TestWindowsV3PublicDirectoryReservationIsDirectNoReplace(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsPublicDirectoryReservationIsDirectNoReplace(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	reserved, outcome, err := root.ReservePublicDirectoryNoReplace("published-directory")
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("directory reservation outcome = %v, %v", outcome, err)
@@ -262,8 +262,8 @@ func TestWindowsV3PublicDirectoryReservationIsDirectNoReplace(t *testing.T) {
 	}
 }
 
-func TestWindowsV3SemanticPublishClassifiesMutationCut(t *testing.T) {
-	closed := &windowsOutputV3Directory{}
+func TestWindowsSemanticPublishClassifiesMutationCut(t *testing.T) {
+	closed := &windowsOutputDirectory{}
 	if outcome, err := closed.PublishFileNoReplace(nil, "x"); outcome != 0 || !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("pre-mutation file outcome = %v, %v", outcome, err)
 	}
@@ -271,30 +271,30 @@ func TestWindowsV3SemanticPublishClassifiesMutationCut(t *testing.T) {
 		!errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("pre-mutation directory outcome = %T, %v, %v", directory, outcome, err)
 	}
-	marked := &windowsV3PublishMutationError{cause: errors.New("post-mutation verification")}
-	if !windowsV3PublicationMayBeVisible(marked) || windowsV3PublicationMayBeVisible(errors.New("preflight")) {
+	marked := &windowsPublishMutationError{cause: errors.New("post-mutation verification")}
+	if !windowsPublicationMayBeVisible(marked) || windowsPublicationMayBeVisible(errors.New("preflight")) {
 		t.Fatal("publication mutation marker classification is not exact")
 	}
 }
 
-func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *testing.T) {
-	platform, guard := windowsV3OpenGuardedTestRoot(t)
+func TestWindowsLiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *testing.T) {
+	platform, guard := windowsOpenGuardedTestRoot(t)
 	rootPath := platform.root.path
-	root := &windowsOutputV3Directory{native: guard.Root()}
-	windowsV3InstallDirectFileChildMarker(t, rootPath)
+	root := &windowsOutputDirectory{native: guard.Root()}
+	windowsInstallDirectFileChildMarker(t, rootPath)
 	controlDirectory, err := root.CreateDirectory(checkpointmodel.LiveCleanupNamespaceV1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer controlDirectory.Close()
-	control := controlDirectory.(*windowsOutputV3Directory)
+	control := controlDirectory.(*windowsOutputDirectory)
 	nestedDirectory, outcome, err := root.ReservePublicDirectoryNoReplace("nested-parent")
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted || nestedDirectory == nil {
 		t.Fatalf("nested parent = (%T, %d, %v)", nestedDirectory, outcome, err)
 	}
 	defer nestedDirectory.Close()
-	nested := nestedDirectory.(*windowsOutputV3Directory)
-	ticket := windowsV3TestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
+	nested := nestedDirectory.(*windowsOutputDirectory)
+	ticket := windowsTestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
 	if err := nested.CreateLiveCleanupStage(control, ticket); err != nil {
 		t.Fatal(err)
 	}
@@ -311,10 +311,10 @@ func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *test
 		t.Fatal(err)
 	}
 	defer reference.Close()
-	referenceDACL, referenceSDDL := windowsV3TestDACL(
+	referenceDACL, referenceSDDL := windowsTestDACL(
 		t, filepath.Join(rootPath, "nested-parent", "ordinary-acl-reference.bin"),
 	)
-	stageDACL, stageSDDL := windowsV3TestDACL(
+	stageDACL, stageSDDL := windowsTestDACL(
 		t, filepath.Join(rootPath, checkpointmodel.LiveCleanupNamespaceV1, ticket.StageName()),
 	)
 	rootReference, err := root.CreateFile("container-acl-reference.bin", false, 0)
@@ -322,7 +322,7 @@ func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *test
 		t.Fatal(err)
 	}
 	defer rootReference.Close()
-	_, rootReferenceSDDL := windowsV3TestDACL(t, filepath.Join(rootPath, "container-acl-reference.bin"))
+	_, rootReferenceSDDL := windowsTestDACL(t, filepath.Join(rootPath, "container-acl-reference.bin"))
 	if referenceDACL&windows.SE_DACL_PROTECTED != 0 || stageDACL&windows.SE_DACL_PROTECTED != 0 {
 		t.Fatalf("ordinary public child profile became protected: reference=(%#x,%q) stage=(%#x,%q)",
 			referenceDACL, referenceSDDL, stageDACL, stageSDDL)
@@ -335,8 +335,8 @@ func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *test
 		t.Fatalf("nested stage retained the container direct-child ACL: stage=%q root-reference=%q",
 			stageSDDL, rootReferenceSDDL)
 	}
-	for _, entry := range windowsV3DirectoryNames(t, rootPath) {
-		if strings.HasPrefix(entry, windowsV3LiveStageTemporaryPrefix) {
+	for _, entry := range windowsDirectoryNames(t, rootPath) {
+		if strings.HasPrefix(entry, windowsLiveStageTemporaryPrefix) {
 			t.Fatalf("successful stage creation leaked public temporary name %q", entry)
 		}
 	}
@@ -362,17 +362,17 @@ func TestWindowsV3LiveCleanupStageUsesPublicParentACLAndPrivateProofName(t *test
 	}
 }
 
-func windowsV3InstallDirectFileChildMarker(t *testing.T, path string) {
+func windowsInstallDirectFileChildMarker(t *testing.T, path string) {
 	t.Helper()
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := windowsV3TestDirectoryOwner(path)
+	owner, err := windowsTestDirectoryOwner(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	principals, err := windowsV3TestDirectoryPrincipals(policy)
+	principals, err := windowsTestDirectoryPrincipals(policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,30 +383,30 @@ func windowsV3InstallDirectFileChildMarker(t *testing.T, path string) {
 	// This read ACE applies only to files created directly under the container.
 	// A stage created through a nested final parent must therefore not receive it.
 	descriptor, err := windows.SecurityDescriptorFromString(
-		"O:" + owner.String() + "D:P" + windowsV3InheritableFullAccessEntries(principals) +
+		"O:" + owner.String() + "D:P" + windowsInheritableFullAccessEntries(principals) +
 			"(A;OINPIO;GR;;;" + everyone.String() + ")",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(path, descriptor, policy); err != nil {
+	if err := windowsSetTestDirectoryDACL(path, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestWindowsV3OrdinaryStageUsesOneSameFilesystemPrivateObject(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	semanticPlatform := &windowsOutputV3Platform{}
+func TestWindowsOrdinaryStageUsesOneSameFilesystemPrivateObject(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	semanticPlatform := &windowsOutputPlatform{}
 	if semanticPlatform.LiveCleanupNativeProfile() != checkpointmodel.LiveCleanupWindowsNTFSV1 {
 		t.Fatalf("native cleanup profile = %d", semanticPlatform.LiveCleanupNativeProfile())
 	}
-	root := &windowsOutputV3Directory{native: guard.Root()}
+	root := &windowsOutputDirectory{native: guard.Root()}
 	stageDirectory, err := root.CreateDirectory("ordinary-stages", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stageDirectory.Close()
-	stages := stageDirectory.(*windowsOutputV3Directory)
+	stages := stageDirectory.(*windowsOutputDirectory)
 	const stageName = "owned.stage"
 	if err := root.CreateOrdinaryOutputStage(stages, stageName, 7); err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestWindowsV3OrdinaryStageUsesOneSameFilesystemPrivateObject(t *testing.T) 
 	}
 }
 
-func windowsV3TestDACL(t *testing.T, path string) (windows.SECURITY_DESCRIPTOR_CONTROL, string) {
+func windowsTestDACL(t *testing.T, path string) (windows.SECURITY_DESCRIPTOR_CONTROL, string) {
 	t.Helper()
 	descriptor, err := windows.GetNamedSecurityInfo(
 		path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION,
@@ -465,7 +465,7 @@ func windowsV3TestDACL(t *testing.T, path string) (windows.SECURITY_DESCRIPTOR_C
 	return control, daclOnly.String()
 }
 
-func windowsV3DirectoryNames(t *testing.T, path string) []string {
+func windowsDirectoryNames(t *testing.T, path string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -484,17 +484,17 @@ const (
 	windowsLiveStageCrashParentName       = "nested-parent"
 )
 
-func TestWindowsV3LiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T) {
+func TestWindowsLiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T) {
 	if os.Getenv(windowsLiveStageCrashChildEnvironment) == "1" {
 		runWindowsLiveStageCrashChild(t)
 		return
 	}
 	requireUnprivilegedWindowsNTFSCertification(t)
-	for _, cut := range []windowsV3LiveStageCreateCut{
-		windowsV3LiveStageCutTemporaryCreated,
-		windowsV3LiveStageCutInstalled,
-		windowsV3LiveStageCutSynced,
-		windowsV3LiveStageCutCommitted,
+	for _, cut := range []windowsLiveStageCreateCut{
+		windowsLiveStageCutTemporaryCreated,
+		windowsLiveStageCutInstalled,
+		windowsLiveStageCutSynced,
+		windowsLiveStageCutCommitted,
 	} {
 		t.Run(strconv.Itoa(int(cut)), func(t *testing.T) {
 			base := t.TempDir()
@@ -513,7 +513,7 @@ func TestWindowsV3LiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T)
 				nativeOutputCrashRootEnvironment + "=" + rootPath,
 				nativeOutputCrashReadyEnvironment + "=" + readyPath,
 			})
-			platform, err := openWindowsV3OutputPlatform(rootPath)
+			platform, err := openWindowsOutputPlatform(rootPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -523,11 +523,11 @@ func TestWindowsV3LiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T)
 				t.Fatal(err)
 			}
 			defer proof.Close()
-			ticket := windowsV3TestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
+			ticket := windowsTestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
 			stage, _, err := proof.openFile(
-				ticket.StageName(), windows.FILE_OPEN, windowsV3ReadFileAccess(), nil, false,
+				ticket.StageName(), windows.FILE_OPEN, windowsReadFileAccess(), nil, false,
 			)
-			if cut != windowsV3LiveStageCutCommitted {
+			if cut != windowsLiveStageCutCommitted {
 				if !errors.Is(err, fs.ErrNotExist) {
 					t.Fatalf("precommit cut retained stage: %v", err)
 				}
@@ -540,8 +540,8 @@ func TestWindowsV3LiveStageCreateSurvivesRealProcessKillAtEveryCut(t *testing.T)
 				}
 				_ = stage.Close()
 			}
-			for _, name := range windowsV3DirectoryNames(t, nestedPath) {
-				if strings.HasPrefix(name, windowsV3LiveStageTemporaryPrefix) {
+			for _, name := range windowsDirectoryNames(t, nestedPath) {
+				if strings.HasPrefix(name, windowsLiveStageTemporaryPrefix) {
 					t.Fatalf("crash cut leaked nested-parent temporary name %q", name)
 				}
 			}
@@ -554,12 +554,12 @@ func runWindowsLiveStageCrashChild(t *testing.T) {
 	readyPath := os.Getenv(nativeOutputCrashReadyEnvironment)
 	rawCut := os.Getenv(windowsLiveStageCrashCutEnvironment)
 	value, err := strconv.Atoi(rawCut)
-	if err != nil || value < int(windowsV3LiveStageCutTemporaryCreated) ||
-		value > int(windowsV3LiveStageCutCommitted) || rootPath == "" || readyPath == "" {
+	if err != nil || value < int(windowsLiveStageCutTemporaryCreated) ||
+		value > int(windowsLiveStageCutCommitted) || rootPath == "" || readyPath == "" {
 		t.Fatalf("invalid live-stage crash child parameters: %v", err)
 	}
-	cut := windowsV3LiveStageCreateCut(value)
-	platform, err := openWindowsV3OutputPlatform(rootPath)
+	cut := windowsLiveStageCreateCut(value)
+	platform, err := openWindowsOutputPlatform(rootPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func runWindowsLiveStageCrashChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parentValue.Close()
-	parentValue.createObserver = windowsV3LiveStageCreateObserverFunc(func(observed windowsV3LiveStageCreateCut) error {
+	parentValue.createObserver = windowsLiveStageCreateObserverFunc(func(observed windowsLiveStageCreateCut) error {
 		if observed != cut {
 			return nil
 		}
@@ -583,18 +583,18 @@ func runWindowsLiveStageCrashChild(t *testing.T) {
 		t.Fatal("live-stage create child was not terminated")
 		return nil
 	})
-	parent := &windowsOutputV3Directory{native: parentValue}
-	proofValue := &windowsOutputV3Directory{native: proof}
-	ticket := windowsV3TestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
+	parent := &windowsOutputDirectory{native: parentValue}
+	proofValue := &windowsOutputDirectory{native: proof}
+	ticket := windowsTestLiveCleanupTicket(t, 9, checkpointmodel.LiveCleanupTicketCommitted)
 	if err := parent.CreateLiveCleanupStage(proofValue, ticket); err != nil {
 		t.Fatal(err)
 	}
 	t.Fatal("live-stage create child passed its requested kill cut")
 }
 
-func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsRecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	for _, cut := range []string{"ticket", "stage", "stage-removed", "ticket-removed"} {
 		t.Run(cut, func(t *testing.T) {
 			controlName := "cleanup-" + cut
@@ -603,8 +603,8 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer controlDirectory.Close()
-			control := controlDirectory.(*windowsOutputV3Directory)
-			ticket := windowsV3TestLiveCleanupTicket(t, 7, checkpointmodel.LiveCleanupTicketCommitted)
+			control := controlDirectory.(*windowsOutputDirectory)
+			ticket := windowsTestLiveCleanupTicket(t, 7, checkpointmodel.LiveCleanupTicketCommitted)
 			ticketName := "ticket-" + hex.EncodeToString(ticket.Nonce()) + ".record"
 			encoded, err := checkpointmodel.EncodeLiveCleanupTicket(ticket)
 			if err != nil {
@@ -691,9 +691,9 @@ func TestWindowsV3RecordBeforeStageCleanupReplaysEveryCut(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PrivateIdentityWrapperUsesPrivateAuthority(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+func TestWindowsPrivateIdentityWrapperUsesPrivateAuthority(t *testing.T) {
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	privateDirectory, err := root.CreateDirectory("control", true)
 	if err != nil {
 		t.Fatal(err)
@@ -711,8 +711,8 @@ func TestWindowsV3PrivateIdentityWrapperUsesPrivateAuthority(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RootIdentityClaimSurvivesSameFilesystemRename(t *testing.T) {
-	parent := windowsV3NativeTestTempDir(t)
+func TestWindowsRootIdentityClaimSurvivesSameFilesystemRename(t *testing.T) {
+	parent := windowsNativeTestTempDir(t)
 	original := filepath.Join(parent, "ordinary-root")
 	renamed := filepath.Join(parent, "ordinary-root-renamed")
 	if err := os.Mkdir(original, 0o700); err != nil {
@@ -754,9 +754,9 @@ func TestWindowsV3RootIdentityClaimSurvivesSameFilesystemRename(t *testing.T) {
 	}
 }
 
-func TestWindowsV3PublicRootRejectsReparseAndFileAncestors(t *testing.T) {
+func TestWindowsPublicRootRejectsReparseAndFileAncestors(t *testing.T) {
 	requireUnprivilegedWindowsNTFSCertification(t)
-	parent := windowsV3NativeTestTempDir(t)
+	parent := windowsNativeTestTempDir(t)
 	target := filepath.Join(parent, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
@@ -781,16 +781,16 @@ func TestWindowsV3PublicRootRejectsReparseAndFileAncestors(t *testing.T) {
 	}
 }
 
-func windowsV3TestLiveCleanupTicket(
+func windowsTestLiveCleanupTicket(
 	t *testing.T,
 	size uint64,
 	state checkpointmodel.LiveCleanupTicketState,
 ) checkpointmodel.LiveCleanupTicket {
 	t.Helper()
-	return windowsV3TestLiveCleanupTicketWithNonce(t, 1, size, state)
+	return windowsTestLiveCleanupTicketWithNonce(t, 1, size, state)
 }
 
-func windowsV3TestLiveCleanupTicketWithNonce(
+func windowsTestLiveCleanupTicketWithNonce(
 	t *testing.T,
 	nonce byte,
 	size uint64,

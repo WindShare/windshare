@@ -1,9 +1,9 @@
 import type { ReceiveIntent } from '../../transfer/intent'
 import type { ExactPreparationEvidence } from '../../transfer/output/session'
 import type {
-  V2PortableOriginalExecutionRoute,
-  V2PortableZipExecutionRoute,
-} from '../../transfer/settlement/v2-plan-authority'
+  PortableOriginalExecutionRoute,
+  PortableZipExecutionRoute,
+} from '../../transfer/settlement/plan-authority'
 import type { CanonicalModifiedTime } from '../../transfer/directory-admission'
 import type { PreparationAdmissionReason } from '../../transfer/lifecycle/state'
 import type {
@@ -55,7 +55,7 @@ export class PortablePreparationAdmissionError extends TypeError {
 }
 
 export function validateOriginalPreparation(
-  intent: Parameters<V2PortableOriginalExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableOriginalExecutionRoute['prepare']>[0],
   evidence: ExactPreparationEvidence,
 ): PreparationFileEntry {
   validateEvidenceEnvelope(evidence)
@@ -80,7 +80,7 @@ export function validateOriginalPreparation(
 }
 
 export function validateZipPreparation(
-  intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
   evidence: ExactPreparationEvidence,
 ): void {
   validateEvidenceEnvelope(evidence)
@@ -98,7 +98,7 @@ export function validateZipPreparation(
 }
 
 function validateZipPreparationEntry(
-  intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
   entry: PreparationManifestEntry,
   generations: ReadonlyMap<string, string>,
   sourceIdentities: Set<string>,
@@ -121,7 +121,7 @@ function validateZipPreparationEntry(
 }
 
 function validateZipPreparationRoot(
-  intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
   root: PreparationDirectoryEntry,
 ): void {
   const anchor = intent.artifact.layout.anchor
@@ -192,7 +192,7 @@ function requireGenerationAuthority(
 }
 
 export async function planPortableZipLayout(
-  intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
   evidence: ExactPreparationEvidence,
   preparationManifestDigest: string,
 ): Promise<SealedZipLayoutPlanV1> {

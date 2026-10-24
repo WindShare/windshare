@@ -1,12 +1,12 @@
 import { expect, test } from '@playwright/test'
 
-import { V2_CATALOG_PAGE_ENTRIES } from '../src/catalog/v2-records'
+import { CATALOG_PAGE_ENTRIES } from '../src/catalog/records'
 import { capabilityUrl, DirectProductStack } from './fixtures/direct-product-stack'
 import { withCapabilityRedaction } from './fixtures/capability-redactor'
 
 const SCENARIO_ID = 'chromium-progressive-catalog'
 const DIRECTORY_NAME = 'wide-directory'
-const FINAL_FILE_INDEX = V2_CATALOG_PAGE_ENTRIES
+const FINAL_FILE_INDEX = CATALOG_PAGE_ENTRIES
 
 test('browses a catalog directory across authenticated pages', async ({ page }) => {
   const stack = new DirectProductStack(SCENARIO_ID)
@@ -42,10 +42,10 @@ test('browses a catalog directory across authenticated pages', async ({ page }) 
     const lastFile = contents.getByRole('button', { name: fileName(FINAL_FILE_INDEX), exact: true })
 
     await expect(pagination.getByText('Page 1 of 2', { exact: true })).toBeVisible()
-    await expect(contents.getByRole('listitem')).toHaveCount(V2_CATALOG_PAGE_ENTRIES)
+    await expect(contents.getByRole('listitem')).toHaveCount(CATALOG_PAGE_ENTRIES)
     await expect(firstFile).toBeVisible()
     await expect(contents.getByRole('button', {
-      name: fileName(V2_CATALOG_PAGE_ENTRIES - 1), exact: true,
+      name: fileName(CATALOG_PAGE_ENTRIES - 1), exact: true,
     })).toBeVisible()
     await expect(lastFile).toHaveCount(0)
     await expect(previous).toBeDisabled()
@@ -59,7 +59,7 @@ test('browses a catalog directory across authenticated pages', async ({ page }) 
 
     await previous.click()
     await expect(pagination.getByText('Page 1 of 2', { exact: true })).toBeVisible()
-    await expect(contents.getByRole('listitem')).toHaveCount(V2_CATALOG_PAGE_ENTRIES)
+    await expect(contents.getByRole('listitem')).toHaveCount(CATALOG_PAGE_ENTRIES)
     await expect(firstFile).toBeVisible()
     await expect(lastFile).toHaveCount(0)
     await expect(previous).toBeDisabled()

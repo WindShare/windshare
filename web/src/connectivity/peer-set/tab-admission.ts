@@ -20,7 +20,7 @@ export class PeerTabCapacityTimeoutError extends DOMException {
   constructor() { super('Tab peer capacity was unavailable within the attempt start window', 'TimeoutError') }
 }
 interface WaitingAttempt {
-  readonly purpose: import('../v2-signaling-codec').ConnectionPurpose
+  readonly purpose: import('../signaling-codec').ConnectionPurpose
   readonly route: 'direct' | 'turn'
   readonly receiver: object
   readonly endpoints: number
@@ -57,7 +57,7 @@ export class PeerTabAdmission {
     this.#endpoints = this.#policy.stunEndpointsPerInterval
   }
 
-  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct', purpose: import('../v2-signaling-codec').ConnectionPurpose = 'initial'): Promise<PeerTabAdmissionPermit> {
+  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct', purpose: import('../signaling-codec').ConnectionPurpose = 'initial'): Promise<PeerTabAdmissionPermit> {
     signal.throwIfAborted()
     if (!Number.isInteger(endpoints) || endpoints < 0 || endpoints > 2 ||
       !Number.isFinite(waitMilliseconds) || waitMilliseconds < 0) {

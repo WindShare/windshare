@@ -19,10 +19,10 @@ export type LifecycleUserAction =
   | 'discard'
   | 'delete'
 
-export type V2ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
+export type ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
 
 export type ReceiveSettlementWait = Readonly<{
-  readonly operation: V2ActiveReceiveControl | 'finish'
+  readonly operation: ActiveReceiveControl | 'finish'
   readonly phase: 'waiting' | 'background'
 }>
 

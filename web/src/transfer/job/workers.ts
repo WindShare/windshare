@@ -1,12 +1,12 @@
 import {
-  V2_MAXIMUM_PENDING_DIRECTORIES,
+  MAXIMUM_PENDING_DIRECTORIES,
   type DirectoryWork,
   type PendingFile,
 } from './contract'
-import { runV2DirectoryTransferWorker } from './directory-transfer'
+import { runDirectoryTransferWorker } from './directory-transfer'
 import { DiscoveryQueue, type DiscoverySchedulingObservation } from '../discovery/queue'
-import { runV2DirectoryReplayWorker, type V2DirectoryReplay } from '../discovery/v2-directory-replay'
-import { isV2FileScopedTransferFailure } from './failures'
+import { runDirectoryReplayWorker, type DirectoryReplay } from '../discovery/directory-replay'
+import { isFileScopedTransferFailure } from './failures'
 import type { TransferExecutionLimits, TransferJobLimits } from './limits'
 import {
   AsyncBoundedQueue,
@@ -43,7 +43,7 @@ export async function runDiscoveryWorkers(input: {
   readonly claimRoot: (root: DirectoryWork) => void
   readonly discoverDirectory: (
     work: DirectoryWork,
-    replays: AsyncBoundedQueue<V2DirectoryReplay>,
+    replays: AsyncBoundedQueue<DirectoryReplay>,
   ) => AsyncGenerator<DirectoryWork, void>
   readonly observeDiscovery?: (event: DiscoverySchedulingObservation) => void
   readonly discoveryComplete: () => void
@@ -57,8 +57,8 @@ export async function runDiscoveryWorkers(input: {
   readonly observeConsequenceFailure?: (failure: WorkerFamilyConsequenceFailure) => void
 }): Promise<void> {
   const directoryQueue = new AsyncBoundedQueue<DirectoryWork>(
-    V2_MAXIMUM_PENDING_DIRECTORIES,
-    BigInt(V2_MAXIMUM_PENDING_DIRECTORIES),
+    MAXIMUM_PENDING_DIRECTORIES,
+    BigInt(MAXIMUM_PENDING_DIRECTORIES),
     () => 1n,
     true,
   )
@@ -66,7 +66,7 @@ export async function runDiscoveryWorkers(input: {
   input.claimRoot(input.root)
   await directoryQueue.push(input.root, input.signal)
 
-  const replays = new DiscoveryQueue<V2DirectoryReplay>({
+  const replays = new DiscoveryQueue<DirectoryReplay>({
     queue: 'generations',
     maximumItems: input.limits.pendingGenerations,
     maximumMetadataBytes: input.limits.pendingGenerationMetadataBytes,
@@ -74,14 +74,14 @@ export async function runDiscoveryWorkers(input: {
     ...(input.observeDiscovery === undefined ? {} : { observe: input.observeDiscovery }),
   })
   const directoryWorkers = Array.from({ length: input.limits.concurrentDirectories }, () =>
-    runV2DirectoryTransferWorker(directoryQueue, replays, {
+    runDirectoryTransferWorker(directoryQueue, replays, {
       signal: input.signal,
       discoverDirectory: input.discoverDirectory,
       isolateDirectory: input.recordDiscoveryFailure,
     }),
   )
   const replayWorkers = Array.from({ length: input.limits.concurrentDirectories }, () =>
-    runV2DirectoryReplayWorker({
+    runDirectoryReplayWorker({
       queue: replays,
       files: sinkFiles,
       signal: input.signal,
@@ -198,7 +198,7 @@ async function runFileWorker(input: {
         }
       } catch (error) {
         if (input.signal.aborted) throw error
-        if (isV2FileScopedTransferFailure(error)) {
+        if (isFileScopedTransferFailure(error)) {
           input.recordFileFailure(file, error)
           continue
         }

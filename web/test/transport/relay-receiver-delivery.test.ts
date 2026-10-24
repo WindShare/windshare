@@ -3,13 +3,13 @@ import { decodeDeliveryConsumed } from '../../src/transport/relay/delivery-consu
 import { decodeDeliveryJoin, type RelayReceiveCapacity } from '../../src/transport/relay/delivery-handshake-codec'
 import { decodeSettlementAck, encodeSettlementNotice } from '../../src/transport/relay/delivery-settlement-codec'
 import type { ReceiveLedgerEvent } from '../../src/contracts/relay-delivery-observation'
-import { dialV2RelayReceiver, V2_RELAY_PROTOCOL_CLOSE_CODE, type V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
-import { encodeV2OpaqueRoute } from '../../src/transport/relay/v2-protocol'
+import { dialRelayReceiver, RELAY_PROTOCOL_CLOSE_CODE, type RelayReceiverConnection } from '../../src/transport/relay/receiver'
+import { encodeOpaqueRoute } from '../../src/transport/relay/protocol'
 import { capability, FakeSocket, relaySessionId } from './relay-receiver-fixture'
 
 const frame = Uint8Array.of(7, 8)
-const envelope = encodeV2OpaqueRoute({ relaySessionId, ciphertext: frame })
-const connections: V2RelayReceiverConnection[] = []
+const envelope = encodeOpaqueRoute({ relaySessionId, ciphertext: frame })
+const connections: RelayReceiverConnection[] = []
 const controls = (socket: FakeSocket, magic: string) => socket.sent.filter(bytes =>
   String.fromCharCode(...bytes.subarray(0, 4)) === magic)
 const notice = (frames: number, id = relaySessionId) => encodeSettlementNotice({
@@ -25,8 +25,8 @@ async function writerTurn(): Promise<void> {
 async function connect(socket: FakeSocket, options: {
   receiveCapacity?: RelayReceiveCapacity
   receiveTrace?: (event: ReceiveLedgerEvent) => void
-} = {}): Promise<V2RelayReceiverConnection> {
-  const connection = await dialV2RelayReceiver('https://relay.invalid', capability, { socketFactory: () => socket, ...options })
+} = {}): Promise<RelayReceiverConnection> {
+  const connection = await dialRelayReceiver('https://relay.invalid', capability, { socketFactory: () => socket, ...options })
   connections.push(connection)
   return connection
 }
@@ -53,14 +53,14 @@ describe('browser cumulative relay delivery', () => {
     expect(controls(socket, 'WS2B')).toEqual([])
     expect(socket.closeCode).toBeUndefined()
     socket.message(envelope)
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
     await expect(connection.channel.frames.getReader().read()).rejects.toMatchObject({ code: 'capacity' })
   })
 
   it('refuses an unrepresentable local capacity before creating a socket', async () => {
     const socketFactory = vi.fn(() => new FakeSocket())
     for (const frames of [0n, -1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n]) {
-      await expect(dialV2RelayReceiver('https://relay.invalid', capability, {
+      await expect(dialRelayReceiver('https://relay.invalid', capability, {
         socketFactory, receiveCapacity: { frames, encodedBytes: 100n },
       })).rejects.toMatchObject({ code: 'config' })
     }
@@ -186,7 +186,7 @@ describe('browser cumulative relay delivery', () => {
     if (invalid === 'totals') socket.message(notice(0))
     if (invalid === 'session') socket.message(notice(1, new Uint8Array(8).fill(9)))
     if (invalid === 'late frame') { socket.message(notice(1)); socket.message(envelope) }
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
     await expect(connection.channel.frames.getReader().read()).rejects.toThrow()
     expect(controls(socket, 'WS2S')).toEqual([])
   })
@@ -202,6 +202,6 @@ describe('browser cumulative relay delivery', () => {
     await reader.read()
     await writerTurn()
     await expect(reader.read()).rejects.toBe(error)
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
   })
 })

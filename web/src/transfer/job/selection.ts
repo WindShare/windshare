@@ -1,19 +1,19 @@
-import type { V2CatalogEntry } from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { CatalogEntry } from '../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import { encodeBase64Url } from '../../crypto/bytes'
 
-export interface MissingV2SelectionTarget {
+export interface MissingSelectionTarget {
   readonly kind: 'directory' | 'file'
   readonly idText: string
 }
 
 /** Tracks only selected opaque targets; unselected overrides require no settlement. */
-export class V2ExplicitSelectionTargetLedger {
-  readonly #pending: Map<string, MissingV2SelectionTarget>
+export class ExplicitSelectionTargetLedger {
+  readonly #pending: Map<string, MissingSelectionTarget>
   readonly #lifetime: AbortSignal
   readonly #opaqueSearch = new AbortController()
 
-  constructor(selection: V2FrozenSelectionPolicy, lifetime: AbortSignal) {
+  constructor(selection: FrozenSelectionPolicy, lifetime: AbortSignal) {
     this.#lifetime = lifetime
     this.#pending = new Map(selection.canonicalRules
       .filter((rule) => rule.selected)
@@ -27,7 +27,7 @@ export class V2ExplicitSelectionTargetLedger {
     this.#stopSatisfiedSearch()
   }
 
-  observe(entry: V2CatalogEntry): void {
+  observe(entry: CatalogEntry): void {
     this.#pending.delete(targetKey(entry.kind, encodeBase64Url(entry.id)))
     this.#stopSatisfiedSearch()
   }
@@ -47,7 +47,7 @@ export class V2ExplicitSelectionTargetLedger {
     return !selectedDirectory && !this.hasPendingTargets && !this.#lifetime.aborted
   }
 
-  missing(): readonly MissingV2SelectionTarget[] {
+  missing(): readonly MissingSelectionTarget[] {
     return Object.freeze([...this.#pending.values()])
   }
 
@@ -58,13 +58,13 @@ export class V2ExplicitSelectionTargetLedger {
   }
 }
 
-export class V2SelectionTargetMissingError extends Error {
-  constructor(target: MissingV2SelectionTarget) {
+export class SelectionTargetMissingError extends Error {
+  constructor(target: MissingSelectionTarget) {
     super(`Selected ${target.kind} target was not found in terminal catalog discovery`)
-    this.name = 'V2SelectionTargetMissingError'
+    this.name = 'SelectionTargetMissingError'
   }
 }
 
-function targetKey(kind: MissingV2SelectionTarget['kind'], idText: string): string {
+function targetKey(kind: MissingSelectionTarget['kind'], idText: string): string {
   return `${kind}:${idText}`
 }

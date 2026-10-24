@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { TransferProgress } from '../../src/transfer/v2-job'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { TransferProgress } from '../../src/transfer/job'
 import {
   catalogFixture, directoryEntry, fileEntry, identity, planAuthorityFixture,
   readerFixture, receiveIntentFixture, transferJobFixture,
@@ -19,7 +19,7 @@ describe('independent selection discovery', () => {
         return { id: identity(2 + level), entries }
       })
       const catalog = catalogFixture(directories)
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const intent = await receiveIntentFixture({
         planKind, artifactKind: planKind === 'direct-tree' ? 'directory-tree' : 'zip-archive', selection,
       })
@@ -61,7 +61,7 @@ describe('independent selection discovery', () => {
   it('keeps a completed denominator when content is cancelled afterwards', async () => {
     const file = fileEntry(identity(20), 'file.bin', 2n)
     const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'direct-tree', artifactKind: 'directory-tree', selection })
     const firstRead = deferred<void>()
     const releaseRead = deferred<void>()

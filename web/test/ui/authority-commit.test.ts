@@ -17,8 +17,8 @@ import type {
   AuthorityCommitRoute,
   ProvisionalOwnedEffectAuthority,
 } from '../../src/application/receive/activation/commit'
-import { V2ActivationStateContractError } from '../../src/application/receive/activation/model'
-import type { V2ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
+import { ActivationStateContractError } from '../../src/application/receive/activation/model'
+import type { ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
   projection,
@@ -129,7 +129,7 @@ describe('authority commit transaction', () => {
   it('freezes one intent and validates the returned bound operation', async () => {
     const fixture = await commitFixture()
     let fenceChecks = 0
-    const authority: V2ArtifactPresentationAuthority = {
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
         const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -153,12 +153,12 @@ describe('authority commit transaction', () => {
     expect(outcome).toMatchObject({ kind: 'bound-operation' })
     expect(transaction.fenced).toBe(true)
     expect(fenceChecks).toBe(2)
-    await expect(transaction.run()).rejects.toBeInstanceOf(V2ActivationStateContractError)
+    await expect(transaction.run()).rejects.toBeInstanceOf(ActivationStateContractError)
   })
 
   it('rejects a route that requests the once-only final fence twice', async () => {
     const fixture = await commitFixture()
-    const authority: V2ArtifactPresentationAuthority = {
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
         const candidate = await candidateBindingForTest(input.action, 'report.txt')
@@ -182,7 +182,7 @@ describe('authority commit transaction', () => {
 
   it('rejects a bound lifecycle that differs from the frozen intent', async () => {
     const fixture = await commitFixture()
-    const authority: V2ArtifactPresentationAuthority = {
+    const authority: ArtifactPresentationAuthority = {
       ready: Promise.resolve(),
       commit: async input => {
         const candidate = await candidateBindingForTest(input.action, 'report.txt')

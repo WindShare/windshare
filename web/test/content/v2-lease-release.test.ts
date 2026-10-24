@@ -1,11 +1,11 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { V2RevisionService } from '../../src/content/v2-session-services'
+import { RevisionService } from '../../src/content/session-services'
 import type { LeaseRetirementObservation } from '../../src/content/scheduling/lease-retirement'
-import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
-import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND, type V2MessageKind } from '../../src/session/v2-message'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
+import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
+import { encodeBody, encodeMessage, MESSAGE_KIND, type MessageKind } from '../../src/session/message'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../src/session/identities'
 import { transferDirectZipFileV1, type DirectZipOrderedFileV1, type DirectZipOutputSessionV1 } from '../../src/transfer/direct-zip'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { deferred, id, SHARE } from '../session/v2-send-fixture'
@@ -22,7 +22,7 @@ const identity = loadVectorFile(new URL('../../../core/testvectors/v2-identity.j
 const revision = loadVectorFile(new URL('../../../core/testvectors/v2-sender-objects.json', import.meta.url))
   .cases.find(value => (value as ObjectVector).domain === 'windshare/v2 object/file-revision') as ObjectVector
 const bytes = (value: string) => new Uint8Array(b64ToBytes(value))
-const ROUTES: V2BlockRouteEligibility = {
+const ROUTES: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
 }
 const RELEASE_WAIT = 30_000
@@ -35,41 +35,41 @@ function fixture() {
     ...SHARE, shareInstance: bytes(identity.shareInstanceB64),
     sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)), chunkSize: 1 << 20,
   }
-  const requests: V2MessageKind[] = []
+  const requests: MessageKind[] = []
   const retirements: LeaseRetirementObservation[] = []
   let nextId = 30
-  const beginOperation = vi.fn(async (kind: V2MessageKind) => {
+  const beginOperation = vi.fn(async (kind: MessageKind) => {
     requests.push(kind)
     const operationId = id(nextId++)
     let body: Uint8Array
-    let response: V2MessageKind
-    if (kind === V2_MESSAGE_KIND.openRevisions) {
-      response = V2_MESSAGE_KIND.openResults
-      body = encodeV2Body(new Map<number, unknown>([
+    let response: MessageKind
+    if (kind === MESSAGE_KIND.openRevisions) {
+      response = MESSAGE_KIND.openResults
+      body = encodeBody(new Map<number, unknown>([
         [0, 1], [1, [[fileId, 0, bytes(revision.objectB64), leaseId, 120_000, 60_000]]],
       ]))
-    } else if (kind === V2_MESSAGE_KIND.renewLease) {
-      response = V2_MESSAGE_KIND.leaseResult
-      body = encodeV2Body(new Map<number, unknown>([[0, 1], [1, leaseId], [2, 120_000], [3, 60_000]]))
+    } else if (kind === MESSAGE_KIND.renewLease) {
+      response = MESSAGE_KIND.leaseResult
+      body = encodeBody(new Map<number, unknown>([[0, 1], [1, leaseId], [2, 120_000], [3, 60_000]]))
     } else {
-      expect(kind).toBe(V2_MESSAGE_KIND.releaseLease)
-      response = V2_MESSAGE_KIND.operationComplete
-      body = encodeV2Body([0])
+      expect(kind).toBe(MESSAGE_KIND.releaseLease)
+      response = MESSAGE_KIND.operationComplete
+      body = encodeBody([0])
     }
     return { id: operationId, requestKind: kind, cancel: () => undefined,
-      next: async () => encodeV2Message(response, operationId, body) }
+      next: async () => encodeMessage(response, operationId, body) }
   })
   const session = {
     beginOperation,
     operationCorrelation: (operation: { id: Uint8Array }) => ({
-      protocolSessionId: createV2ProtocolSessionIdentity(id(7)),
-      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      protocolSessionId: createProtocolSessionIdentity(id(7)),
+      protocolOperationId: createProtocolOperationIdentity(operation.id),
       lane: { id: 1, epoch: 0 },
     }),
-  } as unknown as V2ReceiverSessionRuntime
-  const lanes = new V2LaneSet()
+  } as unknown as ReceiverSessionRuntime
+  const lanes = new LaneSet()
   lanes.add({ id: 1, fetchBlock: async () => { throw new Error('unused') } }, 'direct')
-  const revisions = new V2RevisionService(session, share, bytes(identity.readSecretB64), lanes, {
+  const revisions = new RevisionService(session, share, bytes(identity.readSecretB64), lanes, {
     now: () => Date.now(), beforeLeaseRelease: () => barrier.promise,
     onLeaseRetirement: event => retirements.push(event),
   })
@@ -91,13 +91,13 @@ describe('revision release caller and shared-read ownership', () => {
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
       await timedOut
       expect(harness.retirements.at(-1)?.transition).toBe('deferred_for_reads')
-      expect(harness.requests).not.toContain(V2_MESSAGE_KIND.releaseLease)
+      expect(harness.requests).not.toContain(MESSAGE_KIND.releaseLease)
       expect(harness.revisions.leaseError(opened.leaseId)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
-      expect(harness.requests).toContain(V2_MESSAGE_KIND.renewLease)
+      expect(harness.requests).toContain(MESSAGE_KIND.renewLease)
       harness.barrier.resolve()
       await vi.advanceTimersByTimeAsync(0)
-      expect(harness.requests.filter(kind => kind === V2_MESSAGE_KIND.releaseLease)).toHaveLength(1)
+      expect(harness.requests.filter(kind => kind === MESSAGE_KIND.releaseLease)).toHaveLength(1)
       expect(harness.revisions.leaseError(opened.leaseId)).toBeInstanceOf(Error)
     } finally { harness.close() }
   })
@@ -110,7 +110,7 @@ describe('revision release caller and shared-read ownership', () => {
     await releasing
     harness.barrier.resolve()
     await Promise.resolve()
-    expect(harness.requests).not.toContain(V2_MESSAGE_KIND.releaseLease)
+    expect(harness.requests).not.toContain(MESSAGE_KIND.releaseLease)
   })
 
   it('allows cancelled direct ZIP transfer cleanup to finish even while a shared read retains its lease', async () => {
@@ -143,10 +143,10 @@ describe('revision release caller and shared-read ownership', () => {
       await reachedOutput.promise
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
       await transfer
-      expect(harness.requests).not.toContain(V2_MESSAGE_KIND.releaseLease)
+      expect(harness.requests).not.toContain(MESSAGE_KIND.releaseLease)
       harness.barrier.resolve()
       await vi.advanceTimersByTimeAsync(0)
-      expect(harness.requests).toContain(V2_MESSAGE_KIND.releaseLease)
+      expect(harness.requests).toContain(MESSAGE_KIND.releaseLease)
     } finally { harness.close() }
   })
 })

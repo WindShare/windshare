@@ -1,35 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import { PeerSlotPool } from '../../src/session/peer-slots/slots'
 import { PeerAttemptBudget } from '../../src/connectivity/peer-set/budget'
-import { V2PeerSet } from '../../src/connectivity/peer-set/peer-set'
+import { PeerSet } from '../../src/connectivity/peer-set/peer-set'
 
-import type { V2PeerRecoveryTraceEvent } from '../../src/connectivity/diagnostics'
-import { V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
-import { V2_PEER_OPERATION_CODE } from '../../src/session/v2-message'
+import type { PeerRecoveryTraceEvent } from '../../src/connectivity/diagnostics'
+import { LANE_REJECT } from '../../src/session/lane-codec'
+import { PEER_OPERATION_CODE } from '../../src/session/message'
 import {
-  createV2PeerAttemptIdentity,
-  createV2PeerPathIdentityValue,
-  createV2ProtocolSessionIdentity,
-} from '../../src/session/v2-identities'
+  createPeerAttemptIdentity,
+  createPeerPathIdentityValue,
+  createProtocolSessionIdentity,
+} from '../../src/session/identities'
 import type {
-  V2PeerAttemptCancellationOwner,
-  V2PeerAttemptResult,
-} from '../../src/connectivity/v2-peer-failure'
+  PeerAttemptCancellationOwner,
+  PeerAttemptResult,
+} from '../../src/connectivity/peer-failure'
 import {
-  V2_DEFAULT_PEER_RECOVERY_POLICY,
-  V2_DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS,
-  V2_DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
-  V2_MAXIMUM_PEER_ADMISSION_BUDGET_MILLISECONDS,
-  V2_PEER_RECOVERY_SESSION_ACTIVE_ELAPSED_BUDGET_MILLISECONDS,
-  V2PeerRecoverySupervisor,
-  calculateV2PeerRetryDelay,
-  createV2PeerRecoveryPolicy,
-  type V2PeerAttemptContext,
-  type V2PeerAttemptHandle,
-  type V2PeerRecoveryAttemptFactory,
-  type V2PeerRecoveryClock,
-  type V2PeerRecoveryRearmSource,
-  type V2PeerRecoverySupervisorOptions,
+  DEFAULT_PEER_RECOVERY_POLICY,
+  DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS,
+  DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS,
+  MAXIMUM_PEER_ADMISSION_BUDGET_MILLISECONDS,
+  PEER_RECOVERY_SESSION_ACTIVE_ELAPSED_BUDGET_MILLISECONDS,
+  PeerRecoverySupervisor,
+  calculatePeerRetryDelay,
+  createPeerRecoveryPolicy,
+  type PeerAttemptContext,
+  type PeerAttemptHandle,
+  type PeerRecoveryAttemptFactory,
+  type PeerRecoveryClock,
+  type PeerRecoveryRearmSource,
+  type PeerRecoverySupervisorOptions,
 } from '../../src/connectivity/peer-set/path'
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
@@ -38,8 +38,8 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-const SESSION_ID = createV2ProtocolSessionIdentity(identity(1))
-const PEER_PATH_ID = createV2PeerPathIdentityValue(identity(2))
+const SESSION_ID = createProtocolSessionIdentity(identity(1))
+const PEER_PATH_ID = createPeerPathIdentityValue(identity(2))
 
 describe('demand-driven peer set', () => {
   it('publishes failure and retry transitions even when the state observer throws', async () => {
@@ -58,8 +58,8 @@ describe('demand-driven peer set', () => {
   })
 
   it('waits through more than three busy replies without spending negotiation allowance', async () => {
-    const busy: V2PeerAttemptResult = { type: 'failed', failure: {
-      kind: 'authenticated-peer-operation', code: V2_PEER_OPERATION_CODE.capacity,
+    const busy: PeerAttemptResult = { type: 'failed', failure: {
+      kind: 'authenticated-peer-operation', code: PEER_OPERATION_CODE.capacity,
     } }
     const budget = new PeerAttemptBudget()
     const { supervisor, attempts, clock } = fixture([busy, busy, busy, busy, admitted()], { budget })
@@ -76,8 +76,8 @@ describe('demand-driven peer set', () => {
   })
 
   it('retains the elapsed deadline when the sender remains busy', async () => {
-    const busy: V2PeerAttemptResult = { type: 'failed', failure: {
-      kind: 'authenticated-peer-operation', code: V2_PEER_OPERATION_CODE.capacity,
+    const busy: PeerAttemptResult = { type: 'failed', failure: {
+      kind: 'authenticated-peer-operation', code: PEER_OPERATION_CODE.capacity,
     } }
     const { supervisor, attempts, clock } = fixture([busy, busy, busy, busy, busy])
     const content = supervisor.activate()
@@ -126,13 +126,13 @@ describe('demand-driven peer set', () => {
   it('shares admission tokens between independent paths and replacement sessions', async () => {
     const budget = new PeerAttemptBudget(2, 360_000, 600_000)
     const clock = new ManualClock()
-    const peers = new V2PeerSet()
+    const peers = new PeerSet()
     const first = new ScriptedAttempts(['pending'])
     const second = new ScriptedAttempts(['pending'])
     const path = peers.add({ protocolSessionId: SESSION_ID, peerPathId: PEER_PATH_ID,
       attempts: first, budget, clock })
     const other = peers.add({ protocolSessionId: SESSION_ID,
-      peerPathId: createV2PeerPathIdentityValue(identity(9)), attempts: second, budget, clock })
+      peerPathId: createPeerPathIdentityValue(identity(9)), attempts: second, budget, clock })
     const content = path.activate()
     const otherContent = other.activate()
     await turn()
@@ -143,9 +143,9 @@ describe('demand-driven peer set', () => {
     expect(second.cancellations).toEqual([])
     otherContent.close()
     await peers.close()
-    const replacement = new V2PeerRecoverySupervisor({
+    const replacement = new PeerRecoverySupervisor({
       slot: new PeerSlotPool().acquire(),
-      protocolSessionId: createV2ProtocolSessionIdentity(identity(10)), peerPathId: PEER_PATH_ID,
+      protocolSessionId: createProtocolSessionIdentity(identity(10)), peerPathId: PEER_PATH_ID,
       attempts: new ScriptedAttempts(['pending']), budget, clock,
     })
     const nextContent = replacement.activate()
@@ -248,7 +248,7 @@ describe('wave notice and terminal authority', () => {
   })
 })
 
-const TRANSIENT: V2PeerAttemptResult = Object.freeze({
+const TRANSIENT: PeerAttemptResult = Object.freeze({
   type: 'failed',
   failure: Object.freeze({
     kind: 'local-transient',
@@ -257,7 +257,7 @@ const TRANSIENT: V2PeerAttemptResult = Object.freeze({
   }),
 })
 
-const PATH_POLICY: V2PeerAttemptResult = Object.freeze({
+const PATH_POLICY: PeerAttemptResult = Object.freeze({
   type: 'failed',
   failure: Object.freeze({
     kind: 'local-policy',
@@ -265,27 +265,27 @@ const PATH_POLICY: V2PeerAttemptResult = Object.freeze({
   }),
 })
 
-function admitted(laneId = 7, laneEpoch = 1): V2PeerAttemptResult {
+function admitted(laneId = 7, laneEpoch = 1): PeerAttemptResult {
   return Object.freeze({
     type: 'admitted',
     lane: Object.freeze({ laneId, laneEpoch }),
   })
 }
 
-function admissionLimited(retryAfterMilliseconds: number): V2PeerAttemptResult {
+function admissionLimited(retryAfterMilliseconds: number): PeerAttemptResult {
   return Object.freeze({
     type: 'failed',
     failure: Object.freeze({
       kind: 'authenticated-lane-rejection',
       rejection: Object.freeze({
-        code: V2_LANE_REJECT.admissionLimited,
+        code: LANE_REJECT.admissionLimited,
         retryAfterMilliseconds,
       }),
     }),
   })
 }
 
-class ManualClock implements V2PeerRecoveryClock {
+class ManualClock implements PeerRecoveryClock {
   #now = 0
   readonly sleeps: number[] = []
   readonly #pending = new Set<{
@@ -333,32 +333,32 @@ class ManualClock implements V2PeerRecoveryClock {
 }
 
 type AttemptScript =
-  | V2PeerAttemptResult
+  | PeerAttemptResult
   | 'pending'
-  | ((context: V2PeerAttemptContext) => V2PeerAttemptResult)
+  | ((context: PeerAttemptContext) => PeerAttemptResult)
 
-class ScriptedAttempts implements V2PeerRecoveryAttemptFactory {
-  readonly contexts: V2PeerAttemptContext[] = []
-  readonly cancellations: V2PeerAttemptCancellationOwner[] = []
+class ScriptedAttempts implements PeerRecoveryAttemptFactory {
+  readonly contexts: PeerAttemptContext[] = []
+  readonly cancellations: PeerAttemptCancellationOwner[] = []
   readonly #script: AttemptScript[]
-  readonly #pending = new Map<number, (result: V2PeerAttemptResult) => void>()
+  readonly #pending = new Map<number, (result: PeerAttemptResult) => void>()
 
   constructor(script: AttemptScript[]) {
     this.#script = [...script]
   }
 
-  createAttempt(context: V2PeerAttemptContext): V2PeerAttemptHandle {
+  createAttempt(context: PeerAttemptContext): PeerAttemptHandle {
     const index = this.contexts.length
     this.contexts.push(context)
     const scripted = this.#script[index] ?? 'pending'
-    let result: Promise<V2PeerAttemptResult>
+    let result: Promise<PeerAttemptResult>
     if (scripted === 'pending') {
       result = new Promise((resolve) => this.#pending.set(index, resolve))
     } else {
       result = Promise.resolve(typeof scripted === 'function' ? scripted(context) : scripted)
     }
     return {
-      attemptId: createV2PeerAttemptIdentity(identity(index + 3)),
+      attemptId: createPeerAttemptIdentity(identity(index + 3)),
       result,
       cancel: (owner) => {
         this.cancellations.push(owner)
@@ -371,7 +371,7 @@ class ScriptedAttempts implements V2PeerRecoveryAttemptFactory {
     }
   }
 
-  settle(index: number, result: V2PeerAttemptResult): void {
+  settle(index: number, result: PeerAttemptResult): void {
     const resolve = this.#pending.get(index)
     if (resolve === undefined) throw new Error('attempt is not pending')
     this.#pending.delete(index)
@@ -379,7 +379,7 @@ class ScriptedAttempts implements V2PeerRecoveryAttemptFactory {
   }
 }
 
-class RearmSource implements V2PeerRecoveryRearmSource {
+class RearmSource implements PeerRecoveryRearmSource {
   #listener: (() => void) | undefined
 
   subscribe(listener: () => void): () => void {
@@ -394,21 +394,21 @@ class RearmSource implements V2PeerRecoveryRearmSource {
 
 function fixture(
   script: AttemptScript[],
-  overrides: Partial<V2PeerRecoverySupervisorOptions> = {},
+  overrides: Partial<PeerRecoverySupervisorOptions> = {},
 ): {
-  readonly supervisor: V2PeerRecoverySupervisor
+  readonly supervisor: PeerRecoverySupervisor
   readonly attempts: ScriptedAttempts
   readonly clock: ManualClock
-  readonly events: V2PeerRecoveryTraceEvent[]
+  readonly events: PeerRecoveryTraceEvent[]
 } {
   const attempts = new ScriptedAttempts(script)
   const clock = new ManualClock()
-  const events: V2PeerRecoveryTraceEvent[] = []
+  const events: PeerRecoveryTraceEvent[] = []
   return {
     attempts,
     clock,
     events,
-    supervisor: new V2PeerRecoverySupervisor({
+    supervisor: new PeerRecoverySupervisor({
       slot: new PeerSlotPool().acquire(),
       protocolSessionId: SESSION_ID,
       peerPathId: PEER_PATH_ID,
@@ -420,7 +420,7 @@ function fixture(
       } },
       ...overrides,
       ...(overrides.policy !== undefined && overrides.policy.waveElapsedBudgetMilliseconds < 85_000
-        ? { policy: createV2PeerRecoveryPolicy({ ...overrides.policy,
+        ? { policy: createPeerRecoveryPolicy({ ...overrides.policy,
           negotiationBudgetMilliseconds: 1, admissionBudgetMilliseconds: 1 }) } : {}),
     }),
   }
@@ -432,30 +432,30 @@ async function turn(): Promise<void> {
 
 describe('v2 peer recovery policy', () => {
   it('freezes the authoritative phase and cumulative recovery defaults', () => {
-    expect(V2_DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS).toBe(65_000)
-    expect(V2_DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(20_000)
-    expect(V2_MAXIMUM_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(25_000)
-    expect(V2_DEFAULT_PEER_RECOVERY_POLICY).toMatchObject({
+    expect(DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS).toBe(65_000)
+    expect(DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(20_000)
+    expect(MAXIMUM_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(25_000)
+    expect(DEFAULT_PEER_RECOVERY_POLICY).toMatchObject({
       waveMaxAttempts: 3,
       waveElapsedBudgetMilliseconds: 120_000,
       sessionMaxAttempts: 8,
       sessionActiveElapsedBudgetMilliseconds:
-        V2_PEER_RECOVERY_SESSION_ACTIVE_ELAPSED_BUDGET_MILLISECONDS,
+        PEER_RECOVERY_SESSION_ACTIVE_ELAPSED_BUDGET_MILLISECONDS,
       retryInitialBackoffMilliseconds: 1_000,
       retryBackoffMultiplier: 2,
       retryBackoffMaximumMilliseconds: 8_000,
       retryJitterMinimumFactor: 0.5,
       retryJitterMaximumFactor: 1,
     })
-    expect(Object.isFrozen(V2_DEFAULT_PEER_RECOVERY_POLICY)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_PEER_RECOVERY_POLICY)).toBe(true)
   })
 
   it('calculates equal-jitter edges, exponential caps, and RetryAfter as a lower bound', () => {
-    const policy = V2_DEFAULT_PEER_RECOVERY_POLICY
-    expect(calculateV2PeerRetryDelay(policy, 0, 0)).toBe(500)
-    expect(calculateV2PeerRetryDelay(policy, 0, 1)).toBe(1_000)
-    expect(calculateV2PeerRetryDelay(policy, 4, 1)).toBe(8_000)
-    expect(calculateV2PeerRetryDelay(policy, 0, 0, 12_000)).toBe(12_000)
+    const policy = DEFAULT_PEER_RECOVERY_POLICY
+    expect(calculatePeerRetryDelay(policy, 0, 0)).toBe(500)
+    expect(calculatePeerRetryDelay(policy, 0, 1)).toBe(1_000)
+    expect(calculatePeerRetryDelay(policy, 4, 1)).toBe(8_000)
+    expect(calculatePeerRetryDelay(policy, 0, 0, 12_000)).toBe(12_000)
   })
 
   it.each([
@@ -470,7 +470,7 @@ describe('v2 peer recovery policy', () => {
     { retryJitterMinimumFactor: 0.8, retryJitterMaximumFactor: 0.7 },
     { retryJitterMaximumFactor: 1.1 },
   ])('rejects an invalid recovery configuration %#', (override) => {
-    expect(() => createV2PeerRecoveryPolicy(override)).toThrow(RangeError)
+    expect(() => createPeerRecoveryPolicy(override)).toThrow(RangeError)
   })
 })
 
@@ -519,7 +519,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('honors authenticated RetryAfter across activation cancellation and reopening', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       retryInitialBackoffMilliseconds: 2,
       retryBackoffMaximumMilliseconds: 8,
       waveElapsedBudgetMilliseconds: 100,
@@ -562,7 +562,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('retains authenticated not-before authority when the current wave is already exhausted', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       waveMaxAttempts: 1,
       sessionMaxAttempts: 2,
       waveElapsedBudgetMilliseconds: 100,
@@ -597,7 +597,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('rejects stale phase changes from a replaced attempt', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       waveMaxAttempts: 2,
       sessionMaxAttempts: 2,
       retryInitialBackoffMilliseconds: 1,
@@ -622,7 +622,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('quiesces at a wave attempt ceiling and rearms only on a later activation edge', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       waveMaxAttempts: 2,
       sessionMaxAttempts: 3,
       retryInitialBackoffMilliseconds: 1,
@@ -661,7 +661,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('counts active wave time and temporarily quiesces when elapsed tokens are depleted', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       waveElapsedBudgetMilliseconds: 10,
       sessionActiveElapsedBudgetMilliseconds: 15,
     })
@@ -700,7 +700,7 @@ describe('v2 peer recovery supervisor', () => {
   })
 
   it('coalesces network rearm events and never rearms a permanent path stop', async () => {
-    const policy = createV2PeerRecoveryPolicy({
+    const policy = createPeerRecoveryPolicy({
       waveMaxAttempts: 1,
       sessionMaxAttempts: 3,
     })
@@ -795,15 +795,15 @@ describe('v2 peer recovery supervisor', () => {
       attempts,
       clock,
       random: () => 0,
-      policy: createV2PeerRecoveryPolicy({ waveMaxAttempts: 1 }),
+      policy: createPeerRecoveryPolicy({ waveMaxAttempts: 1 }),
       trace: { current: () => { throw new Error('synthetic trace failure') } },
       closeRelay: () => { relayClosures += 1 },
       closeSession: () => { sessionClosures += 1 },
-    } satisfies V2PeerRecoverySupervisorOptions & {
+    } satisfies PeerRecoverySupervisorOptions & {
       readonly closeRelay: () => void
       readonly closeSession: () => void
     }
-    const supervisor = new V2PeerRecoverySupervisor(options)
+    const supervisor = new PeerRecoverySupervisor(options)
     supervisor.activate()
     await supervisor.join()
 

@@ -1,11 +1,11 @@
 import { abortOwner, authoritativeAfterCancellation, localContractResult, normalizeAttemptResult, waitForAbort } from './attempt-result'
-import type { V2PeerAttemptHandle, V2PeerRecoveryClock, V2PeerRecoveryAttemptRace as AttemptRace } from './contract'
-import type { V2PeerAttemptCancellationOwner } from '../v2-peer-failure'
+import type { PeerAttemptHandle, PeerRecoveryClock, PeerRecoveryAttemptRace as AttemptRace } from './contract'
+import type { PeerAttemptCancellationOwner } from '../peer-failure'
 const NEVER: Promise<never> = new Promise(() => undefined)
 export async function racePeerAttempt(
-  attempt: V2PeerAttemptHandle, clock: V2PeerRecoveryClock,
+  attempt: PeerAttemptHandle, clock: PeerRecoveryClock,
   remaining: { readonly wave: number; readonly session: number }, signal: AbortSignal,
-  cancel: (attempt: V2PeerAttemptHandle, owner: V2PeerAttemptCancellationOwner) => void,
+  cancel: (attempt: PeerAttemptHandle, owner: PeerAttemptCancellationOwner) => void,
 ): Promise<AttemptRace> {
     const exhaustion = remaining.session <= remaining.wave
       ? 'session-elapsed-budget'
@@ -33,7 +33,7 @@ export async function racePeerAttempt(
     return winner
 }
 
-export function cancelPeerAttempt(attempt: V2PeerAttemptHandle | undefined, owner: V2PeerAttemptCancellationOwner): void {
+export function cancelPeerAttempt(attempt: PeerAttemptHandle | undefined, owner: PeerAttemptCancellationOwner): void {
     try {
       attempt?.cancel(owner)
     } catch {

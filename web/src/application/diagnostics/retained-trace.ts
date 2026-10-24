@@ -1,7 +1,7 @@
 import type { RetainedActionPayloadV1 } from '../../diagnostics/trace/retained-payload'
-import type { V2RetainedInventoryTraceEvent } from '../receive/observation/contracts'
+import type { RetainedInventoryTraceEvent } from '../receive/observation/contracts'
 
-type RetainedActionTraceEvent = Extract<V2RetainedInventoryTraceEvent, {
+type RetainedActionTraceEvent = Extract<RetainedInventoryTraceEvent, {
   readonly retained_action: unknown
 }>
 

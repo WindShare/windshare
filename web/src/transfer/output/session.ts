@@ -221,7 +221,7 @@ type ReceiveIntentForPlanArtifact<
  * acquisition: callers must bind it before observing their signal. A returned
  * rejection carries a committed lifecycle cut and must not be settled again.
  */
-export interface V2PlanExecutionAuthority {
+export interface PlanExecutionAuthority {
   openDirectTree(
     intent: ReceiveIntentForPlan<DirectTreePlan>,
     signal: AbortSignal,

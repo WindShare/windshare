@@ -2,24 +2,24 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import { byteRange, FileGeometry } from '../../src/content/geometry'
 import {
-  V2BlockBroker,
-  V2LaneSet,
-  type V2BlockDemand,
-  type V2BlockLane,
-  type V2BlockRangeReader,
-  type V2BlockRouteEligibility,
-} from '../../src/content/v2-broker'
-import type { V2BlockReadObserver } from '../../src/content/v2-lane-set'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
+  BlockBroker,
+  LaneSet,
+  type BlockDemand,
+  type BlockLane,
+  type BlockRangeReader,
+  type BlockRouteEligibility,
+} from '../../src/content/broker'
+import type { BlockReadObserver } from '../../src/content/lane-set'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 
-const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
+const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
   allows: () => true,
   assertActive: () => undefined,
   subscribe: () => () => undefined,
 })
 
-function onlyRoute(route: 'application-relay' | 'direct' | 'turn'): V2BlockRouteEligibility {
+function onlyRoute(route: 'application-relay' | 'direct' | 'turn'): BlockRouteEligibility {
   return Object.freeze({
     active: true,
     allows: (candidate: 'application-relay' | 'direct' | 'turn') => candidate === route,
@@ -34,7 +34,7 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-function revision(exactSize = 40n, blockSize = 10n): V2FileRevisionDescriptor {
+function revision(exactSize = 40n, blockSize = 10n): FileRevisionDescriptor {
   return Object.freeze({
     shareInstance: identity(1),
     shareInstanceId: 'share',
@@ -48,21 +48,21 @@ function revision(exactSize = 40n, blockSize = 10n): V2FileRevisionDescriptor {
 }
 
 interface LaneCall {
-  readonly demand: V2BlockDemand
+  readonly demand: BlockDemand
   readonly signal: AbortSignal
-  readonly resolve: (record: V2BlockRecord) => void
+  readonly resolve: (record: BlockRecord) => void
   readonly onReceive?: (objectBytes: number) => void
 }
 
-class ImmediateRecordingLane implements V2BlockLane {
+class ImmediateRecordingLane implements BlockLane {
   readonly id: number
-  readonly calls: V2BlockDemand[] = []
+  readonly calls: BlockDemand[] = []
 
   constructor(id: number) {
     this.id = id
   }
 
-  async fetchBlock(demand: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
+  async fetchBlock(demand: BlockDemand, signal: AbortSignal): Promise<BlockRecord> {
     signal.throwIfAborted()
     this.calls.push(demand)
     const block = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
@@ -74,11 +74,11 @@ class ImmediateRecordingLane implements V2BlockLane {
   }
 }
 
-class ControlledLane implements V2BlockLane {
+class ControlledLane implements BlockLane {
   readonly id = 1
   readonly calls: LaneCall[] = []
 
-  fetchBlock(demand: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
+  fetchBlock(demand: BlockDemand, signal: AbortSignal, observer?: BlockReadObserver): Promise<BlockRecord> {
     return new Promise((resolve) => this.calls.push({ demand, signal, resolve,
       ...(observer === undefined ? {} : { onReceive: observer.received }) }))
   }
@@ -96,10 +96,10 @@ class ControlledLane implements V2BlockLane {
   }
 }
 
-function brokerWith(lane: ControlledLane, options: ConstructorParameters<typeof V2BlockBroker>[1] = {}) {
-  const lanes = new V2LaneSet()
+function brokerWith(lane: ControlledLane, options: ConstructorParameters<typeof BlockBroker>[1] = {}) {
+  const lanes = new LaneSet()
   lanes.add(lane, 'application-relay')
-  return new V2BlockBroker(lanes, options)
+  return new BlockBroker(lanes, options)
 }
 
 async function turn(): Promise<void> {
@@ -156,7 +156,7 @@ describe('v2 preview/download block broker', () => {
   })
 
   it('keeps raw route authority out of the scoped range-reader port', () => {
-    expectTypeOf<V2BlockBroker>().not.toMatchTypeOf<V2BlockRangeReader>()
+    expectTypeOf<BlockBroker>().not.toMatchTypeOf<BlockRangeReader>()
   })
 
   it('keeps a shared upstream read alive when preview leaves but download remains', async () => {
@@ -296,12 +296,12 @@ describe('v2 preview/download block broker', () => {
 
   it('enforces per-consumer routes for distinct work while coalescing the same BlockRef', async () => {
     const observations: Array<{ readonly route: string; readonly localBlockIndex: bigint }> = []
-    const lanes = new V2LaneSet({
+    const lanes = new LaneSet({
       onBlockFetched: ({ route, localBlockIndex }) => observations.push({ route, localBlockIndex }),
     })
     const relay = new ImmediateRecordingLane(1)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const descriptor = revision()
     const peerRoutes = onlyRoute('direct')
     const relayRoutes = onlyRoute('application-relay')
@@ -343,12 +343,12 @@ describe('v2 preview/download block broker', () => {
 
   it('revokes a canceled consumer route before a queued upstream dispatch', async () => {
     const observations: Array<{ readonly route: string; readonly localBlockIndex: bigint }> = []
-    const lanes = new V2LaneSet({
+    const lanes = new LaneSet({
       onBlockFetched: ({ route, localBlockIndex }) => observations.push({ route, localBlockIndex }),
     })
     const relay = new ImmediateRecordingLane(1)
     lanes.add(relay, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const descriptor = revision()
     const survivingRoutes = onlyRoute('direct')
     const canceledRoutes = onlyRoute('application-relay')

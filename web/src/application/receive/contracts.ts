@@ -18,54 +18,54 @@ import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
 import type { ArtifactChoiceID, ReceiveIntent } from '../../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../transfer/output/session'
-import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from './actions'
+import type { PlanExecutionAuthority } from '../../transfer/output/session'
+import type { LifecycleUserAction, ActiveReceiveControl, WorkspaceUsage } from './actions'
 
-export type V2PresentationSourceOutcome =
+export type PresentationSourceOutcome =
   | 'picker_refused'
   | 'caller_cancelled'
   | 'stale_replacement'
   | 'native_fault'
 
-export class V2PresentationSourceError extends Error {
-  readonly outcome: V2PresentationSourceOutcome
+export class PresentationSourceError extends Error {
+  readonly outcome: PresentationSourceOutcome
 
-  constructor(outcome: V2PresentationSourceOutcome, cause: unknown) {
+  constructor(outcome: PresentationSourceOutcome, cause: unknown) {
     super('Browser receive source reported a closed presentation outcome', { cause })
-    this.name = 'V2PresentationSourceError'
+    this.name = 'PresentationSourceError'
     this.outcome = outcome
   }
 }
 
-export function presentationSourceOutcome(error: unknown): V2PresentationSourceOutcome {
-  return error instanceof V2PresentationSourceError ? error.outcome : 'native_fault'
+export function presentationSourceOutcome(error: unknown): PresentationSourceOutcome {
+  return error instanceof PresentationSourceError ? error.outcome : 'native_fault'
 }
 
-export interface V2LifecycleMutation {
+export interface LifecycleMutation {
   readonly lifecycle: ReceiveLifecycleState
   readonly workspaceUsage?: WorkspaceUsage | null
-  readonly activeControls?: readonly V2ActiveReceiveControl[]
+  readonly activeControls?: readonly ActiveReceiveControl[]
   readonly resumeTransfer?: boolean
   /** Action outcome is separate from the durable state that survived the attempt. */
-  readonly actionOutcome?: V2LifecycleActionOutcome
+  readonly actionOutcome?: LifecycleActionOutcome
   readonly recoverySummary?: RecoverySummary
 }
 
-export type V2LifecycleActionOutcome =
+export type LifecycleActionOutcome =
   | Readonly<{ kind: 'completed' }>
   | Readonly<{ kind: 'failed'; error: unknown }>
 
-export interface V2BoundReceiveOperation {
+export interface BoundReceiveOperation {
   readonly display?: ReceiveOperationDisplay
   readonly intent: ReceiveIntent
   /** Plans and job identity are replaced together only at an explicit continuation boundary. */
-  readonly plans: V2PlanExecutionAuthority
+  readonly plans: PlanExecutionAuthority
   readonly transferJobId: string
   readonly lifecycle: ReceiveLifecycleState
   /** Subscribe before reading lifecycle; notifications never settle the execution lifetime. */
   subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
-  readonly activeControls: readonly V2ActiveReceiveControl[]
-  readonly outputProgress?: V2DirectZipProgressSource | V2BrowserFolderProgressSource
+  readonly activeControls: readonly ActiveReceiveControl[]
+  readonly outputProgress?: DirectZipProgressSource | BrowserFolderProgressSource
   readonly observeCheckpoint?: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
@@ -80,29 +80,29 @@ export interface V2BoundReceiveOperation {
   bindOutputFailures?(failures: OutputFailureSinks | undefined): OutputFailureBindingLease
 
   /** The implementation translates the product control into its plan-specific stable cut. */
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void
 
   /** Picker-bearing publication retries must start inside this synchronous call. */
   startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
+  ): LifecycleMutation | PromiseLike<LifecycleMutation>
 
   resolveWorkspaceUsage(
     lifecycle: ReceiveLifecycleState,
   ): WorkspaceUsage | null | PromiseLike<WorkspaceUsage | null>
   settleTransferAdmissionFailure(
     reason: unknown,
-  ): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
+  ): LifecycleMutation | PromiseLike<LifecycleMutation>
   detach(): void | PromiseLike<void>
 }
 
-export interface V2OwnedActivationAuthority {
+export interface OwnedActivationAuthority {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
 
   /** Durable effects remain owned until settlement records their terminal disposition. */
-  settleActivationFailure(reason: unknown): Promise<V2LifecycleMutation>
+  settleActivationFailure(reason: unknown): Promise<LifecycleMutation>
   detach(): void | PromiseLike<void>
 }
 
@@ -113,16 +113,16 @@ export interface V2OwnedActivationAuthority {
  * authority is ready for another commit; an ordinary rejection ends the authority.
  * Once the durable cut may have occurred, neither retryable-precut nor rejection is valid.
  */
-export type V2RouteCommitResult =
+export type RouteCommitResult =
   | Readonly<{
       kind: 'bound-operation'
-      operation: V2BoundReceiveOperation
+      operation: BoundReceiveOperation
       display?: ReceiveOperationDisplay
     }>
   | Readonly<{
       kind: 'owned-effects'
       cause: unknown
-      authority: V2OwnedActivationAuthority
+      authority: OwnedActivationAuthority
     }>
   | Readonly<{
       kind: 'retryable-precut'
@@ -130,7 +130,7 @@ export type V2RouteCommitResult =
       receiverOperationId?: string
     }>
 
-export interface V2RouteCommitInput {
+export interface RouteCommitInput {
   readonly display?: ReceiveOperationDisplay
   readonly action: ResolvedArtifactAction
   /** Attempt cancellation is separate from releasing the reusable presentation authority. */
@@ -145,16 +145,16 @@ export interface V2RouteCommitInput {
   ) => Promise<BoundReceiveIntent>
 }
 
-export interface V2ArtifactPresentationAuthority {
+export interface ArtifactPresentationAuthority {
   /** Workspace and portable are ready immediately; picker-backed routes settle later. */
   readonly ready: Promise<void>
   /** A retryable-precut result is the only outcome that permits another call. */
-  commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult>
+  commit(input: RouteCommitInput): Promise<RouteCommitResult>
   /** Non-cancellable picker work remains observed and drained after this pre-commit release. */
   release(reason: unknown): void | PromiseLike<void>
 }
 
-export type V2RetainedReceiveAction =
+export type RetainedReceiveAction =
   | 'save-staged-files'
   | 'cleanup-staging'
   | 'discard-incomplete-staging'
@@ -167,14 +167,14 @@ export type V2RetainedReceiveAction =
   | 'delete'
   | 'forget'
 
-export type V2RetainedReceiveActionResult =
+export type RetainedReceiveActionResult =
   | Readonly<{ kind: 'completed' }>
   | Readonly<{
       kind: 'receive-continuation'
-      runtime: V2BoundReceiveOperation
+      runtime: BoundReceiveOperation
     }>
 
-export interface V2RetainedReceiveOperation {
+export interface RetainedReceiveOperation {
   readonly display?: ReceiveOperationDisplay
   readonly shareInstance?: string
   readonly operationId: string
@@ -182,15 +182,15 @@ export interface V2RetainedReceiveOperation {
   readonly lifecycleGeneration: bigint
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
-  readonly actions: readonly V2RetainedReceiveAction[]
+  readonly actions: readonly RetainedReceiveAction[]
   readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
   readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }
 
-export interface V2RetainedReceiveInventory {
-  readonly operations: readonly V2RetainedReceiveOperation[]
+export interface RetainedReceiveInventory {
+  readonly operations: readonly RetainedReceiveOperation[]
   /** Source-reviewed facts; the coordinator never infers incident admission from React state. */
   readonly presentationFailures: readonly FailureFact[]
 
@@ -199,27 +199,27 @@ export interface V2RetainedReceiveInventory {
    * copied projections so presentation can never reconstruct persisted authority.
    */
   act(
-    operation: V2RetainedReceiveOperation,
-    action: V2RetainedReceiveAction,
+    operation: RetainedReceiveOperation,
+    action: RetainedReceiveAction,
     signal: AbortSignal,
     failures?: OutputFailureSinks,
-  ): PromiseLike<V2RetainedReceiveActionResult>
+  ): PromiseLike<RetainedReceiveActionResult>
   close(): void
 }
 
-export interface V2RetainedReceiveInventoryPort {
+export interface RetainedReceiveInventoryPort {
   list(
     signal: AbortSignal,
     failures?: OutputFailureSinks,
-  ): PromiseLike<V2RetainedReceiveInventory>
+  ): PromiseLike<RetainedReceiveInventory>
   readRepairSummary?(
     operationId: string,
     signal: AbortSignal,
   ): PromiseLike<import('../../transfer/lifecycle/name-repair').CompatibleNameRepairSummary | undefined>
 }
 
-export interface V2ReceiveCompositionPort {
-  readonly retained: V2RetainedReceiveInventoryPort
+export interface ReceiveCompositionPort {
+  readonly retained: RetainedReceiveInventoryPort
 
   environment(signal: AbortSignal): EnvironmentOffers | PromiseLike<EnvironmentOffers>
 
@@ -230,32 +230,32 @@ export interface V2ReceiveCompositionPort {
     failures?: OutputFailureSinks,
     display?: ReceiveOperationDisplay,
     recoveryPreference?: import('../../output/browser-delivery/model').BrowserRecoveryPreference,
-  ): V2ArtifactPresentationAuthority
+  ): ArtifactPresentationAuthority
 }
 
-export interface V2BrowserFolderProgressSnapshot {
+export interface BrowserFolderProgressSnapshot {
   readonly kind: 'browser-folder'
   readonly operationId: string
   readonly generation: bigint
   readonly summary: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
 }
 
-export interface V2BrowserFolderProgressSource {
-  getSnapshot(): V2BrowserFolderProgressSnapshot
-  subscribe(listener: (snapshot: V2BrowserFolderProgressSnapshot) => void): () => void
+export interface BrowserFolderProgressSource {
+  getSnapshot(): BrowserFolderProgressSnapshot
+  subscribe(listener: (snapshot: BrowserFolderProgressSnapshot) => void): () => void
 }
 
-export type V2DirectZipProgressPhase =
+export type DirectZipProgressPhase =
   | 'receiving'
   | 'saving-resume-position'
   | 'closing'
   | 'verifying'
 
-export interface V2DirectZipProgressSnapshot {
+export interface DirectZipProgressSnapshot {
   readonly kind: 'direct-zip'
   readonly operationId: string
   readonly generation: bigint
-  readonly phase: V2DirectZipProgressPhase
+  readonly phase: DirectZipProgressPhase
   /** Logical payload, including the retained prefix; retries do not count twice. */
   readonly receivedSelectedBytes: bigint
   /** Payload acknowledged by the output writer; acknowledgement alone does not prove recovery. */
@@ -265,7 +265,7 @@ export interface V2DirectZipProgressSnapshot {
 }
 
 /** The operation owns this stream; UI observers never derive safe bytes from transfer acknowledgements. */
-export interface V2DirectZipProgressSource {
-  getSnapshot(): V2DirectZipProgressSnapshot
-  subscribe(listener: (snapshot: V2DirectZipProgressSnapshot) => void): () => void
+export interface DirectZipProgressSource {
+  getSnapshot(): DirectZipProgressSnapshot
+  subscribe(listener: (snapshot: DirectZipProgressSnapshot) => void): () => void
 }

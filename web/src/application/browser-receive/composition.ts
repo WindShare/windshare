@@ -31,12 +31,12 @@ import type {
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import type { ArtifactChoiceID } from '../../transfer/intent'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2ReceiveCompositionPort,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
+  ArtifactPresentationAuthority,
+  ReceiveCompositionPort,
+  RouteCommitInput,
+  RouteCommitResult,
 } from '../receive/contracts'
-import { V2PresentationSourceError } from '../receive/contracts'
+import { PresentationSourceError } from '../receive/contracts'
 import type { BrowserReceiveWindow } from '../../output/browser/environment'
 import { FSAArtifactPresentationAuthority } from './fsa/route'
 import { BrowserFolderDeliveryProgress } from './fsa/folder-delivery'
@@ -84,11 +84,11 @@ interface InstalledBrowserRouteRegistry {
 export function createBrowserReceiveComposition(
   windowPort: BrowserReceiveWindow,
   options: BrowserReceiveCompositionOptions = {},
-): V2ReceiveCompositionPort {
+): ReceiveCompositionPort {
   let installedDirectZip: InstalledBrowserDirectZipRoute | undefined
   let nativeObjectSupported = false
   let nativeSupportProbe: Promise<boolean> | undefined
-  const composition: V2ReceiveCompositionPort = {
+  const composition: ReceiveCompositionPort = {
     retained: Object.freeze({
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
       readRepairSummary: (operationId: string, signal: AbortSignal) =>
@@ -243,13 +243,13 @@ function diagnosticsFor(
 }
 
 function bindArtifactAuthorityOutputFailures(
-  authority: V2ArtifactPresentationAuthority,
+  authority: ArtifactPresentationAuthority,
   binding: OutputFailureBinding,
   display?: ReceiveOperationDisplay,
-): V2ArtifactPresentationAuthority {
+): ArtifactPresentationAuthority {
   return Object.freeze({
     ready: authority.ready,
-    commit: async (input: V2RouteCommitInput) =>
+    commit: async (input: RouteCommitInput) =>
       bindCommittedOperation(await authority.commit({ ...input,
         ...(display === undefined ? {} : { display }) }), binding, display),
     release: (reason: unknown) => authority.release(reason),
@@ -257,10 +257,10 @@ function bindArtifactAuthorityOutputFailures(
 }
 
 function bindCommittedOperation(
-  result: V2RouteCommitResult,
+  result: RouteCommitResult,
   binding: OutputFailureBinding,
   display?: ReceiveOperationDisplay,
-): V2RouteCommitResult {
+): RouteCommitResult {
   if (result.kind !== 'bound-operation') return result
   return Object.freeze({
     kind: 'bound-operation',
@@ -280,7 +280,7 @@ function startProductionAuthority(
   failures?: OutputFailureSinks,
   displayInput?: ReceiveOperationDisplay,
   recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic',
-): V2ArtifactPresentationAuthority {
+): ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)
   const display = displayForRoute(offered, displayInput)
@@ -376,6 +376,6 @@ function displayForRoute(offered: OfferedArtifactChoice, input: ReceiveOperation
 
 function pickerPresentationError(error: unknown): unknown {
   return error instanceof DOMException && error.name === 'AbortError'
-    ? new V2PresentationSourceError('picker_refused', error)
+    ? new PresentationSourceError('picker_refused', error)
     : error
 }

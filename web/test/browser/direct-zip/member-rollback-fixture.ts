@@ -8,7 +8,7 @@ import type { BrowserReceiveWindow } from '../../../src/output/browser/environme
 import { createBrowserDirectZipComposition } from '../../../src/application/browser-receive/direct-zip/production'
 import { readEnvelope } from '../../../src/output/direct-zip/browser/resources'
 import { createBrowserReceiveComposition } from '../../../src/application/browser-receive/composition'
-import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
+import type { BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import { prepareProductionDirectZipActivation } from './production-activation'
 import { memberRollbackSource, MEMBER_ROLLBACK_PAUSE, type MemberRollbackRevisionMode } from './member-rollback-source'
 
@@ -25,7 +25,7 @@ export async function createMemberRollbackFixture(databaseName: string, mode: Me
     openJournal: () => IndexedDbDirectZipJournalRepository.open({ databaseName }),
   })
   const receiver = createBrowserReceiveComposition(windowPort, { directZip })
-  let active: V2BoundReceiveOperation | undefined
+  let active: BoundReceiveOperation | undefined
   const close = async () => {
     await active?.detach()
     if (originalPicker === undefined) Reflect.deleteProperty(window, 'showDirectoryPicker')

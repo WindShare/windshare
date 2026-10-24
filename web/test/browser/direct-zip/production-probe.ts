@@ -14,7 +14,7 @@ import { readEnvelope } from '../../../src/output/direct-zip/browser/resources'
 import { createBrowserReceiveComposition } from '../../../src/application/browser-receive/composition'
 import type { BrowserReceiveWindow } from '../../../src/output/browser/environment'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
-import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
+import type { BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import type { ReceiveOperationDisplay } from '../../../src/output/workspace/operation-display'
 import { listBrowserRetainedOperations } from '../../../src/application/browser-receive/retained/inventory'
 import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'
@@ -60,7 +60,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     : Uint8Array.of(1, 2, 3, 4, 5, 6)
   const firstWriteBytes = mode === 'automatic-checkpoint-spacing' ? SPACING_FIRST_WRITE_BYTES : 3
   const progress = observeProductionDirectZipProgress(BigInt(payload.byteLength))
-  let active: V2BoundReceiveOperation | undefined
+  let active: BoundReceiveOperation | undefined
   try {
     const activation = await prepareProductionDirectZipActivation(windowPort, receiver, directZip, signal, display)
     const { environment, rootId } = activation
@@ -140,7 +140,7 @@ async function resolveProductionActivation(
   directZip: ReturnType<typeof createBrowserDirectZipComposition>,
   databaseName: string,
   openJournal: ReturnType<typeof faultingJournal>,
-): Promise<V2BoundReceiveOperation> {
+): Promise<BoundReceiveOperation> {
   if (activated.kind === 'owned-effects' && mode === 'bootstrap-recovery') {
     await activated.authority.detach()
     const inventory = await openJournal()
@@ -171,7 +171,7 @@ async function resolveProductionActivation(
 
 async function materializeProductionPayload({ active, rootId, payload, firstWriteBytes, mode,
   directZip, databaseName, parent, progress, fileSystem }: {
-  active: V2BoundReceiveOperation
+  active: BoundReceiveOperation
   rootId: string
   payload: Uint8Array
   firstWriteBytes: number
@@ -253,7 +253,7 @@ async function materializeProductionPayload({ active, rootId, payload, firstWrit
   return { active, execution, resumeOffset }
 }
 
-async function continueCompletedOperation(active: V2BoundReceiveOperation,
+async function continueCompletedOperation(active: BoundReceiveOperation,
   directZip: ReturnType<typeof createBrowserDirectZipComposition>, databaseName: string, mode: ProductionMode) {
   // A complete archive must recover with only local authority, even if the sender is gone.
   if (mode === 'completion-continue') {
@@ -385,9 +385,9 @@ function faultingJournal(databaseName: string, mode: ProductionMode) {
   }
 }
 
-async function continuePausedOperation(active: V2BoundReceiveOperation,
+async function continuePausedOperation(active: BoundReceiveOperation,
   directZip: ReturnType<typeof createBrowserDirectZipComposition>, databaseName: string,
-  mode: ProductionMode, parent: FileSystemDirectoryHandle): Promise<V2BoundReceiveOperation | undefined> {
+  mode: ProductionMode, parent: FileSystemDirectoryHandle): Promise<BoundReceiveOperation | undefined> {
   if (mode === 'unpromoted-settle') {
     const settled = await active.settleTransferAdmissionFailure(new Error('Filesystem close outlived its journal promotion'))
     if (settled.lifecycle.kind !== 'resumable-receive') throw new Error('Candidate failure did not preserve a resumable checkpoint')

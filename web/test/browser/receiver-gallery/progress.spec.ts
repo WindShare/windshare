@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { capture, CURRENT_TASK, expectNoHorizontalOverflow, GALLERY_PATH, showScenario } from './assertions'
-import type { V2ReceiverProgress } from '../../../src/ui/v2-model'
+import type { ReceiverProgress } from '../../../src/ui/model'
 
 const MIB = 1024n * 1024n
 
@@ -13,8 +13,8 @@ test('task progress counts written bytes while discovery is open and uses an exa
   expect(await task.getByRole('progressbar').getAttribute('value')).toBeNull()
   await task.scrollIntoViewIfNeeded()
   await capture(page, 'progress-counting')
-  const update = async (patch: Partial<V2ReceiverProgress>) => page.evaluate(value => {
-    const gallery = window as typeof window & { windshareAdvanceProgress(patch: Partial<V2ReceiverProgress>): void }
+  const update = async (patch: Partial<ReceiverProgress>) => page.evaluate(value => {
+    const gallery = window as typeof window & { windshareAdvanceProgress(patch: Partial<ReceiverProgress>): void }
     gallery.windshareAdvanceProgress(value)
   }, patch)
   await update({ receivedObjectBytes: 0n, writtenBytes: 0n, materializedBytes: 0n })

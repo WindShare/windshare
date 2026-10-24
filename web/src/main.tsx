@@ -17,27 +17,27 @@ import {
   type BrowserReceiveWindow,
 } from './application/browser-receive/composition'
 import { createBrowserDirectZipComposition } from './application/browser-receive/direct-zip/production'
-import { V2ReceiverController } from './ui/v2-controller'
-import { captureV2Location, observeV2Location } from './ui/capability/location'
+import { ReceiverController } from './ui/controller'
+import { captureLocation, observeLocation } from './ui/capability/location'
 import { BrowserCapabilityIntake } from './ui/capability/intake'
-import { V2BrowserReceiverGateway } from './application/browser-share/gateway'
+import { BrowserReceiverGateway } from './application/browser-share/gateway'
 import {
   createConnectivityTraceSource,
   createOutputTraceSource,
   createProtocolTraceSource,
-  createV2ReceiverTraceSource,
+  createReceiverTraceSource,
 } from './application/diagnostics/receive-trace'
 
 // Initialization runs outside React so StrictMode cannot duplicate capability
 // parsing, fragment erasure, or the pre-gesture relay join. Fragment erasure
 // happens before any fallible browser-capability discovery or receiver assembly.
-const initialCapability = captureV2Location(window)
+const initialCapability = captureLocation(window)
 
 // Late binding keeps startup incidents reportable before the controller exists,
 // without exposing the composition root to a temporal-dead-zone lookup.
 const controllerContext: {
   read:
-    | (() => ReturnType<V2ReceiverController['getDiagnosticSnapshot']>)
+    | (() => ReturnType<ReceiverController['getDiagnosticSnapshot']>)
     | undefined
 } = { read: undefined }
 
@@ -63,7 +63,7 @@ const diagnosticDelivery = createDiagnosticsDelivery({
   defer: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
 })
 const stopDiagnosticsObservation = observeDiagnosticsPage(window, diagnosticSession)
-const receiverTrace = createV2ReceiverTraceSource(diagnostics.trace)
+const receiverTrace = createReceiverTraceSource(diagnostics.trace)
 const outputTrace = createOutputTraceSource(diagnostics.trace)
 const protocolTrace = createProtocolTraceSource(diagnostics.trace)
 const connectivityTrace = createConnectivityTraceSource(diagnostics.trace)
@@ -78,11 +78,11 @@ const receiveComposition = createBrowserReceiveComposition(
     localOutputFailures: diagnostics.localOutputFailures,
   },
 )
-const gateway = new V2BrowserReceiverGateway({
+const gateway = new BrowserReceiverGateway({
   protocolTrace,
   connectivityTrace,
 })
-const controller = new V2ReceiverController(gateway, {
+const controller = new ReceiverController(gateway, {
   capabilityIntake: new BrowserCapabilityIntake(() => diagnosticSession.enableFromLink()),
   receive: receiveComposition,
   trace: receiverTrace,
@@ -90,7 +90,7 @@ const controller = new V2ReceiverController(gateway, {
 })
 controllerContext.read = () => controller.getDiagnosticSnapshot()
 controller.initialize(initialCapability)
-const stopLocationObservation = observeV2Location(window, captured => controller.openLocation(captured))
+const stopLocationObservation = observeLocation(window, captured => controller.openLocation(captured))
 installWindShareDiagnostics(window, diagnosticSession)
 
 window.addEventListener('pagehide', (event) => {

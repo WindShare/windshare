@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../../src/catalog/selection'
 import { FileGeometry } from '../../../src/content/geometry'
-import type { V2BlockRangeReader } from '../../../src/content/v2-broker'
-import type { V2RevisionReader } from '../../../src/content/v2-session-services'
+import type { BlockRangeReader } from '../../../src/content/broker'
+import type { RevisionReader } from '../../../src/content/session-services'
 import { OutputCapacityBlockedError } from '../../../src/transfer/capacity-pressure/drain'
 import { createProgressiveWorkspaceExecution } from '../../../src/output/execution/progressive-workspace-execution'
 import { ProgressiveZipArchive, type ZipObjectCapacity } from '../../../src/output/progressive-zip/archive'
@@ -68,7 +68,7 @@ describe('native ZIP capacity scheduling', () => {
       fileEntry(identity(72), 'b.bin', BLOCK_SIZE * 2n), fileEntry(identity(73), 'c.bin', BLOCK_SIZE),
       fileEntry(identity(74), 'd-empty.bin', 0n), fileEntry(identity(75), 'e-not-admitted.bin', 0n)]
     const [a, b, c, d, e] = files
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const object = { operationId: intent.operationId, objectId: 'archive', handleId: 'handle', kind: 'zip-archive' as const }
     const io = new NativeIO()
@@ -123,11 +123,11 @@ describe('native ZIP capacity scheduling', () => {
         await windowPressured.promise
       }
     } })
-    const revisions: V2RevisionReader = { open: async (id, signal) => {
+    const revisions: RevisionReader = { open: async (id, signal) => {
       const opened = await readers.revisions.open(id, signal)
       return { ...opened, descriptor: { ...opened.descriptor, geometry: new FileGeometry(opened.descriptor.exactSize, BLOCK_SIZE) } }
     } }
-    const broker: V2BlockRangeReader = { readRange: async function* (descriptor, _lease, range, request) {
+    const broker: BlockRangeReader = { readRange: async function* (descriptor, _lease, range, request) {
       expect(range.start).toBe(0n)
       if (descriptor.fileIdText === a!.idText) {
         yield { offset: 0n, data: new Uint8Array(BLOCK_BYTES).fill(1) }

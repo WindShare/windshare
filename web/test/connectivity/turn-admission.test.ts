@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { decodeTurnControl, encodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
 import { TurnReceiver } from '../../src/connectivity/turn/receiver'
-import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+import { browserPeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
+import { createProtocolSessionIdentity } from '../../src/session/identities'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 
 const header = { sessionId: new Uint8Array(16).fill(1), ownerPathId: new Uint8Array(16).fill(2), sequence: 1n }
 const grant: TurnGrant = { ...header, kind: 'grant', pathId: new Uint8Array(16).fill(3), replaces: new Uint8Array(16),
@@ -19,15 +19,15 @@ function fixture(send: (message: TurnControl) => Promise<void>) {
   let receive!: (body: Uint8Array<ArrayBuffer>) => void
   const sent: TurnControl[] = []
   const session = {
-    protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
+    protocolSessionIdentity: createProtocolSessionIdentity(header.sessionId),
     subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
     sendTurnControl: async (body: Uint8Array) => {
       const message = decodeTurnControl(body)
       sent.push(message)
       await send(message)
     },
-  } as unknown as V2ReceiverSessionRuntime
-  const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
+  } as unknown as ReceiverSessionRuntime
+  const receiver = new TurnReceiver({ session, clock: browserPeerRecoveryClock, enabled: () => true,
     open: () => undefined, retire: async () => undefined })
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receiver.setDemand(true)

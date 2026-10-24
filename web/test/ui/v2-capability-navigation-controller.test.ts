@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import { type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
-import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
+import { ReceiverController } from '../../src/ui/controller'
+import { type ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import {
   FakeGateway, FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT,
   deferred, resetOrchestrationTestEnvironment, startTransfer, turns, waitFor,
@@ -90,7 +90,7 @@ describe('receiver capability navigation', () => {
     const second = new FakeJoinedShare(true)
     const third = new FakeJoinedShare(true)
     const gateway = new FakeGateway([first, second, third])
-    const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, {
+    const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, {
       receive: new FakeReceiveComposition(WORKSPACE_ENVIRONMENT),
     })
     controller.initialize((await shareLocation(1)).location)
@@ -146,9 +146,9 @@ async function receiver() {
   const gateway = new FakeGateway([joined, new FakeJoinedShare(true)])
   const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
   const decisions: string[] = []
-  const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, {
+  const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, {
     receive,
-    trace: { current: (event: V2ReceiverTraceEvent) => {
+    trace: { current: (event: ReceiverTraceEvent) => {
       if (event.name === 'receiver_experience' && event.transition === 'intent') decisions.push(event.action)
     } },
   })

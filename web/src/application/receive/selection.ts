@@ -1,14 +1,14 @@
-import { frozenV2SelectionPolicy, type V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import { frozenSelectionPolicy, type FrozenSelectionPolicy } from '../../catalog/selection'
 import { decodeBase64Url } from '../../crypto/bytes'
 import type { ReceiveIntent } from '../../transfer/intent'
 
-export function v2SelectionPolicyFromIntent(
+export function selectionPolicyFromIntent(
   intent: ReceiveIntent,
-): V2FrozenSelectionPolicy {
+): FrozenSelectionPolicy {
   if (intent.selection.rules.mode !== 'node-id') {
     throw new TypeError('Browser resume requires node-identity selection authority')
   }
-  return frozenV2SelectionPolicy(
+  return frozenSelectionPolicy(
     intent.selection.rules.defaultSelected,
     intent.selection.rules.rules.map((rule) => {
       const id = decodeBase64Url(rule.id)

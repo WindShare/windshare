@@ -2,19 +2,19 @@ import { describe, expect, it } from 'vitest'
 
 import { FileGeometry } from '../../src/content/geometry'
 import {
-  V2BlockDispatchSequenceAuthority,
+  BlockDispatchSequenceAuthority,
   authenticatedBlockRoute,
-  V2LaneSet,
-  type V2BlockDemand,
-  type V2BlockDispatchObservation,
-  type V2BlockLane,
-  type V2BlockRouteObservation,
-} from '../../src/content/v2-lane-set'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+  LaneSet,
+  type BlockDemand,
+  type BlockDispatchObservation,
+  type BlockLane,
+  type BlockRouteObservation,
+} from '../../src/content/lane-set'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 
-const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
+const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
   allows: () => true,
   assertActive: () => undefined,
@@ -27,7 +27,7 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-const descriptor: V2FileRevisionDescriptor = Object.freeze({
+const descriptor: FileRevisionDescriptor = Object.freeze({
   shareInstance: identity(1),
   shareInstanceId: 'share',
   fileId: identity(2),
@@ -38,20 +38,20 @@ const descriptor: V2FileRevisionDescriptor = Object.freeze({
   geometry: new FileGeometry(2n, 1n),
 })
 
-function demand(index: bigint): V2BlockDemand {
+function demand(index: bigint): BlockDemand {
   return { descriptor, leaseId: identity(4), localBlockIndex: index }
 }
 
-class DeferredLane implements V2BlockLane {
+class DeferredLane implements BlockLane {
   readonly id: number
   readonly calls: bigint[] = []
-  readonly #pending: Array<(record: V2BlockRecord) => void> = []
+  readonly #pending: Array<(record: BlockRecord) => void> = []
 
   constructor(id: number) {
     this.id = id
   }
 
-  fetchBlock(input: V2BlockDemand): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand): Promise<BlockRecord> {
     this.calls.push(input.localBlockIndex)
     return new Promise((resolve) => this.#pending.push(resolve))
   }
@@ -63,7 +63,7 @@ class DeferredLane implements V2BlockLane {
   }
 }
 
-class CancelThenLane implements V2BlockLane {
+class CancelThenLane implements BlockLane {
   readonly id: number
   calls = 0
 
@@ -71,7 +71,7 @@ class CancelThenLane implements V2BlockLane {
     this.id = id
   }
 
-  fetchBlock(input: V2BlockDemand, signal: AbortSignal): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand, signal: AbortSignal): Promise<BlockRecord> {
     this.calls += 1
     if (this.calls > 1) {
       return Promise.resolve({
@@ -87,14 +87,14 @@ class CancelThenLane implements V2BlockLane {
   }
 }
 
-class ImmediateLane implements V2BlockLane {
+class ImmediateLane implements BlockLane {
   readonly id: number
 
   constructor(id: number) {
     this.id = id
   }
 
-  fetchBlock(input: V2BlockDemand): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand): Promise<BlockRecord> {
     return Promise.resolve({
       descriptor,
       localBlockIndex: input.localBlockIndex,
@@ -105,8 +105,8 @@ class ImmediateLane implements V2BlockLane {
 
 describe('v2 receiver LaneSet', () => {
   it('keeps a valid late block but does not attribute traffic to a retired route attestation', async () => {
-    const observations: V2BlockRouteObservation[] = []
-    const lanes = new V2LaneSet({ onBlockFetched: (fact) => observations.push(fact) })
+    const observations: BlockRouteObservation[] = []
+    const lanes = new LaneSet({ onBlockFetched: (fact) => observations.push(fact) })
     const direct = new DeferredLane(1)
     lanes.add(direct, 'direct', 2)
     const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
@@ -129,9 +129,9 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('distributes blocks and reports transport provenance only after each fetch succeeds', async () => {
-    const observations: V2BlockRouteObservation[] = []
-    const dispatches: V2BlockDispatchObservation[] = []
-    const lanes = new V2LaneSet({
+    const observations: BlockRouteObservation[] = []
+    const dispatches: BlockDispatchObservation[] = []
+    const lanes = new LaneSet({
       onBlockDispatched: (observation) => dispatches.push(observation),
       onBlockFetched: (observation) => observations.push(observation),
     })
@@ -194,14 +194,14 @@ describe('v2 receiver LaneSet', () => {
 
   it('isolates dispatch observers and assigns sequence before lane invocation', async () => {
     const order: string[] = []
-    const lane: V2BlockLane = {
+    const lane: BlockLane = {
       id: 7,
       fetchBlock: async (input) => {
         order.push('invoke')
         return { descriptor, localBlockIndex: input.localBlockIndex, data: Uint8Array.of(7) }
       },
     }
-    const lanes = new V2LaneSet({
+    const lanes = new LaneSet({
       onBlockDispatched: (observation) => {
         order.push(`dispatch-${observation.dispatchSequence}`)
         throw new Error('synthetic dispatch observer failure')
@@ -222,17 +222,17 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('keeps one dispatch sequence across protocol-generation lane-set replacement', async () => {
-    const authority = new V2BlockDispatchSequenceAuthority()
+    const authority = new BlockDispatchSequenceAuthority()
     const sequences: number[] = []
-    const observe = (observation: V2BlockDispatchObservation) => {
+    const observe = (observation: BlockDispatchObservation) => {
       sequences.push(observation.dispatchSequence)
     }
-    const firstGeneration = new V2LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
+    const firstGeneration = new LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
     firstGeneration.add(new ImmediateLane(1), 'application-relay', 0)
     await firstGeneration.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
     firstGeneration.close()
 
-    const secondGeneration = new V2LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
+    const secondGeneration = new LaneSet({ dispatchSequence: authority, onBlockDispatched: observe })
     secondGeneration.add(new ImmediateLane(10), 'application-relay', 0)
     await secondGeneration.fetch(demand(1n), ALL_ROUTES, new AbortController().signal)
 
@@ -241,7 +241,7 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('waits without polling until content policy admits a lane', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const waiting = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
     lanes.add(new ImmediateLane(7), 'application-relay')
     await expect(waiting).resolves.toMatchObject({ data: Uint8Array.of(7) })
@@ -249,7 +249,7 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('does not demote a healthy lane when the caller cancels its request', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const first = new CancelThenLane(1)
     const second = new ImmediateLane(2)
     lanes.add(first, 'direct')
@@ -268,14 +268,14 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('adopts a replacement lane that attaches while the failed attempt unwinds', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const replacement = new ImmediateLane(2)
     lanes.add({
       id: 1,
       fetchBlock: async () => {
         lanes.remove(1)
         lanes.add(replacement, 'direct')
-        throw new V2SessionRuntimeError('lane', 'detached')
+        throw new SessionRuntimeError('lane', 'detached')
       },
     }, 'application-relay')
 
@@ -285,7 +285,7 @@ describe('v2 receiver LaneSet', () => {
   })
 
   it('does not retry a content-domain failure across healthy physical lanes', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const fallback = new DeferredLane(2)
     lanes.add({
       id: 1,

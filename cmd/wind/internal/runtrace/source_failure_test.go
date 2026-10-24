@@ -30,7 +30,7 @@ func TestSourceFailureTraceKeepsThePathAndReasonAtTaskAndCommandBoundaries(t *te
 		t.Fatal(err)
 	}
 	for _, event := range []clievent.Event{sourceEvent, commandEvent} {
-		record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1}, event)
+		record, err := encode(testRunIdentity(1), entryMetadata{sequence: 1}, event)
 		if err != nil {
 			t.Fatal(err)
 		}

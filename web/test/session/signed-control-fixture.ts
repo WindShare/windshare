@@ -3,12 +3,12 @@ import { createHash } from 'node:crypto'
 import { concatBytes } from '../../src/crypto/bytes'
 import { decodeCanonicalCbor, encodeCanonicalCbor } from '../../src/protocol/cbor'
 import {
-  encodeV2Message,
-  type V2ControlBinding,
-  type V2MessageKind,
-  type V2SessionMessage,
-  V2_SENDER_CONTROL_SCHEMA_VERSION,
-} from '../../src/session/v2-message'
+  encodeMessage,
+  type ControlBinding,
+  type MessageKind,
+  type SessionMessage,
+  SENDER_CONTROL_SCHEMA_VERSION,
+} from '../../src/session/message'
 
 const CONTROL_SCHEMA_KEY = 0
 const CONTROL_BODY_KEY = 1
@@ -21,7 +21,7 @@ export interface SenderControlKeyPair {
 }
 
 export interface SignedSenderControl {
-  readonly message: V2SessionMessage
+  readonly message: SessionMessage
   readonly unsignedWrapper: Uint8Array<ArrayBuffer>
   readonly preimage: Uint8Array<ArrayBuffer>
   readonly signature: Uint8Array<ArrayBuffer>
@@ -36,15 +36,15 @@ export async function senderControlKeyPair(): Promise<SenderControlKeyPair> {
 }
 
 export async function signSenderOperationControl(options: {
-  readonly kind: V2MessageKind
+  readonly kind: MessageKind
   readonly operationId: Uint8Array
   readonly semanticBody: Uint8Array
-  readonly binding: V2ControlBinding
+  readonly binding: ControlBinding
   readonly privateKey: CryptoKey
 }): Promise<SignedSenderControl> {
   const semanticValue = decodeCanonicalCbor(options.semanticBody, 65_536, 'test semantic body')
   const unsignedWrapper = encodeCanonicalCbor(new Map<number, unknown>([
-    [CONTROL_SCHEMA_KEY, V2_SENDER_CONTROL_SCHEMA_VERSION],
+    [CONTROL_SCHEMA_KEY, SENDER_CONTROL_SCHEMA_VERSION],
     [CONTROL_BODY_KEY, semanticValue],
   ]))
   const preimage = senderOperationControlPreimage(
@@ -59,12 +59,12 @@ export async function signSenderOperationControl(options: {
     preimage,
   ))
   const signedBody = encodeCanonicalCbor(new Map<number, unknown>([
-    [CONTROL_SCHEMA_KEY, V2_SENDER_CONTROL_SCHEMA_VERSION],
+    [CONTROL_SCHEMA_KEY, SENDER_CONTROL_SCHEMA_VERSION],
     [CONTROL_BODY_KEY, semanticValue],
     [CONTROL_SIGNATURE_KEY, signature],
   ]))
   return Object.freeze({
-    message: encodeV2Message(options.kind, options.operationId, signedBody),
+    message: encodeMessage(options.kind, options.operationId, signedBody),
     unsignedWrapper,
     preimage,
     signature,
@@ -72,9 +72,9 @@ export async function signSenderOperationControl(options: {
 }
 
 function senderOperationControlPreimage(
-  kind: V2MessageKind,
+  kind: MessageKind,
   operationId: Uint8Array,
-  binding: V2ControlBinding,
+  binding: ControlBinding,
   unsignedWrapper: Uint8Array,
 ): Uint8Array<ArrayBuffer> {
   const lane = new Uint8Array(8)

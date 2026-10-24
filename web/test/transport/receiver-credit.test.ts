@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ReceiverCredit } from '../../src/transport/relay/receiver-credit'
 import {
-  encodeV2SessionCredit,
-  V2_RELAY_SENDER_WINDOW_BYTES,
-  V2_RELAY_SENDER_WINDOW_FRAMES,
-} from '../../src/transport/relay/v2-protocol'
+  encodeSessionCredit,
+  RELAY_SENDER_WINDOW_BYTES,
+  RELAY_SENDER_WINDOW_FRAMES,
+} from '../../src/transport/relay/protocol'
 
 const relaySessionId = Uint8Array.of(1, 0, 0, 0, 0, 0, 0, 1)
 const encodedFrameBytes = 21
-const grant = (frames: number, bytes: number) => encodeV2SessionCredit({ relaySessionId, frames, bytes })
+const grant = (frames: number, bytes: number) => encodeSessionCredit({ relaySessionId, frames, bytes })
 
 describe('receiver relay credit', () => {
   it('starts empty and waits for independent frame and wire-byte grants', async () => {
@@ -61,7 +61,7 @@ describe('receiver relay credit', () => {
 
   it('rejects each aggregate dimension without partially applying the invalid grant', () => {
     const credit = new ReceiverCredit(relaySessionId)
-    credit.receive(grant(V2_RELAY_SENDER_WINDOW_FRAMES, V2_RELAY_SENDER_WINDOW_BYTES))
+    credit.receive(grant(RELAY_SENDER_WINDOW_FRAMES, RELAY_SENDER_WINDOW_BYTES))
     expect(() => credit.receive(grant(1, 0))).toThrow(/receiver window/)
     expect(() => credit.receive(grant(0, 1))).toThrow(/receiver window/)
     credit.consume(encodedFrameBytes)
@@ -75,7 +75,7 @@ describe('receiver relay credit', () => {
     identity[0] = 2
     expect(credit.receive(new Uint8Array(3))).toBe(false)
     expect(credit.receive(new TextEncoder().encode('WS2A'))).toBe(false)
-    expect(() => credit.receive(encodeV2SessionCredit({ relaySessionId: identity, frames: 1, bytes: 0 })))
+    expect(() => credit.receive(encodeSessionCredit({ relaySessionId: identity, frames: 1, bytes: 0 })))
       .toThrow(/another receiver session/)
     expect(credit.receive(grant(1, encodedFrameBytes))).toBe(true)
   })

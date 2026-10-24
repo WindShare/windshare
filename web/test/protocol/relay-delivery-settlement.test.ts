@@ -5,7 +5,7 @@ import {
   type RelaySettlementAck, type RelaySettlementNotice,
 } from '../../src/transport/relay/delivery-settlement-codec'
 import type { RelayDeliveryTotals } from '../../src/transport/relay/delivery-totals-codec'
-import { V2RelayProtocolError } from '../../src/transport/relay/v2-protocol'
+import { RelayProtocolError } from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 interface Vector extends VectorCase {
@@ -39,14 +39,14 @@ for (const kind of ['settlement-notice', 'settlement-ack'] as const) {
           expect(encode(totals)).toEqual(encoded)
           expect(decode(encoded)).toEqual({ ...totals, kind })
         } else {
-          expect(() => encode(totals)).toThrow(V2RelayProtocolError)
-          expect(() => decode(encoded)).toThrow(V2RelayProtocolError)
+          expect(() => encode(totals)).toThrow(RelayProtocolError)
+          expect(() => decode(encoded)).toThrow(RelayProtocolError)
         }
       })
     }
     for (const test of vector.malformed) {
       it(test.name, () => {
-        expect(() => decode(b64ToBytes(test.encodedB64))).toThrow(V2RelayProtocolError)
+        expect(() => decode(b64ToBytes(test.encodedB64))).toThrow(RelayProtocolError)
       })
     }
 
@@ -54,11 +54,11 @@ for (const kind of ['settlement-notice', 'settlement-ack'] as const) {
       const totals = { relaySessionId, totalFrames: 1n, totalEncodedBytes: 21n }
       for (const value of [-1n, 1n << 64n, 1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
         for (const field of ['totalFrames', 'totalEncodedBytes'] as const) {
-          expect(() => encode({ ...totals, [field]: value } as RelayDeliveryTotals)).toThrow(V2RelayProtocolError)
+          expect(() => encode({ ...totals, [field]: value } as RelayDeliveryTotals)).toThrow(RelayProtocolError)
         }
       }
       for (const id of [new Uint8Array(8), new Uint8Array(7).fill(1), new Uint8Array(9).fill(1)]) {
-        expect(() => encode({ ...totals, relaySessionId: id })).toThrow(V2RelayProtocolError)
+        expect(() => encode({ ...totals, relaySessionId: id })).toThrow(RelayProtocolError)
       }
     })
 
@@ -78,7 +78,7 @@ for (const kind of ['settlement-notice', 'settlement-ack'] as const) {
 it('does not encode an acknowledgement as a notice or a notice as an acknowledgement', () => {
   const totals = { relaySessionId: new Uint8Array(8).fill(1), totalFrames: 0n, totalEncodedBytes: 0n }
   expect(() => encodeSettlementNotice({ ...totals, kind: 'settlement-ack' } as unknown as RelaySettlementNotice))
-    .toThrow(V2RelayProtocolError)
+    .toThrow(RelayProtocolError)
   expect(() => encodeSettlementAck({ ...totals, kind: 'settlement-notice' } as unknown as RelaySettlementAck))
-    .toThrow(V2RelayProtocolError)
+    .toThrow(RelayProtocolError)
 })

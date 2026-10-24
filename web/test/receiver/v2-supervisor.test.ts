@@ -1,33 +1,33 @@
 import { FakeSession, TrackedRelay, FakeSessionFactory, deferred, identity, core, supervisorFixture, descriptor } from './v2-supervisor-fixture'
-import { V2_RELAY_ERROR } from '../../src/transport/relay/v2-protocol'
-import { V2RelayReceiverError } from '../../src/transport/relay/v2-receiver'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
 import type {
-  V2BlockDemand,
-  V2BlockDispatchObservation,
-  V2BlockLane,
-  V2BlockRouteEligibility,
-} from '../../src/content/v2-broker'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
+  BlockDemand,
+  BlockDispatchObservation,
+  BlockLane,
+  BlockRouteEligibility,
+} from '../../src/content/broker'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
 import {
-  V2ConnectivityRouteAuthority,
-  type V2ContentLaneAdmissionObservation,
-} from '../../src/connectivity/v2-receiver-policy'
-import type { V2PeerAttemptTraceEvent } from '../../src/connectivity/diagnostics'
+  ConnectivityRouteAuthority,
+  type ContentLaneAdmissionObservation,
+} from '../../src/connectivity/receiver-policy'
+import type { PeerAttemptTraceEvent } from '../../src/connectivity/diagnostics'
 import {
-  V2BrowserSessionFactory,
-  type V2AttachedRelay,
-  type V2ProtocolGenerationCore,
-  V2StaleShareInstanceError,
-} from '../../src/receiver/v2-session-factory'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
+  BrowserSessionFactory,
+  type AttachedRelay,
+  type ProtocolGenerationCore,
+  StaleShareInstanceError,
+} from '../../src/receiver/session-factory'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 
-const ALL_BLOCK_ROUTES: V2BlockRouteEligibility = Object.freeze({
+const ALL_BLOCK_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
   allows: () => true,
   assertActive: () => undefined,
@@ -36,7 +36,7 @@ const ALL_BLOCK_ROUTES: V2BlockRouteEligibility = Object.freeze({
 
 afterEach(() => vi.useRealTimers())
 
-const blockDescriptor: V2FileRevisionDescriptor = Object.freeze({
+const blockDescriptor: FileRevisionDescriptor = Object.freeze({
   shareInstance: identity(70),
   shareInstanceId: 'dispatch-share',
   fileId: identity(71),
@@ -47,18 +47,18 @@ const blockDescriptor: V2FileRevisionDescriptor = Object.freeze({
   geometry: new FileGeometry(2n, 1n),
 })
 
-function blockDemand(localBlockIndex: bigint): V2BlockDemand {
+function blockDemand(localBlockIndex: bigint): BlockDemand {
   return { descriptor: blockDescriptor, leaseId: identity(73), localBlockIndex }
 }
 
-class ImmediateBlockLane implements V2BlockLane {
+class ImmediateBlockLane implements BlockLane {
   readonly id: number
 
   constructor(id: number) {
     this.id = id
   }
 
-  fetchBlock(demand: V2BlockDemand): Promise<V2BlockRecord> {
+  fetchBlock(demand: BlockDemand): Promise<BlockRecord> {
     return Promise.resolve({
       descriptor: blockDescriptor,
       localBlockIndex: demand.localBlockIndex,
@@ -69,7 +69,7 @@ class ImmediateBlockLane implements V2BlockLane {
 
 
 async function dispatchOnCurrentGeneration(
-  supervisor: V2ReceiverReconnectSupervisor,
+  supervisor: ReceiverReconnectSupervisor,
   laneId: number,
   localBlockIndex: bigint,
 ): Promise<void> {
@@ -134,10 +134,10 @@ describe('v2 receiver reconnect supervisor', () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
-    const dispatches: V2BlockDispatchObservation[] = []
+    const dispatches: BlockDispatchObservation[] = []
     let offerCalls = 0
     let offerAborts = 0
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(session, relay),
       sessionFactory: factory,
@@ -189,8 +189,8 @@ describe('v2 receiver reconnect supervisor', () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
-    const diagnostics: V2PeerAttemptTraceEvent[] = []
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const diagnostics: PeerAttemptTraceEvent[] = []
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(session, relay),
       sessionFactory: factory,
@@ -228,7 +228,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const secondRelay = new TrackedRelay(10)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => core(secondSession, secondRelay)
-    const observations: V2ContentLaneAdmissionObservation[] = []
+    const observations: ContentLaneAdmissionObservation[] = []
     const { supervisor } = supervisorFixture(
       firstSession,
       firstRelay,
@@ -262,9 +262,9 @@ describe('v2 receiver reconnect supervisor', () => {
     const secondRelay = new TrackedRelay(10)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => core(secondSession, secondRelay)
-    const milestones: V2PeerAttemptTraceEvent[] = []
+    const milestones: PeerAttemptTraceEvent[] = []
     let seed = 20
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(firstSession, firstRelay),
       sessionFactory: factory,
@@ -313,8 +313,8 @@ describe('v2 receiver reconnect supervisor', () => {
     const secondRelay = new TrackedRelay(10)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => core(secondSession, secondRelay)
-    const dispatches: V2BlockDispatchObservation[] = []
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const dispatches: BlockDispatchObservation[] = []
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(firstSession, firstRelay),
       sessionFactory: factory,
@@ -341,7 +341,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const factory = new FakeSessionFactory()
     factory.attachRelayImpl = async (target, signal) => {
       signal.throwIfAborted()
-      expect(target).toBe(session as unknown as V2ReceiverSessionRuntime)
+      expect(target).toBe(session as unknown as ReceiverSessionRuntime)
       session.attach(3)
       return { relay: replacementRelay.connection, laneId: 3 }
     }
@@ -369,7 +369,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const firstRelay = new TrackedRelay(1)
     const secondSession = new FakeSession([10])
     const secondRelay = new TrackedRelay(10)
-    const fresh = deferred<V2ProtocolGenerationCore>()
+    const fresh = deferred<ProtocolGenerationCore>()
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = () => fresh.promise
     const { supervisor } = supervisorFixture(firstSession, firstRelay, factory)
@@ -428,7 +428,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const session = new FakeSession([1, 2])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
-    const stale = new V2StaleShareInstanceError('stale authenticated share')
+    const stale = new StaleShareInstanceError('stale authenticated share')
     factory.attachRelayImpl = async () => { throw stale }
     const { supervisor } = supervisorFixture(session, relay, factory)
     const terminal = expect(supervisor.waitForGenerationAfter(1)).rejects.toBe(stale)
@@ -439,7 +439,7 @@ describe('v2 receiver reconnect supervisor', () => {
     expect(factory.attachRelayCalls).toBe(1)
     expect(factory.connectFreshCalls).toBe(0)
     expect(factory.closeCalls).toBe(1)
-    expect(supervisor.contentLaneCount(new V2ConnectivityRouteAuthority())).toBe(0)
+    expect(supervisor.contentLaneCount(new ConnectivityRouteAuthority())).toBe(0)
 
     await supervisor.close()
   })
@@ -448,7 +448,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const session = new FakeSession([1, 2])
     const relay = new TrackedRelay(1)
     const { factory, supervisor } = supervisorFixture(session, relay)
-    const fatal = new V2SessionRuntimeError('session', 'authenticated envelope failed')
+    const fatal = new SessionRuntimeError('session', 'authenticated envelope failed')
     const terminal = expect(supervisor.waitForGenerationAfter(1)).rejects.toBe(fatal)
 
     session.detach(1, fatal)
@@ -495,7 +495,7 @@ function registerProtocolSessionReplacementWaitTests(): void {
     const firstRelay = new TrackedRelay(1)
     const secondSession = new FakeSession([10])
     const secondRelay = new TrackedRelay(10)
-    const fresh = deferred<V2ProtocolGenerationCore>()
+    const fresh = deferred<ProtocolGenerationCore>()
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = () => fresh.promise
     const { supervisor } = supervisorFixture(firstSession, firstRelay, factory)
@@ -558,7 +558,7 @@ describe('bounded protocol generation replacement', () => {
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => { throw new Error('network unavailable') }
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, relay), sessionFactory: factory,
       policy: 'relay-only', clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
     })
@@ -573,7 +573,7 @@ describe('bounded protocol generation replacement', () => {
     expect(state).toMatchObject({ kind: 'reconnecting', activity: { kind: 'waiting' } })
     expect(supervisor.generationId).toBe(1)
     expect(session.isClosed).toBe(true)
-    const replacement = deferred<V2ProtocolGenerationCore>()
+    const replacement = deferred<ProtocolGenerationCore>()
     let handshakeActive = false
     factory.connectFreshImpl = async () => { handshakeActive = true; return replacement.promise }
     supervisor.requestReconnect()
@@ -600,7 +600,7 @@ describe('independent receiver relay set', () => {
     const second = new TrackedRelay(2)
     const third = new TrackedRelay(3)
     const replacement = new TrackedRelay(4)
-    const slow = deferred<V2AttachedRelay>()
+    const slow = deferred<AttachedRelay>()
     const factory = new FakeSessionFactory()
     factory.relayBases.push('https://slow.example', 'https://fast.example')
     const requested: string[] = []
@@ -612,7 +612,7 @@ describe('independent receiver relay set', () => {
       session.attach(laneId)
       return { relay: replacing ? replacement.connection : third.connection, laneId }
     }
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, initial), sessionFactory: factory, policy: 'relay-only',
     })
     const activation = supervisor.beginConnectivity('download')
@@ -649,7 +649,7 @@ describe('independent receiver relay set', () => {
       session.attach(laneId)
       return { relay: calls === 1 ? extra.connection : replaced.connection, laneId }
     }
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, initial), sessionFactory: factory,
       policy: 'p2p-only', nativePeerUsable: () => false,
     })
@@ -670,10 +670,10 @@ describe('v2 browser session factory descriptor continuity', () => {
     const expected = descriptor(1)
     const relay = new TrackedRelay(4)
     const calls: string[] = []
-    const stopped = new V2RelayReceiverError('stopped', { relayError: {
-      code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0,
+    const stopped = new RelayReceiverError('stopped', { relayError: {
+      code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0,
     } })
-    const factory = new V2BrowserSessionFactory({
+    const factory = new BrowserSessionFactory({
       relayBases: ['stopped', 'recoverable'], descriptor: expected,
       capability: { suite: 2, readSecret: identity(1), pkHash: identity(2),
         shareIdRaw: new Uint8Array(12), shareId: 'share' },
@@ -685,7 +685,7 @@ describe('v2 browser session factory descriptor continuity', () => {
         return relay.connection
       },
       openDescriptor: async () => expected,
-      connectSession: async () => new FakeSession([4]) as unknown as V2ReceiverSessionRuntime,
+      connectSession: async () => new FakeSession([4]) as unknown as ReceiverSessionRuntime,
     })
     await expect(factory.connectFresh(new AbortController().signal)).rejects.toMatchObject({
       errors: [{ relayBase: 'stopped', cause: stopped }, { relayBase: 'recoverable', cause: expect.any(Error) }],
@@ -734,8 +734,8 @@ describe('v2 browser session factory descriptor continuity', () => {
           laneEpoch: 1,
         })
       },
-    } as unknown as V2ReceiverSessionRuntime
-    const factory = new V2BrowserSessionFactory({
+    } as unknown as ReceiverSessionRuntime
+    const factory = new BrowserSessionFactory({
       relayBases: ['https://relay.example'],
       capability,
       descriptor: expected,
@@ -766,7 +766,7 @@ describe('v2 browser session factory descriptor continuity', () => {
       shareIdRaw: new Uint8Array(12).fill(3),
       shareId: 'share',
     }
-    const factory = new V2BrowserSessionFactory({
+    const factory = new BrowserSessionFactory({
       relayBases: ['https://relay.example'],
       capability,
       descriptor: expected,
@@ -775,12 +775,12 @@ describe('v2 browser session factory descriptor continuity', () => {
       openDescriptor: async () => stale,
       connectSession: async () => {
         connectCalls += 1
-        return {} as V2ReceiverSessionRuntime
+        return {} as ReceiverSessionRuntime
       },
     })
 
     await expect(factory.connectFresh(new AbortController().signal))
-      .rejects.toMatchObject({ cause: expect.any(V2StaleShareInstanceError) })
+      .rejects.toMatchObject({ cause: expect.any(StaleShareInstanceError) })
     expect(relay.closeCalls).toBe(1)
     expect(connectCalls).toBe(0)
 
@@ -797,7 +797,7 @@ describe('v2 browser session factory descriptor continuity', () => {
       shareIdRaw: new Uint8Array(12).fill(3),
       shareId: 'share',
     }
-    const factory = new V2BrowserSessionFactory({
+    const factory = new BrowserSessionFactory({
       relayBases: ['https://relay.example'],
       capability,
       descriptor: expected,
@@ -820,14 +820,14 @@ describe('v2 browser session factory descriptor continuity', () => {
 it.each(['all-stopped', 'descriptor-conflict'])('ends fresh recovery for %s authority', async (reason) => {
   const session = new FakeSession([1])
   const factory = new FakeSessionFactory()
-  const stopped = new V2RelayReceiverError('stopped', { relayError: {
-    code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0,
+  const stopped = new RelayReceiverError('stopped', { relayError: {
+    code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0,
   } })
   factory.connectFreshImpl = async () => { throw new AggregateError([
-    reason === 'all-stopped' ? stopped : new V2StaleShareInstanceError('descriptor conflict'),
+    reason === 'all-stopped' ? stopped : new StaleShareInstanceError('descriptor conflict'),
     reason === 'all-stopped' ? stopped : new Error('outage'),
   ]) }
-  const supervisor = new V2ReceiverReconnectSupervisor({
+  const supervisor = new ReceiverReconnectSupervisor({
     descriptor: descriptor(), initial: core(session, new TrackedRelay(1)), sessionFactory: factory,
     policy: 'relay-only', clock: { now: () => 0, sleep: async () => undefined },
   })
@@ -848,12 +848,12 @@ it('one stopped relay must not prevent generation recovery through another endpo
   const factory = new FakeSessionFactory()
   factory.connectFreshImpl = async () => {
     if (factory.connectFreshCalls === 1) throw new AggregateError([
-      new V2RelayReceiverError('endpoint A stopped', { relayError: { code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0 } }),
+      new RelayReceiverError('endpoint A stopped', { relayError: { code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 } }),
       new Error('endpoint B temporarily offline'),
     ])
     return core(next, new TrackedRelay(2))
   }
-  const supervisor = new V2ReceiverReconnectSupervisor({
+  const supervisor = new ReceiverReconnectSupervisor({
     descriptor: descriptor(), initial: core(session, relay), sessionFactory: factory,
     policy: 'relay-only', clock: { now: () => 0, sleep: async () => undefined },
   })

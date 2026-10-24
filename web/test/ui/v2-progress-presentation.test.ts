@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import type { V2ReceiverProgress } from '../../src/ui/v2-model'
+import type { ReceiverProgress } from '../../src/ui/model'
 import {
   capacityWaitDescription,
   completionProgressDescription,
   discoveryProgressDescription,
   presentDirectZipProgress,
-} from '../../src/ui/v2-progress-presentation'
+} from '../../src/ui/progress-presentation'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
-import type { V2DirectZipProgressSnapshot } from '../../src/application/receive/contracts'
+import type { DirectZipProgressSnapshot } from '../../src/application/receive/contracts'
 
 describe('v2 progress presentation', () => {
   it.each(['open', 'failed'] as const)('keeps %s discovery and completion totals as lower bounds', (discovery) => {
@@ -92,8 +92,8 @@ describe('v2 progress presentation', () => {
 })
 
 function directZipProgress(
-  overrides: Partial<V2DirectZipProgressSnapshot>,
-): V2DirectZipProgressSnapshot {
+  overrides: Partial<DirectZipProgressSnapshot>,
+): DirectZipProgressSnapshot {
   return Object.freeze({
     kind: 'direct-zip',
     operationId: 'operation',
@@ -125,7 +125,7 @@ function lifecycle(kind: 'receiving' | 'published'): ReceiveLifecycleState {
       })
 }
 
-function receiverProgress(overrides: Partial<V2ReceiverProgress>): V2ReceiverProgress {
+function receiverProgress(overrides: Partial<ReceiverProgress>): ReceiverProgress {
   return Object.freeze({
     phase: 'receiving',
     materializedBytes: 512n,

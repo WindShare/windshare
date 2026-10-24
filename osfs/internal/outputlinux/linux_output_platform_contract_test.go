@@ -28,7 +28,7 @@ const (
 	linuxAdapterTestDeviceMinor = uint32(2)
 )
 
-func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
+func newLinuxAdapterTestPlatform(t *testing.T) (*linuxPlatform, string) {
 	t.Helper()
 	rootPath := t.TempDir()
 	fd, err := unix.Open(rootPath, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -94,13 +94,13 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 		rootObject: facts.identity,
 		restart:    &linuxOutputRestartCertificate{rootIdentity: restartIdentity, durability: linuxOutputProcessRestartDurability},
 	}
-	root := &linuxV3Directory{
+	root := &linuxDirectory{
 		native: &linuxOutputDirectory{
 			system: &system, fd: fd, binding: binding,
 			object: facts.identity,
 		},
 	}
-	platform := &linuxV3Platform{root: root, rootOpenDisposition: outputcap.CallerProvidedContainer}
+	platform := &linuxPlatform{root: root, rootOpenDisposition: outputcap.CallerProvidedContainer}
 	t.Cleanup(func() {
 		if err := platform.Close(); err != nil {
 			t.Errorf("close adapter contract root: %v", err)
@@ -381,7 +381,7 @@ func TestLinuxPlatformAdapterLifecycle(t *testing.T) {
 }
 
 func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
-	var nilPlatform *linuxV3Platform
+	var nilPlatform *linuxPlatform
 	if nilPlatform.Root() != nil {
 		t.Fatal("nil platform returned a root")
 	}
@@ -398,7 +398,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 		t.Fatalf("nil platform close: %v", err)
 	}
 
-	var nilDirectory *linuxV3Directory
+	var nilDirectory *linuxDirectory
 	if err := nilDirectory.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 		t.Errorf("nil directory acquire lock error=%v", err)
 	}
 
-	var nilFile *linuxV3MutableFile
+	var nilFile *linuxMutableFile
 	if err := nilFile.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 		t.Errorf("nil file same-file error=%v", err)
 	}
 
-	var nilEntry *linuxV3EntryRef
+	var nilEntry *linuxEntryRef
 	if nilEntry.Kind() != outputcap.EntryAbsent {
 		t.Fatal("nil entry kind was not absent")
 	}
@@ -495,7 +495,7 @@ func TestLinuxPlatformAdapterClosedCapabilityContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var nilLock *linuxV3Lock
+	var nilLock *linuxLock
 	if nilLock.File() != nil {
 		t.Fatal("nil lock exposed a file")
 	}
@@ -517,8 +517,8 @@ func TestLinuxPlatformAdapterErrorTranslationAndOpenContract(t *testing.T) {
 		{"filesystem collision", os.ErrExist, outputcap.ErrNamespaceCollision},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if !errors.Is(linuxV3Error(test.cause), test.marker) {
-				t.Fatalf("translated error %v does not contain %v", linuxV3Error(test.cause), test.marker)
+			if !errors.Is(linuxError(test.cause), test.marker) {
+				t.Fatalf("translated error %v does not contain %v", linuxError(test.cause), test.marker)
 			}
 		})
 	}
@@ -577,7 +577,7 @@ func TestLinuxOutputCustomErrors(t *testing.T) {
 }
 
 func TestLinuxPlatformAdapterAdditionalCoverage(t *testing.T) {
-	var nilPlatform *linuxV3Platform
+	var nilPlatform *linuxPlatform
 	if nilPlatform.Root() != nil || nilPlatform.RootOpenDisposition() != "" {
 		t.Fatal("nil platform returned non-empty root disposition")
 	}
@@ -596,7 +596,7 @@ func TestLinuxPlatformAdapterAdditionalCoverage(t *testing.T) {
 		t.Fatal("guard root mismatch")
 	}
 
-	var nilDir *linuxV3Directory
+	var nilDir *linuxDirectory
 	if _, err := nilDir.PreparePersistentDirectoryIdentityClaim(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("nil dir prepare claim error=%v", err)
 	}
@@ -604,33 +604,33 @@ func TestLinuxPlatformAdapterAdditionalCoverage(t *testing.T) {
 		t.Fatalf("nil dir stage error=%v", err)
 	}
 
-	rootV3, ok := platform.Root().(*linuxV3Directory)
+	rootDirectory, ok := platform.Root().(*linuxDirectory)
 	if !ok {
 		t.Fatalf("root is not linuxV3Directory: %T", platform.Root())
 	}
-	if err := rootV3.CreateOrdinaryOutputStage(nil, "stage.tmp", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if err := rootDirectory.CreateOrdinaryOutputStage(nil, "stage.tmp", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("nil proof stage error=%v", err)
 	}
-	if err := rootV3.CreateOrdinaryOutputStage(rootV3, "", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+	if err := rootDirectory.CreateOrdinaryOutputStage(rootDirectory, "", 100); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("empty name stage error=%v", err)
 	}
 
-	claim, err := rootV3.PreparePersistentDirectoryIdentityClaim()
+	claim, err := rootDirectory.PreparePersistentDirectoryIdentityClaim()
 	if err != nil || len(claim) == 0 {
 		t.Fatalf("prepare identity claim error=%v len=%d", err, len(claim))
 	}
 
-	controlValue, err := rootV3.CreateDirectory("control", true)
+	controlValue, err := rootDirectory.CreateDirectory("control", true)
 	if err != nil {
 		t.Fatalf("create private control dir error=%v", err)
 	}
-	control := controlValue.(*linuxV3Directory)
+	control := controlValue.(*linuxDirectory)
 
-	if err := rootV3.CreateOrdinaryOutputStage(control, "test_ordinary.tmp", 512); err != nil {
+	if err := rootDirectory.CreateOrdinaryOutputStage(control, "test_ordinary.tmp", 512); err != nil {
 		t.Fatalf("create ordinary stage error=%v", err)
 	}
 
-	nativeDir := rootV3.native
+	nativeDir := rootDirectory.native
 	var nilNative *linuxOutputDirectory
 	if nilNative.durability() != 0 {
 		t.Fatal("nil native durability != 0")
@@ -644,7 +644,7 @@ func TestLinuxPlatformAdapterAdditionalCoverage(t *testing.T) {
 		t.Fatalf("same directory self error=%v same=%v", err, same)
 	}
 
-	testFile, err := rootV3.CreateFile("test_file.bin", false, 0)
+	testFile, err := rootDirectory.CreateFile("test_file.bin", false, 0)
 	if err != nil {
 		t.Fatalf("create test file error=%v", err)
 	}
@@ -693,7 +693,7 @@ func TestLinuxLockStableFileErrorBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	v3File := file.(*linuxV3MutableFile)
+	v3File := file.(*linuxMutableFile)
 
 	origFlock := v3File.state.native.system.flock
 	defer func() { v3File.state.native.system.flock = origFlock }()

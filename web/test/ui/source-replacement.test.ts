@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { findReplacementFile } from '../../src/application/browser-share/source-replacement'
-import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
-import { V2JoinedBrowserShare, type V2BrowsePage } from '../../src/application/browser-share/gateway'
+import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import { JoinedBrowserShare, type BrowsePage } from '../../src/application/browser-share/gateway'
 import { FakeJoinedShare, identityText } from './v2-receiver-orchestration-fixture'
 
 function fixture() {
@@ -9,13 +9,13 @@ function fixture() {
   const failure = { entryId: 'entry', path: ['export', 'file'], sourcePath: ['file'] }
   const operation = {
     sourceRevisionFailures: { shareInstance: joined.descriptor.shareInstanceId, count: 1n, files: [failure] },
-  } as unknown as V2RetainedReceiveOperation
+  } as unknown as RetainedReceiveOperation
   const page = vi.fn(async (directory: ReturnType<FakeJoinedShare['rootDirectory']>, pageIndex: number) => {
     const original = await joined.page(directory)
     return { ...original, pageIndex, pageCount: 2, entries: pageIndex === 0 ? [] :
-      original.entries.map(entry => ({ ...entry, name: 'file' })) } as V2BrowsePage
+      original.entries.map(entry => ({ ...entry, name: 'file' })) } as BrowsePage
   })
-  const share = { descriptor: joined.descriptor as V2JoinedBrowserShare['descriptor'],
+  const share = { descriptor: joined.descriptor as JoinedBrowserShare['descriptor'],
     rootDirectory: () => joined.rootDirectory(), page,
     childDirectory: () => { throw new Error('No nested directories expected') },
   }

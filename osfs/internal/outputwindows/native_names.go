@@ -19,25 +19,25 @@ import (
 )
 
 const (
-	windowsV3DirectoryReadBufferBytes = 32 << 10
-	windowsV3DirectoryClaimTag        = "windows/ntfs/directory-object/v2"
-	windowsV3VolumeGUIDClaimMaxBytes  = 128
-	windowsV3DirectoryClaimMaxBytes   = len(windowsV3DirectoryClaimTag) + 4 +
-		windowsV3VolumeGUIDClaimMaxBytes + 8 + len(windowsV3PersistentObjectID{})
-	windowsV3FileBothDirectoryInfoClass        = 3
-	windowsV3FileNamesInformation              = 12
-	windowsV3FileNamesInformationHeader        = 12
-	windowsV3FiletimeTicksPerSecond            = uint64(10_000_000)
-	windowsV3FiletimeNanosecondsPerTick        = uint32(100)
-	windowsV3UnixEpochFiletimeSeconds          = int64(11_644_473_600)
-	windowsV3FinalPathNameOpened        uint32 = 0x8
+	windowsDirectoryReadBufferBytes = 32 << 10
+	windowsDirectoryClaimTag        = "windows/ntfs/directory-object/v2"
+	windowsVolumeGUIDClaimMaxBytes  = 128
+	windowsDirectoryClaimMaxBytes   = len(windowsDirectoryClaimTag) + 4 +
+		windowsVolumeGUIDClaimMaxBytes + 8 + len(windowsPersistentObjectID{})
+	windowsFileBothDirectoryInfoClass        = 3
+	windowsFileNamesInformation              = 12
+	windowsFileNamesInformationHeader        = 12
+	windowsFiletimeTicksPerSecond            = uint64(10_000_000)
+	windowsFiletimeNanosecondsPerTick        = uint32(100)
+	windowsUnixEpochFiletimeSeconds          = int64(11_644_473_600)
+	windowsFinalPathNameOpened        uint32 = 0x8
 )
 
-// windowsV3FileBothDirectoryInfo mirrors FILE_BOTH_DIR_INFORMATION. Keeping the
+// windowsFileBothDirectoryInfo mirrors FILE_BOTH_DIR_INFORMATION. Keeping the
 // layout local lets admission inspect both names from the already-pinned parent;
 // opening a child would incorrectly require access to a collision we will never
 // overwrite and NtCreateFile does not permit a zero desired-access mask.
-type windowsV3FileBothDirectoryInfo struct {
+type windowsFileBothDirectoryInfo struct {
 	nextEntryOffset uint32
 	fileIndex       uint32
 	creationTime    windows.Filetime
@@ -56,33 +56,33 @@ type windowsV3FileBothDirectoryInfo struct {
 }
 
 const (
-	windowsV3FileBothDirectoryInfoHeader = int(unsafe.Offsetof(windowsV3FileBothDirectoryInfo{}.fileName))
-	windowsV3FileBothDirectoryInfoAlign  = int(unsafe.Alignof(windowsV3FileBothDirectoryInfo{}))
+	windowsFileBothDirectoryInfoHeader = int(unsafe.Offsetof(windowsFileBothDirectoryInfo{}.fileName))
+	windowsFileBothDirectoryInfoAlign  = int(unsafe.Alignof(windowsFileBothDirectoryInfo{}))
 )
 
-type windowsV3LongAndShortName struct {
+type windowsLongAndShortName struct {
 	long  string
 	short string
 }
 
 var (
-	windowsV3NativeDLL            = windows.NewLazySystemDLL("ntdll.dll")
-	windowsV3NtQueryDirectoryFile = windowsV3NativeDLL.NewProc("NtQueryDirectoryFile")
-	windowsV3RtlUpcaseUnicodeChar = windowsV3NativeDLL.NewProc("RtlUpcaseUnicodeChar")
+	windowsNativeDLL            = windows.NewLazySystemDLL("ntdll.dll")
+	windowsNtQueryDirectoryFile = windowsNativeDLL.NewProc("NtQueryDirectoryFile")
+	windowsRtlUpcaseUnicodeChar = windowsNativeDLL.NewProc("RtlUpcaseUnicodeChar")
 )
 
-func (directory *windowsV3Directory) names(limit int) ([]string, error) {
+func (directory *windowsDirectory) names(limit int) ([]string, error) {
 	return directory.namesMatching(limit, func(string) bool { return true })
 }
 
-func (directory *windowsV3Directory) namesWithPrefix(prefix string, limit int) ([]string, error) {
-	foldedPrefix, err := windowsV3NTFSCaseKey(prefix)
+func (directory *windowsDirectory) namesWithPrefix(prefix string, limit int) ([]string, error) {
+	foldedPrefix, err := windowsNTFSCaseKey(prefix)
 	if err != nil {
-		return nil, windowsV3Failure("canonicalize directory prefix", prefix, errWindowsV3OutputUnsupported, err)
+		return nil, windowsFailure("canonicalize directory prefix", prefix, errWindowsOutputUnsupported, err)
 	}
 	var foldErr error
 	names, scanErr := directory.namesMatching(limit, func(name string) bool {
-		foldedName, err := windowsV3NTFSCaseKey(name)
+		foldedName, err := windowsNTFSCaseKey(name)
 		if err != nil {
 			foldErr = err
 			return false
@@ -90,18 +90,18 @@ func (directory *windowsV3Directory) namesWithPrefix(prefix string, limit int) (
 		return strings.HasPrefix(foldedName, foldedPrefix)
 	})
 	if foldErr != nil {
-		foldErr = windowsV3Failure("canonicalize directory entry", prefix, errWindowsV3OutputUnsupported, foldErr)
+		foldErr = windowsFailure("canonicalize directory entry", prefix, errWindowsOutputUnsupported, foldErr)
 	}
 	return names, errors.Join(scanErr, foldErr)
 }
 
-func (directory *windowsV3Directory) namesMatching(
+func (directory *windowsDirectory) namesMatching(
 	limit int,
 	include func(string) bool,
 ) ([]string, error) {
 	const operation = "enumerate output directory"
 	if limit < 0 || include == nil {
-		return nil, windowsV3Failure(operation, "", errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, "", errWindowsOutputUnsafe,
 			errors.New("enumeration bound or filter is invalid"))
 	}
 	if err := directory.usable(); err != nil {
@@ -112,17 +112,17 @@ func (directory *windowsV3Directory) namesMatching(
 	}
 
 	if directory.enumerate == nil {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("directory enumeration authority is absent"))
 	}
 	directory.enumerate.Lock()
 	defer directory.enumerate.Unlock()
 	names := make([]string, 0, min(limit, 16))
 	restart := uintptr(1)
-	buffer := make([]byte, windowsV3DirectoryReadBufferBytes)
+	buffer := make([]byte, windowsDirectoryReadBufferBytes)
 	for {
 		var status windows.IO_STATUS_BLOCK
-		rawStatus, _, _ := windowsV3NtQueryDirectoryFile.Call(
+		rawStatus, _, _ := windowsNtQueryDirectoryFile.Call(
 			uintptr(directory.handle()),
 			0,
 			0,
@@ -130,7 +130,7 @@ func (directory *windowsV3Directory) namesMatching(
 			uintptr(unsafe.Pointer(&status)),
 			uintptr(unsafe.Pointer(&buffer[0])),
 			uintptr(len(buffer)),
-			windowsV3FileNamesInformation,
+			windowsFileNamesInformation,
 			0,
 			0,
 			restart,
@@ -141,23 +141,23 @@ func (directory *windowsV3Directory) namesMatching(
 			break
 		}
 		if nativeStatus != 0 {
-			return nil, windowsV3NativeOperationFailure(operation, directory.path, nativeStatus.Errno())
+			return nil, windowsNativeOperationFailure(operation, directory.path, nativeStatus.Errno())
 		}
 		used := int(status.Information)
 		if used <= 0 || used > len(buffer) {
-			return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 				errors.New("directory query returned an invalid byte count"))
 		}
-		batch, err := windowsV3ParseDirectoryNames(buffer[:used])
+		batch, err := windowsParseDirectoryNames(buffer[:used])
 		if err != nil {
-			return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe, err)
+			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
 		}
 		for _, name := range batch {
 			if !include(name) {
 				continue
 			}
 			if len(names) == limit {
-				return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+				return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 					errors.New("directory exceeds its declared entry bound"))
 			}
 			names = append(names, name)
@@ -170,36 +170,36 @@ func (directory *windowsV3Directory) namesMatching(
 	sort.Strings(names)
 	for index := 1; index < len(names); index++ {
 		if stringsEqualFoldExact(names[index-1], names[index]) {
-			return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+			return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 				errors.New("directory enumeration returned platform-equivalent duplicate names"))
 		}
 	}
 	return names, nil
 }
 
-func windowsV3ParseDirectoryNames(buffer []byte) ([]string, error) {
+func windowsParseDirectoryNames(buffer []byte) ([]string, error) {
 	names := make([]string, 0, 16)
 	for offset := 0; ; {
-		if len(buffer)-offset < windowsV3FileNamesInformationHeader {
+		if len(buffer)-offset < windowsFileNamesInformationHeader {
 			return nil, errors.New("directory query returned a truncated entry header")
 		}
 		entry := buffer[offset:]
 		next := int(binary.LittleEndian.Uint32(entry[0:4]))
 		nameBytes := int(binary.LittleEndian.Uint32(entry[8:12]))
-		if nameBytes == 0 || nameBytes%2 != 0 || nameBytes > len(entry)-windowsV3FileNamesInformationHeader {
+		if nameBytes == 0 || nameBytes%2 != 0 || nameBytes > len(entry)-windowsFileNamesInformationHeader {
 			return nil, errors.New("directory query returned an invalid UTF-16 name length")
 		}
-		minimumEntryBytes := windowsV3FileNamesInformationHeader + nameBytes
+		minimumEntryBytes := windowsFileNamesInformationHeader + nameBytes
 		if next != 0 && (next%4 != 0 || next < minimumEntryBytes || next >= len(entry)) {
 			return nil, errors.New("directory query returned an invalid next-entry offset")
 		}
 		units := make([]uint16, nameBytes/2)
 		for index := range units {
 			units[index] = binary.LittleEndian.Uint16(
-				entry[windowsV3FileNamesInformationHeader+index*2:],
+				entry[windowsFileNamesInformationHeader+index*2:],
 			)
 		}
-		if !windowsV3ValidUTF16Name(units) {
+		if !windowsValidUTF16Name(units) {
 			return nil, errors.New("directory query returned a malformed UTF-16 name")
 		}
 		name := string(utf16.Decode(units))
@@ -213,7 +213,7 @@ func windowsV3ParseDirectoryNames(buffer []byte) ([]string, error) {
 	}
 }
 
-func windowsV3ValidUTF16Name(units []uint16) bool {
+func windowsValidUTF16Name(units []uint16) bool {
 	for index := 0; index < len(units); index++ {
 		switch {
 		case units[index] == 0:
@@ -230,12 +230,12 @@ func windowsV3ValidUTF16Name(units []uint16) bool {
 	return true
 }
 
-func (directory *windowsV3Directory) observeEntry(relative string) (outputcap.EntryKind, error) {
+func (directory *windowsDirectory) observeEntry(relative string) (outputcap.EntryKind, error) {
 	kind, _, err := directory.classifyExactEntry(relative)
 	return kind, err
 }
 
-func (directory *windowsV3Directory) classifyExactEntry(
+func (directory *windowsDirectory) classifyExactEntry(
 	relative string,
 ) (_ outputcap.EntryKind, exact bool, resultErr error) {
 	observation, err := directory.inspectEntryName(relative)
@@ -246,35 +246,35 @@ func (directory *windowsV3Directory) classifyExactEntry(
 		observation.kind == outputcap.EntryAbsent || observation.actual == observation.requested, nil
 }
 
-func (directory *windowsV3Directory) validatePublicEntryName(relative string) error {
+func (directory *windowsDirectory) validatePublicEntryName(relative string) error {
 	return directory.validatePublicEntryNames([]string{relative})
 }
 
-type windowsV3PublicEntryAuthority struct {
+type windowsPublicEntryAuthority struct {
 	requested   string
 	longCount   int
 	aliasCount  int
 	aliasActual string
 }
 
-func (directory *windowsV3Directory) validatePublicEntryNames(relatives []string) error {
+func (directory *windowsDirectory) validatePublicEntryNames(relatives []string) error {
 	const operation = "validate public output entry name"
 	if err := directory.usable(); err != nil {
 		return err
 	}
-	authorities := make(map[string]*windowsV3PublicEntryAuthority, len(relatives))
-	authorityOrder := make([]*windowsV3PublicEntryAuthority, 0, len(relatives))
+	authorities := make(map[string]*windowsPublicEntryAuthority, len(relatives))
+	authorityOrder := make([]*windowsPublicEntryAuthority, 0, len(relatives))
 	for _, relative := range relatives {
-		requested, err := windowsV3RelativePath(relative, true)
+		requested, err := windowsRelativePath(relative, true)
 		if err != nil {
-			return windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+			return windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 		}
-		requestedKey, err := windowsV3NTFSCaseKey(requested)
+		requestedKey, err := windowsNTFSCaseKey(requested)
 		if err != nil {
-			return windowsV3Failure(operation, relative, errWindowsV3OutputUnsupported, err)
+			return windowsFailure(operation, relative, errWindowsOutputUnsupported, err)
 		}
 		if _, exists := authorities[requestedKey]; !exists {
-			authority := &windowsV3PublicEntryAuthority{requested: requested}
+			authority := &windowsPublicEntryAuthority{requested: requested}
 			authorities[requestedKey] = authority
 			authorityOrder = append(authorityOrder, authority)
 		}
@@ -288,11 +288,11 @@ func (directory *windowsV3Directory) validatePublicEntryNames(relatives []string
 	for _, authority := range authorityOrder {
 		if authority.longCount > 1 || authority.aliasCount > 1 ||
 			(authority.longCount != 0 && authority.aliasCount != 0) {
-			return windowsV3Failure(operation, authority.requested, errWindowsV3OutputUnsafe,
+			return windowsFailure(operation, authority.requested, errWindowsOutputUnsafe,
 				errors.New("directory contains ambiguous long and short name authority"))
 		}
 		if authority.aliasCount == 1 {
-			return windowsV3Failure(operation, authority.requested, errWindowsV3OutputUnsafe,
+			return windowsFailure(operation, authority.requested, errWindowsOutputUnsafe,
 				fmt.Errorf("requested entry resolves through a DOS alias to long leaf %q", authority.aliasActual))
 		}
 	}
@@ -302,15 +302,15 @@ func (directory *windowsV3Directory) validatePublicEntryNames(relatives []string
 	return nil
 }
 
-func (directory *windowsV3Directory) scanPublicEntryAuthorities(
-	authorities map[string]*windowsV3PublicEntryAuthority,
+func (directory *windowsDirectory) scanPublicEntryAuthorities(
+	authorities map[string]*windowsPublicEntryAuthority,
 ) error {
 	const operation = "enumerate output long and short names"
 	if err := directory.verify(false); err != nil {
 		return err
 	}
 	if directory.enumerate == nil {
-		return windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("directory enumeration authority is absent"))
 	}
 	directory.enumerate.Lock()
@@ -320,7 +320,7 @@ func (directory *windowsV3Directory) scanPublicEntryAuthorities(
 	// NtQueryDirectoryFile requires naturally aligned storage. A uint64 backing
 	// allocation makes that authority explicit instead of relying on []byte heap
 	// alignment as an implementation detail.
-	aligned := make([]uint64, windowsV3DirectoryReadBufferBytes/8)
+	aligned := make([]uint64, windowsDirectoryReadBufferBytes/8)
 	for {
 		entries, done, err := directory.queryLongAndShortNames(aligned, restart)
 		if err != nil {
@@ -329,7 +329,7 @@ func (directory *windowsV3Directory) scanPublicEntryAuthorities(
 		if done {
 			break
 		}
-		if err := windowsV3RecordPublicEntryAuthorities(authorities, entries); err != nil {
+		if err := windowsRecordPublicEntryAuthorities(authorities, entries); err != nil {
 			return err
 		}
 		restart = 0
@@ -340,14 +340,14 @@ func (directory *windowsV3Directory) scanPublicEntryAuthorities(
 	return nil
 }
 
-func (directory *windowsV3Directory) queryLongAndShortNames(
+func (directory *windowsDirectory) queryLongAndShortNames(
 	aligned []uint64,
 	restart uintptr,
-) ([]windowsV3LongAndShortName, bool, error) {
+) ([]windowsLongAndShortName, bool, error) {
 	const operation = "enumerate output long and short names"
-	buffer := unsafe.Slice((*byte)(unsafe.Pointer(&aligned[0])), windowsV3DirectoryReadBufferBytes)
+	buffer := unsafe.Slice((*byte)(unsafe.Pointer(&aligned[0])), windowsDirectoryReadBufferBytes)
 	var status windows.IO_STATUS_BLOCK
-	rawStatus, _, _ := windowsV3NtQueryDirectoryFile.Call(
+	rawStatus, _, _ := windowsNtQueryDirectoryFile.Call(
 		uintptr(directory.handle()),
 		0,
 		0,
@@ -355,7 +355,7 @@ func (directory *windowsV3Directory) queryLongAndShortNames(
 		uintptr(unsafe.Pointer(&status)),
 		uintptr(unsafe.Pointer(&buffer[0])),
 		uintptr(len(buffer)),
-		windowsV3FileBothDirectoryInfoClass,
+		windowsFileBothDirectoryInfoClass,
 		0,
 		0,
 		restart,
@@ -367,26 +367,26 @@ func (directory *windowsV3Directory) queryLongAndShortNames(
 		return nil, true, nil
 	}
 	if nativeStatus != 0 {
-		return nil, false, windowsV3NativeOperationFailure(operation, directory.path, nativeStatus.Errno())
+		return nil, false, windowsNativeOperationFailure(operation, directory.path, nativeStatus.Errno())
 	}
 	used := int(status.Information)
 	if used <= 0 || used > len(buffer) {
-		return nil, false, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, false, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("directory query returned an invalid long/short-name byte count"))
 	}
-	entries, err := windowsV3ParseLongAndShortNames(buffer[:used])
+	entries, err := windowsParseLongAndShortNames(buffer[:used])
 	if err != nil {
-		return nil, false, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe, err)
+		return nil, false, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
 	}
 	return entries, false, nil
 }
 
-func windowsV3RecordPublicEntryAuthorities(
-	authorities map[string]*windowsV3PublicEntryAuthority,
-	entries []windowsV3LongAndShortName,
+func windowsRecordPublicEntryAuthorities(
+	authorities map[string]*windowsPublicEntryAuthority,
+	entries []windowsLongAndShortName,
 ) error {
 	for _, entry := range entries {
-		longKey, err := windowsV3NTFSCaseKey(entry.long)
+		longKey, err := windowsNTFSCaseKey(entry.long)
 		if err != nil {
 			return err
 		}
@@ -396,7 +396,7 @@ func windowsV3RecordPublicEntryAuthorities(
 		if entry.short == "" {
 			continue
 		}
-		shortKey, err := windowsV3NTFSCaseKey(entry.short)
+		shortKey, err := windowsNTFSCaseKey(entry.short)
 		if err != nil {
 			return err
 		}
@@ -408,43 +408,43 @@ func windowsV3RecordPublicEntryAuthorities(
 	return nil
 }
 
-func windowsV3ParseLongAndShortNames(buffer []byte) ([]windowsV3LongAndShortName, error) {
-	entries := make([]windowsV3LongAndShortName, 0, 16)
+func windowsParseLongAndShortNames(buffer []byte) ([]windowsLongAndShortName, error) {
+	entries := make([]windowsLongAndShortName, 0, 16)
 	for offset := 0; ; {
-		if len(buffer)-offset < windowsV3FileBothDirectoryInfoHeader {
+		if len(buffer)-offset < windowsFileBothDirectoryInfoHeader {
 			return nil, errors.New("directory query returned a truncated long/short-name header")
 		}
-		info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[offset]))
+		info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[offset]))
 		nameBytes := int(info.fileNameLength)
 		shortBytes := int(info.shortNameLength)
 		if nameBytes <= 0 || nameBytes%2 != 0 ||
-			nameBytes > len(buffer)-offset-windowsV3FileBothDirectoryInfoHeader {
+			nameBytes > len(buffer)-offset-windowsFileBothDirectoryInfoHeader {
 			return nil, errors.New("directory query returned an invalid long-name length")
 		}
 		if shortBytes%2 != 0 || shortBytes > len(info.shortName)*2 {
 			return nil, errors.New("directory query returned an invalid short-name length")
 		}
-		minimumEntryBytes := windowsV3FileBothDirectoryInfoHeader + nameBytes
+		minimumEntryBytes := windowsFileBothDirectoryInfoHeader + nameBytes
 		next := int(info.nextEntryOffset)
-		if next != 0 && (next%windowsV3FileBothDirectoryInfoAlign != 0 ||
+		if next != 0 && (next%windowsFileBothDirectoryInfoAlign != 0 ||
 			next < minimumEntryBytes || next >= len(buffer)-offset) {
 			return nil, errors.New("directory query returned an invalid long/short-name next-entry offset")
 		}
 		longUnits := unsafe.Slice(&info.fileName[0], nameBytes/2)
-		if !windowsV3ValidUTF16Name(longUnits) {
+		if !windowsValidUTF16Name(longUnits) {
 			return nil, errors.New("directory query returned a malformed UTF-16 long name")
 		}
 		longName := string(utf16.Decode(longUnits))
 		shortName := ""
 		if shortBytes != 0 {
 			shortUnits := info.shortName[:shortBytes/2]
-			if !windowsV3ValidUTF16Name(shortUnits) {
+			if !windowsValidUTF16Name(shortUnits) {
 				return nil, errors.New("directory query returned a malformed UTF-16 short name")
 			}
 			shortName = string(utf16.Decode(shortUnits))
 		}
 		if longName != "." && longName != ".." {
-			entries = append(entries, windowsV3LongAndShortName{long: longName, short: shortName})
+			entries = append(entries, windowsLongAndShortName{long: longName, short: shortName})
 		}
 		if next == 0 {
 			return entries, nil
@@ -453,65 +453,65 @@ func windowsV3ParseLongAndShortNames(buffer []byte) ([]windowsV3LongAndShortName
 	}
 }
 
-type windowsV3EntryNameObservation struct {
+type windowsEntryNameObservation struct {
 	kind      outputcap.EntryKind
 	requested string
 	actual    string
 }
 
-func (directory *windowsV3Directory) inspectEntryName(
+func (directory *windowsDirectory) inspectEntryName(
 	relative string,
-) (_ windowsV3EntryNameObservation, resultErr error) {
+) (_ windowsEntryNameObservation, resultErr error) {
 	const operation = "observe output entry"
 	if err := directory.usable(); err != nil {
-		return windowsV3EntryNameObservation{}, err
+		return windowsEntryNameObservation{}, err
 	}
-	name, err := windowsV3RelativePath(relative, true)
+	name, err := windowsRelativePath(relative, true)
 	if err != nil {
-		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return windowsEntryNameObservation{}, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
 	// The parent is already fixed and the name is exactly one component. Omitting
 	// OBJ_DONT_REPARSE only for this read-only leaf observation lets a reparse
 	// point be classified as a collision without ever following it.
-	handle, status, err := windowsV3OpenNativeWithOptions(
+	handle, status, err := windowsOpenNativeWithOptions(
 		directory.handle(), name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 		windows.FILE_OPEN, 0, 0, nil,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		windows.OBJ_CASE_INSENSITIVE,
 	)
 	if errors.Is(err, fs.ErrNotExist) {
-		return windowsV3EntryNameObservation{
+		return windowsEntryNameObservation{
 			kind: outputcap.EntryAbsent, requested: name, actual: name,
 		}, nil
 	}
 	if err != nil {
-		return windowsV3EntryNameObservation{}, windowsV3NativeOperationFailure(operation, relative, err)
+		return windowsEntryNameObservation{}, windowsNativeOperationFailure(operation, relative, err)
 	}
-	if _, err := windowsV3CreationStatus(windows.FILE_OPEN, status); err != nil {
+	if _, err := windowsCreationStatus(windows.FILE_OPEN, status); err != nil {
 		_ = windows.CloseHandle(handle)
-		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return windowsEntryNameObservation{}, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
 	opened := os.NewFile(uintptr(handle), relative)
 	if opened == nil {
 		_ = windows.CloseHandle(handle)
-		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
+		return windowsEntryNameObservation{}, windowsFailure(operation, relative, errWindowsOutputUnsafe,
 			errors.New("wrap observed entry handle"))
 	}
 	defer func() { resultErr = errors.Join(resultErr, opened.Close()) }()
-	actualName, err := windowsV3OpenedLeafName(handle)
+	actualName, err := windowsOpenedLeafName(handle)
 	if err != nil {
-		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return windowsEntryNameObservation{}, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
 	facts, err := directory.inspector.Inspect(handle)
 	if err != nil || facts.object.volume != directory.volume || !facts.object.valid() {
-		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
+		return windowsEntryNameObservation{}, windowsFailure(operation, relative, errWindowsOutputUnsafe,
 			errors.Join(errors.New("observed entry is outside the fixed NTFS authority"), err))
 	}
 	kind := outputcap.EntryRegularFile
-	if facts.attributes&windowsV3CloudAttributeMask != 0 {
+	if facts.attributes&windowsCloudAttributeMask != 0 {
 		kind = outputcap.EntryOther
 	} else if facts.attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		kind = outputcap.EntryDirectory
 	}
-	return windowsV3EntryNameObservation{kind: kind, requested: name, actual: actualName}, nil
+	return windowsEntryNameObservation{kind: kind, requested: name, actual: actualName}, nil
 }

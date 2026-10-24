@@ -20,7 +20,7 @@ import type {
   BrowserReceiveWindow,
   BrowserRetainedContinuationExecutor,
 } from '../../src/application/browser-receive/composition'
-import type { V2BoundReceiveOperation } from '../../src/application/receive/contracts'
+import type { BoundReceiveOperation } from '../../src/application/receive/contracts'
 
 type ResumableFileSetPayload = Extract<ReceiveLifecycleStatePayload, {
   kind: 'resumable-receive'
@@ -65,7 +65,7 @@ export function fakeContinuationExecutor(
 
 export function fakeContinuationRuntime(
   close: () => Promise<void>,
-): V2BoundReceiveOperation {
+): BoundReceiveOperation {
   let detached = false
   return Object.freeze({
     detach: async () => {
@@ -73,7 +73,7 @@ export function fakeContinuationRuntime(
       detached = true
       await close()
     },
-  }) as unknown as V2BoundReceiveOperation
+  }) as unknown as BoundReceiveOperation
 }
 
 export class FakeResumeSource implements ReceiveOperationResumeSource {

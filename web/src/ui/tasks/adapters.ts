@@ -1,18 +1,18 @@
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import { presentCompatibleNameRepair } from '../compatible-name-repair-presentation'
-import type { V2ReceiverProgress } from '../v2-model'
-import type { RetainedReceiveOperationSnapshot, V2PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'
-import type { V2RetainedReceiveAction } from '../../application/receive/contracts'
-import type { V2OutputPresentationSnapshot } from '../v2-output'
+import type { ReceiverProgress } from '../model'
+import type { RetainedReceiveOperationSnapshot, PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'
+import type { RetainedReceiveAction } from '../../application/receive/contracts'
+import type { OutputPresentationSnapshot } from '../output'
 import { activeTaskAction, retainedTaskAction } from './actions'
 import { recoverySummaryDescription } from '../resumable-file-set-presentation'
 import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import type { TaskBlocking, TaskCompleteness, TaskFacts, TaskPublication, TaskRecoveryReadiness } from './model'
 
 export function activeTaskFacts(input: Readonly<{
-  output: V2OutputPresentationSnapshot
-  progress: V2ReceiverProgress
+  output: OutputPresentationSnapshot
+  progress: ReceiverProgress
   display?: ReceiveOperationDisplay | null
   blocking?: TaskBlocking | null
   actionAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>
@@ -57,9 +57,9 @@ export function retainedTaskFacts(
   operation: RetainedReceiveOperationSnapshot,
   readiness: TaskRecoveryReadiness = retainedContinuationReadiness(operation, null),
   execution: Readonly<{
-    pending?: V2PendingRetainedReceiveActionSnapshot | null
+    pending?: PendingRetainedReceiveActionSnapshot | null
     blocking?: TaskBlocking | null
-    admission?: (action: V2RetainedReceiveAction) => Readonly<{ allowed: boolean; reason: string | null }>
+    admission?: (action: RetainedReceiveAction) => Readonly<{ allowed: boolean; reason: string | null }>
   }> = {},
 ): TaskFacts {
   const details: string[] = []
@@ -99,7 +99,7 @@ export function retainedTaskFacts(
   })
 }
 
-function completenessFromFacts(state: ReceiveLifecycleState, progress: V2ReceiverProgress | null): TaskCompleteness {
+function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {
   if (state.kind === 'resumable-start') return 'incomplete'
   if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
   if (state.kind === 'resumable-receive') return 'incomplete'

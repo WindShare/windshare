@@ -6,12 +6,12 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/session/turncontrol"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type attemptAdmissionPhase uint8
@@ -311,7 +311,7 @@ func (execution *attemptExecution) acceptAdmission(
 	}
 	direct := execution.attempt.config.turnLease == nil
 	if source, ok := execution.peer.(interface {
-		SelectedPair() (provider.PairFacts, bool)
+		SelectedPair() (pionpeer.PairFacts, bool)
 	}); ok {
 		if pair, selected := source.SelectedPair(); selected {
 			direct = pair.LocalType != "relay" && pair.RemoteType != "relay"

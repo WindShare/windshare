@@ -1,15 +1,15 @@
-import { V2ClassifiedTransferFailureError, snapshotClassification, isClassifiedTransferFailure, type ClassifiedTransferFailure } from '../failure/classification'
+import { ClassifiedTransferFailureError, snapshotClassification, isClassifiedTransferFailure, type ClassifiedTransferFailure } from '../failure/classification'
 import { declaredOutputFailure, type OutputFailure } from '../failure/output'
-import { V2DirectoryFailureError } from '../../catalog/v2-client'
-import { V2BlockLaneAttemptsError } from '../../content/v2-broker'
+import { DirectoryFailureError } from '../../catalog/client'
+import { BlockLaneAttemptsError } from '../../content/broker'
 import {
-  V2BlockOperationError,
-  V2RemoteOperationError,
-  V2RemoteRevisionError,
-  V2RevisionCapacityBusyError,
-  V2RevisionChangedDuringRecoveryError,
-  V2RevisionLeaseExpiredError,
-} from '../../content/v2-session-services'
+  BlockOperationError,
+  RemoteOperationError,
+  RemoteRevisionError,
+  RevisionCapacityBusyError,
+  RevisionChangedDuringRecoveryError,
+  RevisionLeaseExpiredError,
+} from '../../content/session-services'
 import {
   faultFailureFact,
   protocolFailureFact,
@@ -53,12 +53,12 @@ import {
   type MaterializationFailureReason,
 } from '../failure/materialization'
 import {
-  V2CatalogTraversalError,
-  V2DirectoryTraversalError,
-  V2OutputPausedError,
+  CatalogTraversalError,
+  DirectoryTraversalError,
+  OutputPausedError,
 } from './contract'
-import { V2SelectionTargetMissingError } from './selection'
-import { V2RevisionCapacityWaitBudgetError } from '../revision-capacity/public'
+import { SelectionTargetMissingError } from './selection'
+import { RevisionCapacityWaitBudgetError } from '../revision-capacity/public'
 
 const REVISION_FAILURE_STALE = 0x3001
 const REVISION_FAILURE_NOT_FOUND = 0x3002
@@ -75,12 +75,12 @@ export interface TransferFailureClassificationOptions {
   readonly materializationFailureReason?: MaterializationFailureReason
 }
 
-export class V2DirectoryOutputError extends V2ClassifiedTransferFailureError {
+export class DirectoryOutputError extends ClassifiedTransferFailureError {
   readonly directoryId: string | undefined
 
   constructor(classification: ClassifiedTransferFailure, directoryId?: string) {
     super(classification)
-    this.name = 'V2DirectoryOutputError'
+    this.name = 'DirectoryOutputError'
     this.directoryId = directoryId
   }
 }
@@ -90,7 +90,7 @@ export function isolatedDirectoryOutputFailure(
   fileFailureIsolation: boolean,
   directoryId?: string,
   incidentScope?: IncidentScopeHandle,
-): V2DirectoryOutputError | undefined {
+): DirectoryOutputError | undefined {
   const mutation = findOutputDirectoryMutationError(error)
   if (
     !fileFailureIsolation ||
@@ -99,7 +99,7 @@ export function isolatedDirectoryOutputFailure(
   ) {
     return undefined
   }
-  const normalized = normalizedV2FileTransferFault(
+  const normalized = normalizedFileTransferFault(
     outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata),
     {
       stage: 'output_commit',
@@ -107,10 +107,10 @@ export function isolatedDirectoryOutputFailure(
       ...(incidentScope === undefined ? {} : { incidentScope }),
     },
   )
-  return new V2DirectoryOutputError(normalized.diagnostic.classification, directoryId)
+  return new DirectoryOutputError(normalized.diagnostic.classification, directoryId)
 }
 
-export type NormalizedV2FileTransferFailure =
+export type NormalizedFileTransferFailure =
   | Readonly<{ kind: 'canceled', diagnostic: unknown }>
   | Readonly<{
       kind: 'fault'
@@ -118,17 +118,17 @@ export type NormalizedV2FileTransferFailure =
       fact: FailureFact
       factRef?: FailureFactRef
       materializationFailureReason: MaterializationFailureReason
-      diagnostic: V2ClassifiedTransferFailureError
+      diagnostic: ClassifiedTransferFailureError
     }>
 
 /**
  * Maps one immediate collaborator result into product and diagnostic semantics.
  * A previously classified wrapper is materialized into a scope, never classified again.
  */
-export function normalizeV2FileTransferFailure(
+export function normalizeFileTransferFailure(
   error: unknown,
   options: TransferFailureClassificationOptions = {},
-): NormalizedV2FileTransferFailure {
+): NormalizedFileTransferFailure {
   if (error instanceof TransferPauseRequestedError || error instanceof TransferStopRequestedError) {
     return Object.freeze({ kind: 'canceled', diagnostic: error })
   }
@@ -138,8 +138,8 @@ export function normalizeV2FileTransferFailure(
       diagnostic: options.signal.reason ?? error,
     })
   }
-  if (error instanceof V2RevisionCapacityWaitBudgetError) {
-    return normalizedV2FileTransferClassification(Object.freeze({
+  if (error instanceof RevisionCapacityWaitBudgetError) {
+    return normalizedFileTransferClassification(Object.freeze({
       fault: outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget),
       fact: error.failureFact,
       materializationFailureReason: error.surface === 'revision_open'
@@ -147,10 +147,10 @@ export function normalizeV2FileTransferFailure(
         : 'content-read-failed',
     }), options)
   }
-  if (error instanceof V2RevisionCapacityBusyError) {
+  if (error instanceof RevisionCapacityBusyError) {
     // This is a defensive terminal seam. Normal transfer composition intercepts
     // the exact authenticated type in the wrapped content ports before normalization.
-    return normalizedV2FileTransferClassification(Object.freeze({
+    return normalizedFileTransferClassification(Object.freeze({
       fault: outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget),
       fact: protocolFailureFact({
         stage: 'protocol_operation',
@@ -160,7 +160,7 @@ export function normalizeV2FileTransferFailure(
       materializationFailureReason: 'file-open-failed',
     }), options)
   }
-  if (error instanceof V2ClassifiedTransferFailureError) {
+  if (error instanceof ClassifiedTransferFailureError) {
     return normalizedFromClassification(
       materializeClassifiedTransferFailure(
         error.classification,
@@ -191,8 +191,8 @@ export function normalizeV2FileTransferFailure(
   const recoveryDisposition = recoveryDispositionFor(error, fault)
   const reason = options.materializationFailureReason ?? materializationFailureReason(error)
   const fileOutcomeEvidence = transferFileOutcomeEvidence(error)
-  if (error instanceof V2RemoteOperationError) {
-    return normalizedV2FileTransferClassification(
+  if (error instanceof RemoteOperationError) {
+    return normalizedFileTransferClassification(
       Object.freeze({
         fault,
         fact: error.failureFact,
@@ -202,8 +202,8 @@ export function normalizeV2FileTransferFailure(
       fileOutcomeEvidence,
     )
   }
-  if (error instanceof V2RemoteRevisionError) {
-    return normalizedV2FileTransferClassification(
+  if (error instanceof RemoteRevisionError) {
+    return normalizedFileTransferClassification(
       Object.freeze({
         fault,
         fact: error.failureFact,
@@ -216,13 +216,13 @@ export function normalizeV2FileTransferFailure(
   // Preserve bounded exception evidence when there is no protocol/domain fact.
   // Product recovery still follows the reviewed fault, never exception text.
   if (classified === undefined) {
-    return normalizedV2FileTransferClassification(Object.freeze({
+    return normalizedFileTransferClassification(Object.freeze({
       fault,
       fact: unclassifiedFailureFact({ stage, recoveryDisposition, error }),
       materializationFailureReason: reason,
     }), options, fileOutcomeEvidence)
   }
-  return normalizedV2FileTransferFault(fault, {
+  return normalizedFileTransferFault(fault, {
     ...options,
     stage,
     materializationFailureReason: reason,
@@ -234,14 +234,14 @@ export function normalizeV2FileTransferFailure(
 function normalizeDeclaredOutputFailure(
   error: unknown,
   options: TransferFailureClassificationOptions,
-): NormalizedV2FileTransferFailure | undefined {
+): NormalizedFileTransferFailure | undefined {
   // An explicit outer boundary already owns severity; a cause cannot replace it.
   if (error instanceof BoundaryFaultError) return undefined
   const declared = findDeclaredOutputFailure(error)
   if (declared === undefined) return undefined
   const fact = declared.classification.fact
   const stage = options.stage ?? failureStage(error)
-  return normalizedV2FileTransferClassification(Object.freeze({
+  return normalizedFileTransferClassification(Object.freeze({
     fault: declared.classification.fault,
     fact: fact.stage === stage ? fact : Object.freeze({ ...fact, stage }),
     materializationFailureReason: options.materializationFailureReason ?? materializationFailureReason(error),
@@ -253,15 +253,15 @@ export function transferFileOutcomeEvidence(
 ): TransferFileOutcomeEvidence | undefined {
   let error = input
   for (let depth = 0; depth < MAXIMUM_FAILURE_CAUSE_DEPTH; depth += 1) {
-    if (error instanceof V2ClassifiedTransferFailureError &&
+    if (error instanceof ClassifiedTransferFailureError &&
         error.fileOutcomeEvidence !== undefined) {
       return error.fileOutcomeEvidence
     }
     const outputEvidence = declaredOutputFailure(error)?.fileOutcomeEvidence
     if (outputEvidence !== undefined) return outputEvidence
-    if (error instanceof V2RevisionChangedDuringRecoveryError ||
-        error instanceof V2FileRevisionChangedError ||
-        (error instanceof V2RemoteRevisionError &&
+    if (error instanceof RevisionChangedDuringRecoveryError ||
+        error instanceof FileRevisionChangedError ||
+        (error instanceof RemoteRevisionError &&
           (error.failure.code === REVISION_FAILURE_DRIFT ||
            error.failure.code === REVISION_FAILURE_STALE)) ||
         (error instanceof BoundaryFaultError &&
@@ -276,15 +276,15 @@ export function transferFileOutcomeEvidence(
   return undefined
 }
 
-export function normalizedV2FileTransferFault(
+export function normalizedFileTransferFault(
   fault: Fault,
   options: Omit<TransferFailureClassificationOptions, 'signal'> & {
     readonly recoveryDisposition?: RecoveryDisposition
     readonly fileOutcomeEvidence?: TransferFileOutcomeEvidence
   } = {},
-): NormalizedV2FileTransferFailure & { readonly kind: 'fault' } {
+): NormalizedFileTransferFailure & { readonly kind: 'fault' } {
   const stage = options.stage ?? 'content_read'
-  return normalizedV2FileTransferClassification(Object.freeze({
+  return normalizedFileTransferClassification(Object.freeze({
     fault,
     fact: faultFailureFact({
       stage,
@@ -295,11 +295,11 @@ export function normalizedV2FileTransferFault(
   }), options, options.fileOutcomeEvidence)
 }
 
-function normalizedV2FileTransferClassification(
+function normalizedFileTransferClassification(
   classification: ClassifiedTransferFailure,
   options: Pick<TransferFailureClassificationOptions, 'incidentScope' | 'relation'>,
   fileOutcomeEvidence?: TransferFileOutcomeEvidence,
-): NormalizedV2FileTransferFailure & { readonly kind: 'fault' } {
+): NormalizedFileTransferFailure & { readonly kind: 'fault' } {
   return normalizedFromClassification(
     materializeClassifiedTransferFailure(
       classification,
@@ -314,24 +314,24 @@ export function classificationForTransferFailure(
   error: unknown,
   options: TransferFailureClassificationOptions = {},
 ): ClassifiedTransferFailure | undefined {
-  const normalized = normalizeV2FileTransferFailure(error, options)
+  const normalized = normalizeFileTransferFailure(error, options)
   return normalized.kind === 'fault'
     ? normalized.diagnostic.classification
     : undefined
 }
 
 /** Only normalized file-local values may be isolated by TransferJob. */
-export function isV2FileScopedTransferFailure(error: unknown): boolean {
-  return error instanceof V2ClassifiedTransferFailureError &&
+export function isFileScopedTransferFailure(error: unknown): boolean {
+  return error instanceof ClassifiedTransferFailureError &&
     error.classification.fault.scope === FaultScope.FileLocal
 }
 
 function normalizedFromClassification(
   classification: ClassifiedTransferFailure,
   fileOutcomeEvidence?: TransferFileOutcomeEvidence,
-): NormalizedV2FileTransferFailure & { readonly kind: 'fault' } {
+): NormalizedFileTransferFailure & { readonly kind: 'fault' } {
   const snapshot = snapshotClassification(classification)
-  const diagnostic = new V2ClassifiedTransferFailureError(snapshot, fileOutcomeEvidence)
+  const diagnostic = new ClassifiedTransferFailureError(snapshot, fileOutcomeEvidence)
   return Object.freeze({
     kind: 'fault',
     fault: snapshot.fault,
@@ -373,10 +373,10 @@ function fileTransferFault(error: unknown): Fault | undefined {
 }
 
 function remoteTransferFault(error: unknown): Fault | undefined {
-  if (error instanceof V2RemoteRevisionError) {
+  if (error instanceof RemoteRevisionError) {
     return revisionFailureFault(error.failure.code, error.failure.retryable)
   }
-  if (!(error instanceof V2RemoteOperationError)) return undefined
+  if (!(error instanceof RemoteOperationError)) return undefined
   switch (error.scope) {
     case 'revision': return revisionFailureFault(error.code, error.retryable)
     case 'block': return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
@@ -386,35 +386,35 @@ function remoteTransferFault(error: unknown): Fault | undefined {
 }
 
 function sourceTransferFault(error: unknown): Fault | undefined {
-  if (error instanceof V2RevisionChangedDuringRecoveryError) {
+  if (error instanceof RevisionChangedDuringRecoveryError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionInvalidated)
   }
-  if (error instanceof V2FileRevisionChangedError) {
+  if (error instanceof FileRevisionChangedError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged)
   }
-  if (error instanceof V2RevisionLeaseExpiredError) {
+  if (error instanceof RevisionLeaseExpiredError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
   }
-  if (error instanceof V2BlockLaneAttemptsError) {
+  if (error instanceof BlockLaneAttemptsError) {
     return sessionFault(FaultScope.OutputPause, SessionFaultCode.Transport)
   }
-  if (error instanceof V2BlockOperationError) {
+  if (error instanceof BlockOperationError) {
     return sessionFault(FaultScope.SessionTerminal, SessionFaultCode.Protocol)
   }
   return undefined
 }
 
 function catalogTransferFault(error: unknown): Fault | undefined {
-  if (error instanceof V2DirectoryFailureError) {
+  if (error instanceof DirectoryFailureError) {
     return catalogFault(FaultScope.DirectoryLocal, CatalogFaultCode.Unavailable)
   }
-  if (error instanceof V2DirectoryTraversalError) {
+  if (error instanceof DirectoryTraversalError) {
     return catalogFault(FaultScope.DirectoryLocal, CatalogFaultCode.InvalidGeneration)
   }
-  if (error instanceof V2CatalogTraversalError) {
+  if (error instanceof CatalogTraversalError) {
     return catalogFault(FaultScope.SessionTerminal, CatalogFaultCode.InvalidGeneration)
   }
-  if (error instanceof V2SelectionTargetMissingError) {
+  if (error instanceof SelectionTargetMissingError) {
     return catalogFault(FaultScope.FileLocal, CatalogFaultCode.Unavailable)
   }
   return undefined
@@ -441,7 +441,7 @@ function outputTransferFault(error: unknown): Fault | undefined {
   if (error instanceof OutputTransactionContractError) {
     return outputFault(FaultScope.OutputPause, OutputFaultCode.Contract)
   }
-  if (error instanceof V2DirectoryOutputError) {
+  if (error instanceof DirectoryOutputError) {
     return outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata)
   }
   const directoryMutation = findOutputDirectoryMutationError(error)
@@ -453,7 +453,7 @@ function outputTransferFault(error: unknown): Fault | undefined {
         : OutputFaultCode.DirectoryMetadata,
     )
   }
-  if (error instanceof V2FileOutputError || error instanceof V2OutputPausedError) {
+  if (error instanceof FileOutputError || error instanceof OutputPausedError) {
     return outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO)
   }
   return undefined
@@ -462,14 +462,14 @@ function outputTransferFault(error: unknown): Fault | undefined {
 function failureStage(error: unknown): FailureStage {
   const declared = declaredOutputFailure(error)
   if (declared !== undefined) return declared.classification.fact.stage
-  if (error instanceof V2RemoteOperationError) return 'protocol_operation'
-  if (error instanceof V2FileOutputError) {
+  if (error instanceof RemoteOperationError) return 'protocol_operation'
+  if (error instanceof FileOutputError) {
     return error.materializationFailureReason === 'output-commit-failed'
       ? 'output_commit'
       : 'output_write'
   }
   if (
-    error instanceof V2DirectoryOutputError ||
+    error instanceof DirectoryOutputError ||
     findOutputDirectoryMutationError(error) !== undefined
   ) {
     return 'output_commit'
@@ -478,7 +478,7 @@ function failureStage(error: unknown): FailureStage {
     error instanceof OutputBudgetExceededError ||
     error instanceof OutputSessionCompromisedError ||
     error instanceof OutputTransactionContractError ||
-    error instanceof V2OutputPausedError
+    error instanceof OutputPausedError
   ) {
     return 'output_write'
   }
@@ -500,8 +500,8 @@ function recoveryDispositionFor(
   fault: Fault,
 ): RecoveryDisposition {
   if (
-    error instanceof V2RemoteOperationError && error.retryable ||
-    error instanceof V2RevisionLeaseExpiredError
+    error instanceof RemoteOperationError && error.retryable ||
+    error instanceof RevisionLeaseExpiredError
   ) {
     return 'retryable'
   }
@@ -533,14 +533,14 @@ function revisionFailureFault(code: number, retryable: boolean): Fault {
   return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
 }
 
-export class V2FileRevisionChangedError extends Error {
+export class FileRevisionChangedError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'V2FileRevisionChangedError'
+    this.name = 'FileRevisionChangedError'
   }
 }
 
-export class V2FileOutputError extends Error {
+export class FileOutputError extends Error {
   readonly materializationFailureReason: Extract<
     MaterializationFailureReason,
     'output-write-failed' | 'output-commit-failed'
@@ -552,7 +552,7 @@ export class V2FileOutputError extends Error {
     cause?: unknown,
   ) {
     super(message, { cause })
-    this.name = 'V2FileOutputError'
+    this.name = 'FileOutputError'
     this.materializationFailureReason = reason
   }
 }
@@ -565,10 +565,10 @@ export function materializationFailureReason(
   fallback: MaterializationFailureReason = 'content-read-failed',
 ): MaterializationFailureReason {
   if (isClassifiedTransferFailure(input)) return input.materializationFailureReason
-  if (input instanceof V2ClassifiedTransferFailureError) {
+  if (input instanceof ClassifiedTransferFailureError) {
     return input.classification.materializationFailureReason
   }
-  if (input instanceof V2FileOutputError) return input.materializationFailureReason
+  if (input instanceof FileOutputError) return input.materializationFailureReason
   const outputFailure = declaredOutputFailure(input)
   if (outputFailure !== undefined) return outputFailure.classification.materializationFailureReason
   if (
@@ -578,19 +578,19 @@ export function materializationFailureReason(
   ) {
     return 'directory-finalize-failed'
   }
-  if (input instanceof OutputDirectoryMutationError || input instanceof V2DirectoryOutputError) {
+  if (input instanceof OutputDirectoryMutationError || input instanceof DirectoryOutputError) {
     return 'directory-finalize-failed'
   }
   if (
-    input instanceof V2FileRevisionChangedError ||
-    input instanceof V2RevisionChangedDuringRecoveryError
+    input instanceof FileRevisionChangedError ||
+    input instanceof RevisionChangedDuringRecoveryError
   ) {
     return 'source-revision-changed'
   }
-  if (input instanceof V2RemoteRevisionError || input instanceof V2RevisionLeaseExpiredError) {
+  if (input instanceof RemoteRevisionError || input instanceof RevisionLeaseExpiredError) {
     return 'file-open-failed'
   }
-  if (input instanceof V2BlockLaneAttemptsError || input instanceof V2BlockOperationError) {
+  if (input instanceof BlockLaneAttemptsError || input instanceof BlockOperationError) {
     return 'content-read-failed'
   }
   return fallback

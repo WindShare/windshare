@@ -9,19 +9,19 @@ import (
 
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/connectionpath"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideSender}
 	identity := iceconfig.Identity{Provider: "cloudflare", Account: "owner", Profile: "tls"}
-	event, err := ProjectNativeObservation(appobs.WorkflowShare, nativepeer.Observation{Subject: subject, Provider: &provider.Event{
+	event, err := ProjectNativeObservation(appobs.WorkflowShare, nativepeer.Observation{Subject: subject, Provider: &pionpeer.Event{
 		Milestone: "provider_closed", TURNService: &identity,
-		TURN: &provider.TURNResourceSnapshot{OpenedSockets: 1, TransportSent: 1200, TransportReceived: 300},
+		TURN: &pionpeer.TURNResourceSnapshot{OpenedSockets: 1, TransportSent: 1200, TransportReceived: 300},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestNativeTURNObservationsKeepServiceAndTransportAccounting(t *testing.T) {
 func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver}
 	at := time.Unix(100, 42)
-	event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{Subject: subject, Provider: &provider.Event{Milestone: "candidate", At: at, Candidate: &provider.CandidateFacts{Priority: 12345, TCPType: "active", Type: "host", Protocol: "tcp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
+	event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{Subject: subject, Provider: &pionpeer.Event{Milestone: "candidate", At: at, Candidate: &pionpeer.CandidateFacts{Priority: 12345, TCPType: "active", Type: "host", Protocol: "tcp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +54,9 @@ func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T
 		t.Fatalf("facts=%+v", facts)
 	}
 	for _, value := range []nativepeer.Observation{
-		{Subject: subject, Provider: &provider.Event{Milestone: "selected_pair", Pair: &provider.PairFacts{LocalType: "host", RemoteType: "srflx", Protocol: "tcp", LocalAddress: "::1", RemoteAddress: "127.0.0.1", RoundTripTime: time.Millisecond}}},
-		{Subject: subject, Provider: &provider.Event{Milestone: "ice", State: "connected"}},
-		{Subject: subject, Provider: &provider.Event{Milestone: "tcp_unavailable", State: "credential-canary"}},
+		{Subject: subject, Provider: &pionpeer.Event{Milestone: "selected_pair", Pair: &pionpeer.PairFacts{LocalType: "host", RemoteType: "srflx", Protocol: "tcp", LocalAddress: "::1", RemoteAddress: "127.0.0.1", RoundTripTime: time.Millisecond}}},
+		{Subject: subject, Provider: &pionpeer.Event{Milestone: "ice", State: "connected"}},
+		{Subject: subject, Provider: &pionpeer.Event{Milestone: "tcp_unavailable", State: "credential-canary"}},
 		{Reachability: &reachability.Event{Kind: "lease-ready", Endpoint: reachability.Endpoint{Protocol: reachability.UDP, Local: netip.MustParseAddrPort("127.0.0.1:123")}}},
 		{Reachability: &reachability.Event{Kind: "lease-failed", Endpoint: reachability.Endpoint{Protocol: reachability.TCP}, Error: reachability.ErrUnavailable}},
 		{Reachability: &reachability.Event{Kind: "gateway-unavailable"}},
@@ -69,7 +69,7 @@ func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T
 	if _, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{}); err == nil {
 		t.Fatal("empty union accepted")
 	}
-	if _, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{Provider: &provider.Event{}, Reachability: &reachability.Event{}}); err == nil {
+	if _, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{Provider: &pionpeer.Event{}, Reachability: &reachability.Event{}}); err == nil {
 		t.Fatal("ambiguous union accepted")
 	}
 	cases := []struct {

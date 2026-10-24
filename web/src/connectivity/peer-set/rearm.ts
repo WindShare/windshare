@@ -1,6 +1,6 @@
-import type { V2PeerRecoveryRearmSource } from './contract'
+import type { PeerRecoveryRearmSource } from './contract'
 
-export class BrowserV2PeerRecoveryRearmSource implements V2PeerRecoveryRearmSource {
+export class BrowserPeerRecoveryRearmSource implements PeerRecoveryRearmSource {
   subscribe(listener: () => void): () => void {
     const notify = () => {
       try {

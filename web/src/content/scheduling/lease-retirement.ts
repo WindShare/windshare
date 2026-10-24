@@ -1,4 +1,4 @@
-import { V2SessionRuntimeError } from '../../session/v2-runtime-types'
+import { SessionRuntimeError } from '../../session/runtime-types'
 import { delayWithAbort, operationDeadlineSignal } from './deadlines'
 
 export const LEASE_RETIREMENT_WAIT_MILLISECONDS = 30_000
@@ -101,7 +101,7 @@ export async function retireRemoteLease(
         observeLeaseRetirement(owner, { leaseId, attempt, transition: 'released' })
         return
       } catch (failure) {
-        if (deadline.signal.aborted || !(failure instanceof V2SessionRuntimeError) || failure.scope !== 'lane') {
+        if (deadline.signal.aborted || !(failure instanceof SessionRuntimeError) || failure.scope !== 'lane') {
           throw failure
         }
         // RELEASE is idempotent within its ProtocolSession, even if the sender

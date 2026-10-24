@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/reachability/gateway"
 	"github.com/windshare/windshare/connectivity/socketauthority"
@@ -23,7 +24,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/turncontrol"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 const (
@@ -46,7 +46,7 @@ type NetworkMonitor interface {
 type Config struct {
 	Admission           *Admission
 	TURNCapacity        *turncapacity.Pool
-	Connect             func(pion.Configuration, provider.AttemptConfig) (*provider.Connection, error)
+	Connect             func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error)
 	Monitor             NetworkMonitor
 	Sockets             *socketauthority.Authority
 	Pool                *icepolicy.ICEEndpointPool
@@ -72,7 +72,7 @@ type pathResources struct {
 	releaseOptional               func()
 	localSequence, remoteSequence uint64
 	remoteGeneration              [16]byte
-	remoteProfile                 provider.TCPProfile
+	remoteProfile                 pionpeer.TCPProfile
 	remoteDemand                  bool
 	retired                       bool
 	remoteProfileExpires          time.Time
@@ -123,7 +123,7 @@ func New(config Config) (*NativePeerConnectivity, error) {
 		config.Discovery = gateway.NewDiscovery(nil)
 	}
 	if config.Connect == nil {
-		config.Connect = provider.NewPeerConnection
+		config.Connect = pionpeer.NewPeerConnection
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -201,7 +201,7 @@ func (n *NativePeerConnectivity) NetworkGeneration() uint64 {
 	defer n.mu.Unlock()
 	return n.generation
 }
-func (n *NativePeerConnectivity) NewPeerConnection(ctx context.Context, request AttemptRequest) (*provider.Connection, error) {
+func (n *NativePeerConnectivity) NewPeerConnection(ctx context.Context, request AttemptRequest) (*pionpeer.Connection, error) {
 	prepared, err := n.PrepareAttempt(ctx, request)
 	if err != nil {
 		return nil, err

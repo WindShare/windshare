@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises'
 
 import { expect, test, type TestInfo } from '@playwright/test'
 
-import { createV2PeerRecoveryPolicy } from '../src/connectivity/peer-set/path'
+import { createPeerRecoveryPolicy } from '../src/connectivity/peer-set/path'
 import {
   HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
   type HotSwitchPageEvent,
@@ -34,7 +34,7 @@ const TRANSFER_BLOCKS_AFTER_INITIAL_WINDOW = 4
 const TRANSFER_BYTES =
   (HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + TRANSFER_BLOCKS_AFTER_INITIAL_WINDOW) *
   DIRECT_TEST_BLOCK_BYTES
-const RECOVERY_POLICY = createV2PeerRecoveryPolicy({
+const RECOVERY_POLICY = createPeerRecoveryPolicy({
   negotiationBudgetMilliseconds: 10_000,
   admissionBudgetMilliseconds: 4_000,
   waveMaxAttempts: 3,

@@ -2,8 +2,8 @@ import { projectProtocolTraceEvent } from './protocol-trace'
 export { projectProtocolTraceEvent } from './protocol-trace'
 import { correlatedObservation, decimal, observation, requiredCorrelation, snake } from '../../diagnostics/export/trace-observation'
 import type {
-  V2ConnectivityTraceEvent,
-  V2ConnectivityTraceSource,
+  ConnectivityTraceEvent,
+  ConnectivityTraceSource,
 } from '../../connectivity/diagnostics'
 import type {
   TraceEventObservationV2,
@@ -15,19 +15,19 @@ import type {
   OutputTraceSource,
 } from '../../output/diagnostics'
 import type { ProjectionTraceEvent } from '../../transfer/projection'
-import type { TransferTraceEvent } from '../../transfer/v2-job'
+import type { TransferTraceEvent } from '../../transfer/job'
 import type {
-  V2ProtocolTraceSource,
-} from '../../session/v2-diagnostics'
-import type { V2ReceiverTraceEvent } from '../receive/observation/contracts'
+  ProtocolTraceSource,
+} from '../../session/diagnostics'
+import type { ReceiverTraceEvent } from '../receive/observation/contracts'
 import { projectRetainedActionPayload } from './retained-trace'
 
 type BrowserTraceSource = DomainTraceSource<TraceEventObservationV2>
 
-export function createV2ReceiverTraceSource(
+export function createReceiverTraceSource(
   trace: BrowserTraceSource,
-): DomainTraceSource<V2ReceiverTraceEvent> {
-  return adaptTraceSource(trace, projectV2ReceiverTraceEvent)
+): DomainTraceSource<ReceiverTraceEvent> {
+  return adaptTraceSource(trace, projectReceiverTraceEvent)
 }
 
 export function createOutputTraceSource(
@@ -38,18 +38,18 @@ export function createOutputTraceSource(
 
 export function createProtocolTraceSource(
   trace: BrowserTraceSource,
-): V2ProtocolTraceSource {
+): ProtocolTraceSource {
   return adaptTraceSource(trace, projectProtocolTraceEvent)
 }
 
 export function createConnectivityTraceSource(
   trace: BrowserTraceSource,
-): V2ConnectivityTraceSource {
+): ConnectivityTraceSource {
   return adaptTraceSource(trace, projectConnectivityTraceEvent)
 }
 
-export function projectV2ReceiverTraceEvent(
-  event: V2ReceiverTraceEvent,
+export function projectReceiverTraceEvent(
+  event: ReceiverTraceEvent,
 ): TraceEventObservationV2 {
   switch (event.name) {
     case 'receiver_experience':
@@ -114,7 +114,7 @@ export function projectOutputTraceEvent(
 }
 
 export function projectConnectivityTraceEvent(
-  event: V2ConnectivityTraceEvent,
+  event: ConnectivityTraceEvent,
 ): TraceEventObservationV2 {
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'peer_attempt') {
@@ -182,7 +182,7 @@ function projectProjectionTraceEvent(
 }
 
 function projectAuthorityTraceEvent(
-  event: Extract<V2ReceiverTraceEvent, { readonly name: 'authority_transition' }>,
+  event: Extract<ReceiverTraceEvent, { readonly name: 'authority_transition' }>,
 ): TraceEventObservationV2 {
   switch (event.transition) {
     case 'offers_computed':
@@ -264,7 +264,7 @@ function projectAuthorityTraceEvent(
 
 function projectAuthorityActivationContext(
   event: Extract<
-    V2ReceiverTraceEvent,
+    ReceiverTraceEvent,
     { readonly name: 'authority_transition'; readonly activationId: string }
   >,
 ) {
@@ -416,7 +416,7 @@ function workerConsequenceSourceIndex(
 }
 
 function projectPeerAttemptPayload(
-  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
+  event: Extract<ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
 ): TraceEventPayloadByNameV2['peer_attempt'] {
   const payload = projectPeerAttemptMilestone(event)
   if (event.stage !== 'failed' && event.stage !== 'admitted') return payload
@@ -433,7 +433,7 @@ function projectPeerAttemptPayload(
 }
 
 function projectPeerAttemptMilestone(
-  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
+  event: Extract<ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
 ): TraceEventPayloadByNameV2['peer_attempt'] {
   const ordinals = {
     wave_ordinal: decimal(event.waveOrdinal),
@@ -492,7 +492,7 @@ function projectPeerAttemptMilestone(
 }
 
 function projectPeerRecoveryPayload(
-  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_recovery' }>,
+  event: Extract<ConnectivityTraceEvent, { readonly eventName: 'peer_recovery' }>,
 ): TraceEventPayloadByNameV2['peer_recovery'] {
   switch (event.stage) {
     case 'parallelism':

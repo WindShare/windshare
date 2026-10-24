@@ -1,8 +1,8 @@
 import { createEnvironmentOffers } from '../../src/output/planning'
-import type { V2ReceiveCompositionPort } from '../../src/application/receive/contracts'
+import type { ReceiveCompositionPort } from '../../src/application/receive/contracts'
 
 /** Browse-only controller tests install an explicit non-executable output boundary. */
-export const INERT_TEST_RECEIVE_COMPOSITION: V2ReceiveCompositionPort = Object.freeze({
+export const INERT_TEST_RECEIVE_COMPOSITION: ReceiveCompositionPort = Object.freeze({
   retained: Object.freeze({
     list: () => Promise.resolve(Object.freeze({
       operations: Object.freeze([]),

@@ -1,42 +1,42 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
+import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import {
   createReceivedProtocolError,
   type ReceivedProtocolError,
 } from '../../src/diagnostics/incident/fact'
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
+import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
-import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
+import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import {
-  V2RemoteOperationError,
-  V2RemoteRevisionError,
-  V2RevisionCapacityBusyError,
-  V2RevisionService,
-  V2SessionBlockLane,
-} from '../../src/content/v2-session-services'
-import type { V2FileRevisionDescriptor } from '../../src/content/v2-records'
+  RemoteOperationError,
+  RemoteRevisionError,
+  RevisionCapacityBusyError,
+  RevisionService,
+  SessionBlockLane,
+} from '../../src/content/session-services'
+import type { FileRevisionDescriptor } from '../../src/content/records'
 import {
-  decodeV2Message,
-  decodeV2OperationErrorControl,
-  encodeV2Body,
-  encodeV2Message,
-  type V2SessionMessage,
-  V2_MESSAGE_KIND,
-} from '../../src/session/v2-message'
-import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../../src/session/v2-runtime'
+  decodeMessage,
+  decodeOperationErrorControl,
+  encodeBody,
+  encodeMessage,
+  type SessionMessage,
+  MESSAGE_KIND,
+} from '../../src/session/message'
+import type { ReceiverSessionRuntime, SessionOperation } from '../../src/session/runtime'
 import {
-  createV2ProtocolOperationIdentity,
-  createV2ProtocolSessionIdentity,
-} from '../../src/session/v2-identities'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+  createProtocolOperationIdentity,
+  createProtocolSessionIdentity,
+} from '../../src/session/identities'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 import { fragmentRecord } from './v2-fragment-fixture'
 import { delayWithAbort } from '../../src/content/scheduling/deadlines'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
-const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
+const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
   allows: () => true,
   assertActive: () => undefined,
@@ -49,12 +49,12 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-function blockReceivedProtocolError(message: V2SessionMessage) {
-  const decoded = decodeV2OperationErrorControl(message.body)
+function blockReceivedProtocolError(message: SessionMessage) {
+  const decoded = decodeOperationErrorControl(message.body)
   return createReceivedProtocolError({
     requestKind: 'request_blocks', correlation: Object.freeze({
-      protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
-      protocolOperationId: createV2ProtocolOperationIdentity(message.operationId!),
+      protocolSessionId: createProtocolSessionIdentity(identity(7)),
+      protocolOperationId: createProtocolOperationIdentity(message.operationId!),
       lane: Object.freeze({ id: 1, epoch: 1 }),
     }), content: {
       scope: decoded.scope, code: decoded.code, retryable: decoded.retryable
@@ -62,7 +62,7 @@ function blockReceivedProtocolError(message: V2SessionMessage) {
   })
 }
 
-const share: V2ShareDescriptor = Object.freeze({
+const share: ShareDescriptor = Object.freeze({
   wireVersion: 2,
   suite: 2,
   shareInstance: identity(1),
@@ -73,10 +73,10 @@ const share: V2ShareDescriptor = Object.freeze({
   capabilities: 0n,
   sender: createEd25519Verifier(new Uint8Array(32).fill(3)),
   createdAtSeconds: 1n,
-  pathPolicy: V2_PATH_POLICY,
+  pathPolicy: PATH_POLICY,
 })
 
-const revision: V2FileRevisionDescriptor = Object.freeze({
+const revision: FileRevisionDescriptor = Object.freeze({
   shareInstance: share.shareInstance,
   shareInstanceId: share.shareInstanceId,
   fileId: identity(4),
@@ -101,12 +101,12 @@ interface SenderObjectVector extends VectorCase {
   readonly objectB64: string
 }
 
-function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): V2SessionOperation {
+function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): SessionOperation {
   const id = identity(first)
   const fragments = fragmentRecord(id, new Uint8Array(150_000))
   let index = 0
   return {
-    id, requestKind: V2_MESSAGE_KIND.requestBlocks, cancel: () => undefined,
+    id, requestKind: MESSAGE_KIND.requestBlocks, cancel: () => undefined,
     next: async signal => {
       const delay = delays[index] ?? 0
       if (delay > 0) await delayWithAbort(delay, signal!)
@@ -114,8 +114,8 @@ function delayedBlockOperation(first: number, delays: readonly number[], duplica
       const body = fragments[duplicate ? 0 : index++]
       if (duplicate) index += 1
       return body === undefined
-        ? encodeV2Message(V2_MESSAGE_KIND.operationComplete, id, encodeV2Body(new Map([[0, 1], [1, 1]])))
-        : decodeV2Message(body)
+        ? encodeMessage(MESSAGE_KIND.operationComplete, id, encodeBody(new Map([[0, 1], [1, 1]])))
+        : decodeMessage(body)
     },
   }
 }
@@ -128,13 +128,13 @@ function responseOperation(
   requestKind: number,
   responseKind: number,
   body: Uint8Array,
-): V2SessionOperation {
+): SessionOperation {
   const operationId = identity(30 + requestKind)
   return {
     id: operationId,
-    requestKind: requestKind as V2SessionOperation['requestKind'],
-    next: async () => encodeV2Message(
-      responseKind as V2SessionOperation['requestKind'],
+    requestKind: requestKind as SessionOperation['requestKind'],
+    next: async () => encodeMessage(
+      responseKind as SessionOperation['requestKind'],
       operationId,
       body,
     ),
@@ -143,11 +143,11 @@ function responseOperation(
 }
 
 function revisionOperationCorrelation(
-  operation: V2SessionOperation,
+  operation: SessionOperation,
 ): ReceivedProtocolError['correlation'] {
   return Object.freeze({
-    protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
-    protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+    protocolSessionId: createProtocolSessionIdentity(identity(7)),
+    protocolOperationId: createProtocolOperationIdentity(operation.id),
     lane: Object.freeze({ id: 1, epoch: 9 }),
   })
 }
@@ -160,15 +160,15 @@ async function openRevisionFailure(input: {
   const operationId = identity(26)
   let finalRead = false
   let correlationCapturedFromResponse = false
-  const operation: V2SessionOperation = {
+  const operation: SessionOperation = {
     id: operationId,
-    requestKind: V2_MESSAGE_KIND.openRevisions,
+    requestKind: MESSAGE_KIND.openRevisions,
     next: async () => {
       finalRead = true
-      return encodeV2Message(
-        V2_MESSAGE_KIND.openResults,
+      return encodeMessage(
+        MESSAGE_KIND.openResults,
         operationId,
-        encodeV2Body(new Map<number, unknown>([
+        encodeBody(new Map<number, unknown>([
           [0, 1],
           [1, [[
             revision.fileId,
@@ -184,18 +184,18 @@ async function openRevisionFailure(input: {
   }
   const session = {
     beginOperation: async () => operation,
-    authenticatedResponseCorrelation: (message: V2SessionMessage) => {
+    authenticatedResponseCorrelation: (message: SessionMessage) => {
       correlationCapturedFromResponse = finalRead
       expect(message.operationId).toEqual(operationId)
       return revisionOperationCorrelation(operation)
     },
-  } as unknown as V2ReceiverSessionRuntime
-  const lanes = new V2LaneSet()
+  } as unknown as ReceiverSessionRuntime
+  const lanes = new LaneSet()
   lanes.add({
     id: 1,
     fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
   }, 'application-relay')
-  const revisions = new V2RevisionService(
+  const revisions = new RevisionService(
     session,
     share,
     new Uint8Array(16).fill(9),
@@ -217,21 +217,21 @@ async function openRevisionFailure(input: {
 describe('v2 authenticated revision capacity results', () => {
   it('creates retry authority only for the exact authenticated quota tuple', async () => {
     const { error, correlationCapturedFromResponse } = await openRevisionFailure({
-      code: V2_REVISION_CODE_QUOTA,
+      code: REVISION_CODE_QUOTA,
       retryable: true,
       retryAfterMilliseconds: 275,
     })
 
-    expect(error).toBeInstanceOf(V2RevisionCapacityBusyError)
-    if (!(error instanceof V2RevisionCapacityBusyError)) throw error
+    expect(error).toBeInstanceOf(RevisionCapacityBusyError)
+    if (!(error instanceof RevisionCapacityBusyError)) throw error
     expect(correlationCapturedFromResponse).toBe(true)
     expect(error.retryAfterMilliseconds).toBe(275)
     expect(error.failure).toEqual({
-      code: V2_REVISION_CODE_QUOTA,
+      code: REVISION_CODE_QUOTA,
       retryable: true,
       retryAfterMilliseconds: 275,
     })
-    expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', correlation: { lane: { id: 1, epoch: 9 } }, content: { scope: 'revision', code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275 } })
+    expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', correlation: { lane: { id: 1, epoch: 9 } }, content: { scope: 'revision', code: REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275 } })
     expect(error.protocolFailure.correlation.protocolSessionId.copyBytes()).toEqual(identity(7))
     expect(error.protocolFailure.correlation.protocolOperationId.copyBytes()).toEqual(identity(26))
     expect(error.failureFact.recoveryDisposition).toBe('none')
@@ -240,29 +240,29 @@ describe('v2 authenticated revision capacity results', () => {
 
   it('does not promote a generic authenticated operation error into capacity authority', async () => {
     const operation = responseOperation(
-      V2_MESSAGE_KIND.openRevisions,
-      V2_MESSAGE_KIND.operationError,
-      encodeV2Body(new Map<number, unknown>([
-        [0, 1], [1, 3], [2, V2_REVISION_CODE_QUOTA], [3, true], [4, 275],
+      MESSAGE_KIND.openRevisions,
+      MESSAGE_KIND.operationError,
+      encodeBody(new Map<number, unknown>([
+        [0, 1], [1, 3], [2, REVISION_CODE_QUOTA], [3, true], [4, 275],
         [5, 'sender operation is busy'],
       ])),
     )
     const protocolFailure = createReceivedProtocolError({
       requestKind: 'open_revisions', correlation: revisionOperationCorrelation(operation), content: {
-        scope: 'revision', code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275
+        scope: 'revision', code: REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275
       }
     })
     const session = {
       beginOperation: async () => operation,
       operationCorrelation: revisionOperationCorrelation,
       authenticatedReceivedProtocolError: () => protocolFailure,
-    } as unknown as V2ReceiverSessionRuntime
-    const lanes = new V2LaneSet()
+    } as unknown as ReceiverSessionRuntime
+    const lanes = new LaneSet()
     lanes.add({
       id: 1,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
     }, 'application-relay')
-    const revisions = new V2RevisionService(
+    const revisions = new RevisionService(
       session,
       share,
       new Uint8Array(16).fill(9),
@@ -278,12 +278,12 @@ describe('v2 authenticated revision capacity results', () => {
       revisions.close()
       lanes.close()
     }
-    expect(error).toBeInstanceOf(V2RemoteOperationError)
-    expect(error).not.toBeInstanceOf(V2RevisionCapacityBusyError)
+    expect(error).toBeInstanceOf(RemoteOperationError)
+    expect(error).not.toBeInstanceOf(RevisionCapacityBusyError)
   })
 
   it.each([
-    ['non-retryable quota or seal budget', V2_REVISION_CODE_QUOTA, false, undefined],
+    ['non-retryable quota or seal budget', REVISION_CODE_QUOTA, false, undefined],
     ['source missing', 0x3002, false, undefined],
     ['source unreadable', 0x3003, false, undefined],
     ['unsupported source stability', 0x3004, false, undefined],
@@ -298,9 +298,9 @@ describe('v2 authenticated revision capacity results', () => {
         ...(retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds }),
       })
 
-      expect(error).toBeInstanceOf(V2RemoteRevisionError)
-      expect(error).not.toBeInstanceOf(V2RevisionCapacityBusyError)
-      if (!(error instanceof V2RemoteRevisionError)) throw error
+      expect(error).toBeInstanceOf(RemoteRevisionError)
+      expect(error).not.toBeInstanceOf(RevisionCapacityBusyError)
+      if (!(error instanceof RemoteRevisionError)) throw error
       expect(error.failure).toEqual({
         code,
         retryable,
@@ -314,7 +314,7 @@ describe('v2 authenticated revision capacity results', () => {
 
 describe('v2 session block lane deadlines', () => {
   it('uses relay immediately while rejecting a closed route authority', async () => {
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const unusedLane = (id: number) => ({
       id,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
@@ -331,21 +331,21 @@ describe('v2 session block lane deadlines', () => {
         observedLaneId = options.laneId
         throw beginFailure
       },
-    } as unknown as V2ReceiverSessionRuntime
-    const revisions = new V2RevisionService(
+    } as unknown as ReceiverSessionRuntime
+    const revisions = new RevisionService(
       session,
       share,
       new Uint8Array(16).fill(9),
       lanes,
     )
 
-    const canceledRoutes = new V2ConnectivityRouteAuthority()
+    const canceledRoutes = new ConnectivityRouteAuthority()
     canceledRoutes.close()
     const canceled = revisions.open(revision.fileId, canceledRoutes)
     await expect(canceled).rejects.toMatchObject({ name: 'AbortError' })
     expect(observedLaneId).toBeUndefined()
 
-    const peerRoutes = new V2ConnectivityRouteAuthority()
+    const peerRoutes = new ConnectivityRouteAuthority()
     await expect(revisions.open(revision.fileId, peerRoutes)).rejects.toBe(beginFailure)
     expect(observedLaneId).toBe(1)
     lanes.add(unusedLane(2), 'direct')
@@ -359,7 +359,7 @@ describe('v2 session block lane deadlines', () => {
   it('cancels a block operation when the sender withholds every fragment', async () => {
     vi.useFakeTimers()
     const operationId = identity(8)
-    const operation: V2SessionOperation = {
+    const operation: SessionOperation = {
       id: operationId,
       requestKind: 7,
       next: (signal?: AbortSignal) => new Promise((_resolve, reject) => {
@@ -373,8 +373,8 @@ describe('v2 session block lane deadlines', () => {
     const session = {
       beginOperation: async () => operation,
       cancelOperation: async () => { cancellations += 1 },
-    } as unknown as V2ReceiverSessionRuntime
-    const lane = new V2SessionBlockLane(
+    } as unknown as ReceiverSessionRuntime
+    const lane = new SessionBlockLane(
       1,
       session,
       share,
@@ -388,7 +388,7 @@ describe('v2 session block lane deadlines', () => {
       localBlockIndex: 0n,
     }, new AbortController().signal)
     const rejected = expect(pending).rejects.toMatchObject({
-      name: 'V2BlockInactivityTimeoutError',
+      name: 'BlockInactivityTimeoutError',
       phase: 'awaiting_first_fragment',
       scope: 'lane',
     })
@@ -404,17 +404,17 @@ describe('v2 session block lane deadlines', () => {
     const close = vi.fn(async () => undefined)
     const session = {
       beginOperation: async () => responseOperation(
-        V2_MESSAGE_KIND.requestBlocks,
-        V2_MESSAGE_KIND.operationError,
-        encodeV2Body(new Map<number, unknown>([
+        MESSAGE_KIND.requestBlocks,
+        MESSAGE_KIND.operationError,
+        encodeBody(new Map<number, unknown>([
           [0, 1], [1, 3], [2, 0x3008], [3, false], [4, null], [5, 'invalid lease'],
         ])),
       ),
       cancelOperation: async () => { cancellations += 1 },
       close,
       authenticatedReceivedProtocolError: blockReceivedProtocolError,
-    } as unknown as V2ReceiverSessionRuntime
-    const lane = new V2SessionBlockLane(
+    } as unknown as ReceiverSessionRuntime
+    const lane = new SessionBlockLane(
       1,
       session,
       share,
@@ -427,7 +427,7 @@ describe('v2 session block lane deadlines', () => {
       leaseId: identity(6),
       localBlockIndex: 0n,
     }, new AbortController().signal)).rejects.toMatchObject({
-      name: 'V2RemoteOperationError',
+      name: 'RemoteOperationError',
       scope: 'revision',
       code: 0x3008,
     })
@@ -442,18 +442,18 @@ describe('v2 session block lane deadlines', () => {
     const operationId = identity(9)
     const fragments = fragmentRecord(operationId, new Uint8Array(65_441).fill(0x33))
     const responses = [
-      decodeV2Message(fragments[0]!),
-      decodeV2Message(fragments[1]!),
-      encodeV2Message(
-        V2_MESSAGE_KIND.operationComplete,
+      decodeMessage(fragments[0]!),
+      decodeMessage(fragments[1]!),
+      encodeMessage(
+        MESSAGE_KIND.operationComplete,
         operationId,
-        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 1]])),
+        encodeBody(new Map<number, unknown>([[0, 1], [1, 1]])),
       ),
     ]
     let responseIndex = 0
-    const operation: V2SessionOperation = {
+    const operation: SessionOperation = {
       id: operationId,
-      requestKind: V2_MESSAGE_KIND.requestBlocks,
+      requestKind: MESSAGE_KIND.requestBlocks,
       next: (signal?: AbortSignal) => {
         const response = responses[responseIndex++]
         if (response === undefined) return Promise.reject(new Error('missing test response'))
@@ -475,8 +475,8 @@ describe('v2 session block lane deadlines', () => {
     const session = {
       beginOperation: async () => operation,
       cancelOperation: async () => undefined,
-    } as unknown as V2ReceiverSessionRuntime
-    const lane = new V2SessionBlockLane(
+    } as unknown as ReceiverSessionRuntime
+    const lane = new SessionBlockLane(
       1,
       session,
       share,
@@ -490,7 +490,7 @@ describe('v2 session block lane deadlines', () => {
       localBlockIndex: 0n,
     }, new AbortController().signal)
     const rejected = expect(pending).rejects.toMatchObject({
-      name: 'V2BlockOperationError',
+      name: 'BlockOperationError',
       code: 'object-auth',
     })
     await vi.advanceTimersByTimeAsync(20_000)
@@ -512,12 +512,12 @@ describe('v2 session queued block responses', () => {
     const session = {
       beginOperation: async () => operations.shift()!,
       cancelOperation,
-    } as unknown as V2ReceiverSessionRuntime
-    const lane = new V2SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),
+    } as unknown as ReceiverSessionRuntime
+    const lane = new SessionBlockLane(1, session, share, new Uint8Array(16).fill(9),
       { leaseError: () => undefined } as never)
     const descriptor = { ...revision, exactSize: 150_000n, geometry: new FileGeometry(150_000n, 150_000n) }
     const demand = { descriptor, leaseId: identity(6), localBlockIndex: 0n }
-    const lanes = new V2LaneSet({ now: Date.now })
+    const lanes = new LaneSet({ now: Date.now })
     lanes.add(lane, 'direct')
     const first = lanes.fetch(demand, ALL_ROUTES, new AbortController().signal).catch(error => error)
     const queued = lanes.fetch(demand, ALL_ROUTES, new AbortController().signal).catch(error => error)
@@ -525,18 +525,18 @@ describe('v2 session queued block responses', () => {
     expect(cancelOperation).not.toHaveBeenCalled()
     if (duplicate) {
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(await first).toMatchObject({ errors: [{ name: 'V2BlockInactivityTimeoutError', phase: 'receiving_fragments' }] })
+      expect(await first).toMatchObject({ errors: [{ name: 'BlockInactivityTimeoutError', phase: 'receiving_fragments' }] })
       // Unsent requests acquire their inactivity deadline only after admission.
       await vi.advanceTimersByTimeAsync(15_000)
       expect(await queued).toMatchObject({ errors: [{
-        name: 'V2BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 0,
+        name: 'BlockInactivityTimeoutError', phase: 'awaiting_first_fragment', queueProgress: 0,
       }] })
     } else {
       await vi.advanceTimersByTimeAsync(15_000)
       // Deliberately unsigned records reach object authentication after their
       // valid fragment streams; queue policy must never bypass that boundary.
       for (const result of await Promise.all([first, queued])) {
-        expect(result).toMatchObject({ name: 'V2BlockOperationError', code: 'object-auth' })
+        expect(result).toMatchObject({ name: 'BlockOperationError', code: 'object-auth' })
       }
     }
     lane.close()
@@ -550,13 +550,13 @@ describe('v2 session block delivery and lease recovery', () => {
     let cancellations = 0
     const session = {
       beginOperation: async () => responseOperation(
-        V2_MESSAGE_KIND.requestBlocks,
-        V2_MESSAGE_KIND.operationComplete,
-        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 1]])),
+        MESSAGE_KIND.requestBlocks,
+        MESSAGE_KIND.operationComplete,
+        encodeBody(new Map<number, unknown>([[0, 1], [1, 1]])),
       ),
       cancelOperation: async () => { cancellations += 1 },
-    } as unknown as V2ReceiverSessionRuntime
-    const incomplete = new V2SessionBlockLane(
+    } as unknown as ReceiverSessionRuntime
+    const incomplete = new SessionBlockLane(
       1,
       session,
       share,
@@ -564,7 +564,7 @@ describe('v2 session block delivery and lease recovery', () => {
       { leaseError: () => undefined } as never,
     )
     let peerCalls = 0
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     lanes.add(incomplete, 'application-relay')
     lanes.add({
       id: 2,
@@ -593,13 +593,13 @@ describe('v2 session block delivery and lease recovery', () => {
   it('does not retry an authenticated block completion with the wrong result count', async () => {
     const session = {
       beginOperation: async () => responseOperation(
-        V2_MESSAGE_KIND.requestBlocks,
-        V2_MESSAGE_KIND.operationComplete,
-        encodeV2Body(new Map<number, unknown>([[0, 1], [1, 0]])),
+        MESSAGE_KIND.requestBlocks,
+        MESSAGE_KIND.operationComplete,
+        encodeBody(new Map<number, unknown>([[0, 1], [1, 0]])),
       ),
       cancelOperation: async () => undefined,
-    } as unknown as V2ReceiverSessionRuntime
-    const invalid = new V2SessionBlockLane(
+    } as unknown as ReceiverSessionRuntime
+    const invalid = new SessionBlockLane(
       1,
       session,
       share,
@@ -607,7 +607,7 @@ describe('v2 session block delivery and lease recovery', () => {
       { leaseError: () => undefined } as never,
     )
     let peerCalls = 0
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     lanes.add(invalid, 'application-relay')
     lanes.add({
       id: 2,
@@ -640,7 +640,7 @@ describe('v2 session block delivery and lease recovery', () => {
       'windshare/v2 object/file-revision') as SenderObjectVector
     const fileId = vectorBytes(identityVector.fileIdB64)
     const leaseId = identity(24)
-    const vectorShare: V2ShareDescriptor = Object.freeze({
+    const vectorShare: ShareDescriptor = Object.freeze({
       ...share,
       shareInstance: vectorBytes(identityVector.shareInstanceB64),
       shareInstanceId: 'vector-share',
@@ -651,8 +651,8 @@ describe('v2 session block delivery and lease recovery', () => {
     const session = {
       operationCorrelation: revisionOperationCorrelation,
       beginOperation: async (kind: number) => {
-        if (kind === V2_MESSAGE_KIND.openRevisions) {
-          return responseOperation(kind, V2_MESSAGE_KIND.openResults, encodeV2Body(
+        if (kind === MESSAGE_KIND.openRevisions) {
+          return responseOperation(kind, MESSAGE_KIND.openResults, encodeBody(
             new Map<number, unknown>([
               [0, 1],
               [1, [[
@@ -666,18 +666,18 @@ describe('v2 session block delivery and lease recovery', () => {
             ]),
           ))
         }
-        if (kind === V2_MESSAGE_KIND.renewLease) {
+        if (kind === MESSAGE_KIND.renewLease) {
           renewAttempts += 1
           if (renewAttempts === 1) {
-            throw new V2SessionRuntimeError('lane', 'old physical lane disappeared')
+            throw new SessionRuntimeError('lane', 'old physical lane disappeared')
           }
-          return responseOperation(kind, V2_MESSAGE_KIND.leaseResult, encodeV2Body(
+          return responseOperation(kind, MESSAGE_KIND.leaseResult, encodeBody(
             new Map<number, unknown>([
               [0, 1], [1, leaseId], [2, 120_000], [3, 60_000],
             ]),
           ))
         }
-        if (kind === V2_MESSAGE_KIND.releaseLease) {
+        if (kind === MESSAGE_KIND.releaseLease) {
           const operationId = identity(29)
           return {
             id: operationId,
@@ -688,17 +688,17 @@ describe('v2 session block delivery and lease recovery', () => {
               if (signal?.aborted) abort()
             }),
             cancel: () => undefined,
-          } satisfies V2SessionOperation
+          } satisfies SessionOperation
         }
         throw new Error(`unexpected operation kind ${kind}`)
       },
-    } as unknown as V2ReceiverSessionRuntime
-    const lanes = new V2LaneSet()
+    } as unknown as ReceiverSessionRuntime
+    const lanes = new LaneSet()
     lanes.add({
       id: 1,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
     }, 'application-relay')
-    const revisions = new V2RevisionService(
+    const revisions = new RevisionService(
       session,
       vectorShare,
       vectorBytes(identityVector.readSecretB64),

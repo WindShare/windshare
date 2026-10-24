@@ -1,5 +1,5 @@
-import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
-import { V2SessionRuntimeError } from '../../session/v2-runtime-types'
+import type { BlockRouteEligibility, BlockTransportRoute } from '../route-policy'
+import { SessionRuntimeError } from '../../session/runtime-types'
 
 const INITIAL_DIRECT_RESPONSE_MILLISECONDS = 25
 const INITIAL_RELAY_RESPONSE_MILLISECONDS = 250
@@ -13,7 +13,7 @@ interface ContentQueueEstimate {
 export interface RequestLane {
   readonly id: number
   readonly epoch: number
-  readonly route: V2BlockTransportRoute
+  readonly route: BlockTransportRoute
   readonly content?: ContentQueueEstimate
 }
 export interface RequestSchedulingObservation {
@@ -21,7 +21,7 @@ export interface RequestSchedulingObservation {
   readonly kind: LaneRequestKind
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: V2BlockTransportRoute
+  readonly route: BlockTransportRoute
   readonly expectedMilliseconds: number
   readonly pendingRequests: number
   readonly transition: 'dispatched' | 'completed' | 'failed' | 'cancelled'
@@ -35,7 +35,7 @@ interface RequestState {
 }
 export interface LaneRequest {
   readonly kind: LaneRequestKind
-  readonly routes?: V2BlockRouteEligibility
+  readonly routes?: BlockRouteEligibility
   readonly signal?: AbortSignal
 }
 
@@ -122,7 +122,7 @@ export class LaneRequests {
       observe('completed')
       return value
     } catch (error) {
-      if (!signal.aborted && error instanceof V2SessionRuntimeError && error.scope === 'lane') state.failed = true
+      if (!signal.aborted && error instanceof SessionRuntimeError && error.scope === 'lane') state.failed = true
       observe(signal.aborted ? 'cancelled' : 'failed')
       throw error
     }

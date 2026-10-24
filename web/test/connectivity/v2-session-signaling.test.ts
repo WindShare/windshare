@@ -1,20 +1,20 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
+import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
 import type { ReceivedProtocolError } from '../../src/diagnostics/incident/fact'
-import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
+import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
-  decodeV2PeerCandidate,
-  decodeV2PeerOffer,
-  type V2PeerBinding,
-} from '../../src/connectivity/v2-signaling-codec'
+  decodePeerCandidate,
+  decodePeerOffer,
+  type PeerBinding,
+} from '../../src/connectivity/signaling-codec'
 import {
-  V2AuthenticatedPeerOperationError,
-  createV2PeerBindingForPath,
-  createV2PeerPathIdentity,
-  V2SessionSignalingRoute,
-} from '../../src/connectivity/v2-session-signaling'
+  AuthenticatedPeerOperationError,
+  createPeerBindingForPath,
+  createPeerPathIdentity,
+  SessionSignalingRoute,
+} from '../../src/connectivity/session-signaling'
 import {
   SIGNAL_KIND_ANSWER,
   SIGNAL_KIND_CANDIDATE,
@@ -22,35 +22,35 @@ import {
   type ConnectivitySignal,
 } from '../../src/connectivity/signaling'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
-import { V2EnvelopeSealer } from '../../src/session/v2-envelope'
-import { V2SessionLane } from '../../src/session/v2-lane-runtime'
+import { EnvelopeSealer } from '../../src/session/envelope'
+import { SessionLane } from '../../src/session/lane-runtime'
 import {
-  encodeV2Body,
-  encodeV2Message,
-  type V2MessageKind,
-  type V2SessionMessage,
-  V2_MESSAGE_KIND,
-} from '../../src/session/v2-message'
-import { V2OperationRouter } from '../../src/session/v2-operation-router'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+  encodeBody,
+  encodeMessage,
+  type MessageKind,
+  type SessionMessage,
+  MESSAGE_KIND,
+} from '../../src/session/message'
+import { OperationRouter } from '../../src/session/operation-router'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 import {
-  createV2ProtocolOperationIdentity,
-  createV2ProtocolSessionIdentity,
-} from '../../src/session/v2-identities'
+  createProtocolOperationIdentity,
+  createProtocolSessionIdentity,
+} from '../../src/session/identities'
 import type {
-  V2OperationCancellation,
-  V2SessionOperation,
-} from '../../src/session/v2-runtime-types'
-import type { V2SessionKeys } from '../../src/session/v2-transcript'
+  OperationCancellation,
+  SessionOperation,
+} from '../../src/session/runtime-types'
+import type { SessionKeys } from '../../src/session/transcript'
 import { senderControlKeyPair, signSenderOperationControl } from '../session/signed-control-fixture'
 
 const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
 
-function signalingRouter(): V2OperationRouter {
-  return new V2OperationRouter(
+function signalingRouter(): OperationRouter {
+  return new OperationRouter(
     () => undefined,
     undefined,
-    { protocolSessionIdentity: createV2ProtocolSessionIdentity(protocolKeys().protocolSessionId) },
+    { protocolSessionIdentity: createProtocolSessionIdentity(protocolKeys().protocolSessionId) },
   )
 }
 
@@ -91,27 +91,27 @@ class InMemoryFrameChannel implements FrameChannel {
 
 class SignalingSessionFacade {
   readonly keys = protocolKeys()
-  readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
+  readonly protocolSessionIdentity = createProtocolSessionIdentity(this.keys.protocolSessionId)
   readonly protocolFailures: ReceivedProtocolError[] = []
-  readonly #router: V2OperationRouter
-  operation: V2SessionOperation | undefined
+  readonly #router: OperationRouter
+  operation: SessionOperation | undefined
   offerBody: Uint8Array<ArrayBuffer> | undefined
-  followups: { readonly kind: V2MessageKind; readonly body: Uint8Array<ArrayBuffer> }[] = []
+  followups: { readonly kind: MessageKind; readonly body: Uint8Array<ArrayBuffer> }[] = []
   closeCalls = 0
 
-  constructor(router: V2OperationRouter) {
+  constructor(router: OperationRouter) {
     this.#router = router
   }
 
-  async beginOperation(kind: V2MessageKind, body: Uint8Array): Promise<V2SessionOperation> {
+  async beginOperation(kind: MessageKind, body: Uint8Array): Promise<SessionOperation> {
     this.offerBody = body.slice()
     this.operation = this.#router.create(kind, body)
     return this.operation
   }
 
   async sendOperationMessage(
-    operation: V2SessionOperation,
-    kind: V2MessageKind,
+    operation: SessionOperation,
+    kind: MessageKind,
     body: Uint8Array,
   ): Promise<void> {
     if (operation !== this.operation) throw new Error('unexpected signaling operation')
@@ -119,21 +119,21 @@ class SignalingSessionFacade {
   }
 
   async cancelOperation(
-    operation: V2SessionOperation,
-    cancellation: V2OperationCancellation,
+    operation: SessionOperation,
+    cancellation: OperationCancellation,
   ): Promise<void> {
     operation.cancel(cancellation.cause)
   }
 
-  operationCorrelation(operation: V2SessionOperation) {
+  operationCorrelation(operation: SessionOperation) {
     return Object.freeze({
       protocolSessionId: this.protocolSessionIdentity,
-      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      protocolOperationId: createProtocolOperationIdentity(operation.id),
       lane: Object.freeze({ id: this.keys.initialLaneId, epoch: this.keys.initialLaneEpoch }),
     })
   }
 
-  authenticatedReceivedProtocolError(message: V2SessionMessage): ReceivedProtocolError {
+  authenticatedReceivedProtocolError(message: SessionMessage): ReceivedProtocolError {
     const failure = this.#router.protocolFailureFor(message)
     if (failure === undefined) throw new Error('test router did not capture protocol failure')
     this.protocolFailures.push(failure)
@@ -150,9 +150,9 @@ describe('v2 authenticated session signaling', () => {
   it('keeps one path identity while allocating a fresh attempt binding', () => {
     let seed = 1
     const randomBytes = (length: number) => new Uint8Array(length).fill(seed++)
-    const peerPathId = createV2PeerPathIdentity(randomBytes)
-    const first = createV2PeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 1n }, randomBytes)
-    const second = createV2PeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 2n }, randomBytes)
+    const peerPathId = createPeerPathIdentity(randomBytes)
+    const first = createPeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 1n }, randomBytes)
+    const second = createPeerBindingForPath(peerPathId, { peerSlot: 0, attemptSequence: 2n }, randomBytes)
 
     expect(first.peerPathId).toEqual(peerPathId)
     expect(second.peerPathId).toEqual(peerPathId)
@@ -163,10 +163,10 @@ describe('v2 authenticated session signaling', () => {
   it('reads the trace source at each milestone without constructing disabled payloads', async () => {
     const router = signalingRouter()
     const session = new SignalingSessionFacade(router)
-    const events: V2ConnectivityTraceEvent[] = []
-    let current: ((event: V2ConnectivityTraceEvent) => void) | undefined
-    const route = new V2SessionSignalingRoute(
-      session as unknown as V2ReceiverSessionRuntime,
+    const events: ConnectivityTraceEvent[] = []
+    let current: ((event: ConnectivityTraceEvent) => void) | undefined
+    const route = new SessionSignalingRoute(
+      session as unknown as ReceiverSessionRuntime,
       Object.freeze({ peerPathId: identity(36), attemptId: identity(37), purpose: 'initial' as const, attemptSequence: 1n, peerSlot: 0 }),
       { get current() { return current } },
     )
@@ -197,19 +197,19 @@ describe('v2 authenticated session signaling', () => {
     const senderKeys = await senderControlKeyPair()
     const descriptor = shareDescriptor(senderKeys.publicKey)
     const sessionKeys = protocolKeys()
-    const binding: V2PeerBinding = Object.freeze({
+    const binding: PeerBinding = Object.freeze({
       peerPathId: identity(41),
       attemptId: identity(42), purpose: 'initial' as const, attemptSequence: 1n, peerSlot: 0,
     })
     const router = signalingRouter()
     const session = new SignalingSessionFacade(router)
-    const route = new V2SessionSignalingRoute(
-      session as unknown as V2ReceiverSessionRuntime,
+    const route = new SessionSignalingRoute(
+      session as unknown as ReceiverSessionRuntime,
       binding,
     )
     const incoming = route.messages.getReader()
     const channel = new InMemoryFrameChannel()
-    const lane = new V2SessionLane({
+    const lane = new SessionLane({
       channel,
       reader: channel.frames.getReader(),
       keys: sessionKeys,
@@ -220,7 +220,7 @@ describe('v2 authenticated session signaling', () => {
       onClosed: () => undefined,
     })
     let nonce = 0
-    const senderSealer = new V2EnvelopeSealer(sessionKeys.senderToReceiverKey, {
+    const senderSealer = new EnvelopeSealer(sessionKeys.senderToReceiverKey, {
       shareInstance: descriptor.shareInstance,
       protocolSessionId: sessionKeys.protocolSessionId,
       laneId: sessionKeys.initialLaneId,
@@ -232,14 +232,14 @@ describe('v2 authenticated session signaling', () => {
       kind: SIGNAL_KIND_OFFER,
       payload: { type: SIGNAL_KIND_OFFER, sdp: 'v=0\r\na=setup:actpass\r\n' },
     })
-    expect(decodeV2PeerOffer(requireValue(session.offerBody))).toEqual({
+    expect(decodePeerOffer(requireValue(session.offerBody))).toEqual({
       ...binding,
       sdp: 'v=0\r\na=setup:actpass\r\n',
     })
 
     const answerBody = [4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\na=setup:active\r\n']
     const answer = await signSenderOperationControl({
-      kind: V2_MESSAGE_KIND.peerAnswer,
+      kind: MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(answerBody),
       binding: controlBinding(descriptor, sessionKeys, 0n),
@@ -255,7 +255,7 @@ describe('v2 authenticated session signaling', () => {
     })
 
     const replayedAnswer = await signSenderOperationControl({
-      kind: V2_MESSAGE_KIND.peerAnswer,
+      kind: MESSAGE_KIND.peerAnswer,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(answerBody),
       binding: controlBinding(descriptor, sessionKeys, 1n),
@@ -276,7 +276,7 @@ describe('v2 authenticated session signaling', () => {
       'windshare',
     ]
     const candidate = await signSenderOperationControl({
-      kind: V2_MESSAGE_KIND.peerCandidate,
+      kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(candidateBody),
       binding: controlBinding(descriptor, sessionKeys, 2n),
@@ -297,7 +297,7 @@ describe('v2 authenticated session signaling', () => {
     })
 
     const replayedCandidate = await signSenderOperationControl({
-      kind: V2_MESSAGE_KIND.peerCandidate,
+      kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(candidateBody),
       binding: controlBinding(descriptor, sessionKeys, 3n),
@@ -316,7 +316,7 @@ describe('v2 authenticated session signaling', () => {
       'windshare',
     ]
     const distinctCandidate = await signSenderOperationControl({
-      kind: V2_MESSAGE_KIND.peerCandidate,
+      kind: MESSAGE_KIND.peerCandidate,
       operationId: requireValue(session.operation).id,
       semanticBody: encodeCanonicalCbor(distinctCandidateBody),
       binding: controlBinding(descriptor, sessionKeys, 4n),
@@ -348,8 +348,8 @@ describe('v2 authenticated session signaling', () => {
     }
     await route.send(receiverCandidate)
     expect(session.followups).toHaveLength(1)
-    expect(session.followups[0]?.kind).toBe(V2_MESSAGE_KIND.peerCandidate)
-    expect(decodeV2PeerCandidate(requireValue(session.followups[0]?.body))).toEqual({
+    expect(session.followups[0]?.kind).toBe(MESSAGE_KIND.peerCandidate)
+    expect(decodePeerCandidate(requireValue(session.followups[0]?.body))).toEqual({
       ...binding,
       candidate: 'candidate:2 1 udp 1 192.0.2.2 5001 typ host',
       sdpMid: null,
@@ -376,13 +376,13 @@ describe('v2 authenticated session signaling', () => {
 
   it('dedupes concurrent candidate replays that arrive before the answer', async () => {
     const router = signalingRouter()
-    const binding: V2PeerBinding = Object.freeze({
+    const binding: PeerBinding = Object.freeze({
       peerPathId: identity(46),
       attemptId: identity(47), purpose: 'initial' as const, attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
-    const route = new V2SessionSignalingRoute(
-      session as unknown as V2ReceiverSessionRuntime,
+    const route = new SessionSignalingRoute(
+      session as unknown as ReceiverSessionRuntime,
       binding,
     )
     const incoming = route.messages.getReader()
@@ -394,20 +394,20 @@ describe('v2 authenticated session signaling', () => {
     const firstCandidateBody = encodedCandidateBody(binding, 45)
     const replayRoutes = await Promise.all(Array.from(
       { length: EXACT_CANDIDATE_REPLAY_STRESS_COUNT },
-      () => router.route(encodeV2Message(
-        V2_MESSAGE_KIND.peerCandidate,
+      () => router.route(encodeMessage(
+        MESSAGE_KIND.peerCandidate,
         requireValue(session.operation).id,
         firstCandidateBody,
       )),
     ))
     expect(replayRoutes).toHaveLength(EXACT_CANDIDATE_REPLAY_STRESS_COUNT)
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.peerAnswer,
+    await router.route(encodeMessage(
+      MESSAGE_KIND.peerAnswer,
       requireValue(session.operation).id,
-      encodeV2Body([4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\ns=answer\r\n']),
+      encodeBody([4, binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot, 0, 'v=0\r\ns=answer\r\n']),
     ))
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.peerCandidate,
+    await router.route(encodeMessage(
+      MESSAGE_KIND.peerCandidate,
       requireValue(session.operation).id,
       encodedCandidateBody(binding, 46),
     ))
@@ -436,14 +436,14 @@ describe('v2 authenticated session signaling', () => {
 
   it('contains a peer operation failure to its attempt while other session work stays healthy', async () => {
     const router = signalingRouter()
-    const binding: V2PeerBinding = Object.freeze({
+    const binding: PeerBinding = Object.freeze({
       peerPathId: identity(51),
       attemptId: identity(52), purpose: 'initial' as const, attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
-    const attemptDiagnostics: V2ConnectivityTraceEvent[] = []
-    const route = new V2SessionSignalingRoute(
-      session as unknown as V2ReceiverSessionRuntime,
+    const attemptDiagnostics: ConnectivityTraceEvent[] = []
+    const route = new SessionSignalingRoute(
+      session as unknown as ReceiverSessionRuntime,
       binding,
       { current: (event) => attemptDiagnostics.push(event) },
     )
@@ -457,10 +457,10 @@ describe('v2 authenticated session signaling', () => {
     route.offerSent({ localEmitted: 0, remoteAccepted: 0 })
 
     const failedRead = incoming.read()
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.operationError,
+    await router.route(encodeMessage(
+      MESSAGE_KIND.operationError,
       requireValue(session.operation).id,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 3], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'peer rejected'], [6, [binding.peerPathId, binding.attemptId, binding.attemptSequence, binding.peerSlot]],
       ])),
     ))
@@ -468,7 +468,7 @@ describe('v2 authenticated session signaling', () => {
       () => new Error('peer operation failure unexpectedly produced a signal'),
       (reason: unknown) => reason,
     )
-    expect(peerFailure).toBeInstanceOf(V2AuthenticatedPeerOperationError)
+    expect(peerFailure).toBeInstanceOf(AuthenticatedPeerOperationError)
     expect(peerFailure).toMatchObject({
       message: 'Sender rejected the authenticated peer operation',
       protocolFailure: { requestKind: 'peer_offer', content: { scope: 'peer', code: 0x5001 } },
@@ -487,14 +487,14 @@ describe('v2 authenticated session signaling', () => {
 
 
     const healthy = router.create(
-      V2_MESSAGE_KIND.listChildren,
-      encodeV2Body([]),
+      MESSAGE_KIND.listChildren,
+      encodeBody([]),
     )
     const healthyId = healthy.id
-    const result = encodeV2Message(
-      V2_MESSAGE_KIND.catalogResult,
+    const result = encodeMessage(
+      MESSAGE_KIND.catalogResult,
       healthyId,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(54)]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, identity(54)]])),
     )
     await router.route(result)
     await expect(healthy.next()).resolves.toEqual(result)
@@ -505,14 +505,14 @@ describe('v2 authenticated session signaling', () => {
 describe('v2 authenticated signaling contract failures', () => {
   it('keeps authenticated binding conflicts session-fatal', async () => {
     const router = signalingRouter()
-    const binding: V2PeerBinding = Object.freeze({
+    const binding: PeerBinding = Object.freeze({
       peerPathId: identity(61),
       attemptId: identity(62), purpose: 'initial' as const, attemptSequence: 1n, peerSlot: 0,
     })
     const session = new SignalingSessionFacade(router)
-    const traces: V2ConnectivityTraceEvent[] = []
-    const route = new V2SessionSignalingRoute(
-      session as unknown as V2ReceiverSessionRuntime,
+    const traces: ConnectivityTraceEvent[] = []
+    const route = new SessionSignalingRoute(
+      session as unknown as ReceiverSessionRuntime,
       binding,
       { current: (event) => traces.push(event) },
     )
@@ -523,10 +523,10 @@ describe('v2 authenticated signaling contract failures', () => {
     })
 
     const failedRead = incoming.read()
-    const routeFailure = await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.peerCandidate,
+    const routeFailure = await router.route(encodeMessage(
+      MESSAGE_KIND.peerCandidate,
       requireValue(session.operation).id,
-      encodeV2Body([
+      encodeBody([
         1,
         binding.peerPathId,
         identity(63),
@@ -549,8 +549,8 @@ describe('v2 authenticated signaling contract failures', () => {
 })
 
 function controlBinding(
-  descriptor: V2ShareDescriptor,
-  keys: V2SessionKeys,
+  descriptor: ShareDescriptor,
+  keys: SessionKeys,
   sequence: bigint,
 ) {
   return Object.freeze({
@@ -563,7 +563,7 @@ function controlBinding(
   })
 }
 
-function protocolKeys(): V2SessionKeys {
+function protocolKeys(): SessionKeys {
   return Object.freeze({
     protocolSessionId: identity(30),
     transcriptHash: new Uint8Array(32).fill(31),
@@ -574,7 +574,7 @@ function protocolKeys(): V2SessionKeys {
   })
 }
 
-function shareDescriptor(senderPublicKey: Uint8Array<ArrayBuffer>): V2ShareDescriptor {
+function shareDescriptor(senderPublicKey: Uint8Array<ArrayBuffer>): ShareDescriptor {
   return Object.freeze({
     wireVersion: 2,
     suite: 2,
@@ -586,7 +586,7 @@ function shareDescriptor(senderPublicKey: Uint8Array<ArrayBuffer>): V2ShareDescr
     capabilities: 0n,
     sender: createEd25519Verifier(senderPublicKey.slice()),
     createdAtSeconds: 1n,
-    pathPolicy: V2_PATH_POLICY,
+    pathPolicy: PATH_POLICY,
   })
 }
 
@@ -601,8 +601,8 @@ function requireValue<T>(value: T | undefined): T {
   return value
 }
 
-function encodedCandidateBody(binding: V2PeerBinding, seed: number): Uint8Array<ArrayBuffer> {
-  return encodeV2Body([
+function encodedCandidateBody(binding: PeerBinding, seed: number): Uint8Array<ArrayBuffer> {
+  return encodeBody([
     4,
     binding.peerPathId,
     binding.attemptId,

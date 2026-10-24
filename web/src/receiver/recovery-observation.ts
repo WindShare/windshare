@@ -1,11 +1,11 @@
-import type { V2ConnectionRecoveryTraceEvent, V2ProtocolTraceSource } from '../session/v2-diagnostics'
+import type { ConnectionRecoveryTraceEvent, ProtocolTraceSource } from '../session/diagnostics'
 
-export type RecoveryObservation = Pick<V2ConnectionRecoveryTraceEvent,
+export type RecoveryObservation = Pick<ConnectionRecoveryTraceEvent,
   'attempt' | 'phase' | 'transition' | 'delayMilliseconds' | 'waitReason' | 'failure'>
 
 export function observeRecovery(
-  source: V2ProtocolTraceSource | undefined,
-  context: Omit<V2ConnectionRecoveryTraceEvent, keyof RecoveryObservation | 'eventName'>,
+  source: ProtocolTraceSource | undefined,
+  context: Omit<ConnectionRecoveryTraceEvent, keyof RecoveryObservation | 'eventName'>,
   observation: RecoveryObservation,
 ): void {
   try {
