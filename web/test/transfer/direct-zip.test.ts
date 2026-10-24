@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
+import type { CatalogEntry } from '../../src/catalog/records'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockLaneAttemptsError, V2BlockBroker, V2LaneSet } from '../../src/content/v2-broker'
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
+import { BlockLaneAttemptsError, BlockBroker, LaneSet } from '../../src/content/broker'
+import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import {
-  V2SupervisedContent,
-  type V2ContentGeneration,
-  type V2ContentGenerationProvider,
-} from '../../src/receiver/v2-supervised-content'
+  SupervisedContent,
+  type ContentGeneration,
+  type ContentGenerationProvider,
+} from '../../src/receiver/supervised-content'
 import { TransferPauseRequestedError } from '../../src/transfer/output/session'
-import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
-import { createDirectZipProgressObservers, runDirectZipJob } from '../../src/transfer/v2-job-direct-zip'
+import { TransferProgressLedger } from '../../src/transfer/progress/ledger'
+import { createDirectZipProgressObservers, runDirectZipJob } from '../../src/transfer/job-direct-zip'
 import {
-  V2RevisionCapacityBusyError,
-  type V2OpenedRevision,
-} from '../../src/content/v2-session-services'
-import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+  RevisionCapacityBusyError,
+  type OpenedRevision,
+} from '../../src/content/session-services'
+import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import {
   snapshotLogicalArtifactPath,
   snapshotMaterializationRootRelativePath,
@@ -50,9 +50,9 @@ import {
   type DirectZipMemberRollbackAuthorityV1,
 } from '../../src/output/direct-zip/transfer/output-session'
 import {
-  V2RevisionCapacityCoordinator,
-  type V2RevisionCapacityClock,
-  type V2RevisionCapacityWaitSnapshot,
+  RevisionCapacityCoordinator,
+  type RevisionCapacityClock,
+  type RevisionCapacityWaitSnapshot,
 } from '../../src/transfer/revision-capacity/public'
 import {
   candidateObservation,
@@ -91,7 +91,7 @@ describe('direct ZIP ordered transfer composition', () => {
           if (found === undefined) throw new Error('missing test directory')
           return found
         },
-        entries: async function* (directory: V2CommittedDirectory) {
+        entries: async function* (directory: CommittedDirectory) {
           for (const entry of entries.get(directory.directoryIdText) ?? []) yield entry
         },
       } as never,
@@ -141,7 +141,7 @@ describe('direct ZIP ordered transfer composition', () => {
           if (text === anchor.directoryIdText) return anchor
           throw new Error('unselected sibling must not be discovered')
         },
-        entries: async function* (directory: V2CommittedDirectory) {
+        entries: async function* (directory: CommittedDirectory) {
           for (const entry of entries.get(directory.directoryIdText) ?? []) yield entry
         },
       } as never,
@@ -149,7 +149,7 @@ describe('direct ZIP ordered transfer composition', () => {
       selection: {
         defaultSelected: false,
         canonicalRules: [],
-        selected: (entry: V2CatalogEntry) => entry.idText === anchorIdText || entry.kind === 'file',
+        selected: (entry: CatalogEntry) => entry.idText === anchorIdText || entry.kind === 'file',
         directorySelected: (directoryId: string) => directoryId === anchorIdText,
         decision: () => 'default-rule',
         shouldDiscover: (directoryId: string) => directoryId === anchorIdText,
@@ -665,13 +665,13 @@ describe('direct ZIP receive lifecycle', () => {
     const member = contentFile('root/prefetch.bin', 16n)
     const opened = directZipOpenedRevision(member)
     const calls: bigint[] = []
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     lanes.add({ id: 1, fetchBlock: async (demand, _signal, observer) => {
       calls.push(demand.localBlockIndex)
       observer?.received(2)
       return { descriptor: opened.descriptor, localBlockIndex: demand.localBlockIndex, data: Uint8Array.of(1, 2) }
     } }, 'direct')
-    const broker = new V2BlockBroker(lanes, { maximumRangeBufferBytes: 16 })
+    const broker = new BlockBroker(lanes, { maximumRangeBufferBytes: 16 })
     const entered = coordinatorGate()
     const resume = coordinatorGate()
     const writes: bigint[] = []
@@ -681,7 +681,7 @@ describe('direct ZIP receive lifecycle', () => {
       revisions: { open: async () => opened },
       broker: { readRange: (descriptor, lease, range, options) =>
         broker.readRouteAuthorizedRange(descriptor, lease, range, { ...options,
-          routes: new V2ConnectivityRouteAuthority(),
+          routes: new ConnectivityRouteAuthority(),
         }) },
       output: { ...output, beginFile: async () => ({
         resumeOffset: 0n,
@@ -716,8 +716,8 @@ describe('direct ZIP receive lifecycle', () => {
     const opened = directZipOpenedRevision(member)
     const recovering = coordinatorGate()
     const recovered = coordinatorGate()
-    const loss = new V2BlockLaneAttemptsError([new Error('network generation lost')])
-    const generation = (generationId: number): V2ContentGeneration => ({
+    const loss = new BlockLaneAttemptsError([new Error('network generation lost')])
+    const generation = (generationId: number): ContentGeneration => ({
       id: generationId,
       revisions: { open: async () => opened } as never,
       broker: {
@@ -731,7 +731,7 @@ describe('direct ZIP receive lifecycle', () => {
     const first = generation(1)
     const second = generation(2)
     let current = first
-    const provider: V2ContentGenerationProvider = {
+    const provider: ContentGenerationProvider = {
       execute: async (_signal, operation) => ({ generation: current, value: await operation(current) }),
       recover: async (_generation, error) => {
         expect(error).toBe(loss)
@@ -743,8 +743,8 @@ describe('direct ZIP receive lifecycle', () => {
       isCurrent: generation => generation === current,
       contentLaneCount: () => 1,
     }
-    const content = new V2SupervisedContent(provider, length => new Uint8Array(length).fill(9))
-    const scoped = content.forRoutes(new V2ConnectivityRouteAuthority())
+    const content = new SupervisedContent(provider, length => new Uint8Array(length).fill(9))
+    const scoped = content.forRoutes(new ConnectivityRouteAuthority())
     const acknowledged: bigint[] = []
     await output.beginTraversal(ROOT, SIGNAL)
     await output.visit(1n, member, SIGNAL)
@@ -819,7 +819,7 @@ describe('direct ZIP receive lifecycle', () => {
     expect(harness.target.closeAttemptCount).toBe(1)
 
     const resumed = transferOutput(harness.writer(checkpoint), harness)
-    const progress = new V2TransferProgressLedger()
+    const progress = new TransferProgressLedger()
     const materialized: bigint[] = []
     const rootId = id(20)
     const root = committed(rootId, 21, 1)
@@ -896,10 +896,10 @@ describe('direct ZIP revision capacity composition', () => {
     const member = file('root/a.txt', 2n)
     const clock = new DirectZipCapacityClock()
     let reads = 0
-    let recoveredSnapshot: V2RevisionCapacityWaitSnapshot | undefined
-    let afterConsumerTime: V2RevisionCapacityWaitSnapshot | undefined
+    let recoveredSnapshot: RevisionCapacityWaitSnapshot | undefined
+    let afterConsumerTime: RevisionCapacityWaitSnapshot | undefined
     const opened = directZipOpenedRevision(member)
-    const coordinator = new V2RevisionCapacityCoordinator({
+    const coordinator = new RevisionCapacityCoordinator({
       revisions: { open: async () => opened },
       broker: {
         readRange: async function* (_descriptor, _lease, range) {
@@ -964,7 +964,7 @@ function contentFile(path: string, expectedSize: bigint): DirectZipOrderedFileV1
     entry: { ...member.pending.entry, idText: fileId } } }
 }
 
-function directZipOpenedRevision(member: DirectZipOrderedFileV1): V2OpenedRevision {
+function directZipOpenedRevision(member: DirectZipOrderedFileV1): OpenedRevision {
   const shareInstance = id(6)
   const fileRevision = id(7)
   return Object.freeze({
@@ -1001,13 +1001,13 @@ function directZipContentOutput(): DirectZipOutputSessionV1 {
   }
 }
 
-function directZipCapacityError(retryAfterMilliseconds: number): V2RevisionCapacityBusyError {
+function directZipCapacityError(retryAfterMilliseconds: number): RevisionCapacityBusyError {
   const failure = Object.freeze({
-    code: V2_REVISION_CODE_QUOTA,
+    code: REVISION_CODE_QUOTA,
     retryable: true as const,
     retryAfterMilliseconds,
   })
-  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+  return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', id(10)),
       protocolOperationId: createFailureIdentity('protocol_operation', id(11))
@@ -1017,7 +1017,7 @@ function directZipCapacityError(retryAfterMilliseconds: number): V2RevisionCapac
   }))
 }
 
-class DirectZipCapacityClock implements V2RevisionCapacityClock {
+class DirectZipCapacityClock implements RevisionCapacityClock {
   #now = 0
 
   now(): number { return this.#now }
@@ -1158,7 +1158,7 @@ function committed(directoryId: Uint8Array<ArrayBuffer>, generationSeed: number,
   })
 }
 
-function catalogDirectory(identity: Uint8Array<ArrayBuffer>, name: string): V2CatalogEntry {
+function catalogDirectory(identity: Uint8Array<ArrayBuffer>, name: string): CatalogEntry {
   return Object.freeze({ kind: 'directory' as const, id: identity, idText: base64(identity), name })
 }
 
@@ -1166,6 +1166,6 @@ function catalogFile(
   identity: Uint8Array<ArrayBuffer>,
   name: string,
   expectedSize: bigint,
-): V2CatalogEntry {
+): CatalogEntry {
   return Object.freeze({ kind: 'file' as const, id: identity, idText: base64(identity), name, expectedSize })
 }

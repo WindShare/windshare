@@ -150,7 +150,7 @@ func TestLinuxExt4RestartIdentityWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	platform, ok := platformValue.(*linuxV3Platform)
+	platform, ok := platformValue.(*linuxPlatform)
 	if !ok {
 		t.Fatalf("unexpected native platform type %T", platformValue)
 	}

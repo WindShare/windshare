@@ -14,51 +14,51 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-type linuxV3Platform struct {
+type linuxPlatform struct {
 	rootOpenDisposition outputcap.RootOpenDisposition
-	root                *linuxV3Directory
+	root                *linuxDirectory
 }
 
-type linuxV3DirectoryOrigin struct {
+type linuxDirectoryOrigin struct {
 	parent *linuxOutputDirectory
 	name   string
 }
 
-type linuxV3Directory struct {
+type linuxDirectory struct {
 	native *linuxOutputDirectory
-	origin *linuxV3DirectoryOrigin
+	origin *linuxDirectoryOrigin
 }
 
-type linuxV3FileOrigin struct {
+type linuxFileOrigin struct {
 	parent *linuxOutputDirectory
 	name   string
 }
 
-type linuxV3FileState struct {
+type linuxFileState struct {
 	native   *linuxOutputRegularFile
-	origin   *linuxV3FileOrigin
+	origin   *linuxFileOrigin
 	private  bool
 	borrowed bool
 }
 
-type linuxV3ObservedFile struct {
-	state *linuxV3FileState
+type linuxObservedFile struct {
+	state *linuxFileState
 }
 
-type linuxV3RecoveryDurabilityFile struct {
-	state *linuxV3FileState
+type linuxRecoveryDurabilityFile struct {
+	state *linuxFileState
 }
 
-type linuxV3MutableFile struct {
-	state *linuxV3FileState
+type linuxMutableFile struct {
+	state *linuxFileState
 }
 
-type linuxV3Lock struct {
+type linuxLock struct {
 	native *linuxOutputStableLock
-	file   *linuxV3MutableFile
+	file   *linuxMutableFile
 }
 
-type linuxV3EntryRef struct {
+type linuxEntryRef struct {
 	native *linuxOutputPinnedEntry
 }
 
@@ -77,11 +77,11 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 		}
 	}
 	if err != nil {
-		return nil, linuxV3Error(err)
+		return nil, linuxError(err)
 	}
-	return &linuxV3Platform{
+	return &linuxPlatform{
 		rootOpenDisposition: rootOpenDisposition,
-		root:                &linuxV3Directory{native: root},
+		root:                &linuxDirectory{native: root},
 	}, nil
 }
 
@@ -142,14 +142,14 @@ func linuxCreateOutputRoot(path string) (_ *linuxOutputDirectory, resultErr erro
 	return reopened, nil
 }
 
-func (platform *linuxV3Platform) Root() outputcap.Directory {
+func (platform *linuxPlatform) Root() outputcap.Directory {
 	if platform == nil {
 		return nil
 	}
 	return platform.root
 }
 
-func (platform *linuxV3Platform) RootOpenDisposition() outputcap.RootOpenDisposition {
+func (platform *linuxPlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
 	if platform == nil {
 		return ""
 	}
@@ -180,12 +180,12 @@ func (guard *linuxOutputPublicOperationGuard) Close() error {
 	return err
 }
 
-func (platform *linuxV3Platform) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
+func (platform *linuxPlatform) AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error) {
 	if platform == nil || platform.root == nil || platform.root.native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux output platform is closed"))
 	}
 	if err := platform.root.native.validatePublicCreateAuthority(); err != nil {
-		return nil, linuxV3Error(err)
+		return nil, linuxError(err)
 	}
 	root, err := platform.root.Duplicate()
 	if err != nil {
@@ -194,7 +194,7 @@ func (platform *linuxV3Platform) AcquirePublicOperationGuard() (outputcap.Public
 	return &linuxOutputPublicOperationGuard{root: root}, nil
 }
 
-func (platform *linuxV3Platform) Certification() outputcap.CertificationID {
+func (platform *linuxPlatform) Certification() outputcap.CertificationID {
 	if platform == nil || platform.root == nil || platform.root.native == nil ||
 		platform.root.native.binding.restart == nil {
 		return ""
@@ -202,7 +202,7 @@ func (platform *linuxV3Platform) Certification() outputcap.CertificationID {
 	return outputcap.CertificationLinuxExt4ProcessRestart
 }
 
-func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, error) {
+func (platform *linuxPlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	if platform == nil || platform.root == nil || platform.root.native == nil {
 		return outputcap.OutputRootBinding{}, errors.Join(
 			outputcap.ErrUnsafeNamespace,
@@ -211,7 +211,7 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	}
 	root := platform.root.native
 	if err := root.verifyHandle(); err != nil {
-		return outputcap.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxError(err)
 	}
 	binding := root.binding
 	if binding.restart == nil {
@@ -219,7 +219,7 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	}
 	volume, err := linuxEncodeMountIdentity(binding.mount)
 	if err != nil {
-		return outputcap.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxError(err)
 	}
 	if root.system.restartIdentity == nil {
 		return outputcap.OutputRootBinding{}, errors.Join(
@@ -229,7 +229,7 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	}
 	restartIdentity, err := root.system.restartIdentity.Read(root.system, root.fd, binding.mount)
 	if err != nil {
-		return outputcap.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxError(err)
 	}
 	if !restartIdentity.matchesHandle(root.object) ||
 		!restartIdentity.sameDirectory(binding.restart.rootIdentity) {
@@ -240,27 +240,27 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	}
 	object, err := linuxEncodeDirectoryRestartIdentity(restartIdentity)
 	if err != nil {
-		return outputcap.OutputRootBinding{}, linuxV3Error(err)
+		return outputcap.OutputRootBinding{}, linuxError(err)
 	}
 	rootBinding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
-	return rootBinding, linuxV3Error(err)
+	return rootBinding, linuxError(err)
 }
 
-func (platform *linuxV3Platform) Durability() transfer.DurabilityLevel {
+func (platform *linuxPlatform) Durability() transfer.DurabilityLevel {
 	if platform.Certification() == "" {
 		return transfer.DurabilityNone
 	}
 	return transfer.DurabilityProcessRestart
 }
 
-func (platform *linuxV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+func (platform *linuxPlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
 	if platform.Certification() == "" {
 		return 0
 	}
 	return checkpointmodel.LiveCleanupLinuxExt4V1
 }
 
-func (platform *linuxV3Platform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
+func (platform *linuxPlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
 	if platform == nil || platform.root == nil || platform.root.native == nil {
 		return outputcap.DestinationCapabilities{}, errors.Join(
 			outputcap.ErrUnsafeNamespace, errors.New("osfs: Linux output platform is closed"))
@@ -268,7 +268,7 @@ func (platform *linuxV3Platform) DestinationCapabilities() (outputcap.Destinatio
 	return platform.root.native.destinationCapabilities()
 }
 
-func (platform *linuxV3Platform) ProbeRecoverableFeatures() error {
+func (platform *linuxPlatform) ProbeRecoverableFeatures() error {
 	capabilities, err := platform.DestinationCapabilities()
 	if err != nil {
 		return err
@@ -280,32 +280,32 @@ func (platform *linuxV3Platform) ProbeRecoverableFeatures() error {
 	return nil
 }
 
-func (*linuxV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
-	return linuxV3Error(linuxValidateModifiedTime(modified))
+func (*linuxPlatform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
+	return linuxError(linuxValidateModifiedTime(modified))
 }
 
-func (*linuxV3Platform) CanonicalLocatorKey(path string) (string, error) {
+func (*linuxPlatform) CanonicalLocatorKey(path string) (string, error) {
 	key, err := linuxOutputLocatorKey(path)
-	return key, linuxV3Error(err)
+	return key, linuxError(err)
 }
 
-func (*linuxV3Platform) CanonicalComponentKey(name string) (string, error) {
+func (*linuxPlatform) CanonicalComponentKey(name string) (string, error) {
 	if err := linuxValidateComponent("canonicalize output component", name); err != nil {
-		return "", linuxV3Error(err)
+		return "", linuxError(err)
 	}
 	return name, nil
 }
 
-func (platform *linuxV3Platform) Close() error {
+func (platform *linuxPlatform) Close() error {
 	if platform == nil || platform.root == nil {
 		return nil
 	}
 	err := platform.root.Close()
 	platform.root = nil
-	return linuxV3Error(err)
+	return linuxError(err)
 }
 
-func linuxV3Error(err error) error {
+func linuxError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -348,16 +348,16 @@ type linuxLiveCleanupStageRemover interface {
 }
 
 var (
-	_ outputcap.Platform                            = (*linuxV3Platform)(nil)
-	_ linuxDestinationCapabilityReporter            = (*linuxV3Platform)(nil)
-	_ linuxSemanticPublisher                        = (*linuxV3Directory)(nil)
-	_ linuxLiveCleanupStageCreator                  = (*linuxV3Directory)(nil)
-	_ linuxLiveCleanupStageRemover                  = (*linuxV3Directory)(nil)
-	_ outputcap.Directory                           = (*linuxV3Directory)(nil)
-	_ outputcap.PersistentDirectoryIdentity         = (*linuxV3Directory)(nil)
-	_ outputcap.PersistentDirectoryIdentityPreparer = (*linuxV3Directory)(nil)
-	_ outputcap.ObservedFile                        = (*linuxV3ObservedFile)(nil)
-	_ outputcap.RecoveryDurabilityFile              = (*linuxV3RecoveryDurabilityFile)(nil)
-	_ outputcap.MutableFile                         = (*linuxV3MutableFile)(nil)
-	_ outputcap.Lock                                = (*linuxV3Lock)(nil)
+	_ outputcap.Platform                            = (*linuxPlatform)(nil)
+	_ linuxDestinationCapabilityReporter            = (*linuxPlatform)(nil)
+	_ linuxSemanticPublisher                        = (*linuxDirectory)(nil)
+	_ linuxLiveCleanupStageCreator                  = (*linuxDirectory)(nil)
+	_ linuxLiveCleanupStageRemover                  = (*linuxDirectory)(nil)
+	_ outputcap.Directory                           = (*linuxDirectory)(nil)
+	_ outputcap.PersistentDirectoryIdentity         = (*linuxDirectory)(nil)
+	_ outputcap.PersistentDirectoryIdentityPreparer = (*linuxDirectory)(nil)
+	_ outputcap.ObservedFile                        = (*linuxObservedFile)(nil)
+	_ outputcap.RecoveryDurabilityFile              = (*linuxRecoveryDurabilityFile)(nil)
+	_ outputcap.MutableFile                         = (*linuxMutableFile)(nil)
+	_ outputcap.Lock                                = (*linuxLock)(nil)
 )

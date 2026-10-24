@@ -4,11 +4,11 @@ import {
   PINNED_NORMALIZATION_VERSION,
 } from '../unicode/unicode-normalization'
 
-export const V2_PATH_POLICY = 'windshare/path/v1-unicode-15.0.0'
-export const V2_PATH_POLICY_UNICODE_VERSION = PINNED_CASE_FOLD_VERSION
-export const V2_CATALOG_NAME_BYTES = 255
-export const V2_CATALOG_PATH_BYTES = 32 * 1024
-export const V2_CATALOG_PATH_DEPTH = 256
+export const PATH_POLICY = 'windshare/path/v1-unicode-15.0.0'
+export const PATH_POLICY_UNICODE_VERSION = PINNED_CASE_FOLD_VERSION
+export const CATALOG_NAME_BYTES = 255
+export const CATALOG_PATH_BYTES = 32 * 1024
+export const CATALOG_PATH_DEPTH = 256
 
 const TEXT_ENCODER = new TextEncoder()
 const SNAPSHOTTED_PORTABLE_PATHS = new WeakSet<readonly string[]>()
@@ -61,7 +61,7 @@ export function isPortableCatalogName(name: string): boolean {
     name.includes('\\') ||
     name.endsWith('.') ||
     name.endsWith(' ') ||
-    TEXT_ENCODER.encode(name).byteLength > V2_CATALOG_NAME_BYTES ||
+    TEXT_ENCODER.encode(name).byteLength > CATALOG_NAME_BYTES ||
     isWindowsReservedName(name)
   ) return false
   for (const character of name) {
@@ -88,7 +88,7 @@ export function canonicalizePortableCatalogPath(path: string): string {
 /** Validates an already segmented path without hiding traversal ownership in a joined string. */
 export function snapshotPortableCatalogPath(path: readonly string[]): readonly string[] {
   if (SNAPSHOTTED_PORTABLE_PATHS.has(path)) return path
-  if (!Array.isArray(path) || path.length === 0 || path.length > V2_CATALOG_PATH_DEPTH) {
+  if (!Array.isArray(path) || path.length === 0 || path.length > CATALOG_PATH_DEPTH) {
     throw new TypeError('Catalog path violates the frozen path policy')
   }
   let pathBytes = path.length - 1
@@ -99,7 +99,7 @@ export function snapshotPortableCatalogPath(path: readonly string[]): readonly s
     pathBytes += TEXT_ENCODER.encode(segment).byteLength
   }
   if (
-    pathBytes > V2_CATALOG_PATH_BYTES ||
+    pathBytes > CATALOG_PATH_BYTES ||
     foldPortableName15(path[0] ?? '').startsWith(RESERVED_OUTPUT_PREFIX)
   ) throw new TypeError('Catalog path violates the frozen path policy')
   const snapshot = Object.freeze([...path])
@@ -157,6 +157,6 @@ function asciiLower(value: string): string {
 }
 
 if (
-  V2_PATH_POLICY !== `windshare/path/v1-unicode-${PINNED_CASE_FOLD_VERSION}` ||
+  PATH_POLICY !== `windshare/path/v1-unicode-${PINNED_CASE_FOLD_VERSION}` ||
   PINNED_NORMALIZATION_VERSION !== PINNED_CASE_FOLD_VERSION
 ) throw new Error('Catalog path policy does not match its pinned Unicode tables')

@@ -1,13 +1,13 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
-import type { V2ContentLaneAdmissionObservation } from '../../src/connectivity/v2-receiver-policy'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
-import type { V2AttachedRelay, V2ProtocolGenerationCore, V2ReceiverSessionFactory } from '../../src/receiver/v2-session-factory'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { createV2ProtocolSessionIdentity, type V2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import type { V2ProtocolTraceSource } from '../../src/session/v2-diagnostics'
-import type { V2LaneChange } from '../../src/session/v2-runtime-types'
-import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
+import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
+import type { ContentLaneAdmissionObservation } from '../../src/connectivity/receiver-policy'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
+import type { AttachedRelay, ProtocolGenerationCore, ReceiverSessionFactory } from '../../src/receiver/session-factory'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { createProtocolSessionIdentity, type ProtocolSessionIdentity } from '../../src/session/identities'
+import type { ProtocolTraceSource } from '../../src/session/diagnostics'
+import type { LaneChange } from '../../src/session/runtime-types'
+import type { RelayReceiverConnection } from '../../src/transport/relay/receiver'
 
 export class FakeSession {
   subscribePeerPathControls(): () => void { return () => undefined }
@@ -16,9 +16,9 @@ export class FakeSession {
   async sendTurnControl(): Promise<void> {}
   readonly initialLaneId: number
   readonly keys: { readonly protocolSessionId: Uint8Array<ArrayBuffer>; readonly initialLaneEpoch: 0 }
-  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
+  readonly protocolSessionIdentity: ProtocolSessionIdentity
   readonly #laneIds: Set<number>
-  readonly #listeners = new Set<(change: V2LaneChange) => void>()
+  readonly #listeners = new Set<(change: LaneChange) => void>()
   closeCalls = 0
   isClosed = false
 
@@ -29,7 +29,7 @@ export class FakeSession {
       protocolSessionId: identity(this.initialLaneId + 100),
       initialLaneEpoch: 0,
     })
-    this.protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
+    this.protocolSessionIdentity = createProtocolSessionIdentity(this.keys.protocolSessionId)
     this.#laneIds = new Set(laneIds)
   }
 
@@ -37,7 +37,7 @@ export class FakeSession {
     return [...this.#laneIds]
   }
 
-  subscribeLaneChanges(listener: (change: V2LaneChange) => void): () => void {
+  subscribeLaneChanges(listener: (change: LaneChange) => void): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }
@@ -62,53 +62,53 @@ export class FakeSession {
     this.isClosed = true
   }
 
-  #emit(change: V2LaneChange): void {
+  #emit(change: LaneChange): void {
     for (const listener of this.#listeners) listener(change)
   }
 }
 
 export class TrackedRelay {
   closeCalls = 0
-  readonly connection: V2RelayReceiverConnection
+  readonly connection: RelayReceiverConnection
 
   constructor(id: number) {
     this.connection = {
-      endpoint: {} as V2RelayReceiverConnection['endpoint'],
+      endpoint: {} as RelayReceiverConnection['endpoint'],
       relaySessionId: identity(id),
       descriptorObject: Uint8Array.of(id),
-      channel: {} as V2RelayReceiverConnection['channel'],
+      channel: {} as RelayReceiverConnection['channel'],
       close: async () => { this.closeCalls += 1 },
     }
   }
 }
 
-export class FakeSessionFactory implements V2ReceiverSessionFactory {
+export class FakeSessionFactory implements ReceiverSessionFactory {
   readonly relayBases = ['https://relay.example']
   attachRelayCalls = 0
   connectFreshCalls = 0
   closeCalls = 0
   attachRelayImpl: (
-    session: V2ReceiverSessionRuntime,
+    session: ReceiverSessionRuntime,
     signal: AbortSignal,
     relayBase: string,
-  ) => Promise<V2AttachedRelay> = async () => {
+  ) => Promise<AttachedRelay> = async () => {
     throw new Error('Unexpected relay attachment')
   }
-  connectFreshImpl: (signal: AbortSignal) => Promise<V2ProtocolGenerationCore> = async () => {
+  connectFreshImpl: (signal: AbortSignal) => Promise<ProtocolGenerationCore> = async () => {
     throw new Error('Unexpected fresh generation')
   }
   #closed = false
 
   attachRelay(
-    session: V2ReceiverSessionRuntime,
+    session: ReceiverSessionRuntime,
     signal: AbortSignal,
     relayBase: string,
-  ): Promise<V2AttachedRelay> {
+  ): Promise<AttachedRelay> {
     this.attachRelayCalls += 1
     return this.attachRelayImpl(session, signal, relayBase)
   }
 
-  connectFresh(signal: AbortSignal): Promise<V2ProtocolGenerationCore> {
+  connectFresh(signal: AbortSignal): Promise<ProtocolGenerationCore> {
     this.connectFreshCalls += 1
     return this.connectFreshImpl(signal)
   }
@@ -142,7 +142,7 @@ export function identity(first: number): Uint8Array<ArrayBuffer> {
 }
 
 
-export function descriptor(seed = 1): V2ShareDescriptor {
+export function descriptor(seed = 1): ShareDescriptor {
   return Object.freeze({
     wireVersion: 2,
     suite: 2,
@@ -154,7 +154,7 @@ export function descriptor(seed = 1): V2ShareDescriptor {
     capabilities: 0n,
     sender: createEd25519Verifier(new Uint8Array(32).fill(seed + 2)),
     createdAtSeconds: BigInt(seed),
-    pathPolicy: V2_PATH_POLICY,
+    pathPolicy: PATH_POLICY,
   })
 }
 
@@ -162,10 +162,10 @@ export function core(
   session: FakeSession,
   relay: TrackedRelay,
   relayLaneId = session.initialLaneId,
-): V2ProtocolGenerationCore {
+): ProtocolGenerationCore {
   return {
     relayBase: 'https://relay.example',
-    session: session as unknown as V2ReceiverSessionRuntime,
+    session: session as unknown as ReceiverSessionRuntime,
     relay: relay.connection,
     relayLaneId,
   }
@@ -176,10 +176,10 @@ export function supervisorFixture(
   relay: TrackedRelay,
   factory = new FakeSessionFactory(),
   share = descriptor(),
-  onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
-  protocolTrace?: V2ProtocolTraceSource,
+  onContentLaneAdmitted?: (observation: ContentLaneAdmissionObservation) => void,
+  protocolTrace?: ProtocolTraceSource,
 ) {
-  const supervisor = new V2ReceiverReconnectSupervisor({
+  const supervisor = new ReceiverReconnectSupervisor({
     descriptor: share,
     initial: core(session, relay),
     sessionFactory: factory,

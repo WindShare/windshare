@@ -9,9 +9,9 @@ import (
 	"unsafe"
 )
 
-func TestWindowsV3ParseLongAndShortNamesUsesNativeFILEBOTHLayout(t *testing.T) {
-	buffer := windowsV3TestFileBothDirectoryBuffer(t, ".windshare-output", "WINDSH~1", 0)
-	entries, err := windowsV3ParseLongAndShortNames(buffer)
+func TestWindowsParseLongAndShortNamesUsesNativeFILEBOTHLayout(t *testing.T) {
+	buffer := windowsTestFileBothDirectoryBuffer(t, ".windshare-output", "WINDSH~1", 0)
+	entries, err := windowsParseLongAndShortNames(buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,24 +20,24 @@ func TestWindowsV3ParseLongAndShortNamesUsesNativeFILEBOTHLayout(t *testing.T) {
 	}
 }
 
-func TestWindowsV3ParseLongAndShortNamesRejectsMisalignedNextEntry(t *testing.T) {
-	if windowsV3FileBothDirectoryInfoAlign <= 4 {
+func TestWindowsParseLongAndShortNamesRejectsMisalignedNextEntry(t *testing.T) {
+	if windowsFileBothDirectoryInfoAlign <= 4 {
 		t.Skip("native FILE_BOTH layout requires only four-byte alignment")
 	}
 	const fourButNotEightAlignedOffset = 100
-	buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "", fourButNotEightAlignedOffset)
-	if _, err := windowsV3ParseLongAndShortNames(buffer); err == nil {
+	buffer := windowsTestFileBothDirectoryBuffer(t, "a", "", fourButNotEightAlignedOffset)
+	if _, err := windowsParseLongAndShortNames(buffer); err == nil {
 		t.Fatal("parser accepted a next-entry offset that misaligns the native structure")
 	}
 }
 
-func TestWindowsV3ParseDirectoryNamesRejectsMalformedNativeRecords(t *testing.T) {
-	valid := windowsV3DirectoryNamesBuffer("entry")
+func TestWindowsParseDirectoryNamesRejectsMalformedNativeRecords(t *testing.T) {
+	valid := windowsDirectoryNamesBuffer("entry")
 	for _, test := range []struct {
 		name  string
 		build func() []byte
 	}{
-		{name: "truncated header", build: func() []byte { return make([]byte, windowsV3FileNamesInformationHeader-1) }},
+		{name: "truncated header", build: func() []byte { return make([]byte, windowsFileNamesInformationHeader-1) }},
 		{name: "zero name length", build: func() []byte {
 			buffer := append([]byte(nil), valid...)
 			binary.LittleEndian.PutUint32(buffer[8:12], 0)
@@ -69,32 +69,32 @@ func TestWindowsV3ParseDirectoryNamesRejectsMalformedNativeRecords(t *testing.T)
 			return buffer
 		}},
 		{name: "embedded NUL", build: func() []byte {
-			buffer := windowsV3DirectoryNamesBuffer("a")
-			binary.LittleEndian.PutUint16(buffer[windowsV3FileNamesInformationHeader:], 0)
+			buffer := windowsDirectoryNamesBuffer("a")
+			binary.LittleEndian.PutUint16(buffer[windowsFileNamesInformationHeader:], 0)
 			return buffer
 		}},
 		{name: "lone high surrogate", build: func() []byte {
-			buffer := windowsV3DirectoryNamesBuffer("a")
-			binary.LittleEndian.PutUint16(buffer[windowsV3FileNamesInformationHeader:], 0xd800)
+			buffer := windowsDirectoryNamesBuffer("a")
+			binary.LittleEndian.PutUint16(buffer[windowsFileNamesInformationHeader:], 0xd800)
 			return buffer
 		}},
 		{name: "lone low surrogate", build: func() []byte {
-			buffer := windowsV3DirectoryNamesBuffer("a")
-			binary.LittleEndian.PutUint16(buffer[windowsV3FileNamesInformationHeader:], 0xdc00)
+			buffer := windowsDirectoryNamesBuffer("a")
+			binary.LittleEndian.PutUint16(buffer[windowsFileNamesInformationHeader:], 0xdc00)
 			return buffer
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := windowsV3ParseDirectoryNames(test.build()); err == nil {
+			if _, err := windowsParseDirectoryNames(test.build()); err == nil {
 				t.Fatal("malformed native directory record was accepted")
 			}
 		})
 	}
 }
 
-func TestWindowsV3ParseDirectoryNamesFiltersDotEntriesAndChainsRecords(t *testing.T) {
-	buffer := windowsV3DirectoryNamesBuffer(".", "..", "visible")
-	names, err := windowsV3ParseDirectoryNames(buffer)
+func TestWindowsParseDirectoryNamesFiltersDotEntriesAndChainsRecords(t *testing.T) {
+	buffer := windowsDirectoryNamesBuffer(".", "..", "visible")
+	names, err := windowsParseDirectoryNames(buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,77 +103,77 @@ func TestWindowsV3ParseDirectoryNamesFiltersDotEntriesAndChainsRecords(t *testin
 	}
 }
 
-func TestWindowsV3ParseLongAndShortNamesRejectsMalformedNativeRecords(t *testing.T) {
+func TestWindowsParseLongAndShortNamesRejectsMalformedNativeRecords(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		build func(t *testing.T) []byte
 	}{
 		{name: "truncated header", build: func(t *testing.T) []byte {
-			return make([]byte, windowsV3FileBothDirectoryInfoHeader-1)
+			return make([]byte, windowsFileBothDirectoryInfoHeader-1)
 		}},
 		{name: "zero long length", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.fileNameLength = 0
 			return buffer
 		}},
 		{name: "odd long length", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.fileNameLength = 1
 			return buffer
 		}},
 		{name: "oversized long length", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.fileNameLength = uint32(len(buffer))
 			return buffer
 		}},
 		{name: "odd short length", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "B", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "B", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.shortNameLength = 1
 			return buffer
 		}},
 		{name: "oversized short length", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "B", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "B", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.shortNameLength = uint8(len(info.shortName)*2 + 2)
 			return buffer
 		}},
 		{name: "malformed long UTF16", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.fileName[0] = 0
 			return buffer
 		}},
 		{name: "malformed short UTF16", build: func(t *testing.T) []byte {
-			buffer := windowsV3TestFileBothDirectoryBuffer(t, "a", "B", 0)
-			info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+			buffer := windowsTestFileBothDirectoryBuffer(t, "a", "B", 0)
+			info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 			info.shortName[0] = 0xdc00
 			return buffer
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := windowsV3ParseLongAndShortNames(test.build(t)); err == nil {
+			if _, err := windowsParseLongAndShortNames(test.build(t)); err == nil {
 				t.Fatal("malformed native long/short record was accepted")
 			}
 		})
 	}
 }
 
-func TestWindowsV3RecordPublicEntryAuthoritiesTracksLongAndAliasClaims(t *testing.T) {
-	authorities := map[string]*windowsV3PublicEntryAuthority{
+func TestWindowsRecordPublicEntryAuthoritiesTracksLongAndAliasClaims(t *testing.T) {
+	authorities := map[string]*windowsPublicEntryAuthority{
 		"LONG.TXT":  {requested: "Long.txt"},
 		"SHORT.TXT": {requested: "Short.txt"},
 	}
-	entries := []windowsV3LongAndShortName{
+	entries := []windowsLongAndShortName{
 		{long: "Long.txt", short: ""},
 		{long: "Alias.txt", short: "SHORT.TXT"},
 		// A short name equal to the long name is not an alias claim.
 		{long: "Long.txt", short: "Long.txt"},
 	}
-	if err := windowsV3RecordPublicEntryAuthorities(authorities, entries); err != nil {
+	if err := windowsRecordPublicEntryAuthorities(authorities, entries); err != nil {
 		t.Fatal(err)
 	}
 	if got := authorities["LONG.TXT"]; got.longCount != 2 || got.aliasCount != 0 {
@@ -184,17 +184,17 @@ func TestWindowsV3RecordPublicEntryAuthoritiesTracksLongAndAliasClaims(t *testin
 	}
 }
 
-func windowsV3DirectoryNamesBuffer(names ...string) []byte {
+func windowsDirectoryNamesBuffer(names ...string) []byte {
 	entries := make([][]byte, len(names))
 	total := 0
 	for index, name := range names {
 		nameBytes := len(utf16.Encode([]rune(name))) * 2
-		size := (windowsV3FileNamesInformationHeader + nameBytes + 3) &^ 3
+		size := (windowsFileNamesInformationHeader + nameBytes + 3) &^ 3
 		entries[index] = make([]byte, size)
 		binary.LittleEndian.PutUint32(entries[index][8:12], uint32(nameBytes))
 		units := utf16.Encode([]rune(name))
 		for unitIndex, unit := range units {
-			binary.LittleEndian.PutUint16(entries[index][windowsV3FileNamesInformationHeader+unitIndex*2:], unit)
+			binary.LittleEndian.PutUint16(entries[index][windowsFileNamesInformationHeader+unitIndex*2:], unit)
 		}
 		if index < len(names)-1 {
 			binary.LittleEndian.PutUint32(entries[index][0:4], uint32(size))
@@ -208,21 +208,21 @@ func windowsV3DirectoryNamesBuffer(names ...string) []byte {
 	return buffer
 }
 
-func windowsV3TestFileBothDirectoryBuffer(t *testing.T, longName, shortName string, next int) []byte {
+func windowsTestFileBothDirectoryBuffer(t *testing.T, longName, shortName string, next int) []byte {
 	t.Helper()
 	longUnits := utf16.Encode([]rune(longName))
 	shortUnits := utf16.Encode([]rune(shortName))
 	if len(shortUnits) > 12 {
 		t.Fatalf("short test name has %d UTF-16 units", len(shortUnits))
 	}
-	minimum := windowsV3FileBothDirectoryInfoHeader + len(longUnits)*2
+	minimum := windowsFileBothDirectoryInfoHeader + len(longUnits)*2
 	length := minimum
 	if next != 0 {
-		length = next + windowsV3FileBothDirectoryInfoHeader + 2
+		length = next + windowsFileBothDirectoryInfoHeader + 2
 	}
 	words := make([]uint64, (length+7)/8)
 	buffer := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), len(words)*8)
-	info := (*windowsV3FileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
+	info := (*windowsFileBothDirectoryInfo)(unsafe.Pointer(&buffer[0]))
 	info.nextEntryOffset = uint32(next)
 	info.fileNameLength = uint32(len(longUnits) * 2)
 	info.shortNameLength = uint8(len(shortUnits) * 2)

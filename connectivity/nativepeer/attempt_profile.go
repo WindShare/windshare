@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 	"net/netip"
 	"sync"
 	"time"
@@ -62,14 +62,14 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 
 	return profile
 }
-func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResources, profile icepolicy.AttemptICEProfile, binding v2signal.Binding, now time.Time) func(provider.Event) {
+func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResources, profile icepolicy.AttemptICEProfile, binding v2signal.Binding, now time.Time) func(pionpeer.Event) {
 	generation := path.generation
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(binding.AttemptID), AttemptSequence: binding.AttemptSequence, NetworkGenerationID: generation, ICEProfileID: profile.ID(), Side: n.config.Side}
 	facts := n.facts
 	var observationMu sync.Mutex
 	produced := false
 	firstDelay := time.Duration(-1)
-	return func(event provider.Event) {
+	return func(event pionpeer.Event) {
 		observationMu.Lock()
 		if event.Candidate != nil && event.Candidate.Type == "srflx" && event.Candidate.Origin == "ordinary" {
 			if firstDelay < 0 {
@@ -87,7 +87,7 @@ func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResource
 	}
 }
 
-func (n *NativePeerConnectivity) recordSelectedMapping(key pathKey, path *pathResources, generation uint64, pair *provider.PairFacts) {
+func (n *NativePeerConnectivity) recordSelectedMapping(key pathKey, path *pathResources, generation uint64, pair *pionpeer.PairFacts) {
 	if pair == nil {
 		return
 	}

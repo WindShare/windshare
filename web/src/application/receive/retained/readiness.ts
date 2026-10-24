@@ -1,4 +1,4 @@
-import type { V2RetainedReceiveOperation } from '../contracts'
+import type { RetainedReceiveOperation } from '../contracts'
 
 export type RetainedContinuationReadiness =
   | 'local'
@@ -9,7 +9,7 @@ export type RetainedContinuationReadiness =
 
 /** This projects prerequisites; only the inventory's opaque action token grants authority. */
 export function retainedContinuationReadiness(
-  operation: V2RetainedReceiveOperation,
+  operation: RetainedReceiveOperation,
   currentShareInstance: string | null,
 ): RetainedContinuationReadiness {
   const remote = operation.continuation === 'resume-start' || operation.continuation === 'resume-receive' ||

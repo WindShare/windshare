@@ -1,6 +1,6 @@
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
-import type { V2ReceiverSessionRuntime } from '../../session/v2-runtime'
-import type { V2PeerRecoveryClock, V2PeerRecoveryState } from '../peer-set/contract'
+import type { ReceiverSessionRuntime } from '../../session/runtime'
+import type { PeerRecoveryClock, PeerRecoveryState } from '../peer-set/contract'
 import { awaitWithAbort } from '../peer-offer-remote'
 import { decodeTurnControl, encodeTurnControl, TURN_DEMAND_LIFETIME_MS, TURN_RETIRE, type TurnGrant, type TurnHeader, type TurnLane } from '../../protocol/turn-control'
 
@@ -12,8 +12,8 @@ const CONTROL_WRITE_BUDGET_MS = 5000
 const MAX_ACTIVE_SERVICES = 2
 
 export interface TurnReceiverOptions {
-  readonly session: V2ReceiverSessionRuntime
-  readonly clock: V2PeerRecoveryClock
+  readonly session: ReceiverSessionRuntime
+  readonly clock: PeerRecoveryClock
   readonly enabled: () => boolean
   readonly open: (grant: TurnGrant) => void
   readonly retire: (pathId: Uint8Array<ArrayBuffer>) => Promise<void>
@@ -127,7 +127,7 @@ export class TurnReceiver {
     }
   }
 
-  recoveryChanged(pathId: Uint8Array, state: V2PeerRecoveryState): void {
+  recoveryChanged(pathId: Uint8Array, state: PeerRecoveryState): void {
     const path = this.#paths.get(encodeBase64Url(pathId))
     if (path === undefined) return
     switch (state.kind) {

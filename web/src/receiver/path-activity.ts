@@ -1,10 +1,10 @@
-import type { V2ContentLaneAdmissionObservation } from '../connectivity/v2-receiver-policy'
-import type { V2BlockRouteObservation } from '../content/v2-lane-set'
+import type { ContentLaneAdmissionObservation } from '../connectivity/receiver-policy'
+import type { BlockRouteObservation } from '../content/lane-set'
 import type { TurnObservation } from '../connectivity/turn/receiver'
 
 export const RECENT_CONTENT_WINDOW_MILLISECONDS = 5_000
 
-export interface ReceiverContentLaneSnapshot extends V2ContentLaneAdmissionObservation {
+export interface ReceiverContentLaneSnapshot extends ContentLaneAdmissionObservation {
   readonly recentContent: boolean
 }
 
@@ -18,7 +18,7 @@ export const EMPTY_RECEIVER_PATH_ACTIVITY: ReceiverPathActivitySnapshot = Object
 })
 
 interface LaneActivity {
-  readonly admission: V2ContentLaneAdmissionObservation
+  readonly admission: ContentLaneAdmissionObservation
   lastContent: number
 }
 
@@ -54,7 +54,7 @@ export class ReceiverPathActivity {
     this.#refresh()
   }
 
-  admitted(generation: number, lane: V2ContentLaneAdmissionObservation): void {
+  admitted(generation: number, lane: ContentLaneAdmissionObservation): void {
     if (this.#closed || generation !== this.#generation) return
     const previous = this.#lanes.get(lane.laneId)
     if (previous !== undefined && matches(previous.admission, lane)) return
@@ -65,7 +65,7 @@ export class ReceiverPathActivity {
     this.#refresh()
   }
 
-  detached(generation: number, lane: V2ContentLaneAdmissionObservation): void {
+  detached(generation: number, lane: ContentLaneAdmissionObservation): void {
     if (this.#closed || generation !== this.#generation) return
     const current = this.#lanes.get(lane.laneId)
     if (current === undefined || !matches(current.admission, lane)) return
@@ -73,7 +73,7 @@ export class ReceiverPathActivity {
     this.#refresh()
   }
 
-  fetched(generation: number, fact: V2BlockRouteObservation): void {
+  fetched(generation: number, fact: BlockRouteObservation): void {
     if (this.#closed || generation !== this.#generation || fact.usefulBytes <= 0) return
     const current = this.#lanes.get(fact.laneId)
     // An old block can finish after replacement without proving the new lane is carrying data.
@@ -165,6 +165,6 @@ export class ReceiverPathActivity {
   }
 }
 
-function matches(left: V2ContentLaneAdmissionObservation, right: V2ContentLaneAdmissionObservation): boolean {
+function matches(left: ContentLaneAdmissionObservation, right: ContentLaneAdmissionObservation): boolean {
   return left.laneId === right.laneId && left.laneEpoch === right.laneEpoch && left.route === right.route
 }

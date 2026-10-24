@@ -1,16 +1,16 @@
-import type { V2ReceiverSnapshot } from '../v2-model'
-import type { V2RetainedReceiveAction } from '../../application/receive/contracts'
+import type { ReceiverSnapshot } from '../model'
+import type { RetainedReceiveAction } from '../../application/receive/contracts'
 import { activeTaskFacts, presentTask, retainedTaskFacts, type TaskFacts, type TaskPresentation } from '../tasks'
 import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import { isReceiveOutputDelivered } from '../../application/receive/completion'
 import { taskConnectionBlocking } from './share-presentation'
 
 type RetainedAdmission = (
-  operation: V2ReceiverSnapshot['retained']['operations'][number],
-  action: V2RetainedReceiveAction,
+  operation: ReceiverSnapshot['retained']['operations'][number],
+  action: RetainedReceiveAction,
 ) => Readonly<{ allowed: boolean; reason: string | null }>
 
-export function composeTasks(snapshot: V2ReceiverSnapshot, admission?: RetainedAdmission,
+export function composeTasks(snapshot: ReceiverSnapshot, admission?: RetainedAdmission,
   activeAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>): {
   readonly current: TaskPresentation | null
   readonly tasks: readonly TaskPresentation[]

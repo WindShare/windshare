@@ -31,7 +31,7 @@ import type {
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { WorkspaceStageTraceListener } from '../../../output/workspace/stages'
 import type { ReceiveIntent } from '../../../transfer/intent'
-import type { V2LifecycleMutation, V2OwnedActivationAuthority } from '../../receive/contracts'
+import type { LifecycleMutation, OwnedActivationAuthority } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 
 export interface WorkspaceActivationOwnerDependencies {
@@ -66,7 +66,7 @@ interface RecoverWorkspaceActivationOwnerInput extends WorkspaceActivationOwnerC
   readonly error: unknown
 }
 
-export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAuthority {
+export class WorkspaceOwnedActivationAuthority implements OwnedActivationAuthority {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
   readonly #repository: WorkspaceActivationJournalRepository
@@ -79,7 +79,7 @@ export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAutho
   #persistenceConfirmed: boolean | undefined
   #lease: BrowserReceiveOperationLease | undefined
   #recovery: WorkspaceActivationRecovery | undefined
-  #settlement: Promise<V2LifecycleMutation> | undefined
+  #settlement: Promise<LifecycleMutation> | undefined
   #safeToDetach: boolean
   #detached = false
   #leaseReleased = false
@@ -236,7 +236,7 @@ export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAutho
     this.#transferred = true
   }
 
-  settleActivationFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  settleActivationFailure(reason: unknown): Promise<LifecycleMutation> {
     if (this.#settlement !== undefined) return this.#settlement
     if (this.#transferred || this.#detached) {
       return Promise.reject(new DOMException(
@@ -288,7 +288,7 @@ export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAutho
     this.#detached = true
   }
 
-  async #settle(reason: unknown): Promise<V2LifecycleMutation> {
+  async #settle(reason: unknown): Promise<LifecycleMutation> {
     const absenceSettlement = await this.#dependencies.withActivationLock(
       this.intent.operationId,
       () => this.#ensurePersistenceOrAbsence(reason),
@@ -315,13 +315,13 @@ export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAutho
     return this.#recovery.settle(reason)
   }
 
-  async #ensurePersistenceOrAbsence(reason: unknown): Promise<V2LifecycleMutation | undefined> {
+  async #ensurePersistenceOrAbsence(reason: unknown): Promise<LifecycleMutation | undefined> {
     if (this.#persistenceConfirmed) return undefined
     if (this.#candidate !== undefined) return this.#settleCandidateActivation()
     return this.#settleConservativeActivation(reason)
   }
 
-  async #settleCandidateActivation(): Promise<V2LifecycleMutation | undefined> {
+  async #settleCandidateActivation(): Promise<LifecycleMutation | undefined> {
     if (this.#candidate === undefined) throw new TypeError('workspace activation candidate is absent')
     if (this.#namespace !== undefined) {
       await this.#dependencies.removeUncommittedNamespace(this.#namespace).catch(() => false)
@@ -348,7 +348,7 @@ export class WorkspaceOwnedActivationAuthority implements V2OwnedActivationAutho
     return undefined
   }
 
-  async #settleConservativeActivation(reason: unknown): Promise<V2LifecycleMutation | undefined> {
+  async #settleConservativeActivation(reason: unknown): Promise<LifecycleMutation | undefined> {
     if (this.#persistenceConfirmed === undefined) {
       const observation = await this.#dependencies.observePersistence({
         repository: this.#repository,

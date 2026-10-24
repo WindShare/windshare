@@ -3,7 +3,7 @@ import {
   decodeDeliveryJoin, decodeDeliveryRegisterInit, deliveryRegistrationProofPreimage,
   encodeDeliveryJoin, encodeDeliveryRegisterInit,
 } from '../../src/transport/relay/delivery-handshake-codec'
-import { decodeV2Challenge, decodeV2RegisterProof, type V2ChallengePurpose } from '../../src/transport/relay/v2-protocol'
+import { decodeChallenge, decodeRegisterProof, type ChallengePurpose } from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { suite02SenderKeyHash } from '../../src/crypto/suite02-link'
@@ -16,7 +16,7 @@ const frames = vectors.find(value => value.name === 'relay-capacity-frame-decodi
 const registration = vectors.find(value => value.name === 'relay-capacity-registration') as VectorCase & Record<string, string>
 const proofs = vectors.find(value => value.name === 'relay-capacity-proof-authentication') as VectorCase & {
   relayIdentityB64: string
-  cases: { name: string; operation: string; initB64: string; challengePurpose: V2ChallengePurpose; challengeIdB64: string; challengeNonceB64: string; challengeExpiresAt: string; proofB64: string; nowUnixSeconds: string; authenticated: boolean }[]
+  cases: { name: string; operation: string; initB64: string; challengePurpose: ChallengePurpose; challengeIdB64: string; challengeNonceB64: string; challengeExpiresAt: string; proofB64: string; nowUnixSeconds: string; authenticated: boolean }[]
 }
 
 describe('staged delivery handshake', () => {
@@ -37,7 +37,7 @@ describe('staged delivery handshake', () => {
       ['resumeInitB64', 'resumeChallengeB64', 'resumePreimageB64'],
     ] as const) {
       const init = await decodeDeliveryRegisterInit(b64ToBytes(registration[initKey]!))
-      const challenge = decodeV2Challenge(b64ToBytes(registration[challengeKey]!))
+      const challenge = decodeChallenge(b64ToBytes(registration[challengeKey]!))
       expect(await deliveryRegistrationProofPreimage(init, challenge, b64ToBytes(registration.relayIdentityB64!)))
         .toEqual(b64ToBytes(registration[preimageKey]!))
     }
@@ -47,7 +47,7 @@ describe('staged delivery handshake', () => {
     for (const test of proofs.cases) {
       if (test.operation !== 'registration') continue
       const init = await decodeDeliveryRegisterInit(b64ToBytes(test.initB64))
-      const proof = decodeV2RegisterProof(b64ToBytes(test.proofB64))
+      const proof = decodeRegisterProof(b64ToBytes(test.proofB64))
       const challenge = {
         purpose: test.challengePurpose, id: b64ToBytes(test.challengeIdB64),
         nonce: b64ToBytes(test.challengeNonceB64), expiresAtUnixSeconds: BigInt(test.challengeExpiresAt),

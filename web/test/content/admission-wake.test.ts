@@ -5,11 +5,11 @@ import { LanePerformance } from '../../src/content/scheduling/performance'
 import { LaneSampling, SAMPLE_ATTEMPT_BUDGET } from '../../src/content/scheduling/sampling'
 import { PROBE_INTERVAL_MILLISECONDS } from '../../src/content/scheduling/exploration'
 import type { ContentLane, ContentWork } from '../../src/content/scheduling/selection'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
 import { FileGeometry } from '../../src/content/geometry'
 
 const BLOCK_BYTES = 1024 * 1024
-const routes: V2BlockRouteEligibility = {
+const routes: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive() {}, subscribe: () => () => {},
 }
 function work(index: number, signal: AbortSignal): ContentWork {
@@ -144,7 +144,7 @@ describe('admission wake ownership', () => {
     const primary = await request(work(0, controller.signal))
     let relayAllowed = true
     const listeners = new Set<() => void>()
-    const mutableRoutes: V2BlockRouteEligibility = { ...routes,
+    const mutableRoutes: BlockRouteEligibility = { ...routes,
       allows: route => route === 'direct' || relayAllowed,
       subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     }

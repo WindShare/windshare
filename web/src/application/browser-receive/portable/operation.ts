@@ -22,9 +22,9 @@ import { reduceReceiveLifecycle, type LifecycleEvent } from '../../../output/wor
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../../output/workspace/lifecycle/observation'
 import {
-  createV2PlanExecutionAuthority,
-  type V2ExecutionAdmissionLifecycle,
-} from '../../../transfer/settlement/v2-plan-authority'
+  createPlanExecutionAuthority,
+  type ExecutionAdmissionLifecycle,
+} from '../../../transfer/settlement/plan-authority'
 import {
   createOperationID,
   createTransferJobID,
@@ -35,12 +35,12 @@ import {
   type ExactPreparationEvidence,
   type ExecutionAdmissionResult,
   type PortableExecution,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
 } from '../../../transfer/output/session'
-import type { V2ActiveReceiveControl } from '../../receive/actions'
+import type { ActiveReceiveControl } from '../../receive/actions'
 import type {
-  V2BoundReceiveOperation,
-  V2LifecycleMutation,
+  BoundReceiveOperation,
+  LifecycleMutation,
 } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { operationDigest } from '../../../output/workspace/operation-digest'
@@ -66,14 +66,14 @@ export async function createPortableReceiveOperation(
   diagnostics?: OutputDiagnosticsPorts,
   display?: ReceiveOperationDisplay,
   preClickRanking?: readonly ArtifactChoiceID[],
-): Promise<V2BoundReceiveOperation> {
+): Promise<BoundReceiveOperation> {
   return PortableReceiveOperation.create(windowPort, action, intent, diagnostics, display, preClickRanking)
 }
 
 class PortableReceiveOperation implements
-V2BoundReceiveOperation,
+BoundReceiveOperation,
 PortableExecutionLifecycleAuthority,
-V2ExecutionAdmissionLifecycle {
+ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
   readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
   readonly activeControls = Object.freeze(['stop'] as const)
@@ -85,7 +85,7 @@ V2ExecutionAdmissionLifecycle {
   readonly #preClickRanking: readonly ArtifactChoiceID[] | undefined
   readonly #historyAvailable: boolean
   #state: ReceiveLifecycleState
-  #plans!: V2PlanExecutionAuthority
+  #plans!: PlanExecutionAuthority
   #transferJobId = createTransferJobID()
   #preparationStarted = false
   #detached = false
@@ -128,7 +128,7 @@ V2ExecutionAdmissionLifecycle {
     return owner
   }
 
-  get plans(): V2PlanExecutionAuthority {
+  get plans(): PlanExecutionAuthority {
     return this.#plans
   }
 
@@ -146,12 +146,12 @@ V2ExecutionAdmissionLifecycle {
     return this.#attemptId
   }
 
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
     if (control !== 'stop') throw unavailableRoute()
     transfer.abort(new TransferPauseRequestedError('Portable receive stopped by receiver'))
   }
 
-  startLifecycleAction(): V2LifecycleMutation {
+  startLifecycleAction(): LifecycleMutation {
     throw unavailableRoute()
   }
 
@@ -159,7 +159,7 @@ V2ExecutionAdmissionLifecycle {
     return null
   }
 
-  async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  async settleTransferAdmissionFailure(reason: unknown): Promise<LifecycleMutation> {
     const state = await this.settleExecutionAdmissionFailure(
       this.intent,
       reason,
@@ -345,7 +345,7 @@ async function portablePlanAuthority(
   intent: ReceiveIntent,
   owner: PortableReceiveOperation,
   diagnostics?: OutputDiagnosticsPorts,
-): Promise<V2PlanExecutionAuthority> {
+): Promise<PlanExecutionAuthority> {
   const routes = createPortableExecutionRoutes({
     environment: {
       portable: action.route.portable,
@@ -385,7 +385,7 @@ async function portablePlanAuthority(
       return result
     },
   })
-  return createV2PlanExecutionAuthority({
+  return createPlanExecutionAuthority({
     intent,
     routes: {
       ...(routes.portableOriginal === undefined

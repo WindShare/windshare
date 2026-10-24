@@ -6,12 +6,12 @@ import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
 } from '../../src/application/browser-receive/composition'
-import { presentArtifactChoice } from '../../src/ui/v2-artifact-presentation'
+import { presentArtifactChoice } from '../../src/ui/artifact-presentation'
 import {
-  V2AuthorityActivationCoordinator,
+  AuthorityActivationCoordinator,
 } from '../../src/application/receive/activation/coordinator'
-import type { V2ActiveProjection } from '../../src/application/receive/discovery'
-import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import type { ActiveProjection } from '../../src/application/receive/discovery'
+import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
 
 const ACTION_BUTTON_ID = 'windshare-artifact-action-activation'
 const ACTION_LABEL = 'Save using original folder hierarchy'
@@ -47,7 +47,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
   let adoptionPreparationCalls = 0
   let actionReturned = false
   const activeChoice: { choiceId?: ArtifactChoiceID } = {}
-  const coordinatorOwner: { current?: V2AuthorityActivationCoordinator } = {}
+  const coordinatorOwner: { current?: AuthorityActivationCoordinator } = {}
   let complete: (() => void) | undefined
   completion = new Promise<void>((resolve) => {
     complete = resolve
@@ -112,13 +112,13 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
     authorityReleased: false,
   })
 
-  const joined = Object.freeze({}) as V2ActiveProjection['joined']
+  const joined = Object.freeze({}) as ActiveProjection['joined']
   const state = Object.freeze({ projection, discovery })
-  const active: V2ActiveProjection = {
+  const active: ActiveProjection = {
     revision: 1,
     joined,
     selection,
-    frozenSelection: Object.freeze({}) as V2ActiveProjection['frozenSelection'],
+    frozenSelection: Object.freeze({}) as ActiveProjection['frozenSelection'],
     epoch: projection.epoch,
     controller: new AbortController(),
     protocolSessionId: identity(4),
@@ -127,7 +127,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
   }
   let publishPlanning: (() => void) | undefined
   const planningPublished = new Promise<void>((resolve) => { publishPlanning = resolve })
-  const coordinator = new V2AuthorityActivationCoordinator({
+  const coordinator = new AuthorityActivationCoordinator({
     receive: composition,
     activeReceive: {
       prepareAdoption: () => {
@@ -136,7 +136,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
         throw new Error('unresolved choice must not prepare adoption')
       },
     },
-    observability: new V2ControllerObservability({}),
+    observability: new ControllerObservability({}),
     currentProjection: () => active,
     currentJoinedShare: () => joined,
     choiceBlocked: () => false,

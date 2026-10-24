@@ -1,7 +1,7 @@
 import { bytesToHex, equalBytes } from '../../../crypto/bytes'
 import type { RelayDeliveryConsumed } from '../delivery-consumed-codec'
 import type { RelaySettlementAck, RelaySettlementNotice } from '../delivery-settlement-codec'
-import { V2_RELAY_SESSION_ID_BYTES } from '../v2-protocol'
+import { RELAY_SESSION_ID_BYTES } from '../protocol'
 import {
   addCounts, appendEnvelope, positiveUint64, sameCounts, subtractCounts, ZERO_COUNTS,
 } from './counts'
@@ -71,7 +71,7 @@ export class RelayReceiveLedger {
   /** Admit each non-reused wire ID explicitly; events and callbacks cannot recreate a flow. */
   open(wireId: Uint8Array): ReceiveSession {
     if (this.#closed) this.#reject('open', undefined, 'closed')
-    if (wireId.byteLength !== V2_RELAY_SESSION_ID_BYTES || !wireId.some(byte => byte !== 0)) {
+    if (wireId.byteLength !== RELAY_SESSION_ID_BYTES || !wireId.some(byte => byte !== 0)) {
       this.#reject('open', undefined, 'session')
     }
     const id = bytesToHex(wireId)

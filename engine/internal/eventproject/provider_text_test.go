@@ -6,8 +6,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func TestNativeProviderDiagnosticMessageBoundaries(t *testing.T) {
@@ -16,8 +16,8 @@ func TestNativeProviderDiagnosticMessageBoundaries(t *testing.T) {
 		strings.Repeat("界", appobs.NativeProviderDiagnosticMessageLimit),
 	} {
 		event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{
-			Provider: &provider.Event{Milestone: "provider_diagnostic",
-				Diagnostic: &provider.Diagnostic{Scope: "ice", Severity: "warning", Message: message}},
+			Provider: &pionpeer.Event{Milestone: "provider_diagnostic",
+				Diagnostic: &pionpeer.Diagnostic{Scope: "ice", Severity: "warning", Message: message}},
 		})
 		if err != nil {
 			t.Fatalf("log text caused observation loss: %v", err)

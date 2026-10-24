@@ -1,6 +1,6 @@
-import { V2DirectoryFailureError, type V2CatalogScanProgress } from '../../catalog/v2-client'
-import type { V2CatalogEntry } from '../../catalog/v2-records'
-import { V2RemoteOperationError } from '../../content/v2-session-operations'
+import { DirectoryFailureError, type CatalogScanProgress } from '../../catalog/client'
+import type { CatalogEntry } from '../../catalog/records'
+import { RemoteOperationError } from '../../content/session-operations'
 import { equalBytes } from '../../crypto/bytes'
 import { unclassifiedFailureFact } from '../../diagnostics/incident/fact'
 import {
@@ -13,12 +13,12 @@ import type {
   IncidentScopeHandle,
   IncidentScopeOwner,
 } from '../../diagnostics/incident/scope'
-import type { V2ReceiverSnapshot } from '../v2-model'
-import { breadcrumbsFor, projectBrowsePage, type RetryableV2BrowseRequest } from '../v2-controller-state'
+import type { ReceiverSnapshot } from '../model'
+import { breadcrumbsFor, projectBrowsePage, type RetryableBrowseRequest } from '../controller-state'
 import type {
-  V2BrowseDirectory,
-  V2BrowsePage,
-  V2JoinedBrowserShare,
+  BrowseDirectory,
+  BrowsePage,
+  JoinedBrowserShare,
 } from '../../application/browser-share/gateway'
 
 interface BrowserNavigationIncidentPort {
@@ -33,30 +33,30 @@ interface PendingNavigation {
 }
 
 export interface BrowserNavigationCoordinatorOptions {
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
+  readonly currentJoinedShare: () => JoinedBrowserShare | undefined
   readonly isDisposed: () => boolean
-  readonly snapshot: () => V2ReceiverSnapshot
-  readonly publish: (snapshot: V2ReceiverSnapshot) => void
+  readonly snapshot: () => ReceiverSnapshot
+  readonly publish: (snapshot: ReceiverSnapshot) => void
   readonly publicError: (error: unknown) => string
-  readonly onPageCommitted?: (page: V2BrowsePage) => void
+  readonly onPageCommitted?: (page: BrowsePage) => void
   readonly incidents?: BrowserNavigationIncidentPort
 }
 
 export class BrowserNavigationCoordinator {
   readonly #options: BrowserNavigationCoordinatorOptions
-  #page: V2BrowsePage | undefined
-  #directories: V2BrowseDirectory[] = []
-  #entries = new Map<string, V2CatalogEntry>()
+  #page: BrowsePage | undefined
+  #directories: BrowseDirectory[] = []
+  #entries = new Map<string, CatalogEntry>()
   #navigation: PendingNavigation | undefined
   #pendingNavigationKey: string | undefined
-  #loadingDirectory: V2BrowseDirectory | undefined
-  #retryableBrowse: RetryableV2BrowseRequest | undefined
+  #loadingDirectory: BrowseDirectory | undefined
+  #retryableBrowse: RetryableBrowseRequest | undefined
 
   constructor(options: BrowserNavigationCoordinatorOptions) {
     this.#options = options
   }
 
-  get page(): V2BrowsePage | undefined {
+  get page(): BrowsePage | undefined {
     return this.#page
   }
 
@@ -64,7 +64,7 @@ export class BrowserNavigationCoordinator {
     return this.#entries.size
   }
 
-  entry(id: string): V2CatalogEntry | undefined {
+  entry(id: string): CatalogEntry | undefined {
     return this.#entries.get(id)
   }
 
@@ -92,7 +92,7 @@ export class BrowserNavigationCoordinator {
     const page = this.#page
     const entry = this.#entries.get(id)
     if (joined === undefined || page === undefined || entry?.kind !== 'directory') return
-    let child: V2BrowseDirectory
+    let child: BrowseDirectory
     try {
       child = joined.childDirectory(page.directory, entry)
     } catch (error) {
@@ -135,9 +135,9 @@ export class BrowserNavigationCoordinator {
   }
 
   async loadPage(
-    directory: V2BrowseDirectory,
+    directory: BrowseDirectory,
     pageIndex: number,
-    route: readonly V2BrowseDirectory[],
+    route: readonly BrowseDirectory[],
     explicitRetry = false,
   ): Promise<void> {
     const joined = this.#options.currentJoinedShare()
@@ -187,8 +187,8 @@ export class BrowserNavigationCoordinator {
   }
 
   #navigationKey(
-    joined: V2JoinedBrowserShare,
-    route: readonly V2BrowseDirectory[],
+    joined: JoinedBrowserShare,
+    route: readonly BrowseDirectory[],
     pageIndex: number,
     explicitRetry: boolean,
   ): string {
@@ -219,7 +219,7 @@ export class BrowserNavigationCoordinator {
 
   #beginNavigation(
     key: string,
-    directory: V2BrowseDirectory,
+    directory: BrowseDirectory,
   ): PendingNavigation {
     const navigation = this.#newAttempt()
     this.#navigation = navigation
@@ -241,7 +241,7 @@ export class BrowserNavigationCoordinator {
 
   #canPublish(
     navigation: PendingNavigation,
-    joined: V2JoinedBrowserShare,
+    joined: JoinedBrowserShare,
   ): boolean {
     return (
       this.#navigation === navigation &&
@@ -261,9 +261,9 @@ export class BrowserNavigationCoordinator {
 
   #settleNavigationFailure(
     navigation: PendingNavigation,
-    directory: V2BrowseDirectory,
+    directory: BrowseDirectory,
     pageIndex: number,
-    route: readonly V2BrowseDirectory[],
+    route: readonly BrowseDirectory[],
     error: unknown,
   ): void {
     if (this.#navigation !== navigation) {
@@ -278,7 +278,7 @@ export class BrowserNavigationCoordinator {
       return
     }
     const retryable =
-      error instanceof V2DirectoryFailureError && error.failure.retryable
+      error instanceof DirectoryFailureError && error.failure.retryable
     this.#retryableBrowse = retryable
       ? Object.freeze({ directory, pageIndex, route })
       : undefined
@@ -307,7 +307,7 @@ export class BrowserNavigationCoordinator {
     this.#navigation = undefined
   }
 
-  catalogScanProgress(joined: V2JoinedBrowserShare, progress: V2CatalogScanProgress): void {
+  catalogScanProgress(joined: JoinedBrowserShare, progress: CatalogScanProgress): void {
     const directory = this.#loadingDirectory
     if (
       this.#options.currentJoinedShare() !== joined ||
@@ -323,7 +323,7 @@ export class BrowserNavigationCoordinator {
     })
   }
 
-  publishPage(page: V2BrowsePage): void {
+  publishPage(page: BrowsePage): void {
     const joined = this.#options.currentJoinedShare()
     if (joined === undefined) return
     const projection = projectBrowsePage(page, joined.selection, this.#directories)
@@ -331,7 +331,7 @@ export class BrowserNavigationCoordinator {
     this.#options.publish({ ...this.#options.snapshot(), ...projection.snapshot })
   }
 
-  pageMatches(directory: V2BrowseDirectory): boolean {
+  pageMatches(directory: BrowseDirectory): boolean {
     return this.#page?.directory.idText === directory.idText
   }
 
@@ -358,7 +358,7 @@ export class BrowserNavigationCoordinator {
     if (scope === undefined || attempt.decisionSettled) return
     try {
       const trigger = scope.facts.record(
-        error instanceof V2RemoteOperationError
+        error instanceof RemoteOperationError
           ? error.failureFact
           : unclassifiedFailureFact({
               stage: 'browse',

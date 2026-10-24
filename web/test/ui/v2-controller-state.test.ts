@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import type { CatalogEntry } from '../../src/catalog/records'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
@@ -12,20 +12,20 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { ArtifactPlanningContractError } from '../../src/output/planning'
-import { V2ActivationStateContractError } from '../../src/application/receive/activation/model'
-import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
-import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
-import { V2PresentationAttempt } from '../../src/application/receive/observation/attempt'
-import { projectBrowsePage } from '../../src/ui/v2-controller-state'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
-import type { V2RouteCommitResult } from '../../src/application/receive/contracts'
+import { ActivationStateContractError } from '../../src/application/receive/activation/model'
+import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import type { ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
+import { PresentationAttempt } from '../../src/application/receive/observation/attempt'
+import { projectBrowsePage } from '../../src/ui/controller-state'
+import type { BrowseDirectory, BrowsePage } from '../../src/application/browser-share/gateway'
+import type { RouteCommitResult } from '../../src/application/receive/contracts'
 
 describe('v2 browse page presentation', () => {
   it('reports only visible selection facts and leaves artifact semantics to projection', () => {
     const root = directory()
     const selected = file(2, 'selected.txt', 1_024n)
     const notSelected = file(3, 'other.txt', 2_048n)
-    const selection = new V2SelectionPolicy(false)
+    const selection = new SelectionPolicy(false)
     selection.toggle(selected, root.ancestry)
 
     const projection = projectBrowsePage(page(root, [selected, notSelected]), selection, [root])
@@ -44,7 +44,7 @@ describe('v2 controller diagnostics', () => {
     const result = Object.freeze({
       kind: 'retryable-precut',
       receiverOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
-    }) satisfies V2RouteCommitResult
+    }) satisfies RouteCommitResult
 
     expect(result).toEqual({
       kind: 'retryable-precut',
@@ -58,7 +58,7 @@ describe('v2 controller diagnostics', () => {
     const issuer = createIncidentScopeIssuer()
     const order: string[] = []
     const decisions: PresentationDecision[] = []
-    const incidents: V2ReceiverIncidentPort = {
+    const incidents: ReceiverIncidentPort = {
       openScope: (kind: IncidentScopeKind) => issuer.open(kind, {
         factRecorded: ({ relation }: { relation: FailureFactRelation }) => {
           order.push(`fact:${relation}`)
@@ -70,7 +70,7 @@ describe('v2 controller diagnostics', () => {
         order.push('decision')
       },
     }
-    const attempt = new V2PresentationAttempt(incidents, 'authority_activation')
+    const attempt = new PresentationAttempt(incidents, 'authority_activation')
     const trigger = attempt.recordUnclassified('authority_activation', 'contributor')!
 
     attempt.incident('projection_authority', 'failed', trigger)
@@ -85,7 +85,7 @@ describe('v2 controller diagnostics', () => {
 
   it('keeps reporter failure passive and constructs trace payloads only for a current observer', () => {
     const issuer = createIncidentScopeIssuer()
-    const attempt = new V2PresentationAttempt({
+    const attempt = new PresentationAttempt({
       openScope: (kind) => issuer.open(kind),
       submitDecision: () => { throw new Error('reporter unavailable') },
     }, 'join')
@@ -100,7 +100,7 @@ describe('v2 controller diagnostics', () => {
     } = {}
     let payloadsConstructed = 0
     const observed: string[] = []
-    const observability = new V2ControllerObservability({
+    const observability = new ControllerObservability({
       trace: { get current() { return traceState.observer } },
     })
     observability.trace(() => {
@@ -119,10 +119,10 @@ describe('v2 controller diagnostics', () => {
 
   it.each([
     new ArtifactPlanningContractError('same-epoch-selection-digest-changed'),
-    new V2ActivationStateContractError('impossible activation transition'),
+    new ActivationStateContractError('impossible activation transition'),
   ])('classifies %s as a terminal output Contract fault', (error) => {
     const composition = diagnosticsComposition()
-    const observability = new V2ControllerObservability({ incidents: composition.incidents })
+    const observability = new ControllerObservability({ incidents: composition.incidents })
     const attempt = observability.open('authority_activation')
 
     observability.fail(attempt, 'projection_authority', error, 'authority_activation')
@@ -163,7 +163,7 @@ function diagnosticsComposition() {
   })
 }
 
-function directory(): V2BrowseDirectory {
+function directory(): BrowseDirectory {
   return Object.freeze({
     id: identity(1),
     idText: identityText(1),
@@ -174,9 +174,9 @@ function directory(): V2BrowseDirectory {
 }
 
 function page(
-  root: V2BrowseDirectory,
-  entries: readonly V2CatalogEntry[],
-): V2BrowsePage {
+  root: BrowseDirectory,
+  entries: readonly CatalogEntry[],
+): BrowsePage {
   return Object.freeze({
     directory: root,
     pageIndex: 0,
@@ -191,7 +191,7 @@ function file(
   first: number,
   name: string,
   expectedSize: bigint,
-): Extract<V2CatalogEntry, { kind: 'file' }> {
+): Extract<CatalogEntry, { kind: 'file' }> {
   return Object.freeze({
     kind: 'file',
     id: identity(first),

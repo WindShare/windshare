@@ -1,4 +1,4 @@
-import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
+import type { BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import {
   createMemberRollbackFixture, MEMBER_ROLLBACK_SIGNAL, readMemberRollbackState,
 } from './member-rollback-fixture'
@@ -11,7 +11,7 @@ export async function probeProductionMemberRollback(databaseName: string, mode: 
 }
 
 export async function finishMemberRollbackFixture(
-  fixture: Awaited<ReturnType<typeof createMemberRollbackFixture>>, active: V2BoundReceiveOperation,
+  fixture: Awaited<ReturnType<typeof createMemberRollbackFixture>>, active: BoundReceiveOperation,
 ) {
   const resumed = await active.plans.openDirectResumableZip(fixture.intent, MEMBER_ROLLBACK_SIGNAL)
   await fixture.source.run(resumed, 'resumed', MEMBER_ROLLBACK_SIGNAL)

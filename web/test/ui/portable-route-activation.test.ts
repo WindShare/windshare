@@ -371,7 +371,7 @@ describe('portable route activation', () => {
     continueFence?.()
 
     await expect(committing).rejects.toMatchObject({
-      name: 'V2PresentationSourceError',
+      name: 'PresentationSourceError',
       outcome: 'stale_replacement',
     })
     expect(effects.all()).toEqual([])

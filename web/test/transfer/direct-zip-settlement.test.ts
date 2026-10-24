@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import type { DirectZipIntent } from '../../src/transfer/direct-zip'
 import { SelectionMeasureTracker } from '../../src/transfer/measure'
@@ -9,10 +9,10 @@ import {
   type DirectResumableZipExecution,
   type MaterializationSummary,
 } from '../../src/transfer/output/session'
-import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
-import { pauseFailedV2Execution } from '../../src/transfer/settlement/v2-output'
-import { V2JobFailureAuthority } from '../../src/transfer/v2-job-failure-authority'
-import { TransferJobSettlement } from '../../src/transfer/v2-job-settlement'
+import { TransferProgressLedger } from '../../src/transfer/progress/ledger'
+import { pauseFailedExecution } from '../../src/transfer/settlement/output'
+import { JobFailureAuthority } from '../../src/transfer/job-failure-authority'
+import { TransferJobSettlement } from '../../src/transfer/job-settlement'
 import { createWriterHarness, fileAdmission } from '../output/direct-zip/writer/fault-model'
 import { deferred, manualSettlementDeadline } from './settlement-deadline'
 import { planAuthorityFixture } from './v2-job-fixture'
@@ -59,7 +59,7 @@ describe('Direct ZIP durable settlement ownership', () => {
     async route => {
       vi.useFakeTimers()
       const fixture = await settlementFixture(false)
-      const running = pauseFailedV2Execution({
+      const running = pauseFailedExecution({
         intent: fixture.intent,
         ...(route === 'pause' ? { execution: fixture.execution } : {}),
         authority: fixture.plans,
@@ -159,13 +159,13 @@ async function settlementFixture(complete: boolean) {
   const measure = new SelectionMeasureTracker()
   measure.observeUniqueFile(6n)
   measure.complete()
-  const progress = new V2TransferProgressLedger()
+  const progress = new TransferProgressLedger()
   if (complete) progress.completeFile(6n)
   const lifetime = new AbortController()
   const observers = () => undefined
   const emitProgress = () => undefined
-  const failures = new V2JobFailureAuthority({
-    selection: new V2SelectionPolicy(true).snapshot(), signal: lifetime.signal,
+  const failures = new JobFailureAuthority({
+    selection: new SelectionPolicy(true).snapshot(), signal: lifetime.signal,
     measure, progress, observers, emitProgress,
   })
   const settlement = new TransferJobSettlement({

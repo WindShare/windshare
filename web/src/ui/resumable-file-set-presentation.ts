@@ -3,7 +3,7 @@ import type {
   RecoverySummary,
 } from '../transfer/lifecycle/recovery-summary'
 import type { MaterializationPlan } from '../transfer/intent'
-import { formatBytes } from './v2-progress-presentation'
+import { formatBytes } from './progress-presentation'
 
 type ResumableFileSetState = Extract<ReceiveLifecycleState, {
   kind: 'resumable-receive'

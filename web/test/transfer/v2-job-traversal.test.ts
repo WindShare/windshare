@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { V2_MAXIMUM_DIRECTORY_PAGES } from '../../src/catalog/v2-client'
-import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
+import { MAXIMUM_DIRECTORY_PAGES } from '../../src/catalog/client'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
 import {
-  V2_CATALOG_DIRECTORY_ENTRIES,
-  type V2CatalogEntry,
-  type V2CatalogPage,
-} from '../../src/catalog/v2-records'
+  CATALOG_DIRECTORY_ENTRIES,
+  type CatalogEntry,
+  type CatalogPage,
+} from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  V2CatalogTraversalError,
+  CatalogTraversalError,
   type DirectoryCursor,
 } from '../../src/transfer/job/contract'
 import { createAuthenticatedLogicalSiblingMembership } from '../../src/transfer/job/discovery'
-import { V2CatalogPageCursor, V2CatalogTraversalGuard } from '../../src/transfer/job/traversal'
+import { CatalogPageCursor, CatalogTraversalGuard } from '../../src/transfer/job/traversal'
 
 const SHARE = identity(1)
 const DIRECTORY = identity(2)
@@ -78,7 +78,7 @@ describe('v2 catalog generation cursor', () => {
     consumed.push(first.name)
 
     expect(() => pages.accept(page(1, true, [second])))
-      .toThrow(V2CatalogTraversalError)
+      .toThrow(CatalogTraversalError)
     expect(consumed).toEqual([first.name])
   })
 
@@ -86,29 +86,29 @@ describe('v2 catalog generation cursor', () => {
     fileEntry(4, 'e\u0301'),
     fileEntry(4, 'CON'),
   ])('rejects a non-portable sibling name before traversal', (entry) => {
-    const pages = new V2CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
+    const pages = new CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
     expect(() => pages.accept(singlePage([entry])))
-      .toThrow(V2CatalogTraversalError)
+      .toThrow(CatalogTraversalError)
   })
 
   it('applies the reserved output namespace policy while composing entry paths', () => {
-    const guard = new V2CatalogTraversalGuard(SHARE, 1)
+    const guard = new CatalogTraversalGuard(SHARE, 1)
     expect(() => guard.entryPath(directoryCursor(), fileEntry(4, '.WSRESUME-state')))
       .toThrow(/path policy/u)
   })
 
   it.each([
     { pageCount: 0 },
-    { pageCount: V2_MAXIMUM_DIRECTORY_PAGES + 1 },
-    { entryCount: V2_CATALOG_DIRECTORY_ENTRIES + 1 },
+    { pageCount: MAXIMUM_DIRECTORY_PAGES + 1 },
+    { entryCount: CATALOG_DIRECTORY_ENTRIES + 1 },
     { terminalCommitment: new Uint8Array(32) },
-    { omittedCount: BigInt(V2_CATALOG_DIRECTORY_ENTRIES) },
+    { omittedCount: BigInt(CATALOG_DIRECTORY_ENTRIES) },
   ])('rejects malformed committed cursor authority %#', (override) => {
-    expect(() => new V2CatalogPageCursor(
+    expect(() => new CatalogPageCursor(
       SHARE,
       directoryCursor(),
       { ...committed(1, 1), ...override },
-    )).toThrow(V2CatalogTraversalError)
+    )).toThrow(CatalogTraversalError)
   })
 
   it.each([
@@ -121,14 +121,14 @@ describe('v2 catalog generation cursor', () => {
     { objectCommitment: new Uint8Array(32) },
     { entries: [] },
   ])('rejects a page that changes committed cursor authority %#', (override) => {
-    const pages = new V2CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
+    const pages = new CatalogPageCursor(SHARE, directoryCursor(), committed(1, 1))
     expect(() => pages.accept({ ...singlePage([fileEntry(4, 'alpha')]), ...override }))
-      .toThrow(V2CatalogTraversalError)
+      .toThrow(CatalogTraversalError)
   })
 })
 
-function cursor(): V2CatalogPageCursor {
-  return new V2CatalogPageCursor(SHARE, directoryCursor(), committed(2, 2))
+function cursor(): CatalogPageCursor {
+  return new CatalogPageCursor(SHARE, directoryCursor(), committed(2, 2))
 }
 
 function directoryCursor(): DirectoryCursor {
@@ -141,7 +141,7 @@ function directoryCursor(): DirectoryCursor {
   })
 }
 
-function committed(pageCount: number, entryCount: number): V2CommittedDirectory {
+function committed(pageCount: number, entryCount: number): CommittedDirectory {
   return Object.freeze({
     directoryId: DIRECTORY,
     directoryIdText: encodeBase64Url(DIRECTORY),
@@ -157,8 +157,8 @@ function committed(pageCount: number, entryCount: number): V2CommittedDirectory 
 function page(
   pageIndex: number,
   terminal: boolean,
-  entries: readonly V2CatalogEntry[],
-): V2CatalogPage {
+  entries: readonly CatalogEntry[],
+): CatalogPage {
   return Object.freeze({
     shareInstance: SHARE,
     directoryId: DIRECTORY,
@@ -175,11 +175,11 @@ function page(
   })
 }
 
-function singlePage(entries: readonly V2CatalogEntry[]): V2CatalogPage {
+function singlePage(entries: readonly CatalogEntry[]): CatalogPage {
   return page(0, true, entries)
 }
 
-function fileEntry(first: number, name: string): Extract<V2CatalogEntry, { kind: 'file' }> {
+function fileEntry(first: number, name: string): Extract<CatalogEntry, { kind: 'file' }> {
   const id = identity(first)
   return Object.freeze({
     kind: 'file',

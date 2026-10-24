@@ -9,25 +9,25 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-func newWindowsOutputV3ObservedFile(native *windowsV3File, private bool) *windowsOutputV3ObservedFile {
-	return &windowsOutputV3ObservedFile{state: &windowsOutputV3FileState{native: native, private: private}}
+func newWindowsOutputObservedFile(native *windowsFile, private bool) *windowsOutputObservedFile {
+	return &windowsOutputObservedFile{state: &windowsOutputFileState{native: native, private: private}}
 }
 
-func newWindowsOutputV3MutableFile(native *windowsV3File, private bool) *windowsOutputV3MutableFile {
-	return &windowsOutputV3MutableFile{state: &windowsOutputV3FileState{native: native, private: private}}
+func newWindowsOutputMutableFile(native *windowsFile, private bool) *windowsOutputMutableFile {
+	return &windowsOutputMutableFile{state: &windowsOutputFileState{native: native, private: private}}
 }
 
-func windowsOutputV3FileStateFrom(file outputcap.FileIdentity) (*windowsOutputV3FileState, bool) {
+func windowsOutputFileStateFrom(file outputcap.FileIdentity) (*windowsOutputFileState, bool) {
 	switch file := file.(type) {
-	case *windowsOutputV3ObservedFile:
+	case *windowsOutputObservedFile:
 		if file != nil {
 			return file.state, file.state != nil
 		}
-	case *windowsOutputV3RecoveryDurabilityFile:
+	case *windowsOutputRecoveryDurabilityFile:
 		if file != nil {
 			return file.state, file.state != nil
 		}
-	case *windowsOutputV3MutableFile:
+	case *windowsOutputMutableFile:
 		if file != nil {
 			return file.state, file.state != nil
 		}
@@ -35,188 +35,188 @@ func windowsOutputV3FileStateFrom(file outputcap.FileIdentity) (*windowsOutputV3
 	return nil, false
 }
 
-func windowsOutputV3FileClosedError() error {
+func windowsOutputFileClosedError() error {
 	return errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows file authority is closed"))
 }
 
-func windowsOutputV3FileClose(state *windowsOutputV3FileState) error {
+func windowsOutputFileClose(state *windowsOutputFileState) error {
 	if state == nil || state.borrowed || state.native == nil {
 		return nil
 	}
 	err := state.native.Close()
 	state.native = nil
-	return windowsOutputV3Error(err)
+	return windowsOutputError(err)
 }
 
-func windowsOutputV3FileSize(state *windowsOutputV3FileState) (uint64, error) {
+func windowsOutputFileSize(state *windowsOutputFileState) (uint64, error) {
 	if state == nil || state.native == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
 	size, err := state.native.Size()
-	return size, windowsOutputV3Error(err)
+	return size, windowsOutputError(err)
 }
 
-func windowsOutputV3SameFile(
-	state *windowsOutputV3FileState,
+func windowsOutputSameFile(
+	state *windowsOutputFileState,
 	other outputcap.FileIdentity,
 ) (bool, error) {
-	right, ok := windowsOutputV3FileStateFrom(other)
+	right, ok := windowsOutputFileStateFrom(other)
 	if !ok || state == nil || state.native == nil || right.native == nil {
 		return false, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: incompatible Windows file authority"))
 	}
-	same, err := sameWindowsV3OpenedObject(state.native, right.native)
-	return same, windowsOutputV3Error(err)
+	same, err := sameWindowsOpenedObject(state.native, right.native)
+	return same, windowsOutputError(err)
 }
 
-func windowsOutputV3FileSync(state *windowsOutputV3FileState) error {
+func windowsOutputFileSync(state *windowsOutputFileState) error {
 	if state == nil || state.native == nil {
-		return windowsOutputV3FileClosedError()
+		return windowsOutputFileClosedError()
 	}
-	return windowsOutputV3Error(state.native.Sync())
+	return windowsOutputError(state.native.Sync())
 }
 
-func (file *windowsOutputV3ObservedFile) ReadAt(destination []byte, offset int64) (int, error) {
+func (file *windowsOutputObservedFile) ReadAt(destination []byte, offset int64) (int, error) {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
 	count, err := file.state.native.ReadAt(destination, offset)
-	return count, windowsOutputV3Error(err)
+	return count, windowsOutputError(err)
 }
 
-func (file *windowsOutputV3ObservedFile) Close() error {
+func (file *windowsOutputObservedFile) Close() error {
 	if file == nil {
 		return nil
 	}
-	return windowsOutputV3FileClose(file.state)
+	return windowsOutputFileClose(file.state)
 }
 
-func (file *windowsOutputV3ObservedFile) Size() (uint64, error) {
+func (file *windowsOutputObservedFile) Size() (uint64, error) {
 	if file == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3FileSize(file.state)
+	return windowsOutputFileSize(file.state)
 }
 
-func (file *windowsOutputV3ObservedFile) MetadataMatches(
+func (file *windowsOutputObservedFile) MetadataMatches(
 	size uint64,
 	modified catalog.ModifiedTime,
 ) (bool, error) {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return false, windowsOutputV3FileClosedError()
+		return false, windowsOutputFileClosedError()
 	}
 	matches, err := file.state.native.metadataMatches(size, modified)
-	return matches, windowsOutputV3Error(err)
+	return matches, windowsOutputError(err)
 }
 
-func (file *windowsOutputV3ObservedFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+func (file *windowsOutputObservedFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if file == nil {
-		return false, windowsOutputV3FileClosedError()
+		return false, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3SameFile(file.state, other)
+	return windowsOutputSameFile(file.state, other)
 }
 
-func (file *windowsOutputV3RecoveryDurabilityFile) Close() error {
+func (file *windowsOutputRecoveryDurabilityFile) Close() error {
 	if file == nil {
 		return nil
 	}
-	return windowsOutputV3FileClose(file.state)
+	return windowsOutputFileClose(file.state)
 }
 
-func (file *windowsOutputV3RecoveryDurabilityFile) Size() (uint64, error) {
+func (file *windowsOutputRecoveryDurabilityFile) Size() (uint64, error) {
 	if file == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3FileSize(file.state)
+	return windowsOutputFileSize(file.state)
 }
 
-func (file *windowsOutputV3RecoveryDurabilityFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+func (file *windowsOutputRecoveryDurabilityFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if file == nil {
-		return false, windowsOutputV3FileClosedError()
+		return false, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3SameFile(file.state, other)
+	return windowsOutputSameFile(file.state, other)
 }
 
-func (file *windowsOutputV3RecoveryDurabilityFile) Sync() error {
+func (file *windowsOutputRecoveryDurabilityFile) Sync() error {
 	if file == nil {
-		return windowsOutputV3FileClosedError()
+		return windowsOutputFileClosedError()
 	}
-	return windowsOutputV3FileSync(file.state)
+	return windowsOutputFileSync(file.state)
 }
 
-func (file *windowsOutputV3MutableFile) ReadAt(destination []byte, offset int64) (int, error) {
+func (file *windowsOutputMutableFile) ReadAt(destination []byte, offset int64) (int, error) {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
 	count, err := file.state.native.ReadAt(destination, offset)
-	return count, windowsOutputV3Error(err)
+	return count, windowsOutputError(err)
 }
 
-func (file *windowsOutputV3MutableFile) WriteAt(source []byte, offset int64) (int, error) {
+func (file *windowsOutputMutableFile) WriteAt(source []byte, offset int64) (int, error) {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
 	count, err := file.state.native.WriteAt(source, offset)
-	return count, windowsOutputV3Error(err)
+	return count, windowsOutputError(err)
 }
 
-func (file *windowsOutputV3MutableFile) Close() error {
+func (file *windowsOutputMutableFile) Close() error {
 	if file == nil {
 		return nil
 	}
-	return windowsOutputV3FileClose(file.state)
+	return windowsOutputFileClose(file.state)
 }
 
-func (file *windowsOutputV3MutableFile) Sync() error {
+func (file *windowsOutputMutableFile) Sync() error {
 	if file == nil {
-		return windowsOutputV3FileClosedError()
+		return windowsOutputFileClosedError()
 	}
-	return windowsOutputV3FileSync(file.state)
+	return windowsOutputFileSync(file.state)
 }
 
-func (file *windowsOutputV3MutableFile) Size() (uint64, error) {
+func (file *windowsOutputMutableFile) Size() (uint64, error) {
 	if file == nil {
-		return 0, windowsOutputV3FileClosedError()
+		return 0, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3FileSize(file.state)
+	return windowsOutputFileSize(file.state)
 }
 
-func (file *windowsOutputV3MutableFile) SetModifiedTime(modified catalog.ModifiedTime) error {
+func (file *windowsOutputMutableFile) SetModifiedTime(modified catalog.ModifiedTime) error {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return windowsOutputV3FileClosedError()
+		return windowsOutputFileClosedError()
 	}
-	return windowsOutputV3Error(file.state.native.setModifiedTime(modified))
+	return windowsOutputError(file.state.native.setModifiedTime(modified))
 }
 
-func (file *windowsOutputV3MutableFile) MetadataMatches(
+func (file *windowsOutputMutableFile) MetadataMatches(
 	size uint64,
 	modified catalog.ModifiedTime,
 ) (bool, error) {
 	if file == nil || file.state == nil || file.state.native == nil {
-		return false, windowsOutputV3FileClosedError()
+		return false, windowsOutputFileClosedError()
 	}
 	matches, err := file.state.native.metadataMatches(size, modified)
-	return matches, windowsOutputV3Error(err)
+	return matches, windowsOutputError(err)
 }
 
-func (file *windowsOutputV3MutableFile) SameFile(other outputcap.FileIdentity) (bool, error) {
+func (file *windowsOutputMutableFile) SameFile(other outputcap.FileIdentity) (bool, error) {
 	if file == nil {
-		return false, windowsOutputV3FileClosedError()
+		return false, windowsOutputFileClosedError()
 	}
-	return windowsOutputV3SameFile(file.state, other)
+	return windowsOutputSameFile(file.state, other)
 }
 
-func newWindowsOutputV3Lock(lock *windowsV3StableLock) *windowsOutputV3Lock {
-	state := &windowsOutputV3FileState{private: true, borrowed: true}
+func newWindowsOutputLock(lock *windowsStableLock) *windowsOutputLock {
+	state := &windowsOutputFileState{private: true, borrowed: true}
 	if lock != nil {
 		state.native = lock.file
 	}
-	return &windowsOutputV3Lock{
+	return &windowsOutputLock{
 		native: lock,
-		file:   &windowsOutputV3MutableFile{state: state},
+		file:   &windowsOutputMutableFile{state: state},
 	}
 }
 
-func (lock *windowsOutputV3Lock) File() outputcap.MutableFile {
+func (lock *windowsOutputLock) File() outputcap.MutableFile {
 	if lock == nil || lock.native == nil || lock.file == nil || lock.file.state == nil ||
 		lock.file.state.native == nil {
 		return nil
@@ -224,7 +224,7 @@ func (lock *windowsOutputV3Lock) File() outputcap.MutableFile {
 	return lock.file
 }
 
-func (lock *windowsOutputV3Lock) Close() error {
+func (lock *windowsOutputLock) Close() error {
 	if lock == nil || lock.native == nil {
 		return nil
 	}
@@ -233,5 +233,5 @@ func (lock *windowsOutputV3Lock) Close() error {
 	if lock.file != nil && lock.file.state != nil {
 		lock.file.state.native = nil
 	}
-	return windowsOutputV3Error(err)
+	return windowsOutputError(err)
 }

@@ -1,4 +1,4 @@
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
@@ -13,17 +13,17 @@ import {
 } from '../../transfer/projection'
 import type { EnvironmentOffers } from '../../output/planning'
 import type { ReceivePlanningShare } from './joined-share'
-import type { V2ReceiveCompositionPort } from './contracts'
+import type { ReceiveCompositionPort } from './contracts'
 import type { ReceiveObservationOptions } from './observation/contracts'
 import { StaleReceiveBoundaryError } from './observation/contracts'
-import type { V2ControllerObservability } from './observation/coordinator'
+import type { ControllerObservability } from './observation/coordinator'
 
-export interface V2ActiveProjection {
+export interface ActiveProjection {
   /** Selection/projection replacements have distinct owner revisions. */
   readonly revision: number
   readonly joined: ReceivePlanningShare
   readonly selection: SelectionSpec
-  readonly frozenSelection: V2FrozenSelectionPolicy
+  readonly frozenSelection: FrozenSelectionPolicy
   readonly epoch: ProjectionEpoch
   controller: AbortController
   protocolSessionId: string
@@ -32,15 +32,15 @@ export interface V2ActiveProjection {
 }
 
 export interface ProjectionObservationAuthority {
-  observeProjection(active: V2ActiveProjection): void
+  observeProjection(active: ActiveProjection): void
   startObservationReplacement(reason: unknown): void
   invalidate(reason: unknown, invalidation: 'selection-changed'): void
 }
 
 export interface SelectionProjectionRuntimeOptions {
-  readonly receive: Pick<V2ReceiveCompositionPort, 'environment'>
+  readonly receive: Pick<ReceiveCompositionPort, 'environment'>
   readonly authority: ProjectionObservationAuthority
-  readonly observability: V2ControllerObservability
+  readonly observability: ControllerObservability
   readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly isDisposed: () => boolean
   readonly onFailure: (error: unknown) => void
@@ -55,14 +55,14 @@ export class SelectionProjectionRuntime {
   readonly #projection: SelectionProjectionController
   #revision = 0
   #pending: AbortController | undefined
-  #active: V2ActiveProjection | undefined
+  #active: ActiveProjection | undefined
 
   constructor(options: SelectionProjectionRuntimeOptions) {
     this.#options = options
     this.#projection = new SelectionProjectionController(options.trace)
   }
 
-  get current(): V2ActiveProjection | undefined {
+  get current(): ActiveProjection | undefined {
     return this.#active
   }
 
@@ -105,7 +105,7 @@ export class SelectionProjectionRuntime {
     })
   }
 
-  async retry(active: V2ActiveProjection): Promise<void> {
+  async retry(active: ActiveProjection): Promise<void> {
     const attempt = this.#options.observability.open('projection')
     const reason = new DOMException('Projection retry replaced the prior source', 'AbortError')
     this.#options.authority.startObservationReplacement(reason)
@@ -155,7 +155,7 @@ export class SelectionProjectionRuntime {
   async #startOwned(
     revision: number,
     joined: ReceivePlanningShare,
-    frozenSelection: V2FrozenSelectionPolicy,
+    frozenSelection: FrozenSelectionPolicy,
     controller: AbortController,
     environmentTask: Promise<EnvironmentOffers>,
   ): Promise<void> {
@@ -174,7 +174,7 @@ export class SelectionProjectionRuntime {
     const state = this.#projection.beginSelection(selection, Object.freeze({
       protocolSessionId: joined.protocolSessionIdentity,
     }))
-    const active: V2ActiveProjection = {
+    const active: ActiveProjection = {
       revision,
       joined,
       selection,
@@ -205,7 +205,7 @@ export class SelectionProjectionRuntime {
   }
 
   async #consume(
-    active: V2ActiveProjection,
+    active: ActiveProjection,
     controller: AbortController,
     states: AsyncGenerator<SelectionProjectionState, SelectionProjectionState>,
   ): Promise<void> {
@@ -216,7 +216,7 @@ export class SelectionProjectionRuntime {
     }
   }
 
-  #owns(active: V2ActiveProjection, controller: AbortController): boolean {
+  #owns(active: ActiveProjection, controller: AbortController): boolean {
     return this.#active === active && active.controller === controller &&
       !controller.signal.aborted && this.#boundaryIsCurrent(active.revision, active.joined)
   }

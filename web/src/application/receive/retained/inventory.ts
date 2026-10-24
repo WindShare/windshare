@@ -1,5 +1,5 @@
 import type { RetainedReceiveOperationSnapshot } from './model'
-import type { V2RetainedCompatibleNameRepairSource } from '../observation/contracts'
+import type { RetainedCompatibleNameRepairSource } from '../observation/contracts'
 import {
   compatibleNameRepairSummary,
 } from '../../../output/file-system-access/compatible-name/model'
@@ -8,15 +8,15 @@ import {
 } from '../../../transfer/lifecycle/name-repair'
 import { hasValidatedTerminalCompatibleNameRepair } from '../repair'
 import type {
-  V2RetainedReceiveInventory,
-  V2RetainedReceiveAction,
-  V2RetainedReceiveOperation,
+  RetainedReceiveInventory,
+  RetainedReceiveAction,
+  RetainedReceiveOperation,
 } from '../contracts'
 
 export function retainedReceiveActions(
-  operation: V2RetainedReceiveOperation,
+  operation: RetainedReceiveOperation,
   summary: CompatibleNameRepairSummary | undefined,
-): readonly V2RetainedReceiveAction[] {
+): readonly RetainedReceiveAction[] {
   if (summary?.terminalSettlement === 'pending') {
     return Object.freeze(operation.actions.filter(action => action === 'catch-up' || action === 'cleanup-staging' ||
       action === 'discard-incomplete-staging'))
@@ -29,16 +29,16 @@ export function retainedReceiveActions(
 }
 
 export function sameRetainedActions(
-  left: readonly V2RetainedReceiveAction[],
-  right: readonly V2RetainedReceiveAction[],
+  left: readonly RetainedReceiveAction[],
+  right: readonly RetainedReceiveAction[],
 ): boolean {
   return left.length === right.length && left.every((action, index) => action === right[index])
 }
 
 export function retainedReceiveContinuation(
-  operation: V2RetainedReceiveOperation,
+  operation: RetainedReceiveOperation,
   summary: CompatibleNameRepairSummary | undefined,
-): V2RetainedReceiveOperation['continuation'] {
+): RetainedReceiveOperation['continuation'] {
   if (summary?.terminalSettlement === 'pending') return 'pending-catch-up'
   if (operation.lifecycle.kind !== 'published' && operation.lifecycle.kind !== 'partial-directory') {
     return operation.continuation
@@ -52,19 +52,19 @@ export function retainedReceiveContinuation(
 }
 
 export interface ResolvedRetainedInventory {
-  readonly source: V2RetainedReceiveInventory
+  readonly source: RetainedReceiveInventory
   readonly operations: readonly RetainedReceiveOperationSnapshot[]
   readonly sourceOperations: ReadonlyMap<
     RetainedReceiveOperationSnapshot,
-    V2RetainedReceiveOperation
+    RetainedReceiveOperation
   >
 }
 
 
 export async function resolveRetainedInventory(
-  loaded: V2RetainedReceiveInventory,
+  loaded: RetainedReceiveInventory,
   signal: AbortSignal,
-  repairSource: V2RetainedCompatibleNameRepairSource | undefined,
+  repairSource: RetainedCompatibleNameRepairSource | undefined,
 ): Promise<ResolvedRetainedInventory> {
   const summaries = repairSource === undefined
     ? loaded.operations.map(() => undefined)
@@ -76,7 +76,7 @@ export async function resolveRetainedInventory(
 
   const sourceOperations = new Map<
     RetainedReceiveOperationSnapshot,
-    V2RetainedReceiveOperation
+    RetainedReceiveOperation
   >()
   const operations: RetainedReceiveOperationSnapshot[] = []
   loaded.operations.forEach((operation, index) => {

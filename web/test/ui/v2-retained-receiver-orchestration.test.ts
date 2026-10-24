@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
-import type { TransferJobResult } from '../../src/transfer/v2-job'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
+import type { TransferJobResult } from '../../src/transfer/job'
+import { ReceiverController } from '../../src/ui/controller'
+import type { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
 import type {
-  V2RetainedReceiveActionResult,
-  V2RetainedReceiveInventory,
+  RetainedReceiveActionResult,
+  RetainedReceiveInventory,
 } from '../../src/application/receive/contracts'
 import type {
   CompatibleNameRepairSummary,
@@ -53,10 +53,10 @@ describe('v2 receiver product orchestration', () => {
     const summary = repairSummary(true, 'active')
     receive.retainedOperations = Object.freeze([sourceOperation])
     receive.repairSummaries.set(sourceOperation.operationId, summary)
-    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    const actionGate = deferred<RetainedReceiveActionResult>()
     receive.retainedActionGate = actionGate.promise
-    const controller = new V2ReceiverController(
-      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([]) as unknown as BrowserReceiverGateway,
       { receive },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
@@ -87,8 +87,8 @@ describe('v2 receiver product orchestration', () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     receive.retainedOperations = Object.freeze([retainedOperation()])
     const traces: string[] = []
-    const controller = new V2ReceiverController(
-      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([]) as unknown as BrowserReceiverGateway,
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
 
@@ -110,11 +110,11 @@ describe('v2 receiver product orchestration', () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const operation = waitingRetainedOperation()
     receive.retainedOperations = Object.freeze([operation])
-    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    const actionGate = deferred<RetainedReceiveActionResult>()
     receive.retainedActionGate = actionGate.promise
     const traces: string[] = []
-    const controller = new V2ReceiverController(
-      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([]) as unknown as BrowserReceiverGateway,
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
@@ -141,7 +141,7 @@ describe('v2 receiver product orchestration', () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const operation = waitingRetainedOperation()
-    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    const actionGate = deferred<RetainedReceiveActionResult>()
     receive.retainedOperations = Object.freeze([operation])
     receive.retainedActionGate = actionGate.promise
     const controller = controllerFor(joined, receive)
@@ -180,11 +180,11 @@ describe('v2 receiver product orchestration', () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const operation = waitingRetainedOperation()
     receive.retainedOperations = Object.freeze([operation])
-    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    const actionGate = deferred<RetainedReceiveActionResult>()
     receive.retainedActionGate = actionGate.promise
     const traces: string[] = []
-    const controller = new V2ReceiverController(
-      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([]) as unknown as BrowserReceiverGateway,
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
@@ -270,7 +270,7 @@ describe('v2 receiver product orchestration', () => {
     }
     receive.retainedOperations = [retained]
     receive.repairSummaries.set(intent.operationId, summary)
-    const replay = deferred<V2RetainedReceiveActionResult>()
+    const replay = deferred<RetainedReceiveActionResult>()
     receive.retainedActionGate = replay.promise
     controller.catchUpStoppedCompatibleNames()
     await waitFor(() => receive.retainedActionCalls.some(call => call.action === 'catch-up'))
@@ -287,7 +287,7 @@ describe('v2 receiver product orchestration', () => {
   })
 
   it('drops and closes a fresh-page continuation after reconnect changes its action epoch', async () => {
-    const gate = deferred<V2RetainedReceiveActionResult>()
+    const gate = deferred<RetainedReceiveActionResult>()
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const intent = await retainedWorkspaceIntent(joined)
@@ -295,8 +295,8 @@ describe('v2 receiver product orchestration', () => {
     receive.retainedOperations = Object.freeze([operation])
     receive.retainedActionGate = gate.promise
     const traces: string[] = []
-    const controller = new V2ReceiverController(
-      new FakeGateway([joined]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([joined]) as unknown as BrowserReceiverGateway,
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
@@ -342,12 +342,12 @@ describe('v2 receiver product orchestration', () => {
   })
 
   it('fences a retained inventory result that resolves after controller disposal', async () => {
-    const gate = deferred<V2RetainedReceiveInventory>()
+    const gate = deferred<RetainedReceiveInventory>()
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     receive.retainedGate = gate.promise
     const traces: string[] = []
-    const controller = new V2ReceiverController(
-      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+    const controller = new ReceiverController(
+      new FakeGateway([]) as unknown as BrowserReceiverGateway,
       { receive, trace: traceSource(event => traces.push(event.name)) },
     )
 

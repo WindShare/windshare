@@ -1,4 +1,4 @@
-import type { V2CapturedLocation } from './location'
+import type { CapturedLocation } from './location'
 
 export const TRACE_QUERY_PARAMETER = 'trace'
 const TRACE_QUERY_ENABLED = '1'
@@ -18,7 +18,7 @@ export class BrowserCapabilityIntake {
     this.#startDiagnostics = startDiagnostics
   }
 
-  accept(captured: V2CapturedLocation): void {
+  accept(captured: CapturedLocation): void {
     if (captured.diagnosticsRequested === true ||
         (captured.capabilityInput !== null && requestsBrowserTrace(captured.capabilityInput))) {
       this.#startDiagnostics()

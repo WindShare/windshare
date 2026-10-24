@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import type { CatalogEntry } from '../../src/catalog/records'
+import { SelectionPolicy } from '../../src/catalog/selection'
 
 const MILLION_SIBLING_ENTRIES = 1_000_000
 
-function directory(id: string, name = id): V2CatalogEntry {
+function directory(id: string, name = id): CatalogEntry {
   return { kind: 'directory', id: identity(id), idText: id, name }
 }
 
-function file(id: string, name = id): V2CatalogEntry {
+function file(id: string, name = id): CatalogEntry {
   return { kind: 'file', id: identity(id), idText: id, name, expectedSize: 1n }
 }
 
@@ -21,7 +21,7 @@ function identity(seed: string): Uint8Array<ArrayBuffer> {
 
 describe('v2 progressive selection rules', () => {
   it('applies a directory decision to descendants discovered later', () => {
-    const policy = new V2SelectionPolicy(true)
+    const policy = new SelectionPolicy(true)
     const folder = directory('folder')
     policy.toggle(folder, ['root'])
 
@@ -31,7 +31,7 @@ describe('v2 progressive selection rules', () => {
   })
 
   it('retains a selected known descendant below an unselected directory', () => {
-    const policy = new V2SelectionPolicy(true)
+    const policy = new SelectionPolicy(true)
     const folder = directory('folder')
     const child = file('child')
     policy.toggle(folder, ['root'])
@@ -42,7 +42,7 @@ describe('v2 progressive selection rules', () => {
   })
 
   it('does not treat caller-captured ancestry as pruning authority for opaque targets', () => {
-    const policy = new V2SelectionPolicy(true)
+    const policy = new SelectionPolicy(true)
     const excluded = directory('excluded')
     const selected = file('selected')
     policy.toggle(excluded, ['root'])
@@ -53,7 +53,7 @@ describe('v2 progressive selection rules', () => {
   })
 
   it('selects an entire mixed subtree and discards all descendant overrides', () => {
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     const parent = directory('parent')
     const child = directory('child')
     policy.set(parent, ['root'], true)
@@ -75,7 +75,7 @@ describe('v2 progressive selection rules', () => {
   })
 
   it('summarizes selections and exclusions across pages without counting inherited descendants twice', () => {
-    const policy = new V2SelectionPolicy(false)
+    const policy = new SelectionPolicy(false)
     policy.set(directory('parent'), ['root'], true)
     policy.set(file('selected'), ['root', 'parent'], true)
     policy.set(file('excluded'), ['root', 'parent'], false)
@@ -86,7 +86,7 @@ describe('v2 progressive selection rules', () => {
   })
 
   it('retains only explicit rules while evaluating a million sibling identities', () => {
-    const policy = new V2SelectionPolicy(true)
+    const policy = new SelectionPolicy(true)
     let selectedSiblings = 0
     for (let index = 0; index < MILLION_SIBLING_ENTRIES; index += 1) {
       if (policy.selected(file(`sibling-${index}`), ['root'])) selectedSiblings += 1

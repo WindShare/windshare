@@ -11,11 +11,11 @@ import { decodeStoredReceiveLifecycleState } from '../../../output/workspace/sta
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import type { OutputDiagnosticsPorts } from '../../../output/diagnostics'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
-import type { V2RetainedReceiveOperation } from '../../receive/contracts'
+import type { RetainedReceiveOperation } from '../../receive/contracts'
 import { inspectBrowserStagingStorage } from '../../../output/capability/staging-storage'
 import { browserFolderDeliveryTrace } from '../../../output/browser-delivery/trace'
 
-type LocalFolderReference = Pick<V2RetainedReceiveOperation, 'operationId' | 'receiveIntentDigest' | 'lifecycleGeneration'>
+type LocalFolderReference = Pick<RetainedReceiveOperation, 'operationId' | 'receiveIntentDigest' | 'lifecycleGeneration'>
 
 /** Local delivery takes fresh storage authority without starting a receive lifecycle or contacting the sender. */
 export async function runRetainedBrowserFolderAction(

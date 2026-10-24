@@ -10,10 +10,10 @@ import (
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type processPhaseLanes struct{ *receiverTestLanes }
@@ -33,7 +33,7 @@ func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *te
 	native := newTestNative(t, nativepeer.Config{Admission: gate, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), ObservationCapacity: 64})
 	defer native.Close(context.Background())
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
-	var blockers []*provider.Connection
+	var blockers []*pionpeer.Connection
 	for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 		pc, err := native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: binding})
 		if err != nil {

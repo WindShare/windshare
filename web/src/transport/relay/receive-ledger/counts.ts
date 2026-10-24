@@ -1,13 +1,13 @@
 import {
-  V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES, V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES,
-} from '../v2-protocol'
+  RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES, RELAY_OPAQUE_ROUTE_HEADER_BYTES,
+} from '../protocol'
 import { ReceiveLedgerError } from './types'
 import { type ReceiveCounts } from '../../../contracts/relay-delivery-observation'
 
 export const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
 export const ZERO_COUNTS: ReceiveCounts = Object.freeze({ frames: 0n, encodedBytes: 0n })
-const MIN_ENVELOPE_BYTES = V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES + 1
-const MAX_ENVELOPE_BYTES = V2_RELAY_OPAQUE_ROUTE_HEADER_BYTES + V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES
+const MIN_ENVELOPE_BYTES = RELAY_OPAQUE_ROUTE_HEADER_BYTES + 1
+const MAX_ENVELOPE_BYTES = RELAY_OPAQUE_ROUTE_HEADER_BYTES + RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES
 
 export function positiveUint64(value: bigint): boolean {
   return typeof value === 'bigint' && value > 0n && value <= MAX_UINT64

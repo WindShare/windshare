@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { V2ReceiverController } from '../v2-controller'
-import type { V2ReceiverSnapshot } from '../v2-model'
+import type { ReceiverController } from '../controller'
+import type { ReceiverSnapshot } from '../model'
 import { Downloads } from '../downloads/Downloads'
 import type { TaskPresentation } from '../tasks'
 import { taskActions } from './task-actions'
@@ -8,8 +8,8 @@ import { SourceRevisionFailuresPanel } from '../source-replacement/SourceRevisio
 
 export function TaskSourceDetails({ operationId, snapshot, controller }: {
   readonly operationId: string
-  readonly snapshot: V2ReceiverSnapshot
-  readonly controller: V2ReceiverController
+  readonly snapshot: ReceiverSnapshot
+  readonly controller: ReceiverController
 }) {
   const operation = snapshot.retained.operations.find(candidate => candidate.operationId === operationId)
   return operation === undefined ? null : <SourceRevisionFailuresPanel operation={operation}
@@ -19,8 +19,8 @@ export function TaskSourceDetails({ operationId, snapshot, controller }: {
 
 export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDescription, open, onOpenChange }: {
   readonly tasks: readonly TaskPresentation[]
-  readonly snapshot: V2ReceiverSnapshot
-  readonly controller: V2ReceiverController
+  readonly snapshot: ReceiverSnapshot
+  readonly controller: ReceiverController
   readonly entryLabel?: string
   readonly entryDescription?: string
   readonly open?: boolean

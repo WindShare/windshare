@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { encodeTurnControl, decodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
 import { TurnReceiver } from '../../src/connectivity/turn/receiver'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
+import { createProtocolSessionIdentity } from '../../src/session/identities'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { browserPeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
 
 afterEach(() => vi.useRealTimers())
 
@@ -17,11 +17,11 @@ it('replaces TURN inventory by revision while preserving demand and retiring wit
   const profilesChanged = vi.fn()
   const observe = vi.fn()
   const session = {
-    protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
+    protocolSessionIdentity: createProtocolSessionIdentity(header.sessionId),
     subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
     sendTurnControl: async (body: Uint8Array) => { sent.push(decodeTurnControl(body)) },
-  } as unknown as V2ReceiverSessionRuntime
-  const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
+  } as unknown as ReceiverSessionRuntime
+  const receiver = new TurnReceiver({ session, clock: browserPeerRecoveryClock, enabled: () => true,
     open: (value) => opened.push(value), retire: async (path) => { retired.push(path) }, profilesChanged, observe })
   receiver.setDemand(true)
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))

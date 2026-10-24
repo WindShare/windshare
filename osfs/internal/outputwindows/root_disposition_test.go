@@ -10,7 +10,7 @@ import (
 )
 
 func TestWindowsOpenReportsExactRootDisposition(t *testing.T) {
-	base := windowsV3NativeTestTempDir(t)
+	base := windowsNativeTestTempDir(t)
 
 	existing, err := Open(base, true)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestWindowsOpenReportsExactRootDisposition(t *testing.T) {
 }
 
 func TestWindowsPrivatePublicationRootReportsExactDisposition(t *testing.T) {
-	target := filepath.Join(windowsV3NativeTestTempDir(t), "private-output")
+	target := filepath.Join(windowsNativeTestTempDir(t), "private-output")
 
 	created, err := OpenPrivatePublicationRoot(target, true)
 	if err != nil {

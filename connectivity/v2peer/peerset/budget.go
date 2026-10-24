@@ -3,11 +3,11 @@
 package peerset
 
 import (
-	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/nativepeer"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/connectivity/nativepeer"
 )
 
 const (
@@ -76,73 +76,6 @@ func (b *Budget) reserve(now time.Time) (func(time.Duration), time.Duration) {
 			b.mu.Unlock()
 		})
 	}, 0
-}
-
-// Capacity is injected by the application and is FIFO across paths and receivers.
-// An admitted lane releases its
-// attempt slot while retaining its separate provider/socket ownership.
-type Capacity struct {
-	mu            sync.Mutex
-	limit, active int
-	queue         []*capacityWaiter
-}
-type capacityWaiter struct {
-	ready   chan struct{}
-	granted bool
-}
-
-func NewCapacity(limit int) (*Capacity, error) {
-	if limit <= 0 {
-		return nil, ErrConfig
-	}
-	return &Capacity{limit: limit}, nil
-}
-
-func (c *Capacity) acquire(ctx context.Context) (func(), error) {
-	waiter := &capacityWaiter{ready: make(chan struct{})}
-	c.mu.Lock()
-	c.queue = append(c.queue, waiter)
-	c.dispatchLocked()
-	c.mu.Unlock()
-	select {
-	case <-waiter.ready:
-	case <-ctx.Done():
-		c.mu.Lock()
-		if !waiter.granted {
-			for i, item := range c.queue {
-				if item == waiter {
-					c.queue = append(c.queue[:i], c.queue[i+1:]...)
-					break
-				}
-			}
-		} else {
-			c.active--
-			c.dispatchLocked()
-		}
-		c.mu.Unlock()
-		return nil, context.Cause(ctx)
-	}
-	var once sync.Once
-	return func() { once.Do(func() { c.mu.Lock(); c.active--; c.dispatchLocked(); c.mu.Unlock() }) }, nil
-}
-
-func (c *Capacity) tryExplore() func() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.queue) > 0 || c.active >= c.limit-1 {
-		return nil
-	}
-	c.active++
-	return sync.OnceFunc(func() { c.mu.Lock(); c.active--; c.dispatchLocked(); c.mu.Unlock() })
-}
-func (c *Capacity) dispatchLocked() {
-	for c.active < c.limit && len(c.queue) > 0 {
-		waiter := c.queue[0]
-		c.queue = c.queue[1:]
-		c.active++
-		waiter.granted = true
-		close(waiter.ready)
-	}
 }
 
 // A reserved late opportunity charges both buckets immediately, but returns

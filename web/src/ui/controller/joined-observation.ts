@@ -1,15 +1,15 @@
-import type { V2CatalogScanProgress } from '../../catalog/v2-client'
+import type { CatalogScanProgress } from '../../catalog/client'
 import type { ReceiverConnectionSnapshot } from '../../receiver/connection-state'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
-import type { V2JoinedBrowserShare } from '../../application/browser-share/gateway'
+import type { JoinedBrowserShare } from '../../application/browser-share/gateway'
 
 interface JoinedShareObservationOptions {
-  readonly ownsJoinedShare: (joined: V2JoinedBrowserShare) => boolean
+  readonly ownsJoinedShare: (joined: JoinedBrowserShare) => boolean
   readonly isJoining: () => boolean
   readonly onConnection: (connection: ReceiverConnectionSnapshot) => void
   readonly onPathActivity: (pathActivity: ReceiverPathActivitySnapshot) => void
-  readonly onCatalogScanProgress: (joined: V2JoinedBrowserShare, progress: V2CatalogScanProgress) => void
-  readonly onProtocolGeneration: (joined: V2JoinedBrowserShare) => void
+  readonly onCatalogScanProgress: (joined: JoinedBrowserShare, progress: CatalogScanProgress) => void
+  readonly onProtocolGeneration: (joined: JoinedBrowserShare) => void
 }
 
 export class JoinedShareObservation {
@@ -23,7 +23,7 @@ export class JoinedShareObservation {
     this.#options = options
   }
 
-  observe(joined: V2JoinedBrowserShare): void {
+  observe(joined: JoinedBrowserShare): void {
     this.suspendForJoin()
     this.#unsubscribeConnection?.()
     this.#unsubscribeConnection = joined.subscribeConnection(connection => {

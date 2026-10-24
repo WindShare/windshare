@@ -756,7 +756,7 @@ func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
 	}
 }
 
-type decodedRecordV4 struct {
+type decodedRecord struct {
 	SchemaVersion   int
 	Sequence        uint64
 	Time            string
@@ -774,7 +774,7 @@ type decodedRecordV4 struct {
 	SchemaLimited   *bool
 }
 
-func (record *decodedRecordV4) UnmarshalJSON(data []byte) error {
+func (record *decodedRecord) UnmarshalJSON(data []byte) error {
 	var envelope struct {
 		SchemaVersion int                 `json:"schema_version"`
 		Sequence      string              `json:"sequence"`
@@ -800,7 +800,7 @@ func (record *decodedRecordV4) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*record = decodedRecordV4{
+	*record = decodedRecord{
 		SchemaVersion: envelope.SchemaVersion,
 		Sequence:      sequence,
 		Time:          envelope.Time,
@@ -824,7 +824,7 @@ func (record *decodedRecordV4) UnmarshalJSON(data []byte) error {
 		}
 		record.VerifiedBytes = new(payload.Progress.VerifiedBytes)
 	case "trace_summary":
-		var payload traceSummaryPayloadV4
+		var payload traceSummaryPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return err
 		}
@@ -836,12 +836,12 @@ func (record *decodedRecordV4) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func decodeRecords(t *testing.T, contents []byte) []decodedRecordV4 {
+func decodeRecords(t *testing.T, contents []byte) []decodedRecord {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(contents))
-	var records []decodedRecordV4
+	var records []decodedRecord
 	for {
-		var record decodedRecordV4
+		var record decodedRecord
 		if err := decoder.Decode(&record); err != nil {
 			if errors.Is(err, io.EOF) {
 				return records

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockBroker, type V2BlockBrokerOptions } from '../../src/content/v2-broker'
-import { V2LaneSet, type V2BlockDemand } from '../../src/content/v2-lane-set'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
+import { BlockBroker, type BlockBrokerOptions } from '../../src/content/broker'
+import { LaneSet, type BlockDemand } from '../../src/content/lane-set'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
 import { IMMEDIATE_BLOCK_CONSUMER } from '../../src/content/scheduling/range-window'
 
 const MIB = 1024 * 1024
 const BLOCK_BYTES = 4 * MIB
-const routes: V2BlockRouteEligibility = {
+const routes: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive() {}, subscribe: () => () => {},
 }
 const descriptor = {
@@ -17,18 +17,18 @@ const descriptor = {
   exactSize: BigInt(2 * BLOCK_BYTES),
   geometry: new FileGeometry(BigInt(2 * BLOCK_BYTES), BigInt(BLOCK_BYTES)),
 }
-const demand = (index = 0n): V2BlockDemand => ({
+const demand = (index = 0n): BlockDemand => ({
   descriptor, leaseId: new Uint8Array(16), localBlockIndex: index,
 })
-function setup(options: V2BlockBrokerOptions) {
-  const lanes = new V2LaneSet({ now: () => 1 })
+function setup(options: BlockBrokerOptions) {
+  const lanes = new LaneSet({ now: () => 1 })
   const calls: bigint[] = []
   lanes.add({ id: 1, fetchBlock: async input => {
     calls.push(input.localBlockIndex)
     return { descriptor: input.descriptor, localBlockIndex: input.localBlockIndex,
       data: new Uint8Array(BLOCK_BYTES).fill(Number(input.localBlockIndex) + 1) }
   } }, 'direct')
-  const broker = new V2BlockBroker(lanes, options)
+  const broker = new BlockBroker(lanes, options)
   return { broker, calls, close: () => { broker.close(); lanes.close() } }
 }
 async function flush() {

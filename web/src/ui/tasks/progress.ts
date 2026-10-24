@@ -1,4 +1,4 @@
-import { formatBytes } from '../v2-progress-presentation'
+import { formatBytes } from '../progress-presentation'
 import type { TaskFacts, TaskProgressPresentation } from './model'
 import { isTerminalLifecycleState } from '../../transfer/lifecycle/state'
 

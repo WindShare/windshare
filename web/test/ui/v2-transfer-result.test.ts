@@ -4,7 +4,7 @@ import type {
   CompatibleNameRepairSummary,
 } from '../../src/transfer/lifecycle/name-repair'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
-import { presentTransferResult } from '../../src/ui/v2-transfer-result'
+import { presentTransferResult } from '../../src/ui/transfer-result'
 
 describe('transfer result presentation', () => {
   it('uses source, local checkpoint, collision, then residual headline priority without losing counts', () => {

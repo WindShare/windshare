@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReceiverPathActivity, RECENT_CONTENT_WINDOW_MILLISECONDS, type ReceiverPathActivitySnapshot } from '../../src/receiver/path-activity'
-import type { V2ContentLaneAdmissionObservation } from '../../src/connectivity/v2-receiver-policy'
-import type { V2BlockRouteObservation } from '../../src/content/v2-lane-set'
+import type { ContentLaneAdmissionObservation } from '../../src/connectivity/receiver-policy'
+import type { BlockRouteObservation } from '../../src/content/lane-set'
 import { connectedChannelCount, presentReceiverPathActivity } from '../../src/ui/connection/path-presentation'
 
 afterEach(() => vi.useRealTimers())
@@ -10,7 +10,7 @@ const DIRECT = { laneId: 3, laneEpoch: 2, route: 'direct' } as const
 const RELAY = { laneId: 1, laneEpoch: 0, route: 'application-relay' } as const
 const TURN = { laneId: 5, laneEpoch: 1, route: 'turn' } as const
 
-function fetched(lane: V2ContentLaneAdmissionObservation, usefulBytes = 12): V2BlockRouteObservation {
+function fetched(lane: ContentLaneAdmissionObservation, usefulBytes = 12): BlockRouteObservation {
   return { ...lane, dispatchSequence: 1, fileId: 'file', localBlockIndex: 0n, usefulBytes }
 }
 

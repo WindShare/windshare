@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { projectDraft, scopeSelection, shareIdentityFromRoot } from '../../src/ui/draft/model'
-import type { V2BrowsePage } from '../../src/application/browser-share/gateway'
+import type { BrowsePage } from '../../src/application/browser-share/gateway'
 
 const id = (value: number) => new Uint8Array(16).fill(value)
 const root = { id: id(1), idText: encodeBase64Url(id(1)), name: 'Shared files', path: [], ancestry: [encodeBase64Url(id(1))] }
 const folder = { kind: 'directory' as const, id: id(2), idText: encodeBase64Url(id(2)), name: 'Photos' }
 const photo = { kind: 'file' as const, id: id(3), idText: encodeBase64Url(id(3)), name: 'portrait.jpg', expectedSize: 512n }
-const page = (entries: V2BrowsePage['entries'], facts: Partial<V2BrowsePage> = {}): V2BrowsePage =>
+const page = (entries: BrowsePage['entries'], facts: Partial<BrowsePage> = {}): BrowsePage =>
   ({ directory: root, pageIndex: 0, pageCount: 1, entryCount: entries.length, omittedCount: 0n, entries, ...facts })
 
 describe('authenticated share identity and selection draft', () => {
@@ -33,7 +33,7 @@ describe('authenticated share identity and selection draft', () => {
   })
 
   it('keeps explicit emptiness and cross-page exclusions independent of visible file totals', () => {
-    const selection = new V2SelectionPolicy(false)
+    const selection = new SelectionPolicy(false)
     selection.set(folder, root.ancestry, true)
     selection.set(photo, [...root.ancestry, folder.idText], false)
     expect(projectDraft('selection', root, selection, null)).toMatchObject({

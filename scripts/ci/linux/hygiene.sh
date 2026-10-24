@@ -70,6 +70,12 @@ go test ./scripts/ci/_coreboundary
 echo "-- Core production dependency boundary"
 go run ./scripts/ci/_coreboundary
 
+echo "-- Transport dependency boundary tests"
+go test ./scripts/ci/_transportboundary
+
+echo "-- Transport dependency boundary"
+go run ./scripts/ci/_transportboundary
+
 echo "-- Engine application dependency boundary tests"
 go test ./scripts/ci/_engineboundary
 

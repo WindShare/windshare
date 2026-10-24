@@ -1,9 +1,9 @@
-import { V2RemoteRevisionError } from '../../src/content/v2-session-services'
+import { RemoteRevisionError } from '../../src/content/session-services'
 import { createFailureIdentity } from '../../src/diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../src/output/browser/indexeddb-resume-state'
 import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { createBrowserReceiveOperationMutationPort } from '../../src/output/resume/reopen-authority'
-import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
+import { normalizeFileTransferFailure } from '../../src/transfer/job/failures'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
 import { persistentWorkspaceInterruption } from '../../src/output/execution/persistent-evidence'
 import { PersistentSettlementCut } from '../../src/output/execution/persistent-settlement-cut'
@@ -41,7 +41,7 @@ export async function invalidateRetainedOriginal(fixture: DurableReceiveFixture)
       })
     } catch (error) { failure = error }
     if (failure === undefined) throw new Error('Changed source unexpectedly opened')
-    const normalized = normalizeV2FileTransferFailure(failure)
+    const normalized = normalizeFileTransferFailure(failure)
     const packaging = new WorkspaceReceivePackaging({
       windowPort: window, intent: operation.intent, repository: operation.repository,
       namespace: operation.namespace, stages: operation.stages,
@@ -100,8 +100,8 @@ function mutationPort(fixture: DurableReceiveFixture) {
   })
 }
 
-function sourceFailure(): V2RemoteRevisionError {
-  return new V2RemoteRevisionError({
+function sourceFailure(): RemoteRevisionError {
+  return new RemoteRevisionError({
     requestKind: 'open_revisions', content: { scope: 'revision', code: SOURCE_STALE, retryable: false },
     correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', new Uint8Array(16).fill(1)),

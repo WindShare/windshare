@@ -1,5 +1,5 @@
-import type { V2OutputSettlementDeadline } from '../../../transfer/settlement/v2-output'
-import type { V2ActiveReceiveControl } from '../actions'
+import type { OutputSettlementDeadline } from '../../../transfer/settlement/output'
+import type { ActiveReceiveControl } from '../actions'
 import type { ReceiveRuntimeState } from '../state'
 
 export interface ReceiveSettlementDeadlineOptions {
@@ -12,23 +12,23 @@ export interface ReceiveSettlementDeadlineOptions {
  * Expiry changes only what the user waits for; the transfer still owns the original
  * terminal promise and therefore cannot publish a fabricated paused/stopped state.
  */
-export class ReceiveSettlementDeadline implements V2OutputSettlementDeadline {
+export class ReceiveSettlementDeadline implements OutputSettlementDeadline {
   readonly #state: ReceiveRuntimeState
   readonly #operationIsCurrent: () => boolean
-  #control: V2ActiveReceiveControl | undefined
+  #control: ActiveReceiveControl | undefined
 
   constructor(options: ReceiveSettlementDeadlineOptions) {
     this.#state = options.state
     this.#operationIsCurrent = options.operationIsCurrent
   }
 
-  begin(control: V2ActiveReceiveControl): void {
+  begin(control: ActiveReceiveControl): void {
     this.#control = control
     if (!this.#operationIsCurrent()) return
     this.#state.updateReceiveInterruption(Object.freeze({ operation: control, phase: 'waiting' }))
   }
 
-  cancel(control: V2ActiveReceiveControl): void {
+  cancel(control: ActiveReceiveControl): void {
     if (this.#control !== control) return
     this.#control = undefined
     if (this.#operationIsCurrent()) this.#state.updateReceiveInterruption(null)

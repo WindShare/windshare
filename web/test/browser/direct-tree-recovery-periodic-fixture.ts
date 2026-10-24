@@ -1,4 +1,4 @@
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import type { BlockRangeReader } from '../../src/content/broker'
 import {
   IndexedDbFileCheckpointRepository,
   IndexedDbReceiveOperationRepository,
@@ -53,7 +53,7 @@ import {
   type DirectTreeFileProjection,
 } from '../../src/transfer/job/coordinate/direct-tree'
 import type { PendingFile } from '../../src/transfer/job/contract'
-import { transferV2File } from '../../src/transfer/job/file-transfer'
+import { transferFile } from '../../src/transfer/job/file-transfer'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
@@ -345,7 +345,7 @@ export async function recoverDirectTreeAfterProcessTermination(
     } as never
     const broker = observeRangeRequests(readers.broker, pathsByFileId, rangeRequests)
     for (const file of FILES) {
-      await transferV2File({
+      await transferFile({
         descriptor,
         revisions: readers.revisions,
         broker,
@@ -594,13 +594,13 @@ function observeInitialDurableRanges(
   return Object.freeze({ ...execution, output })
 }
 
-type V2RangeReadParameters = Parameters<V2BlockRangeReader['readRange']>
+type V2RangeReadParameters = Parameters<BlockRangeReader['readRange']>
 
 function observeRangeRequests(
-  broker: V2BlockRangeReader,
+  broker: BlockRangeReader,
   pathsByFileId: ReadonlyMap<string, string>,
   requests: ContentRangeRequest[],
-): V2BlockRangeReader {
+): BlockRangeReader {
   return Object.freeze({
     readRange: async function* (
       descriptor: V2RangeReadParameters[0],

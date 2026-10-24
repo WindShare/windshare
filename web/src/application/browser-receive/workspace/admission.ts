@@ -1,7 +1,7 @@
 import { TargetOwnershipUnknownError } from '../../../output/persistent-tree/errors'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
 import type { WorkspaceUsage } from '../../receive/actions'
-import type { V2LifecycleMutation } from '../../receive/contracts'
+import type { LifecycleMutation } from '../../receive/contracts'
 import { isWorkspaceTerminal } from '../route-contract'
 
 export type WorkspaceReceiveAdmission =
@@ -18,7 +18,7 @@ type ExecutionAdmission =
 interface WorkspaceExecutionAdmissionSettlementPort {
   readonly operationId: string
   readonly currentLifecycle: () => Promise<ReceiveLifecycleState>
-  readonly retainStart: (reason?: unknown) => Promise<V2LifecycleMutation>
+  readonly retainStart: (reason?: unknown) => Promise<LifecycleMutation>
   readonly recordUnknown: () => Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>>
   readonly workspaceUsage: (state: ReceiveLifecycleState) => WorkspaceUsage | null
 }
@@ -26,7 +26,7 @@ interface WorkspaceExecutionAdmissionSettlementPort {
 export class WorkspaceExecutionAdmissionSettlement {
   readonly #port: WorkspaceExecutionAdmissionSettlementPort
   #admission: ExecutionAdmission
-  #settlement: Promise<V2LifecycleMutation> | undefined
+  #settlement: Promise<LifecycleMutation> | undefined
 
   constructor(port: WorkspaceExecutionAdmissionSettlementPort, origin: WorkspaceReceiveAdmission) {
     this.#port = port
@@ -47,7 +47,7 @@ export class WorkspaceExecutionAdmissionSettlement {
     this.#admission = { kind: 'admitted' }
   }
 
-  settle(reason?: unknown): Promise<V2LifecycleMutation> {
+  settle(reason?: unknown): Promise<LifecycleMutation> {
     this.#settlement ??= this.#settle(reason).catch(error => {
       this.#settlement = undefined
       throw error
@@ -55,7 +55,7 @@ export class WorkspaceExecutionAdmissionSettlement {
     return this.#settlement
   }
 
-  async #settle(reason?: unknown): Promise<V2LifecycleMutation> {
+  async #settle(reason?: unknown): Promise<LifecycleMutation> {
     if (reason instanceof TargetOwnershipUnknownError) {
       return this.#settleOwnershipUnknown(reason)
     }
@@ -76,11 +76,11 @@ export class WorkspaceExecutionAdmissionSettlement {
     return this.#mutation(await this.#port.recordUnknown())
   }
 
-  #mutation(lifecycle: ReceiveLifecycleState): V2LifecycleMutation {
+  #mutation(lifecycle: ReceiveLifecycleState): LifecycleMutation {
     return Object.freeze({ lifecycle, workspaceUsage: this.#port.workspaceUsage(lifecycle) })
   }
 
-  async #settleOwnershipUnknown(reason: TargetOwnershipUnknownError): Promise<V2LifecycleMutation> {
+  async #settleOwnershipUnknown(reason: TargetOwnershipUnknownError): Promise<LifecycleMutation> {
     if (reason.operationId !== null && reason.operationId !== this.#port.operationId) {
       throw new TypeError('Workspace admission ownership evidence belongs to another operation', {
         cause: reason,

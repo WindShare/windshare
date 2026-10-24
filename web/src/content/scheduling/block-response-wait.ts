@@ -1,17 +1,17 @@
-import { V2SessionRuntimeError } from '../../session/v2-runtime-types'
-import { V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS } from '../v2-flow'
+import { SessionRuntimeError } from '../../session/runtime-types'
+import { FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS } from '../flow'
 import { linkAbortSignals } from './deadlines'
 
 export type BlockReceivePhase = 'awaiting_first_fragment' | 'receiving_fragments'
 
-export class V2BlockInactivityTimeoutError extends V2SessionRuntimeError {
+export class BlockInactivityTimeoutError extends SessionRuntimeError {
   readonly phase: BlockReceivePhase
   readonly waitedMilliseconds: number
   readonly queueProgress: number
 
   constructor(phase: BlockReceivePhase, waitedMilliseconds: number, queueProgress: number, options?: ErrorOptions) {
     super('lane', `Block receive made no authenticated progress (${phase})`, options)
-    this.name = 'V2BlockInactivityTimeoutError'
+    this.name = 'BlockInactivityTimeoutError'
     this.phase = phase
     this.waitedMilliseconds = waitedMilliseconds
     this.queueProgress = queueProgress
@@ -34,7 +34,7 @@ export class BlockResponseWait {
   readonly #timeout = new AbortController()
   readonly #linked: ReturnType<typeof linkAbortSignals>
   readonly #started = performance.now()
-  #deadline = this.#started + V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
+  #deadline = this.#started + FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
   #phase: BlockReceivePhase = 'awaiting_first_fragment'
   #queueProgress = 0
   #reading = true
@@ -43,7 +43,7 @@ export class BlockResponseWait {
   constructor(pending: Set<BlockResponseWait>, signal: AbortSignal) {
     this.#pending = pending
     this.#linked = linkAbortSignals(signal, this.#timeout.signal)
-    this.#timer = globalThis.setTimeout(() => this.#checkDeadline(), V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS)
+    this.#timer = globalThis.setTimeout(() => this.#checkDeadline(), FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS)
   }
 
   get signal(): AbortSignal { return this.#linked.signal }
@@ -54,13 +54,13 @@ export class BlockResponseWait {
     if (!this.#pending.has(this) || this.signal.aborted) return
     const now = performance.now()
     this.#phase = 'receiving_fragments'
-    this.#deadline = now + V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
+    this.#deadline = now + FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
     let preceding = true
     for (const wait of this.#pending) {
       if (wait === this) preceding = false
       else if (!preceding && wait.#phase === 'awaiting_first_fragment' &&
         !wait.signal.aborted && now < wait.#deadline) {
-        wait.#deadline = now + V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
+        wait.#deadline = now + FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS
         wait.#queueProgress += 1
       }
     }
@@ -91,8 +91,8 @@ export class BlockResponseWait {
     this.#timeout.abort(this.inactivityError())
   }
 
-  inactivityError(options?: ErrorOptions): V2BlockInactivityTimeoutError {
-    return new V2BlockInactivityTimeoutError(this.#phase, performance.now() - this.#started, this.#queueProgress, options)
+  inactivityError(options?: ErrorOptions): BlockInactivityTimeoutError {
+    return new BlockInactivityTimeoutError(this.#phase, performance.now() - this.#started, this.#queueProgress, options)
   }
 
   close(): void {

@@ -1,0 +1,177 @@
+import { taskActions } from './experience/task-actions'
+import { downloadScopeLabel, shareConnectionLabel } from './experience/share-presentation'
+import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import type { ReceiverController } from './controller'
+import { presentNewReceiveOperation } from './lifecycle-presentation'
+import { presentSavingActions } from './saving'
+import { SavingControls } from './saving/SavingControls'
+import { ShareContent } from './share-content/ShareContent'
+import { MediaPreview, type PreviewActions } from './share-content/MediaPreview'
+import { DetailSheet } from './controls/DetailSheet'
+import { TaskCard, TaskDetails } from './tasks/TaskView'
+import { composeTasks } from './experience/task-composition'
+import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
+import { ConnectionDetails } from './experience/ConnectionDetails'
+import { DiagnosticsEntry } from './diagnostics/DiagnosticsEntry'
+import { ConnectionRecovery } from './connection/ConnectionRecovery'
+import { connectedChannelCount } from './connection/path-presentation'
+import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
+import { ReceiverFold } from './receiver-presentation/ReceiverFold'
+import { WindShareMark } from './brand/WindShareMark'
+import { isReceiveOutputDelivered } from '../application/receive/completion'
+
+function KeyForm({ controller }: { readonly controller: ReceiverController }) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const input = event.currentTarget.elements.namedItem('capability-key')
+    if (!(input instanceof HTMLInputElement)) return
+    const key = input.value
+    input.value = ''
+    controller.submitKey(key)
+  }
+  return <form className="key-form" onSubmit={submit}>
+    <label htmlFor="capability-key">Separate key</label>
+    <p id="key-help">Paste the key or the complete WindShare link to open this share.</p>
+    <div className="key-entry"><input id="capability-key" name="capability-key" type="password"
+      autoComplete="off" spellCheck={false} aria-describedby="key-help" required autoFocus />
+      <button className="primary-action" type="submit">Open share</button></div>
+  </form>
+}
+
+export function ReceiverApp({ controller }: { readonly controller: ReceiverController }) {
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+  const [details, setDetails] = useState<'connection' | 'task' | null>(null)
+  const [downloadsOpen, setDownloadsOpen] = useState(false)
+  const previewInvoker = useRef<HTMLButtonElement>(null)
+  const detailsInvoker = useRef<HTMLButtonElement>(null)
+  const { current, tasks } = composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action),
+    action => controller.activeLifecycleActionAdmission(action))
+  const actions = taskActions(controller, snapshot)
+  const openDetails = (next: 'connection' | 'task', invoker: HTMLButtonElement) => {
+    detailsInvoker.current = invoker
+    controller.recordExperienceIntent('open-' + next + '-details')
+    setDetails(next)
+  }
+  const closeDetails = () => {
+    controller.recordExperienceIntent('close-details')
+    setDetails(null)
+  }
+  const share = snapshot.share
+  const single = share !== null && share.kind !== 'browser' ? share : null
+  const singleResult = single !== null && (current?.stage === 'saved' || current?.stage === 'handed-to-browser') &&
+    snapshot.output.activationPresentation === null
+  const actionLabel = singleResult ? 'Download from sender again' : downloadScopeLabel(share, snapshot.draft)
+  const saving = presentSavingActions({
+    offers: snapshot.output.offers,
+    actionLabel,
+    disabledReason: snapshot.draft.empty ? 'Select items to download' : snapshot.startAdmission.reason,
+  })
+  const previewActions: PreviewActions = {
+    close: () => controller.cancelPreview(),
+    seek: seconds => controller.seekPreview(seconds),
+    presented: id => controller.previewMediaPresented(id),
+    failed: id => controller.previewMediaFailed(id),
+  }
+  const delivered = isReceiveOutputDelivered(snapshot.output.lifecycle)
+  const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle })
+  const matching = current === null && share !== null ? tasks.find(task => snapshot.retained.operations.some(operation =>
+    operation.operationId === task.operationId && operation.shareInstance === share?.shareInstance && task.primaryAction !== null)) : undefined
+  const hasContent = share !== null || snapshot.breadcrumbs.length > 0
+  // Result actions retain their operation identity; choosing a save route starts a separate receive.
+  const additionalReceive = singleResult && current !== null && current.primaryAction !== null
+  const savingControls = <SavingControls model={saving} activation={snapshot.output.activationPresentation}
+    currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
+      ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
+    actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
+    retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
+    onIntent={action => controller.recordExperienceIntent(action)} />
+
+  return <main className={`receiver-shell receiver-content-${share?.kind ?? 'pending'}`}>
+    <header className="receiver-header">
+      <a className="brand" href="/" aria-label="WindShare home"><WindShareMark size={36} /><span>WindShare</span></a>
+      <div className="receiver-header-actions">
+        <TaskDownloads tasks={tasks} snapshot={snapshot} controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
+      </div>
+    </header>
+    <div className="share-workspace">
+      <div className="share-heading">
+        <div className="share-heading-copy">
+          <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
+          <div className="share-metadata">
+            <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={event => openDetails('connection', event.currentTarget)}>
+              <ReceiverIcon name="connection" />
+              {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
+              {snapshot.pathActivity.lanes.length > 0 && <span>· {connectedChannelCount(snapshot.pathActivity)}</span>}
+            </button>
+            <button className="encryption-note" type="button" onClick={event => openDetails('connection', event.currentTarget)}>
+              <ReceiverIcon name="lock" />Encrypted
+            </button>
+          </div>
+        </div>
+        <ReceiverFold compact={single?.kind === 'photo' || single?.kind === 'video'} />
+      </div>
+      {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error} <DiagnosticsEntry label="Export diagnostics" /></div>}
+      {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
+      {!hasContent && snapshot.phase === 'joining' && <div className="share-loading">
+        <p role="status">{snapshot.status}</p>
+        {snapshot.connection.kind === 'idle' && snapshot.connection.join === 'waiting-for-choice' && <>
+          <button type="button" onClick={() => controller.requestReconnect()}>Retry now</button>
+          <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
+        </>}
+        <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+      </div>}
+      {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery
+        activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
+      {hasContent && <ShareContent share={share} preview={snapshot.preview} previewActions={previewActions} explorer={{ rows: snapshot.rows, breadcrumbs: snapshot.breadcrumbs,
+        pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
+        browse: snapshot.browse, draft: snapshot.draft, actions: {
+          openDirectory: id => controller.openDirectory(id), openBreadcrumb: index => controller.openBreadcrumb(index),
+          showPage: page => controller.showPage(page), preview: (id, invoker) => {
+            previewInvoker.current = invoker
+            controller.previewFile(id)
+          },
+          toggle: id => controller.toggleSelection(id), enterSelection: () => controller.enterSelectionMode(),
+          exitSelection: () => controller.exitSelectionMode(), selectPage: () => controller.selectPage(),
+          clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
+        } }} />}
+      {hasContent && !additionalReceive && savingControls}
+      {matching !== undefined && <div className="continuation-suggestion">
+        <span>Continue {matching.objectLabel}</span>
+        <button type="button" onClick={() => { if (matching.primaryAction !== null) actions.perform(matching.primaryAction) }}>
+          {matching.primaryAction?.label}
+        </button>
+      </div>}
+      {current !== null && <TaskCard task={current} actions={actions} onDetails={invoker => openDetails('task', invoker)}
+        busy={snapshot.retained.pending !== null} />}
+      {hasContent && additionalReceive && <details className="new-operation">
+        <summary>{actionLabel}</summary>{savingControls}
+      </details>}
+      {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>Start another download</button></p>}
+      {newOperation !== null && <details className="new-operation">
+        <summary>{newOperation.title}</summary><p>{newOperation.description}</p>
+        <button type="button" onClick={() => controller.startNewReceiveOperation()}>{newOperation.actionLabel}</button>
+      </details>}
+    </div>
+    {single === null && snapshot.preview.state !== 'idle' && <DetailSheet title={snapshot.preview.name}
+      onClose={previewActions.close} returnFocus={previewInvoker} className="preview-sheet">
+      <MediaPreview preview={snapshot.preview} actions={previewActions} />
+    </DetailSheet>}
+    {details === 'connection' && <DetailSheet title="Encryption and connection" onClose={closeDetails} returnFocus={detailsInvoker}>
+      <ConnectionDetails status={shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)} path={snapshot.pathActivity} />
+    </DetailSheet>}
+    {details === 'task' && current !== null && <DetailSheet title={current.objectLabel} onClose={closeDetails} returnFocus={detailsInvoker}>
+      <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
+        <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
+        {controller.canRetainCurrentOperation && <div className="retained-handoff">
+          <p>Keep this paused task in Downloads to continue later or save its complete received files.</p>
+          <button type="button" onClick={async () => {
+            if (await controller.retainCurrentOperation()) {
+              closeDetails()
+              setDownloadsOpen(true)
+            }
+          }}>Keep progress in Downloads</button>
+        </div>}
+      </TaskDetails>
+    </DetailSheet>}
+  </main>
+}

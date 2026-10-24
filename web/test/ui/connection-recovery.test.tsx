@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
+import { ReceiverApp } from '../../src/ui/ReceiverApp'
 import { composeTasks } from '../../src/ui/experience/task-composition'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2BrowserReceiverGateway, V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { ReceiverController } from '../../src/ui/controller'
+import type { BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import { runInitialJoin, type InitialJoinOptions } from '../../src/receiver/initial-join'
 import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 import { FakeReceiveComposition, FakeJoinedShare, WORKSPACE_ENVIRONMENT, controllerFor,
@@ -21,10 +21,10 @@ it('extends initial waiting through the existing gateway call and releases it wh
       clock: { now: () => now, sleep: async delay => { now += delay } },
       connect: async () => {
         if (!available) throw new Error('Sender is offline')
-        return joined as unknown as V2JoinedBrowserShare
+        return joined as unknown as JoinedBrowserShare
       }, close: value => value.close(),
     })) }
-  const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, { receive })
+  const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, { receive })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
   await waitFor(() => controller.getSnapshot().connection.kind === 'idle' &&
     'join' in controller.getSnapshot().connection && controller.getSnapshot().status.includes('temporarily unreachable'))
@@ -37,7 +37,7 @@ it('extends initial waiting through the existing gateway call and releases it wh
   await controller.dispose()
 
   available = false
-  const cancelled = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, { receive })
+  const cancelled = new ReceiverController(gateway as unknown as BrowserReceiverGateway, { receive })
   cancelled.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
   await waitFor(() => cancelled.getSnapshot().status.includes('temporarily unreachable'))
   const attempts = gateway.join.mock.calls.length
@@ -101,12 +101,12 @@ it('keeps a paused task paused when the connection returns or the user requests 
 it('offers bounded initial waiting choices and same-page recovery controls', () => {
   const waiting = experienceSnapshot({ phase: 'joining', connection: { kind: 'idle', join: 'waiting-for-choice' },
     status: 'The sender is temporarily unreachable. The link may still be valid.' })
-  const html = renderToString(<V2ReceiverApp controller={experienceController(waiting)} />)
+  const html = renderToString(<ReceiverApp controller={experienceController(waiting)} />)
   expect(html).toContain('Retry now')
   expect(html).toContain('Continue waiting')
   expect(html).toContain('Cancel')
   expect(html).toContain('The link may still be valid')
-  const reconnecting = renderToString(<V2ReceiverApp controller={experienceController(experienceSnapshot({
+  const reconnecting = renderToString(<ReceiverApp controller={experienceController(experienceSnapshot({
     phase: 'browsing', connection: { kind: 'reconnecting', activity: { kind: 'waiting', reason: 'backoff', retryAt: 30_000 } },
   }))} />)
   expect(reconnecting).toContain('Retry now')

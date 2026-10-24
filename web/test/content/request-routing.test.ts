@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { LaneRequests, type LaneRequestKind, type RequestSchedulingObservation } from '../../src/content/scheduling/requests'
 import { LanePerformance } from '../../src/content/scheduling/performance'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
 
 const DIRECT_ID = 2
 const RELAY_ID = 1
 const DIRECT_MS = 2
 const RELAY_MS = 1000
 const CONTENT_BLOCK_BYTES = 1024
-const ALL_ROUTES: V2BlockRouteEligibility = {
+const ALL_ROUTES: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
 }
 function pending<T>() {
@@ -128,7 +128,7 @@ describe('latency-sensitive request routing', () => {
     requests.remove(DIRECT_ID, 1)
     requests.add({ id: DIRECT_ID, epoch: 2, route: 'direct' })
     expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(DIRECT_ID)
-    deferred.reject(new V2SessionRuntimeError('lane', 'old lane closed'))
+    deferred.reject(new SessionRuntimeError('lane', 'old lane closed'))
     await expect(first).rejects.toMatchObject({ scope: 'lane' })
     expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(DIRECT_ID)
     requests.close()
@@ -174,7 +174,7 @@ describe('latency-sensitive request routing', () => {
   it('releases failed reservations and never duplicates an uncertain lease-creating operation', async () => {
     const requests = router()
     let calls = 0
-    const failure = new V2SessionRuntimeError('lane', 'send uncertain')
+    const failure = new SessionRuntimeError('lane', 'send uncertain')
     await expect(requests.run({ kind: 'open_revisions' }, async () => { calls += 1; throw failure })).rejects.toBe(failure)
     expect(calls).toBe(1)
     expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(RELAY_ID)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { V2RemoteOperationError } from '../../src/content/v2-session-services'
+import { RemoteOperationError } from '../../src/content/session-services'
 import {
   createFailureIdentity,
   createIncidentScopeIssuer,
@@ -15,10 +15,10 @@ import {
   outputFault,
   sourceFault,
 } from '../../src/transfer/failure/fault'
-import { V2TransferAdmissionFailureError } from '../../src/transfer/job/admission-error'
+import { TransferAdmissionFailureError } from '../../src/transfer/job/admission-error'
 import {
-  V2FileOutputError,
-  normalizeV2FileTransferFailure,
+  FileOutputError,
+  normalizeFileTransferFailure,
 } from '../../src/transfer/job/failures'
 
 describe('transfer failure classification', () => {
@@ -28,8 +28,8 @@ describe('transfer failure classification', () => {
     >[0][] = []
     const scope = incidentScope(observation => { recorded.push(observation) })
 
-    const normalized = normalizeV2FileTransferFailure(
-      new V2FileOutputError('native detail is not retained', 'output-commit-failed'),
+    const normalized = normalizeFileTransferFailure(
+      new FileOutputError('native detail is not retained', 'output-commit-failed'),
       { incidentScope: scope },
     )
     expect(normalized.kind).toBe('fault')
@@ -50,7 +50,7 @@ describe('transfer failure classification', () => {
     expect(Object.isFrozen(normalized.diagnostic.classification)).toBe(true)
     expect(JSON.stringify(normalized.fact)).not.toContain('native detail')
 
-    const replay = normalizeV2FileTransferFailure(normalized.diagnostic, {
+    const replay = normalizeFileTransferFailure(normalized.diagnostic, {
       incidentScope: scope,
     })
     expect(replay.kind).toBe('fault')
@@ -59,13 +59,13 @@ describe('transfer failure classification', () => {
   })
 
   it('carries reviewed authority and immutable exception evidence across transfer admission', () => {
-    const normalized = normalizeV2FileTransferFailure(new Error('private admission detail'), {
+    const normalized = normalizeFileTransferFailure(new Error('private admission detail'), {
       stage: 'authority_selection',
     })
     expect(normalized.kind).toBe('fault')
     if (normalized.kind !== 'fault') return
 
-    const error = new V2TransferAdmissionFailureError(Object.freeze({
+    const error = new TransferAdmissionFailureError(Object.freeze({
       kind: 'fault',
       classification: normalized.diagnostic.classification,
     }))
@@ -82,7 +82,7 @@ describe('transfer failure classification', () => {
   })
 
   it('reuses the authenticated protocol fact while producing product fault authority', () => {
-    const remote = new V2RemoteOperationError(createReceivedProtocolError({
+    const remote = new RemoteOperationError(createReceivedProtocolError({
       requestKind: 'request_blocks', correlation: {
         protocolSessionId: createFailureIdentity('protocol_session', identityBytes(1)),
         protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(2))
@@ -91,7 +91,7 @@ describe('transfer failure classification', () => {
       }
     }))
 
-    const normalized = normalizeV2FileTransferFailure(remote)
+    const normalized = normalizeFileTransferFailure(remote)
     expect(normalized.kind).toBe('fault')
     if (normalized.kind !== 'fault') return
     expect(normalized.fault).toEqual(
@@ -103,10 +103,10 @@ describe('transfer failure classification', () => {
   })
 
   it('does not traverse nested causes to recover product or materialization policy', () => {
-    const nested = new V2FileOutputError('hidden nested output detail', 'output-commit-failed')
+    const nested = new FileOutputError('hidden nested output detail', 'output-commit-failed')
     const outer = new Error('unclassified boundary', { cause: nested })
 
-    const normalized = normalizeV2FileTransferFailure(outer)
+    const normalized = normalizeFileTransferFailure(outer)
     expect(normalized.kind).toBe('fault')
     if (normalized.kind !== 'fault') return
     expect(normalized.fault).toEqual(dependencyContractFault())
@@ -124,8 +124,8 @@ describe('transfer failure classification', () => {
         },
       }),
     })
-    const normalized = normalizeV2FileTransferFailure(
-      new V2FileOutputError('write failed', 'output-write-failed'),
+    const normalized = normalizeFileTransferFailure(
+      new FileOutputError('write failed', 'output-write-failed'),
       { incidentScope: scope },
     )
 
@@ -143,7 +143,7 @@ describe('transfer failure classification', () => {
     const controller = new AbortController()
     controller.abort(new DOMException('cancelled', 'AbortError'))
 
-    const normalized = normalizeV2FileTransferFailure(new Error('late rejection'), {
+    const normalized = normalizeFileTransferFailure(new Error('late rejection'), {
       signal: controller.signal,
       incidentScope: scope,
     })

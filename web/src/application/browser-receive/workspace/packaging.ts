@@ -19,12 +19,12 @@ import type {
 } from '../../../output/execution/persistent-execution'
 import type {
   PlanSettlementRequest,
-  V2PlanExecutionAuthority,
+  PlanExecutionAuthority,
 } from '../../../transfer/output/session'
 import type { SuccessfulTransferWorkerSettlement } from '../../../transfer/outcome'
 import type { PersistentWorkspaceInterruption } from '../../../output/execution/persistent-evidence'
-import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../receive/actions'
-import type { V2LifecycleMutation } from '../../receive/contracts'
+import type { LifecycleUserAction, ActiveReceiveControl, WorkspaceUsage } from '../../receive/actions'
+import type { LifecycleMutation } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { NamespaceOnlyCleanupPort, handoffRetainedWorkspacePackage } from './publication'
 import { checkpointSetDigest } from '../../../output/workspace/operation-digest'
@@ -35,18 +35,18 @@ interface WorkspaceSealBundle {
 }
 
 export interface WorkspaceContinuationPort {
-  readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly activeControls: readonly ActiveReceiveControl[]
   readonly admitted: boolean
   readonly hasReceiveAuthority: boolean
   closeOwnedBackend(): Promise<void>
-  createPlans(): Promise<V2PlanExecutionAuthority>
+  createPlans(): Promise<PlanExecutionAuthority>
   beginContinuation(
     lifecycle: Extract<ReceiveLifecycleState, {
       readonly kind: 'resumable-receive'
       readonly payloadKind: 'file-set'
     }>,
   ): void
-  installTransferAttempt(plans: V2PlanExecutionAuthority, transferJobId: string): void
+  installTransferAttempt(plans: PlanExecutionAuthority, transferJobId: string): void
 }
 
 export class WorkspaceReceivePackaging {
@@ -128,11 +128,11 @@ export class WorkspaceReceivePackaging {
   }
 
   async startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
     backend: OriginPrivateWorkspaceBackend | undefined,
     continuation: WorkspaceContinuationPort,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     switch (action) {
       case 'continue':
         return this.#continue(lifecycle, backend, continuation)
@@ -200,7 +200,7 @@ export class WorkspaceReceivePackaging {
     lifecycle: ReceiveLifecycleState,
     backend: OriginPrivateWorkspaceBackend | undefined,
     continuation: WorkspaceContinuationPort,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     if (lifecycle.kind === 'resumable-package') {
       const seal = this.#sealBundle?.sealed
       if (seal === undefined) {
@@ -234,7 +234,7 @@ export class WorkspaceReceivePackaging {
   async #handoff(
     lifecycle: ReceiveLifecycleState,
     backend: OriginPrivateWorkspaceBackend | undefined,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     if (lifecycle.kind !== 'waiting-to-save' &&
         !(lifecycle.kind === 'download-started' && lifecycle.attemptKind === 'workspace')) {
       throw unavailableRoute()
@@ -253,7 +253,7 @@ export class WorkspaceReceivePackaging {
 
   async #discard(
     backend: OriginPrivateWorkspaceBackend | undefined,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     const result = await this.#stages.discard(this.cleanupRequest(backend))
     return Object.freeze({ lifecycle: result.state, workspaceUsage: null })
   }

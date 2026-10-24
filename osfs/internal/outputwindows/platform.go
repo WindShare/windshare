@@ -13,58 +13,58 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsOutputV3Platform struct {
-	native              *windowsV3OutputPlatform
-	root                *windowsOutputV3Directory
+type windowsOutputPlatform struct {
+	native              *nativeOutputPlatform
+	root                *windowsOutputDirectory
 	rootOpenDisposition outputcap.RootOpenDisposition
-	publicationGuard    *windowsV3PublicOperationGuard
+	publicationGuard    *windowsPublicOperationGuard
 }
 
-type windowsOutputV3Directory struct {
-	native *windowsV3Directory
+type windowsOutputDirectory struct {
+	native *windowsDirectory
 }
 
-type windowsOutputV3PublicOperationGuard struct {
-	native *windowsV3PublicOperationGuard
-	root   *windowsOutputV3Directory
+type windowsOutputPublicOperationGuard struct {
+	native *windowsPublicOperationGuard
+	root   *windowsOutputDirectory
 }
 
-type windowsOutputV3EntryRef struct {
-	native *windowsV3PinnedEntry
+type windowsOutputEntryRef struct {
+	native *windowsPinnedEntry
 }
 
-type windowsOutputV3FileState struct {
-	native   *windowsV3File
+type windowsOutputFileState struct {
+	native   *windowsFile
 	private  bool
 	borrowed bool
 }
 
-type windowsOutputV3ObservedFile struct {
-	state *windowsOutputV3FileState
+type windowsOutputObservedFile struct {
+	state *windowsOutputFileState
 }
 
-type windowsOutputV3RecoveryDurabilityFile struct {
-	state *windowsOutputV3FileState
+type windowsOutputRecoveryDurabilityFile struct {
+	state *windowsOutputFileState
 }
 
-type windowsOutputV3MutableFile struct {
-	state *windowsOutputV3FileState
+type windowsOutputMutableFile struct {
+	state *windowsOutputFileState
 }
 
-type windowsOutputV3Lock struct {
-	native *windowsV3StableLock
-	file   *windowsOutputV3MutableFile
+type windowsOutputLock struct {
+	native *windowsStableLock
+	file   *windowsOutputMutableFile
 }
 
 func Open(path string, create bool) (outputcap.Platform, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace,
-			windowsV3Failure("open output root", path, errWindowsV3OutputUnsafe,
+			windowsFailure("open output root", path, errWindowsOutputUnsafe,
 				errors.New("output root must be absolute")))
 	}
 	clean := filepath.Clean(path)
 	rootOpenDisposition := outputcap.CallerProvidedContainer
-	native, err := openWindowsV3OutputPlatform(clean)
+	native, err := openWindowsOutputPlatform(clean)
 	if create && errors.Is(err, fs.ErrNotExist) {
 		native, err = windowsCreateCertifiedOutputRoot(clean)
 		if err == nil {
@@ -72,11 +72,11 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 		}
 	}
 	if err != nil {
-		return nil, windowsOutputV3Error(err)
+		return nil, windowsOutputError(err)
 	}
-	return &windowsOutputV3Platform{
+	return &windowsOutputPlatform{
 		native:              native,
-		root:                &windowsOutputV3Directory{native: native.root},
+		root:                &windowsOutputDirectory{native: native.root},
 		rootOpenDisposition: rootOpenDisposition,
 	}, nil
 }
@@ -87,31 +87,31 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 func OpenPrivatePublicationRoot(path string, create bool) (outputcap.Platform, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace,
-			windowsV3Failure("open private publication root", path, errWindowsV3OutputUnsafe,
+			windowsFailure("open private publication root", path, errWindowsOutputUnsafe,
 				errors.New("private publication root must be absolute")))
 	}
 	clean := filepath.Clean(path)
-	native, err := openWindowsV3OutputPlatform(clean)
+	native, err := openWindowsOutputPlatform(clean)
 	if err == nil {
-		platform, retainErr := retainWindowsV3PrivatePublicationRoot(native)
+		platform, retainErr := retainWindowsPrivatePublicationRoot(native)
 		if retainErr != nil {
-			return nil, windowsOutputV3Error(retainErr)
+			return nil, windowsOutputError(retainErr)
 		}
 		return platform, nil
 	}
 	if !create || !errors.Is(err, fs.ErrNotExist) {
-		return nil, windowsOutputV3Error(err)
+		return nil, windowsOutputError(err)
 	}
-	platform, err := createWindowsV3PrivatePublicationRootWithObserver(clean, nil)
+	platform, err := createWindowsPrivatePublicationRootWithObserver(clean, nil)
 	if err != nil {
-		return nil, windowsOutputV3Error(err)
+		return nil, windowsOutputError(err)
 	}
 	return platform, nil
 }
 
-func retainWindowsV3PrivatePublicationRoot(
-	native *windowsV3OutputPlatform,
-) (*windowsOutputV3Platform, error) {
+func retainWindowsPrivatePublicationRoot(
+	native *nativeOutputPlatform,
+) (*windowsOutputPlatform, error) {
 	if native == nil {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("private publication root has no native platform"))
@@ -129,26 +129,26 @@ func retainWindowsV3PrivatePublicationRoot(
 			native.Close(),
 		)
 	}
-	return &windowsOutputV3Platform{
+	return &windowsOutputPlatform{
 		native:              native,
-		root:                &windowsOutputV3Directory{native: root},
+		root:                &windowsOutputDirectory{native: root},
 		rootOpenDisposition: outputcap.CallerProvidedContainer,
 		publicationGuard:    guard,
 	}, nil
 }
 
-func createWindowsV3PrivatePublicationRootWithObserver(
+func createWindowsPrivatePublicationRootWithObserver(
 	path string,
-	observer windowsV3OutputRootCreateObserver,
-) (result *windowsOutputV3Platform, resultErr error) {
+	observer windowsOutputRootCreateObserver,
+) (result *windowsOutputPlatform, resultErr error) {
 	const operation = "create private publication root"
 	parentPath := filepath.Dir(path)
 	name := filepath.Base(path)
 	if parentPath == path || name == "." || name == string(filepath.Separator) {
-		return nil, windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, path, errWindowsOutputUnsafe,
 			errors.New("private publication root must be one missing child of an existing parent"))
 	}
-	parent, err := openWindowsV3PrivateRootParent(parentPath)
+	parent, err := openWindowsPrivateRootParent(parentPath)
 	if err != nil {
 		return nil, err
 	}
@@ -159,16 +159,16 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 	parentRoot := placement.Root()
 	if parentRoot == nil {
 		return nil, errors.Join(
-			windowsV3Failure(operation, parentPath, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, parentPath, errWindowsOutputUnsafe,
 				errors.New("private publication-root creation guard has no parent authority")),
 			placement.Close(),
 			parent.Close(),
 		)
 	}
-	if err := windowsV3ObserveOutputRootCreate(
+	if err := windowsObserveOutputRootCreate(
 		observer,
 		parentPath,
-		windowsV3OutputRootCreatePlacementPinned,
+		windowsOutputRootCreatePlacementPinned,
 	); err != nil {
 		return nil, errors.Join(err, placement.Close(), parent.Close())
 	}
@@ -177,7 +177,7 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 		return nil, errors.Join(err, placement.Close(), parent.Close())
 	}
 	var createdClaim []byte
-	var pending *windowsV3OutputPlatform
+	var pending *nativeOutputPlatform
 	succeeded := false
 	defer func() {
 		if pending != nil {
@@ -188,7 +188,7 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 			result = nil
 		}
 		if !succeeded {
-			resultErr = errors.Join(resultErr, cleanupWindowsV3PrivatePublicationRoot(
+			resultErr = errors.Join(resultErr, cleanupWindowsPrivatePublicationRoot(
 				parentRoot, created, name, path, createdClaim,
 			))
 		}
@@ -202,13 +202,13 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 		}
 	}()
 
-	pending, err = openWindowsV3OutputPlatform(path)
+	pending, err = openWindowsOutputPlatform(path)
 	if err != nil {
 		return nil, err
 	}
-	same, compareErr := sameWindowsV3OpenedDirectory(created, pending.root)
+	same, compareErr := sameWindowsOpenedDirectory(created, pending.root)
 	if compareErr != nil || !same {
-		return nil, windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, path, errWindowsOutputUnsafe,
 			errors.Join(errors.New("certified private publication root changed identity"), compareErr))
 	}
 	createdClaim, err = created.preparePrivateIdentityClaim()
@@ -219,20 +219,20 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 		return nil, err
 	}
 	created = nil
-	result, err = retainWindowsV3PrivatePublicationRoot(pending)
+	result, err = retainWindowsPrivatePublicationRoot(pending)
 	pending = nil
 	if err != nil {
 		return nil, err
 	}
 	reopenedClaim, claimErr := result.root.native.preparePrivateIdentityClaim()
 	if claimErr != nil || !bytes.Equal(reopenedClaim, createdClaim) {
-		return result, windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+		return result, windowsFailure(operation, path, errWindowsOutputUnsafe,
 			errors.Join(errors.New("certified private publication root lost its persistent identity"), claimErr))
 	}
-	if err := windowsV3ObserveOutputRootCreate(
+	if err := windowsObserveOutputRootCreate(
 		observer,
 		path,
-		windowsV3OutputRootCreateComponentPinned,
+		windowsOutputRootCreateComponentPinned,
 	); err != nil {
 		return result, err
 	}
@@ -241,16 +241,16 @@ func createWindowsV3PrivatePublicationRootWithObserver(
 	return result, nil
 }
 
-func cleanupWindowsV3PrivatePublicationRoot(
-	parent *windowsV3Directory,
-	created *windowsV3Directory,
+func cleanupWindowsPrivatePublicationRoot(
+	parent *windowsDirectory,
+	created *windowsDirectory,
 	name string,
 	path string,
 	createdClaim []byte,
 ) (resultErr error) {
 	const operation = "cleanup private publication root"
 	if parent == nil {
-		return windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, path, errWindowsOutputUnsafe,
 			errors.New("private publication-root parent authority is absent"))
 	}
 	cleanupTarget := created
@@ -267,7 +267,7 @@ func cleanupWindowsV3PrivatePublicationRoot(
 
 		claim, claimErr := cleanupTarget.preparePrivateIdentityClaim()
 		if claimErr != nil || len(createdClaim) == 0 || !bytes.Equal(claim, createdClaim) {
-			return windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+			return windowsFailure(operation, path, errWindowsOutputUnsafe,
 				errors.Join(errors.New("private publication-root cleanup identity changed"), claimErr))
 		}
 	}
@@ -280,36 +280,36 @@ func cleanupWindowsV3PrivatePublicationRoot(
 	)
 }
 
-type windowsV3OutputRootCreateCut uint8
+type windowsOutputRootCreateCut uint8
 
 const (
-	windowsV3OutputRootCreatePlacementPinned windowsV3OutputRootCreateCut = iota + 1
-	windowsV3OutputRootCreateComponentPinned
+	windowsOutputRootCreatePlacementPinned windowsOutputRootCreateCut = iota + 1
+	windowsOutputRootCreateComponentPinned
 )
 
-type windowsV3OutputRootCreateObserver interface {
-	ObserveOutputRootCreate(path string, cut windowsV3OutputRootCreateCut) error
+type windowsOutputRootCreateObserver interface {
+	ObserveOutputRootCreate(path string, cut windowsOutputRootCreateCut) error
 }
 
-type windowsV3OutputRootCreateObserverFunc func(string, windowsV3OutputRootCreateCut) error
+type windowsOutputRootCreateObserverFunc func(string, windowsOutputRootCreateCut) error
 
-func (observe windowsV3OutputRootCreateObserverFunc) ObserveOutputRootCreate(
+func (observe windowsOutputRootCreateObserverFunc) ObserveOutputRootCreate(
 	path string,
-	cut windowsV3OutputRootCreateCut,
+	cut windowsOutputRootCreateCut,
 ) error {
 	return observe(path, cut)
 }
 
-func windowsCreateCertifiedOutputRoot(path string) (*windowsV3OutputPlatform, error) {
+func windowsCreateCertifiedOutputRoot(path string) (*nativeOutputPlatform, error) {
 	return windowsCreateCertifiedOutputRootWithObserver(path, nil)
 }
 
 func windowsCreateCertifiedOutputRootWithObserver(
 	path string,
-	observer windowsV3OutputRootCreateObserver,
-) (result *windowsV3OutputPlatform, resultErr error) {
+	observer windowsOutputRootCreateObserver,
+) (result *nativeOutputPlatform, resultErr error) {
 	const operation = "create certified Windows output root"
-	ancestor, missing, err := windowsV3FindCertifiedOutputAncestor(path)
+	ancestor, missing, err := windowsFindCertifiedOutputAncestor(path)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func windowsCreateCertifiedOutputRootWithObserver(
 	if err != nil {
 		return nil, errors.Join(err, ancestor.Close())
 	}
-	createdAuthorities := make([]*windowsV3Directory, 0, len(missing))
+	createdAuthorities := make([]*windowsDirectory, 0, len(missing))
 	defer func() {
 		var cleanupErr error
 		for index := range slices.Backward(createdAuthorities) {
@@ -328,7 +328,7 @@ func windowsCreateCertifiedOutputRootWithObserver(
 		if result != nil {
 			closeResult = result.Close
 		}
-		keepResult, err := finishWindowsV3OutputRootCreate(resultErr, cleanupErr, closeResult)
+		keepResult, err := finishWindowsOutputRootCreate(resultErr, cleanupErr, closeResult)
 		resultErr = err
 		if !keepResult {
 			result = nil
@@ -338,10 +338,10 @@ func windowsCreateCertifiedOutputRootWithObserver(
 	if current == nil {
 		return nil, errors.New("external output placement guard has no root authority")
 	}
-	if err := windowsV3ObserveOutputRootCreate(observer, current.path, windowsV3OutputRootCreatePlacementPinned); err != nil {
+	if err := windowsObserveOutputRootCreate(observer, current.path, windowsOutputRootCreatePlacementPinned); err != nil {
 		return nil, err
 	}
-	current, createdAuthorities, err = windowsV3CreateMissingOutputComponents(current, missing, observer)
+	current, createdAuthorities, err = windowsCreateMissingOutputComponents(current, missing, observer)
 	if err != nil {
 		return nil, err
 	}
@@ -349,13 +349,13 @@ func windowsCreateCertifiedOutputRootWithObserver(
 	// The absolute no-reparse reopen binds the caller's requested spelling; the
 	// same-object check prevents an attacker from substituting another directory
 	// after the final handle-relative create.
-	reopened, err := openWindowsV3OutputPlatform(path)
+	reopened, err := openWindowsOutputPlatform(path)
 	if err != nil {
 		return nil, err
 	}
-	same, compareErr := sameWindowsV3OpenedDirectory(current, reopened.root)
+	same, compareErr := sameWindowsOpenedDirectory(current, reopened.root)
 	if compareErr != nil || !same {
-		return nil, errors.Join(windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+		return nil, errors.Join(windowsFailure(operation, path, errWindowsOutputUnsafe,
 			errors.New("reopened root differs from the handle-created directory")), compareErr, reopened.Close())
 	}
 	// Ancestors are placement-only authorities, but the newly created output root
@@ -371,12 +371,12 @@ func windowsCreateCertifiedOutputRootWithObserver(
 	return reopened, nil
 }
 
-func windowsV3FindCertifiedOutputAncestor(path string) (*windowsV3OutputPlatform, []string, error) {
+func windowsFindCertifiedOutputAncestor(path string) (*nativeOutputPlatform, []string, error) {
 	const operation = "create certified Windows output root"
 	candidate := path
 	missing := make([]string, 0, 4)
 	for {
-		opened, err := openWindowsV3OutputPlatform(candidate)
+		opened, err := openWindowsOutputPlatform(candidate)
 		if err == nil {
 			return opened, missing, nil
 		}
@@ -385,7 +385,7 @@ func windowsV3FindCertifiedOutputAncestor(path string) (*windowsV3OutputPlatform
 		}
 		parent := filepath.Dir(candidate)
 		if parent == candidate {
-			return nil, nil, errors.Join(windowsV3Failure(operation, path, errWindowsV3OutputUnsafe,
+			return nil, nil, errors.Join(windowsFailure(operation, path, errWindowsOutputUnsafe,
 				errors.New("no existing certified ancestor contains the requested root")), err)
 		}
 		missing = append(missing, filepath.Base(candidate))
@@ -393,12 +393,12 @@ func windowsV3FindCertifiedOutputAncestor(path string) (*windowsV3OutputPlatform
 	}
 }
 
-func windowsV3CreateMissingOutputComponents(
-	current *windowsV3Directory,
+func windowsCreateMissingOutputComponents(
+	current *windowsDirectory,
 	missing []string,
-	observer windowsV3OutputRootCreateObserver,
-) (*windowsV3Directory, []*windowsV3Directory, error) {
-	createdAuthorities := make([]*windowsV3Directory, 0, len(missing))
+	observer windowsOutputRootCreateObserver,
+) (*windowsDirectory, []*windowsDirectory, error) {
+	createdAuthorities := make([]*windowsDirectory, 0, len(missing))
 	for index := range slices.Backward(missing) {
 		created, err := current.openDirectory(missing[index], false, windows.FILE_CREATE)
 		if err != nil {
@@ -409,8 +409,8 @@ func windowsV3CreateMissingOutputComponents(
 		}
 		createdAuthorities = append(createdAuthorities, created)
 		current = created
-		if err := windowsV3ObserveOutputRootCreate(
-			observer, current.path, windowsV3OutputRootCreateComponentPinned,
+		if err := windowsObserveOutputRootCreate(
+			observer, current.path, windowsOutputRootCreateComponentPinned,
 		); err != nil {
 			return nil, createdAuthorities, err
 		}
@@ -418,10 +418,10 @@ func windowsV3CreateMissingOutputComponents(
 	return current, createdAuthorities, nil
 }
 
-func windowsV3ObserveOutputRootCreate(
-	observer windowsV3OutputRootCreateObserver,
+func windowsObserveOutputRootCreate(
+	observer windowsOutputRootCreateObserver,
 	path string,
-	cut windowsV3OutputRootCreateCut,
+	cut windowsOutputRootCreateCut,
 ) error {
 	if observer == nil {
 		return nil
@@ -429,7 +429,7 @@ func windowsV3ObserveOutputRootCreate(
 	return observer.ObserveOutputRootCreate(path, cut)
 }
 
-func finishWindowsV3OutputRootCreate(
+func finishWindowsOutputRootCreate(
 	operationErr error,
 	cleanupErr error,
 	closeResult func() error,

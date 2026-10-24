@@ -1,5 +1,5 @@
-import { V2_CATALOG_NAME_BYTES } from '../../catalog/path-policy'
-import { V2_MAXIMUM_SELECTION_RULE_OVERRIDES } from '../../catalog/v2-selection'
+import { CATALOG_NAME_BYTES } from '../../catalog/path-policy'
+import { MAXIMUM_SELECTION_RULE_OVERRIDES } from '../../catalog/selection'
 
 export type CanonicalBytes = Uint8Array<ArrayBuffer>
 
@@ -18,7 +18,7 @@ export const STABLE_IDENTITY_BYTES = 16
 export const AUTHORITY_REFERENCE_BYTES = 32
 export const RECEIVE_INTENT_DIGEST_BYTES = 32
 export const ARTIFACT_CHOICE_ID_BYTES = 32
-export const MAX_SELECTION_RULES = V2_MAXIMUM_SELECTION_RULE_OVERRIDES
+export const MAX_SELECTION_RULES = MAXIMUM_SELECTION_RULE_OVERRIDES
 export const MAX_SELECTION_TARGET_UTF8_BYTES = 1 << 20
 export const DEFAULT_RESULT_ROOT_NAME = 'windshare'
 export const DEFAULT_ARCHIVE_NAME = 'windshare.zip'
@@ -27,7 +27,7 @@ export const ARCHIVE_EXTENSION = '.zip'
 export const DIRECT_ZIP_STABLE_NAME_INFIX = '.windshare-'
 export const DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH = 22
 export const RESULT_NAME_POLICY = 'windshare/result-name/v1-unicode-15.0.0'
-export const MAX_RESULT_COMPONENT_BYTES = V2_CATALOG_NAME_BYTES
+export const MAX_RESULT_COMPONENT_BYTES = CATALOG_NAME_BYTES
 export const COLLISION_SUFFIX_HEX_CHARS = 10
 export const DEFAULT_PORTABLE_ARTIFACT_LIMIT = 67_108_864n
 export const DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES = 1_048_576n

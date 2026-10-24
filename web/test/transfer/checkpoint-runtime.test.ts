@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import type { BlockRangeReader } from '../../src/content/broker'
 import type { CheckpointObservation } from '../../src/transfer/checkpoint/controller'
 import { byteRange } from '../../src/content/geometry'
 import {
@@ -27,7 +27,7 @@ describe('file transfer checkpoint wakeups', () => {
     const requested: bigint[] = []
     const observations: CheckpointObservation[] = []
     let receivedBytes = 0n
-    const broker: V2BlockRangeReader = { readRange: async function* (_descriptor, _lease, range) {
+    const broker: BlockRangeReader = { readRange: async function* (_descriptor, _lease, range) {
       requested.push(range.start)
       if (!live) yield { offset: 0n, data: new Uint8Array([1, 2]) }
       stalled.resolve()
@@ -67,7 +67,7 @@ describe('file transfer checkpoint wakeups', () => {
     const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
     const readers = readerFixture([file])
     const stalled = deferred()
-    const broker: V2BlockRangeReader = { readRange: async function* (_descriptor, _lease, _range, request) {
+    const broker: BlockRangeReader = { readRange: async function* (_descriptor, _lease, _range, request) {
       yield { offset: 0n, data: new Uint8Array([1, 2]) }
       stalled.resolve()
       await new Promise<void>((_resolve, reject) => {

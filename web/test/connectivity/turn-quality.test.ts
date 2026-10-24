@@ -2,9 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { LanePerformance } from '../../src/content/scheduling/performance'
 import { TurnReceiver, type TurnMeasurement } from '../../src/connectivity/turn/receiver'
 import { decodeTurnControl, encodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
-import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+import { browserPeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
+import { createProtocolSessionIdentity } from '../../src/session/identities'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 
 afterEach(() => vi.useRealTimers())
 
@@ -28,13 +28,13 @@ it('scopes quality to the network and lane while accounting survives lane replac
   let receive!: (body: Uint8Array<ArrayBuffer>) => void
   const sent: TurnControl[] = []
   const session = {
-    protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
+    protocolSessionIdentity: createProtocolSessionIdentity(header.sessionId),
     subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
     sendTurnControl: async (body: Uint8Array) => { sent.push(decodeTurnControl(body)) },
-  } as unknown as V2ReceiverSessionRuntime
+  } as unknown as ReceiverSessionRuntime
   let network = new Uint8Array(16).fill(4)
   let measurement: TurnMeasurement = { usefulBytes: 2048, unhelpful: false, busyMilliseconds: 1000, pendingBytes: 4096 }
-  const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
+  const receiver = new TurnReceiver({ session, clock: browserPeerRecoveryClock, enabled: () => true,
     open: () => undefined, retire: async () => undefined, measure: () => measurement, networkGeneration: () => network })
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receiver.setDemand(true)

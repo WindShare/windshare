@@ -1,9 +1,9 @@
-import type { V2CatalogClient } from '../../catalog/v2-client'
-import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
-import type { V2CatalogEntry } from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
-import { discoverV2DirectoryGeneration, replayV2DirectoryEntries } from '../discovery/v2-generation-replay'
-import { generationReplayMetadataBytes, type V2DirectoryReplay } from '../discovery/v2-directory-replay'
+import type { CatalogClient } from '../../catalog/client'
+import type { CommittedDirectory } from '../../catalog/page-store'
+import type { CatalogEntry } from '../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
+import { discoverDirectoryGeneration, replayDirectoryEntries } from '../discovery/generation-replay'
+import { generationReplayMetadataBytes, type DirectoryReplay } from '../discovery/directory-replay'
 import type {
   AuthenticatedDirectory,
   AuthenticatedLogicalSiblingMembership,
@@ -15,13 +15,13 @@ import type {
 import type { DirectTreeFileProjection } from './coordinate/direct-tree'
 import type { ExactPreparationCollector } from './preparation'
 import { AsyncBoundedQueue } from './scheduler'
-import type { V2ExplicitSelectionTargetLedger } from './selection'
-import type { V2CatalogTraversalGuard } from './traversal'
+import type { ExplicitSelectionTargetLedger } from './selection'
+import type { CatalogTraversalGuard } from './traversal'
 
 /** Retains the raw committed handle so membership cannot be reconstructed from text projections. */
 export function createAuthenticatedLogicalSiblingMembership(
-  catalog: Pick<V2CatalogClient, 'hasCommittedName'>,
-  committed: V2CommittedDirectory,
+  catalog: Pick<CatalogClient, 'hasCommittedName'>,
+  committed: CommittedDirectory,
   signal: AbortSignal,
 ): AuthenticatedLogicalSiblingMembership {
   return Object.freeze({
@@ -31,49 +31,49 @@ export function createAuthenticatedLogicalSiblingMembership(
   })
 }
 
-export class V2JobDiscovery {
+export class JobDiscovery {
   readonly #catalog: TransferJobOptions['catalog']
-  readonly #selection: V2FrozenSelectionPolicy
-  readonly #traversal: V2CatalogTraversalGuard
-  readonly #explicitTargets: V2ExplicitSelectionTargetLedger
+  readonly #selection: FrozenSelectionPolicy
+  readonly #traversal: CatalogTraversalGuard
+  readonly #explicitTargets: ExplicitSelectionTargetLedger
   readonly #signal: AbortSignal
-  readonly #rootCommitted: () => V2CommittedDirectory | undefined
-  readonly #observeSelectedFile: (entry: Extract<V2CatalogEntry, { kind: 'file' }>) => void
+  readonly #rootCommitted: () => CommittedDirectory | undefined
+  readonly #observeSelectedFile: (entry: Extract<CatalogEntry, { kind: 'file' }>) => void
   readonly #recordDirectoryFailure: (identity: string, error: unknown) => void
   readonly #authenticateDirectory: (
     cursor: DirectoryCursor,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
     parent?: AuthenticatedDirectory,
   ) => Promise<AuthenticatedDirectory>
   readonly #projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
-  readonly #generationCommitted: ((cursor: DirectoryCursor, committed: V2CommittedDirectory) => Promise<void>) | undefined
+  readonly #generationCommitted: ((cursor: DirectoryCursor, committed: CommittedDirectory) => Promise<void>) | undefined
   readonly #prepareDirectory: (
     collector: ExactPreparationCollector,
     cursor: DirectoryCursor,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
     role: 'selected' | 'ancestor',
   ) => AuthenticatedDirectory
 
   constructor(input: {
     readonly catalog: TransferJobOptions['catalog']
-    readonly selection: V2FrozenSelectionPolicy
-    readonly traversal: V2CatalogTraversalGuard
-    readonly explicitTargets: V2ExplicitSelectionTargetLedger
+    readonly selection: FrozenSelectionPolicy
+    readonly traversal: CatalogTraversalGuard
+    readonly explicitTargets: ExplicitSelectionTargetLedger
     readonly signal: AbortSignal
-    readonly rootCommitted: () => V2CommittedDirectory | undefined
-    readonly observeSelectedFile: (entry: Extract<V2CatalogEntry, { kind: 'file' }>) => void
+    readonly rootCommitted: () => CommittedDirectory | undefined
+    readonly observeSelectedFile: (entry: Extract<CatalogEntry, { kind: 'file' }>) => void
     readonly recordDirectoryFailure: (identity: string, error: unknown) => void
     readonly authenticateDirectory: (
       cursor: DirectoryCursor,
-      committed: V2CommittedDirectory,
+      committed: CommittedDirectory,
       parent?: AuthenticatedDirectory,
     ) => Promise<AuthenticatedDirectory>
     readonly projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
-    readonly generationCommitted?: (cursor: DirectoryCursor, committed: V2CommittedDirectory) => Promise<void>
+    readonly generationCommitted?: (cursor: DirectoryCursor, committed: CommittedDirectory) => Promise<void>
     readonly prepareDirectory: (
       collector: ExactPreparationCollector,
       cursor: DirectoryCursor,
-      committed: V2CommittedDirectory,
+      committed: CommittedDirectory,
       role: 'selected' | 'ancestor',
     ) => AuthenticatedDirectory
   }) {
@@ -93,7 +93,7 @@ export class V2JobDiscovery {
 
   async *discoverDirectory(
     work: DirectoryWork,
-    replays: AsyncBoundedQueue<V2DirectoryReplay>,
+    replays: AsyncBoundedQueue<DirectoryReplay>,
     collector?: ExactPreparationCollector,
   ): AsyncGenerator<DirectoryWork, void> {
     const { cursor } = work
@@ -101,7 +101,7 @@ export class V2JobDiscovery {
       (cursor.path.length === 0 && !this.#explicitTargets.hasPendingTargets)
     const discoverySignal = this.#explicitTargets.discoverySignal(validateEntireGeneration)
     const rootCommitted = this.#rootCommitted()
-    const generation = await discoverV2DirectoryGeneration({
+    const generation = await discoverDirectoryGeneration({
       cursor,
       catalog: this.#catalog,
       traversal: this.#traversal,
@@ -126,21 +126,21 @@ export class V2JobDiscovery {
       metadataBytes: generationReplayMetadataBytes(generation),
       run: async files => {
         if (cursor.path.length > 0 && cursor.selected) await materialize('selected')
-        for await (const entry of replayV2DirectoryEntries(generation, replayInput)) {
+        for await (const entry of replayDirectoryEntries(generation, replayInput)) {
           if (entry.kind === 'file') await this.#prepareFile(cursor, materialize, entry, files, collector)
         }
       },
     }, this.#signal)
     // Child discovery reads the committed pages independently of output admission.
     // A full file queue can hold back replay without withholding the selection total.
-    for await (const entry of replayV2DirectoryEntries(generation, replayInput)) {
+    for await (const entry of replayDirectoryEntries(generation, replayInput)) {
       if (entry.kind !== 'directory') continue
       const child = this.#prepareChildDirectory(cursor, materialize, entry)
       if (child !== undefined) yield child
     }
   }
 
-  #observeCatalogEntry(cursor: DirectoryCursor, entry: V2CatalogEntry): boolean {
+  #observeCatalogEntry(cursor: DirectoryCursor, entry: CatalogEntry): boolean {
     this.#traversal.entryPath(cursor, entry)
     this.#traversal.claimNode(entry.id)
     this.#explicitTargets.observe(entry)
@@ -152,7 +152,7 @@ export class V2JobDiscovery {
   async #prepareFile(
     cursor: DirectoryCursor,
     materialize: (role?: 'selected' | 'ancestor') => Promise<AuthenticatedDirectory>,
-    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+    entry: Extract<CatalogEntry, { kind: 'file' }>,
     files: AsyncBoundedQueue<PendingFile>,
     collector?: ExactPreparationCollector,
   ): Promise<void> {
@@ -170,7 +170,7 @@ export class V2JobDiscovery {
   #prepareChildDirectory(
     cursor: DirectoryCursor,
     materialize: (role?: 'selected' | 'ancestor') => Promise<AuthenticatedDirectory>,
-    entry: Extract<V2CatalogEntry, { kind: 'directory' }>,
+    entry: Extract<CatalogEntry, { kind: 'directory' }>,
   ): DirectoryWork | undefined {
     const sourcePath = this.#traversal.entryPath(cursor, entry)
     const selected = this.#selection.selected(entry, cursor.ancestry)
@@ -190,7 +190,7 @@ export class V2JobDiscovery {
   }
 
   async #enqueueFile(
-    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+    entry: Extract<CatalogEntry, { kind: 'file' }>,
     projection: DirectTreeFileProjection,
     parent: AuthenticatedDirectory,
     files: AsyncBoundedQueue<PendingFile>,
@@ -215,7 +215,7 @@ export class V2JobDiscovery {
   #directoryMaterializer(
     work: DirectoryWork,
     cursor: DirectoryCursor,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
     collector?: ExactPreparationCollector,
   ): (role?: 'selected' | 'ancestor') => Promise<AuthenticatedDirectory> {
     if (cursor.path.length === 0) return work.materializeParent

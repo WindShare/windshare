@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { wireFixture } from './lease-retirement-wire-fixture'
-import { V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { MESSAGE_KIND } from '../../src/session/message'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { deferred } from '../session/v2-send-fixture'
 import { catalogFixture, identity, planAuthorityFixture, receiveIntentFixture, testOutput, transferJobFixture } from './v2-job-fixture'
 import { disabledOutputExecutionProfile } from '../../src/transfer/output/session'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import type { BlockRangeReader } from '../../src/content/broker'
 
 type Scenario = 'healthy' | 'relay-loss' | 'relay-loss-before-release' | 'invalid-release-completion'
 const FILE_CONCURRENCY = 2
@@ -28,7 +28,7 @@ async function runDownload(scenario: Scenario) {
   })
   const plans = planAuthorityFixture({ output })
   let siblingAborted = false
-  const broker: V2BlockRangeReader = {
+  const broker: BlockRangeReader = {
     readRange: async function* (descriptor, _lease, range, request) {
       if (descriptor.fileIdText === wire.files[1]!.idText) {
         siblingReading.resolve()
@@ -43,7 +43,7 @@ async function runDownload(scenario: Scenario) {
   }
   let running: Promise<unknown> | undefined
   try {
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: identity(2), entries: wire.files }])
     const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
     const job = transferJobFixture({
@@ -68,12 +68,12 @@ async function runDownload(scenario: Scenario) {
       try { await wire.relay.close(); await detached.promise } finally { unsubscribe() }
       allowRelease.resolve()
       await wire.releaseReached.promise
-      expect(wire.relay.requests.some(message => message.kind === V2_MESSAGE_KIND.releaseLease)).toBe(false)
-      expect(wire.direct.requests.some(message => message.kind === V2_MESSAGE_KIND.releaseLease)).toBe(true)
+      expect(wire.relay.requests.some(message => message.kind === MESSAGE_KIND.releaseLease)).toBe(false)
+      expect(wire.direct.requests.some(message => message.kind === MESSAGE_KIND.releaseLease)).toBe(true)
       await wire.completeRelease()
       siblingContinue.resolve()
     } else {
-      expect(wire.relay.requests.some(message => message.kind === V2_MESSAGE_KIND.releaseLease)).toBe(true)
+      expect(wire.relay.requests.some(message => message.kind === MESSAGE_KIND.releaseLease)).toBe(true)
       if (scenario === 'relay-loss') {
         await wire.relay.close()
         // A real authenticated exchange proves the remaining route before the
@@ -94,7 +94,7 @@ async function runDownload(scenario: Scenario) {
       active: true, allows: route => route === 'direct', assertActive: () => undefined, subscribe: () => () => undefined,
     })
     await probe.release()
-    expect(wire.direct.requests.some(message => message.kind === V2_MESSAGE_KIND.openRevisions)).toBe(true)
+    expect(wire.direct.requests.some(message => message.kind === MESSAGE_KIND.openRevisions)).toBe(true)
     expect(wire.runtime.isClosed).toBe(false)
     expect([...wire.relay.errors, ...wire.direct.errors]).toEqual([])
 

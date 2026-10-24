@@ -1,5 +1,5 @@
-import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
-import type { V2CatalogEntry } from '../../catalog/v2-records'
+import type { CommittedDirectory } from '../../catalog/page-store'
+import type { CatalogEntry } from '../../catalog/records'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
   AuthenticatedGenerationReference,
@@ -49,7 +49,7 @@ export class ExactPreparationCollector {
     this.#intent = intent
   }
 
-  observeGeneration(cursor: DirectoryCursor, committed: V2CommittedDirectory): void {
+  observeGeneration(cursor: DirectoryCursor, committed: CommittedDirectory): void {
     const generation = encodeBase64Url(committed.generation)
     const prior = this.#generations.get(cursor.idText)
     if (prior !== undefined && prior.generation !== generation) {
@@ -63,7 +63,7 @@ export class ExactPreparationCollector {
 
   materializeDirectory(
     cursor: DirectoryCursor,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
     artifactPath: LogicalArtifactPath,
     requestedRole: 'selected' | 'ancestor',
   ): AuthenticatedDirectory {
@@ -105,7 +105,7 @@ export class ExactPreparationCollector {
 
   referenceDirectory(
     cursor: DirectoryCursor,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
     logicalArtifactPath: LogicalArtifactPath,
   ): AuthenticatedDirectory {
     this.observeGeneration(cursor, committed)
@@ -122,7 +122,7 @@ export class ExactPreparationCollector {
   }
 
   addFile(
-    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+    entry: Extract<CatalogEntry, { kind: 'file' }>,
     sourceAuthenticationPath: SourceAuthenticationPath,
     logicalArtifactPath: LogicalArtifactPath,
     parent: AuthenticatedDirectory,

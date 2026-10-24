@@ -4,16 +4,16 @@ import { DEFAULT_RELAY_RECEIVE_CAPACITY } from '../../src/transport/relay/receiv
 import { decodeDeliveryJoin } from '../../src/transport/relay/delivery-handshake-codec'
 import { encodeSettlementNotice } from '../../src/transport/relay/delivery-settlement-codec'
 import {
-  dialV2RelayReceiver,
-  V2_RELAY_HEARTBEAT_CLOSE_CODE,
-  V2_RELAY_PROTOCOL_CLOSE_CODE,
-} from '../../src/transport/relay/v2-receiver'
+  dialRelayReceiver,
+  RELAY_HEARTBEAT_CLOSE_CODE,
+  RELAY_PROTOCOL_CLOSE_CODE,
+} from '../../src/transport/relay/receiver'
 import {
-  decodeV2ConnectionProbe,
-  encodeV2ConnectionProbeAck,
-  encodeV2OpaqueRoute,
-  encodeV2SessionCredit,
-} from '../../src/transport/relay/v2-protocol'
+  decodeConnectionProbe,
+  encodeConnectionProbeAck,
+  encodeOpaqueRoute,
+  encodeSessionCredit,
+} from '../../src/transport/relay/protocol'
 
 import { capability, FakeSocket, relaySessionId } from './relay-receiver-fixture'
 
@@ -24,7 +24,7 @@ describe('v2 relay receiver ingress', () => {
     const socket = new FakeSocket()
     const socketFactory = vi.fn(() => socket)
     const mutableCapability = { ...capability, shareIdRaw: capability.shareIdRaw.slice() }
-    const pending = dialV2RelayReceiver('https://relay.invalid/base?token=a%20b', mutableCapability, {
+    const pending = dialRelayReceiver('https://relay.invalid/base?token=a%20b', mutableCapability, {
       socketFactory,
     })
     mutableCapability.shareIdRaw.fill(9)
@@ -43,7 +43,7 @@ describe('v2 relay receiver ingress', () => {
   it.each(['share_id=other', 'share%5fid=AwMDAwMDAwMDAwMD', 'share_id=x&share_id=y'])(
     'rejects a preconfigured route before opening a socket: %s', async query => {
       const socketFactory = vi.fn(() => new FakeSocket())
-      await expect(dialV2RelayReceiver(`https://relay.invalid?${query}`, capability, {
+      await expect(dialRelayReceiver(`https://relay.invalid?${query}`, capability, {
         socketFactory,
       })).rejects.toThrow(/share_id/u)
       expect(socketFactory).not.toHaveBeenCalled()
@@ -53,7 +53,7 @@ describe('v2 relay receiver ingress', () => {
   it('fails a silently disconnected relay without waiting for a WebSocket close event', async () => {
     vi.useFakeTimers()
     const socket = new FakeSocket()
-    const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
+    const connection = await dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
     const read = connection.channel.frames.getReader().read()
@@ -61,16 +61,16 @@ describe('v2 relay receiver ingress', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     await rejected
     expect(connection.channel.state).toBe('closed')
-    expect(socket.closeCode).toBe(V2_RELAY_HEARTBEAT_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_HEARTBEAT_CLOSE_CODE)
     expect(vi.getTimerCount()).toBe(0)
   })
 
   it('fails the lane instead of buffering beyond its ciphertext frame budget', async () => {
     const socket = new FakeSocket()
-    const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
+    const connection = await dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
-    const opaque = encodeV2OpaqueRoute({
+    const opaque = encodeOpaqueRoute({
       relaySessionId,
       ciphertext: new Uint8Array(65_536).fill(7),
     })
@@ -82,7 +82,7 @@ describe('v2 relay receiver ingress', () => {
     }
     expect(socket.closeCode).toBeUndefined()
     socket.message(opaque)
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
 
     const reader = connection.channel.frames.getReader()
     await expect(reader.read()).rejects.toThrow(/capacity/)
@@ -91,7 +91,7 @@ describe('v2 relay receiver ingress', () => {
   it('bounds a relay that opens but withholds descriptor delivery', async () => {
     vi.useFakeTimers()
     const socket = new FakeSocket(false)
-    const pending = dialV2RelayReceiver('https://relay.invalid', capability, {
+    const pending = dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
     const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
@@ -103,7 +103,7 @@ describe('v2 relay receiver ingress', () => {
 
   it('settles an empty retired receiver channel before closing', async () => {
     const socket = new FakeSocket()
-    const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
+    const connection = await dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
     const reader = connection.channel.frames.getReader()
@@ -120,20 +120,20 @@ describe('v2 relay receiver ingress', () => {
 
   it('fails the receiver link on a malformed retirement control', async () => {
     const socket = new FakeSocket()
-    const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
+    const connection = await dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket,
     })
     const malformed = encodeSettlementNotice({ kind: 'settlement-notice', totalFrames: 0n, totalEncodedBytes: 0n, relaySessionId })
     malformed[5] = 1
 
     socket.message(malformed)
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
     await expect(connection.channel.frames.getReader().read()).rejects.toMatchObject({ kind: 'malformed' })
   })
 })
 
-const wireBytes = (frame: Uint8Array) => encodeV2OpaqueRoute({ relaySessionId, ciphertext: frame }).byteLength
-const connect = (socket: FakeSocket) => dialV2RelayReceiver('https://relay.invalid', capability, { socketFactory: () => socket })
+const wireBytes = (frame: Uint8Array) => encodeOpaqueRoute({ relaySessionId, ciphertext: frame }).byteLength
+const connect = (socket: FakeSocket) => dialRelayReceiver('https://relay.invalid', capability, { socketFactory: () => socket })
 async function settleSends(): Promise<void> {
   const promiseTurns = 20
   for (let turn = 0; turn < promiseTurns; turn += 1) await Promise.resolve()
@@ -239,7 +239,7 @@ describe('v2 relay receiver send credit', () => {
     const rejected = expect(pending).rejects.toMatchObject({ name: 'RelayHeartbeatError' })
     await vi.advanceTimersByTimeAsync(60_000)
     await rejected
-    expect(socket.closeCode).toBe(V2_RELAY_HEARTBEAT_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_HEARTBEAT_CLOSE_CODE)
     expect(socket.opaqueFrames).toEqual([])
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -248,7 +248,7 @@ describe('v2 relay receiver send credit', () => {
     vi.useFakeTimers()
     const socket = new FakeSocket()
     const connection = await connect(socket)
-    const inbound = encodeV2OpaqueRoute({ relaySessionId, ciphertext: Uint8Array.of(9) })
+    const inbound = encodeOpaqueRoute({ relaySessionId, ciphertext: Uint8Array.of(9) })
     for (let elapsed = 0; elapsed < 180_000; elapsed += 15_000) {
       await vi.advanceTimersByTimeAsync(15_000)
       socket.message(inbound)
@@ -293,19 +293,19 @@ describe('v2 relay receiver send credit', () => {
     vi.useFakeTimers()
     const socket = new FakeSocket()
     const trace = vi.fn()
-    const connection = await dialV2RelayReceiver('https://relay.invalid', capability, {
+    const connection = await dialRelayReceiver('https://relay.invalid', capability, {
       socketFactory: () => socket, heartbeatTrace: trace,
     })
     const frame = Uint8Array.of(7)
     for (let index = 0; index < Number(DEFAULT_RELAY_RECEIVE_CAPACITY.frames); index += 1) {
-      socket.message(encodeV2OpaqueRoute({ relaySessionId, ciphertext: frame }))
+      socket.message(encodeOpaqueRoute({ relaySessionId, ciphertext: frame }))
     }
     const pending = connection.channel.send(frame)
     await vi.advanceTimersByTimeAsync(15_000)
     const probe = socket.sent.at(-1)!
-    const nonce = decodeV2ConnectionProbe(probe)
+    const nonce = decodeConnectionProbe(probe)
     expect(socket.opaqueFrames).toEqual([])
-    socket.message(encodeV2ConnectionProbeAck(nonce))
+    socket.message(encodeConnectionProbeAck(nonce))
     expect(trace).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'acknowledged' }))
     socket.grant(1, wireBytes(frame))
     await pending
@@ -328,15 +328,15 @@ describe('v2 relay receiver send credit', () => {
     if (invalid === 'wrong session') {
       const other = relaySessionId.slice()
       other[0] = 2
-      socket.message(encodeV2SessionCredit({ relaySessionId: other, frames: 1, bytes: wireBytes(frame) }))
+      socket.message(encodeSessionCredit({ relaySessionId: other, frames: 1, bytes: wireBytes(frame) }))
     }
     if (invalid === 'malformed') {
-      const malformed = encodeV2SessionCredit({ relaySessionId, frames: 1, bytes: wireBytes(frame) })
+      const malformed = encodeSessionCredit({ relaySessionId, frames: 1, bytes: wireBytes(frame) })
       malformed[5] = 1
       socket.message(malformed)
     }
     await Promise.all([rejected, read])
-    expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
+    expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
     expect(socket.opaqueFrames).toEqual([])
   })
 

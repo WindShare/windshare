@@ -1,19 +1,19 @@
-import type { V2BlockRangeReader } from '../../content/v2-broker'
+import type { BlockRangeReader } from '../../content/broker'
 
 const RECEIPT_PROGRESS_INTERVAL_MILLISECONDS = 250
 
 interface TransferContentProgress {
-  remainingWork?: import('../../content/v2-lane-set').RemainingWorkObservation
+  remainingWork?: import('../../content/lane-set').RemainingWorkObservation
   received(objectBytes: number): void
   updated(): void
 }
 
 /** One stable receipt observer lets shared block reads count traffic once per job. */
 export function observeTransferContent(
-  broker: V2BlockRangeReader,
+  broker: BlockRangeReader,
   progress: TransferContentProgress,
   now: () => number = () => performance.now(),
-): V2BlockRangeReader {
+): BlockRangeReader {
   let lastUpdate = -Infinity
   const onReceive = (objectBytes: number) => {
     progress.received(objectBytes)

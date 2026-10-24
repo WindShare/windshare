@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { snapshotTraceEventObservationV2 } from '../../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../../src/application/diagnostics/protocol-trace'
-import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from '../../../src/session/v2-identities'
+import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../../src/session/identities'
 
 describe('block wait diagnostics', () => {
   it.each(['awaiting_first_fragment', 'receiving_fragments'] as const)('exports correlated %s timeout decisions', phase => {
@@ -10,8 +10,8 @@ describe('block wait diagnostics', () => {
       cancellationReason: 'timeout',
       blockWait: { phase, waitedMilliseconds: 35_000.9, queueProgress: 12 },
       correlation: {
-        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
-        protocolOperationId: createV2ProtocolOperationIdentity(new Uint8Array(16).fill(2)),
+        protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        protocolOperationId: createProtocolOperationIdentity(new Uint8Array(16).fill(2)),
         lane: { id: 1, epoch: 0 },
       },
     })

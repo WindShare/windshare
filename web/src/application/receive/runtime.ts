@@ -2,14 +2,14 @@ import type { SelectionProjectionRuntime } from './discovery'
 import { validateReceiveIntent } from '../../transfer/intent'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import { StaleReceiveBoundaryError } from './observation/contracts'
-import { v2SelectionPolicyFromIntent } from './selection'
+import { selectionPolicyFromIntent } from './selection'
 import type { RetainedContinuationAdoption } from './retained/coordinator'
 import type { ReceiverConnectionSnapshot } from '../../receiver/connection-state'
 import type { ReceiveRuntimeState } from './state'
 import type { ActiveReceiveCoordinator } from './active/coordinator'
 import type { RetainedInventoryCoordinator } from './retained/coordinator'
 import type { LifecycleUserAction } from './actions'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from './contracts'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from './contracts'
 import type { ReceiveJoinedShare } from './joined-share'
 import { isReceiveOutputDelivered } from './completion'
 import { newReceiveOperationKind } from './policy'
@@ -82,15 +82,15 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     this.#options.active.performLifecycleAction(action)
   }
 
-  retainedActionAdmission(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction) {
+  retainedActionAdmission(operation: RetainedReceiveOperation, action: RetainedReceiveAction) {
     return this.#options.retained.actionAdmission(operation, action)
   }
 
-  performRetainedAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): void {
+  performRetainedAction(operation: RetainedReceiveOperation, action: RetainedReceiveAction): void {
     this.#options.retained.perform(operation, action)
   }
 
-  retainedActionCompleted(operationId: string, action: V2RetainedReceiveAction): void {
+  retainedActionCompleted(operationId: string, action: RetainedReceiveAction): void {
     if (this.#options.disposed() || this.#options.active.active ||
         this.#options.state.getSnapshot().lifecycle?.operationId !== operationId ||
         (action !== 'forget' && action !== 'delete' && action !== 'discard')) return
@@ -104,7 +104,7 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     const { runtime } = input
     const intent = await validateReceiveIntent(runtime.intent)
     if (!this.#ownsJoined(joined)) throw new StaleReceiveBoundaryError()
-    const selection = v2SelectionPolicyFromIntent(intent)
+    const selection = selectionPolicyFromIntent(intent)
     this.#options.activation.invalidate(new StaleReceiveBoundaryError(), 'caller-cancelled')
     const prepared = this.#options.active.prepareAdoption({
       joined, selection, runtime,
@@ -182,7 +182,7 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
   }
 
   prepareReplacement(
-    operation: V2RetainedReceiveOperation,
+    operation: RetainedReceiveOperation,
     prepare: (joined: Share, signal: AbortSignal, current: () => boolean) => Promise<void>,
   ): void {
     if (this.#options.disposed() || this.#pending || this.#options.retained.pending ||

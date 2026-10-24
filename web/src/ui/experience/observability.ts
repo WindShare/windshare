@@ -1,17 +1,17 @@
-import type { V2ReceiverControllerOptions } from '../controller/contracts'
-import type { V2ReceiverSnapshot } from '../v2-model'
+import type { ReceiverControllerOptions } from '../controller/contracts'
+import type { ReceiverSnapshot } from '../model'
 import { compareTaskTransition, type TaskPresentationTransition } from '../tasks'
 import { composeTasks } from './task-composition'
 import { compareSavingTransition, presentSavingActions, type SavingPresentationTransition } from '../saving'
 
 export class ReceiverExperienceObservability {
-  readonly #source: V2ReceiverControllerOptions['trace']
+  readonly #source: ReceiverControllerOptions['trace']
   #tasks = new Map<string, TaskPresentationTransition>()
   #saving: SavingPresentationTransition | null = null
 
-  constructor(source: V2ReceiverControllerOptions['trace']) { this.#source = source }
+  constructor(source: ReceiverControllerOptions['trace']) { this.#source = source }
 
-  publish(snapshot: V2ReceiverSnapshot): void {
+  publish(snapshot: ReceiverSnapshot): void {
     const observer = this.#source?.current
     if (observer === undefined) return
     try {
@@ -41,7 +41,7 @@ export class ReceiverExperienceObservability {
     }
   }
 
-  intent(action: string, snapshot: V2ReceiverSnapshot,
+  intent(action: string, snapshot: ReceiverSnapshot,
     operation?: Readonly<{ operationId: string; generation: bigint }>): void {
     try {
       this.#source?.current?.(Object.freeze({ name: 'receiver_experience', transition: 'intent',

@@ -11,8 +11,8 @@ import (
 
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type admissionTestTimer struct {
@@ -84,7 +84,7 @@ func attemptFor(session byte) AttemptRequest {
 	r.ProtocolSessionID = [16]byte{session}
 	return r
 }
-func startActual(t *testing.T, n *NativePeerConnectivity, session byte) *provider.Connection {
+func startActual(t *testing.T, n *NativePeerConnectivity, session byte) *pionpeer.Connection {
 	t.Helper()
 	pc, err := n.NewPeerConnection(context.Background(), attemptFor(session))
 	if err != nil {
@@ -108,7 +108,7 @@ func admissionEvent(t *testing.T, n *NativePeerConnectivity, kind AdmissionKind,
 }
 
 type admissionResult struct {
-	peer *provider.Connection
+	peer *pionpeer.Connection
 	err  error
 }
 
@@ -132,7 +132,7 @@ func actualResult(t *testing.T, ch <-chan admissionResult) admissionResult {
 func TestProcessProviderAdmissionFairAcrossManagersAndIndependentCancellation(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	a, b, c := makeNative(), makeNative(), makeNative()
-	var active []*provider.Connection
+	var active []*pionpeer.Connection
 	for i := byte(1); i <= 4; i++ {
 		active = append(active, startActual(t, a, i))
 	}

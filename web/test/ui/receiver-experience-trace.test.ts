@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
-import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import { ReceiverExperienceObservability } from '../../src/ui/experience/observability'
-import { projectV2ReceiverTraceEvent } from '../../src/application/diagnostics/receive-trace'
+import { projectReceiverTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import {
   FakeJoinedShare, FakeReceiveComposition, MANAGED_ENVIRONMENT, controllerFor,
   resetOrchestrationTestEnvironment, startTransfer, next, identityText,
@@ -15,7 +15,7 @@ describe('receiver experience diagnostics', () => {
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, new FakeReceiveComposition(MANAGED_ENVIRONMENT))
     await startTransfer(controller, joined)
-    const events: V2ReceiverTraceEvent[] = []
+    const events: ReceiverTraceEvent[] = []
     const trace = new ReceiverExperienceObservability({ current: event => events.push(event) })
     const snapshot = controller.getSnapshot()
     if (snapshot.output.lifecycle === null) throw new Error('lifecycle missing')
@@ -41,7 +41,7 @@ describe('receiver experience diagnostics', () => {
         operationId: initial.output.receiveIntent?.operationId }),
     ]))
     for (const event of events) {
-      const exported = projectV2ReceiverTraceEvent(event)
+      const exported = projectReceiverTraceEvent(event)
       expect(() => validateTraceEventPayloadV2(exported.eventName, exported.payload)).not.toThrow()
     }
     await controller.dispose()

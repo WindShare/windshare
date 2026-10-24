@@ -7,8 +7,8 @@ import type {
 } from './hot-switch-contract'
 import { OutputFence } from './hot-switch-page-transfer'
 import type {
-  V2PeerAttemptTraceEvent,
-  V2PeerRecoveryTraceEvent,
+  PeerAttemptTraceEvent,
+  PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
 import type {
   BeginOutputFileResult,
@@ -171,7 +171,7 @@ export class DirectAtomicStreamOutput implements OutputSession {
 }
 
 export function projectAttemptEvidence(
-  event: V2PeerAttemptTraceEvent,
+  event: PeerAttemptTraceEvent,
 ): HotSwitchPeerAttemptEvidence {
   const { correlation, ...payload } = event
   // The browser-test bridge keeps copied bytes instead of inventing a second
@@ -202,7 +202,7 @@ export function projectAttemptEvidence(
 }
 
 export function projectRecoveryEvidence(
-  event: V2PeerRecoveryTraceEvent,
+  event: PeerRecoveryTraceEvent,
 ): HotSwitchPeerRecoveryEvidence {
   if (event.stage === 'attempt-replaced') {
     const { correlation, previousAttemptId, ...payload } = event
@@ -220,7 +220,7 @@ export function projectRecoveryEvidence(
 }
 
 function projectRecoveryCorrelation(
-  correlation: V2PeerRecoveryTraceEvent['correlation'],
+  correlation: PeerRecoveryTraceEvent['correlation'],
 ) {
   return {
     protocolSessionIdBytes: Object.freeze([

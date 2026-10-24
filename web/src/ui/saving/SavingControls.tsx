@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { SavingActionPresentation, SavingChoice } from './index'
-import type { ArtifactActivationPresentation } from '../v2-artifact-presentation'
+import type { ArtifactActivationPresentation } from '../artifact-presentation'
 import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 

@@ -1,10 +1,10 @@
-import type { V2CatalogClient } from '../../src/catalog/v2-client'
-import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
-import type { V2CatalogEntry, V2CatalogPage } from '../../src/catalog/v2-records'
-import { V2SelectionPolicy, type V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
+import type { CatalogClient } from '../../src/catalog/client'
+import type { CommittedDirectory } from '../../src/catalog/page-store'
+import type { CatalogEntry, CatalogPage } from '../../src/catalog/records'
+import { SelectionPolicy, type FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { ByteRangeSet, FileGeometry, byteRange, type ByteRange } from '../../src/content/geometry'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
-import type { V2OpenedRevision, V2RevisionReader } from '../../src/content/v2-session-services'
+import type { BlockRangeReader } from '../../src/content/broker'
+import type { OpenedRevision, RevisionReader } from '../../src/content/session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type {
   ReceiveLifecycleState,
@@ -59,14 +59,14 @@ import {
   type PlanPauseRequest,
   type PlanStopRequest,
   type PortableExecution,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
   type WorkspaceExecution,
 } from '../../src/transfer/output/session'
 import {
   TransferJob,
-  type V2RevisionCapacityPolicyOptions,
-} from '../../src/transfer/v2-job'
-import { V2FileRevisionChangedError } from '../../src/transfer/job/failures'
+  type RevisionCapacityPolicyOptions,
+} from '../../src/transfer/job'
+import { FileRevisionChangedError } from '../../src/transfer/job/failures'
 
 export function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -93,7 +93,7 @@ export function catalogCommitment(first = 1): Uint8Array<ArrayBuffer> {
 export function directoryEntry(
   id: Uint8Array<ArrayBuffer>,
   name: string,
-): Extract<V2CatalogEntry, { kind: 'directory' }> {
+): Extract<CatalogEntry, { kind: 'directory' }> {
   return Object.freeze({ kind: 'directory', id, idText: encodeBase64Url(id), name })
 }
 
@@ -101,13 +101,13 @@ export function fileEntry(
   id: Uint8Array<ArrayBuffer>,
   name: string,
   expectedSize: bigint,
-): Extract<V2CatalogEntry, { kind: 'file' }> {
+): Extract<CatalogEntry, { kind: 'file' }> {
   return Object.freeze({ kind: 'file', id, idText: encodeBase64Url(id), name, expectedSize })
 }
 
 export interface CatalogDirectoryFixture {
   readonly id: Uint8Array<ArrayBuffer>
-  readonly entries: readonly V2CatalogEntry[]
+  readonly entries: readonly CatalogEntry[]
   readonly generation?: Uint8Array<ArrayBuffer>
   readonly omittedCount?: bigint
   readonly loadFailure?: unknown
@@ -115,7 +115,7 @@ export interface CatalogDirectoryFixture {
 }
 
 export function catalogFixture(directories: readonly CatalogDirectoryFixture[]): {
-  readonly catalog: V2CatalogClient
+  readonly catalog: CatalogClient
   readonly loads: string[]
   readonly pageReads: string[]
 } {
@@ -131,18 +131,18 @@ export function catalogFixture(directories: readonly CatalogDirectoryFixture[]):
       if (fixture === undefined) throw new Error('catalog fixture loaded an unknown directory')
       return committedDirectory(fixture)
     },
-    pages: async function* (directory: V2CommittedDirectory) {
+    pages: async function* (directory: CommittedDirectory) {
       const fixture = byId.get(encodeBase64Url(directory.directoryId))
       if (fixture === undefined) throw new Error('catalog fixture lost a committed directory')
       await fixture.beforePages?.()
       pageReads.push(encodeBase64Url(directory.directoryId))
       yield catalogPage(fixture)
     },
-  } as unknown as V2CatalogClient
+  } as unknown as CatalogClient
   return { catalog, loads, pageReads }
 }
 
-function committedDirectory(fixture: CatalogDirectoryFixture): V2CommittedDirectory {
+function committedDirectory(fixture: CatalogDirectoryFixture): CommittedDirectory {
   return Object.freeze({
     directoryId: fixture.id.slice(),
     directoryIdText: encodeBase64Url(fixture.id),
@@ -155,7 +155,7 @@ function committedDirectory(fixture: CatalogDirectoryFixture): V2CommittedDirect
   })
 }
 
-function catalogPage(fixture: CatalogDirectoryFixture): V2CatalogPage {
+function catalogPage(fixture: CatalogDirectoryFixture): CatalogPage {
   const entries = [...fixture.entries]
     .map(entry => Object.freeze({ ...entry, idText: encodeBase64Url(entry.id) }))
     .sort((left, right) => compareUtf8(left.name, right.name))
@@ -175,8 +175,8 @@ function catalogPage(fixture: CatalogDirectoryFixture): V2CatalogPage {
   })
 }
 
-export function selectOnlyFile(file: Extract<V2CatalogEntry, { kind: 'file' }>): V2SelectionPolicy {
-  const selection = new V2SelectionPolicy(false)
+export function selectOnlyFile(file: Extract<CatalogEntry, { kind: 'file' }>): SelectionPolicy {
+  const selection = new SelectionPolicy(false)
   selection.toggle(file, [identityText(2)])
   return selection
 }
@@ -187,8 +187,8 @@ export type TestArtifactKind = 'directory-tree' | 'original-file' | 'zip-archive
 export async function receiveIntentFixture(input: {
   readonly planKind: TestPlanKind
   readonly artifactKind: TestArtifactKind
-  readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
-  readonly file?: Extract<V2CatalogEntry, { kind: 'file' }>
+  readonly selection: FrozenSelectionPolicy | SelectionPolicy
+  readonly file?: Extract<CatalogEntry, { kind: 'file' }>
 }): Promise<ReceiveIntent> {
   const selection = 'snapshot' in input.selection ? input.selection.snapshot() : input.selection
   const selectionSpec = await createSelectionSpec({
@@ -265,8 +265,8 @@ export async function receiveIntentFixture(input: {
 }
 
 function requiredFile(
-  file: Extract<V2CatalogEntry, { kind: 'file' }> | undefined,
-): Extract<V2CatalogEntry, { kind: 'file' }> {
+  file: Extract<CatalogEntry, { kind: 'file' }> | undefined,
+): Extract<CatalogEntry, { kind: 'file' }> {
   if (file === undefined) throw new TypeError('original-file fixture requires a file')
   return file
 }
@@ -281,12 +281,12 @@ export interface ReaderFixtureOptions {
 }
 
 export function readerFixture(
-  files: readonly Extract<V2CatalogEntry, { kind: 'file' }>[],
+  files: readonly Extract<CatalogEntry, { kind: 'file' }>[],
   events: string[] = [],
   options: ReaderFixtureOptions = {},
 ): {
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
   readonly revisionRequests: string[]
   readonly blockRequests: string[]
   readonly releases: string[]
@@ -295,7 +295,7 @@ export function readerFixture(
   const revisionRequests: string[] = []
   const blockRequests: string[] = []
   const releases: string[] = []
-  const revisions: V2RevisionReader = {
+  const revisions: RevisionReader = {
     open: async (id, signal) => {
       signal?.throwIfAborted()
       const idText = encodeBase64Url(id)
@@ -304,7 +304,7 @@ export function readerFixture(
       options.observeOpenSignal?.(idText, signal)
       await options.beforeOpen?.(idText)
       if (options.failRevisionFor === idText) {
-        throw new V2FileRevisionChangedError('fixture revision failure')
+        throw new FileRevisionChangedError('fixture revision failure')
       }
       const file = byId.get(idText)
       if (file === undefined) throw new Error('fixture opened an unknown file')
@@ -315,7 +315,7 @@ export function readerFixture(
       )
     },
   }
-  const broker: V2BlockRangeReader = {
+  const broker: BlockRangeReader = {
     readRange: async function* (descriptor, _leaseId, range, request) {
       request?.signal?.throwIfAborted()
       blockRequests.push(descriptor.fileIdText)
@@ -330,10 +330,10 @@ export function readerFixture(
 }
 
 function openedRevision(
-  file: Extract<V2CatalogEntry, { kind: 'file' }>,
+  file: Extract<CatalogEntry, { kind: 'file' }>,
   release: () => Promise<void>,
   deriveAuthorityFromFileIdentity = false,
-): V2OpenedRevision {
+): OpenedRevision {
   const revision = deriveAuthorityFromFileIdentity
     ? derivedIdentity(file.id, 40)
     : identity((file.id[0] ?? 1) + 40)
@@ -551,7 +551,7 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
   }
 }
 
-export interface TestPlanAuthority extends V2PlanExecutionAuthority {
+export interface TestPlanAuthority extends PlanExecutionAuthority {
   readonly routes: TestPlanKind[]
   readonly preparations: ExactPreparationEvidence[]
   readonly singleFileAdmissions: ExactSingleFileEvidence[]
@@ -625,7 +625,7 @@ export function planAuthorityFixture(input: {
       return pause(intent, request)
     },
   })
-  const authority: V2PlanExecutionAuthority = {
+  const authority: PlanExecutionAuthority = {
     openDirectTree: async (intent) => {
       routes.push('direct-tree')
       const directories = await directoryOutput(
@@ -791,12 +791,12 @@ async function directoryOutput(
 export function transferJobFixture(input: {
   readonly checkpointClock?: ConstructorParameters<typeof TransferJob>[0]['checkpointClock']
   readonly onCheckpointObservation?: ConstructorParameters<typeof TransferJob>[0]['onCheckpointObservation']
-  readonly catalog: V2CatalogClient
-  readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
+  readonly catalog: CatalogClient
+  readonly selection: FrozenSelectionPolicy | SelectionPolicy
   readonly intent: ReceiveIntent
-  readonly plans: V2PlanExecutionAuthority
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
+  readonly plans: PlanExecutionAuthority
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
   readonly onProgress?: ConstructorParameters<typeof TransferJob>[0]['onProgress']
   readonly maximumConcurrentFiles?: number
@@ -807,7 +807,7 @@ export function transferJobFixture(input: {
   readonly chunkSize?: number
   readonly outputSettlementTimeoutMilliseconds?: number
   readonly outputSettlementDeadline?: ConstructorParameters<typeof TransferJob>[0]['outputSettlementDeadline']
-  readonly revisionCapacity?: V2RevisionCapacityPolicyOptions
+  readonly revisionCapacity?: RevisionCapacityPolicyOptions
 }): TransferJob {
   return new TransferJob({
     descriptor: {
@@ -825,7 +825,7 @@ export function transferJobFixture(input: {
       generation: Object.freeze({
         waitForProtocolSessionReplacement: (
           _identity: Parameters<
-            V2RevisionCapacityPolicyOptions['generation']['waitForProtocolSessionReplacement']
+            RevisionCapacityPolicyOptions['generation']['waitForProtocolSessionReplacement']
           >[0],
           signal: AbortSignal,
         ) => waitForAbort(signal),

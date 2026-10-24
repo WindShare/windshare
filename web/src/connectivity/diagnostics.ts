@@ -1,14 +1,14 @@
 import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import type { PeerProviderFact } from './peer-set/provider-facts'
-import { V2_PEER_OPERATION_CODE } from '../session/v2-message'
+import { PEER_OPERATION_CODE } from '../session/message'
 import type {
-  V2PeerAttemptIdentity,
-  V2PeerPathIdentity,
-  V2ProtocolSessionIdentity,
-} from '../session/v2-identities'
-import type { V2PeerAttemptFailure, V2PeerFailureDecision } from './v2-peer-failure'
+  PeerAttemptIdentity,
+  PeerPathIdentity,
+  ProtocolSessionIdentity,
+} from '../session/identities'
+import type { PeerAttemptFailure, PeerFailureDecision } from './peer-failure'
 
-export const V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES = Object.freeze([
+export const BROWSER_CONNECTIVITY_ATTEMPT_STAGES = Object.freeze([
   'started',
   'negotiation-deadline-armed',
   'negotiation-deadline-expired',
@@ -28,7 +28,7 @@ export const V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES = Object.freeze([
   'failed',
 ] as const)
 
-export const V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
+export const BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
   'parallelism',
   'wave-started',
   'retry-decided',
@@ -42,9 +42,9 @@ export const V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
   'session-stopped',
 ] as const)
 
-export const V2_CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt-transient', 'resource-deferred', 'path-terminal', 'session-terminal'] as const)
+export const CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt-transient', 'resource-deferred', 'path-terminal', 'session-terminal'] as const)
 
-export const V2_TYPED_PEER_ERROR_CODES = Object.freeze([
+export const TYPED_PEER_ERROR_CODES = Object.freeze([
   'peer-negotiation',
   'peer-timeout',
   'peer-candidates',
@@ -56,83 +56,83 @@ export const V2_TYPED_PEER_ERROR_CODES = Object.freeze([
   'unexpected',
 ] as const)
 
-export type V2BrowserConnectivityAttemptStage =
-  (typeof V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES)[number]
-export type V2BrowserConnectivityRecoveryStage =
-  (typeof V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES)[number]
-export type V2ConnectivityFailureScope = (typeof V2_CONNECTIVITY_FAILURE_SCOPES)[number]
-export type V2TypedPeerErrorCode = (typeof V2_TYPED_PEER_ERROR_CODES)[number]
+export type BrowserConnectivityAttemptStage =
+  (typeof BROWSER_CONNECTIVITY_ATTEMPT_STAGES)[number]
+export type BrowserConnectivityRecoveryStage =
+  (typeof BROWSER_CONNECTIVITY_RECOVERY_STAGES)[number]
+export type ConnectivityFailureScope = (typeof CONNECTIVITY_FAILURE_SCOPES)[number]
+export type TypedPeerErrorCode = (typeof TYPED_PEER_ERROR_CODES)[number]
 
-export const V2_PEER_OPERATION_TYPED_ERRORS = Object.freeze({
-  [V2_PEER_OPERATION_CODE.negotiation]: 'peer-negotiation',
-  [V2_PEER_OPERATION_CODE.timeout]: 'peer-timeout',
-  [V2_PEER_OPERATION_CODE.candidates]: 'peer-candidates',
-  [V2_PEER_OPERATION_CODE.admission]: 'peer-admission',
-  [V2_PEER_OPERATION_CODE.capacity]: 'peer-busy',
-} as const satisfies Readonly<Record<number, V2TypedPeerErrorCode>>)
+export const PEER_OPERATION_TYPED_ERRORS = Object.freeze({
+  [PEER_OPERATION_CODE.negotiation]: 'peer-negotiation',
+  [PEER_OPERATION_CODE.timeout]: 'peer-timeout',
+  [PEER_OPERATION_CODE.candidates]: 'peer-candidates',
+  [PEER_OPERATION_CODE.admission]: 'peer-admission',
+  [PEER_OPERATION_CODE.capacity]: 'peer-busy',
+} as const satisfies Readonly<Record<number, TypedPeerErrorCode>>)
 
-export const V2_PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
-  Object.freeze({ code: V2_PEER_OPERATION_CODE.negotiation, typedErrorCode: 'peer-negotiation' }),
-  Object.freeze({ code: V2_PEER_OPERATION_CODE.timeout, typedErrorCode: 'peer-timeout' }),
-  Object.freeze({ code: V2_PEER_OPERATION_CODE.candidates, typedErrorCode: 'peer-candidates' }),
-  Object.freeze({ code: V2_PEER_OPERATION_CODE.admission, typedErrorCode: 'peer-admission' }),
-  Object.freeze({ code: V2_PEER_OPERATION_CODE.capacity, typedErrorCode: 'peer-busy' }),
+export const PEER_OPERATION_ERROR_REGISTRY = Object.freeze([
+  Object.freeze({ code: PEER_OPERATION_CODE.negotiation, typedErrorCode: 'peer-negotiation' }),
+  Object.freeze({ code: PEER_OPERATION_CODE.timeout, typedErrorCode: 'peer-timeout' }),
+  Object.freeze({ code: PEER_OPERATION_CODE.candidates, typedErrorCode: 'peer-candidates' }),
+  Object.freeze({ code: PEER_OPERATION_CODE.admission, typedErrorCode: 'peer-admission' }),
+  Object.freeze({ code: PEER_OPERATION_CODE.capacity, typedErrorCode: 'peer-busy' }),
 ] as const)
 
-export function v2TypedErrorForPeerOperationCode(
+export function typedErrorForPeerOperationCode(
   code: number,
-): V2TypedPeerErrorCode | undefined {
-  if (!Object.hasOwn(V2_PEER_OPERATION_TYPED_ERRORS, code)) return undefined
-  return V2_PEER_OPERATION_TYPED_ERRORS[
-    code as keyof typeof V2_PEER_OPERATION_TYPED_ERRORS
+): TypedPeerErrorCode | undefined {
+  if (!Object.hasOwn(PEER_OPERATION_TYPED_ERRORS, code)) return undefined
+  return PEER_OPERATION_TYPED_ERRORS[
+    code as keyof typeof PEER_OPERATION_TYPED_ERRORS
   ]
 }
 
-export interface V2CandidateCounts {
+export interface CandidateCounts {
   readonly localEmitted: number
   readonly remoteAccepted: number
 }
 
-export interface V2LaneIdentity {
+export interface LaneIdentity {
   readonly laneId: number
   readonly laneEpoch: number
 }
 
-export type V2PeerRecoveryWaveTrigger = 'activation' | 'network-change' | 'detachment'
+export type PeerRecoveryWaveTrigger = 'activation' | 'network-change' | 'detachment'
 
-export interface V2AttemptOrdinalCorrelation {
+export interface AttemptOrdinalCorrelation {
   readonly waveOrdinal: number
   readonly waveAttemptOrdinal: number
   readonly sessionAttemptOrdinal: number
 }
 
-export interface V2PeerAttemptCorrelation extends V2AttemptOrdinalCorrelation {
-  readonly protocolSessionId: V2ProtocolSessionIdentity
-  readonly peerPathId: V2PeerPathIdentity
-  readonly attemptId: V2PeerAttemptIdentity
+export interface PeerAttemptCorrelation extends AttemptOrdinalCorrelation {
+  readonly protocolSessionId: ProtocolSessionIdentity
+  readonly peerPathId: PeerPathIdentity
+  readonly attemptId: PeerAttemptIdentity
 }
 
-export interface V2PeerAttemptSummary {
-  readonly lastCompletedStage: V2BrowserConnectivityAttemptStage
+export interface PeerAttemptSummary {
+  readonly lastCompletedStage: BrowserConnectivityAttemptStage
   readonly attemptElapsedMilliseconds: number
   readonly stageElapsedMilliseconds: number
   readonly deadlineExpired: boolean
 }
 
-type V2PeerAttemptBase = Readonly<{
-  summary?: V2PeerAttemptSummary
+type PeerAttemptBase = Readonly<{
+  summary?: PeerAttemptSummary
   eventName: 'peer_attempt'
   correlation: FailureCorrelation & Readonly<{
-    protocolSessionId: V2ProtocolSessionIdentity
-    peerPathId: V2PeerPathIdentity
-    peerAttemptId: V2PeerAttemptIdentity
+    protocolSessionId: ProtocolSessionIdentity
+    peerPathId: PeerPathIdentity
+    peerAttemptId: PeerAttemptIdentity
   }>
   waveOrdinal: number
   waveAttemptOrdinal: number
   sessionAttemptOrdinal: number
 }>
 
-export type V2PeerAttemptTraceEvent = V2PeerAttemptBase & (
+export type PeerAttemptTraceEvent = PeerAttemptBase & (
   | Readonly<{ stage: 'provider-fact'; fact: PeerProviderFact }>
   | Readonly<{ stage: 'started' }>
   | Readonly<{
@@ -142,7 +142,7 @@ export type V2PeerAttemptTraceEvent = V2PeerAttemptBase & (
     }>
   | Readonly<{
       stage: 'offer-created' | 'offer-sent' | 'answer-received' | 'datachannel-open'
-      candidateCounts: V2CandidateCounts
+      candidateCounts: CandidateCounts
     }>
   | Readonly<{
       stage: 'admission-deadline-armed' | 'admission-deadline-expired'
@@ -172,23 +172,23 @@ export type V2PeerAttemptTraceEvent = V2PeerAttemptBase & (
     }>
   | Readonly<{
       stage: 'failed'
-      failedAtStage: Exclude<V2BrowserConnectivityAttemptStage, 'started' | 'failed'>
-      failure: V2PeerAttemptFailure
-      failureScope: V2ConnectivityFailureScope
-      typedErrorCode: V2TypedPeerErrorCode
+      failedAtStage: Exclude<BrowserConnectivityAttemptStage, 'started' | 'failed'>
+      failure: PeerAttemptFailure
+      failureScope: ConnectivityFailureScope
+      typedErrorCode: TypedPeerErrorCode
       retryable: boolean
     }>
 )
 
-type V2PeerRecoveryBase = Readonly<{
+type PeerRecoveryBase = Readonly<{
   eventName: 'peer_recovery'
   correlation: FailureCorrelation & Readonly<{
-    protocolSessionId: V2ProtocolSessionIdentity
-    peerPathId: V2PeerPathIdentity
+    protocolSessionId: ProtocolSessionIdentity
+    peerPathId: PeerPathIdentity
   }>
 }>
 
-export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
+export type PeerRecoveryTraceEvent = PeerRecoveryBase & (
   | Readonly<{ stage: 'parallelism'; action: string; reason: string;
       networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
       paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;
@@ -198,7 +198,7 @@ export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
   | Readonly<{
       stage: 'wave-started'
       waveOrdinal: number
-      trigger: V2PeerRecoveryWaveTrigger
+      trigger: PeerRecoveryWaveTrigger
     }>
   | Readonly<{
       stage: 'wave-rearmed'
@@ -208,8 +208,8 @@ export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
   | Readonly<{
       stage: 'retry-decided'
       waveOrdinal: number
-      decision: V2PeerFailureDecision['type']
-      reason: V2PeerFailureDecision['reason']
+      decision: PeerFailureDecision['type']
+      reason: PeerFailureDecision['reason']
       authenticatedRetryAfterMilliseconds: number
     }>
   | Readonly<{
@@ -223,7 +223,7 @@ export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
   | Readonly<{
       stage: 'attempt-replaced'
       waveOrdinal: number
-      previousAttemptId: V2PeerAttemptIdentity
+      previousAttemptId: PeerAttemptIdentity
     }>
   | Readonly<{
       stage: 'wave-quiesced'
@@ -237,27 +237,27 @@ export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
     }>
   | Readonly<{
       stage: 'path-stopped'
-      reason: Extract<V2PeerFailureDecision, { readonly type: 'stop-path' }>['reason']
+      reason: Extract<PeerFailureDecision, { readonly type: 'stop-path' }>['reason']
     }>
   | Readonly<{
       stage: 'session-stopped'
       reason: Extract<
-        V2PeerFailureDecision,
+        PeerFailureDecision,
         { readonly type: 'stop-session' }
       >['terminal']['code']
     }>
 )
 
-export type V2ConnectivityTraceEvent =
-  | V2PeerAttemptTraceEvent
-  | V2PeerRecoveryTraceEvent
+export type ConnectivityTraceEvent =
+  | PeerAttemptTraceEvent
+  | PeerRecoveryTraceEvent
 
-export type V2ConnectivityTraceObserver = (event: V2ConnectivityTraceEvent) => void
+export type ConnectivityTraceObserver = (event: ConnectivityTraceEvent) => void
 
 /**
  * Connectivity lifetimes retain this source across attempts and reconnect
  * generations; producers read current before constructing a trace event.
  */
-export interface V2ConnectivityTraceSource {
-  readonly current: V2ConnectivityTraceObserver | undefined
+export interface ConnectivityTraceSource {
+  readonly current: ConnectivityTraceObserver | undefined
 }

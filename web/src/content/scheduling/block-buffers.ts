@@ -1,8 +1,8 @@
-import { V2_MAXIMUM_CHUNK_BYTES } from '../../catalog/v2-records'
-import type { V2BlockRecord } from '../v2-records'
+import { MAXIMUM_CHUNK_BYTES } from '../../catalog/records'
+import type { BlockRecord } from '../records'
 import type { ContentPriority } from './selection'
 
-const PREVIEW_RESERVATION_BYTES = 2 * V2_MAXIMUM_CHUNK_BYTES
+const PREVIEW_RESERVATION_BYTES = 2 * MAXIMUM_CHUNK_BYTES
 
 export interface BlockLoadBuffers {
   available(priority: ContentPriority): boolean
@@ -15,7 +15,7 @@ export class BlockBufferPool {
   readonly #maximumBytes: number
   readonly #maximumRetainedCacheBytes: number
   readonly #previewBytes: number
-  readonly #cache = new Map<string, V2BlockRecord>()
+  readonly #cache = new Map<string, BlockRecord>()
   readonly #listeners = new Set<() => void>()
   #reservedBytes = 0
   #cachedBytes = 0
@@ -63,7 +63,7 @@ export class BlockBufferPool {
 
   has(key: string): boolean { return this.#cache.has(key) }
 
-  get(key: string): V2BlockRecord | undefined {
+  get(key: string): BlockRecord | undefined {
     const record = this.#cache.get(key)
     if (record !== undefined) {
       this.#cache.delete(key)
@@ -72,7 +72,7 @@ export class BlockBufferPool {
     return record
   }
 
-  retain(key: string, record: V2BlockRecord): void {
+  retain(key: string, record: BlockRecord): void {
     const ceiling = Math.min(this.#maximumRetainedCacheBytes, this.#maximumBytes - this.#reservedBytes)
     const bytes = record.data.byteLength
     if (bytes > ceiling) return

@@ -3,8 +3,8 @@ import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '..
 import { describe, expect, it } from 'vitest'
 
 import { fileId } from '../../src/catalog/model'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2ConnectivityActivation } from '../../src/connectivity/v2-receiver-policy'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { ConnectivityActivation } from '../../src/connectivity/receiver-policy'
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
@@ -27,24 +27,24 @@ import {
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/failure/fault'
-import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
+import { normalizedFileTransferFault } from '../../src/transfer/job/failures'
 import type { SelectionMeasure } from '../../src/transfer/measure'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
+import type { PlanExecutionAuthority } from '../../src/transfer/output/session'
 import {
   TransferFailureAccumulator,
   transferWorkerSettlement,
   type TransferFileOutcome,
   type TransferWorkerSettlement,
 } from '../../src/transfer/outcome'
-import type { TransferJobResult } from '../../src/transfer/v2-job'
+import type { TransferJobResult } from '../../src/transfer/job'
 import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'
 import { type ActiveReceiveJoinedShare } from '../../src/application/receive/joined-share'
-import type { V2ActiveCompatibleNameRepairProjection } from '../../src/application/receive/observation/contracts'
-import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../src/application/receive/actions'
-import { V2OutputPresentationController } from '../../src/ui/v2-output'
+import type { ActiveCompatibleNameRepairProjection } from '../../src/application/receive/observation/contracts'
+import type { LifecycleUserAction, ActiveReceiveControl } from '../../src/application/receive/actions'
+import { OutputPresentationController } from '../../src/ui/output'
 import type {
-  V2BoundReceiveOperation,
-  V2LifecycleMutation,
+  BoundReceiveOperation,
+  LifecycleMutation,
 } from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
@@ -62,7 +62,7 @@ const TRANSFER_MEASURE: SelectionMeasure = Object.freeze({
   discovery: 'complete',
   sizeClass: 'small',
 })
-const UNAVAILABLE_PLANS: V2PlanExecutionAuthority = Object.freeze({
+const UNAVAILABLE_PLANS: PlanExecutionAuthority = Object.freeze({
   openDirectTree: unavailableExecution,
   openDirectAtomic: unavailableExecution,
   openDirectResumableZip: unavailableExecution,
@@ -247,10 +247,10 @@ describe('active receive result adoption', () => {
 
 async function resultAdoptionFixture(
   mode: 'live' | 'retained',
-  repairProjection?: V2ActiveCompatibleNameRepairProjection,
+  repairProjection?: ActiveCompatibleNameRepairProjection,
   enableLateRepairActivation = false,
 ): Promise<Readonly<{
-  outputs: V2OutputPresentationController
+  outputs: OutputPresentationController
   receiveState: ReceiveRuntimeState
   failures: unknown[]
   settle: (outcome: TransferFileOutcome) => void
@@ -283,7 +283,7 @@ async function resultAdoptionFixture(
   })
   coordinator.adopt({
     joined: share,
-    selection: new V2SelectionPolicy(true).snapshot(),
+    selection: new SelectionPolicy(true).snapshot(),
     runtime,
     ...(repairProjection === undefined ? {} : { repairProjection }),
   })
@@ -310,7 +310,7 @@ async function resultAdoptionFixture(
 }
 
 async function preparedOutput(): Promise<Readonly<{
-  outputs: V2OutputPresentationController
+  outputs: OutputPresentationController
   receiveState: ReceiveRuntimeState
   intent: ReceiveIntent
   choice: ArtifactChoice
@@ -360,7 +360,7 @@ async function preparedOutput(): Promise<Readonly<{
     plan,
   })
   const receiveState = new ReceiveRuntimeState()
-  const outputs = new V2OutputPresentationController(receiveState)
+  const outputs = new OutputPresentationController(receiveState)
   receiveState.updateProjection(1, state, offers)
   receiveState.updateActivation(Object.freeze({
     kind: 'terminal',
@@ -393,7 +393,7 @@ class ResultShare implements ActiveReceiveJoinedShare {
     this.#expectedIntent = expectedIntent
   }
 
-  beginDownloadConnectivity(): V2ConnectivityActivation {
+  beginDownloadConnectivity(): ConnectivityActivation {
     return Object.freeze({
       routes: Object.freeze({
         active: true,
@@ -425,7 +425,7 @@ class ResultShare implements ActiveReceiveJoinedShare {
   }
 }
 
-class ResultRuntime implements V2BoundReceiveOperation {
+class ResultRuntime implements BoundReceiveOperation {
   readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
   subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
     return this.lifecycleNotifications.subscribe(listener)
@@ -435,12 +435,12 @@ class ResultRuntime implements V2BoundReceiveOperation {
   readonly activeControls = Object.freeze([] as const)
   readonly initialWorkspaceUsage = null
   readonly subscribeRepairProjectionActivation?: NonNullable<
-    V2BoundReceiveOperation['subscribeRepairProjectionActivation']
+    BoundReceiveOperation['subscribeRepairProjectionActivation']
   >
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
   #repairActivationListener:
-    ((source: V2ActiveCompatibleNameRepairProjection) => void) | undefined
+    ((source: ActiveCompatibleNameRepairProjection) => void) | undefined
   activationSubscriptionCount = 0
   activationUnsubscribed = false
 
@@ -465,12 +465,12 @@ class ResultRuntime implements V2BoundReceiveOperation {
     }
   }
 
-  activateRepairProjection(source: V2ActiveCompatibleNameRepairProjection): void {
+  activateRepairProjection(source: ActiveCompatibleNameRepairProjection): void {
     this.#repairActivationListener?.(source)
   }
 
   interrupt(
-    control: V2ActiveReceiveControl,
+    control: ActiveReceiveControl,
     transfer: AbortController,
   ): never {
     return unexpectedFixtureCall('result-adoption fixture cannot be interrupted', {
@@ -480,9 +480,9 @@ class ResultRuntime implements V2BoundReceiveOperation {
   }
 
   startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ): V2LifecycleMutation {
+  ): LifecycleMutation {
     return unexpectedFixtureCall('result-adoption fixture has no lifecycle action', {
       action,
       lifecycle,
@@ -496,7 +496,7 @@ class ResultRuntime implements V2BoundReceiveOperation {
     return null
   }
 
-  settleTransferAdmissionFailure(reason: unknown): V2LifecycleMutation {
+  settleTransferAdmissionFailure(reason: unknown): LifecycleMutation {
     return unexpectedFixtureCall('settled result cannot enter admission failure', reason)
   }
 
@@ -512,7 +512,7 @@ function workerWithFileOutcome(outcome: TransferFileOutcome): TransferWorkerSett
   failures.record(Object.freeze({
     kind: 'file',
     fileId: fileId(FILE_ID),
-    classification: normalizedV2FileTransferFault(
+    classification: normalizedFileTransferFault(
       sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable),
     ).diagnostic.classification,
   }), 1n, outcome)
@@ -562,7 +562,7 @@ function repairSummary(
   })
 }
 
-class TestActiveRepairProjection implements V2ActiveCompatibleNameRepairProjection {
+class TestActiveRepairProjection implements ActiveCompatibleNameRepairProjection {
   #listener: ((summary: CompatibleNameRepairSummary) => void) | undefined
   #current: CompatibleNameRepairSummary | undefined
   subscriptionCount = 0

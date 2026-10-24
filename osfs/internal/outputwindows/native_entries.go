@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func (directory *windowsV3Directory) prepareIdentityClaim() ([]byte, error) {
+func (directory *windowsDirectory) prepareIdentityClaim() ([]byte, error) {
 	if _, err := directory.createOrGetPersistentObjectID(
 		"prepare public output directory identity",
 		directory.verifyPublicIdentityAuthority,
@@ -24,28 +24,28 @@ func (directory *windowsV3Directory) prepareIdentityClaim() ([]byte, error) {
 	return directory.identityClaim()
 }
 
-func (directory *windowsV3Directory) identityClaim() ([]byte, error) {
+func (directory *windowsDirectory) identityClaim() ([]byte, error) {
 	return directory.encodeIdentityClaim(
 		"claim output directory identity",
 		directory.verifyPublicIdentityAuthority,
 	)
 }
 
-func (directory *windowsV3Directory) preparePrivateIdentityClaim() ([]byte, error) {
+func (directory *windowsDirectory) preparePrivateIdentityClaim() ([]byte, error) {
 	if _, err := directory.preparePrivatePersistentObjectID(); err != nil {
 		return nil, err
 	}
 	return directory.privateIdentityClaim()
 }
 
-func (directory *windowsV3Directory) privateIdentityClaim() ([]byte, error) {
+func (directory *windowsDirectory) privateIdentityClaim() ([]byte, error) {
 	return directory.encodeIdentityClaim(
 		"claim private output directory identity",
 		func() error { return directory.verify(true) },
 	)
 }
 
-func (directory *windowsV3Directory) encodeIdentityClaim(
+func (directory *windowsDirectory) encodeIdentityClaim(
 	operation string,
 	authorize func() error,
 ) ([]byte, error) {
@@ -53,34 +53,34 @@ func (directory *windowsV3Directory) encodeIdentityClaim(
 		return nil, err
 	}
 	if err := authorize(); err != nil {
-		return nil, windowsV3Failure(
-			operation, directory.path, windowsV3AuthorityFailureClass(err), err,
+		return nil, windowsFailure(
+			operation, directory.path, windowsAuthorityFailureClass(err), err,
 		)
 	}
 	facts, err := directory.inspector.Inspect(directory.handle())
 	if err != nil {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
 	}
-	if err := windowsV3ValidateOpenedObject(facts, directory.volume, true); err != nil {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe, err)
+	if err := windowsValidateOpenedObject(facts, directory.volume, true); err != nil {
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe, err)
 	}
 	if directory.objectIDState == nil {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("persistent NTFS object identity state is absent"))
 	}
 	objectID, prepared := directory.objectIDState.current()
 	if !prepared {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("persistent NTFS object identity was not prepared"))
 	}
 	guid := strings.ToLower(facts.object.volume.guid)
-	if len(guid) == 0 || len(guid) > windowsV3VolumeGUIDClaimMaxBytes {
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+	if len(guid) == 0 || len(guid) > windowsVolumeGUIDClaimMaxBytes {
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("NTFS volume GUID identity exceeds the bounded claim format"))
 	}
-	claim := make([]byte, len(windowsV3DirectoryClaimTag)+4+len(guid)+8+len(objectID))
-	copy(claim, windowsV3DirectoryClaimTag)
-	offset := len(windowsV3DirectoryClaimTag)
+	claim := make([]byte, len(windowsDirectoryClaimTag)+4+len(guid)+8+len(objectID))
+	copy(claim, windowsDirectoryClaimTag)
+	offset := len(windowsDirectoryClaimTag)
 	binary.BigEndian.PutUint32(claim[offset:], uint32(len(guid)))
 	offset += 4
 	copy(claim[offset:], guid)
@@ -91,26 +91,26 @@ func (directory *windowsV3Directory) encodeIdentityClaim(
 	return claim, nil
 }
 
-type windowsV3PinnedEntry struct {
+type windowsPinnedEntry struct {
 	handle     windows.Handle
-	identity   windowsV3ObjectIdentity
+	identity   windowsObjectIdentity
 	attributes uint32
 	kind       outputcap.EntryKind
 	name       string
 }
 
-func (directory *windowsV3Directory) openPinnedEntry(
+func (directory *windowsDirectory) openPinnedEntry(
 	name string,
-) (*windowsV3PinnedEntry, error) {
+) (*windowsPinnedEntry, error) {
 	return directory.openPinnedEntryForAccess(
 		name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 	)
 }
 
-func (directory *windowsV3Directory) openPinnedEntryForAccess(
+func (directory *windowsDirectory) openPinnedEntryForAccess(
 	relative string,
 	access uint32,
-) (*windowsV3PinnedEntry, error) {
+) (*windowsPinnedEntry, error) {
 	const operation = "pin output entry"
 	if err := directory.usable(); err != nil {
 		return nil, err
@@ -118,64 +118,64 @@ func (directory *windowsV3Directory) openPinnedEntryForAccess(
 	if err := directory.verify(false); err != nil {
 		return nil, err
 	}
-	name, err := windowsV3RelativePath(relative, true)
+	name, err := windowsRelativePath(relative, true)
 	if err != nil {
-		return nil, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
-	handle, status, err := windowsV3OpenNativeWithOptions(
+	handle, status, err := windowsOpenNativeWithOptions(
 		directory.handle(), name, access,
 		windows.FILE_OPEN, 0, 0, nil,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		windows.OBJ_CASE_INSENSITIVE,
 	)
 	if err != nil {
-		return nil, windowsV3NativeOperationFailure(operation, name, err)
+		return nil, windowsNativeOperationFailure(operation, name, err)
 	}
-	closeFailure := func(cause error) (*windowsV3PinnedEntry, error) {
+	closeFailure := func(cause error) (*windowsPinnedEntry, error) {
 		return nil, errors.Join(
-			windowsV3Failure(operation, name, errWindowsV3OutputUnsafe, cause),
+			windowsFailure(operation, name, errWindowsOutputUnsafe, cause),
 			windows.CloseHandle(handle),
 		)
 	}
-	if _, err := windowsV3CreationStatus(windows.FILE_OPEN, status); err != nil {
+	if _, err := windowsCreationStatus(windows.FILE_OPEN, status); err != nil {
 		return closeFailure(err)
 	}
-	if err := windowsV3VerifyOpenedExactName(handle, name); err != nil {
+	if err := windowsVerifyOpenedExactName(handle, name); err != nil {
 		return closeFailure(err)
 	}
-	identity, attributes, kind, err := windowsV3ReadPinnedEntryIdentity(handle, directory.volume)
+	identity, attributes, kind, err := windowsReadPinnedEntryIdentity(handle, directory.volume)
 	if err != nil {
 		return closeFailure(err)
 	}
 	if err := directory.verify(false); err != nil {
 		return closeFailure(err)
 	}
-	return &windowsV3PinnedEntry{
+	return &windowsPinnedEntry{
 		handle: handle, identity: identity, attributes: attributes, kind: kind, name: name,
 	}, nil
 }
 
-func windowsV3ReadPinnedEntryIdentity(
+func windowsReadPinnedEntryIdentity(
 	handle windows.Handle,
-	expectedVolume windowsV3VolumeIdentity,
-) (windowsV3ObjectIdentity, uint32, outputcap.EntryKind, error) {
-	var fileID windowsV3FileIDInfo
+	expectedVolume windowsVolumeIdentity,
+) (windowsObjectIdentity, uint32, outputcap.EntryKind, error) {
+	var fileID windowsFileIDInfo
 	if err := windows.GetFileInformationByHandleEx(
 		handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&fileID)), uint32(unsafe.Sizeof(fileID)),
 	); err != nil {
-		return windowsV3ObjectIdentity{}, 0, outputcap.EntryAbsent, err
+		return windowsObjectIdentity{}, 0, outputcap.EntryAbsent, err
 	}
-	identity := windowsV3ObjectIdentity{volume: expectedVolume, fileID: fileID.FileID}
+	identity := windowsObjectIdentity{volume: expectedVolume, fileID: fileID.FileID}
 	if fileID.VolumeSerialNumber != expectedVolume.serial || !identity.valid() {
-		return windowsV3ObjectIdentity{}, 0, outputcap.EntryAbsent,
+		return windowsObjectIdentity{}, 0, outputcap.EntryAbsent,
 			errors.New("entry is outside the fixed NTFS volume identity")
 	}
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return windowsV3ObjectIdentity{}, 0, outputcap.EntryAbsent, err
+		return windowsObjectIdentity{}, 0, outputcap.EntryAbsent, err
 	}
 	kind := outputcap.EntryRegularFile
-	if information.FileAttributes&windowsV3CloudAttributeMask != 0 {
+	if information.FileAttributes&windowsCloudAttributeMask != 0 {
 		kind = outputcap.EntryOther
 	} else if information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		kind = outputcap.EntryDirectory
@@ -183,7 +183,7 @@ func windowsV3ReadPinnedEntryIdentity(
 	return identity, information.FileAttributes, kind, nil
 }
 
-func (entry *windowsV3PinnedEntry) close() error {
+func (entry *windowsPinnedEntry) close() error {
 	if entry == nil || entry.handle == windows.InvalidHandle || entry.handle == 0 {
 		return nil
 	}
@@ -192,33 +192,33 @@ func (entry *windowsV3PinnedEntry) close() error {
 	return err
 }
 
-func (entry *windowsV3PinnedEntry) validate() error {
+func (entry *windowsPinnedEntry) validate() error {
 	const operation = "validate pinned output entry"
 	if entry == nil || entry.handle == windows.InvalidHandle || entry.handle == 0 || !entry.identity.valid() {
-		return windowsV3Failure(operation, "", errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, "", errWindowsOutputUnsafe,
 			errors.New("pinned entry handle is closed or incomplete"))
 	}
-	identity, attributes, kind, err := windowsV3ReadPinnedEntryIdentity(entry.handle, entry.identity.volume)
+	identity, attributes, kind, err := windowsReadPinnedEntryIdentity(entry.handle, entry.identity.volume)
 	if err != nil {
-		return windowsV3Failure(operation, entry.name, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, entry.name, errWindowsOutputUnsafe, err)
 	}
 	if !entry.identity.same(identity) || entry.kind != kind ||
-		entry.attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windowsV3CloudAttributeMask) !=
-			attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windowsV3CloudAttributeMask) {
-		return windowsV3Failure(operation, entry.name, errWindowsV3OutputUnsafe,
+		entry.attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windowsCloudAttributeMask) !=
+			attributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windowsCloudAttributeMask) {
+		return windowsFailure(operation, entry.name, errWindowsOutputUnsafe,
 			errors.New("pinned entry identity or type changed"))
 	}
 	return nil
 }
 
-func (directory *windowsV3Directory) pinnedEntryMatches(
+func (directory *windowsDirectory) pinnedEntryMatches(
 	name string,
-	expected *windowsV3PinnedEntry,
+	expected *windowsPinnedEntry,
 ) (bool, error) {
 	const operation = "compare pinned output entry"
 	if expected == nil || expected.handle == windows.InvalidHandle || expected.handle == 0 ||
 		expected.identity.volume != directory.volume {
-		return false, windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+		return false, windowsFailure(operation, name, errWindowsOutputUnsafe,
 			errors.New("pinned entry belongs to an incompatible authority"))
 	}
 	if err := expected.validate(); err != nil {
@@ -235,15 +235,15 @@ func (directory *windowsV3Directory) pinnedEntryMatches(
 	return same, errors.Join(current.close())
 }
 
-func (directory *windowsV3Directory) openPinnedDirectory(
-	expected *windowsV3PinnedEntry,
+func (directory *windowsDirectory) openPinnedDirectory(
+	expected *windowsPinnedEntry,
 	private bool,
-) (*windowsV3Directory, error) {
+) (*windowsDirectory, error) {
 	const operation = "open pinned output directory"
 	if expected == nil || expected.kind != outputcap.EntryDirectory ||
 		expected.handle == windows.InvalidHandle || expected.handle == 0 ||
 		expected.identity.volume != directory.volume {
-		return nil, windowsV3Failure(operation, "", errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, "", errWindowsOutputUnsafe,
 			errors.New("pinned entry is not an open directory in this authority"))
 	}
 	if err := expected.validate(); err != nil {
@@ -256,7 +256,7 @@ func (directory *windowsV3Directory) openPinnedDirectory(
 	facts, err := opened.inspector.Inspect(opened.handle())
 	if err != nil || !expected.identity.same(facts.object) {
 		return nil, errors.Join(
-			windowsV3Failure(operation, expected.name, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, expected.name, errWindowsOutputUnsafe,
 				errors.New("opened directory differs from the pinned entry")),
 			err, opened.Close(),
 		)
@@ -264,14 +264,14 @@ func (directory *windowsV3Directory) openPinnedDirectory(
 	return opened, nil
 }
 
-func (directory *windowsV3Directory) removePinnedEntry(
+func (directory *windowsDirectory) removePinnedEntry(
 	name string,
-	expected *windowsV3PinnedEntry,
+	expected *windowsPinnedEntry,
 ) (resultErr error) {
 	const operation = "remove pinned output entry"
 	if expected == nil || expected.handle == windows.InvalidHandle || expected.handle == 0 ||
 		expected.identity.volume != directory.volume {
-		return windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, name, errWindowsOutputUnsafe,
 			errors.New("pinned entry belongs to an incompatible authority"))
 	}
 	if err := expected.validate(); err != nil {
@@ -288,10 +288,10 @@ func (directory *windowsV3Directory) removePinnedEntry(
 	}
 	defer func() { resultErr = errors.Join(resultErr, current.close()) }()
 	if expected.kind != current.kind || !expected.identity.same(current.identity) {
-		return windowsV3Failure(operation, name, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, name, errWindowsOutputUnsafe,
 			errors.New("current name differs from the pinned entry"))
 	}
-	if err := windowsV3RemoveHandle(current.handle); err != nil {
+	if err := windowsRemoveHandle(current.handle); err != nil {
 		return err
 	}
 	return directory.Sync()
@@ -310,20 +310,20 @@ func equalFoldWindowsName(left, right string) bool {
 	return strings.EqualFold(left, right)
 }
 
-func (file *windowsV3File) Size() (uint64, error) {
-	metadata, err := windowsV3ReadHandleMetadata(file.handle())
+func (file *windowsFile) Size() (uint64, error) {
+	metadata, err := windowsReadHandleMetadata(file.handle())
 	if err != nil {
-		return 0, windowsV3Failure("inspect output file size", file.path, errWindowsV3OutputUnsafe, err)
+		return 0, windowsFailure("inspect output file size", file.path, errWindowsOutputUnsafe, err)
 	}
 	return metadata.size, nil
 }
 
-type windowsV3OutputMetadata struct {
+type windowsOutputMetadata struct {
 	size          uint64
 	modifiedTicks uint64
 }
 
-func (directory *windowsV3Directory) Duplicate() (*windowsV3Directory, error) {
+func (directory *windowsDirectory) Duplicate() (*windowsDirectory, error) {
 	const operation = "duplicate output directory authority"
 	if err := directory.usable(); err != nil {
 		return nil, err
@@ -333,15 +333,15 @@ func (directory *windowsV3Directory) Duplicate() (*windowsV3Directory, error) {
 	if err := windows.DuplicateHandle(
 		process, directory.handle(), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS,
 	); err != nil {
-		return nil, windowsV3NativeOperationFailure(operation, directory.path, err)
+		return nil, windowsNativeOperationFailure(operation, directory.path, err)
 	}
 	wrapped := os.NewFile(uintptr(duplicate), directory.path)
 	if wrapped == nil {
 		_ = windows.CloseHandle(duplicate)
-		return nil, windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("wrap duplicated directory handle"))
 	}
-	result := &windowsV3Directory{
+	result := &windowsDirectory{
 		file: wrapped, metadataHandle: windows.InvalidHandle, metadataOpenErr: directory.metadataOpenErr,
 		path: directory.path, volume: directory.volume,
 		objectIDs: directory.objectIDs, objectIDState: directory.objectIDState,
@@ -355,7 +355,7 @@ func (directory *windowsV3Directory) Duplicate() (*windowsV3Directory, error) {
 			process, directory.metadataHandle, process, &result.metadataHandle, 0, false, windows.DUPLICATE_SAME_ACCESS,
 		); err != nil {
 			return nil, errors.Join(
-				windowsV3NativeOperationFailure(operation, directory.path, err), result.Close(),
+				windowsNativeOperationFailure(operation, directory.path, err), result.Close(),
 			)
 		}
 		result.metadataHandleOpen = true
@@ -363,9 +363,9 @@ func (directory *windowsV3Directory) Duplicate() (*windowsV3Directory, error) {
 	if err := result.verify(false); err != nil {
 		return nil, errors.Join(err, result.Close())
 	}
-	same, err := sameWindowsV3OpenedDirectory(directory, result)
+	same, err := sameWindowsOpenedDirectory(directory, result)
 	if err != nil || !same {
-		return nil, errors.Join(windowsV3Failure(operation, directory.path, errWindowsV3OutputUnsafe,
+		return nil, errors.Join(windowsFailure(operation, directory.path, errWindowsOutputUnsafe,
 			errors.New("duplicated handle does not identify the fixed directory")), err, result.Close())
 	}
 	return result, nil

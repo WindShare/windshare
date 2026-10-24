@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
+import type { CatalogEntry } from '../../src/catalog/records'
 import {
   createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import type { V2ReceiverController } from '../../src/ui/v2-controller'
-import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
-import type { V2BrowseDirectory, V2BrowsePage } from '../../src/application/browser-share/gateway'
+import type { ReceiverController } from '../../src/ui/controller'
+import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { BrowseDirectory, BrowsePage } from '../../src/application/browser-share/gateway'
 import {
   controllerFor, deferred, DIRECT_ZIP_ENVIRONMENT, FakeJoinedShare, FakeReceiveComposition,
   identityText, resetOrchestrationTestEnvironment, turns, waitFor,
@@ -24,7 +24,7 @@ class InitialFolderShare extends FakeJoinedShare {
   readonly listing = deferred<void>()
   readonly pageCalls: string[] = []
 
-  override async page(directory: V2BrowseDirectory): Promise<V2BrowsePage> {
+  override async page(directory: BrowseDirectory): Promise<BrowsePage> {
     this.pageCalls.push(directory.idText)
     const page = await super.page(directory)
     if (directory.path.length === 0) return { ...page, entries: [FOLDER], entryCount: 1 }
@@ -32,12 +32,12 @@ class InitialFolderShare extends FakeJoinedShare {
     return page
   }
 
-  childDirectory(parent: V2BrowseDirectory, entry: V2CatalogEntry): V2BrowseDirectory {
+  childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
     return { id: entry.id, idText: entry.idText, name: entry.name,
       path: [...parent.path, entry.name], ancestry: [...parent.ancestry, entry.idText] }
   }
 
-  override projectionSource(selection: V2FrozenSelectionPolicy): AuthenticatedDiscoverySource {
+  override projectionSource(selection: FrozenSelectionPolicy): AuthenticatedDiscoverySource {
     const rootId = this.descriptor.syntheticRootId
     const selected = selection.selected(FOLDER, [rootId])
     const requests = this.projectionRequests
@@ -65,7 +65,7 @@ class InitialFolderShare extends FakeJoinedShare {
   }
 }
 
-const controllers: V2ReceiverController[] = []
+const controllers: ReceiverController[] = []
 afterEach(async () => {
   await Promise.all(controllers.splice(0).map(controller => controller.dispose()))
   vi.restoreAllMocks()
@@ -75,13 +75,13 @@ afterEach(async () => {
 function setup() {
   const joined = new InitialFolderShare(true)
   const receive = new FakeReceiveComposition(DIRECT_ZIP_ENVIRONMENT)
-  const traces: V2ReceiverTraceEvent[] = []
+  const traces: ReceiverTraceEvent[] = []
   const controller = controllerFor(joined, receive, undefined, event => traces.push(event))
   controllers.push(controller)
   return { joined, receive, traces, controller }
 }
 
-async function clickFirstDownload(controller: V2ReceiverController): Promise<void> {
+async function clickFirstDownload(controller: ReceiverController): Promise<void> {
   await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
   const offers = controller.getSnapshot().output.offers
   if (offers?.kind !== 'artifact-actions') throw new Error('No download offered')
@@ -89,7 +89,7 @@ async function clickFirstDownload(controller: V2ReceiverController): Promise<voi
   controller.chooseArtifact(offers.primary.choice.choiceId)
 }
 
-function invalidations(traces: readonly V2ReceiverTraceEvent[]) {
+function invalidations(traces: readonly ReceiverTraceEvent[]) {
   return traces.filter(event => event.name === 'authority_transition' && event.transition === 'semantic_invalidated')
 }
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { byteRange } from '../../src/content/geometry'
 import { TransferPauseRequestedError } from '../../src/transfer/output/session'
-import type { TransferProgress } from '../../src/transfer/v2-job'
-import { V2TransferProgressLedger } from '../../src/transfer/progress/v2-ledger'
+import type { TransferProgress } from '../../src/transfer/job'
+import { TransferProgressLedger } from '../../src/transfer/progress/ledger'
 import {
   catalogFixture, fileEntry, identity, planAuthorityFixture, readerFixture,
   receiveIntentFixture, testOutput, transferJobFixture,
@@ -11,7 +11,7 @@ import {
 
 async function runCoverage(initialEnd: bigint, failCommit = false, fileCount = 1) {
   const files = Array.from({ length: fileCount }, (_, index) => fileEntry(identity(index + 11), `file-${index}.bin`, 4n))
-  const selection = new V2SelectionPolicy(true)
+  const selection = new SelectionPolicy(true)
   const intent = await receiveIntentFixture({ planKind: 'direct-tree', artifactKind: 'directory-tree', selection })
   const catalog = catalogFixture([{ id: identity(2), entries: files }])
   const readers = readerFixture(files)
@@ -41,7 +41,7 @@ async function runPausedCoverage(options: {
   initialBytes?: bigint; durability?: 'ProcessRestart' | 'None'; failPause?: boolean; failRelease?: boolean
 }) {
   const file = fileEntry(identity(11), 'partial.bin', 12n)
-  const selection = new V2SelectionPolicy(true)
+  const selection = new SelectionPolicy(true)
   const intent = await receiveIntentFixture({ planKind: 'direct-tree', artifactKind: 'directory-tree', selection })
   const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
   const readers = readerFixture([file])
@@ -137,7 +137,7 @@ describe('native materialization progress', () => {
   })
 
   it('replaces retried coverage without overlapping completed siblings or prior attempts', () => {
-    const ledger = new V2TransferProgressLedger()
+    const ledger = new TransferProgressLedger()
     ledger.completeFile(90n)
     ledger.observeMaterializedFile('partial', 6n)
     ledger.acknowledgeWrite(2n)

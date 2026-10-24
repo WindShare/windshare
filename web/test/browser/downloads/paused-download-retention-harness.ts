@@ -1,10 +1,10 @@
 import { createBrowserReceiveOperationMutationPort } from '../../../src/output/resume/reopen-authority'
 import { offerArtifacts } from '../../../src/output/planning'
 import { createSelectionSpec } from '../../../src/transfer/intent'
-import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
-import { TransferJob } from '../../../src/transfer/v2-job'
+import { SelectionPolicy } from '../../../src/catalog/selection'
+import { TransferJob } from '../../../src/transfer/job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../../src/transfer/outcome'
-import type { V2PlanExecutionAuthority } from '../../../src/transfer/output/session'
+import type { PlanExecutionAuthority } from '../../../src/transfer/output/session'
 import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../../../src/application/browser-receive/composition'
 import { catalogFixture, directoryEntry, fileEntry, identity, identityText, readerFixture } from '../../transfer/v2-job-fixture'
 import { commitProductionChoice, productZipProjection } from '../durable-preparation-harness'
@@ -41,7 +41,7 @@ export async function provePausedDownloadRetention() {
       { id: directory.id, entries: [file], generation: identity(91) },
     ])
     const readers = readerFixture([file])
-    const openWorkspaceZip: V2PlanExecutionAuthority['openWorkspaceZip'] = async (intent, openSignal) => {
+    const openWorkspaceZip: PlanExecutionAuthority['openWorkspaceZip'] = async (intent, openSignal) => {
       const admission = await runtime.plans.openWorkspaceZip(intent, openSignal)
       if (admission.kind !== 'accepted') return admission
       const execution = admission.execution
@@ -60,7 +60,7 @@ export async function provePausedDownloadRetention() {
     const result = await new TransferJob({
       descriptor: { shareInstance: identity(1), syntheticRoot: identity(2),
         syntheticRootId: identityText(2), chunkSize: 2 } as never,
-      catalog: catalog.catalog, selection: new V2SelectionPolicy(true), intent: runtime.intent,
+      catalog: catalog.catalog, selection: new SelectionPolicy(true), intent: runtime.intent,
       plans: { ...runtime.plans, openWorkspaceZip }, revisions: readers.revisions, broker: readers.broker,
       lanes: { size: 1 }, transferJobId: runtime.transferJobId,
       revisionCapacity: { generation: { waitForProtocolSessionReplacement: async () => {

@@ -1,17 +1,17 @@
 import { LaneRequests } from '../../src/content/scheduling/requests'
 import { describe, expect, it } from 'vitest'
 
-import type { V2CatalogPageRequest } from '../../src/catalog/v2-records'
-import { V2CatalogSessionOperations } from '../../src/content/v2-session-services'
+import type { CatalogPageRequest } from '../../src/catalog/records'
+import { CatalogSessionOperations } from '../../src/content/session-services'
 import {
-  encodeV2Body,
-  type V2SessionMessage,
-  V2_MESSAGE_KIND,
-} from '../../src/session/v2-message'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import type { V2SessionOperation } from '../../src/session/v2-runtime-types'
+  encodeBody,
+  type SessionMessage,
+  MESSAGE_KIND,
+} from '../../src/session/message'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import type { SessionOperation } from '../../src/session/runtime-types'
 
-const request: V2CatalogPageRequest = Object.freeze({
+const request: CatalogPageRequest = Object.freeze({
   directoryId: identity(1),
   pageIndex: 0,
 })
@@ -25,13 +25,13 @@ describe('v2 catalog session scan progress', () => {
       progressMessage(attempt, 1n),
       progressMessage(attempt, 256n),
       controlMessage(
-        V2_MESSAGE_KIND.catalogResult,
-        encodeV2Body(new Map<number, unknown>([[0, 1], [1, finalObject]])),
+        MESSAGE_KIND.catalogResult,
+        encodeBody(new Map<number, unknown>([[0, 1], [1, finalObject]])),
       ),
     ])
     const observed: bigint[] = []
-    const result = await new V2CatalogSessionOperations(
-      session as unknown as V2ReceiverSessionRuntime, requestLanes(),
+    const result = await new CatalogSessionOperations(
+      session as unknown as ReceiverSessionRuntime, requestLanes(),
     ).fetchPage(request, new AbortController().signal, (progress) => {
       observed.push(progress.discoveredEntries)
     })
@@ -50,8 +50,8 @@ describe('v2 catalog session scan progress', () => {
         progressMessage(initialAttempt, 10n),
         hostile,
       ])
-      await expect(new V2CatalogSessionOperations(
-        session as unknown as V2ReceiverSessionRuntime, requestLanes(),
+      await expect(new CatalogSessionOperations(
+        session as unknown as ReceiverSessionRuntime, requestLanes(),
       ).fetchPage(request, new AbortController().signal)).rejects.toMatchObject({ scope: 'session' })
       expect(session.closeCalls).toBe(1)
     })
@@ -59,17 +59,17 @@ describe('v2 catalog session scan progress', () => {
 })
 
 class FakeCatalogSession {
-  readonly #messages: V2SessionMessage[]
+  readonly #messages: SessionMessage[]
   closeCalls = 0
 
-  constructor(messages: readonly V2SessionMessage[]) {
+  constructor(messages: readonly SessionMessage[]) {
     this.#messages = [...messages]
   }
 
-  async beginOperation(): Promise<V2SessionOperation> {
+  async beginOperation(): Promise<SessionOperation> {
     return {
       id: identity(9),
-      requestKind: V2_MESSAGE_KIND.listChildren,
+      requestKind: MESSAGE_KIND.listChildren,
       next: async () => {
         const message = this.#messages.shift()
         if (message === undefined) throw new Error('test operation exhausted')
@@ -84,19 +84,19 @@ class FakeCatalogSession {
   }
 }
 
-function progressMessage(attemptId: Uint8Array, discoveredEntries: bigint): V2SessionMessage {
+function progressMessage(attemptId: Uint8Array, discoveredEntries: bigint): SessionMessage {
   return controlMessage(
-    V2_MESSAGE_KIND.scanProgress,
-    encodeV2Body(new Map<number, unknown>([
+    MESSAGE_KIND.scanProgress,
+    encodeBody(new Map<number, unknown>([
       [0, 1], [1, attemptId], [2, discoveredEntries],
     ])),
   )
 }
 
 function controlMessage(
-  kind: V2SessionMessage['kind'],
+  kind: SessionMessage['kind'],
   body: Uint8Array,
-): V2SessionMessage {
+): SessionMessage {
   return {
     kind,
     operationId: identity(9),

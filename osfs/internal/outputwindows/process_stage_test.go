@@ -9,8 +9,8 @@ import (
 )
 
 func TestWindowsProcessStageRetainsNativeObjectWithoutCleanupTicket(t *testing.T) {
-	_, guard := windowsV3OpenGuardedTestRoot(t)
-	root := &windowsOutputV3Directory{native: guard.Root()}
+	_, guard := windowsOpenGuardedTestRoot(t)
+	root := &windowsOutputDirectory{native: guard.Root()}
 	directory, err := root.CreateDirectory("process-stages", true)
 	if err != nil {
 		t.Fatal(err)

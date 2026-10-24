@@ -452,7 +452,7 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 }
 
 func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
-	var closed *linuxV3Platform
+	var closed *linuxPlatform
 	if _, err := closed.RootBinding(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("closed platform classification: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 		})
 		directory := linuxIdentityCoverageDirectory(&current, restart, provider)
 		directory.binding.mount.filesystemUUID = [linuxFilesystemUUIDBytes]byte{}
-		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+		platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 			t.Fatalf("incomplete mount classification: %v", err)
 		}
@@ -488,7 +488,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 
 	t.Run("provider absent", func(t *testing.T) {
 		directory := linuxIdentityCoverageDirectory(&current, restart, nil)
-		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+		platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 			t.Fatalf("absent provider classification: %v", err)
 		}
@@ -500,7 +500,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 			return linuxDirectoryRestartIdentity{}, failure
 		})
 		directory := linuxIdentityCoverageDirectory(&current, restart, provider)
-		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+		platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, failure) {
 			t.Fatalf("provider failure lost its cause: %v", err)
 		}
@@ -513,7 +513,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 			return identity, nil
 		})
 		directory := linuxIdentityCoverageDirectory(&current, restart, provider)
-		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+		platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 			t.Fatalf("mismatched persistent identity classification: %v", err)
 		}
@@ -526,7 +526,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 			return malformed, nil
 		})
 		directory := linuxIdentityCoverageDirectory(&current, malformed, provider)
-		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+		platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 			t.Fatalf("malformed restart claim classification: %v", err)
 		}
@@ -637,7 +637,7 @@ func TestLinuxIdentityCoverageEnrollmentAndRecoveryUseDistinctProviderModes(t *t
 		t.Fatalf("claims differ or wrong provider mode was used: prepare=%d read=%d", prepareCalls, readCalls)
 	}
 
-	platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
+	platform := &linuxPlatform{root: &linuxDirectory{native: directory}}
 	first, err := platform.RootBinding()
 	if err != nil || first.IsZero() {
 		t.Fatalf("root binding: value=%v error=%v", first, err)

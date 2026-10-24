@@ -1,22 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { CatalogEntry } from '../../src/catalog/records'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY } from '../../src/transfer/outcome'
-import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import {
   FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT, controllerFor,
   FILE_ID, deferred, identityText, next, resetOrchestrationTestEnvironment, startTransfer, turns, waitFor,
 } from './v2-receiver-orchestration-fixture'
 
 class ReplacementJoinedShare extends FakeJoinedShare {
-  override selection = new V2SelectionPolicy(true)
-  selectOnlyFile(entry: V2CatalogEntry, ancestry: readonly string[]): void {
-    this.selection = new V2SelectionPolicy(false)
+  override selection = new SelectionPolicy(true)
+  selectOnlyFile(entry: CatalogEntry, ancestry: readonly string[]): void {
+    this.selection = new SelectionPolicy(false)
     this.selection.toggle(entry, ancestry)
   }
 }
 
-function retained(joined: FakeJoinedShare): V2RetainedReceiveOperation {
+function retained(joined: FakeJoinedShare): RetainedReceiveOperation {
   return {
     operationId: identityText(90), receiveIntentDigest: identityText(91, 32), lifecycleGeneration: 2n,
     lifecycle: { kind: 'resumable-receive', payloadKind: 'workspace-archive',
@@ -147,7 +147,7 @@ describe('source revision replacement controller flow', () => {
   })
 })
 
-function settleFailedZip(joined: FakeJoinedShare, receive: FakeReceiveComposition): V2RetainedReceiveOperation {
+function settleFailedZip(joined: FakeJoinedShare, receive: FakeReceiveComposition): RetainedReceiveOperation {
   const runtime = receive.startedAuthorities[0]!.runtime!
   const lifecycle = next(runtime.lifecycle, {
     kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: identityText(92, 32),

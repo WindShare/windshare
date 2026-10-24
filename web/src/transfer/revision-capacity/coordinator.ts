@@ -1,14 +1,14 @@
 import { byteRange, type ByteRange } from '../../content/geometry'
 import {
-  type V2BlockRangeReader,
-  type V2BlockRangeReaderOptions,
-  type V2BlockSlice,
-} from '../../content/v2-broker'
+  type BlockRangeReader,
+  type BlockRangeReaderOptions,
+  type BlockSlice,
+} from '../../content/broker'
 import {
-  V2RevisionCapacityBusyError,
-  type V2OpenedRevision,
-  type V2RevisionReader,
-} from '../../content/v2-session-services'
+  RevisionCapacityBusyError,
+  type OpenedRevision,
+  type RevisionReader,
+} from '../../content/session-services'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
   protocolFailureFact,
@@ -16,40 +16,40 @@ import {
   type ReceivedProtocolError,
 } from '../../diagnostics/incident'
 import {
-  createV2ProtocolSessionIdentity,
-  type V2ProtocolSessionIdentity,
-} from '../../session/v2-identities'
+  createProtocolSessionIdentity,
+  type ProtocolSessionIdentity,
+} from '../../session/identities'
 
-export const V2_REVISION_CAPACITY_WAIT_BUDGET_MILLISECONDS = 2 * 60 * 1_000
-export const V2_REVISION_CAPACITY_MAXIMUM_WAIT_BUDGET_MILLISECONDS = 10 * 60 * 1_000
-export const V2_REVISION_CAPACITY_ADDITIVE_JITTER_LIMIT_MILLISECONDS = 250
-export const V2_REVISION_CAPACITY_MAXIMUM_ADDITIVE_JITTER_LIMIT_MILLISECONDS = 1_000
-export const V2_REVISION_CAPACITY_VISIBILITY_THRESHOLD_MILLISECONDS = 500
-export const V2_REVISION_CAPACITY_MAXIMUM_VISIBILITY_THRESHOLD_MILLISECONDS = 5_000
-export const V2_REVISION_CAPACITY_WAIT_ID_BYTES = 16
+export const REVISION_CAPACITY_WAIT_BUDGET_MILLISECONDS = 2 * 60 * 1_000
+export const REVISION_CAPACITY_MAXIMUM_WAIT_BUDGET_MILLISECONDS = 10 * 60 * 1_000
+export const REVISION_CAPACITY_ADDITIVE_JITTER_LIMIT_MILLISECONDS = 250
+export const REVISION_CAPACITY_MAXIMUM_ADDITIVE_JITTER_LIMIT_MILLISECONDS = 1_000
+export const REVISION_CAPACITY_VISIBILITY_THRESHOLD_MILLISECONDS = 500
+export const REVISION_CAPACITY_MAXIMUM_VISIBILITY_THRESHOLD_MILLISECONDS = 5_000
+export const REVISION_CAPACITY_WAIT_ID_BYTES = 16
 
-export type V2RevisionCapacitySurface = 'revision_open' | 'block_range'
+export type RevisionCapacitySurface = 'revision_open' | 'block_range'
 
-export interface V2RevisionCapacityClock {
+export interface RevisionCapacityClock {
   now(): number
   sleep(milliseconds: number, signal: AbortSignal): Promise<void>
 }
 
-export interface V2ProtocolSessionReplacementWaiter {
+export interface ProtocolSessionReplacementWaiter {
   waitForProtocolSessionReplacement(
-    issuingIdentity: V2ProtocolSessionIdentity,
+    issuingIdentity: ProtocolSessionIdentity,
     signal: AbortSignal,
   ): Promise<void>
 }
 
-export interface V2RevisionCapacityWaitSnapshot {
+export interface RevisionCapacityWaitSnapshot {
   readonly activeWaiters: number
   readonly accumulatedWaitMilliseconds: number
   readonly attempts: number
   readonly visible: boolean
 }
 
-export type V2RevisionCapacityTrace = Readonly<{
+export type RevisionCapacityTrace = Readonly<{
   transition:
     | 'capacity_retry_scheduled'
     | 'capacity_retry_succeeded'
@@ -57,7 +57,7 @@ export type V2RevisionCapacityTrace = Readonly<{
     | 'capacity_wait_cancelled'
     | 'capacity_generation_replaced'
   waitId: string
-  surface: V2RevisionCapacitySurface
+  surface: RevisionCapacitySurface
   protocolSessionId: string
   protocolOperationId: string
   attempt: number
@@ -68,29 +68,29 @@ export type V2RevisionCapacityTrace = Readonly<{
   activeWaiters: number
 }>
 
-export interface V2RevisionCapacityPolicyOptions {
-  readonly generation: V2ProtocolSessionReplacementWaiter
+export interface RevisionCapacityPolicyOptions {
+  readonly generation: ProtocolSessionReplacementWaiter
   readonly waitBudgetMilliseconds?: number
   readonly additiveJitterLimitMilliseconds?: number
   readonly visibilityThresholdMilliseconds?: number
-  readonly clock?: V2RevisionCapacityClock
+  readonly clock?: RevisionCapacityClock
   readonly random?: () => number
   readonly randomBytes?: (length: number) => Uint8Array
 }
 
-export interface V2RevisionCapacityCoordinatorOptions extends V2RevisionCapacityPolicyOptions {
-  readonly onProgress?: (snapshot: V2RevisionCapacityWaitSnapshot) => void
-  readonly onTrace?: (event: V2RevisionCapacityTrace) => void
+export interface RevisionCapacityCoordinatorOptions extends RevisionCapacityPolicyOptions {
+  readonly onProgress?: (snapshot: RevisionCapacityWaitSnapshot) => void
+  readonly onTrace?: (event: RevisionCapacityTrace) => void
 }
 
-export class V2RevisionCapacityWaitBudgetError extends Error {
-  readonly surface: V2RevisionCapacitySurface
+export class RevisionCapacityWaitBudgetError extends Error {
+  readonly surface: RevisionCapacitySurface
   readonly protocolFailure: ReceivedProtocolError
   readonly failureFact: FailureFact<'protocol_failure'>
 
-  constructor(surface: V2RevisionCapacitySurface, capacity: V2RevisionCapacityBusyError) {
+  constructor(surface: RevisionCapacitySurface, capacity: RevisionCapacityBusyError) {
     super('Sender revision capacity stayed busy for the receive wait budget', { cause: capacity })
-    this.name = 'V2RevisionCapacityWaitBudgetError'
+    this.name = 'RevisionCapacityWaitBudgetError'
     this.surface = surface
     this.protocolFailure = capacity.protocolFailure
     this.failureFact = protocolFailureFact({
@@ -105,20 +105,20 @@ export class V2RevisionCapacityWaitBudgetError extends Error {
  * One coordinator accounts elapsed union time, so four blocked workers consume
  * the receive budget at wall-clock speed instead of charging it four times.
  */
-export class V2RevisionCapacityCoordinator {
-  readonly revisions: V2RevisionReader
-  readonly broker: V2BlockRangeReader
-  readonly #sourceRevisions: V2RevisionReader
-  readonly #sourceBroker: V2BlockRangeReader
-  readonly #generation: V2ProtocolSessionReplacementWaiter
-  readonly #clock: V2RevisionCapacityClock
+export class RevisionCapacityCoordinator {
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
+  readonly #sourceRevisions: RevisionReader
+  readonly #sourceBroker: BlockRangeReader
+  readonly #generation: ProtocolSessionReplacementWaiter
+  readonly #clock: RevisionCapacityClock
   readonly #random: () => number
   readonly #randomBytes: (length: number) => Uint8Array
   readonly #waitBudgetMilliseconds: number
   readonly #jitterLimitMilliseconds: number
   readonly #visibilityThresholdMilliseconds: number
-  readonly #onProgress: ((snapshot: V2RevisionCapacityWaitSnapshot) => void) | undefined
-  readonly #onTrace: ((event: V2RevisionCapacityTrace) => void) | undefined
+  readonly #onProgress: ((snapshot: RevisionCapacityWaitSnapshot) => void) | undefined
+  readonly #onTrace: ((event: RevisionCapacityTrace) => void) | undefined
   #activeWaiters = 0
   #activeSince: number | undefined
   #accumulatedWaitMilliseconds = 0
@@ -126,8 +126,8 @@ export class V2RevisionCapacityCoordinator {
   #visibilityTimer: AbortController | undefined
 
   constructor(
-    source: Readonly<{ revisions: V2RevisionReader; broker: V2BlockRangeReader }>,
-    options: V2RevisionCapacityCoordinatorOptions,
+    source: Readonly<{ revisions: RevisionReader; broker: BlockRangeReader }>,
+    options: RevisionCapacityCoordinatorOptions,
   ) {
     this.#sourceRevisions = source.revisions
     this.#sourceBroker = source.broker
@@ -136,23 +136,23 @@ export class V2RevisionCapacityCoordinator {
     this.#random = options.random ?? Math.random
     this.#randomBytes = options.randomBytes ?? systemRandomBytes
     this.#waitBudgetMilliseconds = boundedInteger(
-      options.waitBudgetMilliseconds ?? V2_REVISION_CAPACITY_WAIT_BUDGET_MILLISECONDS,
+      options.waitBudgetMilliseconds ?? REVISION_CAPACITY_WAIT_BUDGET_MILLISECONDS,
       1,
-      V2_REVISION_CAPACITY_MAXIMUM_WAIT_BUDGET_MILLISECONDS,
+      REVISION_CAPACITY_MAXIMUM_WAIT_BUDGET_MILLISECONDS,
       'revision capacity wait budget',
     )
     this.#jitterLimitMilliseconds = boundedInteger(
       options.additiveJitterLimitMilliseconds ??
-        V2_REVISION_CAPACITY_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
+        REVISION_CAPACITY_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
       0,
-      V2_REVISION_CAPACITY_MAXIMUM_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
+      REVISION_CAPACITY_MAXIMUM_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
       'revision capacity additive jitter limit',
     )
     this.#visibilityThresholdMilliseconds = boundedInteger(
       options.visibilityThresholdMilliseconds ??
-        V2_REVISION_CAPACITY_VISIBILITY_THRESHOLD_MILLISECONDS,
+        REVISION_CAPACITY_VISIBILITY_THRESHOLD_MILLISECONDS,
       0,
-      V2_REVISION_CAPACITY_MAXIMUM_VISIBILITY_THRESHOLD_MILLISECONDS,
+      REVISION_CAPACITY_MAXIMUM_VISIBILITY_THRESHOLD_MILLISECONDS,
       'revision capacity visibility threshold',
     )
     this.#onProgress = options.onProgress
@@ -162,15 +162,15 @@ export class V2RevisionCapacityCoordinator {
     })
     this.broker = Object.freeze({
       readRange: (
-        descriptor: Parameters<V2BlockRangeReader['readRange']>[0],
-        leaseId: Parameters<V2BlockRangeReader['readRange']>[1],
-        range: Parameters<V2BlockRangeReader['readRange']>[2],
-        readOptions?: Parameters<V2BlockRangeReader['readRange']>[3],
+        descriptor: Parameters<BlockRangeReader['readRange']>[0],
+        leaseId: Parameters<BlockRangeReader['readRange']>[1],
+        range: Parameters<BlockRangeReader['readRange']>[2],
+        readOptions?: Parameters<BlockRangeReader['readRange']>[3],
       ) => this.#readRange(descriptor, leaseId, range, readOptions),
     })
   }
 
-  snapshot(): V2RevisionCapacityWaitSnapshot {
+  snapshot(): RevisionCapacityWaitSnapshot {
     const now = this.#clock.now()
     const activeElapsed = this.#activeSince === undefined
       ? 0
@@ -189,8 +189,8 @@ export class V2RevisionCapacityCoordinator {
     })
   }
 
-  async #open(fileId: Uint8Array, signal?: AbortSignal): Promise<V2OpenedRevision> {
-    let operation: V2RevisionCapacityWaitOperation | undefined
+  async #open(fileId: Uint8Array, signal?: AbortSignal): Promise<OpenedRevision> {
+    let operation: RevisionCapacityWaitOperation | undefined
     try {
       while (true) {
         signal?.throwIfAborted()
@@ -199,7 +199,7 @@ export class V2RevisionCapacityCoordinator {
           operation?.succeed()
           return opened
         } catch (error) {
-          if (!(error instanceof V2RevisionCapacityBusyError)) throw error
+          if (!(error instanceof RevisionCapacityBusyError)) throw error
           operation ??= this.#operation('revision_open')
           await operation.wait(error, signal)
         }
@@ -210,13 +210,13 @@ export class V2RevisionCapacityCoordinator {
   }
 
   async *#readRange(
-    descriptor: Parameters<V2BlockRangeReader['readRange']>[0],
-    leaseId: Parameters<V2BlockRangeReader['readRange']>[1],
+    descriptor: Parameters<BlockRangeReader['readRange']>[0],
+    leaseId: Parameters<BlockRangeReader['readRange']>[1],
     range: ByteRange,
-    options?: V2BlockRangeReaderOptions,
-  ): AsyncGenerator<V2BlockSlice> {
+    options?: BlockRangeReaderOptions,
+  ): AsyncGenerator<BlockSlice> {
     let nextOffset = range.start
-    let operation: V2RevisionCapacityWaitOperation | undefined
+    let operation: RevisionCapacityWaitOperation | undefined
     try {
       while (nextOffset < range.end) {
         options?.signal?.throwIfAborted()
@@ -238,7 +238,7 @@ export class V2RevisionCapacityCoordinator {
           operation = undefined
           return
         } catch (error) {
-          if (!(error instanceof V2RevisionCapacityBusyError)) throw error
+          if (!(error instanceof RevisionCapacityBusyError)) throw error
           operation ??= this.#operation('block_range')
           await operation.wait(error, options?.signal)
         }
@@ -249,21 +249,21 @@ export class V2RevisionCapacityCoordinator {
     }
   }
 
-  #operation(surface: V2RevisionCapacitySurface): V2RevisionCapacityWaitOperation {
-    return new V2RevisionCapacityWaitOperation(this, surface, this.#newWaitId())
+  #operation(surface: RevisionCapacitySurface): RevisionCapacityWaitOperation {
+    return new RevisionCapacityWaitOperation(this, surface, this.#newWaitId())
   }
 
   #newWaitId(): string {
-    const bytes = this.#randomBytes(V2_REVISION_CAPACITY_WAIT_ID_BYTES)
+    const bytes = this.#randomBytes(REVISION_CAPACITY_WAIT_ID_BYTES)
     if (!(bytes instanceof Uint8Array) ||
-        bytes.byteLength !== V2_REVISION_CAPACITY_WAIT_ID_BYTES ||
+        bytes.byteLength !== REVISION_CAPACITY_WAIT_ID_BYTES ||
         bytes.every(value => value === 0)) {
       throw new TypeError('revision capacity wait ID source returned an invalid identity')
     }
     return encodeBase64Url(bytes)
   }
 
-  activate(): V2RevisionCapacityWaitSnapshot {
+  activate(): RevisionCapacityWaitSnapshot {
     if (this.#activeWaiters === 0) {
       this.#activeSince = this.#clock.now()
       this.#armVisibilityTimer()
@@ -272,7 +272,7 @@ export class V2RevisionCapacityCoordinator {
     return this.#publishProgress()
   }
 
-  finish(): V2RevisionCapacityWaitSnapshot {
+  finish(): RevisionCapacityWaitSnapshot {
     if (this.#activeWaiters === 0) return this.snapshot()
     this.#activeWaiters -= 1
     if (this.#activeWaiters === 0) {
@@ -291,7 +291,7 @@ export class V2RevisionCapacityCoordinator {
   }
 
   planWait(): Readonly<{
-    snapshot: V2RevisionCapacityWaitSnapshot
+    snapshot: RevisionCapacityWaitSnapshot
     remainingMilliseconds: number
     jitterMilliseconds: number
   }> {
@@ -314,13 +314,13 @@ export class V2RevisionCapacityCoordinator {
     })
   }
 
-  budgetExhausted(snapshot: V2RevisionCapacityWaitSnapshot): boolean {
+  budgetExhausted(snapshot: RevisionCapacityWaitSnapshot): boolean {
     return snapshot.accumulatedWaitMilliseconds >= this.#waitBudgetMilliseconds
   }
 
   async raceDelay(
     delayMilliseconds: number,
-    issuingIdentity: V2ProtocolSessionIdentity,
+    issuingIdentity: ProtocolSessionIdentity,
     signal: AbortSignal,
   ): Promise<'timer' | 'generation'> {
     signal.throwIfAborted()
@@ -354,7 +354,7 @@ export class V2RevisionCapacityCoordinator {
     }
   }
 
-  trace(event: V2RevisionCapacityTrace): void {
+  trace(event: RevisionCapacityTrace): void {
     try {
       this.#onTrace?.(event)
     } catch {
@@ -362,7 +362,7 @@ export class V2RevisionCapacityCoordinator {
     }
   }
 
-  #publishProgress(): V2RevisionCapacityWaitSnapshot {
+  #publishProgress(): RevisionCapacityWaitSnapshot {
     const snapshot = this.snapshot()
     try {
       this.#onProgress?.(snapshot)
@@ -384,18 +384,18 @@ export class V2RevisionCapacityCoordinator {
   }
 }
 
-class V2RevisionCapacityWaitOperation {
-  readonly #coordinator: V2RevisionCapacityCoordinator
-  readonly #surface: V2RevisionCapacitySurface
+class RevisionCapacityWaitOperation {
+  readonly #coordinator: RevisionCapacityCoordinator
+  readonly #surface: RevisionCapacitySurface
   readonly #waitId: string
   #active = false
   #closed = false
-  #lastCapacity: V2RevisionCapacityBusyError | undefined
+  #lastCapacity: RevisionCapacityBusyError | undefined
   #lastAttempt = 0
 
   constructor(
-    coordinator: V2RevisionCapacityCoordinator,
-    surface: V2RevisionCapacitySurface,
+    coordinator: RevisionCapacityCoordinator,
+    surface: RevisionCapacitySurface,
     waitId: string,
   ) {
     this.#coordinator = coordinator
@@ -403,7 +403,7 @@ class V2RevisionCapacityWaitOperation {
     this.#waitId = waitId
   }
 
-  async wait(capacity: V2RevisionCapacityBusyError, signal?: AbortSignal): Promise<void> {
+  async wait(capacity: RevisionCapacityBusyError, signal?: AbortSignal): Promise<void> {
     if (this.#closed) throw new Error('revision capacity wait operation is already closed')
     const effectiveSignal = signal ?? NEVER_ABORTED_SIGNAL
     effectiveSignal.throwIfAborted()
@@ -432,7 +432,7 @@ class V2RevisionCapacityWaitOperation {
     try {
       outcome = await this.#coordinator.raceDelay(
         delayMilliseconds,
-        createV2ProtocolSessionIdentity(
+        createProtocolSessionIdentity(
           capacity.protocolFailure.correlation.protocolSessionId.copyBytes(),
         ),
         effectiveSignal,
@@ -464,28 +464,28 @@ class V2RevisionCapacityWaitOperation {
     this.#finish()
   }
 
-  #pause(capacity: V2RevisionCapacityBusyError): never {
+  #pause(capacity: RevisionCapacityBusyError): never {
     const snapshot = this.#finish()
     this.#trace('capacity_wait_budget_paused', capacity, snapshot)
-    throw new V2RevisionCapacityWaitBudgetError(this.#surface, capacity)
+    throw new RevisionCapacityWaitBudgetError(this.#surface, capacity)
   }
 
-  #finish(): V2RevisionCapacityWaitSnapshot {
+  #finish(): RevisionCapacityWaitSnapshot {
     if (this.#closed) return this.#coordinator.snapshot()
     this.#closed = true
     return this.#deactivate()
   }
 
-  #deactivate(): V2RevisionCapacityWaitSnapshot {
+  #deactivate(): RevisionCapacityWaitSnapshot {
     if (!this.#active) return this.#coordinator.snapshot()
     this.#active = false
     return this.#coordinator.finish()
   }
 
   #trace(
-    transition: V2RevisionCapacityTrace['transition'],
-    capacity: V2RevisionCapacityBusyError,
-    snapshot: V2RevisionCapacityWaitSnapshot & Readonly<{
+    transition: RevisionCapacityTrace['transition'],
+    capacity: RevisionCapacityBusyError,
+    snapshot: RevisionCapacityWaitSnapshot & Readonly<{
       jitterMilliseconds?: number
       delayMilliseconds?: number
     }>,
@@ -542,7 +542,7 @@ function systemRandomBytes(length: number): Uint8Array {
   return globalThis.crypto.getRandomValues(new Uint8Array(length))
 }
 
-const SYSTEM_REVISION_CAPACITY_CLOCK: V2RevisionCapacityClock = Object.freeze({
+const SYSTEM_REVISION_CAPACITY_CLOCK: RevisionCapacityClock = Object.freeze({
   now: () => performance.now(),
   sleep: (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
     signal.throwIfAborted()

@@ -5,7 +5,7 @@ import {
   type ClassifiedTransferFailure,
 } from '../failure/classification'
 
-export type V2TransferAdmissionFailureAuthority =
+export type TransferAdmissionFailureAuthority =
   | Readonly<{ readonly kind: 'canceled' }>
   | Readonly<{
       readonly kind: 'fault'
@@ -13,14 +13,14 @@ export type V2TransferAdmissionFailureAuthority =
     }>
 
 /** Keeps admission settlement independent from the native error that reached its classifier. */
-export class V2TransferAdmissionFailureError extends Error {
-  readonly authority: V2TransferAdmissionFailureAuthority
+export class TransferAdmissionFailureError extends Error {
+  readonly authority: TransferAdmissionFailureAuthority
 
-  constructor(authority: V2TransferAdmissionFailureAuthority) {
+  constructor(authority: TransferAdmissionFailureAuthority) {
     super(authority.kind === 'canceled'
       ? 'Transfer admission was canceled'
       : 'Transfer failed before execution admission')
-    this.name = 'V2TransferAdmissionFailureError'
+    this.name = 'TransferAdmissionFailureError'
     this.authority = authority.kind === 'canceled'
       ? Object.freeze({ kind: 'canceled' })
       : Object.freeze({

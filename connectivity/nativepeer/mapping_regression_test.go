@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type pinholeGateway struct{ mappedGateway }
@@ -60,7 +60,7 @@ func TestNativeIPv6PinholeRetainedByExactSelectedHostPair(t *testing.T) {
 		t.Fatal("native IPv6 host synthesized as srflx")
 	}
 	local := h.requests[0].SocketLease.Endpoints()[0]
-	h.requests[0].Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: local.Addr().String(), LocalPort: local.Port(), Protocol: "udp"}})
+	h.requests[0].Observe(pionpeer.Event{Pair: &pionpeer.PairFacts{LocalAddress: local.Addr().String(), LocalPort: local.Port(), Protocol: "udp"}})
 	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	h.now = h.now.Add(4 * time.Second)
 	h.native.Maintain(context.Background())
@@ -73,7 +73,7 @@ func TestNativeIPv6PinholeRetainedByExactSelectedHostPair(t *testing.T) {
 	}
 }
 func TestProvenTCPAllocatesMappingBeforeFreshAttemptAndRetainsOnlyExactProtocol(t *testing.T) {
-	if !provider.Capabilities(provider.TCPNativeWindows).IPv4 {
+	if !pionpeer.Capabilities(pionpeer.TCPNativeWindows).IPv4 {
 		t.Skip("this platform has no proven native TCP profile")
 	}
 	h := newHarness(t)
@@ -98,7 +98,7 @@ func TestProvenTCPAllocatesMappingBeforeFreshAttemptAndRetainsOnlyExactProtocol(
 	if tcp != 1 {
 		t.Fatal("production TCP mapping not supplied", h.requests[1].MappedEndpoints)
 	}
-	h.requests[1].Observe(provider.Event{Pair: &provider.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "tcp"}})
+	h.requests[1].Observe(pionpeer.Event{Pair: &pionpeer.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "tcp"}})
 	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
 	h.now = h.now.Add(4 * time.Second)
 	h.native.Maintain(context.Background())

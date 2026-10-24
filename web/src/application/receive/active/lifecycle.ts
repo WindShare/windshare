@@ -1,34 +1,34 @@
 import { availableReceiveActions } from '../policy'
 import type { PresentationExclusionReason } from '../../../diagnostics/incident'
 import type { OutputFailureBindingLease } from '../../../output/diagnostics'
-import type { LifecycleUserAction, V2ActiveReceiveControl } from '../actions'
+import type { LifecycleUserAction, ActiveReceiveControl } from '../actions'
 import type { ReceiveRuntimeState } from '../state'
 import type {
-  V2BoundReceiveOperation,
-  V2LifecycleMutation,
+  BoundReceiveOperation,
+  LifecycleMutation,
 } from '../contracts'
 import { presentationSourceOutcome } from '../contracts'
 import { StaleReceiveBoundaryError } from '../observation/contracts'
 import {
   type ActiveReceiveObservability,
-  type V2ReceivePresentationAttempt,
+  type ReceivePresentationAttempt,
 } from './observability'
-import type { V2PresentationAttempt } from '../observation/attempt'
+import type { PresentationAttempt } from '../observation/attempt'
 import type { ReceiveSettlementDeadline } from './settlement-wait'
 
 export interface ActiveReceiveLifecycleOperation {
-  readonly runtime: V2BoundReceiveOperation
+  readonly runtime: BoundReceiveOperation
   readonly settlementWait: ReceiveSettlementDeadline
   transfer?: AbortController
   running?: Promise<void>
-  receiveAttempt?: V2ReceivePresentationAttempt
+  receiveAttempt?: ReceivePresentationAttempt
 }
 
 interface PendingLifecycleAction {
   readonly operation: ActiveReceiveLifecycleOperation
   readonly generation: bigint
   readonly action: LifecycleUserAction
-  readonly attempt: V2PresentationAttempt
+  readonly attempt: PresentationAttempt
   readonly outputLease?: OutputFailureBindingLease
 }
 
@@ -40,7 +40,7 @@ export interface ActiveReceiveLifecycleOptions {
   readonly startTransfer: (operation: ActiveReceiveLifecycleOperation) => void
   readonly replaceDetachConsequence: (
     operation: ActiveReceiveLifecycleOperation,
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
   ) => void
   readonly onActionError: (error: unknown) => void
   readonly onIdle: (operation: ActiveReceiveLifecycleOperation) => void
@@ -108,7 +108,7 @@ export class ActiveReceiveLifecycle {
       return
     }
 
-    let started: V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
+    let started: LifecycleMutation | PromiseLike<LifecycleMutation>
     try {
       // Publication pickers must start before the rendered click returns.
       started = active.runtime.startLifecycleAction(action, lifecycle)
@@ -133,7 +133,7 @@ export class ActiveReceiveLifecycle {
   async applyMutation(
     active: ActiveReceiveLifecycleOperation,
     expectedGeneration: bigint,
-    mutation: V2LifecycleMutation,
+    mutation: LifecycleMutation,
     beforePublish?: () => void,
   ): Promise<boolean> {
     const current = this.#state.getSnapshot().lifecycle
@@ -169,7 +169,7 @@ export class ActiveReceiveLifecycle {
 
   #interruptReceive(
     active: ActiveReceiveLifecycleOperation,
-    control: V2ActiveReceiveControl,
+    control: ActiveReceiveControl,
     pending: PendingLifecycleAction,
   ): void {
     const transfer = active.transfer
@@ -206,7 +206,7 @@ export class ActiveReceiveLifecycle {
 
   async #finishMutation(
     pending: PendingLifecycleAction,
-    mutation: V2LifecycleMutation,
+    mutation: LifecycleMutation,
   ): Promise<void> {
     if (this.#pending !== pending) {
       this.#observability.lifecycleExclusion(pending.attempt, 'stale_replacement')

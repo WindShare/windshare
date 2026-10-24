@@ -11,9 +11,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func ProjectNativeObservation(workflow appobs.Workflow, value nativepeer.Observation) (appobs.NativeConnectivityObserved, error) {
@@ -120,7 +120,7 @@ func projectNativeObservation(workflow appobs.Workflow, value nativepeer.Observa
 	return appobs.NewNativeConnectivityObserved(spec)
 }
 
-func projectNativeProvider(spec appobs.NativeConnectivitySpec, p *provider.Event) appobs.NativeConnectivitySpec {
+func projectNativeProvider(spec appobs.NativeConnectivitySpec, p *pionpeer.Event) appobs.NativeConnectivitySpec {
 	spec.Kind = p.Milestone
 	spec.At = p.At
 	if d := p.Diagnostic; d != nil {
@@ -163,7 +163,7 @@ func nativeDiagnosticMessage(message string) string {
 	return message[:end] + suffix
 }
 
-func projectTURNRecoveryFacts(facts *appobs.NativeTURNFacts, event *provider.Event) {
+func projectTURNRecoveryFacts(facts *appobs.NativeTURNFacts, event *pionpeer.Event) {
 	if binding := event.TURNBinding; binding != nil {
 		peer, _ := netip.ParseAddrPort(binding.PeerAddress)
 		allocation, _ := netip.ParseAddrPort(binding.RelayedAddress)

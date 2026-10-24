@@ -45,10 +45,10 @@ import {
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
-import type { V2PlanExecutionAuthority } from '../../src/transfer/output/session'
+import type { PlanExecutionAuthority } from '../../src/transfer/output/session'
 import type {
-  V2BoundReceiveOperation,
-  V2RouteCommitResult,
+  BoundReceiveOperation,
+  RouteCommitResult,
 } from '../../src/application/receive/contracts'
 import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
 import {
@@ -383,7 +383,7 @@ async function routeFixture(options: {
   })
   const events: string[] = []
   const abort = new AbortController()
-  const boundOperations: V2BoundReceiveOperation[] = []
+  const boundOperations: BoundReceiveOperation[] = []
   const dependencies: WorkspaceRouteDependencyOverrides = {
     activationOwner: {
       withActivationLock: async (_operationId, execute) => {
@@ -610,12 +610,12 @@ async function workspaceResolvedAction(quotaEstimate = 1_000_000n): Promise<{
   return Object.freeze({ selection, offered, action: outcome.action })
 }
 
-function requireOwned(result: V2RouteCommitResult): Extract<V2RouteCommitResult, { kind: 'owned-effects' }> {
+function requireOwned(result: RouteCommitResult): Extract<RouteCommitResult, { kind: 'owned-effects' }> {
   if (result.kind !== 'owned-effects') throw new Error('expected owned workspace effects')
   return result
 }
 
-function fakeBoundOperation(intent: ReceiveIntent): V2BoundReceiveOperation {
+function fakeBoundOperation(intent: ReceiveIntent): BoundReceiveOperation {
   const lifecycle = {
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
@@ -624,7 +624,7 @@ function fakeBoundOperation(intent: ReceiveIntent): V2BoundReceiveOperation {
   } as const
   return Object.freeze({
     intent,
-    plans: Object.freeze({}) as V2PlanExecutionAuthority,
+    plans: Object.freeze({}) as PlanExecutionAuthority,
     transferJobId: identity(90),
     lifecycle,
     activeControls: Object.freeze(['pause'] as const),

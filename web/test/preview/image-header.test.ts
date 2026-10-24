@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  sniffV2ImageHeader,
-  V2_IMAGE_DECODED_BYTES,
-  V2ImagePreviewError,
+  sniffImageHeader,
+  IMAGE_DECODED_BYTES,
+  ImagePreviewError,
 } from '../../src/preview/image-header'
 
 function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
@@ -41,7 +41,7 @@ function webpAnimated(): Uint8Array<ArrayBuffer> {
 
 describe('bounded image header policy', () => {
   it('accepts a static PNG without reading its encoded payload', () => {
-    expect(sniffV2ImageHeader(png(320, 200), 1_000_041n)).toEqual({
+    expect(sniffImageHeader(png(320, 200), 1_000_041n)).toEqual({
       mimeType: 'image/png',
       width: 320,
       height: 200,
@@ -49,16 +49,16 @@ describe('bounded image header policy', () => {
   })
 
   it('rejects animation and decoded-memory bombs before browser decode', () => {
-    expect(() => sniffV2ImageHeader(png(10, 10, true), 53n))
-      .toThrowError(new V2ImagePreviewError('Animated PNG preview is not supported'))
-    const side = Math.floor(Math.sqrt(V2_IMAGE_DECODED_BYTES / 4)) + 1
-    expect(() => sniffV2ImageHeader(png(side, side), 41n))
+    expect(() => sniffImageHeader(png(10, 10, true), 53n))
+      .toThrowError(new ImagePreviewError('Animated PNG preview is not supported'))
+    const side = Math.floor(Math.sqrt(IMAGE_DECODED_BYTES / 4)) + 1
+    expect(() => sniffImageHeader(png(side, side), 41n))
       .toThrow('decoded-memory limit')
-    expect(() => sniffV2ImageHeader(webpAnimated(), 30n))
+    expect(() => sniffImageHeader(webpAnimated(), 30n))
       .toThrow('Animated WebP')
   })
 
   it('rejects a WebP whose authenticated file size disagrees with RIFF', () => {
-    expect(() => sniffV2ImageHeader(webpAnimated(), 31n)).toThrow('RIFF length')
+    expect(() => sniffImageHeader(webpAnimated(), 31n)).toThrow('RIFF length')
   })
 })

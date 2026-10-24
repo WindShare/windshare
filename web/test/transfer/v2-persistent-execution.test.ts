@@ -15,10 +15,10 @@ import type {
   PersistentOutputNamespaceClaimPort,
 } from '../../src/output/persistent-tree/contracts'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import {
-  V2OutputPausedError,
+  OutputPausedError,
   type AuthenticatedLogicalSiblingMembership,
 } from '../../src/transfer/job/contract'
 import {
@@ -81,7 +81,7 @@ describe('persistent namespace claim bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const materialization = new PersistentMaterializationFixture(intent)
     const hasCommittedName = vi.fn(async (candidate: string) => candidate === 'occupied')
@@ -139,7 +139,7 @@ describe('persistent namespace claim bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const collision = new OutputDirectoryMutationError(
       'logical directory collides with an operation-owned compatible name',
@@ -184,7 +184,7 @@ describe('persistent namespace claim bridge', () => {
       failure = error
     }
 
-    expect(failure).toBeInstanceOf(V2OutputPausedError)
+    expect(failure).toBeInstanceOf(OutputPausedError)
     expect((failure as Error).cause).toBe(collision)
     expect(ensureDirectory).toHaveBeenCalledOnce()
     expect(isolatedDirectoryOutputFailure(failure, true, intent.syntheticRoot))
@@ -202,7 +202,7 @@ describe('persistent namespace claim bridge', () => {
 describe('persistent production execution bridge', () => {
   it.each(['pause', 'committed-stop', 'failed-stop'] as const)('chooses storage disposition from %s settlement authority', async outcome => {
     const intent = asDirectTree(await receiveIntentFixture({
-      planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new V2SelectionPolicy(),
+      planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new SelectionPolicy(),
     }))
     const preservingClose = vi.fn(async () => undefined)
     const stoppedClose = vi.fn(async () => undefined)
@@ -252,7 +252,7 @@ describe('persistent production execution bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const materialization = new PersistentMaterializationFixture(intent, [{ start: 0n, end: 2n }])
     let settledEvidence: PersistentDirectTreeMaterializationEvidence | undefined
@@ -327,7 +327,7 @@ describe('persistent production execution bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const raw = new DOMException('root directory write failed', 'UnknownError')
     const ensureDirectory = vi.fn(async () => { throw raw })
@@ -369,7 +369,7 @@ describe('persistent production execution bridge', () => {
     } catch (error) {
       backendFailure = error
     }
-    expect(backendFailure).toBeInstanceOf(V2OutputPausedError)
+    expect(backendFailure).toBeInstanceOf(OutputPausedError)
     expect((backendFailure as Error).cause).toBe(raw)
 
     let contractFailure: unknown
@@ -381,7 +381,7 @@ describe('persistent production execution bridge', () => {
     } catch (error) {
       contractFailure = error
     }
-    expect(contractFailure).not.toBeInstanceOf(V2OutputPausedError)
+    expect(contractFailure).not.toBeInstanceOf(OutputPausedError)
     expect(contractFailure).toMatchObject({ name: 'DirectoryAdmissionBindingError' })
     expect(ensureDirectory).toHaveBeenCalledOnce()
   })
@@ -390,7 +390,7 @@ describe('persistent production execution bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const materialization = new PersistentMaterializationFixture(intent)
     const execution = await createPersistentDirectTreeExecution({
@@ -445,7 +445,7 @@ describe('persistent production execution bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const materialization = new PersistentMaterializationFixture(intent)
     const settle = vi.fn(async (
@@ -500,7 +500,7 @@ describe('persistent production execution bridge', () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
-      selection: new V2SelectionPolicy(),
+      selection: new SelectionPolicy(),
     }))
     const closeFailure = new Error('root lease release is unknown')
     const materialization = new PersistentMaterializationFixture(

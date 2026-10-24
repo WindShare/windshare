@@ -1,16 +1,16 @@
 import type { ArtifactChoiceID, SelectionSpec } from '../../../transfer/intent'
 import type { ReceivePlanningShare } from '../joined-share'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
 } from '../contracts'
 import { presentationSourceOutcome } from '../contracts'
 import type { ActiveReceiveCoordinator } from '../active/coordinator'
 import type {
-  V2AuthorityActivationSnapshot,
-  V2AuthorityActivationTerminalOutcome,
+  AuthorityActivationSnapshot,
+  AuthorityActivationTerminalOutcome,
 } from './model'
-import { V2ActivationStateContractError } from './model'
+import { ActivationStateContractError } from './model'
 import { StaleReceiveBoundaryError } from '../observation/contracts'
 import {
   AuthorityCommitTransaction,
@@ -26,7 +26,7 @@ import {
   type AuthorityPlanningRequest,
   type AuthorityPlanningResult,
   type AuthorityPlanningSubject,
-  type V2AuthorityProjectionPublication,
+  type AuthorityProjectionPublication,
 } from './planning'
 import {
   cleanupRequiredSnapshot,
@@ -49,7 +49,7 @@ import {
   offeredArtifactChoiceRanking,
   frozenBoundOperation,
 } from './transaction'
-import type { V2ActiveProjection } from '../discovery'
+import type { ActiveProjection } from '../discovery'
 
 export type { AuthorityActivationOptions } from './lifecycle'
 
@@ -58,13 +58,13 @@ export type { AuthorityActivationOptions } from './lifecycle'
  * Projection/session objects are replaceable observations; only authenticated
  * share, selection, semantic choice, and installed route bind local authority.
  */
-export class V2AuthorityActivationCoordinator {
+export class AuthorityActivationCoordinator {
   readonly #options: AuthorityActivationOptions
   readonly #planning: AuthorityPlanningPipeline
   readonly #binder: ReceiveIntentBinder | undefined
   readonly #createActivationId: () => string
   readonly #listeners = new Set<() => void>()
-  #snapshot: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
+  #snapshot: AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
   #activation: AuthorityActivationRecord | undefined
   #joinSuspended = false
   #joinReplacement: ReceivePlanningShare | undefined
@@ -91,7 +91,7 @@ export class V2AuthorityActivationCoordinator {
     return () => this.#listeners.delete(listener)
   }
 
-  readonly getSnapshot = (): V2AuthorityActivationSnapshot => this.#snapshot
+  readonly getSnapshot = (): AuthorityActivationSnapshot => this.#snapshot
 
   get pending(): boolean {
     const activation = this.#activation
@@ -102,7 +102,7 @@ export class V2AuthorityActivationCoordinator {
     )
   }
 
-  observeProjection(active: V2ActiveProjection): void {
+  observeProjection(active: ActiveProjection): void {
     const activation = this.#activation
     if (activation !== undefined && activation.terminal === undefined) {
       this.#beginObservationReplacement(activation, new StaleReceiveBoundaryError(), false)
@@ -182,7 +182,7 @@ export class V2AuthorityActivationCoordinator {
     this.#activation = record
     this.#trace(record, { transition: 'activation_started' })
 
-    let authority: V2ArtifactPresentationAuthority
+    let authority: ArtifactPresentationAuthority
     try {
       // Installing the record first closes reentrant and repeated-click picker races.
       authority = this.#options.receive.startArtifactAuthority(
@@ -274,7 +274,7 @@ export class V2AuthorityActivationCoordinator {
 
   #observeAuthority(
     record: AuthorityActivationRecord,
-    authority: V2ArtifactPresentationAuthority,
+    authority: ArtifactPresentationAuthority,
   ): void {
     Promise.resolve(authority.ready).then(() => {
       if (this.#activation !== record || record.terminal !== undefined) return
@@ -289,7 +289,7 @@ export class V2AuthorityActivationCoordinator {
 
   #offersApplied(
     request: AuthorityPlanningRequest,
-    offers: V2AuthorityProjectionPublication['offers'],
+    offers: AuthorityProjectionPublication['offers'],
   ): void {
     this.#options.publishProjection(Object.freeze({
       observationRevision: request.revision,
@@ -408,7 +408,7 @@ export class V2AuthorityActivationCoordinator {
       }
       if (!record.observationReplacementPending &&
           record.observationRevision <= attempt.observationRevision) {
-        this.#fail(record, new V2ActivationStateContractError(
+        this.#fail(record, new ActivationStateContractError(
           'route requested a pre-cut retry without a replacement observation',
         ))
         return
@@ -509,7 +509,7 @@ export class V2AuthorityActivationCoordinator {
   #beginBoundRuntimeCleanup(
     record: AuthorityActivationRecord,
     attempt: AuthorityCommitTransaction,
-    runtime: V2BoundReceiveOperation,
+    runtime: BoundReceiveOperation,
     reason: unknown,
   ): void {
     if (record.commitAttempt === attempt) delete record.commitAttempt
@@ -566,7 +566,7 @@ export class V2AuthorityActivationCoordinator {
 
   #invalidate(
     record: AuthorityActivationRecord,
-    reason: Extract<V2AuthorityActivationTerminalOutcome, { kind: 'invalidated' }>['reason'],
+    reason: Extract<AuthorityActivationTerminalOutcome, { kind: 'invalidated' }>['reason'],
   ): void {
     this.#trace(record, { transition: 'semantic_invalidated', invalidationReason: reason })
     this.#terminal(
@@ -610,7 +610,7 @@ export class V2AuthorityActivationCoordinator {
 
   #terminal(
     record: AuthorityActivationRecord,
-    outcome: V2AuthorityActivationTerminalOutcome,
+    outcome: AuthorityActivationTerminalOutcome,
     exclusion: AuthorityAttemptExclusion | undefined,
     releaseReason: unknown,
   ): void {
@@ -630,7 +630,7 @@ export class V2AuthorityActivationCoordinator {
 
   #terminalWithoutRelease(
     record: AuthorityActivationRecord,
-    outcome: V2AuthorityActivationTerminalOutcome,
+    outcome: AuthorityActivationTerminalOutcome,
     exclusion: AuthorityAttemptExclusion | undefined,
   ): void {
     if (!this.#markTerminal(record, outcome, exclusion)) return
@@ -643,7 +643,7 @@ export class V2AuthorityActivationCoordinator {
 
   #markTerminal(
     record: AuthorityActivationRecord,
-    outcome: V2AuthorityActivationTerminalOutcome,
+    outcome: AuthorityActivationTerminalOutcome,
     exclusion: AuthorityAttemptExclusion | undefined,
   ): boolean {
     if (this.#activation !== record || record.terminal !== undefined) return false
@@ -668,7 +668,7 @@ export class V2AuthorityActivationCoordinator {
     this.#publishSnapshot(projection.snapshot)
   }
 
-  #publishSnapshot(snapshot: V2AuthorityActivationSnapshot): void {
+  #publishSnapshot(snapshot: AuthorityActivationSnapshot): void {
     this.#snapshot = snapshot
     for (const listener of this.#listeners) listener()
   }
@@ -686,7 +686,7 @@ export class V2AuthorityActivationCoordinator {
     this.#publishLiveSnapshot(record)
   }
 
-  #currentObservation(record: AuthorityActivationRecord): V2ActiveProjection | undefined {
+  #currentObservation(record: AuthorityActivationRecord): ActiveProjection | undefined {
     const active = this.#options.currentProjection()
     const joined = this.#options.currentJoinedShare()
     if (record.observationReplacementPending || this.#joinSuspended ||

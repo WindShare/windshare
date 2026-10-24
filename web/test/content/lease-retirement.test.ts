@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LEASE_RETIREMENT_WAIT_MILLISECONDS, retireRemoteLease, type LeaseRetirementObservation,
 } from '../../src/content/scheduling/lease-retirement'
-import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
+import { SessionRuntimeError } from '../../src/session/runtime-types'
 import { deferred } from '../session/v2-send-fixture'
 
 const LEASE_ID = '01000000000000000000000000000000'
@@ -19,7 +19,7 @@ describe('bounded remote lease retirement', () => {
   it('bounds repeated physical failures and stops retrying after its deadline', async () => {
     vi.useFakeTimers()
     const f = fixture()
-    const release = vi.fn(async () => { throw new V2SessionRuntimeError('lane', 'physical failure') })
+    const release = vi.fn(async () => { throw new SessionRuntimeError('lane', 'physical failure') })
     const retiring = retireRemoteLease(LEASE_ID, f.owner, release)
     await vi.advanceTimersByTimeAsync(LEASE_RETIREMENT_WAIT_MILLISECONDS)
     await expect(retiring).resolves.toBeUndefined()
@@ -38,7 +38,7 @@ describe('bounded remote lease retirement', () => {
     const reached = deferred<void>()
     const release = vi.fn(async (signal: AbortSignal) => {
       reached.resolve()
-      if (phase === 'retry_backoff') throw new V2SessionRuntimeError('lane', 'detached')
+      if (phase === 'retry_backoff') throw new SessionRuntimeError('lane', 'detached')
       await new Promise<void>((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true })
       })
@@ -53,7 +53,7 @@ describe('bounded remote lease retirement', () => {
   })
 
   it.each([
-    new V2SessionRuntimeError('session', 'terminal'),
+    new SessionRuntimeError('session', 'terminal'),
     new Error('Authenticated release completion was invalid'),
   ])('records a non-retryable remote failure without replay or download failure', async failure => {
     const f = fixture()

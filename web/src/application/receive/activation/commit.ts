@@ -9,16 +9,16 @@ import {
 } from '../../../output/planning'
 import { validateReceiveIntent, type ReceiveIntent, type SelectionSpec } from '../../../transfer/intent'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
+  RouteCommitInput,
+  RouteCommitResult,
 } from '../contracts'
-import { V2ActivationStateContractError } from './model'
+import { ActivationStateContractError } from './model'
 import type {
-  V2ActivationCleanupOwnerKind,
-  V2ActivationCleanupStage,
-  V2AuthorityActivationTerminalOutcome,
+  ActivationCleanupOwnerKind,
+  ActivationCleanupStage,
+  AuthorityActivationTerminalOutcome,
 } from './model'
 
 export type ReceiveIntentBinder = typeof bindReceiveIntent
@@ -37,7 +37,7 @@ export interface ProvisionalOwnedEffectsResult {
   readonly authority: ProvisionalOwnedEffectAuthority
 }
 
-export interface AuthorityCommitRouteInput extends V2RouteCommitInput {
+export interface AuthorityCommitRouteInput extends RouteCommitInput {
   /**
    * Bootstrap records can own filesystem effects before an intent exists. Registering
    * that authority keeps failures recoverable without manufacturing a canonical intent.
@@ -48,21 +48,21 @@ export interface AuthorityCommitRouteInput extends V2RouteCommitInput {
 }
 
 export interface AuthorityCommitRoute {
-  commit(input: AuthorityCommitRouteInput): Promise<V2RouteCommitResult>
+  commit(input: AuthorityCommitRouteInput): Promise<RouteCommitResult>
 }
 
 export type AuthorityCommitOutcome =
-  | Extract<V2RouteCommitResult, { kind: 'retryable-precut' | 'owned-effects' }>
+  | Extract<RouteCommitResult, { kind: 'retryable-precut' | 'owned-effects' }>
   | Readonly<{
       kind: 'bound-operation'
-      operation: V2BoundReceiveOperation
+      operation: BoundReceiveOperation
       intent: ReceiveIntent
     }>
 
 export interface AuthorityCommitTransactionOptions {
   readonly action: ResolvedArtifactAction
   readonly observationRevision: number
-  readonly authority: V2ArtifactPresentationAuthority | AuthorityCommitRoute
+  readonly authority: ArtifactPresentationAuthority | AuthorityCommitRoute
   readonly assertFinalFence: (transaction: AuthorityCommitTransaction) => SelectionSpec
   readonly binder?: ReceiveIntentBinder
 }
@@ -75,7 +75,7 @@ export interface AuthorityCommitTransactionOptions {
 export class AuthorityCommitTransaction {
   readonly action: ResolvedArtifactAction
   readonly observationRevision: number
-  readonly #authority: V2ArtifactPresentationAuthority | AuthorityCommitRoute
+  readonly #authority: ArtifactPresentationAuthority | AuthorityCommitRoute
   readonly #assertFinalFence: AuthorityCommitTransactionOptions['assertFinalFence']
   readonly #binder: ReceiveIntentBinder
   readonly #controller = new AbortController()
@@ -109,7 +109,7 @@ export class AuthorityCommitTransaction {
   /** Transfers cleanup ownership exactly once when the route cannot reach a canonical cut. */
   takeProvisionalOwnedEffects(cause: unknown): ProvisionalOwnedEffectsResult | undefined {
     if (!this.#finished) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'provisional cleanup ownership cannot transfer before the commit attempt finishes',
       )
     }
@@ -124,7 +124,7 @@ export class AuthorityCommitTransaction {
   }
 
   async run(): Promise<AuthorityCommitOutcome> {
-    if (this.#started) throw new V2ActivationStateContractError('commit transaction started twice')
+    if (this.#started) throw new ActivationStateContractError('commit transaction started twice')
     this.#started = true
     try {
       const result = await this.#authority.commit({
@@ -142,14 +142,14 @@ export class AuthorityCommitTransaction {
 
   async #freeze(candidate: CandidateMaterializationBinding): Promise<BoundReceiveIntent> {
     if (this.#freezeRequested) {
-      throw new V2ActivationStateContractError('route requested the final intent fence twice')
+      throw new ActivationStateContractError('route requested the final intent fence twice')
     }
     this.#freezeRequested = true
     const selection = this.#assertFinalFence(this)
     const frozen = await this.#binder({ selection, action: this.action, candidate })
     const provisional = this.#provisionalOwnedEffects
     if (provisional !== undefined && provisional.operationId !== frozen.intent.operationId) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'provisional effects do not belong to the coordinator-frozen operation',
       )
     }
@@ -158,10 +158,10 @@ export class AuthorityCommitTransaction {
     return frozen
   }
 
-  async #validateResult(result: V2RouteCommitResult): Promise<AuthorityCommitOutcome> {
+  async #validateResult(result: RouteCommitResult): Promise<AuthorityCommitOutcome> {
     if (result.kind === 'retryable-precut') {
       if (this.#provisionalOwnedEffects !== undefined) {
-        throw new V2ActivationStateContractError(
+        throw new ActivationStateContractError(
           'route reported a pre-cut retry while provisional effects remain owned',
         )
       }
@@ -169,14 +169,14 @@ export class AuthorityCommitTransaction {
     }
     const frozen = this.#frozen
     if (frozen === undefined) {
-      throw new V2ActivationStateContractError('route committed before the final intent fence')
+      throw new ActivationStateContractError('route committed before the final intent fence')
     }
     const authority = result.kind === 'bound-operation' ? result.operation : result.authority
     const intent = await validateReceiveIntent(authority.intent)
     if (intent.digest !== frozen.intent.digest ||
         authority.lifecycle.operationId !== intent.operationId ||
         authority.lifecycle.receiveIntentDigest !== intent.digest) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'bound receive operation does not match the coordinator-frozen intent',
       )
     }
@@ -188,15 +188,15 @@ export class AuthorityCommitTransaction {
 
   #registerProvisionalOwnedEffects(authority: ProvisionalOwnedEffectAuthority): void {
     if (this.#frozen !== undefined || this.#freezeRequested) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'route registered provisional effects after requesting the final intent fence',
       )
     }
     if (this.#provisionalOwnedEffects !== undefined) {
-      throw new V2ActivationStateContractError('route registered provisional effects twice')
+      throw new ActivationStateContractError('route registered provisional effects twice')
     }
     if (authority.choiceId !== this.action.choiceId) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'provisional effects do not belong to the selected artifact choice',
       )
     }
@@ -204,7 +204,7 @@ export class AuthorityCommitTransaction {
       authority.installedRoute,
       materializationRouteIdentity(this.action.route),
     )) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'provisional effects do not belong to the installed materialization route',
       )
     }
@@ -215,7 +215,7 @@ export class AuthorityCommitTransaction {
     const authority = this.#provisionalOwnedEffects
     if (authority === undefined) return
     if (authority.operationId !== operationId) {
-      throw new V2ActivationStateContractError(
+      throw new ActivationStateContractError(
         'committed operation does not own the provisional effects',
       )
     }
@@ -224,26 +224,26 @@ export class AuthorityCommitTransaction {
 }
 
 export interface ActivationCleanupOwner {
-  readonly kind: V2ActivationCleanupOwnerKind
+  readonly kind: ActivationCleanupOwnerKind
   readonly operationId: string
   readonly settle: (reason: unknown) => PromiseLike<unknown>
   readonly detach: () => void | PromiseLike<void>
   readonly reason: unknown
-  readonly outcome: V2AuthorityActivationTerminalOutcome
+  readonly outcome: AuthorityActivationTerminalOutcome
   settlementComplete: boolean
   detachComplete: boolean
   running: boolean
 }
 
 export interface ActivationCleanupProgress {
-  readonly failedStages: readonly V2ActivationCleanupStage[]
+  readonly failedStages: readonly ActivationCleanupStage[]
   readonly detachedNow: boolean
   readonly complete: boolean
 }
 
 export function ownedEffectsCleanup(
   result: Extract<AuthorityCommitOutcome, { kind: 'owned-effects' }>,
-  outcome: V2AuthorityActivationTerminalOutcome,
+  outcome: AuthorityActivationTerminalOutcome,
 ): ActivationCleanupOwner {
   return {
     kind: 'owned-effects',
@@ -260,7 +260,7 @@ export function ownedEffectsCleanup(
 
 export function provisionalOwnedEffectsCleanup(
   result: ProvisionalOwnedEffectsResult,
-  outcome: V2AuthorityActivationTerminalOutcome,
+  outcome: AuthorityActivationTerminalOutcome,
 ): ActivationCleanupOwner {
   return {
     kind: 'owned-effects',
@@ -276,9 +276,9 @@ export function provisionalOwnedEffectsCleanup(
 }
 
 export function boundOperationCleanup(
-  runtime: V2BoundReceiveOperation,
+  runtime: BoundReceiveOperation,
   reason: unknown,
-  outcome: V2AuthorityActivationTerminalOutcome,
+  outcome: AuthorityActivationTerminalOutcome,
 ): ActivationCleanupOwner {
   return {
     kind: 'bound-operation',
@@ -297,7 +297,7 @@ export function boundOperationCleanup(
 export async function advanceActivationCleanup(
   cleanup: ActivationCleanupOwner,
 ): Promise<ActivationCleanupProgress> {
-  const failedStages: V2ActivationCleanupStage[] = []
+  const failedStages: ActivationCleanupStage[] = []
   if (!cleanup.settlementComplete) {
     try {
       await cleanup.settle(cleanup.reason)

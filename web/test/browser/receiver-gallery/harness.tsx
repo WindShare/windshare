@@ -1,15 +1,15 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { PortalApp } from '../../../src/ui/portal/PortalApp'
-import { V2ReceiverApp } from '../../../src/ui/V2ReceiverApp'
-import type { V2ReceiverController } from '../../../src/ui/v2-controller'
-import type { V2ReceiverSnapshot } from '../../../src/ui/v2-model'
-import { EMPTY_V2_PREVIEW } from '../../../src/ui/v2-model'
+import { ReceiverApp } from '../../../src/ui/ReceiverApp'
+import type { ReceiverController } from '../../../src/ui/controller'
+import type { ReceiverSnapshot } from '../../../src/ui/model'
+import { EMPTY_PREVIEW } from '../../../src/ui/model'
 import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDownloadScenario, type Scenario } from './fixtures'
 import { syntheticVideo } from './video'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import type { ReceiveLifecycleState } from '../../../src/output/workspace'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../../src/application/receive/contracts'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../../src/application/receive/contracts'
 import '../../../src/index.css'
 import '../../../src/App.css'
 
@@ -17,19 +17,19 @@ let root: Root | undefined
 let active: GalleryController | undefined
 
 class GalleryController {
-  #snapshot: V2ReceiverSnapshot
+  #snapshot: ReceiverSnapshot
   readonly #listeners = new Set<() => void>()
   readonly intents: string[] = []
   #videoUrl: string | undefined
   holdVideoSeeks = false
   close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
-  constructor(snapshot: V2ReceiverSnapshot) { this.#snapshot = snapshot }
+  constructor(snapshot: ReceiverSnapshot) { this.#snapshot = snapshot }
   getSnapshot = () => this.#snapshot
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }
-  #publish(patch: Partial<V2ReceiverSnapshot>) {
+  #publish(patch: Partial<ReceiverSnapshot>) {
     this.#snapshot = { ...this.#snapshot, ...patch }
     for (const listener of this.#listeners) listener()
   }
@@ -79,7 +79,7 @@ class GalleryController {
       ? { state: 'error', fileId: id, name: this.#snapshot.share.name, message: 'This format cannot be previewed in this browser.' }
       : photoPreview(true, id) })
   }
-  cancelPreview = () => this.#publish({ preview: EMPTY_V2_PREVIEW })
+  cancelPreview = () => this.#publish({ preview: EMPTY_PREVIEW })
   seekPreview = (seconds: number) => {
     this.intents.push('seek:' + seconds)
     const preview = this.#snapshot.preview
@@ -109,7 +109,7 @@ class GalleryController {
   activeLifecycleActionAdmission = () => ({ allowed: true, reason: null })
   canRetainCurrentOperation = false
   retainCurrentOperation = async () => false
-  performRetainedAction = (operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction) => {
+  performRetainedAction = (operation: RetainedReceiveOperation, action: RetainedReceiveAction) => {
     this.intents.push(`retained:${operation.operationId}:${action}`)
   }
   catchUpStoppedCompatibleNames = () => undefined
@@ -117,7 +117,7 @@ class GalleryController {
     const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
     const source = facts.lifecycle
     let lifecycle: ReceiveLifecycleState = source
-    let continuation: V2RetainedReceiveOperation['continuation'] = 'history-only'
+    let continuation: RetainedReceiveOperation['continuation'] = 'history-only'
     if (source.kind === 'published') {
       lifecycle = { ...source, cleanupState: 'clean' }
       continuation = 'restoration-available'
@@ -141,11 +141,11 @@ class GalleryController {
       ] },
     })
   }
-  advanceProgress = (progress: Partial<V2ReceiverSnapshot['progress']>) => {
+  advanceProgress = (progress: Partial<ReceiverSnapshot['progress']>) => {
     this.#publish({ progress: { ...this.#snapshot.progress, ...progress } })
   }
-  updatePathActivity = (pathActivity: V2ReceiverSnapshot['pathActivity']) => this.#publish({ pathActivity })
-  updateConnection = (connection: V2ReceiverSnapshot['connection']) => this.#publish({ connection })
+  updatePathActivity = (pathActivity: ReceiverSnapshot['pathActivity']) => this.#publish({ pathActivity })
+  updateConnection = (connection: ReceiverSnapshot['connection']) => this.#publish({ connection })
   requestReconnect = () => {
     this.intents.push('reconnect-now')
     this.updateConnection({ kind: 'reconnecting', activity: { kind: 'connecting' } })
@@ -182,8 +182,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   root = createRoot(container)
   // Test data supplies snapshots and records intents; every rendered control is
   // the production receiver, with no networking or destination authority.
-  const Surface = scenario.startsWith('portal') ? PortalApp : V2ReceiverApp
-  flushSync(() => root!.render(<Surface controller={active as unknown as V2ReceiverController} />))
+  const Surface = scenario.startsWith('portal') ? PortalApp : ReceiverApp
+  flushSync(() => root!.render(<Surface controller={active as unknown as ReceiverController} />))
 }
 
 export function holdVideoSeeks() { active!.holdVideoSeeks = true }

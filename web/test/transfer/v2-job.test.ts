@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { TransferTraceEvent } from '../../src/transfer/v2-job'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { TransferTraceEvent } from '../../src/transfer/job'
 import { disabledOutputExecutionProfile } from '../../src/transfer/output/session'
 import {
   catalogFixture,
@@ -31,7 +31,7 @@ describe('plan-specific transfer routing', () => {
   ) => {
     const file = fileEntry(identity(4), 'file.bin', 4n)
     const selection = artifactKind === 'directory-tree'
-      ? new V2SelectionPolicy()
+      ? new SelectionPolicy()
       : selectOnlyFile(file)
     const intent = await receiveIntentFixture({ planKind, artifactKind, selection, file })
     const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
@@ -62,7 +62,7 @@ describe('plan-specific transfer routing', () => {
 
   it('emits only stable plan/operation facts and no catalog identity or path', async () => {
     const file = fileEntry(identity(9), 'secret-name.bin', 2n)
-    const selection = new V2SelectionPolicy()
+    const selection = new SelectionPolicy()
     const intent = await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
@@ -151,7 +151,7 @@ describe('plan-specific transfer routing', () => {
     const root = identity(2)
     const child = identity(3)
     const file = fileEntry(identity(11), 'a.bin', 2n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const childReplayStarted = deferred()
     const releaseChildReplay = deferred()
     const blockStarted = deferred()
@@ -207,7 +207,7 @@ describe('plan-specific transfer routing', () => {
     const root = identity(2)
     const files = Array.from({ length: 6 }, (_, index) =>
       fileEntry(identity(20 + index), `file-${index}.bin`, 2n))
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: files }])
     const twoReadersStarted = deferred()
     const releaseReaders = deferred()
@@ -259,7 +259,7 @@ describe('plan-specific transfer routing', () => {
   it('uses the validated output profile when caller concurrency is omitted', async () => {
     const files = Array.from({ length: 5 }, (_, index) =>
       fileEntry(identity(40 + index), `profile-${index}.bin`, 2n))
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: identity(2), entries: files }])
     const profileWorkersStarted = deferred()
     const releaseReaders = deferred()

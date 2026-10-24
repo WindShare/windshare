@@ -56,6 +56,8 @@ short-go vectors rust web e2e browser hygiene workflow-lint lint vet gopls sloc
 
 ### Go packages
 
+Transport production dependencies cannot reach `connectivity/**`, including through wrappers; `make hygiene` checks Linux, Windows, and macOS graphs. Pion connection setup belongs to `connectivity/pionpeer`; frame delivery stays in `transport/webrtc`.
+
 The root `go.mod` owns all production Go packages. Core is `./core/...`; non-core is the remainder. Core production packages cannot import non-core WindShare packages or concrete networking and transport implementations. Native `osfs/**` fixtures are allowed only in the core test graph delta. Production `cmd/**` files cannot import `connectivity/**`, `transport/**`, or `relay/**`; the engine boundary gate follows exported aliases, fields, methods, and factory signatures in every public `engine/**` package including wrappers in core, to reject native types in the application API. Shared engine code cannot import `osfs/**` or `adapters/**`; hosts assemble these implementations. Engine and production CLI code cannot import test-support packages; e2e milestones are derived from ordinary observation traces. Go gates run with `GOWORK=off` and `GOTOOLCHAIN=local`.
 
 Coverage is gated on the core and non-core totals and on each package, with no per-file floor. The thresholds live in `.testcoverage.yml` and `core/.testcoverage.yml`. `internal/perfevidence` and `spikes/webrtc` are separate evidence modules outside the production set.

@@ -1,5 +1,5 @@
-import type { V2ShareDescriptor } from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { ShareDescriptor } from '../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import { decodeBase64Url, encodeBase64Url } from '../../crypto/bytes'
 import {
   STABLE_IDENTITY_BYTES,
@@ -10,11 +10,11 @@ import {
   type ReceiveIntent,
 } from '../intent'
 
-export function descriptorShareInstanceId(descriptor: V2ShareDescriptor): string {
+export function descriptorShareInstanceId(descriptor: ShareDescriptor): string {
   return encodeBase64Url(descriptor.shareInstance)
 }
 
-export function descriptorRootId(descriptor: V2ShareDescriptor): string {
+export function descriptorRootId(descriptor: ShareDescriptor): string {
   return encodeBase64Url(descriptor.syntheticRoot)
 }
 
@@ -33,8 +33,8 @@ export function snapshotTransferJobId(value: string): string {
 
 export async function validateTransferJobIntent(
   input: ReceiveIntent,
-  descriptor: V2ShareDescriptor,
-  selection: V2FrozenSelectionPolicy,
+  descriptor: ShareDescriptor,
+  selection: FrozenSelectionPolicy,
 ): Promise<ReceiveIntent> {
   const intent = await validateReceiveIntent(input)
   const shareInstance = descriptorShareInstanceId(descriptor)

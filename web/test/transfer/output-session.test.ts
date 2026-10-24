@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import {
   OutputSessionBindingError,
   VerifiedDurableRanges,
@@ -170,7 +170,7 @@ describe('plan-specific output boundary', () => {
   })
 
   it('requires DirectTree to expose incremental directory authority', async () => {
-    const selection = new V2SelectionPolicy()
+    const selection = new SelectionPolicy()
     const intent = await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
@@ -199,7 +199,7 @@ describe('plan-specific output boundary', () => {
 
   it('accepts the explicit plan adapter without consulting a session format', async () => {
     const file = fileEntry(identity(4), 'file.bin', 0n)
-    const selection = new V2SelectionPolicy(false)
+    const selection = new SelectionPolicy(false)
     selection.toggle(file, [identityText(2)])
     const intent = await receiveIntentFixture({
       planKind: 'direct-atomic',

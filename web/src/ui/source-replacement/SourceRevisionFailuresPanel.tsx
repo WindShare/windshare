@@ -1,8 +1,8 @@
 import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
-import type { V2RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { RetainedReceiveOperation } from '../../application/receive/contracts'
 
 export function SourceRevisionFailuresPanel(props: {
-  readonly operation: V2RetainedReceiveOperation
+  readonly operation: RetainedReceiveOperation
   readonly busy: boolean
   readonly prepareReplacement: (failure: SourceRevisionFailure) => void
 }) {

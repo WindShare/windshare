@@ -4,7 +4,7 @@ import {
 import type { OutputTraceEvent } from '../../../src/output/diagnostics/trace'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import { WorkspaceArtifactPresentationAuthority } from '../../../src/application/browser-receive/workspace/route'
-import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
+import type { BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY, environment, handoffTarget, identity, projection,
   singleFileProof, treeProof, workspaceOffer,
@@ -12,7 +12,7 @@ import {
 
 type ArtifactKind = 'original-file' | 'zip-archive'
 
-async function activate(kind: ArtifactKind, events: OutputTraceEvent[]): Promise<V2BoundReceiveOperation> {
+async function activate(kind: ArtifactKind, events: OutputTraceEvent[]): Promise<BoundReceiveOperation> {
   const selection = await createSelectionSpec({
     shareInstance: identity(1), syntheticRoot: identity(2),
     rules: { mode: 'node-id', defaultSelected: true, rules: [] },
@@ -46,7 +46,7 @@ async function activate(kind: ArtifactKind, events: OutputTraceEvent[]): Promise
 }
 
 async function exercise(events: OutputTraceEvent[], settlePermission: () => Promise<void>) {
-  const operations: V2BoundReceiveOperation[] = []
+  const operations: BoundReceiveOperation[] = []
   try {
     operations.push(await activate('original-file', events))
     operations.push(await activate('zip-archive', events))

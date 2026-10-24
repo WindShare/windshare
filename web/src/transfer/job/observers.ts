@@ -1,4 +1,4 @@
-import type { V2ContentLaneStatus } from '../../content/v2-broker'
+import type { ContentLaneStatus } from '../../content/broker'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import {
@@ -16,25 +16,25 @@ import type {
 import type {
   MaterializationFailureReason,
 } from '../failure/materialization'
-import { normalizeV2FileTransferFailure } from './failures'
+import { normalizeFileTransferFailure } from './failures'
 import type { WorkerFamilyConsequenceFailure } from '../worker-family/supervisor'
-import type { V2RevisionCapacityTrace } from '../revision-capacity/public'
+import type { RevisionCapacityTrace } from '../revision-capacity/public'
 
-export interface V2TransferObserversOptions {
+export interface TransferObserversOptions {
   readonly intent: ReceiveIntent
   readonly transferJobId: string
   readonly protocol?: Readonly<{
     readonly sessionId: string
     readonly generation: number
   }>
-  readonly lanes: V2ContentLaneStatus
+  readonly lanes: ContentLaneStatus
   readonly incidentScope?: IncidentScopeHandle
   readonly onProgress?: (progress: TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly trace?: DomainTraceSource<TransferTraceEvent>
 }
 
-export interface V2TransferProgressState {
+export interface TransferProgressState {
   readonly measure: SelectionMeasure
   readonly phase: 'receiving' | 'finishing'
   /** Accepted output payload, including authenticated retained coverage; not restart durability. */
@@ -58,11 +58,11 @@ export interface V2TransferProgressState {
  * Product observers and trace have separate ports. A trace payload is built only
  * after the revocable source yields an active observer.
  */
-export class V2TransferObservers {
-  readonly #options: V2TransferObserversOptions
+export class TransferObservers {
+  readonly #options: TransferObserversOptions
   #performance: PerformanceSummaryObservations | undefined
 
-  constructor(options: V2TransferObserversOptions) {
+  constructor(options: TransferObserversOptions) {
     this.#options = options
   }
 
@@ -88,7 +88,7 @@ export class V2TransferObservers {
     }
   }
 
-  progress(state: V2TransferProgressState): void {
+  progress(state: TransferProgressState): void {
     const partial = state.measure.discovery === 'failed' ||
       state.failedDirectories > 0 ||
       state.fileErrors > 0 ||
@@ -195,7 +195,7 @@ export class V2TransferObservers {
     outputSessionId?: string,
   ): void {
     try {
-      normalizeV2FileTransferFailure(consequence.failure, {
+      normalizeFileTransferFailure(consequence.failure, {
         relation: 'consequence',
         ...(this.#options.incidentScope === undefined
           ? {}
@@ -230,7 +230,7 @@ export class V2TransferObservers {
     }))
   }
 
-  capacityWait(event: V2RevisionCapacityTrace): void {
+  capacityWait(event: RevisionCapacityTrace): void {
     this.#emit(() => Object.freeze({
       name: 'receive_transition',
       transition: event.transition,

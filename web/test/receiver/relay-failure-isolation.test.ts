@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SenderObjectError } from '../../src/crypto/sender-object'
-import { V2BrowserSessionFactory, V2StaleShareInstanceError } from '../../src/receiver/v2-session-factory'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { V2TranscriptError } from '../../src/session/v2-transcript'
-import { V2RelayProtocolError } from '../../src/transport/relay/v2-protocol'
+import { BrowserSessionFactory, StaleShareInstanceError } from '../../src/receiver/session-factory'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { TranscriptError } from '../../src/session/transcript'
+import { RelayProtocolError } from '../../src/transport/relay/protocol'
 import { FakeSession, FakeSessionFactory, TrackedRelay, core, deferred, descriptor, identity } from './v2-supervisor-fixture'
 
 const HEALTHY_RELAY = 'https://relay.example'
 const INVALID_RELAY = 'https://invalid.example'
-const INVALID_FRAME = new V2RelayProtocolError('malformed', 'Invalid relay descriptor delivery')
+const INVALID_FRAME = new RelayProtocolError('malformed', 'Invalid relay descriptor delivery')
 const INVALID_DESCRIPTOR = new SenderObjectError('signature', 'Invalid sender signature')
-const INVALID_HANDSHAKE = new V2TranscriptError('Invalid ServerHello signature')
+const INVALID_HANDSHAKE = new TranscriptError('Invalid ServerHello signature')
 const FAILURES = [
   { stage: 'dial', error: INVALID_FRAME },
   { stage: 'descriptor', error: INVALID_DESCRIPTOR },
@@ -32,13 +32,13 @@ describe('relay endpoint failure isolation', () => {
       }
       return relay.connection
     })
-    const factory = new V2BrowserSessionFactory({
+    const factory = new BrowserSessionFactory({
       relayBases: [HEALTHY_RELAY], descriptor: share,
       capability: { suite: 2, readSecret: identity(1), pkHash: identity(2),
         shareIdRaw: new Uint8Array(12), shareId: 'share' },
       descriptorObject: relay.connection.descriptorObject, dialRelay: dial,
       openDescriptor: async () => share,
-      connectSession: async () => new FakeSession([1]) as unknown as V2ReceiverSessionRuntime,
+      connectSession: async () => new FakeSession([1]) as unknown as ReceiverSessionRuntime,
     })
     try {
       await expect(factory.connectFresh(parent.signal)).rejects.toBe(parent.signal.reason)
@@ -55,8 +55,8 @@ describe('relay endpoint failure isolation', () => {
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
     factory.relayBases.push(INVALID_RELAY)
-    factory.attachRelayImpl = async () => { throw new V2StaleShareInstanceError('Authenticated descriptor changed') }
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    factory.attachRelayImpl = async () => { throw new StaleShareInstanceError('Authenticated descriptor changed') }
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, relay), sessionFactory: factory, policy: 'relay-only',
     })
     const states: string[] = []
@@ -79,7 +79,7 @@ describe('relay endpoint failure isolation', () => {
     const ready = deferred<void>()
     const calls: string[] = []
     let healthySignal: AbortSignal | undefined
-    const factory = new V2BrowserSessionFactory({
+    const factory = new BrowserSessionFactory({
       relayBases: [INVALID_RELAY, HEALTHY_RELAY], descriptor: share,
       capability: { suite: 2, readSecret: identity(1), pkHash: identity(2),
         shareIdRaw: new Uint8Array(12), shareId: 'share' },
@@ -100,7 +100,7 @@ describe('relay endpoint failure isolation', () => {
       },
       connectSession: async options => {
         if (stage === 'handshake' && options.initialChannel === invalid.connection.channel) throw error
-        return new FakeSession([1]) as unknown as V2ReceiverSessionRuntime
+        return new FakeSession([1]) as unknown as ReceiverSessionRuntime
       },
     })
     // Both endpoints carry the pinned descriptor when testing a handshake failure.
@@ -151,7 +151,7 @@ describe('relay endpoint failure isolation', () => {
     }
     const observed: unknown[] = []
     const trace = vi.fn()
-    const supervisor = new V2ReceiverReconnectSupervisor({
+    const supervisor = new ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, healthy), sessionFactory: factory,
       policy: 'relay-only', protocolTrace: { current: trace }, onRecoveryError: failure => observed.push(failure),
     })

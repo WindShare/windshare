@@ -4,12 +4,12 @@ import (
 	"slices"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 const (
@@ -32,7 +32,7 @@ type Subject struct {
 // can outlive an attempt, so it never borrows the currently active attempt ID.
 type Observation struct {
 	Subject      Subject
-	Provider     *provider.Event
+	Provider     *pionpeer.Event
 	Reachability *reachability.Event
 	Lifecycle    *LifecycleFacts
 	Admission    *AdmissionFacts
@@ -110,7 +110,7 @@ func (n *NativePeerConnectivity) CompleteObservations() observationstream.Comple
 	}
 	return n.producer.Complete()
 }
-func (n *NativePeerConnectivity) observeProvider(subject Subject, event provider.Event) {
+func (n *NativePeerConnectivity) observeProvider(subject Subject, event pionpeer.Event) {
 	if event.Diagnostic != nil {
 		copy := *event.Diagnostic
 		event.Diagnostic = &copy

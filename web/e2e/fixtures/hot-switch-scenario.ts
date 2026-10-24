@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises'
 
 import { expect, type Page, type TestInfo } from '@playwright/test'
 
-import { V2_TYPED_PEER_ERROR_CODES } from '../../src/connectivity/diagnostics'
+import { TYPED_PEER_ERROR_CODES } from '../../src/connectivity/diagnostics'
 import {
   classifyNativePeerConnection,
   type NativeRtcCapabilityDiagnostic,
@@ -309,7 +309,7 @@ async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<Nati
 function isNativePeerOutcomeEvent(event: HotSwitchPageEvent): event is NativePeerOutcomeEvent {
   if (event.kind === 'lane-admitted') return event.observation.route === 'direct'
   if (event.kind !== 'attempt' || event.evidence.stage !== 'failed') return false
-  return V2_TYPED_PEER_ERROR_CODES.includes(event.evidence.typedErrorCode)
+  return TYPED_PEER_ERROR_CODES.includes(event.evidence.typedErrorCode)
 }
 
 async function completePeerHotSwitch(

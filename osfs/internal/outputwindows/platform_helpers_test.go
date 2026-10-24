@@ -13,11 +13,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsOutputV3PlatformClosedSurfaceRejectsOperations(t *testing.T) {
-	var nilPlatform *windowsOutputV3Platform
-	closed := &windowsOutputV3Platform{}
+func TestWindowsOutputPlatformClosedSurfaceRejectsOperations(t *testing.T) {
+	var nilPlatform *windowsOutputPlatform
+	closed := &windowsOutputPlatform{}
 
-	for name, platform := range map[string]*windowsOutputV3Platform{
+	for name, platform := range map[string]*windowsOutputPlatform{
 		"nil":    nilPlatform,
 		"closed": closed,
 	} {
@@ -41,8 +41,8 @@ func TestWindowsOutputV3PlatformClosedSurfaceRejectsOperations(t *testing.T) {
 	}
 }
 
-func TestWindowsOutputV3PlatformStaticContractAndCanonicalWrappers(t *testing.T) {
-	platform := &windowsOutputV3Platform{}
+func TestWindowsOutputPlatformStaticContractAndCanonicalWrappers(t *testing.T) {
+	platform := &windowsOutputPlatform{}
 	if got := platform.Certification(); got != outputcap.CertificationWindowsNTFSProcessRestart {
 		t.Fatalf("certification = %v", got)
 	}
@@ -84,9 +84,9 @@ func TestWindowsOutputV3PlatformStaticContractAndCanonicalWrappers(t *testing.T)
 	}
 }
 
-func TestWindowsOutputV3PublicOperationGuardClosedSurfaceIsIdempotent(t *testing.T) {
-	var nilGuard *windowsOutputV3PublicOperationGuard
-	for name, guard := range map[string]*windowsOutputV3PublicOperationGuard{
+func TestWindowsOutputPublicOperationGuardClosedSurfaceIsIdempotent(t *testing.T) {
+	var nilGuard *windowsOutputPublicOperationGuard
+	for name, guard := range map[string]*windowsOutputPublicOperationGuard{
 		"nil":   nilGuard,
 		"empty": {},
 	} {
@@ -101,45 +101,45 @@ func TestWindowsOutputV3PublicOperationGuardClosedSurfaceIsIdempotent(t *testing
 	}
 }
 
-func TestWindowsV3DirectoryNameHelpersRejectInvalidOrClosedAuthorities(t *testing.T) {
-	var directory *windowsV3Directory
+func TestWindowsDirectoryNameHelpersRejectInvalidOrClosedAuthorities(t *testing.T) {
+	var directory *windowsDirectory
 	include := func(string) bool { return true }
 
-	if _, err := directory.namesMatching(-1, include); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := directory.namesMatching(-1, include); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("negative enumeration bound error = %v", err)
 	}
-	if _, err := directory.namesMatching(0, nil); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := directory.namesMatching(0, nil); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("nil enumeration filter error = %v", err)
 	}
-	if _, err := directory.namesMatching(0, include); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := directory.namesMatching(0, include); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed enumeration error = %v", err)
 	}
-	if _, err := directory.namesWithPrefix("Read", 1); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := directory.namesWithPrefix("Read", 1); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed prefix enumeration error = %v", err)
 	}
-	if err := directory.validatePublicEntryNames(nil); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := directory.validatePublicEntryNames(nil); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed public-name validation error = %v", err)
 	}
-	if err := directory.validatePublicEntryName("Readme.txt"); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if err := directory.validatePublicEntryName("Readme.txt"); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed single-name validation error = %v", err)
 	}
 }
 
-func TestWindowsV3DirectoryPublicNameValidationAcceptsEmptyPlan(t *testing.T) {
+func TestWindowsDirectoryPublicNameValidationAcceptsEmptyPlan(t *testing.T) {
 	// The empty plan is a meaningful no-op after a canonical selection has been
 	// reduced to zero public entries; it must not force a native directory scan.
-	directory := &windowsV3Directory{
+	directory := &windowsDirectory{
 		file:      &os.File{},
-		inspector: windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) { return windowsV3ObjectFacts{}, nil }),
-		policy:    &windowsV3PrivatePolicy{},
+		inspector: windowsObjectInspectorFunc(func(windows.Handle) (windowsObjectFacts, error) { return windowsObjectFacts{}, nil }),
+		policy:    &windowsPrivatePolicy{},
 	}
 	if err := directory.validatePublicEntryNames(nil); err != nil {
 		t.Fatalf("empty public-name validation = %v", err)
 	}
 }
 
-func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.T) {
-	var directory *windowsOutputV3Directory
+func TestWindowsOutputDirectoryClosedSurfaceRejectsAllCapabilities(t *testing.T) {
+	var directory *windowsOutputDirectory
 	modified := catalog.ModifiedTime{}
 	if err := directory.Close(); err != nil {
 		t.Fatal(err)
@@ -214,8 +214,8 @@ func TestWindowsOutputV3DirectoryClosedSurfaceRejectsAllCapabilities(t *testing.
 	}
 }
 
-func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
-	var file *windowsOutputV3MutableFile
+func TestWindowsOutputFileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
+	var file *windowsOutputMutableFile
 	if _, err := file.ReadAt(nil, 0); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("read error = %v", err)
 	}
@@ -241,14 +241,14 @@ func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
 		t.Fatalf("same file error = %v", err)
 	}
 
-	var entry *windowsOutputV3EntryRef
+	var entry *windowsOutputEntryRef
 	if got := entry.Kind(); got != outputcap.EntryAbsent {
 		t.Fatalf("closed entry kind = %v", got)
 	}
 	if err := entry.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var lock *windowsOutputV3Lock
+	var lock *windowsOutputLock
 	if lock.File() != nil {
 		t.Fatal("closed lock exposed a file")
 	}
@@ -257,14 +257,14 @@ func TestWindowsOutputV3FileEntryAndLockClosedSurfaceIsSafe(t *testing.T) {
 	}
 }
 
-func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsOutputFileLiveSurfacePreservesPinnedAuthorityThroughSettlement(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	t.Cleanup(func() {
 		if err := platform.Close(); err != nil {
 			t.Errorf("close platform: %v", err)
 		}
 	})
-	directory := &windowsOutputV3Directory{native: platform.Root()}
+	directory := &windowsOutputDirectory{native: platform.Root()}
 
 	const name = "capability-live-surface.bin"
 	created, err := directory.CreateFile(name, true, 0)
@@ -276,7 +276,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 			t.Errorf("close file: %v", err)
 		}
 	})
-	file, ok := created.(*windowsOutputV3MutableFile)
+	file, ok := created.(*windowsOutputMutableFile)
 	if !ok {
 		t.Fatalf("created file type = %T", created)
 	}
@@ -316,7 +316,7 @@ func TestWindowsOutputV3FileLiveSurfacePreservesPinnedAuthorityThroughSettlement
 			t.Errorf("close peer: %v", err)
 		}
 	})
-	peer, ok := opened.(*windowsOutputV3MutableFile)
+	peer, ok := opened.(*windowsOutputMutableFile)
 	if !ok {
 		t.Fatalf("opened file type = %T", opened)
 	}

@@ -14,7 +14,7 @@ import {
   createWorkspaceBinding, createWorkspaceID, createWorkspaceThenPublishPlan,
   createZipArchiveArtifact, deriveArtifactChoiceIdentity,
 } from '../../../src/transfer/intent'
-import { normalizeV2FileTransferFailure } from '../../../src/transfer/job/failures'
+import { normalizeFileTransferFailure } from '../../../src/transfer/job/failures'
 import { TransferPauseRequestedError, type WorkspaceExecution } from '../../../src/transfer/output/session'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY } from '../../../src/transfer/outcome'
 import { WorkspaceReceiveOperation } from '../../../src/application/browser-receive/workspace/operation'
@@ -60,7 +60,7 @@ export async function attempt() {
     if (result.kind !== 'accepted') throw new Error('Unexpected capacity rejection')
     execution = result.execution
   } catch (error) {
-    const normalized = normalizeV2FileTransferFailure(error)
+    const normalized = normalizeFileTransferFailure(error)
     if (normalized.kind === 'fault') {
       failureStage = normalized.fact.stage
       recovery = normalized.fact.recoveryDisposition

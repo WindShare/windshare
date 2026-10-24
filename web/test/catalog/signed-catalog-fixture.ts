@@ -1,7 +1,7 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { ed25519 } from '@noble/curves/ed25519.js'
 
-import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
+import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import { concatBytes, copyBytes, encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createCatalogPageObjectBinding,
@@ -42,7 +42,7 @@ export interface SealedCatalogPage {
 }
 
 export interface SignedCatalogFixture {
-  readonly descriptor: V2ShareDescriptor
+  readonly descriptor: ShareDescriptor
   readonly readSecret: Uint8Array<ArrayBuffer>
   sealPage(input: SignedCatalogPageInput): Promise<SealedCatalogPage>
   close(): void
@@ -61,7 +61,7 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
   const catalogKeyBytes = await deriveSuite02CatalogKey(readSecret, shareInstance)
   const subtle = defaultCryptoRuntime().subtle
   const catalogKey = await subtle.importKey('raw', catalogKeyBytes, 'AES-GCM', false, ['encrypt'])
-  const descriptor: V2ShareDescriptor = Object.freeze({
+  const descriptor: ShareDescriptor = Object.freeze({
     wireVersion: 2,
     suite: 2,
     shareInstance,
@@ -72,7 +72,7 @@ export async function createSignedCatalogFixture(): Promise<SignedCatalogFixture
     capabilities: 0n,
     sender: createEd25519Verifier(senderPublicKey),
     createdAtSeconds: 1n,
-    pathPolicy: V2_PATH_POLICY,
+    pathPolicy: PATH_POLICY,
   })
   let nonceSequence = 1
   let closed = false

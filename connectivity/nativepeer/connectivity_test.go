@@ -10,11 +10,11 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type testMonitor struct {
@@ -35,7 +35,7 @@ type harness struct {
 	native   *NativePeerConnectivity
 	monitor  *testMonitor
 	now      time.Time
-	requests []provider.AttemptConfig
+	requests []pionpeer.AttemptConfig
 }
 
 func newHarness(t *testing.T) *harness {
@@ -45,7 +45,7 @@ func newHarness(t *testing.T) *harness {
 	sockets := socketauthority.New(socketauthority.Config{})
 	h.native = newTestConnectivity(t, Config{Admission: NewAdmission(AdmissionClock{}), Monitor: h.monitor, Sockets: sockets, Pool: &pool, Now: func() time.Time { return h.now },
 		Reachability: reachability.New(reachability.Config{Now: func() time.Time { return h.now }}),
-		Connect: func(_ pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
+		Connect: func(_ pion.Configuration, request pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
 			h.requests = append(h.requests, request)
 			return nil, errors.New("capture")
 		},
@@ -96,7 +96,7 @@ func TestFreshAttemptsFreezeProfileAndReuseExactSocketWithinGeneration(t *testin
 }
 func controlBytes(t *testing.T, sequence uint64, kind protocolsession.PeerPathControlKind, hold time.Duration) []byte {
 	t.Helper()
-	control := protocolsession.PeerPathControl{PeerPathID: [16]byte{2}, NetworkGenerationID: [16]byte{3}, ControlSequence: sequence, Kind: kind, ProviderProfile: string(provider.TCPNativeWindows)}
+	control := protocolsession.PeerPathControl{PeerPathID: [16]byte{2}, NetworkGenerationID: [16]byte{3}, ControlSequence: sequence, Kind: kind, ProviderProfile: string(pionpeer.TCPNativeWindows)}
 	if kind != protocolsession.PeerPathRevoke {
 		control.ValidFor = ControlLifetime
 		control.HoldFor = hold
@@ -141,7 +141,7 @@ func TestAuthenticatedDemandExpiresAndWatermarkPreventsResurrection(t *testing.T
 		t.Fatal("demand rejected")
 	}
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
-	if !h.native.paths[key].content || h.requests[0].TCPProfile != provider.TCPNativeWindows {
+	if !h.native.paths[key].content || h.requests[0].TCPProfile != pionpeer.TCPNativeWindows {
 		t.Fatal("authenticated capability not frozen")
 	}
 	h.now = h.now.Add(ControlLifetime)
@@ -173,7 +173,7 @@ func TestAuthenticatedDemandExpiresAndWatermarkPreventsResurrection(t *testing.T
 		t.Fatal(err)
 	}
 	decoded, err := protocolsession.DecodePeerPathControl(body)
-	if err != nil || decoded.ControlSequence != 1 || decoded.HoldFor != ControlLifetime || decoded.ProviderProfile != string(provider.LocalTCPProfile()) {
+	if err != nil || decoded.ControlSequence != 1 || decoded.HoldFor != ControlLifetime || decoded.ProviderProfile != string(pionpeer.LocalTCPProfile()) {
 		t.Fatal(decoded, err)
 	}
 }
@@ -200,7 +200,7 @@ func TestNativeDemandAdmissionBoundsAndMonitorFailure(t *testing.T) {
 		t.Fatal("monitor error swallowed")
 	}
 	h.monitor.err = nil
-	var missingContext context.Context // Invalid caller input must not start a provider.
+	var missingContext context.Context // Invalid caller input must not start a pionpeer.
 	if _, err := h.native.NewPeerConnection(missingContext, request(1)); err == nil {
 		t.Fatal("nil context")
 	}
@@ -212,8 +212,8 @@ func TestProfileFactsComeFromProviderCandidatesWithoutInventedEndpointSuccess(t 
 	h := newHarness(t)
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
 	emit := h.requests[0].Observe
-	emit(provider.Event{At: h.now.Add(time.Second), Candidate: &provider.CandidateFacts{Type: "host"}})
-	emit(provider.Event{At: h.now.Add(2 * time.Second), Candidate: &provider.CandidateFacts{Type: "srflx", Origin: "ordinary"}})
+	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "host"}})
+	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "ordinary"}})
 	facts := h.native.facts.Snapshot()
 	if len(facts.Endpoints) != 0 || len(facts.Profiles) != 1 || !facts.Profiles[0].ServerReflexiveProduced || facts.Profiles[0].FirstCandidateDelay != 2*time.Second {
 		t.Fatal(facts)

@@ -172,7 +172,7 @@ func (recorder *Recorder) writeNormal(content *traceContent, queued queuedEvent)
 		recorder.countRejectionEvidence(queued.event)
 		return
 	}
-	record, err := encodeV4(recorder.runID, queued.metadata, queued.event)
+	record, err := encode(recorder.runID, queued.metadata, queued.event)
 	if err != nil {
 		recorder.countDropped(queued.progress, 1)
 		recorder.countRejectionEvidence(queued.event)
@@ -219,7 +219,7 @@ func (recorder *Recorder) writeSummary(content *traceContent) {
 	}
 	// Only failures known before encoding belong in the summary. If the append or
 	// authority sync fails, the summary is removed instead of claiming stale health.
-	record := summaryV4(recorder.runID, recorder.command, recorder.summaryMetadata, recorder.Status())
+	record := summaryRecord(recorder.runID, recorder.command, recorder.summaryMetadata, recorder.Status())
 	data, err := json.Marshal(record)
 	if err != nil {
 		recorder.schemaLimited.Store(true)

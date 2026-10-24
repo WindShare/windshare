@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
-import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import { V2_MAXIMUM_PEER_CANDIDATES } from '../../src/session/v2-operation-continuation'
+import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
+import { createProtocolSessionIdentity } from '../../src/session/identities'
+import { MAXIMUM_PEER_CANDIDATES } from '../../src/session/operation-continuation'
 import {
-  V2_MAXIMUM_ACTIVE_OPERATIONS,
-  V2_OPERATION_TOMBSTONE_MILLISECONDS,
-  V2_SESSION_CONTROL_BACKLOG,
-  V2OperationRouter,
-} from '../../src/session/v2-operation-router'
+  MAXIMUM_ACTIVE_OPERATIONS,
+  OPERATION_TOMBSTONE_MILLISECONDS,
+  SESSION_CONTROL_BACKLOG,
+  OperationRouter,
+} from '../../src/session/operation-router'
 
-const EMPTY_REQUEST_BODY = encodeV2Body([])
+const EMPTY_REQUEST_BODY = encodeBody([])
 const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
@@ -22,20 +22,20 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 
 describe('v2 operation replay ownership', () => {
   it('emits closed response and settlement facts with typed lane correlation', async () => {
-    const events: V2ProtocolTraceEvent[] = []
-    const router = new V2OperationRouter(
+    const events: ProtocolTraceEvent[] = []
+    const router = new OperationRouter(
       () => undefined,
       () => 1_000,
       {
-        protocolSessionIdentity: createV2ProtocolSessionIdentity(identity(18)),
+        protocolSessionIdentity: createProtocolSessionIdentity(identity(18)),
         trace: { current: (event) => events.push(event) },
       },
     )
 
-    const operationId = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY).id
+    const operationId = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY).id
 
     await router.route(
-      encodeV2Message(V2_MESSAGE_KIND.catalogResult, operationId, EMPTY_REQUEST_BODY),
+      encodeMessage(MESSAGE_KIND.catalogResult, operationId, EMPTY_REQUEST_BODY),
       4,
       0,
     )
@@ -68,12 +68,12 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('captures authenticated peer failure before delivery and emits it without provider detail', async () => {
-    const events: V2ProtocolTraceEvent[] = []
-    const router = new V2OperationRouter(
+    const events: ProtocolTraceEvent[] = []
+    const router = new OperationRouter(
       () => undefined,
       () => 1_000,
       {
-        protocolSessionIdentity: createV2ProtocolSessionIdentity(identity(20)),
+        protocolSessionIdentity: createProtocolSessionIdentity(identity(20)),
         trace: { current: (event) => events.push(event) },
       },
     )
@@ -81,7 +81,7 @@ describe('v2 operation replay ownership', () => {
     const peerPathId = identity(22)
     const attemptId = identity(23)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -118,12 +118,12 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('drops concurrent exact peer-answer replays before delivery without advancing multiplicity', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(23)
     const attemptId = identity(24)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -156,12 +156,12 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('drops exact candidate replays before they consume the session backlog', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(61)
     const attemptId = identity(62)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -181,17 +181,17 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('admits one overflow representative after the bounded unique candidate authority', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(64)
     const attemptId = identity(65)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
     const candidates = Array.from(
-      { length: V2_MAXIMUM_PEER_CANDIDATES + 1 },
+      { length: MAXIMUM_PEER_CANDIDATES + 1 },
       (_, index) => peerCandidate(operationId, peerPathId, attemptId, index + 1),
     )
     for (const candidate of candidates) await router.route(candidate)
@@ -216,12 +216,12 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('rolls back a candidate reservation when global queue admission rejects it', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
-    const blocker = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const blocker = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
     const blockerId = blocker.id
     const progress = scanProgress(blockerId, identity(68))
-    for (let index = 0; index < V2_SESSION_CONTROL_BACKLOG; index += 1) {
+    for (let index = 0; index < SESSION_CONTROL_BACKLOG; index += 1) {
       await router.route(progress)
     }
 
@@ -229,7 +229,7 @@ describe('v2 operation replay ownership', () => {
     const peerPathId = identity(70)
     const attemptId = identity(71)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -244,22 +244,22 @@ describe('v2 operation replay ownership', () => {
   })
 
   it('retains a peer-answer fingerprint across remote finalization', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(26)
     const attemptId = identity(27)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
     const answer = peerAnswer(operationId, peerPathId, attemptId, 'v=0\r\ns=retained\r\n')
     await router.route(answer)
     await expect(operation.next()).resolves.toEqual(answer)
-    const final = encodeV2Message(
-      V2_MESSAGE_KIND.operationError,
+    const final = encodeMessage(
+      MESSAGE_KIND.operationError,
       operationId,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 3], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'negotiation failed'], [6, [peerPathId, attemptId, 1n, 0]],
       ])),
     )
@@ -277,34 +277,34 @@ describe('v2 operation replay ownership', () => {
 
   it('retains final fingerprints and never reissues an identity after replay collection', async () => {
     let now = 1_000
-    const router = new V2OperationRouter(() => undefined, () => now)
+    const router = new OperationRouter(() => undefined, () => now)
 
     const operation = router.create(
-      V2_MESSAGE_KIND.openRevisions,
+      MESSAGE_KIND.openRevisions,
       EMPTY_REQUEST_BODY,
     )
     const operationId = operation.id
-    const final = encodeV2Message(
-      V2_MESSAGE_KIND.openResults,
+    const final = encodeMessage(
+      MESSAGE_KIND.openResults,
       operationId,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, []]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, []]])),
     )
 
     await router.route(final)
     await expect(operation.next()).resolves.toEqual(final)
-    const next = router.create(V2_MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
+    const next = router.create(MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
     expect(next.id).not.toEqual(operationId)
     next.close()
     await expect(router.route(final)).resolves.toBeUndefined()
 
-    const conflict = encodeV2Message(
-      V2_MESSAGE_KIND.openResults,
+    const conflict = encodeMessage(
+      MESSAGE_KIND.openResults,
       operationId,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, [1]]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, [1]]])),
     )
     await expect(router.route(conflict)).rejects.toMatchObject({ scope: 'session' })
     now += 30_001
-    const afterCollection = router.create(V2_MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
+    const afterCollection = router.create(MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
     expect(afterCollection.id).not.toEqual(operationId)
     expect(afterCollection.id).not.toEqual(next.id)
   })
@@ -313,16 +313,16 @@ describe('v2 operation replay ownership', () => {
 describe('v2 operation tombstone and admission ownership', () => {
   it('drops retired peer traffic after tombstone collection without reviving authority', async () => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
+    const router = new OperationRouter(() => undefined, () => now)
     const path = identity(101)
 
     const attempt = identity(103)
-    const oldIdOperation = router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
+    const oldIdOperation = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
     const oldId = oldIdOperation.id
     oldIdOperation.close()
-    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
 
-    const current = router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(105), 2n))
+    const current = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(105), 2n))
     const currentId = current.id
 
     await expect(router.route(operationError(oldId, 'peer', 'late failure', [path, attempt, 1n]))).resolves.toBeUndefined()
@@ -331,7 +331,7 @@ describe('v2 operation tombstone and admission ownership', () => {
     // Even a fresh random operation ID cannot turn a retired sequence into work.
     await expect(router.route(peerCandidate(identity(106), path, attempt, 2))).resolves.toBeUndefined()
     expect(router.active()).toEqual([current])
-    expect(() => router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)))
+    expect(() => router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)))
       .toThrow('sequence was reused or regressed')
     const currentAnswer = peerAnswer(currentId, path, identity(105), 'current answer', 2n)
     await router.route(currentAnswer)
@@ -340,22 +340,22 @@ describe('v2 operation tombstone and admission ownership', () => {
 
   it('keeps unknown, malformed, and current wrong-operation traffic invalid after peer GC', async () => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
+    const router = new OperationRouter(() => undefined, () => now)
     const path = identity(111)
     const attempt = identity(112)
-    router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)).close()
-    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
-    router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(115), 2n))
+    router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)).close()
+    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
+    router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(115), 2n))
     const unknownId = identity(116)
     for (const message of [
       peerAnswer(unknownId, path, identity(115), 'current', 2n),
       peerAnswer(unknownId, path, attempt, 'future', 3n),
       peerAnswer(unknownId, identity(117), attempt, 'unknown slot', 1n, 1),
-      encodeV2Message(V2_MESSAGE_KIND.peerAnswer, unknownId, encodeV2Body([])),
+      encodeMessage(MESSAGE_KIND.peerAnswer, unknownId, encodeBody([])),
       operationError(unknownId, 'peer', 'unknown slot', undefined, 1),
       operationError(unknownId, 'peer', 'current wrong operation', [path, identity(115), 2n]),
       operationError(unknownId, 'peer', 'future', [path, attempt, 3n]),
-      encodeV2Message(V2_MESSAGE_KIND.operationError, unknownId, encodeV2Body(new Map([[0, 1]]))),
+      encodeMessage(MESSAGE_KIND.operationError, unknownId, encodeBody(new Map([[0, 1]]))),
     ]) {
       await expect(router.route(message)).rejects.toMatchObject({ scope: 'session' })
     }
@@ -363,25 +363,25 @@ describe('v2 operation tombstone and admission ownership', () => {
 
   it('does not hide a live older sequence behind a later retirement watermark', async () => {
     let now = 0
-    const router = new V2OperationRouter(() => undefined, () => now)
+    const router = new OperationRouter(() => undefined, () => now)
     const path = identity(121)
     const attempt = identity(122)
-    const live = router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
-    router.create(V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(125), 2n)).close()
-    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    const live = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
+    router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(125), 2n)).close()
+    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
     await expect(router.route(peerAnswer(identity(126), path, attempt, 'wrong operation')))
       .rejects.toMatchObject({ scope: 'session' })
     live.close()
-    now += V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    now += OPERATION_TOMBSTONE_MILLISECONDS + 1
     await expect(router.route(peerAnswer(identity(126), path, attempt, 'now retired')))
       .resolves.toBeUndefined()
   })
 
   it('accepts revision authority failures for an active block request', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const operation = router.create(
-      V2_MESSAGE_KIND.requestBlocks,
+      MESSAGE_KIND.requestBlocks,
       EMPTY_REQUEST_BODY,
     )
     const operationId = operation.id
@@ -392,10 +392,10 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('preserves the exact local cancellation cause across pending and later reads', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const operation = router.create(
-      V2_MESSAGE_KIND.listChildren,
+      MESSAGE_KIND.listChildren,
       EMPTY_REQUEST_BODY,
     )
     const pending = operation.next()
@@ -408,11 +408,11 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('rejects authenticated traffic for an operation outside the active or tombstone sets', async () => {
-    const router = new V2OperationRouter(() => undefined)
-    const message = encodeV2Message(
-      V2_MESSAGE_KIND.operationError,
+    const router = new OperationRouter(() => undefined)
+    const message = encodeMessage(
+      MESSAGE_KIND.operationError,
       identity(9),
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 1], [1, 4], [2, 0x4006], [3, false], [4, null], [5, 'cancelled'],
       ])),
     )
@@ -420,23 +420,23 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('drops request-compatible traffic after local cancellation but rejects a wrong kind', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
-    const operation = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const operation = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
     const operationId = operation.id
     operation.close()
 
-    const lateProgress = encodeV2Message(
-      V2_MESSAGE_KIND.scanProgress,
+    const lateProgress = encodeMessage(
+      MESSAGE_KIND.scanProgress,
       operationId,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 1], [1, identity(11)], [2, 1],
       ])),
     )
-    const unrelatedLateControl = encodeV2Message(
-      V2_MESSAGE_KIND.peerAnswer,
+    const unrelatedLateControl = encodeMessage(
+      MESSAGE_KIND.peerAnswer,
       operationId,
-      encodeV2Body([]),
+      encodeBody([]),
     )
     const wrongScopedLateError = operationError(operationId, 'block', 'wrong scope')
 
@@ -446,12 +446,12 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('retains peer binding and continuation fingerprints after local cancellation', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(73)
     const attemptId = identity(74)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -466,10 +466,10 @@ describe('v2 operation tombstone and admission ownership', () => {
     const hostile = await Promise.allSettled([
       router.route(peerAnswer(operationId, peerPathId, attemptId, 'v=0\r\ns=conflict\r\n')),
       router.route(peerCandidate(operationId, identity(75), attemptId, 2)),
-      router.route(encodeV2Message(
-        V2_MESSAGE_KIND.catalogResult,
+      router.route(encodeMessage(
+        MESSAGE_KIND.catalogResult,
         operationId,
-        encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(76)]])),
+        encodeBody(new Map<number, unknown>([[0, 1], [1, identity(76)]])),
       )),
       router.route(operationError(operationId, 'directory', 'wrong scope')),
     ])
@@ -485,12 +485,12 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('shares peer continuation authority with the tombstone across a remote-final race', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
     const peerPathId = identity(78)
     const attemptId = identity(79)
     const operation = router.create(
-      V2_MESSAGE_KIND.peerOffer,
+      MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
     const operationId = operation.id
@@ -526,22 +526,22 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('rejects nonterminal traffic introduced after a remote final', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
-    const operation = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const operation = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
     const operationId = operation.id
-    const final = encodeV2Message(
-      V2_MESSAGE_KIND.catalogResult,
+    const final = encodeMessage(
+      MESSAGE_KIND.catalogResult,
       operationId,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(14)]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, identity(14)]])),
     )
     await router.route(final)
     await expect(operation.next()).resolves.toEqual(final)
 
-    const lateProgress = encodeV2Message(
-      V2_MESSAGE_KIND.scanProgress,
+    const lateProgress = encodeMessage(
+      MESSAGE_KIND.scanProgress,
       operationId,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 1], [1, identity(15)], [2, 1],
       ])),
     )
@@ -549,18 +549,18 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('enforces and releases the protocol-session control backlog', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
-    const operation = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const operation = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
     const operationId = operation.id
-    const progress = encodeV2Message(
-      V2_MESSAGE_KIND.scanProgress,
+    const progress = encodeMessage(
+      MESSAGE_KIND.scanProgress,
       operationId,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 1], [1, identity(17)], [2, 1],
       ])),
     )
-    for (let index = 0; index < V2_SESSION_CONTROL_BACKLOG; index += 1) {
+    for (let index = 0; index < SESSION_CONTROL_BACKLOG; index += 1) {
       await router.route(progress)
     }
     await expect(router.route(progress)).rejects.toMatchObject({ scope: 'session' })
@@ -570,55 +570,55 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('drops authenticated frames after the first session terminal', async () => {
-    const router = new V2OperationRouter(() => undefined)
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.sessionTerminal,
+    const router = new OperationRouter(() => undefined)
+    await router.route(encodeMessage(
+      MESSAGE_KIND.sessionTerminal,
       undefined,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, 0x1001], [2, 'done']])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, 0x1001], [2, 'done']])),
     ))
-    const late = encodeV2Message(
-      V2_MESSAGE_KIND.openResults,
+    const late = encodeMessage(
+      MESSAGE_KIND.openResults,
       identity(18),
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, []]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, []]])),
     )
     await expect(router.route(late)).resolves.toBeUndefined()
   })
 
   it('discards remotely-finalized buffers when the session terminates', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = new OperationRouter(() => undefined)
 
-    const operation = router.create(V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+    const operation = router.create(MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
     const operationId = operation.id
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.scanProgress,
+    await router.route(encodeMessage(
+      MESSAGE_KIND.scanProgress,
       operationId,
-      encodeV2Body(new Map<number, unknown>([
+      encodeBody(new Map<number, unknown>([
         [0, 1], [1, identity(20)], [2, 1],
       ])),
     ))
-    await router.route(encodeV2Message(
-      V2_MESSAGE_KIND.catalogResult,
+    await router.route(encodeMessage(
+      MESSAGE_KIND.catalogResult,
       operationId,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(21)]])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, identity(21)]])),
     ))
 
-    const terminal = encodeV2Message(
-      V2_MESSAGE_KIND.sessionTerminal,
+    const terminal = encodeMessage(
+      MESSAGE_KIND.sessionTerminal,
       undefined,
-      encodeV2Body(new Map<number, unknown>([[0, 1], [1, 0x1001], [2, 'done']])),
+      encodeBody(new Map<number, unknown>([[0, 1], [1, 0x1001], [2, 'done']])),
     )
     await router.route(terminal)
     await expect(operation.next()).rejects.toMatchObject({ scope: 'session' })
   })
 
   it('bounds active operations independently of the tombstone budget', () => {
-    const router = new V2OperationRouter(() => undefined)
-    for (let index = 0; index < V2_MAXIMUM_ACTIVE_OPERATIONS; index += 1) {
-      router.create(V2_MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
+    const router = new OperationRouter(() => undefined)
+    for (let index = 0; index < MAXIMUM_ACTIVE_OPERATIONS; index += 1) {
+      router.create(MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
     }
 
     expect(() => router.create(
-      V2_MESSAGE_KIND.openRevisions,
+      MESSAGE_KIND.openRevisions,
       EMPTY_REQUEST_BODY,
     )).toThrow(
       /Active operation budget is exhausted/,
@@ -634,10 +634,10 @@ function peerAnswer(
   sequence = 1n,
   peerSlot = 0,
 ) {
-  return encodeV2Message(
-    V2_MESSAGE_KIND.peerAnswer,
+  return encodeMessage(
+    MESSAGE_KIND.peerAnswer,
     operationId,
-    encodeV2Body([4, peerPathId, attemptId, sequence, peerSlot, 0, sdp]),
+    encodeBody([4, peerPathId, attemptId, sequence, peerSlot, 0, sdp]),
   )
 }
 
@@ -646,7 +646,7 @@ function peerOfferBody(
   attemptId: Uint8Array<ArrayBuffer>,
   sequence = 1n,
 ): Uint8Array<ArrayBuffer> {
-  return encodeV2Body([4, peerPathId, attemptId, sequence, 0, 0, 'v=0\r\ns=offer\r\n'])
+  return encodeBody([4, peerPathId, attemptId, sequence, 0, 0, 'v=0\r\ns=offer\r\n'])
 }
 
 function peerCandidate(
@@ -655,10 +655,10 @@ function peerCandidate(
   attemptId: Uint8Array<ArrayBuffer>,
   seed: number,
 ) {
-  return encodeV2Message(
-    V2_MESSAGE_KIND.peerCandidate,
+  return encodeMessage(
+    MESSAGE_KIND.peerCandidate,
     operationId,
-    encodeV2Body([
+    encodeBody([
       4,
       peerPathId,
       attemptId,
@@ -677,10 +677,10 @@ function scanProgress(
   operationId: Uint8Array<ArrayBuffer>,
   attemptId: Uint8Array<ArrayBuffer>,
 ) {
-  return encodeV2Message(
-    V2_MESSAGE_KIND.scanProgress,
+  return encodeMessage(
+    MESSAGE_KIND.scanProgress,
     operationId,
-    encodeV2Body(new Map<number, unknown>([
+    encodeBody(new Map<number, unknown>([
       [0, 1], [1, attemptId], [2, 1],
     ])),
   )
@@ -694,10 +694,10 @@ function operationError(
   peerSlot = 0,
 ) {
   const [scopeId, code] = operationErrorRegistry(scope)
-  return encodeV2Message(
-    V2_MESSAGE_KIND.operationError,
+  return encodeMessage(
+    MESSAGE_KIND.operationError,
     operationId,
-    encodeV2Body(new Map<number, unknown>([
+    encodeBody(new Map<number, unknown>([
       [0, scope === 'peer' ? 3 : 1], [1, scopeId], [2, code], [3, false], [4, null], [5, message],
       ...(scope === 'peer' ? [[6, [...(binding ?? [identity(201), identity(202), 1n]), peerSlot]]] as [number, unknown][] : []),
     ])),

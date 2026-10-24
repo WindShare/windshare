@@ -12,10 +12,10 @@ import {
   type OfferedArtifactChoice,
 } from '../../../output/planning'
 import type { ProjectionEpoch, SelectionProjectionState } from '../../../transfer/projection'
-import { V2ActivationStateContractError } from './model'
-import type { V2ActiveProjection } from '../discovery'
+import { ActivationStateContractError } from './model'
+import type { ActiveProjection } from '../discovery'
 
-export interface V2AuthorityProjectionPublication {
+export interface AuthorityProjectionPublication {
   readonly observationRevision: number
   readonly state: SelectionProjectionState
   readonly offers: ArtifactOffers
@@ -23,7 +23,7 @@ export interface V2AuthorityProjectionPublication {
 
 export interface AuthorityPlanningRequest {
   readonly revision: number
-  readonly active: V2ActiveProjection
+  readonly active: ActiveProjection
   readonly state: SelectionProjectionState
 }
 
@@ -38,7 +38,7 @@ export type ArtifactOfferPlanner = typeof offerArtifacts
 export type ArtifactChoiceReconciler = typeof reconcileArtifactChoice
 
 export interface AuthorityPlanningPipelineOptions {
-  readonly currentProjection: () => V2ActiveProjection | undefined
+  readonly currentProjection: () => ActiveProjection | undefined
   readonly offersApplied: (request: AuthorityPlanningRequest, offers: ArtifactOffers) => void
   readonly planningFailed: (error: unknown) => void
   readonly reconciliationApplied: (
@@ -110,7 +110,7 @@ export class AuthorityPlanningPipeline {
   }
 
   observe(
-    active: V2ActiveProjection,
+    active: ActiveProjection,
     subject?: AuthorityPlanningSubject,
   ): AuthorityPlanningRequest {
     const request: AuthorityPlanningRequest = Object.freeze({
@@ -173,7 +173,7 @@ export class AuthorityPlanningPipeline {
         offers.selectionDigest !== request.state.projection.selectionDigest) {
       this.#planningFailed(
         request,
-        new V2ActivationStateContractError('artifact offers escaped their planning observation'),
+        new ActivationStateContractError('artifact offers escaped their planning observation'),
       )
       return
     }

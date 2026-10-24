@@ -9,11 +9,11 @@ import {
 } from '../../src/output/planning'
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MS } from '../../src/output/portable/browser-download'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
-import { TransferJob } from '../../src/transfer/v2-job'
+import { TransferJob } from '../../src/transfer/job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import type {
-  V2PlanExecutionAuthority,
+  PlanExecutionAuthority,
 } from '../../src/transfer/output/session'
 import {
   createReceiveIntent,
@@ -43,8 +43,8 @@ import {
   type BrowserReceiveWindow,
 } from '../../src/application/browser-receive/composition'
 import type {
-  V2BoundReceiveOperation,
-  V2ReceiveCompositionPort,
+  BoundReceiveOperation,
+  ReceiveCompositionPort,
 } from '../../src/application/receive/contracts'
 import {
   WorkspaceOperationStages,
@@ -229,7 +229,7 @@ export async function proveProductProgressiveZipAdmission(
     candidate.choice.artifactKind === 'zip-archive')
   if (choice === undefined) throw new TypeError('product composition omitted workspace ZIP')
 
-  let runtime: V2BoundReceiveOperation | undefined
+  let runtime: BoundReceiveOperation | undefined
   try {
     runtime = await commitProductionChoice(
       composition,
@@ -327,7 +327,7 @@ export async function proveTransferJobProgressiveZip(): Promise<TransferJobProgr
     candidate.choice.artifactKind === 'zip-archive')
   if (choice === undefined) throw new TypeError('product composition omitted workspace ZIP')
 
-  let runtime: V2BoundReceiveOperation | undefined
+  let runtime: BoundReceiveOperation | undefined
   try {
     runtime = await commitProductionChoice(
       composition,
@@ -351,7 +351,7 @@ export async function proveTransferJobProgressiveZip(): Promise<TransferJobProgr
     ])
     const readers = readerFixture([file])
     const evidence = { admittedFilePaths: [] as string[], admissionCount: 0, discoveryCompleteCalls: 0 }
-    const openWorkspaceZip: V2PlanExecutionAuthority['openWorkspaceZip'] = async (intent, openSignal) => {
+    const openWorkspaceZip: PlanExecutionAuthority['openWorkspaceZip'] = async (intent, openSignal) => {
       const admitted = await runtime!.plans.openWorkspaceZip(intent, openSignal)
       if (admitted.kind !== 'accepted') return admitted
       evidence.admissionCount++
@@ -371,7 +371,7 @@ export async function proveTransferJobProgressiveZip(): Promise<TransferJobProgr
         },
       } }
     }
-    const plans: V2PlanExecutionAuthority = Object.freeze({ ...runtime.plans, openWorkspaceZip })
+    const plans: PlanExecutionAuthority = Object.freeze({ ...runtime.plans, openWorkspaceZip })
     const result = await new TransferJob({
       descriptor: {
         shareInstance: catalogIdentity(1),
@@ -380,7 +380,7 @@ export async function proveTransferJobProgressiveZip(): Promise<TransferJobProgr
         chunkSize: PRODUCT_FIXTURE_CHUNK_BYTES,
       } as never,
       catalog: catalog.catalog,
-      selection: new V2SelectionPolicy(true),
+      selection: new SelectionPolicy(true),
       intent: runtime.intent,
       plans,
       revisions: readers.revisions,
@@ -466,14 +466,14 @@ function waitUntilAborted(signal: AbortSignal): Promise<void> {
 }
 
 export async function commitProductionChoice(
-  composition: V2ReceiveCompositionPort,
+  composition: ReceiveCompositionPort,
   selection: SelectionSpec,
   projection: SelectionProjectionV1,
   environment: EnvironmentOffers,
   offered: OfferedArtifactChoice,
   signal: AbortSignal,
   display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
-): Promise<V2BoundReceiveOperation> {
+): Promise<BoundReceiveOperation> {
   const resolution = await reconcileArtifactChoice({
     choice: offered.choice,
     preferredRoute: materializationRouteIdentity(offered.route),

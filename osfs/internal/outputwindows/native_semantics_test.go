@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsV3NativeUTF16NameAdmissionIsScalarExact(t *testing.T) {
+func TestWindowsNativeUTF16NameAdmissionIsScalarExact(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		units []uint16
@@ -27,31 +27,31 @@ func TestWindowsV3NativeUTF16NameAdmissionIsScalarExact(t *testing.T) {
 		{name: "lone low surrogate", units: []uint16{0xdc00}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := windowsV3ValidUTF16Name(test.units); got != test.want {
+			if got := windowsValidUTF16Name(test.units); got != test.want {
 				t.Fatalf("valid UTF-16 = %t, want %t", got, test.want)
 			}
 		})
 	}
 }
 
-func TestWindowsV3UnsupportedNativeErrorTaxonomySurvivesWrapping(t *testing.T) {
+func TestWindowsUnsupportedNativeErrorTaxonomySurvivesWrapping(t *testing.T) {
 	for _, native := range []error{
 		windows.ERROR_INVALID_PARAMETER,
 		windows.ERROR_NOT_SUPPORTED,
 		windows.ERROR_CALL_NOT_IMPLEMENTED,
 	} {
-		if !windowsV3IsUnsupportedNative(errors.Join(errors.New("context"), native)) {
+		if !windowsIsUnsupportedNative(errors.Join(errors.New("context"), native)) {
 			t.Fatalf("wrapped native error %v was not classified as unsupported", native)
 		}
 	}
 	for _, native := range []error{nil, windows.ERROR_ACCESS_DENIED, windows.ERROR_FILE_EXISTS} {
-		if windowsV3IsUnsupportedNative(native) {
+		if windowsIsUnsupportedNative(native) {
 			t.Fatalf("native error %v was misclassified as unsupported", native)
 		}
 	}
 }
 
-func TestWindowsV3NativePathAndCreationStatusAreExact(t *testing.T) {
+func TestWindowsNativePathAndCreationStatusAreExact(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		path string
@@ -63,15 +63,15 @@ func TestWindowsV3NativePathAndCreationStatusAreExact(t *testing.T) {
 		{name: "drive", path: `C:\dir`, want: `\??\C:\dir`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := windowsV3NTPath(test.path); got != test.want {
+			if got := windowsNTPath(test.path); got != test.want {
 				t.Fatalf("NT path = %q, want %q", got, test.want)
 			}
 		})
 	}
-	if _, err := windowsV3VolumePath("invalid\x00path"); err == nil {
+	if _, err := windowsVolumePath("invalid\x00path"); err == nil {
 		t.Fatal("volume lookup accepted an embedded NUL")
 	}
-	handle, status, err := windowsV3OpenNativeWithOptions(
+	handle, status, err := windowsOpenNativeWithOptions(
 		windows.InvalidHandle, "invalid\x00name", 0, windows.FILE_OPEN,
 		windows.FILE_NON_DIRECTORY_FILE, windows.FILE_ATTRIBUTE_NORMAL, nil, 0, 0,
 	)
@@ -86,17 +86,17 @@ func TestWindowsV3NativePathAndCreationStatusAreExact(t *testing.T) {
 		created     bool
 		wantError   bool
 	}{
-		{name: "create created", disposition: windows.FILE_CREATE, status: windowsV3FileCreated, created: true},
-		{name: "create opened", disposition: windows.FILE_CREATE, status: windowsV3FileOpened, wantError: true},
-		{name: "open opened", disposition: windows.FILE_OPEN, status: windowsV3FileOpened},
-		{name: "open created", disposition: windows.FILE_OPEN, status: windowsV3FileCreated, wantError: true},
-		{name: "open-if created", disposition: windows.FILE_OPEN_IF, status: windowsV3FileCreated, created: true},
-		{name: "open-if opened", disposition: windows.FILE_OPEN_IF, status: windowsV3FileOpened},
+		{name: "create created", disposition: windows.FILE_CREATE, status: windowsFileCreated, created: true},
+		{name: "create opened", disposition: windows.FILE_CREATE, status: windowsFileOpened, wantError: true},
+		{name: "open opened", disposition: windows.FILE_OPEN, status: windowsFileOpened},
+		{name: "open created", disposition: windows.FILE_OPEN, status: windowsFileCreated, wantError: true},
+		{name: "open-if created", disposition: windows.FILE_OPEN_IF, status: windowsFileCreated, created: true},
+		{name: "open-if opened", disposition: windows.FILE_OPEN_IF, status: windowsFileOpened},
 		{name: "open-if unknown", disposition: windows.FILE_OPEN_IF, status: 99, wantError: true},
-		{name: "unsupported disposition", disposition: windows.FILE_OVERWRITE, status: windowsV3FileOpened, wantError: true},
+		{name: "unsupported disposition", disposition: windows.FILE_OVERWRITE, status: windowsFileOpened, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			created, err := windowsV3CreationStatus(test.disposition, test.status)
+			created, err := windowsCreationStatus(test.disposition, test.status)
 			if created != test.created || (err != nil) != test.wantError {
 				t.Fatalf("creation status = created %t error %v", created, err)
 			}
@@ -104,23 +104,23 @@ func TestWindowsV3NativePathAndCreationStatusAreExact(t *testing.T) {
 	}
 
 	statusError := windows.NTStatus(0xc0000034)
-	if got := normalizeWindowsV3NTError(statusError); got != statusError.Errno() {
+	if got := normalizeWindowsNTError(statusError); got != statusError.Errno() {
 		t.Fatalf("normalized NTSTATUS = %v, want %v", got, statusError.Errno())
 	}
 	sentinel := errors.New("sentinel")
-	if normalizeWindowsV3NTError(nil) != nil || normalizeWindowsV3NTError(sentinel) != sentinel {
+	if normalizeWindowsNTError(nil) != nil || normalizeWindowsNTError(sentinel) != sentinel {
 		t.Fatal("NT error normalization changed nil or a non-NT error")
 	}
 }
 
-func TestWindowsV3PrivatePolicyRejectsBroadProtectedACL(t *testing.T) {
-	if _, err := (*windowsV3PrivatePolicy)(nil).descriptor(false); err == nil {
+func TestWindowsPrivatePolicyRejectsBroadProtectedACL(t *testing.T) {
+	if _, err := (*windowsPrivatePolicy)(nil).descriptor(false); err == nil {
 		t.Fatal("nil private policy produced a descriptor")
 	}
-	if err := (*windowsV3PrivatePolicy)(nil).verify(windows.InvalidHandle, false); err == nil {
+	if err := (*windowsPrivatePolicy)(nil).verify(windows.InvalidHandle, false); err == nil {
 		t.Fatal("nil private policy verified an object")
 	}
-	policy, err := newWindowsV3PrivatePolicy()
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,27 +135,27 @@ func TestWindowsV3PrivatePolicyRejectsBroadProtectedACL(t *testing.T) {
 		}
 	}
 
-	platform := openWindowsV3TestPlatform(t)
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	broad, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;WD)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, _, err := windowsV3OpenNative(
-		platform.Root().handle(), "broad-acl.bin", windowsV3PrivateFileAccess(), windows.FILE_CREATE,
+	handle, _, err := windowsOpenNative(
+		platform.Root().handle(), "broad-acl.bin", windowsPrivateFileAccess(), windows.FILE_CREATE,
 		windows.FILE_NON_DIRECTORY_FILE, windows.FILE_ATTRIBUTE_NORMAL, broad,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = windowsV3RemoveHandle(handle)
+		_ = windowsRemoveHandle(handle)
 		_ = windows.CloseHandle(handle)
 	}()
 	if err := policy.verify(handle, false); err == nil {
 		t.Fatal("broad protected Everyone ACL satisfied the private-object policy")
 	}
-	if err := windowsV3RemoveHandle(handle); err != nil {
+	if err := windowsRemoveHandle(handle); err != nil {
 		t.Fatal(err)
 	}
 	if err := windows.CloseHandle(handle); err != nil {
@@ -167,8 +167,8 @@ func TestWindowsV3PrivatePolicyRejectsBroadProtectedACL(t *testing.T) {
 	}
 }
 
-func TestWindowsV3NativeFileMetadataRemainsHandleBound(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsNativeFileMetadataRemainsHandleBound(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
 	const name = "native-metadata.bin"
@@ -213,12 +213,12 @@ func TestWindowsV3NativeFileMetadataRemainsHandleBound(t *testing.T) {
 	if matches, err := file.metadataMatches(size, catalog.ModifiedTime{}); err != nil || !matches {
 		t.Fatalf("unspecified-time metadata match = %t, error = %v", matches, err)
 	}
-	if _, err := (&windowsV3File{}).metadataMatches(0, catalog.ModifiedTime{}); !errors.Is(err, errWindowsV3OutputUnsafe) {
+	if _, err := (&windowsFile{}).metadataMatches(0, catalog.ModifiedTime{}); !errors.Is(err, errWindowsOutputUnsafe) {
 		t.Fatalf("closed metadata authority = %v", err)
 	}
 }
 
-func TestWindowsV3ModifiedTimeMatchingHonorsDeclaredPrecision(t *testing.T) {
+func TestWindowsModifiedTimeMatchingHonorsDeclaredPrecision(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		nanoseconds  uint32
@@ -228,8 +228,8 @@ func TestWindowsV3ModifiedTimeMatchingHonorsDeclaredPrecision(t *testing.T) {
 	}{
 		{
 			name: "seconds", precision: catalog.TimePrecisionSeconds,
-			withinTicks:  windowsV3FiletimeTicksPerSecond - 1,
-			outsideTicks: windowsV3FiletimeTicksPerSecond,
+			withinTicks:  windowsFiletimeTicksPerSecond - 1,
+			outsideTicks: windowsFiletimeTicksPerSecond,
 		},
 		{
 			name: "milliseconds", nanoseconds: 123_000_000, precision: catalog.TimePrecisionMilliseconds,
@@ -245,19 +245,19 @@ func TestWindowsV3ModifiedTimeMatchingHonorsDeclaredPrecision(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ticks, present, err := windowsV3ModifiedTimeTicks(modified)
+			ticks, present, err := windowsModifiedTimeTicks(modified)
 			if err != nil || !present {
 				t.Fatalf("ticks = %d, present = %t, error = %v", ticks, present, err)
 			}
-			if !windowsV3ModifiedTimeMatches(ticks+test.withinTicks, modified) {
+			if !windowsModifiedTimeMatches(ticks+test.withinTicks, modified) {
 				t.Fatal("timestamp within declared precision did not match")
 			}
-			if windowsV3ModifiedTimeMatches(ticks+test.outsideTicks, modified) {
+			if windowsModifiedTimeMatches(ticks+test.outsideTicks, modified) {
 				t.Fatal("timestamp outside declared precision matched")
 			}
 		})
 	}
-	if !windowsV3ModifiedTimeMatches(^uint64(0), catalog.ModifiedTime{}) {
+	if !windowsModifiedTimeMatches(^uint64(0), catalog.ModifiedTime{}) {
 		t.Fatal("unspecified modified time constrained native metadata")
 	}
 }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { PeerPathControl } from '../../src/connectivity/peer-set/path-control'
 import { PeerNetworkGeneration } from '../../src/connectivity/peer-set/network-generation'
-import { decodeV2PeerPathControl, encodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND as KIND } from '../../src/protocol/peer-path-control'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+import { decodePeerPathControl, encodePeerPathControl, PEER_PATH_CONTROL_KIND as KIND } from '../../src/protocol/peer-path-control'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 
 describe('authenticated cross-attempt path control', () => {
   it('joins demand renewal when the session writer remains stalled', async () => {
@@ -13,15 +13,15 @@ describe('authenticated cross-attempt path control', () => {
         sent.push(body)
         return new Promise<void>(() => undefined)
       },
-    } as unknown as V2ReceiverSessionRuntime
+    } as unknown as ReceiverSessionRuntime
     const control = new PeerPathControl(session, new Uint8Array(16).fill(1), new PeerNetworkGeneration(), {
       now: () => 0,
       sleep: async () => { throw new Error('cancelled send must not begin a timer') },
     }, () => undefined, 'chromium-151.0.7922.34-windows')
     control.activate()
     await control.close()
-    expect(sent.map((body) => decodeV2PeerPathControl(body).kind)).toEqual([KIND.demand, KIND.revoke])
-    expect(decodeV2PeerPathControl(sent[0]!).providerProfile).toBe('chromium-151.0.7922.34-windows')
+    expect(sent.map((body) => decodePeerPathControl(body).kind)).toEqual([KIND.demand, KIND.revoke])
+    expect(decodePeerPathControl(sent[0]!).providerProfile).toBe('chromium-151.0.7922.34-windows')
   })
 
   it('renews only content demand, retains replay watermark, and revokes without reviving an operation', async () => {
@@ -30,7 +30,7 @@ describe('authenticated cross-attempt path control', () => {
     const session = {
       subscribePeerPathControls(listener: typeof receive) { receive = listener; return () => { receive = undefined } },
       async sendPeerPathControl(body: Uint8Array) { sent.push(body) },
-    } as unknown as V2ReceiverSessionRuntime
+    } as unknown as ReceiverSessionRuntime
     const path = new Uint8Array(16).fill(1)
     const network = new PeerNetworkGeneration()
     const waits: (() => void)[] = []
@@ -46,10 +46,10 @@ describe('authenticated cross-attempt path control', () => {
     expect(sent).toHaveLength(0)
     control.activate()
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
-    expect(decodeV2PeerPathControl(sent[0]!)).toMatchObject({
+    expect(decodePeerPathControl(sent[0]!)).toMatchObject({
       controlSequence: 1n, kind: KIND.demand, validForMilliseconds: 120_000, holdForMilliseconds: 85_000,
     })
-    const notice = (sequence: bigint, identity = path) => encodeV2PeerPathControl({
+    const notice = (sequence: bigint, identity = path) => encodePeerPathControl({
       peerPathId: identity, networkGenerationId: network.copyBytes(), controlSequence: sequence,
       kind: KIND.mappingReady, validForMilliseconds: 10_000, holdForMilliseconds: 0,
     })
@@ -60,15 +60,15 @@ describe('authenticated cross-attempt path control', () => {
     expect(hints).toBe(1)
     waits[0]?.()
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
-    expect(decodeV2PeerPathControl(sent[1]!).controlSequence).toBe(2n)
+    expect(decodePeerPathControl(sent[1]!).controlSequence).toBe(2n)
     control.deactivate()
-    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({
+    expect(decodePeerPathControl(sent.at(-1)!)).toMatchObject({
       peerPathId: path, kind: KIND.demand, validForMilliseconds: 120_000, holdForMilliseconds: 0,
     })
     receive?.(notice(3n))
     expect(hints).toBe(1)
     control.activate()
-    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({
+    expect(decodePeerPathControl(sent.at(-1)!)).toMatchObject({
       peerPathId: path, kind: KIND.demand, holdForMilliseconds: 85_000,
     })
     receive?.(notice(3n))
@@ -77,8 +77,8 @@ describe('authenticated cross-attempt path control', () => {
     expect(hints).toBe(2)
     control.deactivate()
     await control.close()
-    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({ kind: KIND.revoke, validForMilliseconds: 0 })
-    expect(sent.map((body) => decodeV2PeerPathControl(body).kind).filter((kind) => kind === KIND.revoke)).toHaveLength(1)
+    expect(decodePeerPathControl(sent.at(-1)!)).toMatchObject({ kind: KIND.revoke, validForMilliseconds: 0 })
+    expect(sent.map((body) => decodePeerPathControl(body).kind).filter((kind) => kind === KIND.revoke)).toHaveLength(1)
     expect(receive).toBeUndefined()
   })
 })

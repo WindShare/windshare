@@ -7,12 +7,12 @@ import type { ReceiveLifecycleState } from '../../../output/workspace'
 import type { OfferComputedDecision, OfferDisabledDecision, ProjectionEpoch, RetryableDiscoveryReason } from '../../../output/planning'
 import type { ArtifactSpec, MaterializationPlan } from '../../../transfer/intent'
 import type { ProjectionTraceEvent } from '../../../transfer/projection'
-import type { TransferTraceEvent } from '../../../transfer/v2-job'
+import type { TransferTraceEvent } from '../../../transfer/job'
 import type { LifecycleUserAction } from '../actions'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../contracts'
-import type { V2ActivationInvalidationReason } from '../activation/model'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../contracts'
+import type { ActivationInvalidationReason } from '../activation/model'
 
-export type V2RetainedInventoryTraceEvent =
+export type RetainedInventoryTraceEvent =
   | Readonly<{ name: 'receive.inventory.load.started' }>
   | Readonly<{ name: 'receive.inventory.load.completed'; operation_count: number }>
   | Readonly<{ name: 'receive.inventory.load.failed' }>
@@ -21,15 +21,15 @@ export type V2RetainedInventoryTraceEvent =
         | 'receive.inventory.action.started'
         | 'receive.inventory.action.completed'
         | 'receive.inventory.action.failed'
-      retained_action: V2RetainedReceiveAction
-      continuation: V2RetainedReceiveOperation['continuation']
+      retained_action: RetainedReceiveAction
+      continuation: RetainedReceiveOperation['continuation']
     }>
 
 /**
  * Repaired output runtimes own this projection; ordinary runtimes omit it entirely so
  * their hot path never constructs a ledger reader, subscriber, or mapping snapshot.
  */
-export interface V2ActiveCompatibleNameRepairProjection {
+export interface ActiveCompatibleNameRepairProjection {
   /**
    * The source synchronously emits its latest durable summary, when one exists, before
    * returning the unsubscribe function. Later emissions represent monotonic durable state.
@@ -41,14 +41,14 @@ export interface V2ActiveCompatibleNameRepairProjection {
  * Implementations perform one operation-header point read. Undefined means there is no
  * user-visible repair summary; the boundary must never infer repair state from lifecycle data.
  */
-export interface V2RetainedCompatibleNameRepairSource {
+export interface RetainedCompatibleNameRepairSource {
   readRepairSummary(
     operationId: string,
     signal: AbortSignal,
   ): PromiseLike<CompatibleNameRepairSummary | undefined>
 }
 
-export type V2AuthorityOfferTraceEvent =
+export type AuthorityOfferTraceEvent =
   | Readonly<{
       name: 'authority_transition'
       transition: 'offers_computed'
@@ -74,7 +74,7 @@ export type V2AuthorityOfferTraceEvent =
       eventClass: 'capability_result' | 'artifact_action' | 'authority_result'
     }>
 
-interface V2AuthorityActivationTraceContext {
+interface AuthorityActivationTraceContext {
   readonly name: 'authority_transition'
   readonly activationId: string
   readonly authenticatedShareInstanceId: string
@@ -86,7 +86,7 @@ interface V2AuthorityActivationTraceContext {
   readonly planKind: MaterializationPlan['kind']
 }
 
-export type V2AuthorityActivationTraceEvent = V2AuthorityActivationTraceContext & (
+export type AuthorityActivationTraceEvent = AuthorityActivationTraceContext & (
   | Readonly<{ transition: 'activation_started' }>
   | Readonly<{
       transition: 'prerequisite_waiting'
@@ -99,7 +99,7 @@ export type V2AuthorityActivationTraceEvent = V2AuthorityActivationTraceContext 
   | Readonly<{ transition: 'artifact_resolved' }>
   | Readonly<{
       transition: 'semantic_invalidated'
-      invalidationReason: V2ActivationInvalidationReason
+      invalidationReason: ActivationInvalidationReason
     }>
   | Readonly<{ transition: 'commit_started' }>
   | Readonly<{
@@ -125,12 +125,12 @@ export type V2AuthorityActivationTraceEvent = V2AuthorityActivationTraceContext 
     }>
 )
 
-export type V2ControllerWorkflowTraceEvent =
+export type ControllerWorkflowTraceEvent =
   | Readonly<{
       name: 'join_transition'
       transition: 'started' | 'joined' | 'failed' | 'stale_replacement'
     }>
-  | V2AuthorityActivationTraceEvent
+  | AuthorityActivationTraceEvent
   | Readonly<{
       name: 'lifecycle_action_transition'
       transition: 'started' | 'completed' | 'failed' | 'excluded'
@@ -138,7 +138,7 @@ export type V2ControllerWorkflowTraceEvent =
       lifecycleKind?: ReceiveLifecycleState['kind']
     }>
 
-export type V2ReceiverExperienceTraceEvent =
+export type ReceiverExperienceTraceEvent =
   | Readonly<{ name: 'receiver_experience'; transition: 'ownership'; operationId: string; generation: bigint;
       state: 'releasing' | 'released' | 'release-failed'; lifecycleKind: ReceiveLifecycleState['kind'] }>
   | Readonly<{ name: 'receiver_experience'; transition: 'task'; operationId: string; generation: bigint;
@@ -149,15 +149,15 @@ export type V2ReceiverExperienceTraceEvent =
   | Readonly<{ name: 'receiver_experience'; transition: 'intent'; action: string;
       operationId: string | null; generation: bigint }>
 
-export type V2ReceiverTraceEvent =
-  | V2ReceiverExperienceTraceEvent
+export type ReceiverTraceEvent =
+  | ReceiverExperienceTraceEvent
   | ProjectionTraceEvent
   | TransferTraceEvent
-  | V2AuthorityOfferTraceEvent
-  | V2ControllerWorkflowTraceEvent
-  | V2RetainedInventoryTraceEvent
+  | AuthorityOfferTraceEvent
+  | ControllerWorkflowTraceEvent
+  | RetainedInventoryTraceEvent
 
-export interface V2ReceiverIncidentPort {
+export interface ReceiverIncidentPort {
   openScope(kind: IncidentScopeKind): IncidentScopeOwner
   submitDecision(scope: IncidentScopeHandle, decision: PresentationDecision): void
 }
@@ -176,6 +176,6 @@ export class StaleReceiveBoundaryError extends DOMException {
 }
 
 export interface ReceiveObservationOptions {
-  readonly incidents?: V2ReceiverIncidentPort
-  readonly trace?: DomainTraceSource<V2ReceiverTraceEvent>
+  readonly incidents?: ReceiverIncidentPort
+  readonly trace?: DomainTraceSource<ReceiverTraceEvent>
 }

@@ -1,25 +1,25 @@
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import type { BrowserRecoveryPreference } from '../../output/browser-delivery/model'
 import type { ArtifactChoiceID, SelectionSpec } from '../../transfer/intent'
-import type { TransferProgress } from '../../transfer/v2-job'
-import { V2AuthorityActivationCoordinator } from './activation/coordinator'
+import type { TransferProgress } from '../../transfer/job'
+import { AuthorityActivationCoordinator } from './activation/coordinator'
 import { ActiveReceiveCoordinator } from './active/coordinator'
-import type { V2ReceiveCompositionPort } from './contracts'
+import type { ReceiveCompositionPort } from './contracts'
 import { SelectionProjectionRuntime, type ProjectionReplacementKind } from './discovery'
 import type { ReceivePlanningShare } from './joined-share'
 import type { ReceiveObservationOptions } from './observation/contracts'
-import { V2ControllerObservability } from './observation/coordinator'
+import { ControllerObservability } from './observation/coordinator'
 import { RetainedInventoryCoordinator } from './retained/coordinator'
-import type { V2RetainedReceiveInventorySnapshot } from './retained/model'
+import type { RetainedReceiveInventorySnapshot } from './retained/model'
 import { BrowserReceiveRuntime } from './runtime'
 import { ReceiveRuntimeState } from './state'
 
 export interface BrowserReceiveApplicationOptions<Share extends ReceivePlanningShare> extends ReceiveObservationOptions {
-  readonly receive: V2ReceiveCompositionPort
+  readonly receive: ReceiveCompositionPort
   readonly currentJoinedShare: () => Share | undefined
   readonly isDisposed: () => boolean
   readonly onProgress: (progress: TransferProgress) => void
-  readonly onRetainedChanged: (retained: V2RetainedReceiveInventorySnapshot) => void
+  readonly onRetainedChanged: (retained: RetainedReceiveInventorySnapshot) => void
   readonly onTaskAdopted: (display: ReceiveOperationDisplay | undefined) => void
   readonly onTaskCleared: () => void
   readonly onChanged: () => void
@@ -33,11 +33,11 @@ export interface BrowserReceiveApplicationOptions<Share extends ReceivePlanningS
  */
 export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   readonly tasks: BrowserReceiveRuntime<Share>
-  readonly diagnostics: V2ControllerObservability
+  readonly diagnostics: ControllerObservability
   readonly #state = new ReceiveRuntimeState()
   readonly observations: Pick<ReceiveRuntimeState, 'getSnapshot' | 'subscribe'> = this.#state
   readonly #active: ActiveReceiveCoordinator
-  readonly #activation: V2AuthorityActivationCoordinator
+  readonly #activation: AuthorityActivationCoordinator
   readonly #retained: RetainedInventoryCoordinator
   readonly #projection: SelectionProjectionRuntime
   readonly #unsubscribeActivation: () => void
@@ -45,7 +45,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
 
   constructor(options: BrowserReceiveApplicationOptions<Share>) {
     const disposed = () => this.#closing !== undefined || options.isDisposed()
-    this.diagnostics = new V2ControllerObservability(options)
+    this.diagnostics = new ControllerObservability(options)
     this.#active = new ActiveReceiveCoordinator({
       state: this.#state,
       ownsJoinedShare: joined => !disposed() && options.currentJoinedShare() === joined,
@@ -57,7 +57,7 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
       onOwnershipReleased: () => this.tasks.ownershipReleased(),
       onRetainedFileFailure: () => this.tasks.releaseFailedReceive(),
     })
-    this.#activation = new V2AuthorityActivationCoordinator({
+    this.#activation = new AuthorityActivationCoordinator({
       receive: options.receive,
       activeReceive: this.#active,
       observability: this.diagnostics,

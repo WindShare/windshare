@@ -157,7 +157,7 @@ func TestCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
 	release()
 	capacity.mu.Lock()
 	defer capacity.mu.Unlock()
-	if capacity.active != 0 || len(capacity.queue) != 0 {
+	if capacity.ledger.Snapshot().Used != 0 || len(capacity.queue) != 0 {
 		t.Fatal("slot leaked")
 	}
 }
@@ -199,7 +199,7 @@ func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testi
 	receive(t, path.Ready())
 	hold := nextTimer(t, clock, PrewarmRetention)
 	capacity.mu.Lock()
-	active := capacity.active
+	active := capacity.ledger.Snapshot().Used
 	capacity.mu.Unlock()
 	if active != 0 {
 		t.Fatal("admitted lane retained attempt slot")

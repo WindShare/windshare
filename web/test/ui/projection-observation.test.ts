@@ -5,8 +5,8 @@ import {
   type AuthenticatedDiscoveryRequest,
 } from '../../src/transfer/projection'
 import { SelectionProjectionRuntime } from '../../src/application/receive/discovery'
-import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
-import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
   FakeJoinedShare,
   FakeReceiveComposition,
@@ -24,7 +24,7 @@ describe('selection projection runtime', () => {
       secondEnvironment.promise,
     ])
     const discovery = deferred<void>()
-    const joined = new FakeJoinedShare(true, [discovery.promise]) as unknown as V2JoinedBrowserShare
+    const joined = new FakeJoinedShare(true, [discovery.promise]) as unknown as JoinedBrowserShare
     const observed: number[] = []
     const replacements: unknown[] = []
     const runtime = new SelectionProjectionRuntime({
@@ -34,7 +34,7 @@ describe('selection projection runtime', () => {
         startObservationReplacement: reason => { replacements.push(reason) },
         invalidate: () => undefined,
       },
-      observability: new V2ControllerObservability({}),
+      observability: new ControllerObservability({}),
       currentJoinedShare: () => joined,
       isDisposed: () => false,
       onFailure: error => { throw error },
@@ -76,7 +76,7 @@ describe('selection projection runtime', () => {
         },
       })
     }
-    const joined = joinedFixture as unknown as V2JoinedBrowserShare
+    const joined = joinedFixture as unknown as JoinedBrowserShare
     const observed: number[] = []
     let replacements = 0
     const runtime = new SelectionProjectionRuntime({
@@ -86,7 +86,7 @@ describe('selection projection runtime', () => {
         startObservationReplacement: () => { replacements += 1 },
         invalidate: () => undefined,
       },
-      observability: new V2ControllerObservability({}),
+      observability: new ControllerObservability({}),
       currentJoinedShare: () => joined,
       isDisposed: () => false,
       onFailure: error => { throw error },

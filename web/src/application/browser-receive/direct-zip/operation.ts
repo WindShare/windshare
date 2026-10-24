@@ -28,14 +28,14 @@ import { createOutputSessionID, createTransferJobID } from '../../../transfer/in
 import {
   TransferPauseRequestedError,
   type DirectResumableZipExecution,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
 } from '../../../transfer/output/session'
 import type {
-  V2BoundReceiveOperation,
-  V2DirectZipProgressSnapshot,
-  V2LifecycleMutation,
+  BoundReceiveOperation,
+  DirectZipProgressSnapshot,
+  LifecycleMutation,
 } from '../../receive/contracts'
-import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../receive/actions'
+import type { LifecycleUserAction, ActiveReceiveControl } from '../../receive/actions'
 import { operationDigest } from '../../../output/workspace/operation-digest'
 import { BrowserDirectZipJournal } from '../../../output/direct-zip/browser-journal'
 import { traceDirectZipMemberRollback } from '../../../output/direct-zip/browser/member-rollback-trace'
@@ -60,12 +60,12 @@ export interface BrowserDirectZipOperationOptions {
 const RECEIVING_CONTROLS = Object.freeze(['pause'] as const)
 const INACTIVE_CONTROLS = Object.freeze([])
 
-export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
+export class BrowserDirectZipOperation implements BoundReceiveOperation {
   readonly intent: DirectZipIntent
   readonly transferJobId = createTransferJobID()
   readonly #input: BrowserDirectZipOperationOptions
   readonly #target: BrowserDirectZipTarget
-  readonly #listeners = new Set<(value: V2DirectZipProgressSnapshot) => void>()
+  readonly #listeners = new Set<(value: DirectZipProgressSnapshot) => void>()
   #journal!: BrowserDirectZipJournal
   #lifecycle: ReceiveLifecycleState
   readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
@@ -116,19 +116,19 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     return this.#lifecycleNotifications.subscribe(listener)
   }
 
-  get activeControls(): readonly V2ActiveReceiveControl[] {
+  get activeControls(): readonly ActiveReceiveControl[] {
     return !this.#closed && this.#lifecycle.kind === 'receiving' ? RECEIVING_CONTROLS : INACTIVE_CONTROLS
   }
 
   readonly outputProgress = {
-    getSnapshot: (): V2DirectZipProgressSnapshot => this.#snapshot(),
-    subscribe: (listener: (value: V2DirectZipProgressSnapshot) => void) => {
+    getSnapshot: (): DirectZipProgressSnapshot => this.#snapshot(),
+    subscribe: (listener: (value: DirectZipProgressSnapshot) => void) => {
       this.#listeners.add(listener)
       return () => { this.#listeners.delete(listener) }
     },
   }
 
-  readonly plans: V2PlanExecutionAuthority = {
+  readonly plans: PlanExecutionAuthority = {
     openDirectTree: unavailable, openDirectAtomic: unavailable,
     openWorkspaceOriginal: unavailable, openWorkspaceZip: unavailable, preparePortable: unavailable,
     openDirectResumableZip: async (intent, signal) => {
@@ -196,12 +196,12 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     }) as Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>>,
   }
 
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
     if (control !== 'pause') throw new TypeError('Direct ZIP only supports pause')
     transfer.abort(new TransferPauseRequestedError())
   }
 
-  async startLifecycleAction(action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>): Promise<V2LifecycleMutation> {
+  async startLifecycleAction(action: Exclude<LifecycleUserAction, ActiveReceiveControl>): Promise<LifecycleMutation> {
     if (action === 'delete' || action === 'discard') {
       await this.deleteOwned()
       return { lifecycle: this.#lifecycle, activeControls: [] }
@@ -223,7 +223,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
 
   resolveWorkspaceUsage() { return null }
 
-  async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  async settleTransferAdmissionFailure(reason: unknown): Promise<LifecycleMutation> {
     this.#executionProgressGeneration += 1n
     await this.#target.abort(reason).catch(() => undefined)
     this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
@@ -456,7 +456,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       checkpointGeneration: this.#journal.persistedCheckpoint.generation }
   }
 
-  #snapshot(): V2DirectZipProgressSnapshot {
+  #snapshot(): DirectZipProgressSnapshot {
     const checkpoint = this.#journal?.persistedCheckpoint ?? this.#input.checkpoint
     return { kind: 'direct-zip', operationId: this.intent.operationId, generation: this.#progressGeneration,
       phase: checkpoint.phase === 'closing' ? 'closing' : 'receiving',

@@ -9,8 +9,8 @@ import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-a
 import type { OfferedArtifactChoice } from '../../../output/planning'
 import type { OutputFailureSinks } from '../../../output/diagnostics'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
 } from '../../receive/contracts'
 
 export interface BrowserDirectZipCapabilitySource {
@@ -30,7 +30,7 @@ export interface BrowserDirectZipFreshAuthorityInput {
 }
 
 export interface BrowserDirectZipRuntimePort {
-  startFresh(input: BrowserDirectZipFreshAuthorityInput): V2ArtifactPresentationAuthority
+  startFresh(input: BrowserDirectZipFreshAuthorityInput): ArtifactPresentationAuthority
   dispatchBootstrapCandidate(
     candidate: DirectZipBootstrapResumeDescriptorV1,
     signal: AbortSignal,
@@ -39,7 +39,7 @@ export interface BrowserDirectZipRuntimePort {
     operation: ReopenedDirectZipOperation,
     signal: AbortSignal,
     failures?: OutputFailureSinks,
-  ): Promise<V2BoundReceiveOperation>
+  ): Promise<BoundReceiveOperation>
   /** Uses retained-session cleanup; it must never reopen transfer execution. */
   deleteRetained(
     operation: ReopenedDirectZipOperation,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createFailureIdentity,
@@ -17,32 +17,32 @@ import {
 import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import { FakeTraceTime } from '../diagnostics/trace/test-support'
-import { V2RemoteOperationError } from '../../src/content/v2-session-operations'
-import { V2RevisionCapacityBusyError } from '../../src/content/v2-session-services'
-import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
-import type { V2CatalogScanProgressListener } from '../../src/catalog/v2-client'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { RemoteOperationError } from '../../src/content/session-operations'
+import { RevisionCapacityBusyError } from '../../src/content/session-services'
+import { REVISION_CODE_QUOTA } from '../../src/content/flow'
+import type { CatalogScanProgressListener } from '../../src/catalog/client'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import {
-  type V2ConnectivityActivation,
-  V2ConnectivityRouteAuthority,
-} from '../../src/connectivity/v2-receiver-policy'
-import { V2PreviewRuntimeError, type V2FilePreview } from '../../src/preview/v2-preview'
-import { V2AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
+  type ConnectivityActivation,
+  ConnectivityRouteAuthority,
+} from '../../src/connectivity/receiver-policy'
+import { PreviewRuntimeError, type FilePreview } from '../../src/preview/preview'
+import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import type {
   AuthenticatedDiscoveryRequest,
   AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
-import { V2PreviewController } from '../../src/ui/v2-preview-controller'
-import { EMPTY_V2_PREVIEW, type V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import { ReceiverController } from '../../src/ui/controller'
+import { PreviewController } from '../../src/ui/preview-controller'
+import { EMPTY_PREVIEW, type ReceiverSnapshot } from '../../src/ui/model'
 import type {
-  V2BrowseDirectory,
-  V2BrowserReceiverGateway,
-  V2JoinedBrowserShare,
+  BrowseDirectory,
+  BrowserReceiverGateway,
+  JoinedBrowserShare,
 } from '../../src/application/browser-share/gateway'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
-const entry: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({
+const entry: Extract<CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
   id: identity(2),
   idText: identityText(2),
@@ -59,9 +59,9 @@ class FakeJoined {
   }
   readonly recoveryIdentity = 'share.recovery'
   readonly protocolSessionId = identityText(8)
-  selection = new V2SelectionPolicy(true)
-  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
-  readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
+  selection = new SelectionPolicy(true)
+  replaceSelection(selection: SelectionPolicy): void { this.selection = selection }
+  readonly entry: Extract<CatalogEntry, { kind: 'file' }>
   readonly events: string[] = []
   readonly previewSignals: AbortSignal[] = []
   previewCount = 0
@@ -69,13 +69,13 @@ class FakeJoined {
   closes = 0
   progressOnPage: bigint | undefined
   pageGate: Promise<void> | undefined
-  #scanProgress: V2CatalogScanProgressListener | undefined
+  #scanProgress: CatalogScanProgressListener | undefined
 
   constructor(fileEntry = entry) {
     this.entry = fileEntry
   }
 
-  rootDirectory(): V2BrowseDirectory {
+  rootDirectory(): BrowseDirectory {
     return {
       id: identity(1),
       idText: identityText(1),
@@ -85,7 +85,7 @@ class FakeJoined {
     }
   }
 
-  async page(directory: V2BrowseDirectory) {
+  async page(directory: BrowseDirectory) {
     if (this.progressOnPage !== undefined) {
       this.#scanProgress?.({
         directoryId: directory.id,
@@ -104,7 +104,7 @@ class FakeJoined {
     }
   }
 
-  subscribeCatalogScanProgress(listener: V2CatalogScanProgressListener): () => void {
+  subscribeCatalogScanProgress(listener: CatalogScanProgressListener): () => void {
     this.#scanProgress = listener
     return () => {
       if (this.#scanProgress === listener) this.#scanProgress = undefined
@@ -126,10 +126,10 @@ class FakeJoined {
     return completedProjectionSource()
   }
 
-  beginPreviewConnectivity(): V2ConnectivityActivation {
+  beginPreviewConnectivity(): ConnectivityActivation {
     this.events.push('begin-preview-connectivity')
     let closed = false
-    const routes = new V2ConnectivityRouteAuthority()
+    const routes = new ConnectivityRouteAuthority()
     return {
       routes,
       close: () => {
@@ -142,10 +142,10 @@ class FakeJoined {
   }
 
   preview(
-    _entry: V2CatalogEntry,
-    _connectivity: V2ConnectivityActivation,
+    _entry: CatalogEntry,
+    _connectivity: ConnectivityActivation,
     signal: AbortSignal,
-  ): Promise<V2FilePreview> {
+  ): Promise<FilePreview> {
     this.events.push('open-preview')
     this.previewSignals.push(signal)
     this.previewCount += 1
@@ -169,7 +169,7 @@ class FakeJoined {
         this.events.push('close-preview-session')
         this.sessionCloses += 1
       },
-    } as unknown as V2FilePreview)
+    } as unknown as FilePreview)
   }
 
   async close(): Promise<void> { this.closes += 1 }
@@ -185,8 +185,8 @@ function identityText(first: number): string {
   return encodeBase64Url(identity(first))
 }
 
-function authenticatedRemoteOperationError(): V2RemoteOperationError {
-  return new V2RemoteOperationError(createReceivedProtocolError({
+function authenticatedRemoteOperationError(): RemoteOperationError {
+  return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
@@ -196,13 +196,13 @@ function authenticatedRemoteOperationError(): V2RemoteOperationError {
   }))
 }
 
-function authenticatedRevisionCapacityError(): V2RevisionCapacityBusyError {
+function authenticatedRevisionCapacityError(): RevisionCapacityBusyError {
   const failure = Object.freeze({
-    code: V2_REVISION_CODE_QUOTA,
+    code: REVISION_CODE_QUOTA,
     retryable: true as const,
     retryAfterMilliseconds: 250,
   })
-  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+  return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(11)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(12)),
@@ -231,21 +231,21 @@ describe('automatic photo ownership', () => {
     const joined = new FakeJoined()
     joined.beginPreviewConnectivity = () => { throw new DOMException('Generation replaced', 'AbortError') }
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => { snapshot = next },
       publicError: () => 'preview failed',
     })
-    expect(() => previews.openAutomaticPhoto(joined as unknown as V2JoinedBrowserShare, entry)).not.toThrow()
-    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    expect(() => previews.openAutomaticPhoto(joined as unknown as JoinedBrowserShare, entry)).not.toThrow()
+    expect(snapshot.preview).toEqual(EMPTY_PREVIEW)
   })
 
   it('yields pending speculation synchronously and leaves an explicit preview usable', async () => {
     const joined = new FakeJoined()
     const automaticPhotoPreview = joined.preview.bind(joined)
-    const source = Object.assign(joined, { automaticPhotoPreview }) as unknown as V2JoinedBrowserShare
+    const source = Object.assign(joined, { automaticPhotoPreview }) as unknown as JoinedBrowserShare
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => { snapshot = next },
       publicError: () => 'preview failed',
@@ -254,7 +254,7 @@ describe('automatic photo ownership', () => {
     expect(snapshot.preview.state).toBe('loading')
     previews.yieldToReceiving()
     expect(joined.previewSignals[0]?.aborted).toBe(true)
-    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    expect(snapshot.preview).toEqual(EMPTY_PREVIEW)
     previews.open(source, entry)
     previews.yieldToReceiving()
     await turn()
@@ -266,9 +266,9 @@ describe('automatic photo ownership', () => {
   it('retains decoded automatic photo while receiving and closes it on explicit dismissal', async () => {
     const joined = new FakeJoined()
     joined.previewCount = 1
-    const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as V2JoinedBrowserShare
+    const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as JoinedBrowserShare
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => { snapshot = next },
       publicError: () => 'preview failed',
@@ -287,17 +287,17 @@ describe('automatic photo ownership', () => {
   it('returns to explicit Preview when automatic header inspection exceeds its budget', async () => {
     const joined = new FakeJoined()
     const source = Object.assign(joined, {
-      automaticPhotoPreview: () => Promise.reject(new V2AutomaticPhotoDeferredError('Use Preview for this larger image')),
-    }) as unknown as V2JoinedBrowserShare
+      automaticPhotoPreview: () => Promise.reject(new AutomaticPhotoDeferredError('Use Preview for this larger image')),
+    }) as unknown as JoinedBrowserShare
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => { snapshot = next },
       publicError: () => 'preview failed',
     })
     previews.openAutomaticPhoto(source, entry)
     await turn()
-    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    expect(snapshot.preview).toEqual(EMPTY_PREVIEW)
     expect(joined.events).toEqual(['begin-preview-connectivity', 'close-preview-connectivity'])
   })
 
@@ -305,9 +305,9 @@ describe('automatic photo ownership', () => {
     vi.useFakeTimers()
     try {
       const joined = new FakeJoined()
-      const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as V2JoinedBrowserShare
+      const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as JoinedBrowserShare
       let snapshot = directPreviewSnapshot()
-      const previews = new V2PreviewController({
+      const previews = new PreviewController({
         snapshot: () => snapshot,
         publish: next => { snapshot = next },
         publicError: () => 'preview failed',
@@ -316,7 +316,7 @@ describe('automatic photo ownership', () => {
       expect(joined.events).toEqual([])
       previews.openAutomaticPhoto(source, entry)
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+      expect(snapshot.preview).toEqual(EMPTY_PREVIEW)
       expect(joined.previewSignals[0]?.aborted).toBe(true)
       await previews.close()
     } finally {
@@ -331,7 +331,7 @@ describe('v2 preview incident ownership', () => {
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
     const order: string[] = []
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => {
         snapshot = next
@@ -344,7 +344,7 @@ describe('v2 preview incident ownership', () => {
       if (decision.kind === 'incident') order.push('decision')
     }
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
     if (snapshot.preview.state !== 'image' && snapshot.preview.state !== 'video') {
       throw new TypeError('expected media preview')
@@ -394,7 +394,7 @@ describe('v2 preview incident ownership', () => {
     ]) {
       const incidents = new RecordingPreviewIncidents()
       let snapshot = directPreviewSnapshot()
-      const previews = new V2PreviewController({
+      const previews = new PreviewController({
         snapshot: () => snapshot,
         publish: next => {
           snapshot = next
@@ -403,7 +403,7 @@ describe('v2 preview incident ownership', () => {
         incidents,
       })
 
-      previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+      previews.open(joined as unknown as JoinedBrowserShare, entry)
       await turn()
       const presented = snapshot.preview
       if (presented.state !== 'image' && presented.state !== 'video') {
@@ -434,7 +434,7 @@ describe('v2 preview incident ownership', () => {
     const joined = new DiagnosticPreviewJoined()
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => {
         snapshot = next
@@ -443,7 +443,7 @@ describe('v2 preview incident ownership', () => {
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
     if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
     const initialPresentation = snapshot.preview.presentationId
@@ -479,7 +479,7 @@ describe('v2 preview incident ownership', () => {
     })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
@@ -487,7 +487,7 @@ describe('v2 preview incident ownership', () => {
     })
     incidents.onDecision = () => { throw new Error('diagnostic submit failed') }
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
 
     expect(snapshot.preview).toMatchObject({
@@ -509,14 +509,14 @@ describe('v2 preview incident ownership', () => {
     })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
     previews.seek(12)
     await turn()
@@ -569,14 +569,14 @@ describe('v2 preview incident ownership', () => {
     const joined = new DiagnosticPreviewJoined({ openFailure: failure })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
 
     expect(incidents.facts).toHaveLength(1)
@@ -598,14 +598,14 @@ describe('v2 preview incident ownership', () => {
     const joined = new DiagnosticPreviewJoined({ openFailure: failure })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
 
     expect(incidents.facts).toHaveLength(1)
@@ -616,7 +616,7 @@ describe('v2 preview incident ownership', () => {
         kind: 'protocol_failure',
         correlation: failure.failureFact.correlation,
         payload: {
-          protocolFailure: { correlation: failure.protocolFailure.correlation, content: { code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 250 } },
+          protocolFailure: { correlation: failure.protocolFailure.correlation, content: { code: REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 250 } },
         },
       },
       relation: 'contributor',
@@ -630,14 +630,14 @@ describe('v2 preview incident ownership', () => {
     })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
 
     expect(incidents.owners.map((owner) => owner.identity.scopeKind)).toEqual([
@@ -666,14 +666,14 @@ describe('v2 preview incident ownership', () => {
     const joined = new DiagnosticPreviewJoined({ openPending: true })
     const incidents = new RecordingPreviewIncidents()
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
       incidents,
     })
 
-    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    previews.open(joined as unknown as JoinedBrowserShare, entry)
     previews.cancel()
     await turn()
 
@@ -687,7 +687,7 @@ describe('v2 preview incident ownership', () => {
       },
     ])
     expect(incidents.owners[0]?.isClosed()).toBe(true)
-    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    expect(snapshot.preview).toEqual(EMPTY_PREVIEW)
   })
 })
 
@@ -706,23 +706,23 @@ describe('preview diagnostics continuity', () => {
       randomBytes: length => new Uint8Array(length).fill(1),
     })
     const enabled = diagnostics.runtime.enable()
-    const failure = new V2PreviewRuntimeError('File is not a supported preview image or MP4 video')
+    const failure = new PreviewRuntimeError('File is not a supported preview image or MP4 video')
     const joined = new DiagnosticPreviewJoined({ openFailure: failure })
     let snapshot = directPreviewSnapshot()
-    const previews = new V2PreviewController({
+    const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: next => { snapshot = next },
       publicError: error => String(error),
       incidents: diagnostics.incidents,
     })
     try {
-      previews.open(joined as unknown as V2JoinedBrowserShare, { ...entry, name: 'setup.exe' })
+      previews.open(joined as unknown as JoinedBrowserShare, { ...entry, name: 'setup.exe' })
       await turn()
       expect(snapshot.preview.state).toBe('error')
       expect(diagnostics.runtime.inspectLastFailure()?.payload.trigger).toMatchObject({
         stage: 'preview_open',
         payload: { unclassified: { exception: {
-          errorName: 'V2PreviewRuntimeError', message: failure.message, stack: failure.stack,
+          errorName: 'PreviewRuntimeError', message: failure.message, stack: failure.stack,
         } } },
       })
       // This pause exceeds both former failure deadlines without delaying the test.
@@ -781,9 +781,9 @@ describe('v2 preview click controller boundary', () => {
     })
     const joined = new FakeJoined({ ...entry, name: 'photo.bin' })
     const gateway = {
-      join: async () => joined as unknown as V2JoinedBrowserShare,
-    } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+      join: async () => joined as unknown as JoinedBrowserShare,
+    } as unknown as BrowserReceiverGateway
+    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => controller.getSnapshot().phase === 'browsing')
     expect(controller.getSnapshot().phase).toBe('browsing')
@@ -824,9 +824,9 @@ describe('v2 preview click controller boundary', () => {
     joined.progressOnPage = 257n
     joined.pageGate = new Promise<void>((resolve) => { releasePage = resolve })
     const gateway = {
-      join: async () => joined as unknown as V2JoinedBrowserShare,
-    } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+      join: async () => joined as unknown as JoinedBrowserShare,
+    } as unknown as BrowserReceiverGateway
+    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => controller.getSnapshot().browse.status.includes('257 entries discovered'))
     expect(controller.getSnapshot().browse.status).toContain('257 entries discovered')
@@ -844,11 +844,11 @@ describe('v2 preview click controller boundary', () => {
     })
     const first = new FakeJoined({ ...entry, idText: 'first', name: 'first.png' })
     const second = new FakeJoined({ ...entry, idText: 'second', name: 'second.png' })
-    const pending: Array<(joined: V2JoinedBrowserShare) => void> = []
+    const pending: Array<(joined: JoinedBrowserShare) => void> = []
     const gateway = {
-      join: () => new Promise<V2JoinedBrowserShare>((resolve) => pending.push(resolve)),
-    } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+      join: () => new Promise<JoinedBrowserShare>((resolve) => pending.push(resolve)),
+    } as unknown as BrowserReceiverGateway
+    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
 
     controller.initialize({ capabilityInput: 'first-key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => pending.length === 1)
@@ -856,10 +856,10 @@ describe('v2 preview click controller boundary', () => {
     await waitFor(() => pending.length === 2)
     expect(pending).toHaveLength(2)
 
-    pending[1]?.(second as unknown as V2JoinedBrowserShare)
+    pending[1]?.(second as unknown as JoinedBrowserShare)
     await waitFor(() => controller.getSnapshot().rows[0]?.name === 'second.png')
     expect(controller.getSnapshot().rows[0]?.name).toBe('second.png')
-    pending[0]?.(first as unknown as V2JoinedBrowserShare)
+    pending[0]?.(first as unknown as JoinedBrowserShare)
     await waitFor(() => first.closes === 1)
     expect(first.closes).toBe(1)
     expect(controller.getSnapshot().rows[0]?.name).toBe('second.png')
@@ -871,7 +871,7 @@ describe('v2 preview click controller boundary', () => {
       navigator: { storage: {} },
       showSaveFilePicker: () => Promise.reject(new DOMException('unused', 'AbortError')),
     })
-    const selection = new V2SelectionPolicy(false)
+    const selection = new SelectionPolicy(false)
     const joined = {
       descriptor: {
         shareInstance: identity(7),
@@ -883,11 +883,11 @@ describe('v2 preview click controller boundary', () => {
       protocolSessionId: identityText(8),
       protocolSessionIdentity: identityText(8),
       selection,
-      replaceSelection(this: { selection: V2SelectionPolicy }, next: V2SelectionPolicy) { this.selection = next },
+      replaceSelection(this: { selection: SelectionPolicy }, next: SelectionPolicy) { this.selection = next },
       rootDirectory: () => ({
         id: identity(1), idText: identityText(1), name: 'Shared files', path: [], ancestry: [identityText(1)],
       }),
-      page: async (directory: V2BrowseDirectory) => {
+      page: async (directory: BrowseDirectory) => {
         return {
           directory,
           pageIndex: 0,
@@ -903,9 +903,9 @@ describe('v2 preview click controller boundary', () => {
       subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
       subscribeProtocolGeneration: () => () => undefined,
       close: async () => undefined,
-    } as unknown as V2JoinedBrowserShare
-    const gateway = { join: async () => joined } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway, {
+    } as unknown as JoinedBrowserShare
+    const gateway = { join: async () => joined } as unknown as BrowserReceiverGateway
+    const controller = new ReceiverController(gateway, {
       receive: {
         retained: {
           list: () => Promise.resolve(Object.freeze({
@@ -934,12 +934,12 @@ describe('v2 preview click controller boundary', () => {
 })
 
 function diagnosticImageJoined(): Readonly<{
-  beginPreviewConnectivity(): V2ConnectivityActivation
-  preview(): Promise<V2FilePreview>
+  beginPreviewConnectivity(): ConnectivityActivation
+  preview(): Promise<FilePreview>
 }> {
   return Object.freeze({
     beginPreviewConnectivity: () => {
-      const routes = new V2ConnectivityRouteAuthority()
+      const routes = new ConnectivityRouteAuthority()
       return { routes, close: () => routes.close() }
     },
     preview: () => Promise.resolve({
@@ -955,7 +955,7 @@ function diagnosticImageJoined(): Readonly<{
         throw new Error('image preview cannot seek')
       },
       close: async () => undefined,
-    } as unknown as V2FilePreview),
+    } as unknown as FilePreview),
   })
 }
 
@@ -978,7 +978,7 @@ class DiagnosticPreviewJoined {
     durationSeconds: 30,
     positionSeconds: 0,
   })
-  readonly #session: V2FilePreview
+  readonly #session: FilePreview
 
   constructor(options: DiagnosticPreviewOptions = {}) {
     this.#options = options
@@ -995,18 +995,18 @@ class DiagnosticPreviewJoined {
           throw this.#options.closeFailure
         }
       },
-    } as unknown as V2FilePreview
+    } as unknown as FilePreview
   }
 
-  beginPreviewConnectivity(): V2ConnectivityActivation {
-    const routes = new V2ConnectivityRouteAuthority()
+  beginPreviewConnectivity(): ConnectivityActivation {
+    const routes = new ConnectivityRouteAuthority()
     return {
       routes,
       close: () => routes.close(),
     }
   }
 
-  preview(): Promise<V2FilePreview> {
+  preview(): Promise<FilePreview> {
     if (this.#options.openFailure !== undefined) {
       return Promise.reject(this.#options.openFailure)
     }
@@ -1054,10 +1054,10 @@ class RecordingPreviewIncidents {
   }
 }
 
-function directPreviewSnapshot(): V2ReceiverSnapshot {
+function directPreviewSnapshot(): ReceiverSnapshot {
   return {
-    preview: EMPTY_V2_PREVIEW,
-  } as V2ReceiverSnapshot
+    preview: EMPTY_PREVIEW,
+  } as ReceiverSnapshot
 }
 
 function completedProjectionSource(): AuthenticatedDiscoverySource {

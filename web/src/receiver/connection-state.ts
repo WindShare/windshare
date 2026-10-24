@@ -1,7 +1,7 @@
-import { V2RelayReceiverError } from '../transport/relay/v2-receiver'
-import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
+import { RelayReceiverError } from '../transport/relay/receiver'
+import { RELAY_ERROR } from '../transport/relay/protocol'
 import { RelayEndpointFailure } from './relay-race'
-import { V2StaleShareInstanceError } from './v2-session-factory'
+import { StaleShareInstanceError } from './session-factory'
 
 export type ReceiverReconnectActivity =
   | Readonly<{ kind: 'connecting' }>
@@ -53,8 +53,8 @@ export class ReceiverConnectionState {
 
 function confirmedShareEnd(error: unknown): 'share-replaced' | 'share-stopped' | null {
   if (error instanceof RelayEndpointFailure) return confirmedShareEnd(error.cause)
-  if (error instanceof V2StaleShareInstanceError) return 'share-replaced'
-  if (error instanceof V2RelayReceiverError && error.relayError?.code === V2_RELAY_ERROR.stopped) return 'share-stopped'
+  if (error instanceof StaleShareInstanceError) return 'share-replaced'
+  if (error instanceof RelayReceiverError && error.relayError?.code === RELAY_ERROR.stopped) return 'share-stopped'
   if (error instanceof AggregateError) {
     const reasons = error.errors.map(confirmedShareEnd)
     if (reasons.includes('share-replaced')) return 'share-replaced'

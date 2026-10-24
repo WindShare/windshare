@@ -20,19 +20,19 @@ const (
 	windowsNativeTestTempPattern = ".windshare-osfs-test-*"
 )
 
-func windowsV3SetTestDirectoryDACL(
+func windowsSetTestDirectoryDACL(
 	path string,
 	descriptor *windows.SECURITY_DESCRIPTOR,
-	policy *windowsV3PrivatePolicy,
+	policy *windowsPrivatePolicy,
 ) error {
 	if descriptor == nil || policy == nil {
 		return errors.New("test directory DACL policy is absent")
 	}
-	existingOwner, err := windowsV3TestDirectoryOwner(path)
+	existingOwner, err := windowsTestDirectoryOwner(path)
 	if err != nil {
 		return err
 	}
-	if !windowsV3TrustedTestOwner(policy, existingOwner) {
+	if !windowsTrustedTestOwner(policy, existingOwner) {
 		return fmt.Errorf("Windows native-test directory has untrusted owner %s", existingOwner.String())
 	}
 	dacl, daclDefaulted, err := descriptor.DACL()
@@ -56,7 +56,7 @@ func windowsV3SetTestDirectoryDACL(
 	); err != nil {
 		return err
 	}
-	installedOwner, err := windowsV3TestDirectoryOwner(path)
+	installedOwner, err := windowsTestDirectoryOwner(path)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func windowsV3SetTestDirectoryDACL(
 	return nil
 }
 
-func windowsV3TrustedTestOwner(policy *windowsV3PrivatePolicy, owner *windows.SID) bool {
+func windowsTrustedTestOwner(policy *windowsPrivatePolicy, owner *windows.SID) bool {
 	if policy == nil || owner == nil || !owner.IsValid() {
 		return false
 	}
@@ -79,7 +79,7 @@ func windowsV3TrustedTestOwner(policy *windowsV3PrivatePolicy, owner *windows.SI
 		policy.administratorsSID != nil && owner.Equals(policy.administratorsSID)
 }
 
-func windowsV3TestDirectoryOwner(path string) (*windows.SID, error) {
+func windowsTestDirectoryOwner(path string) (*windows.SID, error) {
 	descriptor, err := windows.GetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
@@ -97,25 +97,25 @@ func windowsV3TestDirectoryOwner(path string) (*windows.SID, error) {
 	return windows.StringToSid(owner.String())
 }
 
-func windowsV3ProtectedTestDescriptor(
-	policy *windowsV3PrivatePolicy,
+func windowsProtectedTestDescriptor(
+	policy *windowsPrivatePolicy,
 	owner *windows.SID,
 ) (*windows.SECURITY_DESCRIPTOR, error) {
 	if policy == nil || owner == nil || !owner.IsValid() {
 		return nil, errors.New("Windows native-test ACL policy is unavailable")
 	}
-	if !windowsV3TrustedTestOwner(policy, owner) {
+	if !windowsTrustedTestOwner(policy, owner) {
 		return nil, fmt.Errorf("Windows native-test directory has untrusted owner %s", owner.String())
 	}
-	principals, err := windowsV3TestDirectoryPrincipals(policy)
+	principals, err := windowsTestDirectoryPrincipals(policy)
 	if err != nil {
 		return nil, err
 	}
-	entries := windowsV3InheritableFullAccessEntries(principals)
+	entries := windowsInheritableFullAccessEntries(principals)
 	return windows.SecurityDescriptorFromString("O:" + owner.String() + "D:P" + entries)
 }
 
-func windowsV3InheritableFullAccessEntries(principals []*windows.SID) string {
+func windowsInheritableFullAccessEntries(principals []*windows.SID) string {
 	var entries strings.Builder
 	for _, principal := range principals {
 		entries.WriteString("(A;OICI;GA;;;")
@@ -125,7 +125,7 @@ func windowsV3InheritableFullAccessEntries(principals []*windows.SID) string {
 	return entries.String()
 }
 
-func windowsV3TestDirectoryPrincipals(policy *windowsV3PrivatePolicy) ([]*windows.SID, error) {
+func windowsTestDirectoryPrincipals(policy *windowsPrivatePolicy) ([]*windows.SID, error) {
 	if policy == nil {
 		return nil, errors.New("Windows native-test ACL policy is unavailable")
 	}
@@ -144,13 +144,13 @@ func windowsV3TestDirectoryPrincipals(policy *windowsV3PrivatePolicy) ([]*window
 	return principals, nil
 }
 
-func windowsV3VerifyTestDirectoryDescriptor(
+func windowsVerifyTestDirectoryDescriptor(
 	descriptor *windows.SECURITY_DESCRIPTOR,
 	expectedOwner *windows.SID,
-	policy *windowsV3PrivatePolicy,
+	policy *windowsPrivatePolicy,
 ) error {
 	if descriptor == nil || expectedOwner == nil || !expectedOwner.IsValid() ||
-		policy == nil || !windowsV3TrustedTestOwner(policy, expectedOwner) {
+		policy == nil || !windowsTrustedTestOwner(policy, expectedOwner) {
 		return errors.New("Windows native-test descriptor expectation is unavailable")
 	}
 	owner, ownerDefaulted, err := descriptor.Owner()
@@ -168,7 +168,7 @@ func windowsV3VerifyTestDirectoryDescriptor(
 	if err != nil || dacl == nil || daclDefaulted {
 		return errors.Join(errors.New("Windows native-test DACL is absent or defaulted"), err)
 	}
-	principals, err := windowsV3TestDirectoryPrincipals(policy)
+	principals, err := windowsTestDirectoryPrincipals(policy)
 	if err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func windowsV3VerifyTestDirectoryDescriptor(
 			return errors.New("Windows native-test DACL grants an unexpected principal")
 		}
 		switch {
-		case ace.Header.AceFlags == 0 && ace.Mask == windowsV3FileAllAccess:
+		case ace.Header.AceFlags == 0 && ace.Mask == windowsFileAllAccess:
 			if objectFound[principalIndex] {
 				return errors.New("Windows native-test DACL duplicates current-object authority")
 			}
@@ -232,17 +232,17 @@ func windowsV3VerifyTestDirectoryDescriptor(
 	return nil
 }
 
-func TestWindowsV3TestDirectoryDescriptorPreservesExistingOwner(t *testing.T) {
-	policy, err := newWindowsV3PrivatePolicy()
+func TestWindowsTestDirectoryDescriptorPreservesExistingOwner(t *testing.T) {
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := t.TempDir()
-	owner, err := windowsV3TestDirectoryOwner(path)
+	owner, err := windowsTestDirectoryOwner(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, err := windowsV3ProtectedTestDescriptor(policy, owner)
+	descriptor, err := windowsProtectedTestDescriptor(policy, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestWindowsV3TestDirectoryDescriptorPreservesExistingOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := windowsV3SetTestDirectoryDACL(path, descriptor, policy); err != nil {
+	if err := windowsSetTestDirectoryDACL(path, descriptor, policy); err != nil {
 		t.Fatal(err)
 	}
 	installed, err := windows.GetNamedSecurityInfo(
@@ -276,22 +276,22 @@ func TestWindowsV3TestDirectoryDescriptorPreservesExistingOwner(t *testing.T) {
 	if beforeOwner == nil || installedOwner == nil || !beforeOwner.Equals(installedOwner) {
 		t.Fatalf("test directory owner changed while installing its DACL: before=%v after=%v", beforeOwner, installedOwner)
 	}
-	if err := windowsV3VerifyTestDirectoryDescriptor(installed, owner, policy); err != nil {
+	if err := windowsVerifyTestDirectoryDescriptor(installed, owner, policy); err != nil {
 		t.Fatalf("verify exact installed test directory descriptor: %v", err)
 	}
 }
 
-func TestWindowsV3TestDirectoryDACLDoesNotApplyDescriptorOwner(t *testing.T) {
-	policy, err := newWindowsV3PrivatePolicy()
+func TestWindowsTestDirectoryDACLDoesNotApplyDescriptorOwner(t *testing.T) {
+	policy, err := newWindowsPrivatePolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := t.TempDir()
-	owner, err := windowsV3TestDirectoryOwner(path)
+	owner, err := windowsTestDirectoryOwner(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, err := windowsV3ProtectedTestDescriptor(policy, owner)
+	descriptor, err := windowsProtectedTestDescriptor(policy, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestWindowsV3TestDirectoryDACLDoesNotApplyDescriptorOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := windowsV3SetTestDirectoryDACL(path, absolute, policy); err != nil {
+	if err := windowsSetTestDirectoryDACL(path, absolute, policy); err != nil {
 		t.Fatal(err)
 	}
 	installed, err := windows.GetNamedSecurityInfo(
@@ -331,7 +331,7 @@ func TestWindowsV3TestDirectoryDACLDoesNotApplyDescriptorOwner(t *testing.T) {
 	if installedOwner == nil || !installedOwner.Equals(owner) {
 		t.Fatalf("descriptor owner changed test directory ownership: got=%v want=%v", installedOwner, owner)
 	}
-	if err := windowsV3VerifyTestDirectoryDescriptor(installed, owner, policy); err != nil {
+	if err := windowsVerifyTestDirectoryDescriptor(installed, owner, policy); err != nil {
 		t.Fatalf("verify DACL installed independently of descriptor owner: %v", err)
 	}
 }

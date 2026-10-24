@@ -3,9 +3,9 @@ import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/re
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { taskFixture } from '../../src/ui/tasks/fixtures'
 import { deliveryFixture } from '../output/browser-delivery-fixture'
-import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
+import { presentReceiveLifecycle } from '../../src/ui/lifecycle-presentation'
 import { planningFixture } from './fsa-route-activation-fixture'
-import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
 import type {
   CompatibleNameRepairSummary,
@@ -31,7 +31,7 @@ describe('folder receiving and local saving presentation', () => {
         plan: { kind: 'direct-tree' } as Parameters<typeof presentReceiveLifecycle>[0]['plan'], browserDelivery: summary })
       expect(active.category).toBe('terminal')
       expect(active.actions).toEqual([{ kind: expectedAction, destructive: kind === 'receiving', label: expect.any(String) }])
-      const operation: V2RetainedReceiveOperation = {
+      const operation: RetainedReceiveOperation = {
         operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
         lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'restoration-available',
         browserDelivery: summary, actions: retainedBrowserDeliveryActions(lifecycle, summary, []),
@@ -51,7 +51,7 @@ describe('folder receiving and local saving presentation', () => {
     const fixture = deliveryFixture()
     const lifecycle = { operationId: fixture.policy.operationId, receiveIntentDigest: fixture.policy.receiveIntentDigest, generation: 2n,
       kind: 'partial-directory' as const, reason: 'stopped' as const, successCount: 1n, failureCount: 1n, receiptDigest: fixture.policy.digest }
-    const operation: V2RetainedReceiveOperation = { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
+    const operation: RetainedReceiveOperation = { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
       lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'restoration-available',
       actions: ['save-staged-files', 'cleanup-staging', 'discard-incomplete-staging', 'catch-up'] }
     const summary = { terminalSettlement: 'pending' } as CompatibleNameRepairSummary
@@ -143,7 +143,7 @@ describe('folder receiving and local saving presentation', () => {
       checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' as const },
     }
-    const operation: V2RetainedReceiveOperation = {
+    const operation: RetainedReceiveOperation = {
       operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
       lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'resume-receive',
       actions: ['continue', 'save-staged-files'], browserDelivery: summary,

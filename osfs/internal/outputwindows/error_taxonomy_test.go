@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestWindowsV3OperationalErrorContextPreservesRawTaxonomy(t *testing.T) {
+func TestWindowsOperationalErrorContextPreservesRawTaxonomy(t *testing.T) {
 	rawCauses := []error{
 		windows.ERROR_ACCESS_DENIED,
 		windows.ERROR_SHARING_VIOLATION,
@@ -23,13 +23,13 @@ func TestWindowsV3OperationalErrorContextPreservesRawTaxonomy(t *testing.T) {
 	}
 	for _, cause := range rawCauses {
 		t.Run(cause.Error(), func(t *testing.T) {
-			native := windowsV3NativeOperationFailure("exercise native operation", "entry", cause)
-			requireWindowsV3RawOperationalError(t, native, cause)
+			native := windowsNativeOperationFailure("exercise native operation", "entry", cause)
+			requireWindowsRawOperationalError(t, native, cause)
 			if message := native.Error(); !strings.Contains(message, "exercise native operation") ||
 				!strings.Contains(message, "entry") {
 				t.Fatalf("operational context = %q", message)
 			}
-			requireWindowsV3RawOperationalError(t, windowsOutputV3Error(native), cause)
+			requireWindowsRawOperationalError(t, windowsOutputError(native), cause)
 		})
 	}
 
@@ -38,30 +38,30 @@ func TestWindowsV3OperationalErrorContextPreservesRawTaxonomy(t *testing.T) {
 		windows.ERROR_NOT_SUPPORTED,
 		windows.ERROR_CALL_NOT_IMPLEMENTED,
 	} {
-		native := windowsV3NativeOperationFailure("exercise unsupported operation", "entry", cause)
-		if !errors.Is(native, errWindowsV3OutputUnsupported) ||
-			!errors.Is(windowsOutputV3Error(native), outputcap.ErrRecoverableOutputUnsupported) {
+		native := windowsNativeOperationFailure("exercise unsupported operation", "entry", cause)
+		if !errors.Is(native, errWindowsOutputUnsupported) ||
+			!errors.Is(windowsOutputError(native), outputcap.ErrRecoverableOutputUnsupported) {
 			t.Fatalf("unsupported cause %v = %v", cause, native)
 		}
 	}
 
 	for _, cause := range []error{windows.ERROR_FILE_EXISTS, windows.ERROR_ALREADY_EXISTS} {
-		native := windowsV3NativeNoReplaceFailure("exercise no-replace operation", "entry", cause)
-		if !errors.Is(native, errWindowsV3OutputCollision) ||
-			!errors.Is(windowsOutputV3Error(native), outputcap.ErrNamespaceCollision) {
+		native := windowsNativeNoReplaceFailure("exercise no-replace operation", "entry", cause)
+		if !errors.Is(native, errWindowsOutputCollision) ||
+			!errors.Is(windowsOutputError(native), outputcap.ErrNamespaceCollision) {
 			t.Fatalf("collision cause %v = %v", cause, native)
 		}
 	}
 
-	observed := windowsV3Failure(
-		"verify positively observed entry", "entry", errWindowsV3OutputUnsafe, windows.ERROR_ACCESS_DENIED,
+	observed := windowsFailure(
+		"verify positively observed entry", "entry", errWindowsOutputUnsafe, windows.ERROR_ACCESS_DENIED,
 	)
-	if !errors.Is(windowsOutputV3Error(observed), outputcap.ErrUnsafeNamespace) {
+	if !errors.Is(windowsOutputError(observed), outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("positive-entry denial lost unsafe evidence: %v", observed)
 	}
 }
 
-func TestWindowsV3DirectoryInstallDeniedClassificationRequiresSettledObservation(t *testing.T) {
+func TestWindowsDirectoryInstallDeniedClassificationRequiresSettledObservation(t *testing.T) {
 	closeFailure := errors.New("close collision observation")
 	tests := []struct {
 		name            string
@@ -73,7 +73,7 @@ func TestWindowsV3DirectoryInstallDeniedClassificationRequiresSettledObservation
 	}{
 		{
 			name:            "settled positive observation is collision",
-			nativeCategory:  errWindowsV3OutputCollision,
+			nativeCategory:  errWindowsOutputCollision,
 			wrapperCategory: outputcap.ErrNamespaceCollision,
 		},
 		{
@@ -83,8 +83,8 @@ func TestWindowsV3DirectoryInstallDeniedClassificationRequiresSettledObservation
 		},
 		{
 			name:            "unsafe positive observation remains unsafe",
-			observationErr:  windowsV3Failure("observe existing directory", "target", errWindowsV3OutputUnsafe, windows.ERROR_ACCESS_DENIED),
-			nativeCategory:  errWindowsV3OutputUnsafe,
+			observationErr:  windowsFailure("observe existing directory", "target", errWindowsOutputUnsafe, windows.ERROR_ACCESS_DENIED),
+			nativeCategory:  errWindowsOutputUnsafe,
 			wrapperCategory: outputcap.ErrUnsafeNamespace,
 		},
 		{
@@ -95,20 +95,20 @@ func TestWindowsV3DirectoryInstallDeniedClassificationRequiresSettledObservation
 		{
 			name:            "unsupported observation remains unsupported",
 			observationErr:  windows.ERROR_NOT_SUPPORTED,
-			nativeCategory:  errWindowsV3OutputUnsupported,
+			nativeCategory:  errWindowsOutputUnsupported,
 			wrapperCategory: outputcap.ErrRecoverableOutputUnsupported,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			native := windowsV3DirectoryInstallDeniedFailure(
+			native := windowsDirectoryInstallDeniedFailure(
 				"target", windows.ERROR_ACCESS_DENIED, test.observationErr, test.closeErr,
 			)
-			wrapped := windowsOutputV3Error(native)
+			wrapped := windowsOutputError(native)
 			if test.rawCause != nil {
-				requireWindowsV3RawOperationalError(t, native, test.rawCause)
-				requireWindowsV3RawOperationalError(t, wrapped, test.rawCause)
+				requireWindowsRawOperationalError(t, native, test.rawCause)
+				requireWindowsRawOperationalError(t, wrapped, test.rawCause)
 			} else if !errors.Is(native, test.nativeCategory) || !errors.Is(wrapped, test.wrapperCategory) {
 				t.Fatalf("classification = native %v wrapped %v", native, wrapped)
 			}
@@ -119,11 +119,11 @@ func TestWindowsV3DirectoryInstallDeniedClassificationRequiresSettledObservation
 	}
 }
 
-func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsRealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
-	wrapper := &windowsOutputV3Directory{native: root}
+	wrapper := &windowsOutputDirectory{native: root}
 
 	for _, open := range []struct {
 		name string
@@ -148,7 +148,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	} {
 		t.Run("missing "+open.name, func(t *testing.T) {
 			err := open.run()
-			requireWindowsV3RawOperationalError(t, err, fs.ErrNotExist)
+			requireWindowsRawOperationalError(t, err, fs.ErrNotExist)
 		})
 	}
 
@@ -160,8 +160,8 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	if err := blocked.Close(); err != nil {
 		t.Fatal(err)
 	}
-	blocker, _, err := windowsV3OpenNativeWithOptions(
-		root.handle(), blockedName, windowsV3ReadFileAccess(), windows.FILE_OPEN,
+	blocker, _, err := windowsOpenNativeWithOptions(
+		root.handle(), blockedName, windowsReadFileAccess(), windows.FILE_OPEN,
 		windows.FILE_NON_DIRECTORY_FILE, windows.FILE_ATTRIBUTE_NORMAL, nil, 0,
 		windows.OBJ_CASE_INSENSITIVE|windows.OBJ_DONT_REPARSE,
 	)
@@ -185,7 +185,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	} {
 		t.Run("sharing "+open.name, func(t *testing.T) {
 			err := open.run()
-			requireWindowsV3RawOperationalError(t, err, windows.ERROR_SHARING_VIOLATION)
+			requireWindowsRawOperationalError(t, err, windows.ERROR_SHARING_VIOLATION)
 		})
 	}
 
@@ -196,7 +196,7 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	}
 	defer existing.Close()
 	if duplicate, err := root.CreatePrivateFile(collisionName); duplicate != nil ||
-		!errors.Is(err, errWindowsV3OutputCollision) {
+		!errors.Is(err, errWindowsOutputCollision) {
 		t.Fatalf("native collision = file %v error %v", duplicate, err)
 	}
 	if duplicate, err := wrapper.CreateFile(collisionName, true, 0); duplicate != nil ||
@@ -205,16 +205,16 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	}
 
 	inaccessibleRoot := *root
-	inaccessibleRoot.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
-		return windowsV3ObjectFacts{}, windows.ERROR_ACCESS_DENIED
+	inaccessibleRoot.inspector = windowsObjectInspectorFunc(func(windows.Handle) (windowsObjectFacts, error) {
+		return windowsObjectFacts{}, windows.ERROR_ACCESS_DENIED
 	})
 	if opened, err := inaccessibleRoot.OpenRegularFile(collisionName); opened != nil {
 		_ = opened.Close()
 		t.Fatal("native post-open denial unexpectedly returned an authority")
-	} else if !errors.Is(err, errWindowsV3OutputUnsafe) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+	} else if !errors.Is(err, errWindowsOutputUnsafe) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		t.Fatalf("native post-open denial = %v", err)
 	}
-	inaccessibleWrapper := &windowsOutputV3Directory{native: &inaccessibleRoot}
+	inaccessibleWrapper := &windowsOutputDirectory{native: &inaccessibleRoot}
 	if opened, err := inaccessibleWrapper.OpenObservedFile(collisionName, false); opened != nil {
 		_ = opened.Close()
 		t.Fatal("wrapper post-open denial unexpectedly returned an authority")
@@ -227,11 +227,11 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	}
 }
 
-func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsRealNativeMutationFailuresRemainOperational(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
-	wrapper := &windowsOutputV3Directory{native: root}
+	wrapper := &windowsOutputDirectory{native: root}
 
 	const sourceName = "read-only-source.bin"
 	created, err := root.CreatePrivateFile(sourceName)
@@ -246,7 +246,7 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer readOnly.Close()
-	wrappedReadOnly := &windowsOutputV3ObservedFile{state: &windowsOutputV3FileState{
+	wrappedReadOnly := &windowsOutputObservedFile{state: &windowsOutputFileState{
 		native: readOnly, private: true, borrowed: true,
 	}}
 
@@ -257,34 +257,34 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 	if err := windows.CloseHandle(staleDirectory.handle()); err != nil {
 		t.Fatal(err)
 	}
-	staleWrapper := &windowsOutputV3Directory{native: staleDirectory}
+	staleWrapper := &windowsOutputDirectory{native: staleDirectory}
 	if duplicate, err := staleDirectory.Duplicate(); duplicate != nil {
 		_ = duplicate.Close()
 		t.Fatal("stale native authority unexpectedly duplicated")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	}
 	if duplicate, err := staleWrapper.Duplicate(); duplicate != nil {
 		_ = duplicate.Close()
 		t.Fatal("stale wrapper authority unexpectedly duplicated")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	}
 	_, err = staleDirectory.observeEntry("denied-observation.bin")
-	requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+	requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	_, err = staleWrapper.ObserveEntry("denied-wrapper-observation.bin")
-	requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+	requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	if linked, err := staleDirectory.LinkRegularFileNoReplace(readOnly, "denied-link.bin"); linked != nil {
 		_ = linked.Close()
 		t.Fatal("stale destination authority unexpectedly authorized a native hard link")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	}
 	if linked, err := staleWrapper.LinkFileNoReplace(wrappedReadOnly, "denied-wrapper-link.bin"); linked != nil {
 		_ = linked.Close()
 		t.Fatal("stale destination authority unexpectedly authorized a wrapper hard link")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_INVALID_HANDLE)
 	}
 	_ = staleDirectory.file.Close()
 	staleDirectory.file = nil
@@ -292,16 +292,16 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireWindowsV3RawOperationalError(t,
-		windowsV3SetHandleModifiedTime(readOnly.handle(), readOnly.path, modified),
+	requireWindowsRawOperationalError(t,
+		windowsSetHandleModifiedTime(readOnly.handle(), readOnly.path, modified),
 		windows.ERROR_ACCESS_DENIED,
 	)
-	requireWindowsV3RawOperationalError(t, windowsV3RemoveHandle(readOnly.handle()), windows.ERROR_ACCESS_DENIED)
-	requireWindowsV3RawOperationalError(t,
+	requireWindowsRawOperationalError(t, windowsRemoveHandle(readOnly.handle()), windows.ERROR_ACCESS_DENIED)
+	requireWindowsRawOperationalError(t,
 		root.AtomicReplacePrivateFile(readOnly, "denied-replacement.state"),
 		windows.ERROR_ACCESS_DENIED,
 	)
-	requireWindowsV3RawOperationalError(t,
+	requireWindowsRawOperationalError(t,
 		wrapper.ReplacePrivateFile(wrappedReadOnly, "denied-wrapper-replacement.state"),
 		windows.ERROR_ACCESS_DENIED,
 	)
@@ -315,24 +315,24 @@ func TestWindowsV3RealNativeMutationFailuresRemainOperational(t *testing.T) {
 		_ = installed.Close()
 		t.Fatal("public placement handle unexpectedly authorized a native rename")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
 	}
 	if installed, err := wrapper.InstallDirectoryNoReplace(
-		&windowsOutputV3Directory{native: publicSource}, "denied-wrapper-directory-install",
+		&windowsOutputDirectory{native: publicSource}, "denied-wrapper-directory-install",
 	); installed != nil {
 		_ = installed.Close()
 		t.Fatal("public placement handle unexpectedly authorized a wrapper rename")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
 	}
 
-	requireWindowsV3RawOperationalError(t,
-		windowsV3RemoveHandle(windows.InvalidHandle), windows.ERROR_INVALID_HANDLE,
+	requireWindowsRawOperationalError(t,
+		windowsRemoveHandle(windows.InvalidHandle), windows.ERROR_INVALID_HANDLE,
 	)
 }
 
-func TestWindowsV3RealNativeLockTaxonomy(t *testing.T) {
-	platform := openWindowsV3TestPlatform(t)
+func TestWindowsRealNativeLockTaxonomy(t *testing.T) {
+	platform := openWindowsTestPlatform(t)
 	defer platform.Close()
 	root := platform.Root()
 
@@ -351,7 +351,7 @@ func TestWindowsV3RealNativeLockTaxonomy(t *testing.T) {
 	}
 	defer first.Close()
 	if second, err := root.AcquireExistingStableLock(name); second != nil ||
-		!errors.Is(err, errWindowsV3OutputLockBusy) {
+		!errors.Is(err, errWindowsOutputLockBusy) {
 		if second != nil {
 			_ = second.Close()
 		}
@@ -361,14 +361,14 @@ func TestWindowsV3RealNativeLockTaxonomy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handle, _, err := windowsV3OpenNative(
+	handle, _, err := windowsOpenNative(
 		root.handle(), name, windows.SYNCHRONIZE, windows.FILE_OPEN,
 		windows.FILE_NON_DIRECTORY_FILE, windows.FILE_ATTRIBUTE_NORMAL, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	minimal := &windowsV3File{
+	minimal := &windowsFile{
 		file: os.NewFile(uintptr(handle), name), path: name, volume: root.volume,
 		inspector: root.inspector, policy: root.policy,
 	}
@@ -376,24 +376,24 @@ func TestWindowsV3RealNativeLockTaxonomy(t *testing.T) {
 		_ = windows.CloseHandle(handle)
 		t.Fatal("minimal lock handle could not be wrapped")
 	}
-	if lock, err := windowsV3LockStableFile(minimal, name); lock != nil {
+	if lock, err := windowsLockStableFile(minimal, name); lock != nil {
 		_ = lock.Close()
 		t.Fatal("metadata-only handle unexpectedly authorized a byte-range lock")
 	} else {
-		requireWindowsV3RawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
+		requireWindowsRawOperationalError(t, err, windows.ERROR_ACCESS_DENIED)
 	}
 }
 
-func requireWindowsV3RawOperationalError(t *testing.T, err error, cause error) {
+func requireWindowsRawOperationalError(t *testing.T, err error, cause error) {
 	t.Helper()
 	if err == nil || !errors.Is(err, cause) {
 		t.Fatalf("operational error = %v, want raw cause %v", err, cause)
 	}
 	for _, category := range []error{
-		errWindowsV3OutputUnsupported,
-		errWindowsV3OutputUnsafe,
-		errWindowsV3OutputCollision,
-		errWindowsV3OutputLockBusy,
+		errWindowsOutputUnsupported,
+		errWindowsOutputUnsafe,
+		errWindowsOutputCollision,
+		errWindowsOutputLockBusy,
 		outputcap.ErrRecoverableOutputUnsupported,
 		outputcap.ErrUnsafeNamespace,
 		outputcap.ErrNamespaceCollision,

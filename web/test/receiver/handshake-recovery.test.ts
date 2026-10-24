@@ -1,17 +1,17 @@
 import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { openV2ShareDescriptor } from '../../src/catalog/v2-records'
+import { openShareDescriptor } from '../../src/catalog/records'
 import type { FrameChannel } from '../../src/contracts/channel'
-import { V2BrowserSessionFactory } from '../../src/receiver/v2-session-factory'
-import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
+import { BrowserSessionFactory } from '../../src/receiver/session-factory'
+import { ReceiverReconnectSupervisor } from '../../src/receiver/supervisor'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
 import { isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
-import { V2SessionHandshakeTimeoutError } from '../../src/session/v2-runtime-types'
-import { V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from '../../src/session/v2-runtime'
-import * as relayReceiver from '../../src/transport/relay/v2-receiver'
-import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
-import { decodeV2DescriptorDelivery } from '../../src/transport/relay/v2-protocol'
+import { SessionHandshakeTimeoutError } from '../../src/session/runtime-types'
+import { SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from '../../src/session/runtime'
+import * as relayReceiver from '../../src/transport/relay/receiver'
+import type { RelayReceiverConnection } from '../../src/transport/relay/receiver'
+import { decodeDescriptorDelivery } from '../../src/transport/relay/protocol'
 import { joinBrowserRelays } from '../../src/receiver/browser-join'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { identity, namedCase, senderObjects } from '../protocol/r0-contract-support'
@@ -70,7 +70,7 @@ async function shareFixture() {
   const capability = { suite: 2 as const, readSecret: b64ToBytes(identity.readSecretB64).slice(),
     pkHash: b64ToBytes(identity.pkHashB64).slice(), shareIdRaw: b64ToBytes(identity.shareIdRawB64).slice(), shareId: identity.shareId }
   const descriptorObject = b64ToBytes(senderObjects.find(value => value.domain === 'windshare/v2 object/descriptor')!.objectB64).slice()
-  const descriptor = await openV2ShareDescriptor(descriptorObject, capability)
+  const descriptor = await openShareDescriptor(descriptorObject, capability)
   return { capability, descriptorObject, descriptor }
 }
 
@@ -78,13 +78,13 @@ async function factoryFixture() {
   const { capability, descriptorObject, descriptor } = await shareFixture()
   const channels: HandshakeChannel[] = []
   const control = { response: 'valid' as Response, dialed: deferred<HandshakeChannel>() }
-  const factory = new V2BrowserSessionFactory({ relayBases: ['https://relay.example'], capability, descriptor, descriptorObject,
+  const factory = new BrowserSessionFactory({ relayBases: ['https://relay.example'], capability, descriptor, descriptorObject,
     dialRelay: async () => {
       const channel = new HandshakeChannel(control.response)
       channels.push(channel)
       control.dialed.resolve(channel)
       control.dialed = deferred<HandshakeChannel>()
-      return { endpoint: {} as V2RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+      return { endpoint: {} as RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
         descriptorObject, channel, close: () => channel.close() }
     },
   })
@@ -103,19 +103,19 @@ describe('production browser handshake recovery', () => {
     const invalidObject = descriptorObject.slice()
     invalidObject[invalidObject.length - 1] = invalidObject.at(-1)! ^ 1
     let healthySignal: AbortSignal | undefined
-    const dial = vi.spyOn(relayReceiver, 'dialV2RelayReceiver').mockImplementation(async (base, _key, options) => {
+    const dial = vi.spyOn(relayReceiver, 'dialRelayReceiver').mockImplementation(async (base, _key, options) => {
       if (base === 'invalid') {
         if (failure === 'malformed') {
           rejected.resolve()
-          decodeV2DescriptorDelivery(Uint8Array.of(0))
+          decodeDescriptorDelivery(Uint8Array.of(0))
         }
-        return { endpoint: {} as V2RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+        return { endpoint: {} as RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
           descriptorObject: invalidObject, channel: new HandshakeChannel('silent'),
           close: async () => { rejected.resolve() } }
       }
       healthySignal = options?.signal
       await ready.promise
-      return { endpoint: {} as V2RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+      return { endpoint: {} as RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
         descriptorObject, channel: healthy, close: () => healthy.close() }
     })
     const parent = new AbortController()
@@ -148,7 +148,7 @@ describe('production browser handshake recovery', () => {
     const { factory, descriptor, channels, control } = await factoryFixture()
     const initial = await factory.connectFresh(new AbortController().signal)
     const errors: unknown[] = []
-    const supervisor = new V2ReceiverReconnectSupervisor({ descriptor, initial, sessionFactory: factory,
+    const supervisor = new ReceiverReconnectSupervisor({ descriptor, initial, sessionFactory: factory,
       clock: systemReconnectClock, nativePeerUsable: () => false, onRecoveryError: error => errors.push(error) })
     const content = supervisor.content
     const states: ReceiverConnectionSnapshot[] = []
@@ -163,9 +163,9 @@ describe('production browser handshake recovery', () => {
       let resumed = false
       const operation = supervisor.execute(undefined, async () => { resumed = true; return 'same-operation' })
       operation.catch(() => undefined)
-      await vi.advanceTimersByTimeAsync(V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS)
+      await vi.advanceTimersByTimeAsync(SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS)
       expect(errors).toHaveLength(1)
-      expect(errors[0]).toMatchObject({ cause: expect.any(V2SessionHandshakeTimeoutError) })
+      expect(errors[0]).toMatchObject({ cause: expect.any(SessionHandshakeTimeoutError) })
       expect(isTerminalRecoveryFailure(errors[0])).toBe(false)
       expect(states.at(-1)?.kind).toBe('reconnecting')
       expect(supervisor.generationId).toBe(1)
@@ -192,7 +192,7 @@ describe('production browser handshake recovery', () => {
     control.response = response
     try {
       const error: unknown = await factory.connectFresh(new AbortController().signal).catch((cause: unknown) => cause)
-      expect(error).toMatchObject({ cause: { name: 'V2TranscriptError' } })
+      expect(error).toMatchObject({ cause: { name: 'TranscriptError' } })
       expect(isTerminalRecoveryFailure(error)).toBe(true)
       expect(channels[0]!.state).toBe('closed')
     } finally { factory.close() }

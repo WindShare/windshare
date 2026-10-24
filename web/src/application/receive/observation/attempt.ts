@@ -23,15 +23,15 @@ import {
   type LateOutputFailureConsequenceCapability,
   type OutputFailureSinks,
 } from '../../../output/diagnostics'
-import type { V2ReceiverIncidentPort } from './contracts'
+import type { ReceiverIncidentPort } from './contracts'
 
 /**
  * Presentation owners retain this capability rather than a reporter reference in
  * asynchronous callbacks. The attempt keeps every diagnostic exception outside
  * product authority while preserving owner-only close and explicit causality.
  */
-export class V2PresentationAttempt {
-  readonly #incidents: V2ReceiverIncidentPort | undefined
+export class PresentationAttempt {
+  readonly #incidents: ReceiverIncidentPort | undefined
   readonly #scope: IncidentScopeOwner | undefined
   readonly #outputFailures: AttemptOutputFailureCapability
   #decisionSettled = false
@@ -40,7 +40,7 @@ export class V2PresentationAttempt {
   #closed = false
 
   constructor(
-    incidents: V2ReceiverIncidentPort | undefined,
+    incidents: ReceiverIncidentPort | undefined,
     kind: IncidentScopeKind,
   ) {
     this.#incidents = incidents

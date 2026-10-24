@@ -33,10 +33,10 @@ import {
   type ReceiveIntent,
 } from '../../../transfer/intent'
 import type {
-  V2ArtifactPresentationAuthority,
-  V2BoundReceiveOperation,
-  V2RouteCommitInput,
-  V2RouteCommitResult,
+  ArtifactPresentationAuthority,
+  BoundReceiveOperation,
+  RouteCommitInput,
+  RouteCommitResult,
 } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { snapshotPreClickRanking } from '../route-contract'
@@ -55,7 +55,7 @@ type OpenWorkspaceNamespaceInput = Parameters<typeof openOriginPrivateWorkspaceN
 type CreateWorkspaceOperationInput = Parameters<typeof WorkspaceReceiveOperation.create>[0]
 type WorkspaceCommitAttempt = {
   repository?: WorkspaceActivationJournalRepository
-  frozen?: Awaited<ReturnType<V2RouteCommitInput['freezeAtFence']>>
+  frozen?: Awaited<ReturnType<RouteCommitInput['freezeAtFence']>>
   namespace?: OriginPrivateWorkspaceNamespace
   owner?: WorkspaceOwnedActivationAuthority
 }
@@ -68,7 +68,7 @@ export interface WorkspaceRouteDependencies {
   readonly openStages: typeof WorkspaceOperationStages.open
   readonly createOperation: (
     input: CreateWorkspaceOperationInput,
-  ) => Promise<V2BoundReceiveOperation>
+  ) => Promise<BoundReceiveOperation>
   readonly operationId: typeof createOperationID
   readonly workspaceId: typeof createWorkspaceID
   readonly repositoryReference: () => string
@@ -89,7 +89,7 @@ export interface WorkspaceArtifactAuthorityOptions {
 }
 
 /** Workspace has no click-time external authority, so readiness is immediate. */
-export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresentationAuthority {
+export class WorkspaceArtifactPresentationAuthority implements ArtifactPresentationAuthority {
   readonly ready = Promise.resolve()
   readonly #window: BrowserReceiveWindow
   readonly #choice: OfferedArtifactChoice['choice']
@@ -127,7 +127,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
     this.#dependencies = workspaceRouteDependencies(options.windowPort, options.dependencies)
   }
 
-  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+  async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     this.#claim()
     const action = this.#requireAction(input.action)
     const identity = this.#preparedIdentity ??= Object.freeze({
@@ -151,11 +151,11 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
   }
 
   async #performCommit(
-    input: V2RouteCommitInput,
+    input: RouteCommitInput,
     workspace: Awaited<ReturnType<typeof createWorkspaceBinding>>,
     operationId: string,
     attempt: WorkspaceCommitAttempt,
-  ): Promise<V2RouteCommitResult> {
+  ): Promise<RouteCommitResult> {
     input.signal.throwIfAborted()
     attempt.frozen = await input.freezeAtFence(Object.freeze({
       kind: 'workspace-binding',
@@ -244,7 +244,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
   async #requireDurableOwner(
     attempt: WorkspaceCommitAttempt,
     repository: WorkspaceActivationJournalRepository,
-    frozen: Awaited<ReturnType<V2RouteCommitInput['freezeAtFence']>>,
+    frozen: Awaited<ReturnType<RouteCommitInput['freezeAtFence']>>,
     namespace: OriginPrivateWorkspaceNamespace,
   ): Promise<WorkspaceOwnedActivationAuthority> {
     if (attempt.owner !== undefined) {
@@ -258,11 +258,11 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
   }
 
   async #handleCommitFailure(
-    input: V2RouteCommitInput,
+    input: RouteCommitInput,
     operationId: string,
     attempt: WorkspaceCommitAttempt,
     error: unknown,
-  ): Promise<V2RouteCommitResult> {
+  ): Promise<RouteCommitResult> {
     observeWorkspaceReservationFailure(this.#diagnostics, error)
     if (attempt.repository === undefined || attempt.frozen === undefined) {
       if (this.#canRetryPrecut(input.signal)) return this.#retryablePrecut(operationId)
@@ -287,7 +287,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
     throw error
   }
 
-  #retryablePrecut(operationId: string): V2RouteCommitResult {
+  #retryablePrecut(operationId: string): RouteCommitResult {
     this.#claimed = false
     return Object.freeze({ kind: 'retryable-precut', receiverOperationId: operationId })
   }
@@ -344,7 +344,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
 
 export function startWorkspaceArtifactAuthority(
   options: WorkspaceArtifactAuthorityOptions,
-): V2ArtifactPresentationAuthority {
+): ArtifactPresentationAuthority {
   return new WorkspaceArtifactPresentationAuthority(options)
 }
 

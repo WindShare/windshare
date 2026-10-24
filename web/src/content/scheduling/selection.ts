@@ -1,15 +1,15 @@
-import type { V2BlockDemand, V2BlockLane } from '../v2-lane-set'
+import type { BlockDemand, BlockLane } from '../lane-set'
 import type { BlockReceiveWindow } from './receive-window'
-import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
+import type { BlockRouteEligibility, BlockTransportRoute } from '../route-policy'
 import { LanePerformance } from './performance'
 import { LaneSampling } from './sampling'
 import { completionCost } from './completion'
 import { PROBE_INTERVAL_MILLISECONDS, isExploratoryDispatch, type DispatchPurpose } from './exploration'
 
 export interface ContentLane {
-  readonly lane: V2BlockLane
+  readonly lane: BlockLane
   readonly laneEpoch: number
-  readonly route: V2BlockTransportRoute
+  readonly route: BlockTransportRoute
   readonly performance: LanePerformance
   readonly sampling: LaneSampling
   readonly receive: BlockReceiveWindow
@@ -29,8 +29,8 @@ export interface ContentWork {
   readonly capacity?: ContentCapacity
   /** Newly assembled sealed-object bytes; not authenticated output or resumable coverage. */
   readonly onReceive?: (objectBytes: number) => void
-  readonly demand: V2BlockDemand
-  readonly routes: V2BlockRouteEligibility
+  readonly demand: BlockDemand
+  readonly routes: BlockRouteEligibility
   readonly signal: AbortSignal
   readonly priority: ContentPriority
   /** Zero identifies a consumer's output frontier; positive distance is bounded read-ahead. */
@@ -47,7 +47,7 @@ export type ContentSelection<T extends ContentWork> =
   | { readonly kind: 'probe-deadline'; readonly at: number }
   | { readonly kind: 'blocked' }
 
-export function demandBytes(demand: V2BlockDemand): number {
+export function demandBytes(demand: BlockDemand): number {
   const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
   return Number(range.end - range.start)
 }

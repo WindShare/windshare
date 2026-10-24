@@ -2,9 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { encodeTurnControl, decodeTurnControl, type TurnControl, type TurnGrant } from '../../src/protocol/turn-control'
 import { turnRTCConfiguration } from '../../src/connectivity/turn/rtc-configuration'
 import { TurnReceiver } from '../../src/connectivity/turn/receiver'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
-import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
-import { browserV2PeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
+import { createProtocolSessionIdentity } from '../../src/session/identities'
+import type { ReceiverSessionRuntime } from '../../src/session/runtime'
+import { browserPeerRecoveryClock } from '../../src/connectivity/peer-set/contract'
 import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import { readFileSync } from 'node:fs'
 
@@ -48,11 +48,11 @@ it('starts only for demand and replaces over surviving session control without r
   const opened: TurnGrant[] = []
   const retired: Uint8Array[] = []
   const session = {
-    protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
+    protocolSessionIdentity: createProtocolSessionIdentity(header.sessionId),
     subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
     sendTurnControl: async (body: Uint8Array) => { sent.push(decodeTurnControl(body)) },
-  } as unknown as V2ReceiverSessionRuntime
-  const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
+  } as unknown as ReceiverSessionRuntime
+  const receiver = new TurnReceiver({ session, clock: browserPeerRecoveryClock, enabled: () => true,
     open: (value) => opened.push(value), retire: async (path) => { retired.push(path) } })
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['unexpected'] }))
@@ -100,7 +100,7 @@ it('retries readiness and useful reports across a temporary control-lane failure
   let reportAttempts = 0
   let usefulBytes = 1024
   const session = {
-    protocolSessionIdentity: createV2ProtocolSessionIdentity(header.sessionId),
+    protocolSessionIdentity: createProtocolSessionIdentity(header.sessionId),
     subscribeTurnControls: (listener: typeof receive) => { receive = listener; return () => undefined },
     sendTurnControl: async (body: Uint8Array) => {
       const message = decodeTurnControl(body)
@@ -108,8 +108,8 @@ it('retries readiness and useful reports across a temporary control-lane failure
       if (message.kind === 'report' && ++reportAttempts === 1) throw new Error('control lane changed')
       sent.push(message)
     },
-  } as unknown as V2ReceiverSessionRuntime
-  const receiver = new TurnReceiver({ session, clock: browserV2PeerRecoveryClock, enabled: () => true,
+  } as unknown as ReceiverSessionRuntime
+  const receiver = new TurnReceiver({ session, clock: browserPeerRecoveryClock, enabled: () => true,
     open: () => undefined, retire: async () => undefined, measure: () => ({ usefulBytes, unhelpful: false, busyMilliseconds: 0, pendingBytes: 0 }) })
   receive(encodeTurnControl({ ...header, kind: 'available', profiles: ['primary'] }))
   receiver.setDemand(true)

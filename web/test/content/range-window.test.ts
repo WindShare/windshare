@@ -1,25 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { V2BlockBroker } from '../../src/content/v2-broker'
-import { V2LaneSet, type V2BlockDemand, type V2BlockReadObserver } from '../../src/content/v2-lane-set'
+import { BlockBroker } from '../../src/content/broker'
+import { LaneSet, type BlockDemand, type BlockReadObserver } from '../../src/content/lane-set'
 import { FileGeometry } from '../../src/content/geometry'
-import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import type { V2BlockRouteEligibility } from '../../src/content/v2-route-policy'
+import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
+import type { BlockRouteEligibility } from '../../src/content/route-policy'
 
 const BLOCK_BYTES = 1024
 const BLOCKS = 16
-const routes: V2BlockRouteEligibility = {
+const routes: BlockRouteEligibility = {
   active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
 }
-const descriptor: V2FileRevisionDescriptor = {
+const descriptor: FileRevisionDescriptor = {
   shareInstance: new Uint8Array(16), shareInstanceId: 'share', fileId: new Uint8Array(16), fileIdText: 'file',
   fileRevision: new Uint8Array(16), fileRevisionText: 'revision', exactSize: BigInt(BLOCK_BYTES * BLOCKS),
   geometry: new FileGeometry(BigInt(BLOCK_BYTES * BLOCKS), BigInt(BLOCK_BYTES)),
 }
 class ControlledLane {
   readonly id = 1
-  readonly calls: V2BlockDemand[] = []
+  readonly calls: BlockDemand[] = []
   readonly active = new Map<string, () => void>()
-  fetchBlock(input: V2BlockDemand, signal: AbortSignal, observer?: V2BlockReadObserver): Promise<V2BlockRecord> {
+  fetchBlock(input: BlockDemand, signal: AbortSignal, observer?: BlockReadObserver): Promise<BlockRecord> {
     this.calls.push(input)
     observer?.received(BLOCK_BYTES)
     const key = this.key(input.descriptor.fileIdText, input.localBlockIndex)
@@ -45,12 +45,12 @@ async function microtasks(): Promise<void> {
 }
 function setup(bufferBlocks: number) {
   const lane = new ControlledLane()
-  const lanes = new V2LaneSet()
+  const lanes = new LaneSet()
   lanes.add(lane, 'direct')
-  const broker = new V2BlockBroker(lanes, { maximumRangeBufferBytes: BLOCK_BYTES * bufferBlocks })
+  const broker = new BlockBroker(lanes, { maximumRangeBufferBytes: BLOCK_BYTES * bufferBlocks })
   return { lane, lanes, broker }
 }
-function range(broker: V2BlockBroker, signal: AbortSignal, file = descriptor) {
+function range(broker: BlockBroker, signal: AbortSignal, file = descriptor) {
   return broker.readRouteAuthorizedRange(file, new Uint8Array(16), { start: 0n, end: file.exactSize },
     { routes, signal, maximumParallel: 2 })
 }

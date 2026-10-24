@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
-import type { V2BrowseRow, V2Breadcrumb, V2ReceiverSnapshot } from '../v2-model'
-import { formatBytes } from '../v2-progress-presentation'
+import type { BrowseRow, Breadcrumb, ReceiverSnapshot } from '../model'
+import { formatBytes } from '../progress-presentation'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 
 export interface ExplorerActions {
@@ -16,7 +16,7 @@ export interface ExplorerActions {
   readonly retry: () => void
 }
 
-function SelectionCheckbox({ row, toggle, active }: { readonly row: V2BrowseRow; readonly toggle: () => void; readonly active: boolean }) {
+function SelectionCheckbox({ row, toggle, active }: { readonly row: BrowseRow; readonly toggle: () => void; readonly active: boolean }) {
   const input = useRef<HTMLInputElement>(null)
   const mixed = active && row.selection === 'mixed'
   const checked = active && row.selection === 'selected'
@@ -26,14 +26,14 @@ function SelectionCheckbox({ row, toggle, active }: { readonly row: V2BrowseRow;
     onChange={toggle} /></label>
 }
 
-function entrySize(row: V2BrowseRow): string {
+function entrySize(row: BrowseRow): string {
   return row.expectedSize === undefined ? 'Size unknown' : formatBytes(row.expectedSize)
 }
 
 const IMAGE_FILENAME = /\.(?:avif|gif|heic|heif|jpe?g|png|svg|webp)$/iu
 const VIDEO_FILENAME = /\.(?:m4v|mkv|mov|mp4|webm)$/iu
 
-function entryIcon(row: V2BrowseRow): ReceiverIconName {
+function entryIcon(row: BrowseRow): ReceiverIconName {
   if (row.kind === 'directory') return 'folder'
   // Filename decoration never grants preview support or establishes a media type.
   if (IMAGE_FILENAME.test(row.name)) return 'image'
@@ -42,13 +42,13 @@ function entryIcon(row: V2BrowseRow): ReceiverIconName {
 }
 
 export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount, browse, draft, actions }: {
-  readonly rows: readonly V2BrowseRow[]
-  readonly breadcrumbs: readonly V2Breadcrumb[]
+  readonly rows: readonly BrowseRow[]
+  readonly breadcrumbs: readonly Breadcrumb[]
   readonly pageIndex: number
   readonly pageCount: number
   readonly omittedCount: bigint
-  readonly browse: V2ReceiverSnapshot['browse']
-  readonly draft: V2ReceiverSnapshot['draft']
+  readonly browse: ReceiverSnapshot['browse']
+  readonly draft: ReceiverSnapshot['draft']
   readonly actions: ExplorerActions
 }) {
   return <section className="explorer" aria-label="Shared files" aria-busy={browse.kind === 'loading'}>

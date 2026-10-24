@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from 'react'
 import './App.css'
-import { V2ReceiverApp } from './ui/V2ReceiverApp'
+import { ReceiverApp } from './ui/ReceiverApp'
 import { PortalApp } from './ui/portal/PortalApp'
-import type { V2ReceiverController } from './ui/v2-controller'
+import type { ReceiverController } from './ui/controller'
 
 export interface AppProps {
-  readonly controller: V2ReceiverController
+  readonly controller: ReceiverController
 }
 
 export default function App({ controller }: AppProps) {
@@ -23,7 +23,7 @@ export default function App({ controller }: AppProps) {
     (snapshot.phase === 'failed' && snapshot.error !== null)
 
   if (isReceivingShare) {
-    return <V2ReceiverApp controller={controller} />
+    return <ReceiverApp controller={controller} />
   }
 
   return <PortalApp controller={controller} />

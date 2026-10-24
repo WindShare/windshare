@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { PeerChannel, PeerPathRoute } from '../../src/connectivity/peer-channel'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2BlockBroker, V2LaneSet, type V2BlockDemand } from '../../src/content/v2-broker'
-import type { V2BlockSchedulingObservation } from '../../src/content/v2-lane-set'
+import { BlockBroker, LaneSet, type BlockDemand } from '../../src/content/broker'
+import type { BlockSchedulingObservation } from '../../src/content/lane-set'
 import {
   HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
   HOT_SWITCH_TRANSFER_BLOCKS,
@@ -19,11 +19,11 @@ import {
 import { parseLocalTurnReadyRecord } from '../../e2e/fixtures/local-turn-server'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
 import { createCapabilityRedactor } from '../../e2e/fixtures/capability-redactor'
-import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
+import { normalizeFileTransferFailure } from '../../src/transfer/job/failures'
 
 describe('direct weekly network fixtures', () => {
   it('retains terminal exception evidence when the event prefix exceeds the diagnostic bound', () => {
-    const normalized = normalizeV2FileTransferFailure(new Error('physical socket failed', {
+    const normalized = normalizeFileTransferFailure(new Error('physical socket failed', {
       cause: new Error('connection reset'),
     }))
     if (normalized.kind !== 'fault') throw new Error('Expected a classified fixture failure')
@@ -71,15 +71,15 @@ describe('direct weekly network fixtures', () => {
       fileRevision: new Uint8Array(16), fileRevisionText: 'revision',
       exactSize, geometry: new FileGeometry(exactSize, BigInt(blockBytes)),
     }
-    const fetchBlock = async (demand: V2BlockDemand) => {
+    const fetchBlock = async (demand: BlockDemand) => {
       // A physical channel delivers its reply in a later task, after queued output microtasks.
       await new Promise<void>(resolve => setTimeout(resolve, 1))
       return { descriptor, localBlockIndex: demand.localBlockIndex, data: new Uint8Array(blockBytes) }
     }
-    const dispatches: V2BlockSchedulingObservation[] = []
-    const lanes = new V2LaneSet({ onBlockScheduled: observation => dispatches.push(observation) })
+    const dispatches: BlockSchedulingObservation[] = []
+    const lanes = new LaneSet({ onBlockScheduled: observation => dispatches.push(observation) })
     lanes.add({ id: 1, fetchBlock }, 'application-relay')
-    const broker = new V2BlockBroker(lanes)
+    const broker = new BlockBroker(lanes)
     const fence = new OutputFence(relay === 'healthy')
     let writtenBytes = 0
     const transfer = (async () => {

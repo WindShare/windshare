@@ -29,11 +29,11 @@ import type {
 import type { SelectionProjectionState } from '../../transfer/projection'
 import type { TransferJobResult } from '../../transfer/job/contract'
 import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/persistent-file-transaction'
-import type { V2AuthorityActivationSnapshot } from './activation/model'
-import { type V2ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
-import type { V2DirectZipProgressSnapshot } from './contracts'
+import type { AuthorityActivationSnapshot } from './activation/model'
+import { type ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
+import type { DirectZipProgressSnapshot } from './contracts'
 
-const INACTIVE_ACTIVATION: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
+const INACTIVE_ACTIVATION: AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
 
 export interface ReceiveRuntimeSnapshot {
   readonly transferResult: TransferResultProjection | null
@@ -41,7 +41,7 @@ export interface ReceiveRuntimeSnapshot {
   readonly projectionRevision: number | null
   readonly projection: SelectionProjectionState | null
   readonly offers: ArtifactOffers | null
-  readonly activation: V2AuthorityActivationSnapshot
+  readonly activation: AuthorityActivationSnapshot
   readonly chosenChoice: ArtifactChoice | null
   readonly chosenSizeProjection: ArtifactSizeProjection | null
   readonly resolvedArtifact: ArtifactSpec | null
@@ -52,10 +52,10 @@ export interface ReceiveRuntimeSnapshot {
   readonly recoverySummary: RecoverySummary | null
   readonly writerOpenPause: PersistentWriterOpenPauseFact | null
   readonly workspaceUsage: WorkspaceUsage | null
-  readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly activeControls: readonly ActiveReceiveControl[]
   readonly receiveInterruption: ReceiveSettlementWait | null
-  readonly browserFolderProgress?: import('./contracts').V2BrowserFolderProgressSnapshot | null
-  readonly directZipProgress: V2DirectZipProgressSnapshot | null
+  readonly browserFolderProgress?: import('./contracts').BrowserFolderProgressSnapshot | null
+  readonly directZipProgress: DirectZipProgressSnapshot | null
 }
 
 export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
@@ -129,7 +129,7 @@ export class ReceiveRuntimeState {
     return true
   }
 
-  updateActivation(activation: V2AuthorityActivationSnapshot): void {
+  updateActivation(activation: AuthorityActivationSnapshot): void {
     const previous = this.#snapshot.activation
     if (activationOwnsChoice(activation)) {
       const activationChanged = !activationOwnsChoice(previous) ||
@@ -174,7 +174,7 @@ export class ReceiveRuntimeState {
     intent: ReceiveIntent,
     lifecycle?: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
-    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     return this.adoptReceiveIntentAtomically(
@@ -194,7 +194,7 @@ export class ReceiveRuntimeState {
     commitOwnership: () => void,
     lifecycle?: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
-    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     const activation = this.#snapshot.activation
@@ -229,7 +229,7 @@ export class ReceiveRuntimeState {
     intent: ReceiveIntent,
     lifecycle: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
-    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary,
   ): void {
     this.adoptRetainedReceiveIntentAtomically(
@@ -247,7 +247,7 @@ export class ReceiveRuntimeState {
     lifecycle: ReceiveLifecycleState,
     commitOwnership: () => void,
     workspaceUsage?: WorkspaceUsage | null,
-    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary,
   ): void {
     if (lifecycle.operationId !== intent.operationId ||
@@ -292,7 +292,7 @@ export class ReceiveRuntimeState {
   settleLifecycle(
     state: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
-    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary | null,
     recoverySummary?: RecoverySummary | null,
   ): boolean {
@@ -318,7 +318,7 @@ export class ReceiveRuntimeState {
     return true
   }
 
-  updateActiveControls(controls: readonly V2ActiveReceiveControl[]): boolean {
+  updateActiveControls(controls: readonly ActiveReceiveControl[]): boolean {
     const lifecycle = this.#snapshot.lifecycle
     if (lifecycle === null) return false
     this.#publishLifecycleSnapshot({
@@ -338,7 +338,7 @@ export class ReceiveRuntimeState {
     return true
   }
 
-  updateBrowserFolderProgress(progress: import('./contracts').V2BrowserFolderProgressSnapshot): boolean {
+  updateBrowserFolderProgress(progress: import('./contracts').BrowserFolderProgressSnapshot): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || intent.plan.kind !== 'direct-tree' ||
         progress.operationId !== intent.operationId ||
@@ -352,7 +352,7 @@ export class ReceiveRuntimeState {
     return true
   }
 
-  updateDirectZipProgress(progress: V2DirectZipProgressSnapshot): boolean {
+  updateDirectZipProgress(progress: DirectZipProgressSnapshot): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || intent.plan.kind !== 'direct-resumable-zip' ||
         progress.operationId !== intent.operationId) return false
@@ -505,7 +505,7 @@ function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPau
   })
 }
 
-function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
+function requireDirectZipProgress(progress: DirectZipProgressSnapshot): void {
   if (progress.operationId.length === 0 || progress.generation < 0n ||
       progress.receivedSelectedBytes < 0n || progress.writtenSelectedBytes < 0n ||
       progress.safeResumeBytes < 0n || progress.safeResumeBytes > progress.writtenSelectedBytes ||
@@ -623,7 +623,7 @@ function sameLogicalPath(
 }
 
 function resolvedActionFromActivation(
-  activation: V2AuthorityActivationSnapshot,
+  activation: AuthorityActivationSnapshot,
 ): ResolvedArtifactAction | null {
   switch (activation.kind) {
     case 'waiting-authority':

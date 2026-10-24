@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2BlockRangeReader } from '../../src/content/v2-broker'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { BlockRangeReader } from '../../src/content/broker'
 import {
   catalogFixture,
   directoryEntry,
@@ -110,14 +110,14 @@ describe('v2 cancellation settlement', () => {
   }) => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const secondBlockStarted = deferred()
     const releaseSecondBlock = deferred()
     const pauseStarted = deferred()
     const releasePause = deferred()
     const readers = readerFixture([file])
-    const broker: V2BlockRangeReader = {
+    const broker: BlockRangeReader = {
       readRange: async function* (descriptor, leaseId, range, request) {
         for await (const slice of readers.broker.readRange(descriptor, leaseId, range, request)) {
           const firstBlockBytes = Number(descriptor.geometry.blockSize)
@@ -189,7 +189,7 @@ describe('v2 cancellation settlement', () => {
   it('cancels Portable ZIP discovery before preparation can acquire output authority', async () => {
     const root = identity(2)
     const child = identity(3)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const childReplayStarted = deferred()
     const releaseChildReplay = deferred()
     const catalog = catalogFixture([

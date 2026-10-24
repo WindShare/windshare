@@ -25,9 +25,9 @@ import type {
 } from '../../transfer/output/session'
 import type { SuccessfulTransferWorkerSettlement } from '../../transfer/outcome'
 import type {
-  V2PortableOriginalExecutionRoute,
-  V2PortableZipExecutionRoute,
-} from '../../transfer/settlement/v2-plan-authority'
+  PortableOriginalExecutionRoute,
+  PortableZipExecutionRoute,
+} from '../../transfer/settlement/plan-authority'
 import type {
   PreparationAdmissionReason,
   ReceiveLifecycleState,
@@ -128,8 +128,8 @@ export interface PortableExecutionRoutePorts {
 }
 
 export interface PortableExecutionRoutes {
-  readonly portableOriginal?: V2PortableOriginalExecutionRoute
-  readonly portableZip?: V2PortableZipExecutionRoute
+  readonly portableOriginal?: PortableOriginalExecutionRoute
+  readonly portableZip?: PortableZipExecutionRoute
 }
 
 /**
@@ -144,18 +144,18 @@ export function createPortableExecutionRoutes(
   assertRuntimePorts(ports)
   if (!ports.environment.handoffTarget.supportsPortableArtifact) return Object.freeze({})
 
-  const portableOriginal: V2PortableOriginalExecutionRoute = Object.freeze({
+  const portableOriginal: PortableOriginalExecutionRoute = Object.freeze({
     prepare: (
-      intent: Parameters<V2PortableOriginalExecutionRoute['prepare']>[0],
+      intent: Parameters<PortableOriginalExecutionRoute['prepare']>[0],
       evidence: ExactPreparationEvidence,
       signal: AbortSignal,
     ) => preparePortableOriginal(intent, evidence, signal, ports),
   })
   if (ports.createZipSpool === undefined) return Object.freeze({ portableOriginal })
 
-  const portableZip: V2PortableZipExecutionRoute = Object.freeze({
+  const portableZip: PortableZipExecutionRoute = Object.freeze({
     prepare: (
-      intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+      intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
       evidence: ExactPreparationEvidence,
       signal: AbortSignal,
     ) => preparePortableZip(intent, evidence, signal, ports),
@@ -164,7 +164,7 @@ export function createPortableExecutionRoutes(
 }
 
 async function preparePortableOriginal(
-  intent: Parameters<V2PortableOriginalExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableOriginalExecutionRoute['prepare']>[0],
   evidence: ExactPreparationEvidence,
   signal: AbortSignal,
   ports: PortableExecutionRoutePorts,
@@ -218,7 +218,7 @@ async function preparePortableOriginal(
 }
 
 async function preparePortableZip(
-  intent: Parameters<V2PortableZipExecutionRoute['prepare']>[0],
+  intent: Parameters<PortableZipExecutionRoute['prepare']>[0],
   evidence: ExactPreparationEvidence,
   signal: AbortSignal,
   ports: PortableExecutionRoutePorts,

@@ -1,8 +1,8 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
-import type { V2CatalogClient } from '../../catalog/v2-client'
-import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
-import type { V2CatalogEntry, V2ShareDescriptor } from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { CatalogClient } from '../../catalog/client'
+import type { CommittedDirectory } from '../../catalog/page-store'
+import type { CatalogEntry, ShareDescriptor } from '../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import { artifactDirectoryPath, artifactFilePath } from '../job/artifact-path'
 import type { AuthenticatedDirectory, PendingFile } from '../job/contract'
@@ -21,23 +21,23 @@ import type {
 const TEXT_ENCODER = new TextEncoder()
 
 interface CatalogFrontierEntry {
-  readonly entry: V2CatalogEntry
-  readonly parent: V2CommittedDirectory
+  readonly entry: CatalogEntry
+  readonly parent: CommittedDirectory
   readonly sourcePath: readonly string[]
   readonly artifactPath: readonly string[] | undefined
   readonly ancestry: readonly string[]
-  readonly iterator: AsyncIterator<V2CatalogEntry>
+  readonly iterator: AsyncIterator<CatalogEntry>
 }
 
 interface ResolvedCatalogCandidate {
   readonly member?: DirectZipOrderedMemberV1
-  readonly child?: V2CommittedDirectory
+  readonly child?: CommittedDirectory
 }
 
 export interface DirectZipCatalogSourceOptionsV1 {
-  readonly catalog: Pick<V2CatalogClient, 'loadDirectory' | 'entries'>
-  readonly descriptor: V2ShareDescriptor
-  readonly selection: V2FrozenSelectionPolicy
+  readonly catalog: Pick<CatalogClient, 'loadDirectory' | 'entries'>
+  readonly descriptor: ShareDescriptor
+  readonly selection: FrozenSelectionPolicy
   readonly intent: DirectZipIntent
   readonly maximumNodeClaims: number
 }
@@ -51,7 +51,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
   readonly #selectedRuleIds: Set<string>
   readonly #observedSelectedRuleIds = new Set<string>()
   readonly #claimedNodeIds = new Set<string>()
-  #root: V2CommittedDirectory | undefined
+  #root: CommittedDirectory | undefined
 
   constructor(options: DirectZipCatalogSourceOptionsV1) {
     if (!Number.isSafeInteger(options.maximumNodeClaims) || options.maximumNodeClaims <= 0) {
@@ -130,7 +130,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
       return Object.freeze({ member: this.#fileMember(candidate) })
     }
 
-    let child: V2CommittedDirectory | undefined
+    let child: CommittedDirectory | undefined
     if (this.#options.selection.shouldDiscover(candidate.entry.idText, candidate.ancestry)) {
       child = await this.#loadDirectory(candidate.entry, signal)
     }
@@ -143,7 +143,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
     return member === undefined ? Object.freeze({ child }) : Object.freeze({ child, member })
   }
 
-  async #loadRoot(signal: AbortSignal): Promise<V2CommittedDirectory> {
+  async #loadRoot(signal: AbortSignal): Promise<CommittedDirectory> {
     if (this.#root !== undefined) return this.#root
     const committed = await this.#options.catalog.loadDirectory(
       this.#options.descriptor.syntheticRoot,
@@ -159,9 +159,9 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
   }
 
   async #loadDirectory(
-    entry: Extract<V2CatalogEntry, { readonly kind: 'directory' }>,
+    entry: Extract<CatalogEntry, { readonly kind: 'directory' }>,
     signal: AbortSignal,
-  ): Promise<V2CommittedDirectory> {
+  ): Promise<CommittedDirectory> {
     this.#claim(entry.idText)
     const committed = await this.#options.catalog.loadDirectory(entry.id, { signal })
     requireCommittedDirectory(committed, entry.id)
@@ -180,7 +180,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
 
   async #pushFirst(
     frontier: CatalogFrontierEntry[],
-    parent: V2CommittedDirectory,
+    parent: CommittedDirectory,
     parentPath: readonly string[],
     ancestry: readonly string[],
     signal: AbortSignal,
@@ -213,11 +213,11 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
   }
 
   #candidate(
-    entry: V2CatalogEntry,
-    parent: V2CommittedDirectory,
+    entry: CatalogEntry,
+    parent: CommittedDirectory,
     parentPath: readonly string[],
     ancestry: readonly string[],
-    iterator: AsyncIterator<V2CatalogEntry>,
+    iterator: AsyncIterator<CatalogEntry>,
   ): CatalogFrontierEntry {
     const sourcePath = snapshotPortableCatalogPath([...parentPath, entry.name])
     const artifactPath = projectedArtifactPath(this.#options.intent, sourcePath, entry.kind)
@@ -226,7 +226,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
 
   #directoryMember(
     candidate: CatalogFrontierEntry,
-    committed: V2CommittedDirectory,
+    committed: CommittedDirectory,
   ): Extract<DirectZipOrderedMemberV1, { kind: 'directory' }> | undefined {
     if (candidate.entry.kind !== 'directory') {
       throw new TypeError('direct ZIP directory candidate changed kind')
@@ -293,7 +293,7 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
   }
 }
 
-function requireCommittedDirectory(directory: V2CommittedDirectory, expectedId: Uint8Array): void {
+function requireCommittedDirectory(directory: CommittedDirectory, expectedId: Uint8Array): void {
   if (!equalBytes(directory.directoryId, expectedId) || directory.omittedCount !== 0n ||
       directory.generation.byteLength !== 16 || directory.generation.every(byte => byte === 0)) {
     throw new Error('direct ZIP catalog generation lost authenticated directory authority')
@@ -333,7 +333,7 @@ const EMPTY_PATH: readonly string[] = Object.freeze([])
 function projectedArtifactPath(
   intent: DirectZipIntent,
   sourcePath: readonly string[],
-  kind: V2CatalogEntry['kind'],
+  kind: CatalogEntry['kind'],
 ): readonly string[] | undefined {
   const anchor = intent.artifact.layout.anchor
   if (anchor.kind === 'directory') {

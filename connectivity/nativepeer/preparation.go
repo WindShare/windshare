@@ -8,10 +8,10 @@ import (
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/turncapacity"
 	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 // PreparedAttempt owns an admitted application opportunity. Separation from Start
@@ -166,7 +166,7 @@ func (p *PreparedAttempt) release() {
 	permit.release()
 }
 
-// Close abandons a preparation which has not transferred to a provider.
+// Close abandons a preparation which has not transferred to a pionpeer.
 // Once Start succeeds, provider close or authenticated lane admission settles it.
 func (p *PreparedAttempt) Close() {
 	if p == nil {
@@ -199,7 +199,7 @@ func (p *PreparedAttempt) abort() {
 	p.Close()
 	<-p.done
 }
-func (p *PreparedAttempt) Start(ctx context.Context) (*provider.Connection, error) {
+func (p *PreparedAttempt) Start(ctx context.Context) (*pionpeer.Connection, error) {
 	if p == nil || ctx == nil {
 		return nil, ErrAdmission
 	}
@@ -218,7 +218,7 @@ func (p *PreparedAttempt) Start(ctx context.Context) (*provider.Connection, erro
 	go func() { <-p.ctx.Done(); _ = connection.Close() }()
 	return connection, nil
 }
-func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, error) {
+func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, error) {
 	n := p.native
 	n.mu.Lock()
 	path := p.path
@@ -249,7 +249,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 	if !now.Before(path.remoteProfileExpires) {
 		remoteProfile = ""
 	}
-	capability := provider.Capabilities(remoteProfile)
+	capability := pionpeer.Capabilities(remoteProfile)
 	if capability.IPv4 || capability.IPv6 {
 		_ = path.lease.PrepareTCP(capability.IPv6)
 	}
@@ -266,14 +266,14 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*provider.Connection, er
 		n.mu.Unlock()
 		return nil, err
 	}
-	config := provider.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
+	config := pionpeer.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
 		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
 		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile, OnTURNRecovery: p.request.OnTURNRecovery}
 	if p.turn != nil {
-		config.TURN = &provider.TURNConfig{Plan: p.turnPlan, Reservation: p.turn}
+		config.TURN = &pionpeer.TURNConfig{Plan: p.turnPlan, Reservation: p.turn}
 	}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding, now)
-	config.Observe = func(event provider.Event) {
+	config.Observe = func(event pionpeer.Event) {
 		observer(event)
 		if event.Milestone == "provider_closed" {
 			p.finish()

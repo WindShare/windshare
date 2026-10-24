@@ -1,5 +1,5 @@
 import {
-  V2OutputPausedError,
+  OutputPausedError,
   type PendingFile,
 } from './contract'
 import {
@@ -106,13 +106,13 @@ export class AsyncBoundedQueue<T> {
     this.#validateWeight(weight)
     while (!this.#closed && !this.#canAdmit(weight)) await this.#wait(signal)
     signal.throwIfAborted()
-    if (this.#closed) throw this.#failure ?? new V2OutputPausedError('Transfer queue is closed')
+    if (this.#closed) throw this.#failure ?? new OutputPausedError('Transfer queue is closed')
     this.#admit(item, weight)
   }
 
   tryPush(item: T, signal: AbortSignal): boolean {
     signal.throwIfAborted()
-    if (this.#closed) throw this.#failure ?? new V2OutputPausedError('Transfer queue is closed')
+    if (this.#closed) throw this.#failure ?? new OutputPausedError('Transfer queue is closed')
     const weight = this.#weight(item)
     this.#validateWeight(weight)
     if (!this.#canAdmit(weight)) return false
@@ -165,7 +165,7 @@ export class AsyncBoundedQueue<T> {
 
   #validateWeight(weight: bigint): void {
     if (weight < 0n || weight > this.#maximumBytes) {
-      throw new V2OutputPausedError('Transfer queue item exceeds its byte admission')
+      throw new OutputPausedError('Transfer queue item exceeds its byte admission')
     }
   }
 

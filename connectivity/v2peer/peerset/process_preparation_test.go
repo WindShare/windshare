@@ -10,26 +10,26 @@ import (
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t *testing.T) {
 	clock := newClock()
 	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{Now: clock.Now})
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
-	captured := make(chan provider.AttemptConfig, 8)
+	captured := make(chan pionpeer.AttemptConfig, 8)
 	native := newTestNative(t, nativepeer.Config{Admission: gate, Now: clock.Now, Pool: &pool, Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
 		Reachability: reachability.New(reachability.Config{Now: clock.Now}), ObservationCapacity: 64,
-		Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
+		Connect: func(config pion.Configuration, request pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
 			captured <- request
-			return provider.NewPeerConnection(config, request)
+			return pionpeer.NewPeerConnection(config, request)
 		}})
 	// The test context is canceled before cleanup joins outstanding preparations.
 	t.Cleanup(func() { _ = native.Close(context.Background()) })
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
-	var blockers []*provider.Connection
+	var blockers []*pionpeer.Connection
 	for i := byte(1); i <= nativepeer.ConcurrentAttempts; i++ {
 		pc, err := native.NewPeerConnection(context.Background(), nativepeer.AttemptRequest{ProtocolSessionID: [16]byte{i}, Binding: binding})
 		if err != nil {

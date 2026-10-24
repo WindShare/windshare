@@ -13,8 +13,8 @@ import {
   AuthorityPlanningPipeline,
   planningSubject,
 } from '../../src/application/receive/activation/planning'
-import type { V2ActiveProjection } from '../../src/application/receive/discovery'
-import type { V2JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import type { ActiveProjection } from '../../src/application/receive/discovery'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
   COMPLETE_DISCOVERY,
   projection,
@@ -35,7 +35,7 @@ describe('authority planning pipeline', () => {
     const fixture = await planningFixture(false)
     const planning: Deferred<ArtifactOffers>[] = []
     const applied: number[] = []
-    let current: V2ActiveProjection | undefined
+    let current: ActiveProjection | undefined
     const pipeline = new AuthorityPlanningPipeline({
       currentProjection: () => current,
       offersApplied: request => { applied.push(request.revision) },
@@ -66,7 +66,7 @@ describe('authority planning pipeline', () => {
     const fixture = await planningFixture(false)
     const reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[] = []
     const applied: number[] = []
-    let current: V2ActiveProjection | undefined
+    let current: ActiveProjection | undefined
     const pipeline = new AuthorityPlanningPipeline({
       currentProjection: () => current,
       offersApplied: () => undefined,
@@ -98,7 +98,7 @@ describe('authority planning pipeline', () => {
       const fixture = await planningFixture(true)
       const reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[] = []
       const failures: unknown[] = []
-      let current: V2ActiveProjection | undefined
+      let current: ActiveProjection | undefined
       const pipeline = new AuthorityPlanningPipeline({
         currentProjection: () => current,
         offersApplied: () => undefined,
@@ -146,7 +146,7 @@ describe('authority planning pipeline', () => {
       const fixture = await planningFixture(true)
       const reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[] = []
       const failures: unknown[] = []
-      let current: V2ActiveProjection | undefined
+      let current: ActiveProjection | undefined
       const pipeline = new AuthorityPlanningPipeline({
         currentProjection: () => current,
         offersApplied: () => undefined,
@@ -191,7 +191,7 @@ describe('authority planning pipeline', () => {
     const fixture = await planningFixture(true)
     const reconciliation: Deferred<ArtifactChoiceReconcileOutcome>[] = []
     const failures: unknown[] = []
-    let current: V2ActiveProjection | undefined
+    let current: ActiveProjection | undefined
     const pipeline = new AuthorityPlanningPipeline({
       currentProjection: () => current,
       offersApplied: () => undefined,
@@ -235,7 +235,7 @@ async function planningFixture(sameEpoch: boolean) {
     syntheticRoot: joined.descriptor.syntheticRootId,
     rules: { mode: 'node-id', defaultSelected: true, rules: [] },
   })
-  const active: V2ActiveProjection[] = []
+  const active: ActiveProjection[] = []
   const offers: ArtifactOffers[] = []
   for (let index = 0; index < 3; index += 1) {
     const projected = projection(
@@ -250,7 +250,7 @@ async function planningFixture(sameEpoch: boolean) {
     })
     active.push({
       revision: index + 1,
-      joined: joined as unknown as V2JoinedBrowserShare,
+      joined: joined as unknown as JoinedBrowserShare,
       selection,
       frozenSelection: joined.selection.snapshot(),
       epoch: projected.epoch,
@@ -276,7 +276,7 @@ async function planningFixture(sameEpoch: boolean) {
 }
 
 function observation(
-  active: V2ActiveProjection,
+  active: ActiveProjection,
   resolvedArtifactDigest: string | null,
 ): ArtifactChoiceReconcileOutcome {
   return Object.freeze({

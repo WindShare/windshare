@@ -5,16 +5,16 @@ import {
 } from '../../security/capability-redactor'
 import { formatDiagnosticValue } from '../../security/diagnostic-formatter'
 
-export type V2SecurityMilestone = 'location-cleared' | 'key-cleared'
+export type SecurityMilestone = 'location-cleared' | 'key-cleared'
 
-export type V2DiagnosticFormatter = (
+export type DiagnosticFormatter = (
   error: unknown,
   redactor: CapabilityRedactor | undefined,
 ) => string
 
-export interface V2CapabilityLifecycleOptions {
-  readonly diagnosticFormatter?: V2DiagnosticFormatter
-  readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
+export interface CapabilityLifecycleOptions {
+  readonly diagnosticFormatter?: DiagnosticFormatter
+  readonly onSecurityMilestone?: (milestone: SecurityMilestone) => void
 }
 
 /**
@@ -22,7 +22,7 @@ export interface V2CapabilityLifecycleOptions {
  * Keeping handoff and release here prevents controller branches from retaining
  * another copy while an asynchronous gateway failure is being formatted.
  */
-export interface V2CapabilityJoinLease {
+export interface CapabilityJoinLease {
   readonly activate: () => void
   readonly handoff: <T>(operation: (input: string) => T) => T
   readonly publicError: (error: unknown) => string
@@ -34,17 +34,17 @@ export interface V2CapabilityJoinLease {
  * receiver instance. The controller delegates this boundary so navigation and
  * transfer orchestration cannot accidentally reintroduce secret retention.
  */
-export class V2CapabilityInputLifecycle {
-  readonly #diagnosticFormatter: V2DiagnosticFormatter
-  readonly #onSecurityMilestone: ((milestone: V2SecurityMilestone) => void) | undefined
+export class CapabilityInputLifecycle {
+  readonly #diagnosticFormatter: DiagnosticFormatter
+  readonly #onSecurityMilestone: ((milestone: SecurityMilestone) => void) | undefined
   #redactor: CapabilityRedactor | undefined
 
-  constructor(options: V2CapabilityLifecycleOptions = {}) {
-    this.#diagnosticFormatter = options.diagnosticFormatter ?? formatV2PublicError
+  constructor(options: CapabilityLifecycleOptions = {}) {
+    this.#diagnosticFormatter = options.diagnosticFormatter ?? formatPublicError
     this.#onSecurityMilestone = options.onSecurityMilestone
   }
 
-  beginJoin(input: string, pageUrl: string): V2CapabilityJoinLease {
+  beginJoin(input: string, pageUrl: string): CapabilityJoinLease {
     const redactor = createCapabilityRedactor(
       capabilityRedactionValuesFromInput(input, pageUrl),
     )
@@ -60,7 +60,7 @@ export class V2CapabilityInputLifecycle {
     return this.#format(error, this.#redactor)
   }
 
-  notify(milestone: V2SecurityMilestone): void {
+  notify(milestone: SecurityMilestone): void {
     notifySecurityMilestone(this.#onSecurityMilestone, milestone)
   }
 
@@ -81,7 +81,7 @@ export class V2CapabilityInputLifecycle {
   }
 }
 
-class OwnedCapabilityJoinLease implements V2CapabilityJoinLease {
+class OwnedCapabilityJoinLease implements CapabilityJoinLease {
   #input: string | undefined
   readonly #redactor: CapabilityRedactor
   readonly #activateOwner: (redactor: CapabilityRedactor) => void
@@ -126,7 +126,7 @@ class OwnedCapabilityJoinLease implements V2CapabilityJoinLease {
   }
 }
 
-export function formatV2PublicError(
+export function formatPublicError(
   error: unknown,
   redactor: CapabilityRedactor | undefined,
 ): string {
@@ -155,7 +155,7 @@ function diagnosticMessageFromDetached(value: unknown): string | undefined {
   return undefined
 }
 
-function notifySecurityMilestone<Milestone extends V2SecurityMilestone>(
+function notifySecurityMilestone<Milestone extends SecurityMilestone>(
   observer: ((milestone: Milestone) => void) | undefined,
   milestone: Milestone,
 ): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import {
   createDirectResumableZipPlan, createFSAOwnedFileBinding, createReceiveIntent,
   type ReceiveIntent,
@@ -8,9 +8,9 @@ import {
   TransferPauseRequestedError, type DirectResumableZipExecution,
 } from '../../src/transfer/output/session'
 import {
-  createV2PlanExecutionAuthority,
-  type V2PlanExecutionRouteRegistry,
-} from '../../src/transfer/settlement/v2-plan-authority'
+  createPlanExecutionAuthority,
+  type PlanExecutionRouteRegistry,
+} from '../../src/transfer/settlement/plan-authority'
 import { deferred } from './settlement-deadline'
 import {
   catalogFixture, digestIdentity, fileEntry, identity, identityText, planAuthorityFixture, readerFixture,
@@ -96,7 +96,7 @@ describe('production execution handoff cancellation', () => {
 async function fixture(route: typeof ROUTES[number], rejectPreparation = false) {
   const file = fileEntry(identity(11), 'payload.bin', 4n)
   const selection = route.artifactKind === 'original-file'
-    ? selectOnlyFile(file) : new V2SelectionPolicy(true)
+    ? selectOnlyFile(file) : new SelectionPolicy(true)
   const seed = await receiveIntentFixture({
     ...route, planKind: route.planKind === 'direct-resumable-zip' ? 'workspace-then-publish' : route.planKind,
     selection, file,
@@ -113,7 +113,7 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
     await release.promise
     return accepted
   }
-  const routes: V2PlanExecutionRouteRegistry = {
+  const routes: PlanExecutionRouteRegistry = {
     directTree: { open: (...args) => handoff(backend.openDirectTree(...args)) },
     directAtomic: { open: (...args) => handoff(backend.openDirectAtomic(...args)) },
     directResumableZip: { open: async intent => {
@@ -149,7 +149,7 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
     portableZip: { prepare: (...args) => handoff(backend.preparePortable(...args)) },
     lifecycle: backend,
   }
-  const plans = await createV2PlanExecutionAuthority({ intent, routes })
+  const plans = await createPlanExecutionAuthority({ intent, routes })
   const controller = new AbortController()
   const job = transferJobFixture({
     catalog: catalog.catalog, selection, intent, plans,

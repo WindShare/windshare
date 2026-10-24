@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isIndexedDbConstraintError,
   waitForIndexedDbTransaction,
-} from '../../src/catalog/v2-indexeddb-transaction'
+} from '../../src/catalog/indexeddb-transaction'
 
 const ABORT_CAUSES: readonly (readonly [
   scenario: string,

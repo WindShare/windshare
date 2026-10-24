@@ -1,10 +1,10 @@
 import { equalBytes } from '../../crypto/bytes'
 import {
-  decodeV2SessionCredit,
-  V2_RELAY_SENDER_WINDOW_BYTES,
-  V2_RELAY_SENDER_WINDOW_FRAMES,
-  V2RelayProtocolError,
-} from './v2-protocol'
+  decodeSessionCredit,
+  RELAY_SENDER_WINDOW_BYTES,
+  RELAY_SENDER_WINDOW_FRAMES,
+  RelayProtocolError,
+} from './protocol'
 
 /** One serialized socket writer consumes a relay-owned, initially empty window. */
 export class ReceiverCredit {
@@ -19,15 +19,15 @@ export class ReceiverCredit {
 
   receive(encoded: Uint8Array): boolean {
     if (encoded.byteLength < 4 || String.fromCharCode(...encoded.subarray(0, 4)) !== 'WS2W') return false
-    const credit = decodeV2SessionCredit(encoded)
+    const credit = decodeSessionCredit(encoded)
     if (!equalBytes(credit.relaySessionId, this.#relaySessionId)) {
-      throw new V2RelayProtocolError('malformed', 'Relay credited another receiver session')
+      throw new RelayProtocolError('malformed', 'Relay credited another receiver session')
     }
     if (
-      this.#frames + credit.frames > V2_RELAY_SENDER_WINDOW_FRAMES ||
-      this.#bytes + credit.bytes > V2_RELAY_SENDER_WINDOW_BYTES
+      this.#frames + credit.frames > RELAY_SENDER_WINDOW_FRAMES ||
+      this.#bytes + credit.bytes > RELAY_SENDER_WINDOW_BYTES
     ) {
-      throw new V2RelayProtocolError('malformed', 'Relay credit exceeds the receiver window')
+      throw new RelayProtocolError('malformed', 'Relay credit exceeds the receiver window')
     }
     this.#frames += credit.frames
     this.#bytes += credit.bytes
@@ -56,7 +56,7 @@ export class ReceiverCredit {
   // Cancellation while awaiting local buffer space therefore cannot lose credit.
   consume(encodedBytes: number): void {
     if (!this.#hasCapacity(encodedBytes)) {
-      throw new V2RelayProtocolError('malformed', 'Relay frame exceeds available receiver credit')
+      throw new RelayProtocolError('malformed', 'Relay frame exceeds available receiver credit')
     }
     this.#frames -= 1
     this.#bytes -= encodedBytes

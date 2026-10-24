@@ -1,5 +1,5 @@
-import { V2_MAXIMUM_CHUNK_BYTES } from '../../catalog/v2-records'
-import type { V2BlockRecord } from '../v2-records'
+import { MAXIMUM_CHUNK_BYTES } from '../../catalog/records'
+import type { BlockRecord } from '../records'
 import type { ContentPriority } from './selection'
 
 export const RANGE_READ_AHEAD_FACTOR = 4
@@ -26,7 +26,7 @@ export class RangeBufferBudget {
 
   nextTurn(): number { return ++this.#turn }
 
-  constructor(maximum: number, interactive = V2_MAXIMUM_CHUNK_BYTES) {
+  constructor(maximum: number, interactive = MAXIMUM_CHUNK_BYTES) {
     if (!Number.isSafeInteger(maximum) || maximum <= 0) throw new RangeError('Range buffer budget must be positive')
     this.#maximum = maximum
     this.#interactive = Math.min(interactive, Math.floor(maximum / 2))
@@ -67,11 +67,11 @@ interface BlockWindowOptions {
   readonly priority: ContentPriority
   readonly budget: RangeBufferBudget
   readonly bytes: (index: bigint) => number
-  readonly read: (index: bigint, consumer: BlockConsumer) => Promise<V2BlockRecord>
+  readonly read: (index: bigint, consumer: BlockConsumer) => Promise<BlockRecord>
 }
 
 interface BufferedBlock {
-  readonly result: Promise<V2BlockRecord>
+  readonly result: Promise<BlockRecord>
   readonly release: () => void
 }
 
@@ -94,7 +94,7 @@ export class OrderedBlockWindow {
     this.#fill()
   }
 
-  async next(signal: AbortSignal): Promise<V2BlockRecord> {
+  async next(signal: AbortSignal): Promise<BlockRecord> {
     signal.throwIfAborted()
     const entry = this.#pending.get(this.#emitted)
     if (entry === undefined) throw new Error('Output frontier has no queued block')

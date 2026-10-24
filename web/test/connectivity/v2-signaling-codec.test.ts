@@ -5,22 +5,22 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import {
-  decodeV2PeerAnswer,
-  decodeV2PeerCandidate,
-  decodeV2PeerOffer,
-  encodeV2PeerAnswer,
-  encodeV2PeerCandidate,
-  encodeV2PeerOffer,
-  sameV2PeerBinding,
-} from '../../src/connectivity/v2-signaling-codec'
+  decodePeerAnswer,
+  decodePeerCandidate,
+  decodePeerOffer,
+  encodePeerAnswer,
+  encodePeerCandidate,
+  encodePeerOffer,
+  samePeerBinding,
+} from '../../src/connectivity/signaling-codec'
 import { concatBytes } from '../../src/crypto/bytes'
 import { decodeCanonicalCbor, encodeCanonicalCbor, requireBytes, requireNumericMap } from '../../src/protocol/cbor'
 import {
-  encodeV2Message,
-  type V2ControlBinding,
-  verifyV2SenderControl,
-  V2_MESSAGE_KIND,
-} from '../../src/session/v2-message'
+  encodeMessage,
+  type ControlBinding,
+  verifySenderControl,
+  MESSAGE_KIND,
+} from '../../src/session/message'
 
 interface SignedControlVector {
   readonly sequence: string
@@ -68,15 +68,15 @@ function bytes(value: string): Uint8Array<ArrayBuffer> {
 
 describe('v2 E2E peer signaling codec', () => {
   it('cannot substitute optional admission purpose for an essential attempt', () => {
-    const initial = decodeV2PeerOffer(bytes(vector.offer.bodyB64))
+    const initial = decodePeerOffer(bytes(vector.offer.bodyB64))
     for (const purpose of ['recovery', 'throughput'] as const) {
-      const alternate = decodeV2PeerOffer(encodeV2PeerOffer({ ...initial, purpose }))
+      const alternate = decodePeerOffer(encodePeerOffer({ ...initial, purpose }))
       expect(alternate.purpose).toBe(purpose)
-      expect(sameV2PeerBinding(initial, alternate)).toBe(false)
+      expect(samePeerBinding(initial, alternate)).toBe(false)
     }
     const fields = [...decodeCanonicalCbor(bytes(vector.offer.bodyB64), 65_536, 'offer') as readonly unknown[]]
     fields[5] = 3
-    expect(() => decodeV2PeerOffer(encodeCanonicalCbor(fields))).toThrow()
+    expect(() => decodePeerOffer(encodeCanonicalCbor(fields))).toThrow()
   })
 
   it('matches the shared Go/TypeScript deterministic bodies and reserved kinds', () => {
@@ -88,9 +88,9 @@ describe('v2 E2E peer signaling codec', () => {
       peerSlot: vector.peerSlot,
     }
     expect(vector.schemaVersion).toBe(4)
-    expect(V2_MESSAGE_KIND.peerOffer).toBe(vector.messageKinds.offer)
-    expect(V2_MESSAGE_KIND.peerAnswer).toBe(vector.messageKinds.answer)
-    expect(V2_MESSAGE_KIND.peerCandidate).toBe(vector.messageKinds.candidate)
+    expect(MESSAGE_KIND.peerOffer).toBe(vector.messageKinds.offer)
+    expect(MESSAGE_KIND.peerAnswer).toBe(vector.messageKinds.answer)
+    expect(MESSAGE_KIND.peerCandidate).toBe(vector.messageKinds.candidate)
 
     const offer = { ...binding, sdp: vector.offer.sdp }
     const answer = { ...binding, sdp: vector.answer.sdp }
@@ -101,12 +101,12 @@ describe('v2 E2E peer signaling codec', () => {
       sdpMLineIndex: vector.candidate.sdpMLineIndex,
       usernameFragment: vector.candidate.usernameFragment,
     }
-    expect(encodeV2PeerOffer(offer)).toEqual(bytes(vector.offer.bodyB64))
-    expect(decodeV2PeerOffer(bytes(vector.offer.bodyB64))).toEqual(offer)
-    expect(encodeV2PeerAnswer(answer)).toEqual(bytes(vector.answer.bodyB64))
-    expect(decodeV2PeerAnswer(bytes(vector.answer.bodyB64))).toEqual(answer)
-    expect(encodeV2PeerCandidate(candidate)).toEqual(bytes(vector.candidate.bodyB64))
-    expect(decodeV2PeerCandidate(bytes(vector.candidate.bodyB64))).toEqual(candidate)
+    expect(encodePeerOffer(offer)).toEqual(bytes(vector.offer.bodyB64))
+    expect(decodePeerOffer(bytes(vector.offer.bodyB64))).toEqual(offer)
+    expect(encodePeerAnswer(answer)).toEqual(bytes(vector.answer.bodyB64))
+    expect(decodePeerAnswer(bytes(vector.answer.bodyB64))).toEqual(answer)
+    expect(encodePeerCandidate(candidate)).toEqual(bytes(vector.candidate.bodyB64))
+    expect(decodePeerCandidate(bytes(vector.candidate.bodyB64))).toEqual(candidate)
   })
 
   it('opens the Go-authored signed answer and candidate wrappers as their typed bodies', async () => {
@@ -120,13 +120,13 @@ describe('v2 E2E peer signaling codec', () => {
       direction: 1 as const,
     }
     const cases = [
-      [V2_MESSAGE_KIND.peerAnswer, vector.answer, decodeV2PeerAnswer],
-      [V2_MESSAGE_KIND.peerCandidate, vector.candidate, decodeV2PeerCandidate],
+      [MESSAGE_KIND.peerAnswer, vector.answer, decodePeerAnswer],
+      [MESSAGE_KIND.peerCandidate, vector.candidate, decodePeerCandidate],
     ] as const
 
     for (const [kind, control, decodeBody] of cases) {
       const semanticBody = bytes(control.bodyB64)
-      const binding: V2ControlBinding = {
+      const binding: ControlBinding = {
         ...baseBinding,
         sequence: BigInt(control.sequence),
       }
@@ -147,8 +147,8 @@ describe('v2 E2E peer signaling codec', () => {
       expect(requireBytes(signedFields.get(255), 64, 'peer control signature')).toEqual(
         bytes(control.controlSignatureB64),
       )
-      const verified = await verifyV2SenderControl(
-        encodeV2Message(kind, operationId, signedBody),
+      const verified = await verifySenderControl(
+        encodeMessage(kind, operationId, signedBody),
         binding,
         createEd25519Verifier(bytes(vector.senderPublicKeyB64)),
       )
@@ -171,11 +171,11 @@ describe('v2 E2E peer signaling codec', () => {
       attemptSequence: BigInt(vector.attemptSequence),
       peerSlot: vector.peerSlot,
     }
-    expect(() => encodeV2PeerOffer({ ...binding, peerPathId: new Uint8Array(16), sdp: 'v=0' }))
+    expect(() => encodePeerOffer({ ...binding, peerPathId: new Uint8Array(16), sdp: 'v=0' }))
       .toThrow()
-    expect(() => encodeV2PeerOffer({ ...binding, sdp: 'e\u0301' })).toThrow()
-    expect(() => encodeV2PeerOffer({ ...binding, sdp: '\ud800' })).toThrow()
-    expect(() => encodeV2PeerCandidate({
+    expect(() => encodePeerOffer({ ...binding, sdp: 'e\u0301' })).toThrow()
+    expect(() => encodePeerOffer({ ...binding, sdp: '\ud800' })).toThrow()
+    expect(() => encodePeerCandidate({
       ...binding,
       candidate: vector.candidate.candidate,
       sdpMid: null,
@@ -188,7 +188,7 @@ describe('v2 E2E peer signaling codec', () => {
 function peerControlPreimage(
   kind: number,
   operationId: Uint8Array,
-  binding: V2ControlBinding,
+  binding: ControlBinding,
   unsignedWrapper: Uint8Array,
 ): Uint8Array<ArrayBuffer> {
   const lane = new Uint8Array(8)

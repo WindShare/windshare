@@ -9,7 +9,7 @@ Pinned Pion versions and source reconstruction are recorded in
 Reproduce from the repository root:
 
 ```sh
-go test -race ./transport/webrtc/provider -run '^TestLocalFixedSTUNSocketLifecycleBaseline$' -count=1 -timeout 30s -v
+go test -race ./connectivity/pionpeer -run '^TestLocalFixedSTUNSocketLifecycleBaseline$' -count=1 -timeout 30s -v
 ```
 
 `local-fixed-stun-baseline.json` records one Windows run, source hashes, and limits.

@@ -1,6 +1,6 @@
-import { V2CatalogClient, V2CatalogClientError } from '../../src/catalog/v2-client'
-import type { V2CatalogPageStore } from '../../src/catalog/v2-page-store'
-import type { V2CatalogPageRequest } from '../../src/catalog/v2-records'
+import { CatalogClient, CatalogClientError } from '../../src/catalog/client'
+import type { CatalogPageStore } from '../../src/catalog/page-store'
+import type { CatalogPageRequest } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { createSignedCatalogFixture, signedCatalogIdentity } from './signed-catalog-fixture'
 
@@ -13,7 +13,7 @@ export interface SignedCatalogOwnershipProbeResult {
 }
 
 export async function runSignedCatalogOwnershipProbe(
-  store: V2CatalogPageStore,
+  store: CatalogPageStore,
 ): Promise<SignedCatalogOwnershipProbeResult> {
   const fixture = await createSignedCatalogFixture()
   const objects = new Map<string, Uint8Array<ArrayBuffer>>()
@@ -56,7 +56,7 @@ export async function runSignedCatalogOwnershipProbe(
   )
 
   const protocolFailures: unknown[] = []
-  const client = new V2CatalogClient({
+  const client = new CatalogClient({
     descriptor: fixture.descriptor,
     readSecret: fixture.readSecret,
     operations: {
@@ -138,7 +138,7 @@ async function addSinglePageCatalog(
   objects.set(requestKey({ directoryId, pageIndex: 0 }), sealed.object)
 }
 
-function requestKey(request: Pick<V2CatalogPageRequest, 'directoryId' | 'pageIndex'>): string {
+function requestKey(request: Pick<CatalogPageRequest, 'directoryId' | 'pageIndex'>): string {
   return `${encodeBase64Url(request.directoryId)}:${request.pageIndex}`
 }
 
@@ -147,7 +147,7 @@ async function rejectsProtocol(operation: Promise<unknown>): Promise<boolean> {
     await operation
     return false
   } catch (error) {
-    return error instanceof V2CatalogClientError &&
+    return error instanceof CatalogClientError &&
       error.message === 'Authenticated catalog traffic violated its protocol'
   }
 }

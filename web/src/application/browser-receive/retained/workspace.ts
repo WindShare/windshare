@@ -12,14 +12,14 @@ import type {
 } from '../../../output/diagnostics'
 import { recordOutputException, emitOutputTrace, outputTraceEvent } from '../../../output/diagnostics'
 import { classificationForTransferFailure } from '../../../transfer/job/failures'
-import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
-import type { V2BoundReceiveOperation, V2RetainedReceiveAction } from '../../receive/contracts'
+import { TransferFailureSettlementError } from '../../../transfer/settlement/output'
+import type { BoundReceiveOperation, RetainedReceiveAction } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { WorkspaceReceiveOperation } from '../workspace/operation'
 import { handoffRetainedWorkspacePackage } from '../workspace/publication'
 import { bindRuntimeOutputFailures, diagnosticsOption } from './diagnostics'
 
-type RetainedContinuationAction = Extract<V2RetainedReceiveAction, 'save' | 'redownload'>
+type RetainedContinuationAction = Extract<RetainedReceiveAction, 'save' | 'redownload'>
 type WorkspaceReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'workspace-receive' }
@@ -32,7 +32,7 @@ export async function resumeWorkspaceReceive(
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: OutputTraceSource | undefined,
   binding: OutputFailureBinding,
-): Promise<V2BoundReceiveOperation> {
+): Promise<BoundReceiveOperation> {
   const fallback = continuation.operation.receiveAdmissionFallback
   if (fallback === undefined) {
     throw new TypeError('Workspace continuation omitted its admission fallback')
@@ -79,7 +79,7 @@ export async function resumeWorkspaceReceive(
         relation: 'consequence',
       })
       if (consequence === undefined) throw error
-      throw new V2TransferFailureSettlementError(
+      throw new TransferFailureSettlementError(
         classificationForTransferFailure(error, {
           stage: 'reopen',
           relation: 'contributor',

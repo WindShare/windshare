@@ -3,7 +3,7 @@ import type {
   HotSwitchRecoveryControl,
   ObservedTransferFailure,
 } from './hot-switch-contract'
-import type { V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
+import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   DeliveryBuffer,
@@ -29,13 +29,13 @@ import type {
 import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
   DirectAtomicExecution,
-  V2PlanExecutionAuthority,
+  PlanExecutionAuthority,
 } from '../../src/transfer/output/session'
 
 const GATEWAY_MODULE_PATH = '/src/application/browser-share/gateway.ts'
 const INTENT_MODULE_PATH = '/src/transfer/intent.ts'
 const OFFER_MODULE_PATH = '/src/connectivity/peer-offer.ts'
-const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/v2-plan-authority.ts'
+const PLAN_AUTHORITY_MODULE_PATH = '/src/transfer/settlement/plan-authority.ts'
 const PLANNING_MODULE_PATH = '/src/output/planning/index.ts'
 const PROJECTION_MODULE_PATH = '/src/transfer/projection/index.ts'
 const STREAM_MODULE_PATH = '/src/output/streams/single-file.ts'
@@ -48,13 +48,13 @@ const TEXT_ENCODER = new TextEncoder()
 type GatewayModule = typeof import('../../src/application/browser-share/gateway')
 type IntentModule = typeof import('../../src/transfer/intent')
 type OfferModule = typeof import('../../src/connectivity/peer-offer')
-type PlanAuthorityModule = typeof import('../../src/transfer/settlement/v2-plan-authority')
+type PlanAuthorityModule = typeof import('../../src/transfer/settlement/plan-authority')
 type PlanningModule = typeof import('../../src/output/planning')
 type ProjectionModule = typeof import('../../src/transfer/projection')
 type StreamModule = typeof import('../../src/output/streams/single-file')
 type WorkspaceStateModule = typeof import('../../src/transfer/lifecycle/state')
 type JoinedReceiver = Awaited<ReturnType<
-  InstanceType<GatewayModule['V2BrowserReceiverGateway']>['join']
+  InstanceType<GatewayModule['BrowserReceiverGateway']>['join']
 >>
 type DownloadActivation = ReturnType<JoinedReceiver['beginDownloadConnectivity']>
 
@@ -91,8 +91,8 @@ interface ProductModules {
 
 interface BoundDirectAtomicOperation {
   readonly intent: ReceiveIntent
-  readonly plans: V2PlanExecutionAuthority
-  readonly selection: V2FrozenSelectionPolicy
+  readonly plans: PlanExecutionAuthority
+  readonly selection: FrozenSelectionPolicy
 }
 
 
@@ -287,7 +287,7 @@ async function bindDirectAtomicOperation(
     throw new Error('Hot-switch intent binding did not remain direct-atomic')
   }
   const intent = bound.intent
-  const plans = await modules.planAuthority.createV2PlanExecutionAuthority({
+  const plans = await modules.planAuthority.createPlanExecutionAuthority({
     intent,
     routes: {
       directAtomic: {
@@ -428,7 +428,7 @@ function createGateway(
   relayCut: RelayCutEvidence,
   peerRelease: OneShotRelease,
   peerHarness: PagePeerRecoveryHarness,
-): InstanceType<GatewayModule['V2BrowserReceiverGateway']> {
+): InstanceType<GatewayModule['BrowserReceiverGateway']> {
   const realOffers = new modules.offer.BrowserOfferChannelFactory({
     configuration: input.rtcConfiguration,
   })
@@ -447,7 +447,7 @@ function createGateway(
       return peerHarness.wrap(peer)
     },
   }
-  return new modules.gateway.V2BrowserReceiverGateway({
+  return new modules.gateway.BrowserReceiverGateway({
     offersFactory: () => gatedOffers,
     nativePeerUsable: () => input.nativePeerUsable,
     connectivityTrace: {

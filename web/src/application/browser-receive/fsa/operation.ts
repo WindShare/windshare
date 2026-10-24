@@ -30,10 +30,10 @@ import { ReceiveLifecycleObservation, type ReceiveLifecycleListener } from '../.
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../../output/execution/persistent-execution'
-import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
+import { TransferFailureSettlementError } from '../../../transfer/settlement/output'
 import {
-  createV2PlanExecutionAuthority,
-} from '../../../transfer/settlement/v2-plan-authority'
+  createPlanExecutionAuthority,
+} from '../../../transfer/settlement/plan-authority'
 import {
   createOutputSessionID,
   createTransferJobID,
@@ -44,12 +44,12 @@ import {
   TransferStopRequestedError,
   outputExecutionProfile,
   outputSessionIdentity,
-  type V2PlanExecutionAuthority,
+  type PlanExecutionAuthority,
 } from '../../../transfer/output/session'
-import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../receive/actions'
+import type { LifecycleUserAction, ActiveReceiveControl } from '../../receive/actions'
 import type {
-  V2BoundReceiveOperation,
-  V2LifecycleMutation,
+  BoundReceiveOperation,
+  LifecycleMutation,
 } from '../../receive/contracts'
 import { readLifecycle, transitionLifecycle } from '../../../output/workspace/lifecycle/repository'
 import { unavailableRoute } from '../route-contract'
@@ -88,7 +88,7 @@ export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
   maximumBufferedBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES,
 })
 
-export class FSAReceiveOperation implements V2BoundReceiveOperation {
+export class FSAReceiveOperation implements BoundReceiveOperation {
   readonly intent: ReceiveIntent
   readonly #lifecycle: ReceiveLifecycleObservation
   readonly #unsubscribeLifecycle: () => void
@@ -104,7 +104,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly #attemptIdentities: FSAAttemptIdentitySource
   readonly #folderDelivery: BrowserFolderDeliveryContext | undefined
   #settlement: FileSystemAccessOperationSettlementAuthority
-  #plans: V2PlanExecutionAuthority
+  #plans: PlanExecutionAuthority
   #closeCheckpointAuthorities: () => void | Promise<void>
   #transferJobId: string
   #detached = false
@@ -117,7 +117,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     session: FileSystemAccessOutputSession
     settlement: FileSystemAccessOperationSettlementAuthority
     resources: FSAResourceOwner
-    plans: V2PlanExecutionAuthority
+    plans: PlanExecutionAuthority
     closeCheckpointAuthorities: () => void | Promise<void>
     transferJobId: string
     attemptIdentities: FSAAttemptIdentitySource
@@ -279,7 +279,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     }
   }
 
-  get plans(): V2PlanExecutionAuthority {
+  get plans(): PlanExecutionAuthority {
     return this.#plans
   }
 
@@ -297,7 +297,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     observeBrowserFolderCheckpoint(this.#diagnostics, event)
   }
 
-  interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
+  interrupt(control: ActiveReceiveControl, transfer: AbortController): void {
     switch (control) {
       case 'pause':
         transfer.abort(new TransferPauseRequestedError())
@@ -316,9 +316,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   }
 
   async startLifecycleAction(
-    action: Exclude<LifecycleUserAction, V2ActiveReceiveControl>,
+    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
-  ): Promise<V2LifecycleMutation> {
+  ): Promise<LifecycleMutation> {
     this.#requireAttached()
     if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') {
       return runActiveBrowserFolderAction({
@@ -409,7 +409,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     return null
   }
 
-  async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+  async settleTransferAdmissionFailure(reason: unknown): Promise<LifecycleMutation> {
     this.#requireAttached()
     const controller = new AbortController()
     const lifecycle = await this.#settlement.settleExecutionAdmissionFailure(
@@ -470,7 +470,7 @@ async function settleFailedFSAReopen(
           })]),
     ].filter(candidate => candidate !== undefined)
     if (consequences.length !== 0) {
-      throw new V2TransferFailureSettlementError(
+      throw new TransferFailureSettlementError(
         classificationForTransferFailure(error, {
           stage: 'output_reservation',
           relation: 'contributor',
@@ -523,7 +523,7 @@ async function createFSAAttempt(
   folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
-  plans: V2PlanExecutionAuthority
+  plans: PlanExecutionAuthority
   closeCheckpointAuthorities: () => void | Promise<void>
   transferJobId: string
 }>> {
@@ -601,7 +601,7 @@ async function createFSAPlanAuthority(
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
   folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
-  plans: V2PlanExecutionAuthority
+  plans: PlanExecutionAuthority
   closeCheckpointAuthorities: () => void | Promise<void>
 }>> {
   const checkpointIdentity = Object.freeze({
@@ -632,7 +632,7 @@ async function createFSAPlanAuthority(
   } catch (error) {
     return closeFSAContinuationAfterFailure({ close: closeCheckpointAuthorities }, error)
   }
-  const plans = await createV2PlanExecutionAuthority({
+  const plans = await createPlanExecutionAuthority({
     intent,
     routes: {
       directTree: {

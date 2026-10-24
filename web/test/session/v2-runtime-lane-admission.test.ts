@@ -1,17 +1,17 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { V2ShareDescriptor } from '../../src/catalog/v2-records'
+import type { ShareDescriptor } from '../../src/catalog/records'
 import type { FrameChannel } from '../../src/contracts/channel'
-import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
+import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import {
-  V2LaneInstallationError,
-  V2ReceiverSessionRuntime,
-} from '../../src/session/v2-runtime'
-import type { V2LaneGrant } from '../../src/session/v2-lane-codec'
+  LaneInstallationError,
+  ReceiverSessionRuntime,
+} from '../../src/session/runtime'
+import type { LaneGrant } from '../../src/session/lane-codec'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
-import { encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
-import type { V2ReceiverSessionOptions } from '../../src/session/v2-runtime-types'
-import type { V2SessionKeys } from '../../src/session/v2-transcript'
+import { encodeMessage, MESSAGE_KIND } from '../../src/session/message'
+import type { ReceiverSessionOptions } from '../../src/session/runtime-types'
+import type { SessionKeys } from '../../src/session/transcript'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { identity as identityVector } from '../protocol/r0-contract-support'
 
@@ -90,9 +90,9 @@ describe('receiver runtime caller-owned lane admission', () => {
     const epoch = current.laneEpoch + (stale ? 0 : 1)
     vi.spyOn(runtime, 'beginOperation').mockResolvedValue({
       id: current.grantOperationId,
-      requestKind: V2_MESSAGE_KIND.laneAttach,
-      next: async () => encodeV2Message(
-        V2_MESSAGE_KIND.laneAttach,
+      requestKind: MESSAGE_KIND.laneAttach,
+      next: async () => encodeMessage(
+        MESSAGE_KIND.laneAttach,
         current.grantOperationId,
         encodeCanonicalCbor(new Map<number, unknown>([
           [0, 1], [1, 1], [2, current.laneId], [3, epoch], [4, current.attachNonce],
@@ -111,7 +111,7 @@ describe('receiver runtime caller-owned lane admission', () => {
   })
 
   it('retains the underlying authenticated lane failure before retiring the session', async () => {
-    const events: V2ProtocolTraceEvent[] = []
+    const events: ProtocolTraceEvent[] = []
     const { runtime, initialChannel } = runtimeFixture({ current: event => events.push(event) })
     initialChannel.receive(new Uint8Array([0]))
 
@@ -122,9 +122,9 @@ describe('receiver runtime caller-owned lane admission', () => {
       detachmentClass: 'authenticated_failure',
       correlation: { lane: { id: 0x0102_0304, epoch: 0 } },
       failure: {
-        name: 'V2SessionRuntimeError',
+        name: 'SessionRuntimeError',
         cause: {
-          name: 'V2EnvelopeError',
+          name: 'EnvelopeError',
           message: 'Envelope header is malformed or has the wrong direction',
         },
       },
@@ -133,7 +133,7 @@ describe('receiver runtime caller-owned lane admission', () => {
   })
 
   it('publishes authenticated milestones and transfers an accepted channel to the runtime', async () => {
-    const events: V2ProtocolTraceEvent[] = []
+    const events: ProtocolTraceEvent[] = []
     const { runtime } = runtimeFixture({
       current: (event) => {
         events.push(event)
@@ -161,7 +161,7 @@ describe('receiver runtime caller-owned lane admission', () => {
   })
 
   it('preserves the full authenticated rejection and closes the consumed candidate once', async () => {
-    const events: V2ProtocolTraceEvent[] = []
+    const events: ProtocolTraceEvent[] = []
     const { runtime } = runtimeFixture({ current: (event) => events.push(event) })
     const channel = new ScriptedChannel(b64ToBytes(lane.laneRejectB64))
 
@@ -209,7 +209,7 @@ describe('receiver runtime caller-owned lane admission', () => {
       laneId: lane.attachedLaneId,
       laneEpoch: lane.attachedLaneEpoch,
     })
-    expect(result.installation === 'failed' && result.error).toBeInstanceOf(V2LaneInstallationError)
+    expect(result.installation === 'failed' && result.error).toBeInstanceOf(LaneInstallationError)
     expect(candidate.closes).toBe(1)
     expect(runtime.laneIds()).toEqual([0x0102_0304, lane.attachedLaneId])
     await runtime.close()
@@ -242,15 +242,15 @@ describe('receiver runtime caller-owned lane admission', () => {
 })
 
 function runtimeFixture(
-  protocolTrace?: V2ReceiverSessionOptions['protocolTrace'],
-): { readonly runtime: V2ReceiverSessionRuntime; readonly initialChannel: ScriptedChannel } {
+  protocolTrace?: ReceiverSessionOptions['protocolTrace'],
+): { readonly runtime: ReceiverSessionRuntime; readonly initialChannel: ScriptedChannel } {
   const initialChannel = new ScriptedChannel()
   const initialReader = initialChannel.frames.getReader()
   const descriptor = {
     shareInstance: b64ToBytes(lane.shareInstanceB64),
     sender: createEd25519Verifier(b64ToBytes(identityVector.senderPublicKeyB64)),
-  } as V2ShareDescriptor
-  const keys: V2SessionKeys = Object.freeze({
+  } as ShareDescriptor
+  const keys: SessionKeys = Object.freeze({
     protocolSessionId: vectorBytes(lane.protocolSessionIdB64),
     transcriptHash: new Uint8Array(32),
     receiverToSenderKey: vectorBytes(lane.receiverToSenderKeyB64),
@@ -264,20 +264,20 @@ function runtimeFixture(
     initialChannel,
     randomBytes: (length: number) => new Uint8Array(length).fill(1),
     ...(protocolTrace === undefined ? {} : { protocolTrace }),
-  } as V2ReceiverSessionOptions
-  const Runtime = V2ReceiverSessionRuntime as unknown as new (
-    options: V2ReceiverSessionOptions,
-    keys: V2SessionKeys,
+  } as ReceiverSessionOptions
+  const Runtime = ReceiverSessionRuntime as unknown as new (
+    options: ReceiverSessionOptions,
+    keys: SessionKeys,
     receiverInstanceId: Uint8Array,
     reader: ReadableStreamDefaultReader<Uint8Array>,
-  ) => V2ReceiverSessionRuntime
+  ) => ReceiverSessionRuntime
   return {
     runtime: new Runtime(options, keys, new Uint8Array(16).fill(2), initialReader),
     initialChannel,
   }
 }
 
-function grant(): V2LaneGrant {
+function grant(): LaneGrant {
   return Object.freeze({
     laneId: lane.attachedLaneId,
     laneEpoch: lane.attachedLaneEpoch,

@@ -24,7 +24,7 @@ func TestDownloadConnectivityFinalExportUsesExistingTransferSettlement(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV4(testRunIdentity(0x12), entryMetadata{sequence: 1, time: now}, event)
+	record, err := encode(testRunIdentity(0x12), entryMetadata{sequence: 1, time: now}, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestDownloadConnectivityFinalExportUsesExistingTransferSettlement(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = encodeV4(testRunIdentity(0x12), entryMetadata{sequence: 2, time: now}, event)
+	record, err = encode(testRunIdentity(0x12), entryMetadata{sequence: 2, time: now}, event)
 	if err != nil {
 		t.Fatal(err)
 	}

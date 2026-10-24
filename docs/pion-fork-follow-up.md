@@ -41,7 +41,7 @@
 
 **原问题。** 按 IP 分配完整 LocalPreference 会覆盖 TCP 方向偏好；收到远端 passive 候选后动态创建的 active TCP 又绕过了该策略，导致普通候选和动态候选评分不一致。
 
-**本地已完成。** [产品策略](../transport/webrtc/provider/priority.go)只提供冻结的基址顺序；[ICE 评分入口](../third_party/pion/ice/provider_priority.go)在启动候选、构造检查表和发布之前组合一次最终分数。保留类型、UDP/TCP、TCP 方向及 TURN 自身偏好；每个协议偏好组先为各基址保留首次机会，重复端口、映射和未列出的基址使用余下独立分数。空间耗尽显式报告，禁止回绕到另一个方向。动态 active TCP 走同一入口。
+**本地已完成。** [产品策略](../connectivity/pionpeer/priority.go)只提供冻结的基址顺序；[ICE 评分入口](../third_party/pion/ice/provider_priority.go)在启动候选、构造检查表和发布之前组合一次最终分数。保留类型、UDP/TCP、TCP 方向及 TURN 自身偏好；每个协议偏好组先为各基址保留首次机会，重复端口、映射和未列出的基址使用余下独立分数。空间耗尽显式报告，禁止回绕到另一个方向。动态 active TCP 走同一入口。
 
 回归覆盖同 IP active/passive、重复 active、多基址双栈 UDP/TCP 映射、迟到基址、非默认 TCP 类型偏移、配置快照、发布/统计一致性和分数边界，无长时间等待。最终优先级和 TCP 方向进入现有 native connectivity trace，沿用 session、path、attempt 标识。此修复不调整中转等待或重试期限；实际直连成功率收益仍需网络证据。[RFC 6544 §4.2](https://www.rfc-editor.org/rfc/rfc6544.html#section-4.2)中的方向排序是可调整的推荐值，并非不可配置的硬要求。
 
@@ -85,7 +85,7 @@
 
 ## 7. 独立配置初始 ICE 检查窗口
 
-**需求。** 初始连通性探索需要等待迟到候选或入站检查；连接建立后又需要及时发现失联。当前 [provider](../transport/webrtc/provider/connection.go)使用独立初始窗口，避免把两个阶段的超时一起拉长。
+**需求。** 初始连通性探索需要等待迟到候选或入站检查；连接建立后又需要及时发现失联。当前 [provider](../connectivity/pionpeer/connection.go)使用独立初始窗口，避免把两个阶段的超时一起拉长。
 
 **上游处理。** 在现有 `initialCheckingTimeout()` 基础上讨论独立 AgentOption，后续再接入 WebRTC SettingEngine。明确默认值、显式禁用、调用方取消，以及与 disconnected/failed timeout 的关系。还应区分 PAC 的最短等待语义与应用的总体连接期限，不能仅凭设置一个超时就宣称完整实现 PAC。[RFC 8863 §4](https://www.rfc-editor.org/rfc/rfc8863.html#section-4)推荐的默认 39.5 秒应作为语义依据。
 

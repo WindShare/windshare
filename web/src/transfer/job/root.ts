@@ -1,24 +1,24 @@
-import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
-import { V2_CATALOG_IDENTITY_BYTES } from '../../catalog/v2-records'
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { CommittedDirectory } from '../../catalog/page-store'
+import { CATALOG_IDENTITY_BYTES } from '../../catalog/records'
+import type { FrozenSelectionPolicy } from '../../catalog/selection'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { AuthenticatedDirectory, DirectoryCursor, DirectoryWork, TransferJobOptions } from './contract'
-import { V2CatalogTraversalError } from './contract'
+import { CatalogTraversalError } from './contract'
 import {
   snapshotLogicalArtifactPath,
   snapshotSourceAuthenticationPath,
 } from './coordinate/direct-tree'
 import { descriptorRootId } from './identity'
 
-export class V2JobRootAuthority {
+export class JobRootAuthority {
   readonly #options: TransferJobOptions
-  readonly #selection: V2FrozenSelectionPolicy
+  readonly #selection: FrozenSelectionPolicy
   readonly #signal: AbortSignal
-  #committed: V2CommittedDirectory | undefined
+  #committed: CommittedDirectory | undefined
 
   constructor(
     options: TransferJobOptions,
-    selection: V2FrozenSelectionPolicy,
+    selection: FrozenSelectionPolicy,
     signal: AbortSignal,
   ) {
     this.#options = options
@@ -26,11 +26,11 @@ export class V2JobRootAuthority {
     this.#signal = signal
   }
 
-  get committed(): V2CommittedDirectory | undefined {
+  get committed(): CommittedDirectory | undefined {
     return this.#committed
   }
 
-  async load(): Promise<V2CommittedDirectory> {
+  async load(): Promise<CommittedDirectory> {
     if (this.#committed !== undefined) return this.#committed
     this.#committed = await loadSyntheticRoot(this.#options, this.#signal)
     return this.#committed
@@ -40,14 +40,14 @@ export class V2JobRootAuthority {
     return syntheticRootCursor(this.#options, this.#selection)
   }
 
-  authenticated(committed: V2CommittedDirectory): DirectoryWork {
+  authenticated(committed: CommittedDirectory): DirectoryWork {
     return authenticatedRootWork(this.cursor(), committed)
   }
 
   async direct(
     admit: (
       cursor: DirectoryCursor,
-      committed: V2CommittedDirectory,
+      committed: CommittedDirectory,
     ) => Promise<AuthenticatedDirectory>,
   ): Promise<DirectoryWork> {
     const committed = await this.load()
@@ -60,22 +60,22 @@ export class V2JobRootAuthority {
 export async function loadSyntheticRoot(
   options: TransferJobOptions,
   signal: AbortSignal,
-): Promise<V2CommittedDirectory> {
+): Promise<CommittedDirectory> {
   const root = await options.catalog.loadDirectory(
     options.descriptor.syntheticRoot,
     { signal },
   )
   if (root === undefined || !equalBytes(root.directoryId, options.descriptor.syntheticRoot) ||
-      root.generation.byteLength !== V2_CATALOG_IDENTITY_BYTES ||
+      root.generation.byteLength !== CATALOG_IDENTITY_BYTES ||
       root.generation.every(byte => byte === 0) || root.omittedCount !== 0n) {
-    throw new V2CatalogTraversalError('Synthetic root committed generation is unavailable')
+    throw new CatalogTraversalError('Synthetic root committed generation is unavailable')
   }
   return root
 }
 
 export function syntheticRootCursor(
   options: TransferJobOptions,
-  selection: V2FrozenSelectionPolicy,
+  selection: FrozenSelectionPolicy,
 ): DirectoryCursor {
   const rootId = descriptorRootId(options.descriptor)
   return Object.freeze({
@@ -89,7 +89,7 @@ export function syntheticRootCursor(
 
 export function authenticatedRootWork(
   cursor: DirectoryCursor,
-  committed: V2CommittedDirectory,
+  committed: CommittedDirectory,
 ): DirectoryWork {
   const root: AuthenticatedDirectory = Object.freeze({
     kind: 'reference',

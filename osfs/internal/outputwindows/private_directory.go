@@ -14,27 +14,27 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3PrivateDirectoryCreateCut uint8
+type windowsPrivateDirectoryCreateCut uint8
 
 const (
-	windowsV3PrivateDirectoryCutCreated windowsV3PrivateDirectoryCreateCut = iota + 1
-	windowsV3PrivateDirectoryCutACLHidden
-	windowsV3PrivateDirectoryCutSynced
-	windowsV3PrivateDirectoryCutCommitted
-	windowsV3PrivateDirectoryCutClosed
+	windowsPrivateDirectoryCutCreated windowsPrivateDirectoryCreateCut = iota + 1
+	windowsPrivateDirectoryCutACLHidden
+	windowsPrivateDirectoryCutSynced
+	windowsPrivateDirectoryCutCommitted
+	windowsPrivateDirectoryCutClosed
 )
 
-func (cut windowsV3PrivateDirectoryCreateCut) String() string {
+func (cut windowsPrivateDirectoryCreateCut) String() string {
 	switch cut {
-	case windowsV3PrivateDirectoryCutCreated:
+	case windowsPrivateDirectoryCutCreated:
 		return "create"
-	case windowsV3PrivateDirectoryCutACLHidden:
+	case windowsPrivateDirectoryCutACLHidden:
 		return "acl-hidden"
-	case windowsV3PrivateDirectoryCutSynced:
+	case windowsPrivateDirectoryCutSynced:
 		return "sync-reopen"
-	case windowsV3PrivateDirectoryCutCommitted:
+	case windowsPrivateDirectoryCutCommitted:
 		return "commit"
-	case windowsV3PrivateDirectoryCutClosed:
+	case windowsPrivateDirectoryCutClosed:
 		return "close"
 	default:
 		return fmt.Sprintf("unknown(%d)", cut)
@@ -44,53 +44,53 @@ func (cut windowsV3PrivateDirectoryCreateCut) String() string {
 // The observer is deliberately attached to the fixed directory authority so
 // fault tests can stop at native syscall boundaries without introducing a
 // process-global hook that would race unrelated output sessions.
-type windowsV3PrivateDirectoryCreateObserver interface {
-	ObservePrivateDirectoryCreate(parent, target string, cut windowsV3PrivateDirectoryCreateCut) error
+type windowsPrivateDirectoryCreateObserver interface {
+	ObservePrivateDirectoryCreate(parent, target string, cut windowsPrivateDirectoryCreateCut) error
 }
 
-type windowsV3PrivateDirectoryCreateObserverFunc func(
+type windowsPrivateDirectoryCreateObserverFunc func(
 	parent, target string,
-	cut windowsV3PrivateDirectoryCreateCut,
+	cut windowsPrivateDirectoryCreateCut,
 ) error
 
-func (observe windowsV3PrivateDirectoryCreateObserverFunc) ObservePrivateDirectoryCreate(
+func (observe windowsPrivateDirectoryCreateObserverFunc) ObservePrivateDirectoryCreate(
 	parent, target string,
-	cut windowsV3PrivateDirectoryCreateCut,
+	cut windowsPrivateDirectoryCreateCut,
 ) error {
 	return observe(parent, target, cut)
 }
 
-func (directory *windowsV3Directory) observePrivateDirectoryCreate(
+func (directory *windowsDirectory) observePrivateDirectoryCreate(
 	target string,
-	cut windowsV3PrivateDirectoryCreateCut,
+	cut windowsPrivateDirectoryCreateCut,
 ) error {
 	if directory.createObserver == nil {
 		return nil
 	}
-	observer, ok := directory.createObserver.(windowsV3PrivateDirectoryCreateObserver)
+	observer, ok := directory.createObserver.(windowsPrivateDirectoryCreateObserver)
 	if !ok {
 		return nil
 	}
 	return observer.ObservePrivateDirectoryCreate(directory.path, target, cut)
 }
 
-func (directory *windowsV3Directory) createPrivateDirectory(
+func (directory *windowsDirectory) createPrivateDirectory(
 	relative string,
-) (_ *windowsV3Directory, resultErr error) {
+) (_ *windowsDirectory, resultErr error) {
 	const operation = "create crash-safe private output directory"
 	if err := directory.usable(); err != nil {
 		return nil, err
 	}
-	native, err := windowsV3RelativePath(relative, true)
+	native, err := windowsRelativePath(relative, true)
 	if err != nil {
-		return nil, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
 	descriptor, err := directory.policy.descriptor(true)
 	if err != nil {
-		return nil, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
-	handle, status, err := windowsV3OpenNativeWithOptions(
-		directory.handle(), native, windowsV3DirectoryAccess(), windows.FILE_CREATE,
+	handle, status, err := windowsOpenNativeWithOptions(
+		directory.handle(), native, windowsDirectoryAccess(), windows.FILE_CREATE,
 		windows.FILE_DIRECTORY_FILE|windows.FILE_DELETE_ON_CLOSE,
 		windows.FILE_ATTRIBUTE_HIDDEN, descriptor,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
@@ -98,27 +98,27 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 	)
 	runtime.KeepAlive(descriptor)
 	if err != nil {
-		return nil, windowsV3NativeNoReplaceFailure(operation, relative, err)
+		return nil, windowsNativeNoReplaceFailure(operation, relative, err)
 	}
-	createdStatus, statusErr := windowsV3CreationStatus(windows.FILE_CREATE, status)
+	createdStatus, statusErr := windowsCreationStatus(windows.FILE_CREATE, status)
 	if statusErr != nil || !createdStatus {
 		return nil, errors.Join(
-			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, statusErr),
+			windowsFailure(operation, relative, errWindowsOutputUnsafe, statusErr),
 			windows.CloseHandle(handle), directory.Sync(),
 		)
 	}
 	file := os.NewFile(uintptr(handle), relative)
 	if file == nil {
 		return nil, errors.Join(
-			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, errors.New("wrap directory handle")),
+			windowsFailure(operation, relative, errWindowsOutputUnsafe, errors.New("wrap directory handle")),
 			windows.CloseHandle(handle), directory.Sync(),
 		)
 	}
-	created := &windowsV3Directory{
+	created := &windowsDirectory{
 		file: file, metadataHandle: windows.InvalidHandle,
 		path: filepath.Join(directory.path, relative), volume: directory.volume,
 		objectIDs: directory.objectIDs, inspector: directory.inspector, policy: directory.policy,
-		objectIDState: newWindowsV3PersistentObjectIDState(), ancestryAuthority: directory.ancestryAuthority,
+		objectIDState: newWindowsPersistentObjectIDState(), ancestryAuthority: directory.ancestryAuthority,
 		enumerate: &sync.Mutex{}, createObserver: directory.createObserver, private: true,
 	}
 	defer func() {
@@ -135,10 +135,10 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 	if err != nil {
 		return nil, err
 	}
-	if err := windowsV3CommitDeleteOnClose(created.handle()); err != nil {
-		return nil, windowsV3NativeOperationFailure(operation, relative, err)
+	if err := windowsCommitDeleteOnClose(created.handle()); err != nil {
+		return nil, windowsNativeOperationFailure(operation, relative, err)
 	}
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutCommitted); err != nil {
+	if err := directory.observePrivateDirectoryCreate(relative, windowsPrivateDirectoryCutCommitted); err != nil {
 		return nil, err
 	}
 	if err := directory.Sync(); err != nil {
@@ -147,17 +147,17 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 	if err := created.Close(); err != nil {
 		return nil, err
 	}
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutClosed); err != nil {
+	if err := directory.observePrivateDirectoryCreate(relative, windowsPrivateDirectoryCutClosed); err != nil {
 		return nil, err
 	}
 	reopened, err := directory.OpenPrivateDirectory(relative)
 	if err != nil {
-		return nil, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return nil, windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
 	reopenedFacts, factsErr := reopened.inspector.Inspect(reopened.handle())
 	if factsErr != nil || !preparedFacts.object.same(reopenedFacts.object) {
 		return nil, errors.Join(
-			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
+			windowsFailure(operation, relative, errWindowsOutputUnsafe,
 				errors.New("committed private directory reopened as a different incarnation")),
 			factsErr, reopened.Close(),
 		)
@@ -165,72 +165,72 @@ func (directory *windowsV3Directory) createPrivateDirectory(
 	return reopened, nil
 }
 
-func (directory *windowsV3Directory) prepareCreatedPrivateDirectory(
-	created *windowsV3Directory,
+func (directory *windowsDirectory) prepareCreatedPrivateDirectory(
+	created *windowsDirectory,
 	relative string,
 	native string,
-) (windowsV3ObjectFacts, error) {
+) (windowsObjectFacts, error) {
 	const operation = "create crash-safe private output directory"
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutCreated); err != nil {
-		return windowsV3ObjectFacts{}, err
+	if err := directory.observePrivateDirectoryCreate(relative, windowsPrivateDirectoryCutCreated); err != nil {
+		return windowsObjectFacts{}, err
 	}
 	// Protected ACL verification is a private-namespace invariant. Object IDs are
 	// deliberately absent here: live crash cleanup must remain available when
 	// restart identity enrollment is not.
 	if err := created.verify(true); err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsObjectFacts{}, err
 	}
-	if err := windowsV3VerifyOpenedLeafAuthority(created.handle(), native, true); err != nil {
-		return windowsV3ObjectFacts{}, err
+	if err := windowsVerifyOpenedLeafAuthority(created.handle(), native, true); err != nil {
+		return windowsObjectFacts{}, err
 	}
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutACLHidden); err != nil {
-		return windowsV3ObjectFacts{}, err
+	if err := directory.observePrivateDirectoryCreate(relative, windowsPrivateDirectoryCutACLHidden); err != nil {
+		return windowsObjectFacts{}, err
 	}
 	if err := errors.Join(created.Sync(), directory.Sync()); err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsObjectFacts{}, err
 	}
 	duplicate, err := created.Duplicate()
 	if err != nil {
-		return windowsV3ObjectFacts{}, err
+		return windowsObjectFacts{}, err
 	}
 	verifyErr := duplicate.verify(true)
 	closeErr := duplicate.Close()
 	if verifyErr != nil || closeErr != nil {
-		return windowsV3ObjectFacts{}, errors.Join(
-			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
+		return windowsObjectFacts{}, errors.Join(
+			windowsFailure(operation, relative, errWindowsOutputUnsafe,
 				errors.New("private directory did not preserve its protected security")),
 			verifyErr, closeErr,
 		)
 	}
 	preparedFacts, err := created.inspector.Inspect(created.handle())
 	if err != nil {
-		return windowsV3ObjectFacts{},
-			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
+		return windowsObjectFacts{},
+			windowsFailure(operation, relative, errWindowsOutputUnsafe, err)
 	}
-	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutSynced); err != nil {
-		return windowsV3ObjectFacts{}, err
+	if err := directory.observePrivateDirectoryCreate(relative, windowsPrivateDirectoryCutSynced); err != nil {
+		return windowsObjectFacts{}, err
 	}
 	return preparedFacts, nil
 }
 
-func windowsV3CommitDeleteOnClose(handle windows.Handle) error {
+func windowsCommitDeleteOnClose(handle windows.Handle) error {
 	// FileDispositionInfoEx with ON_CLOSE and without DELETE is the NT contract
 	// for clearing a FILE_DELETE_ON_CLOSE link. This is the sole transition from
 	// rollback-on-process-death to a persistent namespace entry.
-	information := windowsV3DispositionInformation{Flags: windows.FILE_DISPOSITION_ON_CLOSE}
+	information := windowsDispositionInformation{Flags: windows.FILE_DISPOSITION_ON_CLOSE}
 	return windows.SetFileInformationByHandle(
 		handle, windows.FileDispositionInfoEx, (*byte)(unsafe.Pointer(&information)),
 		uint32(unsafe.Sizeof(information)),
 	)
 }
 
-type windowsV3PrivatePolicy struct {
+type windowsPrivatePolicy struct {
 	userSID           *windows.SID
 	systemSID         *windows.SID
 	administratorsSID *windows.SID
 }
 
-func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
+func newWindowsPrivatePolicy() (*windowsPrivatePolicy, error) {
 	user, err := windows.GetCurrentThreadEffectiveToken().GetTokenUser()
 	if err != nil {
 		return nil, err
@@ -249,12 +249,12 @@ func newWindowsV3PrivatePolicy() (*windowsV3PrivatePolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &windowsV3PrivatePolicy{
+	return &windowsPrivatePolicy{
 		userSID: userSID, systemSID: systemSID, administratorsSID: administratorsSID,
 	}, nil
 }
 
-func (policy *windowsV3PrivatePolicy) descriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
+func (policy *windowsPrivatePolicy) descriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
 	if policy == nil || policy.userSID == nil || policy.systemSID == nil {
 		return nil, errors.New("windows private ACL policy is unavailable")
 	}
@@ -272,21 +272,21 @@ func (policy *windowsV3PrivatePolicy) descriptor(directory bool) (*windows.SECUR
 	return windows.SecurityDescriptorFromString("O:" + policy.userSID.String() + "D:P" + entries)
 }
 
-func (policy *windowsV3PrivatePolicy) verify(handle windows.Handle, directory bool) error {
+func (policy *windowsPrivatePolicy) verify(handle windows.Handle, directory bool) error {
 	expectedFlags := uint8(0)
 	if directory {
 		expectedFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
 	}
 	return policy.verifyObjectPolicy(
-		handle, windows.SE_FILE_OBJECT, windowsV3FileAllAccess, expectedFlags,
+		handle, windows.SE_FILE_OBJECT, windowsFileAllAccess, expectedFlags,
 	)
 }
 
-func (policy *windowsV3PrivatePolicy) verifyKernelMutex(handle windows.Handle) error {
+func (policy *windowsPrivatePolicy) verifyKernelMutex(handle windows.Handle) error {
 	return policy.verifyObjectPolicy(handle, windows.SE_KERNEL_OBJECT, windows.MUTEX_ALL_ACCESS, 0)
 }
 
-func (policy *windowsV3PrivatePolicy) verifyObjectPolicy(
+func (policy *windowsPrivatePolicy) verifyObjectPolicy(
 	handle windows.Handle,
 	objectType windows.SE_OBJECT_TYPE,
 	expectedMask windows.ACCESS_MASK,

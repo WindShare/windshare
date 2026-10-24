@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InitialJoinControl, InitialJoinUnavailableError, runInitialJoin } from '../../src/receiver/initial-join'
-import { V2RelayReceiverError } from '../../src/transport/relay/v2-receiver'
-import { V2_RELAY_ERROR } from '../../src/transport/relay/v2-protocol'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
+import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { SenderObjectError } from '../../src/crypto/sender-object'
 import { RecoveryWake } from '../../src/receiver/recovery-wake'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 
 afterEach(() => vi.useRealTimers())
 
-const unavailable = () => new V2RelayReceiverError('not found', { relayError: {
-  code: V2_RELAY_ERROR.notFound, retryAfterMilliseconds: 0,
+const unavailable = () => new RelayReceiverError('not found', { relayError: {
+  code: RELAY_ERROR.notFound, retryAfterMilliseconds: 0,
 } })
 
 function advancingClock() {

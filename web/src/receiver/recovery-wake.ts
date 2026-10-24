@@ -1,4 +1,4 @@
-import type { V2ReconnectClock } from './recovery-clock'
+import type { ReconnectClock } from './recovery-clock'
 
 /** A retry request releases current delays; it never starts or cancels a handshake. */
 export class RecoveryWake {
@@ -8,7 +8,7 @@ export class RecoveryWake {
     for (const wake of this.#waiting) wake()
   }
 
-  async sleep(clock: V2ReconnectClock, milliseconds: number, signal: AbortSignal): Promise<void> {
+  async sleep(clock: ReconnectClock, milliseconds: number, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
     const delay = new AbortController()
     let wake!: () => void

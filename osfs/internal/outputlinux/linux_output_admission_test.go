@@ -54,7 +54,7 @@ func TestLinuxRuntimeAdmissionDoesNotRequireRestartIdentity(t *testing.T) {
 			if root.binding.restart != nil || root.binding.mount.filesystemUUID != [linuxFilesystemUUIDBytes]byte{} {
 				t.Fatal("runtime-only admission retained a partial restart certificate")
 			}
-			platform := &linuxV3Platform{root: &linuxV3Directory{native: root}}
+			platform := &linuxPlatform{root: &linuxDirectory{native: root}}
 			assertLinuxProcessOnlyPlatform(t, platform)
 			if err := root.verifyHandle(); err != nil {
 				t.Fatal(err)
@@ -117,7 +117,7 @@ func TestLinuxRuntimeAdmissionPreservesCertificationAndRejectsContradictions(t *
 				t.Fatalf("certificate=%v expected=%v", root.binding.restart, test.wantCertificate)
 			}
 			if test.wantCertificate {
-				platform := &linuxV3Platform{root: &linuxV3Directory{native: root}}
+				platform := &linuxPlatform{root: &linuxDirectory{native: root}}
 				if platform.Certification() != outputcap.CertificationLinuxExt4ProcessRestart {
 					t.Fatalf("lost exact ext4 certificate: %v", platform.Certification())
 				}
@@ -271,7 +271,7 @@ func TestLinuxTmpfsProcessStageRetainsWitnessAcrossInstallFailure(t *testing.T) 
 	defer stageDirectory.Close()
 	system := *root.native.system
 	root.native.system = &system
-	stageNative := stageDirectory.(*linuxV3Directory).native
+	stageNative := stageDirectory.(*linuxDirectory).native
 	stageNative.system = &system
 	originalSync := system.fsync
 	system.fsync = func(fd int) error {
@@ -335,7 +335,7 @@ func TestLinuxTmpfsCreatesNestedOutputRoot(t *testing.T) {
 	if platform.RootOpenDisposition() != outputcap.AuthorityCreatedRoot {
 		t.Fatalf("root disposition=%v", platform.RootOpenDisposition())
 	}
-	assertLinuxProcessOnlyPlatform(t, platform.(*linuxV3Platform))
+	assertLinuxProcessOnlyPlatform(t, platform.(*linuxPlatform))
 	file, err := platform.Root().CreateFile("created", false, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestLinuxTmpfsProcessStageInheritsFinalParentACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nestedValue.Close()
-	nested := nestedValue.(*linuxV3Directory)
+	nested := nestedValue.(*linuxDirectory)
 	nestedPath := filepath.Join(rootPath, "nested")
 	linuxTestSetDefaultACL(t, nestedPath, linuxTestDefaultACL(uint32(unix.Geteuid()+2), linuxTestACLWrite))
 	file, err := nested.CreateProcessStage(stageDirectory, "stage", 0)
@@ -387,7 +387,7 @@ func TestLinuxTmpfsProcessStageInheritsFinalParentACL(t *testing.T) {
 	}
 }
 
-func newLinuxTmpfsOutputPlatform(t *testing.T) (*linuxV3Platform, string) {
+func newLinuxTmpfsOutputPlatform(t *testing.T) (*linuxPlatform, string) {
 	t.Helper()
 	const tmpfsRoot = "/dev/shm"
 	var filesystem unix.Statfs_t
@@ -412,10 +412,10 @@ func newLinuxTmpfsOutputPlatform(t *testing.T) (*linuxV3Platform, string) {
 			t.Error(err)
 		}
 	})
-	return opened.(*linuxV3Platform), path
+	return opened.(*linuxPlatform), path
 }
 
-func assertLinuxProcessOnlyPlatform(t *testing.T, platform *linuxV3Platform) {
+func assertLinuxProcessOnlyPlatform(t *testing.T, platform *linuxPlatform) {
 	t.Helper()
 	if platform.Certification() != "" || platform.Durability() != transfer.DurabilityNone ||
 		platform.LiveCleanupNativeProfile() != 0 {

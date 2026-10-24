@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
-import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
-import { V2SessionBlockLane, type V2RevisionService } from '../../src/content/v2-session-services'
-import { encodeV2Body, V2_MESSAGE_KIND } from '../../src/session/v2-message'
+import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
+import { SessionBlockLane, type RevisionService } from '../../src/content/session-services'
+import { encodeBody, MESSAGE_KIND } from '../../src/session/message'
 import { id, KEY, runtimeFixture, SHARE } from './v2-send-fixture'
 
 it('keeps physical send failure within the lane boundary for in-flight requests', async () => {
@@ -10,7 +10,7 @@ it('keeps physical send failure within the lane boundary for in-flight requests'
   const physicalFailure = new Error('physical socket failed')
   vi.spyOn(channel, 'send').mockRejectedValueOnce(physicalFailure)
   try {
-    await expect(runtime.beginOperation(V2_MESSAGE_KIND.listChildren, encodeV2Body([])))
+    await expect(runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([])))
       .rejects.toMatchObject({ scope: 'lane', cause: physicalFailure })
   } finally {
     await runtime.close()
@@ -21,7 +21,7 @@ it('keeps physical receive failure within the lane boundary for waiting sends', 
   const { runtime, channel } = runtimeFixture()
   const physicalFailure = new Error('physical socket read failed')
   try {
-    const pending = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, encodeV2Body([]))
+    const pending = runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
     const rejected = expect(pending).rejects.toMatchObject({ scope: 'lane', cause: physicalFailure })
     await channel.sending.promise
     channel.failIncoming(physicalFailure)
@@ -34,9 +34,9 @@ it('keeps physical receive failure within the lane boundary for waiting sends', 
 it.each(['send', 'receive'] as const)('retries a physical %s failure on the healthy content lane', async (direction) => {
   const { runtime, channel } = runtimeFixture()
   const dispatched = vi.fn()
-  const lanes = new V2LaneSet({ onBlockDispatched: dispatched })
-  const revisions = { leaseError: () => undefined } as unknown as V2RevisionService
-  lanes.add(new V2SessionBlockLane(1, runtime, SHARE, KEY, revisions), 'application-relay')
+  const lanes = new LaneSet({ onBlockDispatched: dispatched })
+  const revisions = { leaseError: () => undefined } as unknown as RevisionService
+  lanes.add(new SessionBlockLane(1, runtime, SHARE, KEY, revisions), 'application-relay')
   const descriptor = {
     shareInstance: SHARE.shareInstance, shareInstanceId: SHARE.shareInstanceId,
     fileId: id(30), fileIdText: 'file', fileRevision: id(31), fileRevisionText: 'revision',
@@ -44,7 +44,7 @@ it.each(['send', 'receive'] as const)('retries a physical %s failure on the heal
   }
   const demand = { descriptor, leaseId: id(32), localBlockIndex: 0n }
   const expected = { descriptor, localBlockIndex: 0n, data: Uint8Array.of(0x42) }
-  const routes: V2BlockRouteEligibility = {
+  const routes: BlockRouteEligibility = {
     active: true, allows: () => true, assertActive: () => undefined, subscribe: () => () => undefined,
   }
   const fetchPeer = vi.fn(async () => expected)
@@ -73,8 +73,8 @@ it.each(['send', 'receive'] as const)('retries a physical %s failure on the heal
 it('keeps envelope validation failure fatal while sends are waiting', async () => {
   const { runtime, channel, events } = runtimeFixture()
   try {
-    const pending = runtime.beginOperation(V2_MESSAGE_KIND.listChildren, encodeV2Body([]))
-    const rejected = expect(pending).rejects.toMatchObject({ name: 'V2EnvelopeError' })
+    const pending = runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'EnvelopeError' })
     await channel.sending.promise
     channel.receive(Uint8Array.of(0xff))
     await rejected

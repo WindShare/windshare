@@ -1,0 +1,788 @@
+package runtrace
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
+	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/core/diagnosticerror"
+	appobs "github.com/windshare/windshare/engine/observation"
+	wire "github.com/windshare/windshare/engine/observation/wire"
+)
+
+const (
+	displayNameCanary = "secret-file-name-token.txt"
+	displayPathCanary = `C:\private\catalog\secret-file-name-token.txt`
+)
+
+func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
+	snapshot, err := appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		DiscoveredFiles: 1, DiscoveredBytes: 4,
+		PublishedFiles: 1, PublishedBytes: 4, PreviouslyPublishedBytes: 4,
+		FileOutcomes: appobs.FileOutcomes{PreviouslyPublishedFiles: 1},
+		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, err := wire.EncodeProgress(snapshot)
+	if err != nil || progress.PreviouslyPublishedBytes != "4" || progress.VerifiedBytes != "0" ||
+		progress.NewlyVerifiedBytes != "0" || progress.FileOutcomes.PreviouslyPublishedFiles != "1" ||
+		progress.FileOutcomes.ResumedFiles != "0" {
+		t.Fatalf("historical trace = (%+v, %v)", progress, err)
+	}
+}
+
+func TestEncodeVisitsEveryEventWithSealedPayloads(t *testing.T) {
+	events := allTraceEvents(t)
+	if got, want := len(events), 28; got != want {
+		t.Fatalf("event fixture count = %d, want %d", got, want)
+	}
+	expectedEvents := []string{
+		"ready",
+		"sharing_subject_selected",
+		"relay_connected",
+		"relay_recovering",
+		"content_path_selected",
+		"fallback",
+		"transfer_progress",
+		"warning",
+		"command_failed",
+		"transfer_settled",
+		"sharing_stopped",
+		"trace_incomplete",
+		"lane_adopted",
+		"relay_lifecycle",
+		"webrtc_lifecycle",
+		"peer_attempt",
+		"transfer_lifecycle",
+		"filesystem_output",
+		"sender_terminal_send_observed",
+		"sender_session_terminated",
+		"catalog_storage",
+		"root_prefetch",
+		"protocol_operation",
+		"lane_settlement",
+		"observer_loss",
+		"receiver_termination",
+		"platform_setup",
+		"native_connectivity",
+	}
+	eventNames := make(map[string]struct{}, len(events))
+	payloadTypes := make(map[reflect.Type]string, len(events))
+	for index, event := range events {
+		record, err := encode(
+			testRunIdentity(0x10),
+			entryMetadata{
+				sequence:  uint64(index + 1),
+				time:      time.Date(2026, 8, 16, 5, 6, 7, index, time.FixedZone("private-zone", 9*60*60)),
+				elapsedMS: int64(index),
+			},
+			event,
+		)
+		if err != nil {
+			t.Fatalf("encode event %T: %v", event, err)
+		}
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			t.Fatalf("marshal event %T: %v", event, err)
+		}
+		if record.SchemaVersion != SchemaVersion || record.RuntimeRunID == "" ||
+			!strings.HasSuffix(record.Time, "Z") || record.Payload == nil {
+			t.Fatalf("required envelope missing for %T: %+v", event, record)
+		}
+		if record.Event != expectedEvents[index] {
+			t.Fatalf("event %T discriminator = %q, want %q", event, record.Event, expectedEvents[index])
+		}
+		if _, duplicate := eventNames[record.Event]; duplicate {
+			t.Fatalf("duplicate event discriminator %q", record.Event)
+		}
+		eventNames[record.Event] = struct{}{}
+		payloadType := reflect.TypeOf(record.Payload)
+		if previous, duplicate := payloadTypes[payloadType]; duplicate &&
+			payloadType != reflect.TypeFor[wire.EmptyPayload]() {
+			t.Fatalf("events %q and %q share payload type %v", previous, record.Event, payloadType)
+		}
+		payloadTypes[payloadType] = record.Event
+		assertEnvelopeAllowlist(t, encoded, record.Correlation != nil)
+		assertNoPrivacyCanaries(t, encoded)
+	}
+}
+
+func TestEncodePreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T) {
+	events := allTraceEvents(t)
+	transfer, err := encode(
+		testRunIdentity(0x12),
+		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
+		events[16],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transferPayload, ok := transfer.Payload.(wire.TransferLifecyclePayload)
+	if !ok || transferPayload.ItemBlockReason == nil ||
+		*transferPayload.ItemBlockReason != "revision_conflict" {
+		t.Fatalf("transfer item block payload = %#v", transfer.Payload)
+	}
+
+	filesystem, err := encode(
+		testRunIdentity(0x13),
+		entryMetadata{sequence: 2, time: time.Unix(2, 0)},
+		events[17],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesystemPayload, ok := filesystem.Payload.(fsobs.FilesystemOutputPayload)
+	if !ok || filesystemPayload.CheckpointDecision == nil ||
+		*filesystemPayload.CheckpointDecision != "revision_conflict" {
+		t.Fatalf("filesystem checkpoint payload = %#v", filesystem.Payload)
+	}
+}
+
+func TestPayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T) {
+	var roots []reflect.Type
+	for _, event := range allTraceEvents(t) {
+		record, err := encode(
+			testRunIdentity(0x11),
+			entryMetadata{sequence: 1, time: time.Unix(1, 0)},
+			event,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots = append(roots, reflect.TypeOf(record.Payload))
+	}
+	roots = append(roots,
+		reflect.TypeFor[traceSummaryPayload](),
+		reflect.TypeFor[wire.ProtocolErrorContent](),
+		reflect.TypeFor[wire.ProtocolResponseSendPayload](),
+		reflect.TypeFor[wire.ProtocolSendAttemptSettledPayload](),
+		reflect.TypeFor[wire.ProtocolErrorReceivedPayload](),
+	)
+	seen := make(map[reflect.Type]struct{})
+	var inspect func(reflect.Type)
+	inspect = func(value reflect.Type) {
+		for value.Kind() == reflect.Pointer {
+			value = value.Elem()
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		if value.Kind() != reflect.Struct {
+			t.Fatalf("payload node %v is not a struct", value)
+		}
+		for field := range value.Fields() {
+			tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if field.Anonymous {
+				inspect(field.Type)
+				continue
+			}
+			if tag == "" || tag == "-" {
+				t.Fatalf("payload field %v.%s lacks an explicit JSON key", value, field.Name)
+			}
+			fieldType := field.Type
+			for fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
+			}
+			switch fieldType.Kind() {
+			case reflect.Struct:
+				inspect(fieldType)
+			case reflect.Interface, reflect.Map, reflect.Func, reflect.Chan:
+				t.Fatalf("payload field %v.%s has open type %v", value, field.Name, field.Type)
+			case reflect.Slice:
+				switch fieldType.Elem().Kind() {
+				case reflect.String:
+				case reflect.Struct:
+					inspect(fieldType.Elem())
+				default:
+					t.Fatalf("payload field %v.%s has open slice %v", value, field.Name, field.Type)
+				}
+			case reflect.Uint64, reflect.Int64:
+				t.Fatalf("payload field %v.%s must use canonical decimal text, not %v", value, field.Name, field.Type)
+			case reflect.Int:
+				if tag != "exit_code" {
+					t.Fatalf("payload field %v.%s uses an unreviewed int number", value, field.Name)
+				}
+			}
+		}
+	}
+	for _, root := range roots {
+		inspect(root)
+	}
+}
+
+func TestEncodeEnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
+	runID := testRunIdentity(0x20)
+	record, err := encode(
+		runID,
+		entryMetadata{
+			sequence:  math.MaxUint64,
+			time:      time.Unix(1, 234).In(time.FixedZone("private", 9*60*60)),
+			elapsedMS: math.MaxInt64,
+		},
+		appobs.NewReady(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schema_version":4,"sequence":"18446744073709551615","time":"1970-01-01T00:00:01.000000234Z","elapsed_ms":"9223372036854775807","level":"info","event":"ready","command":"share","runtime_run_id":"` +
+		runID.encoded() + `","payload":{}}`
+	if string(encoded) != want {
+		t.Fatalf("envelope = %s, want %s", encoded, want)
+	}
+}
+
+func TestEncodeProgressUsesNestedDecimalStrings(t *testing.T) {
+	snapshot := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		DiscoveredFiles:         math.MaxUint64,
+		DiscoveredBytes:         math.MaxUint64,
+		PublishedFiles:          math.MaxUint64,
+		PublishedBytes:          math.MaxUint64,
+		VerifiedBytes:           math.MaxUint64,
+		NewlyVerifiedBytes:      math.MaxUint64,
+		FileOutcomes:            appobs.FileOutcomes{DownloadedFiles: math.MaxUint64},
+		CapacityActiveWaiters:   math.MaxUint32,
+		CapacityAccumulatedWait: 1250 * time.Millisecond,
+		CapacityWaitAttempts:    math.MaxUint64,
+		Discovery:               appobs.DiscoveryFailed,
+		CountersExact:           false,
+	}))
+	event := mustValue(appobs.NewTransferProgress(
+		mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0xa1))),
+		mustValue(appobs.NewTransferJobID(testIdentity(t, 0xb2))),
+		snapshot,
+	))
+	record, err := encode(
+		testRunIdentity(0x21),
+		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := record.Payload.(wire.TransferProgressPayload)
+	if !ok {
+		t.Fatalf("payload type = %T", record.Payload)
+	}
+	max := "18446744073709551615"
+	if payload.Progress.DiscoveredFiles != max ||
+		payload.Progress.DiscoveredBytes != max ||
+		payload.Progress.PublishedFiles != max ||
+		payload.Progress.PublishedBytes != max ||
+		payload.Progress.VerifiedBytes != max ||
+		payload.Progress.NewlyVerifiedBytes != max ||
+		payload.Progress.FileOutcomes.DownloadedFiles != max ||
+		payload.Progress.CapacityWait.ActiveWaiters != "4294967295" ||
+		payload.Progress.CapacityWait.AccumulatedWaitMS != "1250" ||
+		payload.Progress.CapacityWait.Attempts != max {
+		t.Fatalf("unsafe progress projection: %+v", payload.Progress)
+	}
+	if payload.ReceiveOperationID != base64.RawURLEncoding.EncodeToString(event.ReceiveOperationID().Bytes()) {
+		t.Fatalf("local typed identity projection = %q", payload.ReceiveOperationID)
+	}
+	if record.Correlation != nil {
+		t.Fatalf("local progress acquired cross-runtime correlation: %+v", record.Correlation)
+	}
+}
+
+func TestEncodeProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	lane := mustValue(appobs.NewLaneIdentity(math.MaxUint32, 0))
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+		Workflow:          appobs.WorkflowReceive,
+		Role:              appobs.ProtocolRoleReceiver,
+		Stage:             appobs.ProtocolOperationReceiverEnded,
+		ProtocolSession:   session,
+		ProtocolOperation: operation,
+		RequestKind:       appobs.ProtocolMessageRequestBlocks,
+		Lane:              lane,
+		HasLane:           true,
+		Cause:             appobs.ProtocolOperationCauseNone,
+	}))
+	record, err := encode(
+		testRunIdentity(0x22),
+		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
+		event,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Correlation == nil ||
+		record.Correlation.ProtocolSessionID != base64.RawURLEncoding.EncodeToString(session.Bytes()) ||
+		record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) ||
+		record.Correlation.LaneID == nil || *record.Correlation.LaneID != math.MaxUint32 ||
+		record.Correlation.LaneEpoch == nil || *record.Correlation.LaneEpoch != 0 {
+		t.Fatalf("correlation = %+v", record.Correlation)
+	}
+}
+
+func TestEncodeRetainsNormalCancellationAsDiagnostic(t *testing.T) {
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+		ProtocolSession: session, ProtocolOperation: operation, RequestKind: appobs.ProtocolMessagePeerOffer,
+		Stage: appobs.ProtocolOperationReceiverEnded, Cause: appobs.ProtocolOperationCauseCanceled,
+	}))
+	record, err := encode(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := record.Payload.(wire.ProtocolOperationPayload)
+	if payload.Stage != "receiver_ended" || payload.Cause != "canceled" ||
+		record.Correlation == nil || record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+		t.Fatalf("normal cancellation was lost or classified as failure: %+v", record)
+	}
+}
+
+func TestEncodeIncludesBlockWaitDecision(t *testing.T) {
+	for _, phase := range []appobs.BlockWaitPhase{appobs.BlockWaitAwaitingFirstFragment, appobs.BlockWaitReceivingFragments} {
+		session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+		operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+		event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+			ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+			Stage: appobs.ProtocolOperationReceiverFailed, ProtocolSession: session, ProtocolOperation: operation,
+			RequestKind: appobs.ProtocolMessageRequestBlocks, Cause: appobs.ProtocolOperationCauseDeadline,
+			BlockWait: appobs.BlockWaitSpec{Phase: phase, WaitedMillis: 35_000, QueueProgress: 12},
+		}))
+		record, err := encode(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait := record.Payload.(wire.ProtocolOperationPayload).BlockWait
+		name, _ := phase.Name()
+		if wait == nil || wait.Phase != name || wait.WaitedMS != "35000" || wait.QueueProgress != "12" ||
+			record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+			t.Fatalf("uncorrelated block wait decision: %+v", record)
+		}
+	}
+}
+
+func TestEncodeIncludesControlSchedulingWithOperationCorrelation(t *testing.T) {
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x32)))
+	lane := mustValue(appobs.NewLaneIdentity(3, 2))
+	event := mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Workflow: appobs.WorkflowReceive, Role: appobs.ProtocolRoleReceiver,
+		Stage: appobs.ProtocolOperationReceiverEnded, ProtocolSession: session, ProtocolOperation: operation,
+		RequestKind: appobs.ProtocolMessageOpenRevisions, Lane: lane, HasLane: true,
+		Cause:             appobs.ProtocolOperationCauseNone,
+		RequestScheduling: appobs.RequestSchedulingSpec{ExpectedMillis: 42, ResponseMillis: 10, QueuedContentMillis: 12, PendingRequests: 2},
+	}))
+	record, err := encode(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := record.Payload.(wire.ProtocolOperationPayload).RequestScheduling
+	if decision == nil || decision.ExpectedMS != "42" || decision.ResponseMS != "10" || decision.QueuedContentMS != "12" || decision.PendingRequests != 2 ||
+		record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+		t.Fatalf("uncorrelated scheduling decision: %+v", record)
+	}
+}
+
+func TestEncodeSeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
+	session := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x61)))
+	lane := mustValue(appobs.NewLaneIdentity(1, 0))
+	send := mustValue(appobs.NewSenderTerminalSendObserved(
+		session, lane, false,
+		appobs.SenderTerminalSendUnsettled,
+		appobs.SenderTerminalSendUnknown,
+		appobs.SenderTerminalSendFailed,
+	))
+	root := mustValue(appobs.NewSenderSessionTerminated(
+		session,
+		appobs.SenderSessionTerminalGracefulStop,
+		appobs.SenderSessionTerminalNormalStop,
+		diagnosticerror.Snapshot{},
+	))
+	sendRecord, err := encode(
+		testRunIdentity(0x25),
+		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
+		send,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRecord, err := encode(
+		testRunIdentity(0x25),
+		entryMetadata{sequence: 2, time: time.Unix(2, 0)},
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendRecord.Event != "sender_terminal_send_observed" ||
+		rootRecord.Event != "sender_session_terminated" ||
+		sendRecord.Correlation.LaneID == nil || rootRecord.Correlation.LaneID != nil {
+		t.Fatalf("terminal records = send %+v, root %+v", sendRecord, rootRecord)
+	}
+	rootPayload := rootRecord.Payload.(wire.SenderSessionTerminatedPayload)
+	if rootPayload.Trigger != "graceful_stop" || rootPayload.Provenance != "normal_stop" {
+		t.Fatalf("terminal root payload = %+v", rootPayload)
+	}
+}
+
+func TestSummaryIsTypedAndTruthful(t *testing.T) {
+	record := summaryRecord(
+		testRunIdentity(0x26),
+		clievent.CommandGet,
+		entryMetadata{sequence: math.MaxUint64, time: time.Unix(1, 0), elapsedMS: 4},
+		Status{
+			Complete:         false,
+			LifecycleDropped: math.MaxUint64,
+			ProgressDropped:  7,
+			EventsWritten:    11,
+			WriterFailed:     true,
+			FlushFailed:      true,
+			SchemaLimited:    true,
+		},
+	)
+	payload, ok := record.Payload.(traceSummaryPayload)
+	if !ok || record.Event != "trace_summary" || record.Level != "warn" ||
+		!payload.Incomplete || payload.LifecycleDropped != "18446744073709551615" ||
+		payload.ProgressDropped != "7" || payload.EventsWritten != "11" ||
+		!payload.WriterFailed || !payload.FlushFailed || !payload.SchemaLimited {
+		t.Fatalf("summary = %+v payload=%+v", record, payload)
+	}
+}
+
+func assertEnvelopeAllowlist(t *testing.T, encoded []byte, hasCorrelation bool) {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"schema_version", "sequence", "time", "elapsed_ms", "level", "event",
+		"command", "runtime_run_id", "payload",
+	}
+	if hasCorrelation {
+		want = append(want, "correlation")
+	}
+	if len(fields) != len(want) {
+		t.Fatalf("envelope fields = %v in %s", reflect.ValueOf(fields).MapKeys(), encoded)
+	}
+	for _, name := range want {
+		if _, ok := fields[name]; !ok {
+			t.Fatalf("envelope field %q missing from %s", name, encoded)
+		}
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(fields["payload"], &payload); err != nil || payload == nil {
+		t.Fatalf("payload is not an object in %s: %v", encoded, err)
+	}
+}
+
+func allTraceEvents(t *testing.T) []clievent.Event {
+	t.Helper()
+	failure := mustValue(appobs.NewFailure(appobs.FailureUnexpected))
+	retryFailure := mustValue(appobs.NewRetryableFailure(
+		appobs.FailureRelayStarting, math.MaxUint64,
+	))
+	fault := mustValue(appobs.NewFaultContext(
+		appobs.FaultOutput, appobs.FaultFileLocal, 1,
+	))
+	faultFailure := mustValue(appobs.NewFaultFailure(appobs.FailureOutputStateIO, fault))
+	authority := mustValue(appobs.NewRelayAuthority(
+		appobs.RelayWSS, "relay.example", 443,
+	))
+	receiveOperation := mustValue(appobs.NewReceiveOperationID(testIdentity(t, 0x11)))
+	protocolSession := mustValue(appobs.NewProtocolSessionID(testIdentity(t, 0x22)))
+	protocolOperation := mustValue(appobs.NewProtocolOperationID(testIdentity(t, 0x23)))
+	transferJob := mustValue(appobs.NewTransferJobID(testIdentity(t, 0x33)))
+	peerPath := mustValue(appobs.NewPeerPathID(testIdentity(t, 0x44)))
+	peerAttempt := mustValue(appobs.NewPeerAttemptID(testIdentity(t, 0x55)))
+	lane := mustValue(appobs.NewLaneIdentity(7, 9))
+	relaySession := mustValue(appobs.NewRelaySessionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}))
+	progress := mustValue(appobs.NewProgressSnapshot(appobs.ProgressSpec{
+		DiscoveredFiles:    3,
+		DiscoveredBytes:    500,
+		PublishedFiles:     1,
+		PublishedBytes:     100,
+		VerifiedBytes:      200,
+		NewlyVerifiedBytes: 150,
+		FileOutcomes:       appobs.FileOutcomes{DownloadedFiles: 1, ModifiedTimeWarnings: 2},
+		Discovery:          appobs.DiscoveryComplete,
+		CountersExact:      true,
+	}))
+	subject := mustValue(appobs.NewFileSubject(
+		appobs.NewDisplayName(displayNameCanary), math.MaxUint64,
+	))
+	transferResult := mustValue(clievent.NewTransferResult(clievent.TransferResultSpec{
+		Status:              clievent.ResultPartial,
+		ExitCode:            clievent.ExitFailure,
+		Drift:               clievent.DriftNone,
+		Elapsed:             3*time.Second + 4*time.Millisecond,
+		Destination:         appobs.NewDisplayPath(displayPathCanary),
+		DestinationAdjusted: true,
+		Files:               appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
+		DirectoryFailures:   math.MaxUint64,
+		OmittedDiagnostics:  2,
+		PublishedBytes:      100,
+		CountersExact:       false,
+		Failure:             failure,
+	}))
+	shareResult := mustValue(clievent.NewShareResult(clievent.ShareResultSpec{
+		ExitCode: clievent.ExitSuccess,
+		Elapsed:  2 * time.Second,
+	}))
+
+	return []clievent.Event{
+		appobs.NewReady(),
+		mustValue(appobs.NewSharingSubjectSelected(subject)),
+		mustValue(clievent.NewRelayConnected(clievent.CommandShare, authority)),
+		mustValue(clievent.NewRelayRecovering(
+			clievent.CommandGet, authority, 2, appobs.RelayRecoveryFailed, retryFailure,
+		)),
+		mustValue(appobs.NewContentPathSelected(appobs.ContentPathDirect)),
+		mustValue(clievent.NewFallback(
+			clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay, failure,
+		)),
+		mustValue(appobs.NewTransferProgress(receiveOperation, transferJob, progress)),
+		mustValue(clievent.NewWarning(clievent.CommandGet, faultFailure)),
+		mustValue(clievent.NewCommandFailed(
+			clievent.CommandShare, clievent.ExitFailure, failure,
+		)),
+		mustValue(clievent.NewTransferSettled(transferResult)),
+		mustValue(clievent.NewSharingStopped(shareResult)),
+		mustValue(clievent.NewTraceIncomplete(
+			clievent.CommandGet, clievent.TraceIncompleteLifecycleDrop, clievent.TraceLoss{LifecycleDrops: math.MaxUint64, ProgressDrops: 4},
+		)),
+		mustValue(clievent.NewLaneAdopted(
+			clievent.CommandGet, protocolSession, lane, appobs.TransportWebRTC,
+		)),
+		mustValue(appobs.NewRelayLifecycleObserved(appobs.RelayLifecycleSpec{
+			Workflow:         appobs.WorkflowShare,
+			LinkID:           math.MaxUint64,
+			RelaySession:     relaySession,
+			SendOperationID:  math.MaxUint64,
+			Stage:            appobs.RelaySendAdmitted,
+			Disposition:      appobs.SendAccepted,
+			RetirementSource: appobs.RelayRetirementNone,
+			Cause:            appobs.RelayCauseTransport,
+			DrainCause:       appobs.RelayCauseNone,
+			Dropped:          math.MaxUint64,
+		})),
+		mustValue(appobs.NewWebRTCLifecycleObserved(appobs.WebRTCLifecycleSpec{
+			Workflow:        appobs.WorkflowReceive,
+			ChannelID:       math.MaxUint64,
+			SendOperationID: math.MaxUint64,
+			Operation:       appobs.WebRTCChannel,
+			Transition:      appobs.WebRTCTraceDropped,
+			Disposition:     appobs.SendAccepted,
+			State:           appobs.ChannelOpen,
+			Terminal:        appobs.WebRTCTerminalNone,
+			Cause:           appobs.WebRTCCauseNone,
+			Dropped:         math.MaxUint64,
+		})),
+		mustValue(appobs.NewPeerAttemptObserved(appobs.PeerAttemptSpec{
+			Workflow:      appobs.WorkflowReceive,
+			Session:       protocolSession,
+			PeerPath:      peerPath,
+			Attempt:       peerAttempt,
+			Sequence:      math.MaxUint64,
+			ElapsedMillis: math.MaxUint64,
+			Stage:         appobs.PeerAttemptFailed,
+			FailedAtStage: appobs.PeerAdmissionResponseSettled,
+			Candidates:    appobs.CandidateCounts{LocalEmitted: 1, RemoteAccepted: 2},
+			HasCandidates: true,
+			FailureScope:  appobs.PeerFailureAttempt,
+			Failure:       failure,
+		})),
+		mustValue(appobs.NewTransferLifecycleObserved(appobs.TransferLifecycleSpec{
+			ReceiveOperation: receiveOperation,
+			ProtocolSession:  protocolSession,
+			TransferJob:      transferJob,
+			Stage:            appobs.TransferFileSettled,
+			Progress:         progress,
+			FileSelection:    appobs.FileSelectionInherited,
+			FileSettlement:   appobs.FileItemBlocked,
+			ItemBlockReason:  appobs.ItemBlockRevisionConflict,
+			TreeSettlement:   appobs.TreeSettlementPartial,
+			Failure:          failure,
+		})),
+		mustValue(fsobs.NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+			Operation:           fsobs.FilesystemRuntimeDecision,
+			ReceiveOperation:    receiveOperation,
+			Certification:       fsobs.FilesystemCertificationWindowsNTFSProcessRestart,
+			NativeLockScope:     fsobs.FilesystemNativeLockSession,
+			NativeLockMilestone: fsobs.FilesystemNativeLockAcquired,
+			RootDisposition:     fsobs.FilesystemRootAuthorityCreated,
+			RuntimeComponent:    fsobs.FilesystemRuntimeFile,
+			RuntimeOperation:    fsobs.FilesystemRuntimeWriteRange,
+			RuntimeDecision:     fsobs.FilesystemRuntimeNeedsAttention,
+			CheckpointDecision:  fsobs.FilesystemCheckpointRevisionConflict,
+			OperationID:         math.MaxUint64,
+			ClaimID:             math.MaxUint64,
+			Counters: fsobs.FilesystemOutputCounters{
+				NodeClaims:             math.MaxUint64,
+				DirectoryClaims:        2,
+				FileClaims:             3,
+				ActiveFileClaims:       4,
+				ReservedFileSlots:      5,
+				DirectoryMetadataBytes: math.MaxUint64,
+				CheckpointRecords:      7,
+			},
+			Failure:            faultFailure,
+			FailureStage:       fsobs.FilesystemFailureNativeDurability,
+			ReconciliationStep: fsobs.FilesystemReconciliationRecordPromotion,
+			NativeErrorClass:   fsobs.FilesystemNativeErrorSharingViolation,
+		})),
+		mustValue(appobs.NewSenderTerminalSendObserved(
+			protocolSession, lane, false,
+			appobs.SenderTerminalSendUnsettled,
+			appobs.SenderTerminalSendUnknown,
+			appobs.SenderTerminalSendFailed,
+		)),
+		mustValue(appobs.NewSenderSessionTerminated(
+			protocolSession,
+			appobs.SenderSessionTerminalGracefulStop,
+			appobs.SenderSessionTerminalNormalStop,
+			diagnosticerror.Snapshot{},
+		)),
+		mustValue(appobs.NewCatalogStorageObserved(
+			appobs.CatalogStorageBudgetRejected,
+			appobs.CatalogStorageCauseBudget,
+			appobs.CatalogUsage{
+				ActiveScans: math.MaxUint64,
+				ScanWork:    math.MaxUint64,
+				Entries:     math.MaxUint64,
+				MemoryBytes: math.MaxUint64,
+				SpillBytes:  math.MaxUint64,
+			},
+			math.MaxUint64,
+		)),
+		mustValue(appobs.NewRootPrefetchObserved(
+			appobs.RootPrefetchCommitted,
+			math.MaxUint64,
+			math.MaxUint64,
+			math.MaxUint64,
+		)),
+		mustValue(appobs.NewProtocolOperationObserved(appobs.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
+			Workflow:                appobs.WorkflowReceive,
+			Role:                    appobs.ProtocolRoleReceiver,
+			Stage:                   appobs.ProtocolOperationReceiverFailed,
+			ProtocolSession:         protocolSession,
+			ProtocolOperation:       protocolOperation,
+			RequestKind:             appobs.ProtocolMessageReleaseLease,
+			Lane:                    lane,
+			HasLane:                 true,
+			HasSend:                 true,
+			SendSettled:             true,
+			SendAdmitted:            true,
+			SendOutcome:             appobs.ProtocolSendTransportConfirmed,
+			DeadlineRemainingMillis: math.MaxUint64,
+			HasDeadline:             true,
+			OperationElapsedMillis:  math.MaxUint64,
+			UsableLanesAtSelection:  math.MaxUint32,
+			UsableLanesAtSettlement: math.MaxUint32,
+			Cause:                   appobs.ProtocolOperationCauseDeadline,
+		})),
+		mustValue(appobs.NewLaneSettlementObserved(appobs.LaneSettlementSpec{
+			Session:             protocolSession,
+			Route:               appobs.LaneRouteDirect,
+			Lane:                lane,
+			DeliveredBlocks:     math.MaxUint64,
+			DeliveredBytes:      math.MaxUint64,
+			FailedBlockAttempts: 2,
+			ReassignedBlocks:    3,
+			Incomplete:          true,
+		})),
+		mustValue(appobs.NewObserverLossObserved(appobs.ObserverLossSpec{
+			Workflow: appobs.WorkflowReceive,
+			Category: appobs.ObserverLossReceiverTermination,
+			Reason:   appobs.ObserverLossAdapterCapacityTimeout,
+			Count:    math.MaxUint64,
+		})),
+		mustValue(appobs.NewReceiverTerminationObserved(appobs.ReceiverTerminationSpec{
+			Operation:             protocolOperation,
+			HasOperation:          true,
+			LocalGeneration:       math.MaxUint64,
+			TransitionAuthority:   appobs.ReceiverTerminalRemote,
+			Disposition:           appobs.ReceiverSessionUnsafe,
+			TransitionProvenance:  appobs.ReceiverProvenanceRemoteFailureMalformed,
+			ConsequenceProvenance: appobs.ReceiverProvenanceRemoteFailureMalformed,
+			LocalStopReason:       appobs.ReceiverLocalStopNone,
+			DiagnosticsTruncated:  true,
+			BenignComponents: []appobs.ReceiverBenignComponent{
+				appobs.ReceiverBenignContextCanceled,
+			},
+			RetainedCauseClasses: []appobs.ReceiverCauseClass{
+				appobs.ReceiverCauseProtocol,
+			},
+			TeardownTransitions: []appobs.PeerTeardownTransition{
+				appobs.PeerTeardownShutdownInitiated,
+			},
+			PeerShutdownFailed: true,
+			ChannelDrainFailed: true,
+		})),
+		mustValue(clievent.NewPlatformSetupObserved(clievent.CommandGet, "declined", "user-skipped")),
+		mustValue(appobs.NewNativeConnectivityObserved(appobs.NativeConnectivitySpec{Workflow: appobs.WorkflowReceive, Side: "receiver", Kind: "provider_created", State: "unknown"})),
+	}
+}
+
+func assertNoPrivacyCanaries(t *testing.T, encoded []byte) {
+	t.Helper()
+	canaries := []string{
+		displayNameCanary,
+		displayPathCanary,
+		"https://relay.example/private/route?auth=token#secret-key",
+		"split-key-secret",
+		"authentication-token-secret",
+		"private-key-material",
+		"catalog/private/path",
+		"argv-secret-marker",
+		"environment-secret-marker",
+		"provider-error-secret",
+	}
+	for _, canary := range canaries {
+		if strings.Contains(string(encoded), canary) {
+			t.Fatalf("privacy canary %q leaked in %s", canary, encoded)
+		}
+		digest := sha256.Sum256([]byte(canary))
+		encodedDigest := hex.EncodeToString(digest[:])
+		if strings.Contains(string(encoded), encodedDigest) ||
+			strings.Contains(string(encoded), encodedDigest[:12]) {
+			t.Fatalf("privacy canary hash for %q leaked in %s", canary, encoded)
+		}
+	}
+}
+
+func testRunIdentity(marker byte) runIdentity {
+	var identity runIdentity
+	for index := range identity {
+		identity[index] = marker + byte(index)
+	}
+	return identity
+}
+
+func testIdentity(t *testing.T, marker byte) []byte {
+	t.Helper()
+	identity := make([]byte, appobs.IdentityBytes)
+	for index := range identity {
+		identity[index] = marker + byte(index)
+	}
+	return identity
+}
+
+func mustValue[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}

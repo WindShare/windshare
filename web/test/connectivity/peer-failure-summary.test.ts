@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserAttemptLifecycle } from '../../src/connectivity/v2-session-signaling-lifecycle'
-import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
+import { BrowserAttemptLifecycle } from '../../src/connectivity/session-signaling-lifecycle'
+import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
-  createV2ProtocolSessionIdentity, createV2ProtocolOperationIdentity,
-  createV2PeerPathIdentityValue, createV2PeerAttemptIdentity,
-} from '../../src/session/v2-identities'
+  createProtocolSessionIdentity, createProtocolOperationIdentity,
+  createPeerPathIdentityValue, createPeerAttemptIdentity,
+} from '../../src/session/identities'
 import { projectConnectivityTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
@@ -14,11 +14,11 @@ const bytes = (seed: number) => new Uint8Array(16).fill(seed)
 
 function timedOutAttempt() {
   let now = 0
-  const events: V2ConnectivityTraceEvent[] = []
+  const events: ConnectivityTraceEvent[] = []
   const lifecycle = new BrowserAttemptLifecycle(() => ({
-    protocolSessionId: createV2ProtocolSessionIdentity(bytes(1)),
-    peerPathId: createV2PeerPathIdentityValue(bytes(2)),
-    attemptId: createV2PeerAttemptIdentity(bytes(3)),
+    protocolSessionId: createProtocolSessionIdentity(bytes(1)),
+    peerPathId: createPeerPathIdentityValue(bytes(2)),
+    attemptId: createPeerAttemptIdentity(bytes(3)),
     waveOrdinal: 1, waveAttemptOrdinal: 1, sessionAttemptOrdinal: 1,
   }), { current: event => events.push(event) }, () => now)
   lifecycle.phaseDeadlineArmed('negotiation', 65_000)
@@ -27,7 +27,7 @@ function timedOutAttempt() {
   }
   now = 1_000
   lifecycle.phaseDeadlineArmed('admission', 20_000)
-  lifecycle.grantRequested(createV2ProtocolOperationIdentity(bytes(4)), 2)
+  lifecycle.grantRequested(createProtocolOperationIdentity(bytes(4)), 2)
   now = 21_000
   lifecycle.phaseDeadlineExpired('admission', 20_000)
   lifecycle.failed({ kind: 'local-transient', phase: 'admission', reason: 'admission-timeout' })

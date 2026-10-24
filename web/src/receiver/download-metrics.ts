@@ -1,4 +1,4 @@
-import type { V2BlockTransportRoute } from '../content/v2-route-policy'
+import type { BlockTransportRoute } from '../content/route-policy'
 
 export const MAXIMUM_DOWNLOAD_INTERVALS = 4_096
 import type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
@@ -74,7 +74,7 @@ export class DownloadMetrics {
     }
   }
   evidenceLost(): void { if (!this.#final) this.#incomplete = true }
-  delivered(revision: string, start: bigint, end: bigint, route?: V2BlockTransportRoute): void {
+  delivered(revision: string, start: bigint, end: bigint, route?: BlockTransportRoute): void {
     if (this.#final) return
     this.#tick()
     if (revision === '' || start < 0n || end <= start) { this.evidenceLost(); return }

@@ -1,55 +1,55 @@
-import type { V2FrozenSelectionPolicy } from '../../../catalog/v2-selection'
-import type { V2ConnectivityActivation } from '../../../connectivity/v2-receiver-policy'
+import type { FrozenSelectionPolicy } from '../../../catalog/selection'
+import type { ConnectivityActivation } from '../../../connectivity/receiver-policy'
 import type {
   LateOutputFailureConsequenceCapability,
   OutputFailureBindingLease,
 } from '../../../output/diagnostics'
 import { isTerminalLifecycleState } from '../../../output/workspace'
 import { TransferPauseRequestedError } from '../../../transfer/output/session'
-import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
+import { TransferFailureSettlementError } from '../../../transfer/settlement/output'
 import {
   materializeClassifiedTransferFailure,
 } from '../../../transfer/job/failures'
 import {
   type ClassifiedTransferFailure,
 } from '../../../transfer/failure/classification'
-import type { V2TransferAdmissionFailureAuthority } from '../../../transfer/job/admission-error'
+import type { TransferAdmissionFailureAuthority } from '../../../transfer/job/admission-error'
 import {
-  V2TransferAdmissionFailureError,
+  TransferAdmissionFailureError,
   type TransferJobResult,
   type TransferProgress,
-} from '../../../transfer/v2-job'
+} from '../../../transfer/job'
 import { type LifecycleUserAction } from '../actions'
 import { isAbortError, ReceiveSourceInvalidatedError } from '../errors'
 import type { ActiveReceiveJoinedShare } from '../joined-share'
 import type { ReceiveRuntimeState } from '../state'
-import type { V2BoundReceiveOperation } from '../contracts'
+import type { BoundReceiveOperation } from '../contracts'
 import type { ReceiveObservationOptions } from '../observation/contracts'
-import { StaleReceiveBoundaryError, type V2ActiveCompatibleNameRepairProjection } from '../observation/contracts'
+import { StaleReceiveBoundaryError, type ActiveCompatibleNameRepairProjection } from '../observation/contracts'
 import {
   ActiveReceiveObservability,
   type ReceiveFailureTrigger,
-  type V2ReceivePresentationAttempt,
+  type ReceivePresentationAttempt,
 } from './observability'
 import {
   ActiveReceiveLifecycle,
   type ActiveReceiveLifecycleOperation,
 } from './lifecycle'
 import { ReceiveSettlementDeadline } from './settlement-wait'
-import type { V2PresentationAttempt } from '../observation/attempt'
+import type { PresentationAttempt } from '../observation/attempt'
 import { isReceiveOutputDelivered } from '../completion'
 
 interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly boundary: number
   readonly joined: ActiveReceiveJoinedShare
-  readonly selection: V2FrozenSelectionPolicy
-  readonly runtime: V2BoundReceiveOperation
-  repairProjection?: V2ActiveCompatibleNameRepairProjection
+  readonly selection: FrozenSelectionPolicy
+  readonly runtime: BoundReceiveOperation
+  repairProjection?: ActiveCompatibleNameRepairProjection
   transfer?: AbortController
-  connectivity?: V2ConnectivityActivation
+  connectivity?: ConnectivityActivation
   running?: Promise<void>
-  receiveAttempt?: V2ReceivePresentationAttempt
-  latestReceiveAttempt?: V2ReceivePresentationAttempt
+  receiveAttempt?: ReceivePresentationAttempt
+  latestReceiveAttempt?: ReceivePresentationAttempt
   receiveOutputLease?: OutputFailureBindingLease
   detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
@@ -73,9 +73,9 @@ export interface ActiveReceiveCoordinatorOptions {
 
 export interface ActiveReceiveAdoption {
   readonly joined: ActiveReceiveJoinedShare
-  readonly selection: V2FrozenSelectionPolicy
-  readonly runtime: V2BoundReceiveOperation
-  readonly repairProjection?: V2ActiveCompatibleNameRepairProjection
+  readonly selection: FrozenSelectionPolicy
+  readonly runtime: BoundReceiveOperation
+  readonly repairProjection?: ActiveCompatibleNameRepairProjection
 }
 
 export interface PreparedActiveReceiveAdoption {
@@ -146,7 +146,7 @@ export class ActiveReceiveCoordinator {
        state.kind === 'needs-attention')
   }
 
-  ownsRuntime(runtime: V2BoundReceiveOperation): boolean {
+  ownsRuntime(runtime: BoundReceiveOperation): boolean {
     return this.#operation?.runtime === runtime
   }
 
@@ -235,7 +235,7 @@ export class ActiveReceiveCoordinator {
     const outputLease = active.runtime.bindOutputFailures?.(attempt.outputFailures)
     if (outputLease !== undefined) active.receiveOutputLease = outputLease
 
-    let connectivity: V2ConnectivityActivation | undefined
+    let connectivity: ConnectivityActivation | undefined
     let transfer: AbortController | undefined
     let task: Promise<void>
     try {
@@ -264,7 +264,7 @@ export class ActiveReceiveCoordinator {
       )
       task = job.run(transfer.signal).then(
         result => this.#settleTransfer(active, attempt, result),
-        (error: unknown) => error instanceof V2TransferAdmissionFailureError
+        (error: unknown) => error instanceof TransferAdmissionFailureError
           ? this.#settleTransferAdmissionFailure(active, attempt, error)
           : this.#settleUnexpectedTransferFailure(active, attempt, error),
       )
@@ -332,7 +332,7 @@ export class ActiveReceiveCoordinator {
 
   async #settleTransfer(
     active: ActiveReceiveOperation,
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     result: TransferJobResult,
   ): Promise<void> {
     if (!this.#operationIsCurrent(active)) {
@@ -403,7 +403,7 @@ export class ActiveReceiveCoordinator {
 
   async #settleTransferAdmissionFailure(
     active: ActiveReceiveOperation,
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     error: unknown,
   ): Promise<void> {
     if (!this.#operationIsCurrent(active)) {
@@ -454,14 +454,14 @@ export class ActiveReceiveCoordinator {
 
   #admissionFailureAuthority(
     error: unknown,
-  ): V2TransferAdmissionFailureAuthority | undefined {
-    return error instanceof V2TransferAdmissionFailureError ? error.authority : undefined
+  ): TransferAdmissionFailureAuthority | undefined {
+    return error instanceof TransferAdmissionFailureError ? error.authority : undefined
   }
 
   #admissionFailureTrigger(
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     error: unknown,
-    authority: V2TransferAdmissionFailureAuthority | undefined,
+    authority: TransferAdmissionFailureAuthority | undefined,
   ): ClassifiedTransferFailure | undefined {
     if (authority?.kind === 'canceled') return undefined
     if (authority?.kind === 'fault') {
@@ -476,7 +476,7 @@ export class ActiveReceiveCoordinator {
   }
 
   #reportAdmissionSettlementFailure(
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     admissionError: unknown,
     trigger: ClassifiedTransferFailure | undefined,
     settlementError: unknown,
@@ -494,13 +494,13 @@ export class ActiveReceiveCoordinator {
     const consequences = consequence === undefined ? [] : [consequence]
     const productError = selectedTrigger === undefined
       ? admissionError
-      : new V2TransferFailureSettlementError(trigger, consequences)
+      : new TransferFailureSettlementError(trigger, consequences)
     this.#reportTransferFailure(productError)
   }
 
   async #settleUnexpectedTransferFailure(
     active: ActiveReceiveOperation,
-    attempt: V2ReceivePresentationAttempt,
+    attempt: ReceivePresentationAttempt,
     error: unknown,
   ): Promise<void> {
     if (!this.#operationIsCurrent(active)) {
@@ -628,7 +628,7 @@ export class ActiveReceiveCoordinator {
 
   #startLifecycleObservation(active: ActiveReceiveOperation): void {
     let observing = true
-    const publish = (state: V2BoundReceiveOperation['lifecycle']) => {
+    const publish = (state: BoundReceiveOperation['lifecycle']) => {
       if (!observing || !this.#operationIsCurrent(active)) return
       try { this.#state.observeLifecycle(state) } catch (error) { this.#reportTransferFailure(error) }
     }
@@ -689,7 +689,7 @@ export class ActiveReceiveCoordinator {
 
   #replaceDetachConsequence(
     active: ActiveReceiveOperation,
-    attempt: V2PresentationAttempt,
+    attempt: PresentationAttempt,
   ): void {
     if (active.detachment !== undefined) return
     active.detachOutputCapability?.revoke()
@@ -699,7 +699,7 @@ export class ActiveReceiveCoordinator {
     if (capability !== undefined) active.detachOutputCapability = capability
   }
 
-  #closeAttempt(attempt: V2PresentationAttempt | undefined): void {
+  #closeAttempt(attempt: PresentationAttempt | undefined): void {
     attempt?.close()
   }
 }

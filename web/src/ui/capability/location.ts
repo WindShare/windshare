@@ -2,26 +2,26 @@ import { isPortalFragment } from '../portal/navigation'
 
 import { requestsBrowserTrace, TRACE_QUERY_PARAMETER } from './intake'
 
-export interface V2CapturedLocation {
+export interface CapturedLocation {
   readonly capabilityInput: string | null
   readonly pageUrl: string
   readonly diagnosticsRequested?: boolean
 }
 
-export interface BrowserLocationCapture extends V2CapturedLocation {
+export interface BrowserLocationCapture extends CapturedLocation {
   readonly diagnosticsRequested: boolean
 }
 
-export interface V2LocationCaptureOptions {
+export interface LocationCaptureOptions {
   readonly onSecurityMilestone?: (milestone: 'location-cleared') => void
 }
 
 type LocationPort = Pick<Window, 'location' | 'history'>
 type LocationEventsPort = LocationPort & Pick<Window, 'addEventListener' | 'removeEventListener'>
 
-export function captureV2Location(
+export function captureLocation(
   windowPort: LocationPort = window,
-  options: V2LocationCaptureOptions = {},
+  options: LocationCaptureOptions = {},
 ): BrowserLocationCapture {
   const input = windowPort.location.href
   const sanitized = new URL(input)
@@ -48,13 +48,13 @@ export function captureV2Location(
 }
 
 /** One document owns its listener even when React remounts or the page enters bfcache. */
-export function observeV2Location(
+export function observeLocation(
   windowPort: LocationEventsPort,
   accept: (captured: BrowserLocationCapture) => void,
 ): () => void {
   const changed = () => {
     // Queued hashchange events may describe a URL already replaced by a newer link.
-    const captured = captureV2Location(windowPort)
+    const captured = captureLocation(windowPort)
     if (captured.capabilityInput !== null || captured.diagnosticsRequested) accept(captured)
   }
   windowPort.addEventListener('hashchange', changed)

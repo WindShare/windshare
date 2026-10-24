@@ -1,30 +1,30 @@
 import { describe, expect, it } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import { byteRange } from '../../src/content/geometry'
 import {
-  V2BlockBroker,
-  V2LaneSet,
-  type V2BlockDemand,
-  type V2BlockLane,
-  type V2BlockRangeReader,
-  type V2BlockRouteEligibility,
-} from '../../src/content/v2-broker'
-import type { V2BlockRecord } from '../../src/content/v2-records'
+  BlockBroker,
+  LaneSet,
+  type BlockDemand,
+  type BlockLane,
+  type BlockRangeReader,
+  type BlockRouteEligibility,
+} from '../../src/content/broker'
+import type { BlockRecord } from '../../src/content/records'
 import {
-  V2RevisionCapacityBusyError,
-  type V2RevisionReader,
-} from '../../src/content/v2-session-services'
-import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+  RevisionCapacityBusyError,
+  type RevisionReader,
+} from '../../src/content/session-services'
+import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import {
   createFailureIdentity,
   createReceivedProtocolError,
 } from '../../src/diagnostics/incident'
 import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
-import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/v2-job'
+import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/job'
 import type {
-  V2ProtocolSessionReplacementWaiter,
-  V2RevisionCapacityClock,
+  ProtocolSessionReplacementWaiter,
+  RevisionCapacityClock,
 } from '../../src/transfer/revision-capacity/public'
 import type { TestOutput } from './v2-job-fixture'
 import {
@@ -39,25 +39,25 @@ import {
   transferJobFixture,
 } from './v2-job-fixture'
 
-const ALL_CONTENT_ROUTES: V2BlockRouteEligibility = Object.freeze({
+const ALL_CONTENT_ROUTES: BlockRouteEligibility = Object.freeze({
   active: true,
   allows: () => true,
   assertActive: () => undefined,
   subscribe: () => () => undefined,
 })
 
-class DeferredTransferLane implements V2BlockLane {
+class DeferredTransferLane implements BlockLane {
   readonly id: number
   readonly calls: Array<Readonly<{
-    demand: V2BlockDemand
-    resolve: (record: V2BlockRecord) => void
+    demand: BlockDemand
+    resolve: (record: BlockRecord) => void
   }>> = []
 
   constructor(id: number) {
     this.id = id
   }
 
-  fetchBlock(demand: V2BlockDemand, _signal?: AbortSignal, observer?: import('../../src/content/v2-lane-set').V2BlockReadObserver): Promise<V2BlockRecord> {
+  fetchBlock(demand: BlockDemand, _signal?: AbortSignal, observer?: import('../../src/content/lane-set').BlockReadObserver): Promise<BlockRecord> {
     const block = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
     observer?.received?.(Number(block.end - block.start))
     return new Promise((resolve) => this.calls.push({ demand, resolve }))
@@ -130,7 +130,7 @@ describe('v2 authenticated file transfer', () => {
     const root = identity(2)
     const blocked = fileEntry(identity(11), 'blocked.bin', 2n)
     const sibling = fileEntry(identity(12), 'sibling.bin', 2n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [blocked, sibling] }])
     const readers = readerFixture([blocked, sibling])
     const output = testOutput([], {
@@ -241,13 +241,13 @@ describe('v2 authenticated file transfer', () => {
     const selection = selectOnlyFile(file)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readers = readerFixture([file])
-    const lanes = new V2LaneSet()
+    const lanes = new LaneSet()
     const relay = new DeferredTransferLane(1)
     const peer = new DeferredTransferLane(2)
     lanes.add(relay, 'application-relay')
     lanes.add(peer, 'direct')
-    const blockBroker = new V2BlockBroker(lanes)
-    const broker: V2BlockRangeReader = {
+    const blockBroker = new BlockBroker(lanes)
+    const broker: BlockRangeReader = {
       readRange: (descriptor, leaseId, range, options = {}) =>
         blockBroker.readRouteAuthorizedRange(descriptor, leaseId, range, {
           ...options,
@@ -591,7 +591,7 @@ function registerRevisionCapacityJobTests(): void {
       planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
     })
     let opens = 0
-    const revisions: V2RevisionReader = {
+    const revisions: RevisionReader = {
       open: async (fileId, signal) => {
         opens += 1
         if (opens === 1) throw capacityFailure(25)
@@ -668,13 +668,13 @@ function registerRevisionCapacityJobTests(): void {
   })
 }
 
-function capacityFailure(retryAfterMilliseconds: number): V2RevisionCapacityBusyError {
+function capacityFailure(retryAfterMilliseconds: number): RevisionCapacityBusyError {
   const failure = Object.freeze({
-    code: V2_REVISION_CODE_QUOTA,
+    code: REVISION_CODE_QUOTA,
     retryable: true as const,
     retryAfterMilliseconds,
   })
-  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+  return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', identity(91)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(92))
@@ -686,14 +686,14 @@ function capacityFailure(retryAfterMilliseconds: number): V2RevisionCapacityBusy
 
 function immediateCapacityPolicy(waitBudgetMilliseconds: number) {
   let currentTime = 0
-  const clock: V2RevisionCapacityClock = {
+  const clock: RevisionCapacityClock = {
     now: () => currentTime,
     sleep: async (milliseconds, signal) => {
       signal.throwIfAborted()
       currentTime += milliseconds
     },
   }
-  const generation: V2ProtocolSessionReplacementWaiter = {
+  const generation: ProtocolSessionReplacementWaiter = {
     waitForProtocolSessionReplacement: (_identity, signal) => new Promise((_resolve, reject) => {
       const abort = () => reject(signal.reason)
       signal.addEventListener('abort', abort, { once: true })

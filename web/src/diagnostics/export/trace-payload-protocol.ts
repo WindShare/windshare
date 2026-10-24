@@ -1,6 +1,6 @@
-import { V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
+import { BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
 import { validateProtocolErrorContentV2 } from './protocol-error-v2'
-import { classifyV2PeerAttemptFailure } from '../../connectivity/v2-peer-failure'
+import { classifyPeerAttemptFailure } from '../../connectivity/peer-failure'
 import { CONNECTION_TRACE_TEXT_MAX_CHARACTERS } from '../trace/connection-payload'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../trace/lane-payload'
 import {
@@ -20,7 +20,7 @@ import {
   type UnknownRecord,
 } from './trace-payload-validation'
 
-const PEER_COMPLETED_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES
+const PEER_COMPLETED_STAGES = BROWSER_CONNECTIVITY_ATTEMPT_STAGES
   .filter(stage => stage !== 'failed' && stage !== 'negotiation-deadline-expired' && stage !== 'admission-deadline-expired')
   .map(stage => stage.replaceAll('-', '_'))
 const MAX_AUTHENTICATED_RETRY_AFTER_MS = 30_000
@@ -323,7 +323,7 @@ function validateAttemptFailure(input: unknown): void {
     default:
       throw new TypeError('peer failure kind is invalid')
   }
-  const decision = classifyV2PeerAttemptFailure(input)
+  const decision = classifyPeerAttemptFailure(input)
   if (decision.type === 'stop-path' && decision.reason === 'untyped-failure') {
     throw new TypeError('peer failure fields are invalid')
   }

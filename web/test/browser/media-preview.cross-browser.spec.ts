@@ -20,30 +20,30 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
   const pageOrigin = new URL(page.url()).origin
   expect(pageOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
   const evidence = await page.evaluate(async ({ mp4Base64, mp4BlockBytes }) => {
-    const previewPath = '/src/preview/v2-preview.ts'
+    const previewPath = '/src/preview/preview.ts'
     const imageHeaderPath = '/src/preview/image-header.ts'
     const mp4RangePath = '/src/preview/mp4-range.ts'
     const geometryPath = '/src/content/geometry.ts'
-    const brokerPath = '/src/content/v2-broker.ts'
-    const connectivityPath = '/src/connectivity/v2-receiver-policy.ts'
+    const brokerPath = '/src/content/broker.ts'
+    const connectivityPath = '/src/connectivity/receiver-policy.ts'
     const [previewModule, imageHeaderModule, mp4RangeModule, geometryModule, brokerModule,
       connectivityModule] = await Promise.all([
-      import(previewPath) as Promise<typeof import('../../src/preview/v2-preview')>,
+      import(previewPath) as Promise<typeof import('../../src/preview/preview')>,
       import(imageHeaderPath) as Promise<typeof import('../../src/preview/image-header')>,
       import(mp4RangePath) as Promise<typeof import('../../src/preview/mp4-range')>,
       import(geometryPath) as Promise<typeof import('../../src/content/geometry')>,
-      import(brokerPath) as Promise<typeof import('../../src/content/v2-broker')>,
-      import(connectivityPath) as Promise<typeof import('../../src/connectivity/v2-receiver-policy')>,
+      import(brokerPath) as Promise<typeof import('../../src/content/broker')>,
+      import(connectivityPath) as Promise<typeof import('../../src/connectivity/receiver-policy')>,
     ])
 
     type CatalogFile = Extract<
-    import('../../src/catalog/v2-records').V2CatalogEntry,
+    import('../../src/catalog/records').CatalogEntry,
     { kind: 'file' }
     >
-    type Descriptor = import('../../src/content/v2-records').V2FileRevisionDescriptor
-    type RangeReader = import('../../src/content/v2-broker').V2BlockRangeReader
-    type BlockLane = import('../../src/content/v2-broker').V2BlockLane
-    type RevisionReader = import('../../src/content/v2-session-services').V2RevisionReader
+    type Descriptor = import('../../src/content/records').FileRevisionDescriptor
+    type RangeReader = import('../../src/content/broker').BlockRangeReader
+    type BlockLane = import('../../src/content/broker').BlockLane
+    type RevisionReader = import('../../src/content/session-services').RevisionReader
 
     interface ReadObservation {
       readonly start: number
@@ -98,10 +98,10 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
           })
         },
       }
-      const lanes = new brokerModule.V2LaneSet()
+      const lanes = new brokerModule.LaneSet()
       lanes.add(lane, 'application-relay')
-      const productionBroker = new brokerModule.V2BlockBroker(lanes)
-      const routes = new connectivityModule.V2ConnectivityRouteAuthority()
+      const productionBroker = new brokerModule.BlockBroker(lanes)
+      const routes = new connectivityModule.ConnectivityRouteAuthority()
       const recordingBroker: RangeReader = {
         readRange(candidate, candidateLease, range, options) {
           options?.signal?.throwIfAborted()
@@ -180,7 +180,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     if (!heroResponse.ok) throw new Error(`Repository PNG returned HTTP ${heroResponse.status}`)
     const heroBytes = new Uint8Array(await heroResponse.arrayBuffer())
     const imageRuntime = createRuntime(heroBytes, 'hero.png', 1, 16 * 1024)
-    const imagePreview = await previewModule.V2FilePreview.open(
+    const imagePreview = await previewModule.FilePreview.open(
       imageRuntime.entry,
       imageRuntime.revisions,
       imageRuntime.broker,
@@ -229,7 +229,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
     const videoRuntime = createRuntime(mp4Bytes, 'bounded-two-sample.mp4', 10, mp4BlockBytes)
     // canPlayType is intentionally outside this oracle: the production container parser,
     // authenticated broker reads, segmentation, Blob construction, and seek lifecycle are portable.
-    const videoPreview = await previewModule.V2FilePreview.open(
+    const videoPreview = await previewModule.FilePreview.open(
       videoRuntime.entry,
       videoRuntime.revisions,
       videoRuntime.broker,
@@ -282,9 +282,9 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
       },
       latestRevokedAfterClose: await objectUrlIsRevoked(later.url),
       limits: {
-        edgeMetadataBytes: mp4RangeModule.V2_VIDEO_EDGE_METADATA_BYTES,
-        headerSniffBytes: imageHeaderModule.V2_IMAGE_HEADER_BYTES,
-        sampleBytes: mp4RangeModule.V2_VIDEO_SAMPLE_BYTES,
+        edgeMetadataBytes: mp4RangeModule.VIDEO_EDGE_METADATA_BYTES,
+        headerSniffBytes: imageHeaderModule.IMAGE_HEADER_BYTES,
+        sampleBytes: mp4RangeModule.VIDEO_SAMPLE_BYTES,
       },
       mimeType: initial.mimeType,
       ranges: rangesBeforeClose,

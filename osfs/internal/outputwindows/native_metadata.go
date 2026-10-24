@@ -13,95 +13,95 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func windowsV3OutputLocatorKey(path string) (string, error) {
+func windowsOutputLocatorKey(path string) (string, error) {
 	canonical, err := catalog.CanonicalPath(path)
 	if err != nil || canonical != path {
-		return "", errors.Join(windowsV3Failure("validate output locator", path, errWindowsV3OutputUnsafe,
+		return "", errors.Join(windowsFailure("validate output locator", path, errWindowsOutputUnsafe,
 			errors.New("locator is not a canonical catalog path")), err)
 	}
-	native, err := windowsV3RelativePath(path, false)
+	native, err := windowsRelativePath(path, false)
 	if err != nil {
-		return "", windowsV3Failure("validate output locator", path, errWindowsV3OutputUnsafe, err)
+		return "", windowsFailure("validate output locator", path, errWindowsOutputUnsafe, err)
 	}
-	key, err := windowsV3NTFSCaseKey(native)
+	key, err := windowsNTFSCaseKey(native)
 	if err != nil {
-		return "", windowsV3Failure("canonicalize output locator", path, errWindowsV3OutputUnsupported, err)
+		return "", windowsFailure("canonicalize output locator", path, errWindowsOutputUnsupported, err)
 	}
 	return key, nil
 }
 
-func windowsV3NTFSCaseKey(value string) (string, error) {
-	if err := windowsV3RtlUpcaseUnicodeChar.Find(); err != nil {
+func windowsNTFSCaseKey(value string) (string, error) {
+	if err := windowsRtlUpcaseUnicodeChar.Find(); err != nil {
 		return "", fmt.Errorf("load Windows ordinal upcase table: %w", err)
 	}
 	units := utf16.Encode([]rune(value))
 	for index, unit := range units {
-		upper, _, _ := windowsV3RtlUpcaseUnicodeChar.Call(uintptr(unit))
+		upper, _, _ := windowsRtlUpcaseUnicodeChar.Call(uintptr(unit))
 		units[index] = uint16(upper)
 	}
 	return string(utf16.Decode(units)), nil
 }
 
-func windowsV3VerifyOpenedExactName(handle windows.Handle, expected string) error {
-	return windowsV3VerifyOpenedLeafAuthority(handle, expected, true)
+func windowsVerifyOpenedExactName(handle windows.Handle, expected string) error {
+	return windowsVerifyOpenedLeafAuthority(handle, expected, true)
 }
 
-func windowsV3VerifyOpenedPlacementLeafAuthority(
+func windowsVerifyOpenedPlacementLeafAuthority(
 	handle windows.Handle,
 	requested string,
 	parentCaseSensitive bool,
 ) error {
 	const operation = "verify opened output placement name"
-	native, err := windowsV3RelativePath(requested, true)
+	native, err := windowsRelativePath(requested, true)
 	if err != nil {
-		return windowsV3Failure(operation, requested, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, requested, errWindowsOutputUnsafe, err)
 	}
-	normalized, err := windowsV3OpenedLeafNameWithFlags(handle, 0)
+	normalized, err := windowsOpenedLeafNameWithFlags(handle, 0)
 	if err != nil {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, native, errWindowsOutputUnsafe, err)
 	}
-	opened, err := windowsV3OpenedLeafNameWithFlags(handle, windowsV3FinalPathNameOpened)
+	opened, err := windowsOpenedLeafNameWithFlags(handle, windowsFinalPathNameOpened)
 	if err != nil {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, native, errWindowsOutputUnsafe, err)
 	}
-	match, compareErr := windowsV3PlacementLeafNamesMatch(
+	match, compareErr := windowsPlacementLeafNamesMatch(
 		native, normalized, opened, parentCaseSensitive,
 	)
 	if compareErr != nil {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsupported, compareErr)
+		return windowsFailure(operation, native, errWindowsOutputUnsupported, compareErr)
 	}
 	if !match {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, native, errWindowsOutputUnsafe,
 			fmt.Errorf("requested placement resolves to normalized leaf %q through opened leaf %q", normalized, opened))
 	}
 	return nil
 }
 
-func windowsV3PlacementLeafNamesMatch(requested, normalized, opened string, caseSensitive bool) (bool, error) {
+func windowsPlacementLeafNamesMatch(requested, normalized, opened string, caseSensitive bool) (bool, error) {
 	if caseSensitive {
 		return requested == normalized || requested == opened, nil
 	}
-	requestedKey, requestedErr := windowsV3NTFSCaseKey(requested)
-	normalizedKey, normalizedErr := windowsV3NTFSCaseKey(normalized)
-	openedKey, openedErr := windowsV3NTFSCaseKey(opened)
+	requestedKey, requestedErr := windowsNTFSCaseKey(requested)
+	normalizedKey, normalizedErr := windowsNTFSCaseKey(normalized)
+	openedKey, openedErr := windowsNTFSCaseKey(opened)
 	if requestedErr != nil || normalizedErr != nil || openedErr != nil {
 		return false, errors.Join(requestedErr, normalizedErr, openedErr)
 	}
 	return requestedKey == normalizedKey || requestedKey == openedKey, nil
 }
 
-func windowsV3VerifyOpenedLeafAuthority(handle windows.Handle, expected string, exact bool) error {
+func windowsVerifyOpenedLeafAuthority(handle windows.Handle, expected string, exact bool) error {
 	const operation = "verify opened output entry name"
-	native, err := windowsV3RelativePath(expected, true)
+	native, err := windowsRelativePath(expected, true)
 	if err != nil {
-		return windowsV3Failure(operation, expected, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, expected, errWindowsOutputUnsafe, err)
 	}
-	actual, err := windowsV3OpenedLeafName(handle)
+	actual, err := windowsOpenedLeafName(handle)
 	if err != nil {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe, err)
+		return windowsFailure(operation, native, errWindowsOutputUnsafe, err)
 	}
 	if exact && actual != native {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, native, errWindowsOutputUnsafe,
 			fmt.Errorf("actual private entry spelling is %q", actual))
 	}
 	if exact {
@@ -111,28 +111,28 @@ func windowsV3VerifyOpenedLeafAuthority(handle windows.Handle, expected string, 
 	// catalog component. Comparing the handle-derived long leaf through the
 	// volume's ordinal upcase table permits case-only reuse while refusing a
 	// different namespace spelling before descent or mutation.
-	expectedKey, expectedErr := windowsV3NTFSCaseKey(native)
-	actualKey, actualErr := windowsV3NTFSCaseKey(actual)
+	expectedKey, expectedErr := windowsNTFSCaseKey(native)
+	actualKey, actualErr := windowsNTFSCaseKey(actual)
 	if expectedErr != nil || actualErr != nil {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsupported,
+		return windowsFailure(operation, native, errWindowsOutputUnsupported,
 			errors.Join(expectedErr, actualErr))
 	}
 	if actualKey != expectedKey {
-		return windowsV3Failure(operation, native, errWindowsV3OutputUnsafe,
+		return windowsFailure(operation, native, errWindowsOutputUnsafe,
 			fmt.Errorf("requested entry resolves to different long leaf %q", actual))
 	}
 	return nil
 }
 
-func windowsV3OpenedLeafName(handle windows.Handle) (string, error) {
-	return windowsV3OpenedLeafNameWithFlags(handle, 0)
+func windowsOpenedLeafName(handle windows.Handle) (string, error) {
+	return windowsOpenedLeafNameWithFlags(handle, 0)
 }
 
-func windowsV3OpenedLeafNameWithFlags(handle windows.Handle, flags uint32) (string, error) {
+func windowsOpenedLeafNameWithFlags(handle windows.Handle, flags uint32) (string, error) {
 	// Both normalized and opened spellings come from the same handle. Callers can
 	// therefore distinguish canonical output lookup from placement-only alias
 	// binding without re-resolving an attacker-controlled path.
-	normalized, err := windowsV3FinalPath(handle, flags)
+	normalized, err := windowsFinalPath(handle, flags)
 	if err != nil {
 		return "", fmt.Errorf("query opened file name: %w", err)
 	}
@@ -140,113 +140,113 @@ func windowsV3OpenedLeafNameWithFlags(handle windows.Handle, flags uint32) (stri
 	if leaf == "." || leaf == string(filepath.Separator) {
 		return "", errors.New("opened file name does not contain a leaf component")
 	}
-	validated, err := windowsV3RelativePath(leaf, true)
+	validated, err := windowsRelativePath(leaf, true)
 	if err != nil {
 		return "", fmt.Errorf("validate opened file name: %w", err)
 	}
 	return validated, nil
 }
 
-func windowsV3ValidateModifiedTime(modified catalog.ModifiedTime) error {
-	_, _, err := windowsV3ModifiedTimeTicks(modified)
+func windowsValidateModifiedTime(modified catalog.ModifiedTime) error {
+	_, _, err := windowsModifiedTimeTicks(modified)
 	return err
 }
 
-func windowsV3ModifiedTimeTicks(modified catalog.ModifiedTime) (uint64, bool, error) {
+func windowsModifiedTimeTicks(modified catalog.ModifiedTime) (uint64, bool, error) {
 	const operation = "validate output modified time"
 	if !modified.Present() {
 		return 0, false, nil
 	}
 	if modified.Precision() < catalog.TimePrecisionSeconds || modified.Precision() > catalog.TimePrecisionNanoseconds ||
 		modified.Nanoseconds() >= 1_000_000_000 {
-		return 0, false, windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+		return 0, false, windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("catalog modified time is invalid"))
 	}
 	if modified.Precision() == catalog.TimePrecisionNanoseconds &&
-		modified.Nanoseconds()%windowsV3FiletimeNanosecondsPerTick != 0 {
-		return 0, false, windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+		modified.Nanoseconds()%windowsFiletimeNanosecondsPerTick != 0 {
+		return 0, false, windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("nanosecond timestamp is not exactly representable by NTFS FILETIME"))
 	}
-	shiftedSeconds := modified.Seconds() + windowsV3UnixEpochFiletimeSeconds
+	shiftedSeconds := modified.Seconds() + windowsUnixEpochFiletimeSeconds
 	if shiftedSeconds < 0 {
-		return 0, false, windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+		return 0, false, windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("timestamp predates the NTFS FILETIME epoch"))
 	}
 	seconds := uint64(shiftedSeconds)
-	fraction := uint64(modified.Nanoseconds() / windowsV3FiletimeNanosecondsPerTick)
-	if seconds > math.MaxUint64/windowsV3FiletimeTicksPerSecond ||
-		seconds*windowsV3FiletimeTicksPerSecond > math.MaxUint64-fraction {
-		return 0, false, windowsV3Failure(operation, "", errWindowsV3OutputUnsupported,
+	fraction := uint64(modified.Nanoseconds() / windowsFiletimeNanosecondsPerTick)
+	if seconds > math.MaxUint64/windowsFiletimeTicksPerSecond ||
+		seconds*windowsFiletimeTicksPerSecond > math.MaxUint64-fraction {
+		return 0, false, windowsFailure(operation, "", errWindowsOutputUnsupported,
 			errors.New("timestamp exceeds the NTFS FILETIME range"))
 	}
-	return seconds*windowsV3FiletimeTicksPerSecond + fraction, true, nil
+	return seconds*windowsFiletimeTicksPerSecond + fraction, true, nil
 }
 
-func (file *windowsV3File) setModifiedTime(modified catalog.ModifiedTime) error {
+func (file *windowsFile) setModifiedTime(modified catalog.ModifiedTime) error {
 	if err := file.verify(false); err != nil {
 		return err
 	}
-	return windowsV3SetHandleModifiedTime(file.handle(), file.path, modified)
+	return windowsSetHandleModifiedTime(file.handle(), file.path, modified)
 }
 
-func (directory *windowsV3Directory) setModifiedTime(modified catalog.ModifiedTime) error {
+func (directory *windowsDirectory) setModifiedTime(modified catalog.ModifiedTime) error {
 	if err := directory.verify(false); err != nil {
 		return err
 	}
 	if directory.private {
-		return windowsV3SetHandleModifiedTime(directory.handle(), directory.path, modified)
+		return windowsSetHandleModifiedTime(directory.handle(), directory.path, modified)
 	}
 	if directory.metadataHandleOpen {
-		return windowsV3SetHandleModifiedTime(directory.metadataHandle, directory.path, modified)
+		return windowsSetHandleModifiedTime(directory.metadataHandle, directory.path, modified)
 	}
 	if directory.metadataOpenErr != nil {
 		return directory.metadataOpenErr
 	}
-	return windowsV3NativeOperationFailure(
+	return windowsNativeOperationFailure(
 		"set output modified time", directory.path, windows.ERROR_ACCESS_DENIED,
 	)
 }
 
-func windowsV3SetHandleModifiedTime(handle windows.Handle, path string, modified catalog.ModifiedTime) error {
-	ticks, present, err := windowsV3ModifiedTimeTicks(modified)
+func windowsSetHandleModifiedTime(handle windows.Handle, path string, modified catalog.ModifiedTime) error {
+	ticks, present, err := windowsModifiedTimeTicks(modified)
 	if err != nil || !present {
 		return err
 	}
 	filetime := windows.Filetime{LowDateTime: uint32(ticks), HighDateTime: uint32(ticks >> 32)}
 	if err := windows.SetFileTime(handle, nil, nil, &filetime); err != nil {
-		return windowsV3NativeOperationFailure("set output modified time", path, err)
+		return windowsNativeOperationFailure("set output modified time", path, err)
 	}
 	return nil
 }
 
-func (file *windowsV3File) metadataMatches(
+func (file *windowsFile) metadataMatches(
 	exactSize uint64,
 	modified catalog.ModifiedTime,
 ) (bool, error) {
 	if err := file.verify(false); err != nil {
 		return false, err
 	}
-	metadata, err := windowsV3ReadHandleMetadata(file.handle())
+	metadata, err := windowsReadHandleMetadata(file.handle())
 	if err != nil {
-		return false, windowsV3Failure("inspect output file metadata", file.path, errWindowsV3OutputUnsafe, err)
+		return false, windowsFailure("inspect output file metadata", file.path, errWindowsOutputUnsafe, err)
 	}
-	return metadata.size == exactSize && windowsV3ModifiedTimeMatches(metadata.modifiedTicks, modified), nil
+	return metadata.size == exactSize && windowsModifiedTimeMatches(metadata.modifiedTicks, modified), nil
 }
 
-func windowsV3ReadHandleMetadata(handle windows.Handle) (windowsV3OutputMetadata, error) {
+func windowsReadHandleMetadata(handle windows.Handle) (windowsOutputMetadata, error) {
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return windowsV3OutputMetadata{}, err
+		return windowsOutputMetadata{}, err
 	}
-	return windowsV3OutputMetadata{
+	return windowsOutputMetadata{
 		size: uint64(information.FileSizeHigh)<<32 | uint64(information.FileSizeLow),
 		modifiedTicks: uint64(information.LastWriteTime.HighDateTime)<<32 |
 			uint64(information.LastWriteTime.LowDateTime),
 	}, nil
 }
 
-func windowsV3ModifiedTimeMatches(actual uint64, expected catalog.ModifiedTime) bool {
-	ticks, present, err := windowsV3ModifiedTimeTicks(expected)
+func windowsModifiedTimeMatches(actual uint64, expected catalog.ModifiedTime) bool {
+	ticks, present, err := windowsModifiedTimeTicks(expected)
 	if err != nil {
 		return false
 	}
@@ -255,7 +255,7 @@ func windowsV3ModifiedTimeMatches(actual uint64, expected catalog.ModifiedTime) 
 	}
 	switch expected.Precision() {
 	case catalog.TimePrecisionSeconds:
-		return actual/windowsV3FiletimeTicksPerSecond == ticks/windowsV3FiletimeTicksPerSecond
+		return actual/windowsFiletimeTicksPerSecond == ticks/windowsFiletimeTicksPerSecond
 	case catalog.TimePrecisionMilliseconds:
 		const ticksPerMillisecond = uint64(10_000)
 		return actual/ticksPerMillisecond == ticks/ticksPerMillisecond

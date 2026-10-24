@@ -4,12 +4,12 @@ import { readBrowserDeliveryResumeSummary } from '../../../output/browser-delive
 import { hasBrowserDeliveryStaging, type BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
 import { browserDeliveryLocalActions } from '../../../output/browser-delivery/recovery/local-actions'
 import type { ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
-import type { V2RetainedReceiveAction } from '../../receive/contracts'
+import type { RetainedReceiveAction } from '../../receive/contracts'
 
 export type BrowserDeliveryRepositoryFactory = () => Promise<BrowserDeliveryRepository>
 
 export function retainedBrowserDeliveryActions(lifecycle: ReceiveLifecycleState, summary: BrowserDeliveryResumeSummary | undefined,
-  ordinary: readonly V2RetainedReceiveAction[]): readonly V2RetainedReceiveAction[] {
+  ordinary: readonly RetainedReceiveAction[]): readonly RetainedReceiveAction[] {
   if (summary === undefined) return ordinary
   const actions = ordinary.filter(action => !hasBrowserDeliveryStaging(summary) || action !== 'forget')
   return Object.freeze([...browserDeliveryLocalActions(lifecycle, summary), ...actions])

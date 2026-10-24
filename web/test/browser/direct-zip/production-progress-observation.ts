@@ -1,6 +1,6 @@
-import type { V2BoundReceiveOperation, V2DirectZipProgressSnapshot } from '../../../src/application/receive/contracts'
-import { presentDirectZipProgress } from '../../../src/ui/v2-progress-presentation'
-import { presentReceiveLifecycle } from '../../../src/ui/v2-lifecycle-presentation'
+import type { BoundReceiveOperation, DirectZipProgressSnapshot } from '../../../src/application/receive/contracts'
+import { presentDirectZipProgress } from '../../../src/ui/progress-presentation'
+import { presentReceiveLifecycle } from '../../../src/ui/lifecycle-presentation'
 import type { ReceiveLifecycleState } from '../../../src/transfer/lifecycle/state'
 
 export function observeProductionDirectZipProgress(selectedBytes: bigint) {
@@ -8,7 +8,7 @@ export function observeProductionDirectZipProgress(selectedBytes: bigint) {
   const notifications: ReturnType<typeof counters>[][] = []
   let unsubscribe: (() => void) | undefined
 
-  function capture(operation: V2BoundReceiveOperation, lifecycle: ReceiveLifecycleState = operation.lifecycle) {
+  function capture(operation: BoundReceiveOperation, lifecycle: ReceiveLifecycleState = operation.lifecycle) {
     const progress = operation.outputProgress?.getSnapshot()
     if (progress?.kind !== 'direct-zip') throw new Error('Production operation lost Direct ZIP progress')
     const presentation = presentDirectZipProgress({
@@ -25,7 +25,7 @@ export function observeProductionDirectZipProgress(selectedBytes: bigint) {
   }
 
   return {
-    bind: (operation: V2BoundReceiveOperation) => {
+    bind: (operation: BoundReceiveOperation) => {
       unsubscribe?.()
       const events: ReturnType<typeof counters>[] = []
       notifications.push(events)
@@ -34,7 +34,7 @@ export function observeProductionDirectZipProgress(selectedBytes: bigint) {
         events.push(counters(progress))
       })
     },
-    sample: (name: string, operation: V2BoundReceiveOperation, lifecycle?: ReceiveLifecycleState) => {
+    sample: (name: string, operation: BoundReceiveOperation, lifecycle?: ReceiveLifecycleState) => {
       samples[name] = capture(operation, lifecycle)
     },
     result: () => ({ samples, notifications }),
@@ -42,7 +42,7 @@ export function observeProductionDirectZipProgress(selectedBytes: bigint) {
   }
 }
 
-function counters(progress: V2DirectZipProgressSnapshot) {
+function counters(progress: DirectZipProgressSnapshot) {
   return { operationId: progress.operationId, generation: progress.generation.toString(),
     received: progress.receivedSelectedBytes.toString(), written: progress.writtenSelectedBytes.toString(),
     safe: progress.safeResumeBytes.toString() }

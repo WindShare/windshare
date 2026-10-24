@@ -33,7 +33,7 @@ import type { BoundReceiveIntent } from '../../../output/planning'
 import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-authority'
 import type { OutputTraceSource } from '../../../output/diagnostics'
 import type {
-  V2ArtifactPresentationAuthority, V2RouteCommitInput, V2RouteCommitResult,
+  ArtifactPresentationAuthority, RouteCommitInput, RouteCommitResult,
 } from '../../receive/contracts'
 import type { BrowserReceiveWindow } from '../../../output/browser/environment'
 import { digestText } from '../../../output/workspace/operation-digest'
@@ -130,7 +130,7 @@ type Dependencies = {
   readonly trace?: OutputTraceSource
 }
 
-class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
+class BrowserDirectZipPresentation implements ArtifactPresentationAuthority {
   readonly ready: Promise<void>
   readonly #window: BrowserReceiveWindow
   readonly #input: BrowserDirectZipFreshAuthorityInput
@@ -148,7 +148,7 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
 
   release() { this.#released = true }
 
-  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+  async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     if (this.#released || this.#committed) throw new DOMException('ZIP presentation is closed', 'InvalidStateError')
     this.#committed = true
     const parent = await this.#input.pickedParent

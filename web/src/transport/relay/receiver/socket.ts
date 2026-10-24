@@ -1,15 +1,15 @@
-import { decodeV2RelayError, V2_RELAY_ERROR, type V2RelayErrorFrame } from '../v2-protocol'
+import { decodeRelayError, RELAY_ERROR, type RelayErrorFrame } from '../protocol'
 
 export const WEBSOCKET_OPEN = 1
 export const WEBSOCKET_CLOSING = 2
 export const WEBSOCKET_CLOSED = 3
 // Browser close() only accepts 1000 or application codes from 3000 to 4999.
-export const V2_RELAY_HEARTBEAT_CLOSE_CODE = 4001
-export const V2_RELAY_PROTOCOL_CLOSE_CODE = 4002
+export const RELAY_HEARTBEAT_CLOSE_CODE = 4001
+export const RELAY_PROTOCOL_CLOSE_CODE = 4002
 const BUFFER_DRAIN_INTERVAL_MILLISECONDS = 8
 const MAXIMUM_BUFFERED_BYTES = 4 * 65_536
 
-export interface V2WebSocketPort {
+export interface WebSocketPort {
   binaryType: BinaryType
   readonly readyState: number
   readonly bufferedAmount: number
@@ -26,14 +26,14 @@ export interface V2WebSocketPort {
   ): void
 }
 
-export type V2WebSocketFactory = (endpoint: string) => V2WebSocketPort
+export type WebSocketFactory = (endpoint: string) => WebSocketPort
 
-export class V2RelayReceiverError extends Error {
-  readonly relayError: V2RelayErrorFrame | undefined
+export class RelayReceiverError extends Error {
+  readonly relayError: RelayErrorFrame | undefined
 
-  constructor(message: string, options?: ErrorOptions & { readonly relayError?: V2RelayErrorFrame }) {
+  constructor(message: string, options?: ErrorOptions & { readonly relayError?: RelayErrorFrame }) {
     super(message, options)
-    this.name = 'V2RelayReceiverError'
+    this.name = 'RelayReceiverError'
     this.relayError = options?.relayError
   }
 }
@@ -50,41 +50,41 @@ export function waitForSendTurn(previous: Promise<void>, signal: AbortSignal): P
   })
 }
 
-export function decodeRelayErrorIfPresent(encoded: Uint8Array): V2RelayErrorFrame | undefined {
+export function decodeRelayErrorIfPresent(encoded: Uint8Array): RelayErrorFrame | undefined {
   if (encoded.byteLength < 4) return undefined
   const magic = String.fromCharCode(...encoded.subarray(0, 4))
-  return magic === 'WS2E' ? decodeV2RelayError(encoded) : undefined
+  return magic === 'WS2E' ? decodeRelayError(encoded) : undefined
 }
 
-export function relayErrorMessage(error: V2RelayErrorFrame): string {
-  if (error.code === V2_RELAY_ERROR.stopped) return 'This share was stopped permanently.'
-  if (error.code === V2_RELAY_ERROR.starting) return 'This share is still starting.'
-  if (error.code === V2_RELAY_ERROR.notFound) return 'This share is not currently available.'
-  if (error.code === V2_RELAY_ERROR.admission) return 'The relay is currently at capacity.'
+export function relayErrorMessage(error: RelayErrorFrame): string {
+  if (error.code === RELAY_ERROR.stopped) return 'This share was stopped permanently.'
+  if (error.code === RELAY_ERROR.starting) return 'This share is still starting.'
+  if (error.code === RELAY_ERROR.notFound) return 'This share is not currently available.'
+  if (error.code === RELAY_ERROR.admission) return 'The relay is currently at capacity.'
   return 'The relay rejected this receiver join.'
 }
 
-export async function waitForBufferCapacity(socket: V2WebSocketPort, signal?: AbortSignal): Promise<void> {
+export async function waitForBufferCapacity(socket: WebSocketPort, signal?: AbortSignal): Promise<void> {
   while (socket.bufferedAmount > MAXIMUM_BUFFERED_BYTES) {
     if (socket.readyState !== WEBSOCKET_OPEN) {
-      throw new V2RelayReceiverError('Relay closed while applying send backpressure')
+      throw new RelayReceiverError('Relay closed while applying send backpressure')
     }
     await delay(BUFFER_DRAIN_INTERVAL_MILLISECONDS, signal)
   }
   if (socket.readyState !== WEBSOCKET_OPEN) {
-    throw new V2RelayReceiverError('Relay closed before the buffered frame could be sent')
+    throw new RelayReceiverError('Relay closed before the buffered frame could be sent')
   }
 }
 
-export async function waitForBufferDrain(socket: V2WebSocketPort, signal?: AbortSignal): Promise<void> {
+export async function waitForBufferDrain(socket: WebSocketPort, signal?: AbortSignal): Promise<void> {
   while (socket.bufferedAmount > 0) {
     if (socket.readyState !== WEBSOCKET_OPEN) {
-      throw new V2RelayReceiverError('Relay closed before terminal delivery drained')
+      throw new RelayReceiverError('Relay closed before terminal delivery drained')
     }
     await delay(BUFFER_DRAIN_INTERVAL_MILLISECONDS, signal)
   }
   if (socket.readyState !== WEBSOCKET_OPEN) {
-    throw new V2RelayReceiverError('Relay closed while confirming terminal delivery')
+    throw new RelayReceiverError('Relay closed while confirming terminal delivery')
   }
 }
 
@@ -105,7 +105,7 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-export function awaitSocketClose(socket: V2WebSocketPort, timeoutMilliseconds: number): Promise<void> {
+export function awaitSocketClose(socket: WebSocketPort, timeoutMilliseconds: number): Promise<void> {
   if (socket.readyState === WEBSOCKET_CLOSED) return Promise.resolve()
   return new Promise<void>((resolve) => {
     const finish = () => {

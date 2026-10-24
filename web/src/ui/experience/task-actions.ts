@@ -1,8 +1,8 @@
-import type { V2ReceiverController } from '../v2-controller'
-import type { V2ReceiverSnapshot } from '../v2-model'
+import type { ReceiverController } from '../controller'
+import type { ReceiverSnapshot } from '../model'
 import type { TaskViewActions } from '../tasks/TaskView'
 
-export function taskActions(controller: V2ReceiverController, snapshot: V2ReceiverSnapshot): TaskViewActions {
+export function taskActions(controller: ReceiverController, snapshot: ReceiverSnapshot): TaskViewActions {
   return {
     perform: action => {
       if (action.disabledReason !== null) return

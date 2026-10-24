@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import {
   disabledOutputExecutionProfile,
   TransferPauseRequestedError,
   TransferStopRequestedError,
 } from '../../src/transfer/output/session'
-import type { TransferTraceEvent } from '../../src/transfer/v2-job'
+import type { TransferTraceEvent } from '../../src/transfer/job'
 import {
-  V2OutputSettlementTimeoutError,
-  V2TransferFailureSettlementError,
-  type V2OutputSettlementDeadline,
-} from '../../src/transfer/settlement/v2-output'
+  OutputSettlementTimeoutError,
+  TransferFailureSettlementError,
+  type OutputSettlementDeadline,
+} from '../../src/transfer/settlement/output'
 import {
   catalogFixture,
   directoryEntry,
@@ -30,7 +30,7 @@ describe('v2 plan settlement', () => {
   it('aborts an in-flight DirectTree receive into its typed Stop terminal cut', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     let announceRead!: () => void
     const readStarted = new Promise<void>(resolve => { announceRead = resolve })
@@ -85,7 +85,7 @@ describe('v2 plan settlement', () => {
   }) => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readStarted = deferred<void>()
     const releaseRead = deferred<void>()
@@ -140,7 +140,7 @@ describe('v2 plan settlement', () => {
   it('settles DirectTree progressively as a partial directory after a file-local failure', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readers = readerFixture([file], [], { failRevisionFor: file.idText })
     const plans = planAuthorityFixture()
@@ -168,7 +168,7 @@ describe('v2 plan settlement', () => {
 
   it('keeps ordinary DirectTree settlement after directory finalization', async () => {
     const root = identity(2)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [] }])
     const readers = readerFixture([])
     const order: string[] = []
@@ -218,7 +218,7 @@ describe('v2 plan settlement', () => {
       const root = identity(2)
       const first = fileEntry(identity(11), 'first.bin', 2n)
       const second = fileEntry(identity(12), 'second.bin', 2n)
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const catalog = catalogFixture([{ id: root, entries: [first, second] }])
       const firstStarted = deferred<void>()
       const secondStarted = deferred<void>()
@@ -335,7 +335,7 @@ describe('v2 plan settlement', () => {
       const root = identity(2)
       const child = identity(3)
       const file = fileEntry(identity(11), 'payload.bin', 2n)
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const catalog = catalogFixture([
         { id: root, entries: [directoryEntry(child, 'child'), file] },
         { id: child, entries: [] },
@@ -397,7 +397,7 @@ describe('v2 plan settlement', () => {
 describe('v2 terminal settlement authority', () => {
   it('does not re-enter Pause or replace an initiating DirectTree terminal-cut failure', async () => {
     const root = identity(2)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [] }])
     const readers = readerFixture([])
     const plansFailure = new Error('projector terminal drain failed')
@@ -430,7 +430,7 @@ describe('v2 terminal settlement authority', () => {
 
   it('drains DirectTree terminal authority before exposing a latched timeout', async () => {
     const root = identity(2)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [] }])
     const readers = readerFixture([])
     const terminalEntered = deferred<void>()
@@ -475,7 +475,7 @@ describe('v2 terminal settlement authority', () => {
     expect(plans.settlementSignals[0]?.aborted).toBe(true)
 
     releaseTerminal.resolve()
-    await expect(running).rejects.toBeInstanceOf(V2OutputSettlementTimeoutError)
+    await expect(running).rejects.toBeInstanceOf(OutputSettlementTimeoutError)
     await exposureObservation
     expect(exposed).toBe(true)
     expect(terminalMutations).toEqual(['terminal-finished'])
@@ -490,7 +490,7 @@ describe('v2 terminal settlement authority', () => {
   it('drains DirectTree Stop authority before exposing a latched timeout', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readStarted = deferred<void>()
     const releaseRead = deferred<void>()
@@ -546,7 +546,7 @@ describe('v2 terminal settlement authority', () => {
     expect(plans.stopSignals[0]?.aborted).toBe(true)
 
     releaseTerminal.resolve()
-    await expect(running).rejects.toBeInstanceOf(V2OutputSettlementTimeoutError)
+    await expect(running).rejects.toBeInstanceOf(OutputSettlementTimeoutError)
     await exposureObservation
     expect(exposed).toBe(true)
     expect(terminalMutations).toEqual(['stop-finished'])
@@ -645,8 +645,8 @@ describe('v2 terminal settlement authority', () => {
       thrown = error
     }
 
-    expect(thrown).toBeInstanceOf(V2TransferFailureSettlementError)
-    const failure = thrown as V2TransferFailureSettlementError
+    expect(thrown).toBeInstanceOf(TransferFailureSettlementError)
+    const failure = thrown as TransferFailureSettlementError
     expect(failure.transferFailure).toBe(failure.trigger)
     expect(failure.message).toBe('Transfer failed before output settlement completed')
     expect(failure.cause).toBeUndefined()
@@ -666,7 +666,7 @@ describe('v2 terminal settlement authority', () => {
   })
 })
 
-function manualSettlementDeadline(): V2OutputSettlementDeadline & Readonly<{
+function manualSettlementDeadline(): OutputSettlementDeadline & Readonly<{
   expire(): void
 }> {
   let expiration: (() => void) | undefined

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { presentTask } from '../../src/ui/tasks'
 import { taskFixture, TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
-import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
+import { EMPTY_PROGRESS } from '../../src/ui/model'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 
 const MIB = 1024n * 1024n
 const resumed = {
-  ...EMPTY_V2_PROGRESS, discovery: 'complete' as const,
+  ...EMPTY_PROGRESS, discovery: 'complete' as const,
   discoveredFiles: 10, discoveredBytes: 100n * MIB,
   completedFiles: 9, completedBytes: 90n * MIB,
   writtenBytes: MIB, materializedBytes: 91n * MIB,
@@ -16,7 +16,7 @@ const resumed = {
 describe('task progress native authority', () => {
   it('keeps incoming object traffic separate from output completion', () => {
     const task = presentTask(taskFixture({ progress: {
-      ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredFiles: 1,
+      ...EMPTY_PROGRESS, discovery: 'complete', discoveredFiles: 1,
       discoveredBytes: 8n * MIB, receivedObjectBytes: MIB,
     } }))
     expect(task.progress).toMatchObject({
@@ -43,7 +43,7 @@ describe('task progress native authority', () => {
     expect(task.publication).toBe('unpublished')
     const paused = presentTask(taskFixture({
       lifecycle: decodeStoredReceiveLifecycleState(record),
-      progress: { ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredFiles: 1, discoveredBytes: 12n * MIB },
+      progress: { ...EMPTY_PROGRESS, discovery: 'complete', discoveredFiles: 1, discoveredBytes: 12n * MIB },
     }))
     expect(paused.progress?.label).toContain('3.0 MiB / 12.0 MiB written or reused')
     expect(paused.progress?.percentage).toBe(25)

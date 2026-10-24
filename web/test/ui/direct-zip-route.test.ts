@@ -16,7 +16,7 @@ import {
 } from '../../src/application/browser-receive/direct-zip'
 import { listBrowserRetainedOperations } from '../../src/application/browser-receive/retained/inventory'
 import type { BrowserReceiveWindow } from '../../src/output/browser/environment'
-import type { V2ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
+import type { ArtifactPresentationAuthority } from '../../src/application/receive/contracts'
 
 const CHOICE = 'choice' as ArtifactChoiceID
 
@@ -303,7 +303,7 @@ function directZipPort(
   }
 }
 
-function authority(): V2ArtifactPresentationAuthority {
+function authority(): ArtifactPresentationAuthority {
   return Object.freeze({
     ready: Promise.resolve(),
     commit: vi.fn(),

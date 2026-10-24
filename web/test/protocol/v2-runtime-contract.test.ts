@@ -31,62 +31,62 @@ import {
   suite02SenderKeyHash,
 } from '../../src/crypto/suite02-link'
 import {
-  V2LaneResponseAuthority,
-  V2_LANE_REJECT,
-  decodeV2LaneHello,
-  encodeV2LaneHello,
-  v2LaneAcceptBody,
-  v2LaneRejectBody,
-  verifyV2LaneAccept,
-  verifyV2LaneReject,
-} from '../../src/session/v2-lane-codec'
-import { canonicalV2RelayEndpoint } from '../../src/transport/relay/v2-endpoint'
+  LaneResponseAuthority,
+  LANE_REJECT,
+  decodeLaneHello,
+  encodeLaneHello,
+  laneAcceptBody,
+  laneRejectBody,
+  verifyLaneAccept,
+  verifyLaneReject,
+} from '../../src/session/lane-codec'
+import { canonicalRelayEndpoint } from '../../src/transport/relay/endpoint'
 import {
-  V2_CHALLENGE_PURPOSE,
-  V2_REGISTRATION_MODE,
-  V2_RELAY_ERROR,
-  decodeV2Challenge,
-  decodeV2ConnectionProbe,
-  decodeV2ConnectionProbeAck,
-  decodeV2DescriptorDelivery,
-  decodeV2DescriptorUpload,
-  decodeV2Join,
-  decodeV2OpaqueRoute,
-  decodeV2RegisterInit,
-  decodeV2RegisterProof,
-  decodeV2Registered,
-  decodeV2RelayError,
-  decodeV2ResumeCredential,
-  decodeV2SessionRetired,
-  decodeV2SessionCredit,
-  decodeV2SessionAdmitted,
-  decodeV2StopInit,
-  decodeV2StopProof,
-  decodeV2Stopped,
-  encodeV2Challenge,
-  encodeV2ConnectionProbe,
-  encodeV2ConnectionProbeAck,
-  encodeV2DescriptorDelivery,
-  encodeV2DescriptorUpload,
-  encodeV2Join,
-  encodeV2OpaqueRoute,
-  encodeV2RegisterInit,
-  encodeV2RegisterProof,
-  encodeV2Registered,
-  encodeV2RelayError,
-  encodeV2ResumeCredential,
-  encodeV2SessionRetired,
-  encodeV2SessionCredit,
-  encodeV2SessionAdmitted,
-  encodeV2StopInit,
-  encodeV2StopProof,
-  encodeV2Stopped,
-  v2RegistrationProofPreimage,
-  v2StopProofPreimage,
-  type V2Challenge,
-  type V2RegisterInit,
-  type V2StopInit,
-} from '../../src/transport/relay/v2-protocol'
+  CHALLENGE_PURPOSE,
+  REGISTRATION_MODE,
+  RELAY_ERROR,
+  decodeChallenge,
+  decodeConnectionProbe,
+  decodeConnectionProbeAck,
+  decodeDescriptorDelivery,
+  decodeDescriptorUpload,
+  decodeJoin,
+  decodeOpaqueRoute,
+  decodeRegisterInit,
+  decodeRegisterProof,
+  decodeRegistered,
+  decodeRelayError,
+  decodeResumeCredential,
+  decodeSessionRetired,
+  decodeSessionCredit,
+  decodeSessionAdmitted,
+  decodeStopInit,
+  decodeStopProof,
+  decodeStopped,
+  encodeChallenge,
+  encodeConnectionProbe,
+  encodeConnectionProbeAck,
+  encodeDescriptorDelivery,
+  encodeDescriptorUpload,
+  encodeJoin,
+  encodeOpaqueRoute,
+  encodeRegisterInit,
+  encodeRegisterProof,
+  encodeRegistered,
+  encodeRelayError,
+  encodeResumeCredential,
+  encodeSessionRetired,
+  encodeSessionCredit,
+  encodeSessionAdmitted,
+  encodeStopInit,
+  encodeStopProof,
+  encodeStopped,
+  registrationProofPreimage,
+  stopProofPreimage,
+  type Challenge,
+  type RegisterInit,
+  type StopInit,
+} from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 interface IdentityVector extends VectorCase {
@@ -523,64 +523,64 @@ describe('suite-02 relay runtime contract', () => {
     const endpointVector = named<RelayEndpointVector>('v2-relay-endpoint-normalization')
     for (const endpointCase of endpointVector.cases) {
       if (!endpointCase.accepted) {
-        await expect(canonicalV2RelayEndpoint(endpointCase.relayBaseUrl)).rejects.toThrow()
+        await expect(canonicalRelayEndpoint(endpointCase.relayBaseUrl)).rejects.toThrow()
         continue
       }
-      const normalized = await canonicalV2RelayEndpoint(endpointCase.relayBaseUrl)
+      const normalized = await canonicalRelayEndpoint(endpointCase.relayBaseUrl)
       expect(normalized.dialEndpoint).toBe(endpointCase.dialEndpoint)
       expect(normalized.relayIdentityEndpoint).toBe(endpointCase.relayIdentityEndpoint)
       expect(normalized.relayIdentity).toEqual(bytes(endpointCase.relayIdentityB64!))
     }
-    const endpoint = await canonicalV2RelayEndpoint(vector.relayBaseUrl)
+    const endpoint = await canonicalRelayEndpoint(vector.relayBaseUrl)
     expect(endpoint.dialEndpoint).toBe(vector.dialEndpoint)
     expect(endpoint.relayIdentityEndpoint).toBe(vector.relayIdentityEndpoint)
     expect(endpoint.relayIdentity).toEqual(bytes(vector.relayIdentityB64))
     expect(endpoint.relayIdentityEndpoint).not.toContain('?')
 
-    const init: V2RegisterInit = {
-      mode: V2_REGISTRATION_MODE.fresh,
+    const init: RegisterInit = {
+      mode: REGISTRATION_MODE.fresh,
       shareId: bytes(identity.shareIdRawB64),
       shareInstance: bytes(identity.shareInstanceB64),
       pkHash: bytes(identity.pkHashB64),
       descriptorDigest: bytes(vector.descriptorDigestB64),
       resumeTokenHash: bytes(vector.resumeTokenHashB64),
     }
-    const challenge: V2Challenge = {
-      purpose: V2_CHALLENGE_PURPOSE.register,
+    const challenge: Challenge = {
+      purpose: CHALLENGE_PURPOSE.register,
       id: bytes(vector.challengeIdB64),
       nonce: bytes(vector.challengeNonceB64),
       expiresAtUnixSeconds: BigInt(vector.expiresAt),
     }
-    const registerInit = await encodeV2RegisterInit(init)
+    const registerInit = await encodeRegisterInit(init)
     expect(registerInit).toEqual(bytes(vector.registerInitB64))
-    expect(await decodeV2RegisterInit(registerInit)).toEqual(init)
-    expect(encodeV2Challenge(challenge)).toEqual(bytes(vector.registerChallengeB64))
-    expect(decodeV2Challenge(bytes(vector.registerChallengeB64))).toEqual(challenge)
-    const registerPreimage = await v2RegistrationProofPreimage(
+    expect(await decodeRegisterInit(registerInit)).toEqual(init)
+    expect(encodeChallenge(challenge)).toEqual(bytes(vector.registerChallengeB64))
+    expect(decodeChallenge(bytes(vector.registerChallengeB64))).toEqual(challenge)
+    const registerPreimage = await registrationProofPreimage(
       init,
       challenge,
       endpoint.relayIdentity,
     )
     expect(registerPreimage).toEqual(bytes(vector.preimageB64))
     expect(await verifyEd25519(registerPreimage, bytes(vector.signatureB64))).toBe(true)
-    const registerProof = encodeV2RegisterProof({
+    const registerProof = encodeRegisterProof({
       mode: init.mode,
       senderPublicKey: bytes(identity.senderPublicKeyB64),
       signature: bytes(vector.signatureB64),
     })
     expect(registerProof).toEqual(bytes(vector.registerProofB64))
-    expect(decodeV2RegisterProof(registerProof).mode).toBe(V2_REGISTRATION_MODE.fresh)
+    expect(decodeRegisterProof(registerProof).mode).toBe(REGISTRATION_MODE.fresh)
 
-    const resumeInit = { ...init, mode: V2_REGISTRATION_MODE.resume } as const
-    const resumeChallenge: V2Challenge = {
-      purpose: V2_CHALLENGE_PURPOSE.resume,
+    const resumeInit = { ...init, mode: REGISTRATION_MODE.resume } as const
+    const resumeChallenge: Challenge = {
+      purpose: CHALLENGE_PURPOSE.resume,
       id: bytes(vector.resumeChallengeIdB64),
       nonce: bytes(vector.resumeChallengeNonceB64),
       expiresAtUnixSeconds: BigInt(vector.resumeExpiresAt),
     }
-    expect(await encodeV2RegisterInit(resumeInit)).toEqual(bytes(vector.resumeInitB64))
-    expect(encodeV2Challenge(resumeChallenge)).toEqual(bytes(vector.resumeChallengeB64))
-    const resumePreimage = await v2RegistrationProofPreimage(
+    expect(await encodeRegisterInit(resumeInit)).toEqual(bytes(vector.resumeInitB64))
+    expect(encodeChallenge(resumeChallenge)).toEqual(bytes(vector.resumeChallengeB64))
+    const resumePreimage = await registrationProofPreimage(
       resumeInit,
       resumeChallenge,
       endpoint.relayIdentity,
@@ -588,107 +588,107 @@ describe('suite-02 relay runtime contract', () => {
     expect(resumePreimage).toEqual(bytes(vector.resumePreimageB64))
     expect(await verifyEd25519(resumePreimage, bytes(vector.resumeSignatureB64))).toBe(true)
     expect(
-      encodeV2RegisterProof({
-        mode: V2_REGISTRATION_MODE.resume,
+      encodeRegisterProof({
+        mode: REGISTRATION_MODE.resume,
         senderPublicKey: bytes(identity.senderPublicKeyB64),
         signature: bytes(vector.resumeSignatureB64),
       }),
     ).toEqual(bytes(vector.resumeProofB64))
-    expect(encodeV2ResumeCredential(bytes(vector.resumeTokenB64))).toEqual(
+    expect(encodeResumeCredential(bytes(vector.resumeTokenB64))).toEqual(
       bytes(vector.resumeCredentialB64),
     )
-    expect(decodeV2ResumeCredential(bytes(vector.resumeCredentialB64))).toEqual(
+    expect(decodeResumeCredential(bytes(vector.resumeCredentialB64))).toEqual(
       bytes(vector.resumeTokenB64),
     )
 
-    const stopInit: V2StopInit = {
+    const stopInit: StopInit = {
       shareId: init.shareId,
       shareInstance: init.shareInstance,
       pkHash: init.pkHash,
       relayIdentity: endpoint.relayIdentity,
       stopId: bytes(vector.stopIdB64),
     }
-    const stopChallenge: V2Challenge = {
-      purpose: V2_CHALLENGE_PURPOSE.stop,
+    const stopChallenge: Challenge = {
+      purpose: CHALLENGE_PURPOSE.stop,
       id: bytes(vector.stopChallengeIdB64),
       nonce: bytes(vector.stopChallengeNonceB64),
       expiresAtUnixSeconds: BigInt(vector.stopExpiresAt),
     }
-    expect(await encodeV2StopInit(stopInit)).toEqual(bytes(vector.stopInitB64))
-    expect(await decodeV2StopInit(bytes(vector.stopInitB64))).toEqual(stopInit)
-    expect(encodeV2Challenge(stopChallenge)).toEqual(bytes(vector.stopChallengeB64))
-    const stopPreimage = await v2StopProofPreimage(stopInit, stopChallenge)
+    expect(await encodeStopInit(stopInit)).toEqual(bytes(vector.stopInitB64))
+    expect(await decodeStopInit(bytes(vector.stopInitB64))).toEqual(stopInit)
+    expect(encodeChallenge(stopChallenge)).toEqual(bytes(vector.stopChallengeB64))
+    const stopPreimage = await stopProofPreimage(stopInit, stopChallenge)
     expect(stopPreimage).toEqual(bytes(vector.stopPreimageB64))
     expect(await verifyEd25519(stopPreimage, bytes(vector.stopSignatureB64))).toBe(true)
     expect(
-      encodeV2StopProof({
+      encodeStopProof({
         senderPublicKey: bytes(identity.senderPublicKeyB64),
         signature: bytes(vector.stopSignatureB64),
       }),
     ).toEqual(bytes(vector.stopProofB64))
-    expect(decodeV2StopProof(bytes(vector.stopProofB64)).signature).toEqual(
+    expect(decodeStopProof(bytes(vector.stopProofB64)).signature).toEqual(
       bytes(vector.stopSignatureB64),
     )
 
     const descriptor = bytes(senderObjects[0]!.objectB64)
-    expect(encodeV2DescriptorUpload(descriptor)).toEqual(bytes(vector.descriptorUploadB64))
-    expect(decodeV2DescriptorUpload(bytes(vector.descriptorUploadB64))).toEqual(descriptor)
+    expect(encodeDescriptorUpload(descriptor)).toEqual(bytes(vector.descriptorUploadB64))
+    expect(decodeDescriptorUpload(bytes(vector.descriptorUploadB64))).toEqual(descriptor)
     expect(
-      encodeV2DescriptorDelivery({
+      encodeDescriptorDelivery({
         relaySessionId: bytes(vector.relaySessionIdB64),
         object: descriptor,
       }),
     ).toEqual(bytes(vector.descriptorDeliveryB64))
-    expect(decodeV2DescriptorDelivery(bytes(vector.descriptorDeliveryB64)).object).toEqual(
+    expect(decodeDescriptorDelivery(bytes(vector.descriptorDeliveryB64)).object).toEqual(
       descriptor,
     )
-    expect(encodeV2Join(init.shareId)).toEqual(bytes(vector.joinB64))
-    expect(decodeV2Join(bytes(vector.joinB64))).toEqual(init.shareId)
+    expect(encodeJoin(init.shareId)).toEqual(bytes(vector.joinB64))
+    expect(decodeJoin(bytes(vector.joinB64))).toEqual(init.shareId)
     expect(
-      encodeV2Registered({
+      encodeRegistered({
         shareId: init.shareId,
         shareInstance: init.shareInstance,
         descriptorDigest: init.descriptorDigest,
       }),
     ).toEqual(bytes(vector.registeredB64))
-    expect(decodeV2Registered(bytes(vector.registeredB64)).shareInstance).toEqual(
+    expect(decodeRegistered(bytes(vector.registeredB64)).shareInstance).toEqual(
       init.shareInstance,
     )
-    expect(encodeV2Stopped(stopInit.stopId)).toEqual(bytes(vector.stoppedB64))
-    expect(decodeV2Stopped(bytes(vector.stoppedB64))).toEqual(stopInit.stopId)
+    expect(encodeStopped(stopInit.stopId)).toEqual(bytes(vector.stoppedB64))
+    expect(decodeStopped(bytes(vector.stoppedB64))).toEqual(stopInit.stopId)
     const opaque = {
       relaySessionId: bytes(vector.opaqueRelaySessionIdB64),
       ciphertext: bytes(vector.opaqueCiphertextB64),
     }
-    expect(encodeV2OpaqueRoute(opaque)).toEqual(bytes(vector.opaqueRouteB64))
-    expect(decodeV2OpaqueRoute(bytes(vector.opaqueRouteB64))).toEqual(opaque)
+    expect(encodeOpaqueRoute(opaque)).toEqual(bytes(vector.opaqueRouteB64))
+    expect(decodeOpaqueRoute(bytes(vector.opaqueRouteB64))).toEqual(opaque)
     const sessionRetired = {
       relaySessionId: bytes(vector.sessionRetiredRelaySessionIdB64),
     }
-    expect(encodeV2SessionRetired(sessionRetired)).toEqual(bytes(vector.sessionRetiredB64))
-    expect(decodeV2SessionRetired(bytes(vector.sessionRetiredB64))).toEqual(sessionRetired)
+    expect(encodeSessionRetired(sessionRetired)).toEqual(bytes(vector.sessionRetiredB64))
+    expect(decodeSessionRetired(bytes(vector.sessionRetiredB64))).toEqual(sessionRetired)
     const credit = { relaySessionId: opaque.relaySessionId, frames: 2, bytes: 100 }
-    expect(encodeV2SessionCredit(credit)).toEqual(bytes(vector.sessionCreditB64))
-    expect(decodeV2SessionCredit(bytes(vector.sessionCreditB64))).toEqual(credit)
+    expect(encodeSessionCredit(credit)).toEqual(bytes(vector.sessionCreditB64))
+    expect(decodeSessionCredit(bytes(vector.sessionCreditB64))).toEqual(credit)
     expect(encodeReceiveCredit(credit)).toEqual(bytes(vector.receiveCreditB64))
     expect(decodeReceiveCredit(bytes(vector.receiveCreditB64))).toEqual(credit)
-    expect(encodeV2SessionAdmitted(sessionRetired)).toEqual(bytes(vector.sessionAdmittedB64))
-    expect(decodeV2SessionAdmitted(bytes(vector.sessionAdmittedB64))).toEqual(sessionRetired)
-    expect(encodeV2RelayError({ code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0 })).toEqual(
+    expect(encodeSessionAdmitted(sessionRetired)).toEqual(bytes(vector.sessionAdmittedB64))
+    expect(decodeSessionAdmitted(bytes(vector.sessionAdmittedB64))).toEqual(sessionRetired)
+    expect(encodeRelayError({ code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 })).toEqual(
       bytes(vector.stoppedErrorB64),
     )
-    expect(decodeV2RelayError(bytes(vector.stoppedErrorB64)).code).toBe(V2_RELAY_ERROR.stopped)
-    const staleResume = { code: V2_RELAY_ERROR.resumeStale, retryAfterMilliseconds: 0 }
-    expect(encodeV2RelayError(staleResume)).toEqual(bytes(vector.resumeStaleErrorB64))
-    expect(decodeV2RelayError(bytes(vector.resumeStaleErrorB64))).toEqual(staleResume)
+    expect(decodeRelayError(bytes(vector.stoppedErrorB64)).code).toBe(RELAY_ERROR.stopped)
+    const staleResume = { code: RELAY_ERROR.resumeStale, retryAfterMilliseconds: 0 }
+    expect(encodeRelayError(staleResume)).toEqual(bytes(vector.resumeStaleErrorB64))
+    expect(decodeRelayError(bytes(vector.resumeStaleErrorB64))).toEqual(staleResume)
     const probeNonce = BigInt(vector.connectionProbeNonce)
-    expect(encodeV2ConnectionProbe(probeNonce)).toEqual(bytes(vector.connectionProbeB64))
-    expect(decodeV2ConnectionProbe(bytes(vector.connectionProbeB64))).toBe(probeNonce)
-    expect(encodeV2ConnectionProbeAck(probeNonce)).toEqual(bytes(vector.connectionProbeAckB64))
-    expect(decodeV2ConnectionProbeAck(bytes(vector.connectionProbeAckB64))).toBe(probeNonce)
+    expect(encodeConnectionProbe(probeNonce)).toEqual(bytes(vector.connectionProbeB64))
+    expect(decodeConnectionProbe(bytes(vector.connectionProbeB64))).toBe(probeNonce)
+    expect(encodeConnectionProbeAck(probeNonce)).toEqual(bytes(vector.connectionProbeAckB64))
+    expect(decodeConnectionProbeAck(bytes(vector.connectionProbeAckB64))).toBe(probeNonce)
     const registrationAxes: readonly {
-      readonly candidateInit: V2RegisterInit
-      readonly candidateChallenge: V2Challenge
+      readonly candidateInit: RegisterInit
+      readonly candidateChallenge: Challenge
       readonly candidateRelayIdentity: Uint8Array
     }[] = [
       { candidateInit: { ...init, shareInstance: flip(init.shareInstance) }, candidateChallenge: challenge, candidateRelayIdentity: endpoint.relayIdentity },
@@ -700,7 +700,7 @@ describe('suite-02 relay runtime contract', () => {
       { candidateInit: init, candidateChallenge: challenge, candidateRelayIdentity: flip(endpoint.relayIdentity) },
     ]
     for (const axis of registrationAxes) {
-      const candidate = await v2RegistrationProofPreimage(
+      const candidate = await registrationProofPreimage(
         axis.candidateInit,
         axis.candidateChallenge,
         axis.candidateRelayIdentity,
@@ -712,21 +712,21 @@ describe('suite-02 relay runtime contract', () => {
       bytes(identity.readSecretB64),
       mutatedPKHash,
     )
-    const mutatedKeyPreimage = await v2RegistrationProofPreimage(
+    const mutatedKeyPreimage = await registrationProofPreimage(
       { ...init, pkHash: mutatedPKHash, shareId: mutatedRoute.shareIdRaw },
       challenge,
       endpoint.relayIdentity,
     )
     expect(await verifyEd25519(mutatedKeyPreimage, bytes(vector.signatureB64))).toBe(false)
     await expect(
-      v2RegistrationProofPreimage(
+      registrationProofPreimage(
         { ...init, shareId: flip(init.shareId) },
         challenge,
         endpoint.relayIdentity,
       ),
     ).rejects.toThrow()
 
-    const stopAxes: readonly { readonly init: V2StopInit; readonly challenge: V2Challenge }[] = [
+    const stopAxes: readonly { readonly init: StopInit; readonly challenge: Challenge }[] = [
       { init: { ...stopInit, shareInstance: flip(stopInit.shareInstance) }, challenge: stopChallenge },
       { init: { ...stopInit, relayIdentity: flip(stopInit.relayIdentity) }, challenge: stopChallenge },
       { init: { ...stopInit, stopId: flip(stopInit.stopId) }, challenge: stopChallenge },
@@ -735,51 +735,51 @@ describe('suite-02 relay runtime contract', () => {
       { init: stopInit, challenge: { ...stopChallenge, expiresAtUnixSeconds: stopChallenge.expiresAtUnixSeconds + 1n } },
     ]
     for (const axis of stopAxes) {
-      const candidate = await v2StopProofPreimage(axis.init, axis.challenge)
+      const candidate = await stopProofPreimage(axis.init, axis.challenge)
       expect(await verifyEd25519(candidate, bytes(vector.stopSignatureB64))).toBe(false)
     }
-    const mutatedStopKeyPreimage = await v2StopProofPreimage(
+    const mutatedStopKeyPreimage = await stopProofPreimage(
       { ...stopInit, pkHash: mutatedPKHash, shareId: mutatedRoute.shareIdRaw },
       stopChallenge,
     )
     expect(await verifyEd25519(mutatedStopKeyPreimage, bytes(vector.stopSignatureB64))).toBe(false)
     await expect(
-      v2StopProofPreimage({ ...stopInit, shareId: flip(stopInit.shareId) }, stopChallenge),
+      stopProofPreimage({ ...stopInit, shareId: flip(stopInit.shareId) }, stopChallenge),
     ).rejects.toThrow()
 
     await expect(
-      v2RegistrationProofPreimage(init, { ...challenge, purpose: V2_CHALLENGE_PURPOSE.resume }, endpoint.relayIdentity),
+      registrationProofPreimage(init, { ...challenge, purpose: CHALLENGE_PURPOSE.resume }, endpoint.relayIdentity),
     ).rejects.toThrow()
     const replayedChallenge = { ...challenge, id: flip(challenge.id) }
-    const replayPreimage = await v2RegistrationProofPreimage(
+    const replayPreimage = await registrationProofPreimage(
       init,
       replayedChallenge,
       endpoint.relayIdentity,
     )
     expect(await verifyEd25519(replayPreimage, bytes(vector.signatureB64))).toBe(false)
-    await expect(v2StopProofPreimage(stopInit, challenge)).rejects.toThrow()
-    expect(() => decodeV2OpaqueRoute(flip(bytes(vector.opaqueRouteB64), 5))).toThrow()
-    expect(() => decodeV2OpaqueRoute(bytes(vector.sessionRetiredB64))).toThrow()
-    expect(() => decodeV2SessionRetired(flip(bytes(vector.sessionRetiredB64), 5))).toThrow()
-    expect(() => decodeV2SessionCredit(flip(bytes(vector.sessionCreditB64), 5))).toThrow()
-    expect(() => decodeV2SessionAdmitted(flip(bytes(vector.sessionAdmittedB64), 5))).toThrow()
-    expect(() => decodeV2SessionCredit(new Uint8Array(24))).toThrow()
-    expect(() => decodeV2SessionAdmitted(new Uint8Array(16))).toThrow()
+    await expect(stopProofPreimage(stopInit, challenge)).rejects.toThrow()
+    expect(() => decodeOpaqueRoute(flip(bytes(vector.opaqueRouteB64), 5))).toThrow()
+    expect(() => decodeOpaqueRoute(bytes(vector.sessionRetiredB64))).toThrow()
+    expect(() => decodeSessionRetired(flip(bytes(vector.sessionRetiredB64), 5))).toThrow()
+    expect(() => decodeSessionCredit(flip(bytes(vector.sessionCreditB64), 5))).toThrow()
+    expect(() => decodeSessionAdmitted(flip(bytes(vector.sessionAdmittedB64), 5))).toThrow()
+    expect(() => decodeSessionCredit(new Uint8Array(24))).toThrow()
+    expect(() => decodeSessionAdmitted(new Uint8Array(16))).toThrow()
     for (const [frames, creditBytes] of [[0, 0], [65, 2000], [-1, 100], [1, -1], [1, (4 << 20) + 1], [1.5, 100], [1, 1.5]] as const) {
-      expect(() => encodeV2SessionCredit({ relaySessionId: bytes(vector.opaqueRelaySessionIdB64), frames, bytes: creditBytes })).toThrow()
+      expect(() => encodeSessionCredit({ relaySessionId: bytes(vector.opaqueRelaySessionIdB64), frames, bytes: creditBytes })).toThrow()
     }
-    expect(() => decodeV2SessionRetired(bytes(vector.sessionRetiredB64).subarray(0, 15))).toThrow()
-    expect(() => decodeV2SessionRetired(new Uint8Array(16))).toThrow()
-    expect(() => encodeV2SessionRetired({ relaySessionId: new Uint8Array(8) })).toThrow()
-    expect(() => encodeV2OpaqueRoute({ ...opaque, ciphertext: new Uint8Array(65_537) })).toThrow()
-    expect(() => encodeV2OpaqueRoute({ ...opaque, ciphertext: new Uint8Array(0) })).toThrow()
-    expect(() => encodeV2OpaqueRoute({ ...opaque, relaySessionId: new Uint8Array(8) })).toThrow()
+    expect(() => decodeSessionRetired(bytes(vector.sessionRetiredB64).subarray(0, 15))).toThrow()
+    expect(() => decodeSessionRetired(new Uint8Array(16))).toThrow()
+    expect(() => encodeSessionRetired({ relaySessionId: new Uint8Array(8) })).toThrow()
+    expect(() => encodeOpaqueRoute({ ...opaque, ciphertext: new Uint8Array(65_537) })).toThrow()
+    expect(() => encodeOpaqueRoute({ ...opaque, ciphertext: new Uint8Array(0) })).toThrow()
+    expect(() => encodeOpaqueRoute({ ...opaque, relaySessionId: new Uint8Array(8) })).toThrow()
     expect(
-      decodeV2OpaqueRoute(
-        encodeV2OpaqueRoute({ ...opaque, ciphertext: new Uint8Array(65_536).fill(1) }),
+      decodeOpaqueRoute(
+        encodeOpaqueRoute({ ...opaque, ciphertext: new Uint8Array(65_536).fill(1) }),
       ).ciphertext,
     ).toHaveLength(65_536)
-    expect(() => encodeV2RelayError({ code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 1 })).toThrow()
+    expect(() => encodeRelayError({ code: RELAY_ERROR.stopped, retryAfterMilliseconds: 1 })).toThrow()
   })
 
   it('matches relay route lifecycle and credit semantics', () => {
@@ -833,8 +833,8 @@ describe('suite-02 relay runtime contract', () => {
       const credit = {
         relaySessionId: bytes(vector.relaySessionIdB64), frames: grant.frames, bytes: grant.bytes,
       }
-      expect(encodeV2SessionCredit(credit), grant.name).toEqual(bytes(grant.encodedB64))
-      expect(decodeV2SessionCredit(bytes(grant.encodedB64)), grant.name).toEqual(credit)
+      expect(encodeSessionCredit(credit), grant.name).toEqual(bytes(grant.encodedB64))
+      expect(decodeSessionCredit(bytes(grant.encodedB64)), grant.name).toEqual(credit)
     }
   })
 
@@ -852,41 +852,41 @@ describe('suite-02 lane runtime contract', () => {
       attachNonce: bytes(vector.attachNonceB64),
     }
     const trafficKey = bytes(vector.receiverToSenderKeyB64)
-    const hello = await encodeV2LaneHello(fields, trafficKey)
+    const hello = await encodeLaneHello(fields, trafficKey)
     expect(hello).toEqual(bytes(vector.laneHelloB64))
-    expect(await decodeV2LaneHello(hello, trafficKey)).toEqual(fields)
-    expect(await v2LaneAcceptBody(hello, bytes(vector.laneAckBodyB64).subarray(37))).toEqual(
+    expect(await decodeLaneHello(hello, trafficKey)).toEqual(fields)
+    expect(await laneAcceptBody(hello, bytes(vector.laneAckBodyB64).subarray(37))).toEqual(
       bytes(vector.laneAckBodyB64),
     )
     const senderPublicKey = bytes(identity.senderPublicKeyB64)
-    expect(await verifyV2LaneAccept(bytes(vector.laneAckB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
+    expect(await verifyLaneAccept(bytes(vector.laneAckB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
       bytes(vector.laneAckBodyB64).subarray(37),
     )
     const rejection = {
-      code: vector.laneRejectCode as typeof V2_LANE_REJECT.admissionLimited,
+      code: vector.laneRejectCode as typeof LANE_REJECT.admissionLimited,
       retryAfterMilliseconds: vector.laneRejectRetryAfterMilliseconds,
     }
-    expect(await v2LaneRejectBody(hello, rejection)).toEqual(bytes(vector.laneRejectBodyB64))
-    expect(await verifyV2LaneReject(bytes(vector.laneRejectB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
+    expect(await laneRejectBody(hello, rejection)).toEqual(bytes(vector.laneRejectBodyB64))
+    expect(await verifyLaneReject(bytes(vector.laneRejectB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
       rejection,
     )
 
     const axes = [5, 21, 37, 41, 45, 61]
     for (const offset of axes) {
       const hostile = flip(hello, offset)
-      await expect(decodeV2LaneHello(hostile, trafficKey)).rejects.toThrow()
-      await expect(verifyV2LaneAccept(bytes(vector.laneAckB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
-      await expect(verifyV2LaneReject(bytes(vector.laneRejectB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+      await expect(decodeLaneHello(hostile, trafficKey)).rejects.toThrow()
+      await expect(verifyLaneAccept(bytes(vector.laneAckB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+      await expect(verifyLaneReject(bytes(vector.laneRejectB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
     }
-    await expect(decodeV2LaneHello(hello, flip(trafficKey))).rejects.toThrow()
-    await expect(verifyV2LaneAccept(flip(bytes(vector.laneAckB64), 53), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
-    await expect(verifyV2LaneReject(flip(bytes(vector.laneRejectB64), 44), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
-    await expect(encodeV2LaneHello({ ...fields, laneId: 0 }, trafficKey)).rejects.toThrow()
+    await expect(decodeLaneHello(hello, flip(trafficKey))).rejects.toThrow()
+    await expect(verifyLaneAccept(flip(bytes(vector.laneAckB64), 53), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+    await expect(verifyLaneReject(flip(bytes(vector.laneRejectB64), 44), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+    await expect(encodeLaneHello({ ...fields, laneId: 0 }, trafficKey)).rejects.toThrow()
     await expect(
-      v2LaneRejectBody(hello, { code: V2_LANE_REJECT.stopping, retryAfterMilliseconds: 1 }),
+      laneRejectBody(hello, { code: LANE_REJECT.stopping, retryAfterMilliseconds: 1 }),
     ).rejects.toThrow()
 
-    const authority = new V2LaneResponseAuthority(hello, createEd25519Verifier(senderPublicKey))
+    const authority = new LaneResponseAuthority(hello, createEd25519Verifier(senderPublicKey))
     await expect(authority.accept(bytes(vector.laneAckB64))).resolves.toEqual(
       bytes(vector.laneAckBodyB64).subarray(37),
     )

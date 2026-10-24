@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { activeTaskFacts, compareTaskTransition, presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { taskFixture, TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
-import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../src/ui/v2-output'
-import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
-import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import { EMPTY_OUTPUT_PRESENTATION } from '../../src/ui/output'
+import { EMPTY_PROGRESS } from '../../src/ui/model'
+import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { TaskAction } from '../../src/ui/tasks'
 
-function retained(actions: V2RetainedReceiveOperation['actions'] = ['continue', 'save-partial', 'discard']): V2RetainedReceiveOperation {
+function retained(actions: RetainedReceiveOperation['actions'] = ['continue', 'save-partial', 'discard']): RetainedReceiveOperation {
   const state: ReceiveLifecycleState = {
     operationId: '1'.repeat(32), receiveIntentDigest: '2'.repeat(64), generation: 4n,
     kind: 'resumable-receive', payloadKind: 'workspace-archive',
@@ -26,11 +26,11 @@ describe('shared task presenter', () => {
   it('keeps failed startup retryable without claiming that source content is missing', () => {
     const lifecycle: ReceiveLifecycleState = { operationId: 'startup', receiveIntentDigest: 'intent',
       generation: 3n, kind: 'resumable-start', reason: 'failed' }
-    const active = activeTaskFacts({ output: { ...EMPTY_V2_OUTPUT_PRESENTATION, lifecycle },
-      progress: { ...EMPTY_V2_PROGRESS, discovery: 'failed' } })
+    const active = activeTaskFacts({ output: { ...EMPTY_OUTPUT_PRESENTATION, lifecycle },
+      progress: { ...EMPTY_PROGRESS, discovery: 'failed' } })
     expect(active?.completeness).toBe('incomplete')
     expect(presentTask(active!).stage).toBe('needs-action')
-    const retainedOperation: V2RetainedReceiveOperation = { ...retained(['continue', 'discard']),
+    const retainedOperation: RetainedReceiveOperation = { ...retained(['continue', 'discard']),
       operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
       lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'resume-start' }
     const task = presentTask(retainedTaskFacts(retainedOperation, 'matching-share'))
@@ -48,13 +48,13 @@ describe('shared task presenter', () => {
     expect(open.progress?.remainingBytes).toBeNull()
     expect(open.progress?.details.join(' ')).toContain('final total unknown')
     expect(presentTask(taskFixture({
-      progress: { ...EMPTY_V2_PROGRESS, discovery: 'failed', discoveredBytes: 100n, writtenBytes: 50n },
+      progress: { ...EMPTY_PROGRESS, discovery: 'failed', discoveredBytes: 100n, writtenBytes: 50n },
     })).progress?.percentage).toBeNull()
   })
 
   it('requires exact closed discovery and never presents receipt as publication', () => {
     const result = presentTask(taskFixture({
-      progress: { ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredBytes: 100n, writtenBytes: 100n, materializedBytes: 100n },
+      progress: { ...EMPTY_PROGRESS, discovery: 'complete', discoveredBytes: 100n, writtenBytes: 100n, materializedBytes: 100n },
     }))
     expect(result.progress).toMatchObject({ mode: 'determinate', percentage: 99 })
     expect(result.stage).toBe('downloading')
@@ -63,7 +63,7 @@ describe('shared task presenter', () => {
 
   it('labels nonoverlapping local materialization separately from this attempt receipt', () => {
     const result = presentTask(taskFixture({
-      progress: { ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredBytes: 100n,
+      progress: { ...EMPTY_PROGRESS, discovery: 'complete', discoveredBytes: 100n,
         materializedBytes: 91n, writtenBytes: 1n, completedBytes: 80n },
     }))
     expect(result.progress?.percentage).toBe(91)
@@ -74,7 +74,7 @@ describe('shared task presenter', () => {
   it('keeps direct ZIP verification ahead of disconnected sender and generic finishing', () => {
     const result = presentTask(taskFixture({
       ...TASK_FIXTURES.verifying!, blocking: { kind: 'share-ended' },
-      progress: { ...EMPTY_V2_PROGRESS, phase: 'finishing' },
+      progress: { ...EMPTY_PROGRESS, phase: 'finishing' },
     }))
     expect(result.headline).toBe('Verifying ZIP')
   })
@@ -149,7 +149,7 @@ describe('shared task presenter', () => {
   })
 
   it('keeps local packaging actionable without a joined share', () => {
-    const operation: V2RetainedReceiveOperation = {
+    const operation: RetainedReceiveOperation = {
       ...retained(['continue']),
       continuation: 'resume-package',
       lifecycle: {
@@ -165,7 +165,7 @@ describe('shared task presenter', () => {
   })
 
   it('shows source-authorized pending local work as Finishing without implying a remote transfer', () => {
-    const operation: V2RetainedReceiveOperation = { ...retained(['continue']), continuation: 'resume-local-finalization' }
+    const operation: RetainedReceiveOperation = { ...retained(['continue']), continuation: 'resume-local-finalization' }
     const idle = presentTask(retainedTaskFacts(operation, 'local'))
     const running = presentTask(retainedTaskFacts(operation, 'local', {
       pending: { operationId: operation.operationId, action: 'continue' },
@@ -193,17 +193,17 @@ describe('shared task presenter', () => {
   })
 
   it('treats crash inventory as inactive while preserving its durable receive and packaging phases', () => {
-    const receiving: V2RetainedReceiveOperation = { ...retained(['continue']), lifecycle: taskFixture().lifecycle }
+    const receiving: RetainedReceiveOperation = { ...retained(['continue']), lifecycle: taskFixture().lifecycle }
     const remote = presentTask(retainedTaskFacts(receiving, 'original-link-required'))
     expect(remote.stage).toBe('needs-action')
     expect(remote.headline).toContain('original link')
     expect(receiving.lifecycle.kind).toBe('receiving')
     expect(presentTask(retainedTaskFacts(receiving, 'matching-share')).stage).toBe('paused')
-    const packaging: V2RetainedReceiveOperation = { ...receiving, continuation: 'resume-package' }
+    const packaging: RetainedReceiveOperation = { ...receiving, continuation: 'resume-package' }
     expect(presentTask(retainedTaskFacts(packaging, 'local')).headline).toBe('Ready to finish locally')
-    const handoff: V2RetainedReceiveOperation = { ...receiving, continuation: 'retry-download' }
+    const handoff: RetainedReceiveOperation = { ...receiving, continuation: 'retry-download' }
     expect(presentTask(retainedTaskFacts(handoff, 'local')).headline).toBe('Ready to save')
-    const sealed: V2RetainedReceiveOperation = { ...receiving, continuation: 'save-artifact', actions: ['save'] }
+    const sealed: RetainedReceiveOperation = { ...receiving, continuation: 'save-artifact', actions: ['save'] }
     expect(presentTask(retainedTaskFacts(sealed, 'local')).primaryAction?.id).toBe('save')
   })
 
@@ -233,15 +233,15 @@ describe('shared task presenter', () => {
   })
 
   it('does not create a task before lifecycle commitment', () => {
-    expect(activeTaskFacts({ output: EMPTY_V2_OUTPUT_PRESENTATION, progress: EMPTY_V2_PROGRESS })).toBeNull()
+    expect(activeTaskFacts({ output: EMPTY_OUTPUT_PRESENTATION, progress: EMPTY_PROGRESS })).toBeNull()
   })
 
   it('uses immutable display facts and identical lifecycle presentation for current and retained adapters', () => {
     const operation = retained(['continue'])
     const display = operation.display!
     const active = activeTaskFacts({
-      output: { ...EMPTY_V2_OUTPUT_PRESENTATION, lifecycle: operation.lifecycle },
-      progress: EMPTY_V2_PROGRESS, display,
+      output: { ...EMPTY_OUTPUT_PRESENTATION, lifecycle: operation.lifecycle },
+      progress: EMPTY_PROGRESS, display,
     })!
     const restored = retainedTaskFacts(operation, 'matching-share')
     expect(presentTask(active).headline).toBe(presentTask(restored).headline)
@@ -253,7 +253,7 @@ describe('shared task presenter', () => {
     const initial = presentTask(taskFixture()).transition
     const bytes = presentTask(taskFixture({
       lifecycle: { ...taskFixture().lifecycle, generation: 2n },
-      progress: { ...EMPTY_V2_PROGRESS, writtenBytes: 999n },
+      progress: { ...EMPTY_PROGRESS, writtenBytes: 999n },
     })).transition
     expect(compareTaskTransition(initial, bytes)).toBeNull()
     expect(compareTaskTransition(initial, presentTask(TASK_FIXTURES.reconnecting!).transition)).not.toBeNull()

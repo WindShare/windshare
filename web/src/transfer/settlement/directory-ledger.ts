@@ -3,8 +3,8 @@ import {
   DirectorySettlementKind,
   type DirectoryAdmission,
 } from '../directory-admission'
-import { V2OutputPausedError } from '../job/contract'
-import { finalizeV2Directories } from '../job/directory-transfer'
+import { OutputPausedError } from '../job/contract'
+import { finalizeDirectories } from '../job/directory-transfer'
 import { isolatedDirectoryOutputFailure } from '../job/failures'
 import type {
   DirectTreeExecution,
@@ -41,7 +41,7 @@ export class DirectorySettlementLedger {
   reserveAdmission(): void {
     if (this.#options.retention === 'after-content' &&
         this.#admissionClaims >= BigInt(this.#options.maximumAdmissions)) {
-      throw new V2OutputPausedError('Directory admission budget was exhausted')
+      throw new OutputPausedError('Directory admission budget was exhausted')
     }
     this.#admissionClaims += 1n
   }
@@ -70,7 +70,7 @@ export class DirectorySettlementLedger {
     signal: AbortSignal,
     fileFailureIsolation: boolean,
   ): Promise<void> {
-    await finalizeV2Directories({
+    await finalizeDirectories({
       admissions: this.#finalizable,
       output,
       signal,

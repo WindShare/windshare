@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import { V2DirectoryAncestry, V2DirectoryTraversalError } from '../../src/transfer/v2-job'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import { DirectoryAncestry, DirectoryTraversalError } from '../../src/transfer/job'
 import {
   catalogFixture,
   directoryEntry,
@@ -23,7 +23,7 @@ describe('v2 catalog and preparation authority', () => {
         fileEntry(identity(11), 'a.txt', 4n),
         fileEntry(identity(12), 'z.txt', 4n),
       ]
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const catalog = catalogFixture([{ id: identity(2), entries: files }])
       const readers = readerFixture(files)
       const plans = planAuthorityFixture()
@@ -68,7 +68,7 @@ describe('v2 catalog and preparation authority', () => {
   )
 
   it('releases sequential sibling identities from path-local ancestry', () => {
-    const ancestry = new V2DirectoryAncestry()
+    const ancestry = new DirectoryAncestry()
     const leaveRoot = ancestry.enter('root')
     for (let index = 0; index < 10_000; index += 1) {
       const leaveSibling = ancestry.enter(`sibling-${index}`)
@@ -86,7 +86,7 @@ describe('v2 catalog and preparation authority', () => {
     async (planKind) => {
       const root = identity(2)
       const file = fileEntry(identity(11), 'payload.bin', 4n)
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const catalog = catalogFixture([{ id: root, entries: [file], generation: identity(31) }])
       const readers = readerFixture([file])
       const plans = planAuthorityFixture({ rejectPreparation: true })
@@ -120,7 +120,7 @@ describe('v2 catalog and preparation authority', () => {
   it('passes exact authenticated generations and artifact entries to Portable ZIP preparation', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [file], generation: identity(31) }])
     const readers = readerFixture([file])
     const plans = planAuthorityFixture({ rejectPreparation: true })
@@ -171,8 +171,8 @@ describe('v2 catalog and preparation authority', () => {
     async (planKind) => {
       const root = identity(2)
       const child = identity(3)
-      const selection = new V2SelectionPolicy(true)
-      const discoveryFailure = new V2DirectoryTraversalError('child generation unavailable')
+      const selection = new SelectionPolicy(true)
+      const discoveryFailure = new DirectoryTraversalError('child generation unavailable')
       const catalog = catalogFixture([
         { id: root, entries: [directoryEntry(child, 'child')] },
         { id: child, entries: [], loadFailure: discoveryFailure },
@@ -213,7 +213,7 @@ describe('v2 catalog and preparation authority', () => {
       const root = identity(2)
       const child = identity(3)
       const file = fileEntry(identity(11), 'a.bin', 4n)
-      const selection = new V2SelectionPolicy(true)
+      const selection = new SelectionPolicy(true)
       const childReplayStarted = deferred()
       const releaseChildReplay = deferred()
       const fileCompleted = deferred()
@@ -227,7 +227,7 @@ describe('v2 catalog and preparation authority', () => {
             childReplayStarted.resolve()
             await releaseChildReplay.promise
             if (interruption === 'failure') {
-              throw new V2DirectoryTraversalError('child generation unavailable')
+              throw new DirectoryTraversalError('child generation unavailable')
             }
           },
         },
@@ -308,7 +308,7 @@ describe('v2 catalog and preparation authority', () => {
 
   it('rejects an omitted synthetic root before any directory, revision, or block mutation', async () => {
     const root = identity(2)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: root, entries: [], omittedCount: 1n }])
     const readers = readerFixture([])
     const plans = planAuthorityFixture()

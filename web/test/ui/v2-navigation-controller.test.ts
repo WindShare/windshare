@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createFailureIdentity,
@@ -15,20 +15,20 @@ import {
   type IncidentScopeOwner,
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
-import { V2RemoteOperationError } from '../../src/content/v2-session-operations'
+import { RemoteOperationError } from '../../src/content/session-operations'
 import type {
   AuthenticatedDiscoveryRequest,
   AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
 import { BrowserNavigationCoordinator } from '../../src/ui/controller/navigation'
-import { captureV2Location, V2ReceiverController } from '../../src/ui/v2-controller'
+import { captureLocation, ReceiverController } from '../../src/ui/controller'
 import type {
-  V2BrowseDirectory,
-  V2BrowsePage,
-  V2BrowserReceiverGateway,
-  V2JoinedBrowserShare,
+  BrowseDirectory,
+  BrowsePage,
+  BrowserReceiverGateway,
+  JoinedBrowserShare,
 } from '../../src/application/browser-share/gateway'
-import type { V2ReceiverSnapshot } from '../../src/ui/v2-model'
+import type { ReceiverSnapshot } from '../../src/ui/model'
 import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 const firstChild = directoryEntry(2, 'first', 'First')
@@ -43,19 +43,19 @@ class NavigableJoinedShare {
   }
   readonly recoveryIdentity = 'navigation-share'
   readonly protocolSessionId = identityText(8)
-  selection = new V2SelectionPolicy(true)
-  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
+  selection = new SelectionPolicy(true)
+  replaceSelection(selection: SelectionPolicy): void { this.selection = selection }
   readonly requests: Array<{
-    readonly directory: V2BrowseDirectory
+    readonly directory: BrowseDirectory
     readonly signal: AbortSignal | undefined
-    readonly result: Deferred<V2BrowsePage>
+    readonly result: Deferred<BrowsePage>
   }> = []
 
-  rootDirectory(): V2BrowseDirectory {
+  rootDirectory(): BrowseDirectory {
     return directory(1, 'root', 'Shared files', [], ['root'])
   }
 
-  childDirectory(parent: V2BrowseDirectory, entry: V2CatalogEntry): V2BrowseDirectory {
+  childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
     if (entry.kind !== 'directory') throw new TypeError('not a directory')
     return directory(
       entry.id[0] ?? 0,
@@ -67,14 +67,14 @@ class NavigableJoinedShare {
   }
 
   async page(
-    directory: V2BrowseDirectory,
+    directory: BrowseDirectory,
     _pageIndex: number,
     options: { readonly signal?: AbortSignal } = {},
-  ): Promise<V2BrowsePage> {
+  ): Promise<BrowsePage> {
     if (directory.idText === 'root') {
       return browsePage(directory, [firstChild, secondChild])
     }
-    const result = deferred<V2BrowsePage>()
+    const result = deferred<BrowsePage>()
     this.requests.push({ directory, signal: options.signal, result })
     // The fake deliberately ignores AbortSignal so tests exercise the stale
     // completion fence rather than relying on cooperative I/O cancellation.
@@ -180,7 +180,7 @@ describe('browser navigation incident ownership', () => {
     let snapshot = directNavigationSnapshot()
     const publicationOrder: string[] = []
     const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as V2JoinedBrowserShare,
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
       isDisposed: () => false,
       snapshot: () => snapshot,
       publish: (next) => {
@@ -225,7 +225,7 @@ describe('browser navigation incident ownership', () => {
     const incidents = new RecordingIncidentPort()
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as V2JoinedBrowserShare,
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
       isDisposed: () => false,
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
@@ -257,7 +257,7 @@ describe('browser navigation incident ownership', () => {
     const incidents = new RecordingIncidentPort()
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as V2JoinedBrowserShare,
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
       isDisposed: () => false,
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
@@ -296,7 +296,7 @@ describe('browser navigation incident ownership', () => {
     const incidents = new RecordingIncidentPort()
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as V2JoinedBrowserShare,
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
       isDisposed: () => false,
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
@@ -333,7 +333,7 @@ describe('browser navigation incident ownership', () => {
     const incidents = new RecordingIncidentPort()
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as V2JoinedBrowserShare,
+      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
       isDisposed: () => false,
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
@@ -381,7 +381,7 @@ describe('v2 receiver capability lifecycle', () => {
       history,
     } as unknown as Window
 
-    const captured = captureV2Location(windowPort, {
+    const captured = captureLocation(windowPort, {
       onSecurityMilestone: (milestone) => events.push(milestone),
     })
 
@@ -406,8 +406,8 @@ describe('v2 receiver capability lifecycle', () => {
           `gateway rejected ${input}`,
         )
       },
-    } as unknown as V2BrowserReceiverGateway
-    const controller = new V2ReceiverController(gateway, {
+    } as unknown as BrowserReceiverGateway
+    const controller = new ReceiverController(gateway, {
       receive: INERT_TEST_RECEIVE_COMPOSITION,
       onSecurityMilestone: (milestone) => milestones.push(milestone),
     })
@@ -428,14 +428,14 @@ describe('v2 receiver capability lifecycle', () => {
 })
 
 async function readyController(): Promise<{
-  readonly controller: V2ReceiverController
+  readonly controller: ReceiverController
   readonly joined: NavigableJoinedShare
 }> {
   const joined = new NavigableJoinedShare()
   const gateway = {
-    join: async () => joined as unknown as V2JoinedBrowserShare,
-  } as unknown as V2BrowserReceiverGateway
-  const controller = new V2ReceiverController(gateway, {
+    join: async () => joined as unknown as JoinedBrowserShare,
+  } as unknown as BrowserReceiverGateway
+  const controller = new ReceiverController(gateway, {
     receive: INERT_TEST_RECEIVE_COMPOSITION,
   })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
@@ -444,9 +444,9 @@ async function readyController(): Promise<{
 }
 
 function browsePage(
-  browseDirectory: V2BrowseDirectory,
-  entries: readonly V2CatalogEntry[],
-): V2BrowsePage {
+  browseDirectory: BrowseDirectory,
+  entries: readonly CatalogEntry[],
+): BrowsePage {
   return Object.freeze({
     directory: browseDirectory,
     pageIndex: 0,
@@ -457,11 +457,11 @@ function browsePage(
   })
 }
 
-function directoryEntry(first: number, idText: string, name: string): V2CatalogEntry {
+function directoryEntry(first: number, idText: string, name: string): CatalogEntry {
   return Object.freeze({ kind: 'directory', id: identity(first), idText, name })
 }
 
-function fileEntry(first: number, idText: string, name: string): V2CatalogEntry {
+function fileEntry(first: number, idText: string, name: string): CatalogEntry {
   return Object.freeze({ kind: 'file', id: identity(first), idText, name, expectedSize: 1n })
 }
 
@@ -471,7 +471,7 @@ function directory(
   name: string,
   path: readonly string[],
   ancestry: readonly string[],
-): V2BrowseDirectory {
+): BrowseDirectory {
   return Object.freeze({
     id: identity(first),
     idText,
@@ -528,7 +528,7 @@ class RecordingIncidentPort {
   }
 }
 
-function directNavigationSnapshot(): V2ReceiverSnapshot {
+function directNavigationSnapshot(): ReceiverSnapshot {
   return {
     phase: 'browsing',
     status: 'ready',
@@ -542,11 +542,11 @@ function directNavigationSnapshot(): V2ReceiverSnapshot {
     selectedVisibleFiles: 0,
     selectedVisibleBytes: 0n,
     directoryRetryable: false,
-  } as unknown as V2ReceiverSnapshot
+  } as unknown as ReceiverSnapshot
 }
 
-function authenticatedRemoteOperationError(): V2RemoteOperationError {
-  return new V2RemoteOperationError(createReceivedProtocolError({
+function authenticatedRemoteOperationError(): RemoteOperationError {
+  return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'list_children', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),

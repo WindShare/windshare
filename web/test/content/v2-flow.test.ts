@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  decodeV2OpenResults,
-  V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS,
-  V2_FRAGMENT_PAYLOAD_BYTES,
-  V2FragmentAssembler,
-  V2_LEASE_RENEW_AFTER_MILLISECONDS,
-  V2_LEASE_TTL_MILLISECONDS,
-  V2_REVISION_CODE_QUOTA,
-  V2_REVISION_RETRY_MAXIMUM_MILLISECONDS,
-} from '../../src/content/v2-flow'
+  decodeOpenResults,
+  FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS,
+  FRAGMENT_PAYLOAD_BYTES,
+  FragmentAssembler,
+  LEASE_RENEW_AFTER_MILLISECONDS,
+  LEASE_TTL_MILLISECONDS,
+  REVISION_CODE_QUOTA,
+  REVISION_RETRY_MAXIMUM_MILLISECONDS,
+} from '../../src/content/flow'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
 import { fragmentRecord } from './v2-fragment-fixture'
 
@@ -29,24 +29,24 @@ describe('v2 content result frozen bounds', () => {
         [1, [[fileId, 1, code, true, delay]]],
       ]),
     )
-    expect(() => decodeV2OpenResults(
-      failedOpen(V2_REVISION_CODE_QUOTA, 0),
+    expect(() => decodeOpenResults(
+      failedOpen(REVISION_CODE_QUOTA, 0),
       fileId,
     )).toThrow(/frozen range/i)
-    expect(decodeV2OpenResults(
-      failedOpen(V2_REVISION_CODE_QUOTA, V2_REVISION_RETRY_MAXIMUM_MILLISECONDS),
+    expect(decodeOpenResults(
+      failedOpen(REVISION_CODE_QUOTA, REVISION_RETRY_MAXIMUM_MILLISECONDS),
       fileId,
     ).failure).toEqual({
-      code: V2_REVISION_CODE_QUOTA,
+      code: REVISION_CODE_QUOTA,
       retryable: true,
-      retryAfterMilliseconds: V2_REVISION_RETRY_MAXIMUM_MILLISECONDS,
+      retryAfterMilliseconds: REVISION_RETRY_MAXIMUM_MILLISECONDS,
     })
-    expect(() => decodeV2OpenResults(
-      failedOpen(V2_REVISION_CODE_QUOTA, 30_001),
+    expect(() => decodeOpenResults(
+      failedOpen(REVISION_CODE_QUOTA, 30_001),
       fileId,
     )).toThrow(/frozen range/i)
 
-    expect(decodeV2OpenResults(failedOpen(0x3001, 25), fileId).failure).toEqual({
+    expect(decodeOpenResults(failedOpen(0x3001, 25), fileId).failure).toEqual({
       code: 0x3001,
       retryable: true,
       retryAfterMilliseconds: 25,
@@ -60,13 +60,13 @@ describe('v2 content result frozen bounds', () => {
         [1, [[fileId, 0, Uint8Array.of(1), identity(2), ttl, renewAfter]]],
       ]),
     )
-    expect(() => decodeV2OpenResults(successfulOpen(
-      V2_LEASE_TTL_MILLISECONDS,
-      V2_LEASE_RENEW_AFTER_MILLISECONDS,
+    expect(() => decodeOpenResults(successfulOpen(
+      LEASE_TTL_MILLISECONDS,
+      LEASE_RENEW_AFTER_MILLISECONDS,
     ), fileId)).not.toThrow()
-    expect(() => decodeV2OpenResults(successfulOpen(119_999, 60_000), fileId))
+    expect(() => decodeOpenResults(successfulOpen(119_999, 60_000), fileId))
       .toThrow(/lease timing/i)
-    expect(() => decodeV2OpenResults(successfulOpen(120_000, 59_999), fileId))
+    expect(() => decodeOpenResults(successfulOpen(120_000, 59_999), fileId))
       .toThrow(/lease timing/i)
   })
 })
@@ -75,14 +75,14 @@ describe('v2 fragment inactivity accounting', () => {
   it('allows assemblies longer than 15 seconds while unique fragments keep arriving', async () => {
     let now = 0
     const operationId = identity(11)
-    const object = new Uint8Array(V2_FRAGMENT_PAYLOAD_BYTES * 2 + 1).fill(0x31)
+    const object = new Uint8Array(FRAGMENT_PAYLOAD_BYTES * 2 + 1).fill(0x31)
     const fragments = fragmentRecord(operationId, object)
-    const assembler = new V2FragmentAssembler(operationId, () => now)
+    const assembler = new FragmentAssembler(operationId, () => now)
 
-    await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: V2_FRAGMENT_PAYLOAD_BYTES })
-    now += V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
-    await expect(assembler.accept(fragments[1]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: V2_FRAGMENT_PAYLOAD_BYTES })
-    now += V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
+    await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: FRAGMENT_PAYLOAD_BYTES })
+    now += FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
+    await expect(assembler.accept(fragments[1]!)).resolves.toMatchObject({ status: 'accepted', receivedBytes: FRAGMENT_PAYLOAD_BYTES })
+    now += FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
     await expect(assembler.accept(fragments[2]!)).resolves.toMatchObject({
       status: 'complete',
       receivedBytes: 1,
@@ -95,16 +95,16 @@ describe('v2 fragment inactivity accounting', () => {
     const operationId = identity(12)
     const fragments = fragmentRecord(
       operationId,
-      new Uint8Array(V2_FRAGMENT_PAYLOAD_BYTES + 1).fill(0x32),
+      new Uint8Array(FRAGMENT_PAYLOAD_BYTES + 1).fill(0x32),
     )
-    const assembler = new V2FragmentAssembler(operationId, () => now)
+    const assembler = new FragmentAssembler(operationId, () => now)
 
     await assembler.accept(fragments[0]!)
-    now += V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
+    now += FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS - 1_000
     await expect(assembler.accept(fragments[0]!)).resolves.toMatchObject({ status: 'duplicate' })
     now += 1_000
     await expect(assembler.accept(fragments[1]!)).rejects.toMatchObject({
-      name: 'V2FragmentInactivityError',
+      name: 'FragmentInactivityError',
     })
   })
 })

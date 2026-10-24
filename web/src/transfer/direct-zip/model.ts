@@ -1,4 +1,4 @@
-import type { V2CatalogModifiedTime } from '../../catalog/v2-records'
+import type { CatalogModifiedTime } from '../../catalog/records'
 import type { DirectResumableZipPlan, ReceiveIntent, ZipArchiveArtifact } from '../intent'
 import type { PendingFile } from '../job/contract'
 import type {
@@ -23,7 +23,7 @@ interface DirectZipOrderedMemberBaseV1 {
   readonly artifactPath: readonly string[]
   readonly layoutEvidence: Uint8Array
   readonly discoveryEvidence: Uint8Array
-  readonly modifiedTime?: V2CatalogModifiedTime
+  readonly modifiedTime?: CatalogModifiedTime
 }
 
 export interface DirectZipOrderedDirectoryV1 extends DirectZipOrderedMemberBaseV1 {

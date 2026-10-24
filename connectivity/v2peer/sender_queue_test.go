@@ -11,11 +11,11 @@ import (
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/transport/webrtc/provider"
 )
 
 type handshakeClock struct {
@@ -81,7 +81,7 @@ type queuedHandshake struct {
 	sender                       *peerAttempt
 	receiver                     *ReceiverAttempt
 	native                       *nativepeer.NativePeerConnectivity
-	blockers                     []*provider.Connection
+	blockers                     []*pionpeer.Connection
 	operation                    *handshakeOperation
 	session                      *testPeerSession
 	started                      *atomic.Int32
@@ -105,11 +105,11 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 	newNative := func(count *atomic.Int32, sockets *socketauthority.Authority) *nativepeer.NativePeerConnectivity {
 		pool, _ := icepolicy.NewICEEndpointPool(nil)
 		gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{Now: clock.Now, AfterFunc: clock.AfterFunc})
-		native := newTestNative(t, nativepeer.Config{Admission: gate, Sockets: sockets, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request provider.AttemptConfig) (*provider.Connection, error) {
+		native := newTestNative(t, nativepeer.Config{Admission: gate, Sockets: sockets, Pool: &pool, Monitor: networkstate.NewMonitor(processPhaseNetwork{}, time.Nanosecond), Reachability: reachability.New(reachability.Config{}), Now: clock.Now, ObservationCapacity: 128, Connect: func(config pion.Configuration, request pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
 			if count != nil {
 				count.Add(1)
 			}
-			return provider.NewPeerConnection(config, request)
+			return pionpeer.NewPeerConnection(config, request)
 		}})
 		t.Cleanup(func() { _ = native.Close(context.Background()) })
 		return native

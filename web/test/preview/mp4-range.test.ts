@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { V2Mp4RangePreview, V2VideoPreviewError, type V2PreviewRangeSource } from '../../src/preview/mp4-range'
+import { Mp4RangePreview, VideoPreviewError, type PreviewRangeSource } from '../../src/preview/mp4-range'
 import type { ByteRange } from '../../src/content/geometry'
 
 function box(bytes: Uint8Array, offset: number, size: number, type: string): void {
@@ -8,7 +8,7 @@ function box(bytes: Uint8Array, offset: number, size: number, type: string): voi
   bytes.set([...type].map((value) => value.charCodeAt(0)), offset + 4)
 }
 
-class RecordedSource implements V2PreviewRangeSource {
+class RecordedSource implements PreviewRangeSource {
   readonly exactSize: bigint
   readonly ranges: ByteRange[] = []
   readonly #bytes: Uint8Array<ArrayBuffer>
@@ -33,8 +33,8 @@ describe('v2 MP4 bounded range parser', () => {
     box(bytes, bytes.byteLength - 8, 8, 'moov')
     const source = new RecordedSource(bytes)
 
-    await expect(V2Mp4RangePreview.open(source, new AbortController().signal))
-      .rejects.toBeInstanceOf(V2VideoPreviewError)
+    await expect(Mp4RangePreview.open(source, new AbortController().signal))
+      .rejects.toBeInstanceOf(VideoPreviewError)
     expect(source.ranges[0]).toEqual({ start: 0n, end: 256n * 1024n })
     expect(source.ranges[1]).toEqual({
       start: BigInt(bytes.byteLength - 256 * 1024),
@@ -50,7 +50,7 @@ describe('v2 MP4 bounded range parser', () => {
     box(bytes, 0, 24, 'ftyp')
     box(bytes, 24, 2_000, 'mdat')
     const source = new RecordedSource(bytes)
-    await expect(V2Mp4RangePreview.open(source, new AbortController().signal))
+    await expect(Mp4RangePreview.open(source, new AbortController().signal))
       .rejects.toThrow('invalid size')
   })
 })

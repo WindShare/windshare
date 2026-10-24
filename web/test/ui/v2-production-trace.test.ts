@@ -2,10 +2,10 @@ import { emitRelayHeartbeat, emitRelayDelivery } from '../../src/diagnostics/tra
 import { describe, expect, it, vi } from 'vitest'
 import { PeerSlotPool } from '../../src/session/peer-slots/slots'
 import {
-  createV2PeerPathIdentityValue,
-  createV2ProtocolSessionIdentity,
-} from '../../src/session/v2-identities'
-import { V2PeerRecoverySupervisor } from '../../src/connectivity/peer-set/path'
+  createPeerPathIdentityValue,
+  createProtocolSessionIdentity,
+} from '../../src/session/identities'
+import { PeerRecoverySupervisor } from '../../src/connectivity/peer-set/path'
 import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../../src/diagnostics/trace/lane-payload'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
@@ -31,10 +31,10 @@ import {
   createOutputTraceSource,
   createProtocolTraceSource,
   projectProtocolTraceEvent,
-  createV2ReceiverTraceSource,
-  projectV2ReceiverTraceEvent,
+  createReceiverTraceSource,
+  projectReceiverTraceEvent,
 } from '../../src/application/diagnostics/receive-trace'
-import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 
 it('exports scheduling decisions with session, lane, block, and completion estimates', () => {
   const composition = productionComposition()
@@ -45,7 +45,7 @@ it('exports scheduling decisions with session, lane, block, and completion estim
     const event = {
       eventName: 'content_scheduling' as const,
       correlation: {
-        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
         lane: { id: 2, epoch: 3 },
       },
       dispatchSequence: 10,
@@ -73,7 +73,7 @@ it('exports request route decisions and outcomes with validated session correlat
     const event = {
       eventName: 'request_scheduling' as const,
       correlation: {
-        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
         lane: { id: 2, epoch: 3 },
       },
       sequence: 7, kind: 'open_revisions' as const, laneId: 2, laneEpoch: 3,
@@ -95,7 +95,7 @@ it('exports remote lease retirement independently of transfer incidents', () => 
   const composition = productionComposition()
   composition.runtime.enable()
   const source = createProtocolTraceSource(composition.trace)
-  const correlation = { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) }
+  const correlation = { protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)) }
   const identity = { eventName: 'lease_retirement' as const, correlation,
     leaseId: '01000000000000000000000000000000', attempt: 1 }
   const events = [
@@ -131,7 +131,7 @@ it('exports a sealed unsampled final per-download record through the existing tr
       name: 'receive_transition' as const, transition: 'download_connectivity' as const,
       transferJobId: 'AQAAAAAAAAAAAAAAAAAAAA', connectivity: metrics.snapshot(true),
     }
-    const projected = projectV2ReceiverTraceEvent(event)
+    const projected = projectReceiverTraceEvent(event)
     expect(projected.eventName).toBe('receive_transition')
     expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({ transition: 'download_connectivity', connectivity: {
@@ -142,7 +142,7 @@ it('exports a sealed unsampled final per-download record through the existing tr
     })).toThrow('incomplete')
     const composition = productionComposition()
     composition.runtime.enable()
-    const source = createV2ReceiverTraceSource(composition.trace)
+    const source = createReceiverTraceSource(composition.trace)
     emit(source, () => event)
     expect(composition.runtime.status().retained_event_count).toBe('1')
   })
@@ -150,7 +150,7 @@ it('exports a sealed unsampled final per-download record through the existing tr
 it('exports discovery scheduling decisions with bounded queue and operation context', () => {
   const composition = productionComposition()
   composition.runtime.enable()
-  const source = createV2ReceiverTraceSource(composition.trace)
+  const source = createReceiverTraceSource(composition.trace)
   for (const decision of ['waiting', 'resumed', 'cancelled', 'complete'] as const) {
     const event = {
       name: 'receive_transition' as const, transition: 'discovery_scheduling' as const,
@@ -160,7 +160,7 @@ it('exports discovery scheduling decisions with bounded queue and operation cont
       pendingItems: 256, metadataBytes: 4096n,
       maximumItems: 256, maximumMetadataBytes: 16777216n,
     }
-    const projected = projectV2ReceiverTraceEvent(event)
+    const projected = projectReceiverTraceEvent(event)
     expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({
       operation_id: event.operationId, transfer_job_id: event.transferJobId, decision,
@@ -174,7 +174,7 @@ it('exports discovery scheduling decisions with bounded queue and operation cont
 it('retains bounded discovery from the projection controller through trace export', async () => {
   const composition = productionComposition()
   composition.runtime.enable()
-  const controller = new SelectionProjectionController(createV2ReceiverTraceSource(composition.trace))
+  const controller = new SelectionProjectionController(createReceiverTraceSource(composition.trace))
   const selection = await createSelectionSpec({
     shareInstance: 'AgAAAAAAAAAAAAAAAAAAAA',
     syntheticRoot: 'AQAAAAAAAAAAAAAAAAAAAA',
@@ -211,7 +211,7 @@ it('exports lane exception causes and bounded stacks without mutating the failur
       detachmentClass: 'authenticated_failure' as const,
       failure,
       correlation: {
-        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
         lane: { id: 2, epoch: 0 },
       },
     }
@@ -278,7 +278,7 @@ it.each([
   const composition = productionComposition()
   composition.runtime.enable()
   const source = createProtocolTraceSource(composition.trace)
-  const protocolSessionId = createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1))
+  const protocolSessionId = createProtocolSessionIdentity(new Uint8Array(16).fill(1))
   const event = Object.freeze({
     eventName: 'connection_recovery' as const,
     correlation: { protocolSessionId },
@@ -335,7 +335,7 @@ it('exports connection probes with available session identity and bounded queue 
   const composition = productionComposition()
   const source = createProtocolTraceSource(composition.trace)
   const context = vi.fn(() => ({
-    correlation: { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
+    correlation: { protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
     shareInstanceId: 'instance',
   }))
   const event = { connectionId: 4n, round: 3n, stage: 'failed' as const, bufferedBytes: 4096, elapsedMilliseconds: 44999.25, timeoutMilliseconds: 45000 }
@@ -399,7 +399,7 @@ it('exports operation recovery decisions with session and local operation correl
   for (const transition of transitions) {
     source.current?.({
       eventName: 'operation_recovery',
-      correlation: { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
+      correlation: { protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
       operationSequence: 2, generationId: 1, availabilityRevision: 3,
       laneCount: 1, unchangedAvailabilityRetries: 2,
       ...(transition === 'wait_for_availability'
@@ -423,8 +423,8 @@ it('exports operation recovery decisions with session and local operation correl
 
 describe('peer recovery terminal trace', () => {
   const correlation = {
-    protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
-    peerPathId: createV2PeerPathIdentityValue(new Uint8Array(16).fill(2)),
+    protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+    peerPathId: createPeerPathIdentityValue(new Uint8Array(16).fill(2)),
   }
 
   it.each([
@@ -473,11 +473,11 @@ describe('peer recovery terminal trace', () => {
   it('retains and exports the supervisor protocol failure without dropping trace evidence', async () => {
     const composition = productionComposition()
     composition.runtime.enable()
-    createV2ReceiverTraceSource(composition.trace).current?.({
+    createReceiverTraceSource(composition.trace).current?.({
       name: 'join_transition', transition: 'started',
     })
     const createAttempt = vi.fn(() => { throw new Error('Stopped sessions cannot start attempts') })
-    const supervisor = new V2PeerRecoverySupervisor({
+    const supervisor = new PeerRecoverySupervisor({
       slot: new PeerSlotPool().acquire(),
       ...correlation,
       attempts: { createAttempt },
@@ -526,7 +526,7 @@ describe('retained receive trace projection', () => {
       'receive.inventory.action.completed',
       'receive.inventory.action.failed',
     ] as const) {
-      const projected = projectV2ReceiverTraceEvent({
+      const projected = projectReceiverTraceEvent({
         name,
         retained_action: 'continue',
         continuation,
@@ -537,7 +537,7 @@ describe('retained receive trace projection', () => {
   })
 
   it('distinguishes verification of a completed ZIP from receiving more content', () => {
-    const projected = projectV2ReceiverTraceEvent({
+    const projected = projectReceiverTraceEvent({
       name: 'receive.inventory.action.started',
       retained_action: 'continue',
       continuation: 'verify-direct-zip-completion',
@@ -550,7 +550,7 @@ describe('retained receive trace projection', () => {
   })
 
   it('keeps retained-inventory failure events closed at the typed adapter', () => {
-    const projected = projectV2ReceiverTraceEvent({
+    const projected = projectReceiverTraceEvent({
       name: 'receive.inventory.load.failed',
     })
 
@@ -572,8 +572,8 @@ describe('browser diagnostics production composition', () => {
 
   it('keeps the event factory untouched until tracing is explicitly enabled', () => {
     const composition = productionComposition()
-    const source = createV2ReceiverTraceSource(composition.trace)
-    const createEvent = vi.fn<() => V2ReceiverTraceEvent>(() =>
+    const source = createReceiverTraceSource(composition.trace)
+    const createEvent = vi.fn<() => ReceiverTraceEvent>(() =>
       Object.freeze({
         name: 'join_transition',
         transition: 'started',
@@ -600,7 +600,7 @@ describe('browser diagnostics production composition', () => {
   it('exports enabled trace without writing per-event console output', () => {
     const error = vi.fn()
     const composition = productionComposition(error)
-    const source = createV2ReceiverTraceSource(composition.trace)
+    const source = createReceiverTraceSource(composition.trace)
 
     composition.runtime.enable()
     emit(source, () => Object.freeze({
@@ -635,14 +635,14 @@ describe('browser diagnostics production composition', () => {
       artifactKind: 'directory-tree' as const,
       planKind: 'direct-tree' as const,
     })
-    const started = projectV2ReceiverTraceEvent({
+    const started = projectReceiverTraceEvent({
       ...activation,
       transition: 'activation_started',
       observedProtocolSessionId: 'AQAAAAAAAAAAAAAAAAAAAA',
       projectionEpoch: nextProjectionEpoch(6n),
       observationRevision: 1,
     })
-    const waiting = projectV2ReceiverTraceEvent({
+    const waiting = projectReceiverTraceEvent({
       ...activation,
       transition: 'prerequisite_waiting',
       waitingFor: 'resolution',
@@ -686,7 +686,7 @@ describe('browser diagnostics production composition', () => {
       planKind: 'direct-tree' as const,
     })
 
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'retry_required',
       retryableDiscoveryReason: 'receiver-reconnecting',
@@ -694,7 +694,7 @@ describe('browser diagnostics production composition', () => {
       transition: 'retry_required',
       retryable_discovery_reason: 'receiver_reconnecting',
     })
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'semantic_invalidated',
       invalidationReason: 'installed-route-changed',
@@ -702,7 +702,7 @@ describe('browser diagnostics production composition', () => {
       transition: 'semantic_invalidated',
       invalidation_reason: 'installed_route_changed',
     })
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'commit_owned_effects',
       receiverOperationId: 'AwAAAAAAAAAAAAAAAAAAAA',
@@ -710,7 +710,7 @@ describe('browser diagnostics production composition', () => {
       transition: 'commit_owned_effects',
       receiver_operation_id: 'AwAAAAAAAAAAAAAAAAAAAA',
     })
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'commit_pre_cut_retry',
       receiverOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
@@ -726,7 +726,7 @@ describe('browser diagnostics production composition', () => {
       plan_kind: 'direct_tree',
       receiver_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
     })
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'cleanup_failed',
       receiverOperationId: 'AwAAAAAAAAAAAAAAAAAAAA',
@@ -744,7 +744,7 @@ describe('browser diagnostics production composition', () => {
       receiver_operation_id: 'AwAAAAAAAAAAAAAAAAAAAA',
       failed_stage: 'detach',
     })
-    expect(projectV2ReceiverTraceEvent({
+    expect(projectReceiverTraceEvent({
       ...activation,
       transition: 'cleanup_completed',
     }).payload).not.toHaveProperty('receiver_operation_id')
@@ -752,7 +752,7 @@ describe('browser diagnostics production composition', () => {
 
   it('exports worker-family consequence diagnostics with stable operation context', () => {
     const composition = productionComposition()
-    const source = createV2ReceiverTraceSource(composition.trace)
+    const source = createReceiverTraceSource(composition.trace)
 
     composition.runtime.enable()
     emit(source, () => Object.freeze({
@@ -790,7 +790,7 @@ describe('browser diagnostics production composition', () => {
   })
 
   it('projects complete capacity scheduling progress independently from file outcomes', () => {
-    const projected = projectV2ReceiverTraceEvent(Object.freeze({
+    const projected = projectReceiverTraceEvent(Object.freeze({
       name: 'transfer_progress',
       operationId: 'BQAAAAAAAAAAAAAAAAAAAA',
       transferJobId: 'BgAAAAAAAAAAAAAAAAAAAA',
@@ -825,7 +825,7 @@ describe('browser diagnostics production composition', () => {
   })
 
   it('exports authenticated capacity retry scheduling without file or path data', () => {
-    const projected = projectV2ReceiverTraceEvent(Object.freeze({
+    const projected = projectReceiverTraceEvent(Object.freeze({
       name: 'receive_transition',
       transition: 'capacity_retry_scheduled',
       capacityWaitId: 'BwAAAAAAAAAAAAAAAAAAAA',
@@ -979,8 +979,8 @@ function productionComposition(error = vi.fn()) {
 }
 
 function emit(
-  source: ReturnType<typeof createV2ReceiverTraceSource>,
-  createEvent: () => V2ReceiverTraceEvent,
+  source: ReturnType<typeof createReceiverTraceSource>,
+  createEvent: () => ReceiverTraceEvent,
 ): void {
   const observer = source.current
   if (observer === undefined) return

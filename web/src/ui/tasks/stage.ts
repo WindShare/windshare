@@ -1,6 +1,6 @@
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
 import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
-import { SOURCE_INVALIDATED_DESCRIPTION } from '../v2-lifecycle-presentation'
+import { SOURCE_INVALIDATED_DESCRIPTION } from '../lifecycle-presentation'
 
 export interface StageCopy {
   readonly stage: TaskStage

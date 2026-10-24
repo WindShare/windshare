@@ -8,19 +8,19 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsV3AncestryAuthorityVerifier interface {
+type windowsAncestryAuthorityVerifier interface {
 	Verify(windows.Handle) error
 }
 
-type windowsV3AncestryAuthorityVerifierFunc func(windows.Handle) error
+type windowsAncestryAuthorityVerifierFunc func(windows.Handle) error
 
-func (verify windowsV3AncestryAuthorityVerifierFunc) Verify(handle windows.Handle) error {
+func (verify windowsAncestryAuthorityVerifierFunc) Verify(handle windows.Handle) error {
 	return verify(handle)
 }
 
-type windowsV3NativeAncestryAuthorityVerifier struct{}
+type windowsNativeAncestryAuthorityVerifier struct{}
 
-func (windowsV3NativeAncestryAuthorityVerifier) Verify(handle windows.Handle) error {
+func (windowsNativeAncestryAuthorityVerifier) Verify(handle windows.Handle) error {
 	if handle == 0 || handle == windows.InvalidHandle {
 		return errors.New("windows public directory handle is invalid")
 	}
@@ -31,7 +31,7 @@ func (windowsV3NativeAncestryAuthorityVerifier) Verify(handle windows.Handle) er
 	return windows.GetFileInformationByHandle(handle, &information)
 }
 
-func (directory *windowsV3Directory) verifyPublicIdentityAuthority() error {
+func (directory *windowsDirectory) verifyPublicIdentityAuthority() error {
 	if err := directory.usable(); err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (directory *windowsV3Directory) verifyPublicIdentityAuthority() error {
 	if err != nil {
 		return err
 	}
-	if err := windowsV3ValidateOpenedObject(facts, directory.volume, true); err != nil {
+	if err := windowsValidateOpenedObject(facts, directory.volume, true); err != nil {
 		return err
 	}
 	if directory.ancestryAuthority == nil {
@@ -51,9 +51,9 @@ func (directory *windowsV3Directory) verifyPublicIdentityAuthority() error {
 	return directory.ancestryAuthority.Verify(directory.handle())
 }
 
-func windowsV3AuthorityFailureClass(err error) error {
-	if errors.Is(err, errWindowsV3OutputUnsupported) {
-		return errWindowsV3OutputUnsupported
+func windowsAuthorityFailureClass(err error) error {
+	if errors.Is(err, errWindowsOutputUnsupported) {
+		return errWindowsOutputUnsupported
 	}
-	return errWindowsV3OutputUnsafe
+	return errWindowsOutputUnsafe
 }

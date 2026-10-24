@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
 
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { SelectionPolicy } from '../../src/catalog/selection'
 import {
   catalogFixture,
   directoryEntry,
@@ -51,7 +51,7 @@ import type {
   ExactPreparationEvidence,
   OutputFileRequest,
 } from '../../src/transfer/output/session'
-import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
+import { createPlanExecutionAuthority } from '../../src/transfer/settlement/plan-authority'
 import {
   snapshotLogicalArtifactPath,
   snapshotMaterializationRootRelativePath,
@@ -83,7 +83,7 @@ describe('portable exact-preparation execution routes', () => {
     const leaf = fileEntry(catalogIdentity(11), 'leaf.txt', BigInt(payloadBytes))
     const root = fileEntry(catalogIdentity(12), rootFile, BigInt(payloadBytes))
     const child = directoryEntry(catalogIdentity(3), directory)
-    const selection = new V2SelectionPolicy(true)
+    const selection = new SelectionPolicy(true)
     const intent = await receiveIntentFixture({
       planKind: 'portable-handoff', artifactKind: 'zip-archive', selection,
     })
@@ -108,7 +108,7 @@ describe('portable exact-preparation execution routes', () => {
       lifecycle: lifecycleAuthority(),
       createZipSpool: () => spool,
     })
-    const plans = await createV2PlanExecutionAuthority({
+    const plans = await createPlanExecutionAuthority({
       intent, routes: { ...routes, lifecycle: unopenedLifecycle(intent) },
     })
     const result = await transferJobFixture({
@@ -156,7 +156,7 @@ describe('portable exact-preparation execution routes', () => {
       assembly: { Blob, WritableStream },
       lifecycle,
     })
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent,
       routes: {
         ...routes,
@@ -219,7 +219,7 @@ describe('portable exact-preparation execution routes', () => {
       lifecycle: lifecycleAuthority(),
       createZipSpool: () => spool,
     })
-    const authority = await createV2PlanExecutionAuthority({
+    const authority = await createPlanExecutionAuthority({
       intent,
       routes: {
         ...routes,

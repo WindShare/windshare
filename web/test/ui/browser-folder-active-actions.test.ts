@@ -17,7 +17,7 @@ vi.mock('../../src/output/browser-delivery/recovery/local-lifecycle', () => ({
   beginBrowserDeliveryLocalMutation: targets.begin, reconcileBrowserDeliveryLifecycle: targets.reconcile,
 }))
 // These cases exercise the bound runtime after source settlement; no receive job is opened.
-vi.mock('../../src/transfer/settlement/v2-plan-authority', () => ({ createV2PlanExecutionAuthority: async () => ({}) }))
+vi.mock('../../src/transfer/settlement/plan-authority', () => ({ createPlanExecutionAuthority: async () => ({}) }))
 
 async function activeFixture() {
   vi.clearAllMocks()
