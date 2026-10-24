@@ -395,29 +395,6 @@ func (value TreeSettlement) Name() (string, bool) {
 	return names[value], true
 }
 
-type FilesystemOutputOperation uint8
-
-const (
-	FilesystemCertified FilesystemOutputOperation = iota + 1
-	FilesystemFeatureProbeCompleted
-	FilesystemCheckpointNamespaceOpened
-	FilesystemNativeLock
-	FilesystemSessionOpened
-	FilesystemCheckpointReconciled
-	FilesystemRuntimeDecision
-)
-
-func (value FilesystemOutputOperation) Name() (string, bool) {
-	names := [...]string{
-		"", "certified", "feature_probe_completed", "checkpoint_namespace_opened", "native_lock",
-		"session_opened", "checkpoint_reconciled", "runtime_decision",
-	}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
 type SenderTerminalSendTransport uint8
 
 const (

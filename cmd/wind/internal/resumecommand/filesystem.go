@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/engine"
 )
 
@@ -47,5 +48,5 @@ func (opener filesystemResumeStateInventoryOpener) OpenResumeStateInventory(
 	if opener.recovery == nil {
 		return nil, engine.RecoveryDestinationFailure(engine.ErrRecoveryContract)
 	}
-	return opener.recovery.InspectRecovery(ctx, engine.FilesystemRecovery(rootPath))
+	return opener.recovery.InspectRecovery(ctx, filesystem.Recovery(rootPath))
 }

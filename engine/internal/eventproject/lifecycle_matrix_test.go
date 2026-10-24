@@ -6,7 +6,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -103,68 +102,6 @@ func TestLaneSettlementProjectionPreservesRouteAndSaturatingCounters(t *testing.
 	})
 	if err != nil || event.Route() != appobs.LaneRouteDirect || event.DeliveredBlocks() != ^uint64(0) || !event.Incomplete() {
 		t.Fatalf("lane settlement=%#v err=%v", event, err)
-	}
-}
-
-func TestFilesystemFailureClassificationProjectionIsExhaustive(t *testing.T) {
-	stages := []struct {
-		source osfs.FilesystemOutputFailureStage
-		want   appobs.FilesystemFailureStage
-	}{
-		{osfs.FilesystemOutputFailureDestinationBinding, appobs.FilesystemFailureDestinationBinding},
-		{osfs.FilesystemOutputFailureInventoryPaging, appobs.FilesystemFailureInventoryPaging},
-		{osfs.FilesystemOutputFailureActiveLookup, appobs.FilesystemFailureActiveLookup},
-		{osfs.FilesystemOutputFailureOperationAcquisition, appobs.FilesystemFailureOperationAcquisition},
-		{osfs.FilesystemOutputFailureOperationAdmission, appobs.FilesystemFailureOperationAdmission},
-		{osfs.FilesystemOutputFailureCheckpointReconciliation, appobs.FilesystemFailureCheckpointReconciliation},
-		{osfs.FilesystemOutputFailureNativeDurability, appobs.FilesystemFailureNativeDurability},
-		{osfs.FilesystemOutputFailureAuthorityClose, appobs.FilesystemFailureAuthorityClose},
-	}
-	for _, test := range stages {
-		event, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
-			Operation:    osfs.TraceRuntimeDecision,
-			FailureStage: test.source,
-			Failed:       true,
-		})
-		if err != nil {
-			t.Fatalf("stage %v: %v", test.source, err)
-		}
-		stage, _, _, present := event.FailureClassification()
-		if !present || stage != test.want {
-			t.Fatalf("stage %v projected as %v, present=%t", test.source, stage, present)
-		}
-	}
-
-	for name, source := range map[string]osfs.FilesystemOutputTrace{
-		"unknown checkpoint decision": {
-			Operation: osfs.TraceRuntimeDecision, CheckpointDecision: osfs.FilesystemCheckpointDecision(255),
-		},
-		"unknown stage": {
-			Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureStage(255), Failed: true,
-		},
-		"unknown reconciliation step": {
-			Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureNativeDurability,
-			ReconciliationStep: osfs.FilesystemCheckpointReconciliationStep(255), Failed: true,
-		},
-		"unknown native class": {
-			Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureNativeDurability,
-			NativeErrorClass: osfs.FilesystemNativeErrorClass(255), Failed: true,
-		},
-	} {
-		_, err := ProjectFilesystemOutput(source)
-		var projection ProjectionError
-		if !errors.As(err, &projection) || projection.Reason() != ProjectionUnknownEnum {
-			t.Fatalf("%s error=%v", name, err)
-		}
-	}
-
-	_, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{
-		Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureDestinationBinding,
-		ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion, Failed: true,
-	})
-	var projection ProjectionError
-	if !errors.As(err, &projection) || projection.Reason() != ProjectionInvalidStageFields {
-		t.Fatalf("invalid filesystem stage/step error=%v", err)
 	}
 }
 

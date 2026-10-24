@@ -1,6 +1,7 @@
 package clievent
 
 import (
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -65,7 +66,7 @@ func (value Fallback) Accept(visitor Visitor) error {
 }
 
 type FilesystemOutputObserved struct {
-	appobs.FilesystemOutputObserved
+	fsobs.FilesystemOutputObserved
 }
 
 func (value FilesystemOutputObserved) event()           {}

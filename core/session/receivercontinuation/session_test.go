@@ -19,13 +19,13 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
+	"github.com/windshare/windshare/osfs"
 )
 
 type fixture struct {

@@ -94,13 +94,6 @@ func validateTransferLifecycleObserved(value TransferLifecycleObserved) error {
 	return nil
 }
 
-func validateFilesystemOutputObserved(value FilesystemOutputObserved) error {
-	if !validFilesystemOutputSpec(value.spec) {
-		return ErrInvalidEvent
-	}
-	return nil
-}
-
 func validateSenderTerminalSendObserved(value SenderTerminalSendObserved) error {
 	_, transportOK := value.transportDisposition.Name()
 	_, outcomeOK := value.outcome.Name()

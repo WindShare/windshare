@@ -10,10 +10,10 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/internal/testrun"
+	"github.com/windshare/windshare/osfs"
 )
 
 func (a *App) runShare(ctx context.Context, args []string) int {

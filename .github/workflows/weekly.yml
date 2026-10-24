@@ -89,7 +89,7 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
       - name: Run native durability suites
-        run: go test -count=1 ./core/osfs/internal/outputruntime -run '^TestLong'
+        run: go test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
 
   durable-output-windows:
     name: Durable output runtime (Windows)
@@ -105,7 +105,7 @@ jobs:
           check-latest: true
           cache-dependency-path: go.sum
       - name: Run native durability suites
-        run: go test -count=1 ./core/osfs/internal/outputruntime -run '^TestLong'
+        run: go test -count=1 ./osfs/internal/outputruntime -run '^TestLong'
 
   browser-progressive:
     name: Progressive catalog browser scenario (Linux)

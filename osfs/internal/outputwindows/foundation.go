@@ -1,0 +1,384 @@
+//go:build windows
+
+package outputwindows
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io/fs"
+	"strings"
+	"syscall"
+
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"golang.org/x/sys/windows"
+)
+
+const (
+	windowsV3OutputFilesystem                   = "NTFS"
+	windowsV3OutputVolumeNameGUID       uint32  = 1
+	windowsV3FileSupportsPOSIXSemantics         = 0x00000400
+	windowsV3FileRenameInformationEx            = 65
+	windowsV3FileOpened                 uintptr = 1
+	windowsV3FileCreated                uintptr = 2
+	windowsV3DirectoryAddFile                   = windows.FILE_WRITE_DATA
+	windowsV3DirectoryAddSubdirectory           = windows.FILE_APPEND_DATA
+	windowsV3DirectoryDeleteChild               = 0x00000040
+	windowsV3FileAllAccess                      = 0x001F01FF
+	windowsV3MaximumComponentUTF16Units         = 255
+	// NT UNICODE_STRING stores byte length in uint16 and reserves one UTF-16
+	// unit for the terminator used by NewNTUnicodeString.
+	windowsV3MaximumNTNameUTF16Units = (1 << 15) - 2
+	windowsV3CloudAttributeMask      = windows.FILE_ATTRIBUTE_REPARSE_POINT |
+		windows.FILE_ATTRIBUTE_OFFLINE | 0x00040000 | 0x00400000 // RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS
+)
+
+var (
+	errWindowsV3OutputUnsupported = errors.New("osfs: windows v3 output backend is unsupported")
+	errWindowsV3OutputUnsafe      = errors.New("osfs: windows v3 output namespace is unsafe")
+	errWindowsV3OutputCollision   = errors.New("osfs: windows v3 output name already exists")
+	errWindowsV3OutputLockBusy    = errors.New("osfs: windows v3 output lock is already held")
+)
+
+// windowsV3OutputError retains a machine-readable failure category without
+// making callers parse a path-bearing diagnostic. The v3 integration layer can
+// consequently map admission, quarantine, collision, and contention decisions
+// without weakening this native boundary.
+type windowsV3OutputError struct {
+	Operation string
+	Path      string
+	Category  error
+	Cause     error
+	native    outputcap.NativeErrorClass
+}
+
+func (failure *windowsV3OutputError) Error() string {
+	detail := ""
+	if failure.Category != nil {
+		detail = failure.Category.Error()
+	}
+	if failure.Cause != nil && detail != "" {
+		detail += ": " + failure.Cause.Error()
+	} else if failure.Cause != nil {
+		detail = failure.Cause.Error()
+	}
+	if detail == "" {
+		detail = "operation failed without a classified cause"
+	}
+	if failure.Path == "" {
+		return fmt.Sprintf("%s: %s", failure.Operation, detail)
+	}
+	return fmt.Sprintf("%s %q: %s", failure.Operation, failure.Path, detail)
+}
+
+func (failure *windowsV3OutputError) Is(target error) bool {
+	return failure.Category != nil && errors.Is(failure.Category, target)
+}
+
+func (failure *windowsV3OutputError) Unwrap() error { return failure.Cause }
+
+func (failure *windowsV3OutputError) NativeErrorClass() outputcap.NativeErrorClass {
+	if failure == nil || !failure.native.Valid() {
+		return outputcap.NativeErrorUnknown
+	}
+	return failure.native
+}
+
+func windowsV3Failure(operation, path string, category, cause error) error {
+	return &windowsV3OutputError{
+		Operation: operation,
+		Path:      path,
+		Category:  category,
+		Cause:     cause,
+		native:    windowsV3NativeErrorClass(category, cause),
+	}
+}
+
+// Operational failures retain diagnostic context without inventing namespace
+// evidence. Callers can therefore pause and retry raw policy or transient
+// denials, while explicit semantic categories continue to drive collision,
+// unsupported-platform, and quarantine decisions.
+func windowsV3OperationalFailure(operation, path string, cause error) error {
+	return &windowsV3OutputError{
+		Operation: operation,
+		Path:      path,
+		Cause:     cause,
+		native:    windowsV3NativeErrorClass(nil, cause),
+	}
+}
+
+func windowsV3NativeErrorClass(category, cause error) outputcap.NativeErrorClass {
+	switch {
+	case errors.Is(cause, windows.ERROR_ACCESS_DENIED),
+		errors.Is(cause, windows.ERROR_PRIVILEGE_NOT_HELD):
+		return outputcap.NativeErrorAccessDenied
+	case errors.Is(cause, windows.ERROR_SHARING_VIOLATION),
+		errors.Is(cause, windows.ERROR_LOCK_VIOLATION):
+		return outputcap.NativeErrorSharingViolation
+	case errors.Is(cause, fs.ErrNotExist),
+		errors.Is(cause, windows.ERROR_FILE_NOT_FOUND),
+		errors.Is(cause, windows.ERROR_PATH_NOT_FOUND):
+		return outputcap.NativeErrorNotFound
+	case errors.Is(cause, windows.ERROR_INVALID_HANDLE):
+		return outputcap.NativeErrorInvalidHandle
+	case errors.Is(category, errWindowsV3OutputUnsupported), windowsV3IsUnsupportedNative(cause):
+		return outputcap.NativeErrorUnsupported
+	}
+	if _, ok := errors.AsType[syscall.Errno](cause); ok {
+		return outputcap.NativeErrorIO
+	}
+	return outputcap.NativeErrorUnknown
+}
+
+func windowsV3NativeOperationFailure(operation, path string, cause error) error {
+	if windowsV3IsUnsupportedNative(cause) {
+		return windowsV3Failure(operation, path, errWindowsV3OutputUnsupported, cause)
+	}
+	return windowsV3OperationalFailure(operation, path, cause)
+}
+
+func windowsV3NativeNoReplaceFailure(operation, path string, cause error) error {
+	if windowsV3IsCollision(cause) {
+		return windowsV3Failure(operation, path, errWindowsV3OutputCollision, cause)
+	}
+	return windowsV3NativeOperationFailure(operation, path, cause)
+}
+
+type windowsV3OutputDurability uint8
+
+const windowsV3OutputProcessRestart windowsV3OutputDurability = 1
+
+type windowsV3VolumeIdentity struct {
+	guid   string
+	serial uint64
+}
+
+func (identity windowsV3VolumeIdentity) valid() bool {
+	return identity.guid != "" && identity.serial != 0
+}
+
+type windowsV3ObjectIdentity struct {
+	volume windowsV3VolumeIdentity
+	fileID [16]byte
+}
+
+func (identity windowsV3ObjectIdentity) valid() bool {
+	return identity.volume.valid() && identity.fileID != [16]byte{}
+}
+
+// The identity deliberately has no byte/string encoding. It is only a token
+// for comparing two simultaneously open objects; the hard-link anchor, not a
+// persisted File ID, is the durable ownership witness.
+func (identity windowsV3ObjectIdentity) same(other windowsV3ObjectIdentity) bool {
+	return identity.valid() && identity == other
+}
+
+func (platform *windowsOutputV3Platform) Root() outputcap.Directory {
+	if platform == nil || platform.native == nil || platform.root == nil || platform.root.native == nil {
+		return nil
+	}
+	return platform.root
+}
+
+func (platform *windowsOutputV3Platform) RootOpenDisposition() outputcap.RootOpenDisposition {
+	if platform == nil {
+		return ""
+	}
+	return platform.rootOpenDisposition
+}
+
+func (platform *windowsOutputV3Platform) AcquirePublicOperationGuard() (
+	outputcap.PublicOperationGuard,
+	error,
+) {
+	if platform == nil || platform.native == nil {
+		return nil, errors.Join(outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
+	}
+	guard, err := platform.native.acquirePublicOperationGuard()
+	if err != nil {
+		return nil, windowsOutputV3Error(err)
+	}
+	root := guard.Root()
+	if root == nil {
+		return nil, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			windowsOutputV3Error(guard.Close()),
+			errors.New("osfs: Windows ancestry guard has no root authority"),
+		)
+	}
+	return &windowsOutputV3PublicOperationGuard{
+		native: guard,
+		root:   &windowsOutputV3Directory{native: root},
+	}, nil
+}
+
+func (guard *windowsOutputV3PublicOperationGuard) Root() outputcap.Directory {
+	if guard == nil || guard.native == nil || guard.root == nil || guard.root.native == nil {
+		return nil
+	}
+	return guard.root
+}
+
+func (guard *windowsOutputV3PublicOperationGuard) Close() error {
+	if guard == nil || guard.native == nil {
+		return nil
+	}
+	err := guard.native.Close()
+	guard.native = nil
+	if guard.root != nil {
+		guard.root.native = nil
+	}
+	guard.root = nil
+	return windowsOutputV3Error(err)
+}
+
+func (*windowsOutputV3Platform) Certification() outputcap.CertificationID {
+	return outputcap.CertificationWindowsNTFSProcessRestart
+}
+
+func (platform *windowsOutputV3Platform) RootBinding() (
+	_ outputcap.OutputRootBinding,
+	resultErr error,
+) {
+	if platform == nil || platform.native == nil || platform.native.root == nil {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows output platform is closed"),
+		)
+	}
+	guard, err := platform.native.acquirePublicOperationGuard()
+	if err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, windowsOutputV3Error(guard.Close())) }()
+	root := guard.Root()
+	if root == nil {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows ancestry guard has no root authority"),
+		)
+	}
+	if _, err := root.prepareIdentityClaim(); err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(err)
+	}
+	facts, err := root.inspector.Inspect(root.handle())
+	if err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(
+			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
+		)
+	}
+	if err := windowsV3ValidateOpenedObject(facts, root.volume, true); err != nil {
+		return outputcap.OutputRootBinding{}, windowsOutputV3Error(
+			windowsV3Failure("bind output root", root.path, errWindowsV3OutputUnsafe, err),
+		)
+	}
+	objectID, prepared := root.objectIDState.current()
+	if !prepared {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows output-root Object ID was not prepared"),
+		)
+	}
+	guid := strings.ToLower(facts.object.volume.guid)
+	if len(guid) == 0 || len(guid) > windowsV3VolumeGUIDClaimMaxBytes {
+		return outputcap.OutputRootBinding{}, errors.Join(
+			outputcap.ErrUnsafeNamespace,
+			errors.New("osfs: Windows volume GUID identity exceeds the bounded root-binding format"),
+		)
+	}
+	volume := make([]byte, len("windows/ntfs/volume/v1")+4+len(guid)+8)
+	copy(volume, "windows/ntfs/volume/v1")
+	offset := len("windows/ntfs/volume/v1")
+	binary.BigEndian.PutUint32(volume[offset:], uint32(len(guid)))
+	offset += 4
+	copy(volume[offset:], guid)
+	offset += len(guid)
+	binary.BigEndian.PutUint64(volume[offset:], facts.object.volume.serial)
+
+	object := make([]byte, len("windows/ntfs/directory-object/v2")+len(objectID))
+	copy(object, "windows/ntfs/directory-object/v2")
+	copy(object[len("windows/ntfs/directory-object/v2"):], objectID[:])
+	binding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
+	return binding, windowsOutputV3Error(err)
+}
+
+func (*windowsOutputV3Platform) Durability() transfer.DurabilityLevel {
+	return transfer.DurabilityProcessRestart
+}
+
+func (*windowsOutputV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+	return checkpointmodel.LiveCleanupWindowsNTFSV1
+}
+
+func (platform *windowsOutputV3Platform) DestinationCapabilities() (
+	_ outputcap.DestinationCapabilities,
+	resultErr error,
+) {
+	if platform == nil || platform.native == nil || platform.native.root == nil {
+		return outputcap.DestinationCapabilities{}, errors.Join(
+			outputcap.ErrUnsafeNamespace, errors.New("osfs: Windows output platform is closed"))
+	}
+	var guard *windowsV3PublicOperationGuard
+	var err error
+	if platform.root.native.private {
+		guard, err = platform.native.acquirePrivatePublicationRootGuard()
+	} else {
+		guard, err = platform.native.acquirePublicOperationGuard()
+	}
+	if err != nil {
+		return outputcap.DestinationCapabilities{}, windowsOutputV3Error(err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, windowsOutputV3Error(guard.Close())) }()
+	return guard.Root().destinationCapabilities()
+}
+
+func (platform *windowsOutputV3Platform) ProbeRecoverableFeatures() error {
+	capabilities, err := platform.DestinationCapabilities()
+	if err != nil {
+		return err
+	}
+	if mode, modeErr := outputcap.SelectExecutionMode(capabilities); modeErr != nil ||
+		mode != outputcap.ExecutionResumable {
+		return errors.Join(outputcap.ErrRecoverableOutputUnsupported, modeErr)
+	}
+	return nil
+}
+
+func (*windowsOutputV3Platform) ValidateModifiedTime(modified catalog.ModifiedTime) error {
+	return windowsOutputV3Error(windowsV3ValidateModifiedTime(modified))
+}
+
+func (*windowsOutputV3Platform) CanonicalLocatorKey(path string) (string, error) {
+	key, err := windowsV3OutputLocatorKey(path)
+	return key, windowsOutputV3Error(err)
+}
+
+func (*windowsOutputV3Platform) CanonicalComponentKey(name string) (string, error) {
+	native, err := windowsV3RelativePath(name, true)
+	if err != nil {
+		return "", windowsOutputV3Error(err)
+	}
+	key, err := windowsV3NTFSCaseKey(native)
+	return key, windowsOutputV3Error(err)
+}
+
+func (platform *windowsOutputV3Platform) Close() error {
+	if platform == nil || platform.native == nil {
+		return nil
+	}
+	var err error
+	if platform.publicationGuard != nil {
+		err = errors.Join(err, platform.publicationGuard.Close())
+		platform.publicationGuard = nil
+	}
+	err = errors.Join(err, platform.native.Close())
+	platform.native = nil
+	if platform.root != nil {
+		platform.root.native = nil
+	}
+	platform.root = nil
+	return windowsOutputV3Error(err)
+}

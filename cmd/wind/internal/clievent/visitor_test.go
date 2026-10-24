@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -155,8 +156,8 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		FileSelection: appobs.FileSelectionNone, FileSettlement: appobs.FileSettlementNone,
 		TreeSettlement: appobs.TreeSettlementNone,
 	})
-	filesystemOutput, _ := NewFilesystemOutputObserved(appobs.FilesystemOutputSpec{
-		ReceiveOperation: receiveID, Operation: appobs.FilesystemRuntimeDecision,
+	filesystemOutput, _ := NewFilesystemOutputObserved(fsobs.FilesystemOutputSpec{
+		ReceiveOperation: receiveID, Operation: fsobs.FilesystemRuntimeDecision,
 	})
 	senderTerminalSend, _ := NewSenderTerminalSendObserved(
 		sessionID, lane, true, appobs.SenderTerminalSendAccepted,

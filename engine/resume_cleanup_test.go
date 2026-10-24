@@ -6,19 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine/output"
 )
 
-type resumeCleanupDiagnosticError struct {
-	stage osfs.FilesystemOutputFailureStage
-	cause error
-}
-
-func (failure resumeCleanupDiagnosticError) Error() string { return failure.cause.Error() }
-func (failure resumeCleanupDiagnosticError) Unwrap() error { return failure.cause }
-func (failure resumeCleanupDiagnosticError) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
-	return osfs.FilesystemOutputDiagnostic{Stage: failure.stage}
+func resumeCleanupFailure(stage output.FailureStage, cause error) error {
+	value, _ := output.SealFailure(cause, output.FailureDiagnostic{Stage: stage})
+	return value
 }
 
 func TestRecoveryRetainsIndependentCloseFailuresAlongsidePrimaryFailure(t *testing.T) {
@@ -33,16 +27,16 @@ func TestRecoveryRetainsIndependentCloseFailuresAlongsidePrimaryFailure(t *testi
 			primaryCause := errors.New("checkpoint reconciliation failed")
 			firstCloseCause := errors.New("operation lease close failed")
 			secondCloseCause := errors.New("destination authority close failed")
-			primary := resumeCleanupDiagnosticError{stage: osfs.FilesystemOutputFailureCheckpointReconciliation, cause: primaryCause}
-			firstClose := resumeCleanupDiagnosticError{stage: osfs.FilesystemOutputFailureAuthorityClose, cause: firstCloseCause}
-			secondClose := resumeCleanupDiagnosticError{stage: osfs.FilesystemOutputFailureAuthorityClose, cause: secondCloseCause}
+			primary := resumeCleanupFailure(output.FailureCheckpoint, primaryCause)
+			firstClose := resumeCleanupFailure(output.FailureClose, firstCloseCause)
+			secondClose := resumeCleanupFailure(output.FailureClose, secondCloseCause)
 			mixed := fmt.Errorf("native recovery: %w", errors.Join(primary, errors.Join(firstClose, secondClose)))
 			if operation == "inspect" {
 				_, err = application.InspectRecovery(context.Background(), resumeTestAuthority{
 					list: func(context.Context) (RecoverySnapshot, error) { return RecoverySnapshot{}, mixed },
 				})
 				var failure *RecoveryFailure
-				if !errors.As(err, &failure) || failure.Detail.Stage != osfs.FilesystemOutputFailureCheckpointReconciliation {
+				if !errors.As(err, &failure) || failure.Detail.Stage != output.FailureCheckpoint {
 					t.Fatalf("primary diagnostic changed: %v", err)
 				}
 			} else {

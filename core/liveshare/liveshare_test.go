@@ -20,7 +20,6 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -28,6 +27,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs"
 )
 
 func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {

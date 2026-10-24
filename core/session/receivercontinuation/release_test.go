@@ -11,11 +11,11 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs"
 )
 
 // Arming after prior operations complete isolates the release acknowledgement.

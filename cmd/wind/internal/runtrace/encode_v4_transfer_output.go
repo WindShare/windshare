@@ -1,6 +1,7 @@
 package runtrace
 
 import (
+	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
@@ -149,7 +150,7 @@ func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *fil
 	if !present {
 		return nil
 	}
-	project := func(value appobs.FilesystemCapability) filesystemCapabilityV4 {
+	project := func(value fsobs.FilesystemCapability) filesystemCapabilityV4 {
 		reason, _ := value.Reason.Name()
 		return filesystemCapabilityV4{Supported: value.Supported, Reason: reason}
 	}
@@ -311,7 +312,7 @@ func optionalClosedName(value namedValue) *string {
 	return &name
 }
 
-func projectFilesystemCounters(counters appobs.FilesystemOutputCounters) filesystemCountersV4 {
+func projectFilesystemCounters(counters fsobs.FilesystemOutputCounters) filesystemCountersV4 {
 	return filesystemCountersV4{
 		NodeClaims:             decimal(counters.NodeClaims),
 		DirectoryClaims:        decimal(counters.DirectoryClaims),

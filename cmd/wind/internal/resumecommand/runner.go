@@ -94,7 +94,7 @@ func failureStatus(failure *engine.RecoveryFailure, attentionStatus string) stri
 func (runner Runner) reportListOpenFailure(err error) Result {
 	failure := recoveryFailure(err)
 	rendered, renderErr := runner.dependencies.renderer.ListControlStatus(
-		failureStatus(failure, resumeListStatusNeedsAttention), failure.Reason, failure.Detail,
+		failureStatus(failure, resumeListStatusNeedsAttention), failure.Reason, presentFailureDetail(failure),
 	)
 	if renderErr != nil {
 		runner.dependencies.logger.Logf("resume list: status could not be represented safely")
@@ -215,7 +215,7 @@ func (runner Runner) reportDiscardFailure(itemNumber int, failure *engine.Recove
 	}
 	return runner.reportDiscardControlWithDetail(
 		failureStatus(failure, resumeDiscardStatusNeedsAttention),
-		itemNumber, failure.Reason, message, failure.Detail,
+		itemNumber, failure.Reason, message, presentFailureDetail(failure),
 	)
 }
 

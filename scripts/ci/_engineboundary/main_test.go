@@ -62,3 +62,40 @@ func TestSourceGateChecksInactivePlatformsAndLeavesTestsAtTheirOwnedBoundary(t *
 		t.Fatalf("findings=%v err=%v", findings, err)
 	}
 }
+
+func TestCoreWrappersCannotLaunderStorageImplementationTypes(t *testing.T) {
+	for _, path := range []string{"/osfs", "/core/osfs", "/adapters/filesystem", "/osfs/internal/outputruntime"} {
+		t.Run(path, func(t *testing.T) {
+			native := types.NewPackage(module+path, "native")
+			concrete := types.NewNamed(types.NewTypeName(token.NoPos, native, "Diagnostic", nil), types.NewStruct(nil, nil), nil)
+			core := types.NewPackage(module+"/core/transfer", "transfer")
+			wrapper := types.NewNamed(types.NewTypeName(token.NoPos, core, "Output", nil),
+				types.NewStruct([]*types.Var{types.NewField(token.NoPos, core, "Diagnostic", concrete, false)}, nil), nil)
+			if findings := typeFindings("OutputFactory", wrapper); len(findings) != 1 {
+				t.Fatalf("core wrapper hid storage implementation: %v", findings)
+			}
+		})
+	}
+}
+func TestStorageAdaptersBelongToHostsNotSharedWorkflows(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"cmd/wind/output.go":                      "package main\nimport _ \"" + module + "/adapters/filesystem\"\n",
+		"cmd/wind/source.go":                      "package main\nimport _ \"" + module + "/osfs\"\n",
+		"engine/internal/receive/native_plan9.go": "//go:build plan9\n\npackage receive\nimport _ \"" + module + "/osfs\"\n",
+		"engine/recovery/native.go":               "package recovery\nimport _ \"" + module + "/adapters/filesystem\"\n",
+	}
+	for path, body := range files {
+		target := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	findings, err := sourceFindings(root)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("findings=%v err=%v", findings, err)
+	}
+}

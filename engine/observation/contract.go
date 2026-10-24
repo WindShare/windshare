@@ -27,3 +27,22 @@ func (w Workflow) Name() (string, bool) {
 	}
 }
 func (w Workflow) Valid() bool { _, ok := w.Name(); return ok }
+
+// OutputDiagnostic is immutable, provider-owned debugging evidence. It carries
+// no task authority: output modes and failures travel through separate contracts.
+// Hosts may render supported provider schemas; shared workflows only validate
+// and forward them through the bounded receive observation stream.
+type OutputDiagnostic interface {
+	Event
+	OutputDiagnostic()
+}
+
+// OutputDiagnosticError retains why provider evidence was rejected without
+// granting that evidence authority over the receive task.
+type OutputDiagnosticError struct {
+	Reason  ObserverLossReason
+	Context ObservationRejection
+}
+
+func (OutputDiagnosticError) Error() string { return ErrInvalidEvent.Error() }
+func (OutputDiagnosticError) Unwrap() error { return ErrInvalidEvent }

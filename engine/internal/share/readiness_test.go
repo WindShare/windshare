@@ -10,9 +10,9 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/osfs"
 )
 
 func TestShareReadyAndAdmissionDoNotWaitForScanAndStopJoinsIt(t *testing.T) {

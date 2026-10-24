@@ -445,3 +445,19 @@ func (l *recordingGraphLister) List(
 	}
 	return l.production, nil
 }
+
+func TestNativeStorageIsOnlyAllowedInCoreTestGraphDelta(t *testing.T) {
+	for _, path := range []string{"/osfs", "/osfs/internal/checkpointstore"} {
+		pkg := listedPackage{ImportPath: repositoryModulePath + path, Module: &listedModule{Path: repositoryModulePath}}
+		if got := packagePolicyViolations(productionScope, pkg); len(got) == 0 {
+			t.Fatal("native storage entered core production")
+		}
+		if got := packagePolicyViolations(testDeltaScope, pkg); len(got) != 0 {
+			t.Fatalf("native integration fixture rejected: %v", got)
+		}
+	}
+	foreign := listedPackage{ImportPath: repositoryModulePath + "/adapters/filesystem", Module: &listedModule{Path: repositoryModulePath}}
+	if got := packagePolicyViolations(testDeltaScope, foreign); len(got) == 0 {
+		t.Fatal("fixture exception admitted application assembly")
+	}
+}

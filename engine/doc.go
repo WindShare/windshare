@@ -24,7 +24,10 @@
 // stop the share if presentation fails. Directory prefetch follows readiness in
 // the background; relay availability and active sessions evolve independently.
 //
-// InspectRecovery returns listed operation identities after releasing filesystem
+// Output and recovery ports are platform-neutral; hosts assemble osfs through
+// adapters/filesystem. Provider-owned diagnostic events retain native detail.
+//
+// InspectRecovery returns listed operation identities after releasing destination
 // leases. RecoveryInventory.Discard reacquires output authority and rechecks those
-// identities before changing owned state, so a prompt holds no filesystem lease.
+// identities before changing owned state, so a prompt holds no destination lease.
 package engine

@@ -3,13 +3,9 @@ package receive
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
-	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestPortableOutputDestinationIsOnlyAnOpaqueDisplayLabel(t *testing.T) {
@@ -38,70 +34,6 @@ func TestPortableOutputDestinationIsOnlyAnOpaqueDisplayLabel(t *testing.T) {
 	}
 	if _, _, err := getOperationDestination("valid label", OutputOperation{}); !errors.Is(err, errGetOutputReservationContract) {
 		t.Fatalf("invalid operation=%v", err)
-	}
-}
-
-type testFilesystemDiagnostic struct {
-	value osfs.FilesystemOutputDiagnostic
-}
-
-func (d *testFilesystemDiagnostic) Error() string { return "native failure" }
-func (d *testFilesystemDiagnostic) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
-	return d.value
-}
-
-type failingNativeAuthority struct {
-	nativeFilesystemOutputAuthority
-	cause error
-}
-
-func (a failingNativeAuthority) BindDestination(context.Context) (osfs.FilesystemOutputExecutionMode, error) {
-	return osfs.FilesystemOutputExecutionMode{}, a.cause
-}
-func (a failingNativeAuthority) LookupActive(context.Context, transfer.SelectionSpec) (osfs.FilesystemOutputLookup, error) {
-	return osfs.FilesystemOutputLookup{}, a.cause
-}
-func (a failingNativeAuthority) CreateOperation(context.Context, osfs.FilesystemOutputLookup, receivecontract.ArtifactSpec) (osfs.FilesystemOutputOperation, error) {
-	return osfs.FilesystemOutputOperation{}, a.cause
-}
-func (a failingNativeAuthority) Close() error { return a.cause }
-
-func TestFilesystemAdapterSealsNativeDiagnosticWithoutReplacingCause(t *testing.T) {
-	diagnostic := osfs.FilesystemOutputDiagnostic{Stage: osfs.FilesystemOutputFailureAuthorityClose}
-	cause := &testFilesystemDiagnostic{value: diagnostic}
-	native := failingNativeAuthority{cause: cause}
-	authority := &filesystemOutputAuthority{native: native}
-	operations := []func() error{
-		func() error { _, err := authority.BindDestination(context.Background()); return err },
-		func() error {
-			_, err := authority.LookupActive(context.Background(), transfer.SelectionSpec{})
-			return err
-		},
-		func() error {
-			_, err := (filesystemReservation{authority: native}).Create(context.Background(), receivecontract.ArtifactSpec{})
-			return err
-		},
-		authority.Close,
-	}
-	for _, operation := range operations {
-		err := operation()
-		got, ok := OutputDiagnostic(err)
-		if !ok || got != diagnostic || !errors.Is(err, cause) || err.Error() != cause.Error() {
-			t.Fatalf("diagnostic=%+v present=%v error=%v", got, ok, err)
-		}
-		if _, ok := OutputDiagnostic(fmt.Errorf("arbitrary wrapper: %w", err)); ok {
-			t.Fatal("direct proof traversed untrusted wrapper")
-		}
-	}
-	if _, ok := OutputDiagnostic(cause); ok {
-		t.Fatal("arbitrary provider forged native diagnostic")
-	}
-	if _, ok := OutputDiagnostic((*filesystemFailure)(nil)); ok {
-		t.Fatal("nil diagnostic carrier accepted")
-	}
-	unknown := errors.New("opaque provider failure")
-	if sealFilesystemOutputFailure(unknown) != unknown || sealFilesystemOutputFailure(nil) != nil {
-		t.Fatal("unclassified errors changed identity")
 	}
 }
 

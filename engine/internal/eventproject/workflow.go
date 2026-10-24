@@ -77,9 +77,16 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 			p.publish(appobs.LossSnapshot{Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
 		}
 		return accepted
-	case receive.FilesystemObserved:
-		event, err := ProjectFilesystemOutput(value.Value)
-		return p.project(appobs.ObserverLossFilesystemOutput, event, err)
+	case receive.OutputObserved:
+		err := value.Err
+		if err == nil {
+			if value.Value == nil || value.Value.Workflow() != appobs.WorkflowReceive || value.Value.Level() != appobs.LevelDebug {
+				err = appobs.ErrInvalidEvent
+			} else {
+				err = value.Value.Validate()
+			}
+		}
+		return p.project(appobs.ObserverLossOutputDiagnostic, value.Value, err)
 	case receive.TransferObserved:
 		event, err := ProjectTransferLifecycle(value.Value)
 		return p.project(appobs.ObserverLossTransferLifecycle, event, err)

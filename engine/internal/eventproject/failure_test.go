@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/osfs"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/osfs"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -260,7 +261,7 @@ func TestSealedFilesystemFailuresPreserveClosedOutputAndCheckpointCodes(t *testi
 				Stage: test.stage, FaultDomain: uint8(test.fault.Domain()),
 				NormalizedScope: uint8(test.fault.Scope()), NormalizedCode: test.fault.Code(),
 			}
-			sealed, ok := SealFilesystemOutputFailure(diagnostic)
+			sealed, ok := filesystem.SealFilesystemOutputFailure(diagnostic)
 			if !ok {
 				t.Fatal("valid filesystem diagnostic was not sealed")
 			}
@@ -285,7 +286,7 @@ func TestFilesystemFailureAuthorityIsExactAndPrimary(t *testing.T) {
 		FaultDomain: uint8(primaryFault.Domain()), NormalizedScope: uint8(primaryFault.Scope()),
 		NormalizedCode: primaryFault.Code(),
 	}
-	sealed, ok := SealFilesystemOutputFailure(primaryDiagnostic)
+	sealed, ok := filesystem.SealFilesystemOutputFailure(primaryDiagnostic)
 	if !ok {
 		t.Fatal("valid primary diagnostic was not sealed")
 	}
@@ -296,7 +297,7 @@ func TestFilesystemFailureAuthorityIsExactAndPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanup, ok := SealFilesystemOutputFailure(osfs.FilesystemOutputDiagnostic{
+	cleanup, ok := filesystem.SealFilesystemOutputFailure(osfs.FilesystemOutputDiagnostic{
 		Stage:       osfs.FilesystemOutputFailureAuthorityClose,
 		FaultDomain: uint8(cleanupFault.Domain()), NormalizedScope: uint8(cleanupFault.Scope()),
 		NormalizedCode: cleanupFault.Code(),

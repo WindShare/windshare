@@ -46,7 +46,7 @@ func TestGetDefaultsToCurrentDirectoryAndBindsItBeforeSessionWork(t *testing.T) 
 	}
 	var events []string
 	app.getOutputFactory = engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
-		if config.Tracer == nil {
+		if config.Observe == nil {
 			t.Fatal("missing output observations")
 		}
 		events = append(events, "construct")

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/internal/testoutputroot"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs"
 )
 
 func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.T) {

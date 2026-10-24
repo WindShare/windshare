@@ -26,3 +26,15 @@ func (err *SourceError) Error() string {
 }
 
 func (err *SourceError) Unwrap() error { return err.Cause }
+
+// SelectionError identifies the caller's selected item when acquisition fails.
+// Label is display-only: providers retain all authority to resolve the selection.
+type SelectionError struct {
+	Label string
+	Cause error
+}
+
+func (err *SelectionError) Error() string {
+	return fmt.Sprintf("select source %q: %v", err.Label, err.Cause)
+}
+func (err *SelectionError) Unwrap() error { return err.Cause }

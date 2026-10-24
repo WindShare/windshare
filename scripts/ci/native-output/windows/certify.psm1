@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:RequiredWindowsNativeTestSelectors = @(
     [pscustomobject]@{
-        PackageArgument = './core/osfs'
+        PackageArgument = './osfs'
         TestNames = @(
             'TestWindowsNTFSNativeCertification',
             'TestWindowsNTFSProcessRestartRecovery',
@@ -11,7 +11,7 @@ $script:RequiredWindowsNativeTestSelectors = @(
         )
     },
     [pscustomobject]@{
-        PackageArgument = './core/osfs/internal/outputwindows'
+        PackageArgument = './osfs/internal/outputwindows'
         TestNames = @(
             'TestWindowsNTFSProbeMutexIsProcessExclusiveAndRecoversAbandonment',
             'TestWindowsRecoveryDurabilityOrdinaryStageSync'

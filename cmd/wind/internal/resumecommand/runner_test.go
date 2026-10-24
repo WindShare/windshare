@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 )
@@ -196,7 +195,7 @@ func TestResumeListSurfacesUnknownOrBusyRootWithoutNativeDetails(t *testing.T) {
 			wantReason: resumeDestinationUnknownReason,
 		},
 		"busy": {
-			err:        fmt.Errorf("native lock: %w", osfs.ErrResumeStateBusy),
+			err:        fmt.Errorf("native lock: %w", engine.ErrRecoveryBusy),
 			wantStatus: resumeBusyStatus,
 			wantReason: "destination-already-in-use",
 		},

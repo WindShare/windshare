@@ -11,10 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/catalog"
-
 	"github.com/windshare/windshare/core/transfer"
-
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -119,7 +118,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 	ctx := context.Background()
 	rootPath := newCLICertifiedOutputTestRoot(t)
 	openAuthority := func() getOutputAuthority {
-		authority, err := (FilesystemOutput{RootPath: rootPath, CreateRoot: true}).NewOutputAuthority(OutputConfig{})
+		authority, err := (filesystem.FilesystemOutput{RootPath: rootPath, CreateRoot: true}).NewOutputAuthority(OutputConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
