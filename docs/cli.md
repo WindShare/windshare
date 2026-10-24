@@ -1,107 +1,63 @@
 # CLI
 
-See [installation and optional first setup](installation.md).
+> WindShare is in rapid development, and the CLI may change along with the implementation.
+> This page only outlines the CLI's shape and vocabulary. The code under [`cmd/wind/`](../cmd/wind/)
+> and [`engine/`](../engine/) is the source of truth for specifics.
+
+`wind` shares local files and directories, downloads capability links, enrolls or imports relay settings,
+and inspects or discards unfinished downloads. Capability links and split keys are written to stdout;
+progress, prompts, and diagnostics go to stderr. See [installation](installation.md) and [TURN services](turn.md).
+
+## Maintenance
+
+- Keep only what is needed to understand the CLI's shape and vocabulary; added detail is a regression, not an improvement.
+- State current facts only: no recommendations, constraint rules, or plans.
+- Leave constants, limits, exit codes, timing, and platform edge cases to the code; link to it instead of copying.
+- When the shape or vocabulary changes, replace or delete the affected lines, and keep the page about its current size.
 
 ## Share
 
 ```text
-wind share <path...>
-wind share <path...> --split-key
+wind share <path...> [--relay <url>]... [--front-url <url>] [--block-size <bytes>] [--split-key] [--browser-trace]
 ```
 
-After at least one relay confirms registration and local session admission starts, `share` prints:
-
-```text
-Link: <link>
-```
-
-`--split-key` prints the link and key separately:
-
-```text
-Bare link: <link-without-key>
-Key: <key>
-```
-
-Links and keys go to stdout. Status and errors go to stderr.
-
-Link delivery does not wait for directory prefetch. If link
-encoding or output fails, the command stops the share and waits for cleanup before
-returning the output error; background work may already have started.
-
-If every relay is temporarily unreachable, `share` waits and retries until one is ready; Ctrl+C cancels waiting. Each relay recovers independently, including those unavailable at startup. Later outages retain the original share link. Status shows how many relays currently admit new receivers, ongoing recovery, and successful reconnection; healthy direct transfers can continue while relay access recovers. Stopping or exiting the sender ends the share.
-
-Windows sources are admitted by file identity and write-excluding handle capabilities, including eligible removable and network volumes. Filesystems with weak change metadata keep the same revision while its handle remains open; reopening creates a new revision, so old download ranges are never mixed with potentially changed content.
+- Commits the selected roots, registers the descriptor with active relays, prints the capability link once a relay admits sessions, and serves catalog pages and file blocks on demand until stopped.
+- Default stdout output is `Link: <link>`. `--split-key` prints `Bare link: <link-without-key>` and `Key: <key>`.
+- `--front-url` and repeatable `--relay` override the saved sharing defaults for that run; `--browser-trace` sets the link query flag that enables browser receiver diagnostics.
 
 ### Sharing defaults
 
-For a personal Cloudflare deployment, follow the [deployment guide](deploy/cloudflare-relay.md).
-
-Add a relay with `wind relay add <url>`. Open relays are saved directly; restricted relays
-open browser approval. `wind relay onboard <url>` selects only that private relay while
-keeping existing profiles and P2P. Ordinary addition preserves active selections and frontend
-choices. Use `--name <device>` to label the credential and `--no-browser` for headless approval.
-Interrupted setup resumes with the same command; `wind relay cancel <url>` abandons an
-incomplete installation and revokes its issued credential, even after remote confirmation.
-Expired requests are cleared so the next run can start again.
-
-For automation, create a named credential in the console and import its JSON configuration:
-
 ```text
-wind config import config.json
-wind share <path...>
+wind relay add <url> [--name <device>] [--no-browser]
+wind relay onboard <url> [--name <device>] [--no-browser]
+wind relay cancel <url>
+wind config import <file|-> [--front-url <url>] [-v|--verbose]
 ```
+
+- `relay add` discovers relay access, runs browser device approval when required, and saves the profile while preserving active-relay and frontend selections.
+- `relay onboard` enrolls a private relay, saves its advertised frontend and managed TURN reference, and selects only that relay in `active_relays`.
+- `relay cancel` abandons an unfinished enrollment and revokes its issued credential.
+- `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
+- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Rebuildable runtime state lives alongside it in `config.json.state/setup/` (pending enrollment) and `config.json.state/turn/` (managed TURN discovery cache).
 
 ```json
-{"front_url":"https://your-site.example","profiles":[{"url":"https://your-site.example","access_key":"your-device-key"}],"active_relays":["https://your-site.example"]}
+{
+  "front_url": "https://your-site.example",
+  "profiles": [{ "url": "https://your-site.example", "access_key": "your-device-key" }],
+  "active_relays": ["https://your-site.example"]
+}
 ```
 
-`wind config import <file|-> --front-url <url>` sets or overrides the document's frontend
-before saving; `-` reads stdin and `-v` adds structured diagnostics. Import replaces the
-**sharing settings**, without merging old relays or frontend choices. Changed settings
-supersede an unfinished setup: cancel it before starting again. Its cancellation record
-is retained. Invalid input or a failed write preserves the saved file. Import does not
-contact the deployment.
-
-The file is stored as `windshare/config.json` in your user configuration directory:
-`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (default `~/.config`) on Linux, or
-`~/Library/Application Support` on macOS. `WINDSHARE_CONFIG` selects another file
-for both import and sharing. Manual editing remains supported. This file contains only
-user settings. Rebuildable TURN discovery lives in `config.json.state/turn/`; interrupted
-setup records live in `config.json.state/setup/` and are removed on completion. Neither
-is included in configuration imports or exports.
-
-Ordinary `wind share <path...>` reuses these defaults. A single relay at the frontend's
-origin produces a link without `r=`; separate origins and multiple relays retain their hints.
-`front_url` must be an HTTP(S) base URL without credentials, query or fragment; subpaths are allowed.
-Relay-only configurations may omit it, but sharing then requires `--front-url`. There is no implicit
-localhost or public-service fallback. Save up to 64 profiles and select up to eight of their
-URLs in `active_relays`; an empty selection selects no relay. Omit `access_key` for open relays.
-Use base URLs without `/v2/ws`. Protect this local file like a password; only public URLs enter links.
-The key is sent as a Bearer credential for REGISTER, including re-registration after recovery;
-RESUME and STOP retain their independent authentication.
-
-`--front-url <url>` and repeated `--relay <url>` independently override one share without
-changing saved defaults. Matching relay addresses retain their credentials; a different
-path or query never inherits them. Without saved defaults, supply both options explicitly.
-Invalid or unreadable configuration fails explicitly.
-
-Cloudflare-managed TURN is saved during onboarding and refreshed in the background
-while sharing with a selected private relay. Existing valid credentials are reused.
-Optional manual TURN services belong in the same file's `turn` section.
-See [TURN configuration and budgets](turn.md).
+Optional `managed_turn_policies` and manual `turn` sections live in the same file; see [Cloudflare deployment](deploy/cloudflare-relay.md) and [TURN services](turn.md).
 
 ## Download
 
 ```text
-wind get <link>
-wind get -o <directory> <link>
-wind get --only <path> <link>
-wind get <bare-link> --key <key>
-wind get --connectivity auto|relay-only|p2p-only <link>
-wind get --wait-timeout 2m <link>
+wind get <link> [-o <directory>] [--only <path>]... [--key <key>] [--connectivity auto|relay-only|p2p-only] [--wait-timeout <duration>]
 ```
 
-`-o` selects the output directory and defaults to the current directory. `--only` may be repeated to select multiple paths.
+- Joins the share, resolves the selected catalog paths (`--only`, repeatable), and writes the result under `-o` (default `.`). A bare link uses `--key` or prompts for the key on stdin.
+- Terminal result states are `success`, `partial`, `paused`, and `failed`.
 
 | Selection | Saved as |
 |---|---|
@@ -110,41 +66,39 @@ wind get --wait-timeout 2m <link>
 | Part of one directory | `<directory>-selection/...` |
 | Multiple roots | `windshare/...` |
 
-Existing files are not overwritten. A name collision creates a suffixed destination. Names are shortened
-on Unicode character boundaries to fit the output limit; extensions are preserved unless they leave no
-room for a filename character and the collision suffix.
-
-| Mode | Behavior |
+| `--connectivity` | Behavior |
 |---|---|
-| `auto` | Starts on the first available path; direct WebRTC, TURN and application relays may carry content together, scheduled by measured performance. |
-| `relay-only` | Transfers content through application relays; creates no direct or TURN connections. |
-| `p2p-only` | Uses relays for setup, transfers content only directly, and stops if direct recovery is exhausted. |
-
-Temporary outages reconnect automatically, keeping the same download, output, and verified progress while the shared file revision remains unchanged. After fast retries, recovery continues at a lower rate; healthy direct paths can keep transferring while a relay recovers. Authentication, changed content, and output failures retain their own failure handling.
-
-By default, the first connection waits up to 10 seconds; an established download waits through later connection outages until cancelled. `--wait-timeout <duration>` (for example, `30s` or `2m`) limits the initial connection and each later full connection outage separately. Healthy transfer time does not consume this limit. `0` selects the defaults; negative durations are invalid. Press Ctrl+C to cancel waiting. If the first connection expires, retry the original command or increase the wait timeout; temporary unavailability does not prove the link has expired.
-
-The final result is `success`, `partial`, `paused`, or `failed`. Exit codes are: `0` success, `1` runtime failure, `2` invalid command, `3` network failure, and `4` shared content changed.
-
-## Diagnostics
-
-- `-v` or `--verbose` prints additional connection and protocol status to stderr.
-- `--trace <file>` creates one NDJSON trace. The file must not already exist.
-- `--trace-dir <directory>` creates one run-specific NDJSON trace in that directory.
-- `--trace` and `--trace-dir` cannot be used together.
-
-Traces may contain filenames, local paths, and connection details. They exclude links, keys, credentials, and file content.
+| `auto` | Schedules content across available relay, direct WebRTC, and TURN lanes. |
+| `relay-only` | Transfers content only through application relays; creates no ICE connections. |
+| `p2p-only` | Uses relays for signaling and transfers content only over direct WebRTC paths. |
 
 ## Resume
-
-On destinations with recovery support, running the same compatible `get` again in the same output directory resumes staged data.
-Safe destinations without recovery support can still receive files while WindShare remains open; the CLI explains this limit before receiving content. Normal cleanup uses retained file handles. After an unexpected exit, unrecognized unfinished files are left for manual cleanup, never reopened or deleted by name alone.
-Previously delivered files keep their completion receipts without rereading or revalidating their current contents.
-Resume trusts private staged data to remain unchanged; it does not detect arbitrary external edits.
 
 ```text
 wind resume list -o <directory>
 wind resume discard -o <directory> --item <N>
 ```
 
-`resume list` shows unfinished downloads. `resume discard` requires interactive confirmation and removes the selected unfinished state. Completed and unrecognized files are not removed.
+- Rerunning a compatible `wind get` in the same `-o` directory reuses staged checkpoints and verified byte progress.
+- `resume list` reports destination-owned recovery state (`incomplete`, `resumable`, `cleanup-pending`, `needs-attention`) and item-blocked entries.
+- `resume discard` re-lists the inventory and, after interactive terminal confirmation, removes the selected unfinished operation while preserving published and unrecognized files.
+
+## Diagnostics
+
+- `-v`, `--verbose`: writes milestone and connection diagnostics to stderr (`share`, `get`, `config import`).
+- `--trace <file>`: writes one run's structured NDJSON trace to a new file (`share`, `get`).
+- `--trace-dir <directory>`: writes a run-specific NDJSON trace file in `<directory>` (`share`, `get`).
+
+Traces record lifecycle, connectivity, catalog, content, and provider diagnostics while redacting links, keys, credentials, and file content.
+
+## Code
+
+| Topic | Packages |
+|---|---|
+| Command dispatch, flags, exit codes | [`cmd/wind`](../cmd/wind/), [`cmd/wind/internal/cli`](../cmd/wind/internal/cli/) |
+| Configuration import and storage | [`cmd/wind/internal/configcommand`](../cmd/wind/internal/configcommand/), [`engine/relayconfig`](../engine/relayconfig/) |
+| Relay enrollment | [`engine/relaysetup`](../engine/relaysetup/) |
+| Resume inventory and discard | [`cmd/wind/internal/resumecommand`](../cmd/wind/internal/resumecommand/), [`engine/recovery`](../engine/recovery/), [`adapters/filesystem`](../adapters/filesystem/) |
+| Terminal events and rendering | [`cmd/wind/internal/clievent`](../cmd/wind/internal/clievent/), [`cmd/wind/internal/commandprojection`](../cmd/wind/internal/commandprojection/), [`cmd/wind/internal/humanoutput`](../cmd/wind/internal/humanoutput/), [`cmd/wind/internal/terminalcanvas`](../cmd/wind/internal/terminalcanvas/) |
+| NDJSON run trace | [`cmd/wind/internal/runtrace`](../cmd/wind/internal/runtrace/), [`core/testvectors`](../core/testvectors/) |
+| Share, receive, and TURN runtime | [`engine`](../engine/), [`osfs`](../osfs/) |
