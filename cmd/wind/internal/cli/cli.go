@@ -15,7 +15,6 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
@@ -181,12 +180,6 @@ func (a *App) newApplication() (*engine.Engine, error) {
 	config := a.engineConfig
 	if config.Now == nil && a.clock != nil {
 		config.Now = a.clock.Now
-	}
-	if config.RevisionCapacity.Limits == (revisioncapacity.CapacityLimits{}) {
-		config.RevisionCapacity.Limits = revisioncapacity.DefaultProcessLimits()
-	}
-	if config.RevisionCapacity.RetryAfter == 0 {
-		config.RevisionCapacity.RetryAfter = revisioncapacity.DefaultCapacityRetryAfter
 	}
 	config.Receive = a.receiveDependencies()
 	return engine.New(config)
