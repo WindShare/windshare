@@ -1,5 +1,6 @@
 import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
 import { LanePerformance } from './scheduling/performance'
+import { LaneSampling, type SamplingEvidence, type SamplingOutcome } from './scheduling/sampling'
 import { BlockReceiveWindow, type BlockReceiveAdmission } from './scheduling/receive-window'
 import { ContentAdmissions, type ContentAdmission } from './scheduling/admission'
 import { LaneRequests, type RequestSchedulingObservation } from './scheduling/requests'
@@ -148,7 +149,7 @@ export class V2LaneSet {
     const performance = new LanePerformance()
     const receive = new BlockReceiveWindow(this.#now)
     const unsubscribeReceive = receive.subscribeAvailable(() => this.wakeContent())
-    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance, receive, unsubscribeReceive })
+    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance, sampling: new LaneSampling(), receive, unsubscribeReceive })
     this.#useful.set(lane.id, { bytes: 0, admittedAt: this.#now(), lastAt: undefined })
     this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: performance })
     this.#wakeWaiters()
@@ -223,6 +224,24 @@ export class V2LaneSet {
       busyMilliseconds: state.performance.busyMilliseconds(this.#now()), pendingBytes: state.performance.pendingBytes }
   }
 
+  sampleLane(laneId: number, laneEpoch: number): void {
+    const state = this.#lanes.get(laneId)
+    if (state === undefined || state.laneEpoch !== laneEpoch) return
+    for (const lane of this.#lanes.values()) lane.sampling.stop()
+    state.sampling.start(this.#now())
+    this.wakeContent()
+  }
+
+  stopSampling(laneId: number, laneEpoch: number): void {
+    const state = this.#lanes.get(laneId)
+    if (state?.laneEpoch === laneEpoch) state.sampling.stop()
+  }
+
+  samplingEvidence(laneId: number, laneEpoch: number): SamplingEvidence | undefined {
+    const state = this.#lanes.get(laneId)
+    return state?.laneEpoch === laneEpoch ? state.sampling.snapshot(this.#now()) : undefined
+  }
+
   eligibleSize(routes: V2BlockRouteEligibility): number {
     routes.assertActive()
     return [...this.#lanes.values()].filter((candidate) => routes.allows(candidate.route)).length
@@ -287,7 +306,7 @@ export class V2LaneSet {
       await this.#awaitReplacementOrThrow(failures, attempted, work.routes, signal)
     }
     const admission = await this.#admissions.request(work, signal, lane => !attempted.has(lane))
-    if (signal.aborted) { admission.close(false); throw signal.reason }
+    if (signal.aborted) { admission.close('cancelled'); throw signal.reason }
     return admission
   }
 
@@ -338,7 +357,7 @@ export class V2LaneSet {
         bytesPerSecond: state.performance.bytesPerSecond,
       }))
     } catch { /* Scheduling observers cannot become transfer authority. */ }
-    let successful = false
+    let outcome: SamplingOutcome = 'cancelled'
     let received = 0
     try {
       signal.throwIfAborted()
@@ -352,16 +371,18 @@ export class V2LaneSet {
         },
       })
       if (received < bytes) permit.receive(bytes - received)
-      successful = true
+      outcome = 'completed'
       state.failed = false
       return { state, observation, record }
     } catch (error) {
+      outcome = signal.aborted ? 'cancelled' : 'failed'
+      if (signal.reason instanceof ContentRaceWon) outcome = 'superseded'
       if (!signal.aborted && isRetryableLaneFailure(error)) state.failed = true
       throw error
     } finally {
       releaseAttempt()
-      admission.close(successful)
-      if (!successful && signal.reason instanceof ContentRaceWon) {
+      admission.close(outcome)
+      if (outcome === 'superseded') {
         state.performance.superseded(bytes, this.#now() - started)
       }
     }

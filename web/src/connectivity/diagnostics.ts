@@ -192,7 +192,9 @@ export type V2PeerRecoveryTraceEvent = V2PeerRecoveryBase & (
   | Readonly<{ stage: 'parallelism'; action: string; reason: string;
       networkWaitingBytes: number; inFlightBytes: number; remainingBytes: number; remainingKnown: boolean;
       paths: number; queuedBytes: number; unfinishedBytes: number; capacityWaitingBytes: number;
-      usefulRate: number; outputRate: number; baselineUsefulRate: number; baselineOutputRate: number }>
+      usefulRate: number; outputRate: number; baselineUsefulRate: number; baselineOutputRate: number;
+      trialPath?: Readonly<{ pathId: string; laneId: number; laneEpoch: number }>;
+      trialWork?: import('../content/scheduling/sampling').SamplingEvidence }>
   | Readonly<{
       stage: 'wave-started'
       waveOrdinal: number

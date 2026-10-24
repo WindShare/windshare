@@ -40,7 +40,8 @@ it('exports scheduling decisions with session, lane, block, and completion estim
   const composition = productionComposition()
   composition.runtime.enable()
   const source = createProtocolTraceSource(composition.trace)
-  for (const purpose of ['content', 'probe', 'rescue'] as const) {
+  const purposes = ['content', 'probe', 'sample', 'rescue'] as const
+  for (const purpose of purposes) {
     const event = {
       eventName: 'content_scheduling' as const,
       correlation: {
@@ -61,7 +62,7 @@ it('exports scheduling decisions with session, lane, block, and completion estim
     })
     source.current?.(event)
   }
-  expect(composition.runtime.status().retained_event_count).toBe('3')
+  expect(composition.runtime.status().retained_event_count).toBe(String(purposes.length))
 })
 
 it('exports request route decisions and outcomes with validated session correlation', () => {
@@ -439,6 +440,27 @@ describe('peer recovery terminal trace', () => {
 
     expect(snapshotTraceEventObservationV2(projected).payload).toEqual({
       stage: 'session_stopped', reason: exportedReason,
+    })
+  })
+
+  it.each([
+    ['sample', 'path-sampling-started'],
+    ['retire', 'insufficient-scheduling-evidence'],
+    ['abandon', 'trial-path-replaced'],
+  ] as const)('exports %s with the exact trial identity and settlement evidence', (action, reason) => {
+    const projected = projectConnectivityTraceEvent({
+      eventName: 'peer_recovery', correlation, stage: 'parallelism', action, reason, paths: 2,
+      networkWaitingBytes: 1000, inFlightBytes: 100, remainingBytes: 10_000, remainingKnown: true,
+      queuedBytes: 1000, unfinishedBytes: 100, capacityWaitingBytes: 0,
+      usefulRate: 100, outputRate: 100, baselineUsefulRate: 100, baselineOutputRate: 100,
+      trialPath: { pathId: 'AgICAgICAgICAgICAgICAg', laneId: 2, laneEpoch: 3 },
+      trialWork: { offeredBytes: 400, settledBytes: 300, completedBytes: 100,
+        completedAttempts: 1, failedAttempts: 1, supersededAttempts: 0, cancelledAttempts: 1, busyMilliseconds: 1500 },
+    })
+    expect(snapshotTraceEventObservationV2(projected).payload).toMatchObject({
+      action, reason, trial_path: { path_id: 'AgICAgICAgICAgICAgICAg', lane_id: 2, lane_epoch: 3 },
+      trial_work: { offered_bytes: '400', settled_bytes: '300', completed_bytes: '100', completed_attempts: '1',
+        failed_attempts: '1', superseded_attempts: '0', cancelled_attempts: '1', busy_ms: '1500' },
     })
   })
 

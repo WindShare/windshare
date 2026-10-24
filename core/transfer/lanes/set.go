@@ -23,6 +23,7 @@ type laneState struct {
 	settlementHolds uint32
 	failures        uint32
 	performance     lanescheduling.Performance
+	sampling        lanescheduling.Sampling
 	receive         lanescheduling.ReceiveWindow
 	retired         bool
 	settled         bool

@@ -46,7 +46,7 @@ import type {
 } from '../../src/connectivity/peer-set/path'
 
 describe('content path policy authority', () => {
-  it('explores sustained work, then retires an unhelpful path without ending the download', async () => {
+  it('requires settled work before retiring an unhelpful path without ending the download', async () => {
     const clock = new ManualRecoveryClock()
     const offers = new SuccessfulOffers()
     const events: V2PeerRecoveryTraceEvent[] = []
@@ -64,6 +64,17 @@ describe('content path policy authority', () => {
     for (let second = 0; second < 4; second++) await clock.advance(1000)
     await waitForMicrotaskCondition('optional path', () => lanes.eligibleSize(activation.routes) === 2)
     for (let second = 0; second < 4; second++) await clock.advance(1000)
+    expect(lanes.eligibleSize(activation.routes)).toBe(2)
+    const sample = events.find(event => event.stage === 'parallelism' && event.action === 'sample')
+    if (sample?.stage !== 'parallelism' || sample.trialPath === undefined) throw new Error('Missing bound sample')
+    const readEvidence = lanes.samplingEvidence.bind(lanes)
+    vi.spyOn(lanes, 'samplingEvidence').mockImplementation((id, epoch) => {
+      const evidence = readEvidence(id, epoch)
+      if (evidence === undefined || id !== sample.trialPath!.laneId) return evidence
+      return { ...evidence, offeredBytes: 8 * 1024 * 1024, settledBytes: 8 * 1024 * 1024,
+        completedBytes: 8 * 1024 * 1024, completedAttempts: 8, busyMilliseconds: 1000 }
+    })
+    for (let second = 0; second < 3; second++) await clock.advance(1000)
     await waitForMicrotaskCondition('unhelpful path retired', () => lanes.eligibleSize(activation.routes) === 1)
     expect(activation.routes.active).toBe(true)
     expect(events).toContainEqual(expect.objectContaining({ stage: 'parallelism', action: 'retire', reason: 'no-aggregate-gain' }))

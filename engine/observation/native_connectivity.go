@@ -35,12 +35,17 @@ type NativeConnectivitySpec struct {
 }
 
 type NativeParallelismFacts struct {
-	NetworkWaitingBytes, InFlightBytes, RemainingBytes             uint64
-	RemainingKnown                                                 bool
-	Action, Reason                                                 string
-	Paths, OptionalPaths                                           uint64
-	QueuedBytes, UnfinishedBytes, CapacityWaitingBytes             uint64
-	UsefulRate, OutputRate, BaselineUsefulRate, BaselineOutputRate float64
+	TrialPath                                                                string
+	TrialLaneID, TrialLaneEpoch                                              uint32
+	OfferedBytes, SettledBytes, CompletedBytes                               uint64
+	CompletedAttempts, FailedAttempts, SupersededAttempts, CancelledAttempts uint64
+	BusyMilliseconds                                                         uint64
+	NetworkWaitingBytes, InFlightBytes, RemainingBytes                       uint64
+	RemainingKnown                                                           bool
+	Action, Reason                                                           string
+	Paths, OptionalPaths                                                     uint64
+	QueuedBytes, UnfinishedBytes, CapacityWaitingBytes                       uint64
+	UsefulRate, OutputRate, BaselineUsefulRate, BaselineOutputRate           float64
 }
 
 const NativeProviderDiagnosticMessageLimit = 4096
@@ -307,7 +312,7 @@ func validateNativeFactKinds(spec NativeConnectivitySpec) error {
 		return EventContractError{Field: "parallelism", Rule: "kind_matches_facts"}
 	}
 	if p := spec.Parallelism; p != nil {
-		if !slices.Contains([]string{"explore", "keep", "retire"}, p.Action) || len(p.Reason) > 64 ||
+		if !slices.Contains([]string{"explore", "sample", "keep", "retire", "abandon"}, p.Action) || len(p.Reason) > 64 ||
 			!nativeAllowance(p.UsefulRate) || !nativeAllowance(p.OutputRate) || !nativeAllowance(p.BaselineUsefulRate) || !nativeAllowance(p.BaselineOutputRate) {
 			return EventContractError{Field: "parallelism", Rule: "valid_decision_rates"}
 		}

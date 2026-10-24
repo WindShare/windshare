@@ -1,0 +1,164 @@
+{
+  "controllerReplay": {
+    "scenarios": 1526,
+    "decisions": 90098,
+    "status": "passed",
+    "seed": 20261024,
+    "inputSHA256": "db45995bae542f2a3f357655d2ea2edb7df76cc54615c526f4de46907fee4aee",
+    "nativeDecisionsSHA256": "72d80e822f148b82530d1f22c03d9d6020e0d25773bf80c0388be108efdda538"
+  },
+  "gates": [
+    {
+      "name": "race-repeat-25",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=25",
+        "./core/transfer/lanescheduling",
+        "./core/transfer/lanes",
+        "./connectivity/throughput",
+        "./connectivity/v2peer/peerset"
+      ],
+      "exitCode": 0,
+      "seconds": 31.67,
+      "logSHA256": "6e3cdf490ee448486843f081a4fc93dbfa92637997e0c55931c06de5317380f6"
+    },
+    {
+      "name": "integration-repeat-3",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=3",
+        "./integration/v2peer"
+      ],
+      "exitCode": 0,
+      "seconds": 7.75,
+      "logSHA256": "06637e6639560c0123ef2b9c5c42371a1c75a6c42c7bc4c69067c532c064db4a"
+    },
+    {
+      "name": "e2e",
+      "command": [
+        "make",
+        "e2e"
+      ],
+      "exitCode": 0,
+      "seconds": 9.45,
+      "logSHA256": "efd5a9af1bc7da8664ab3b0898cabe6189d08fc1aeb85dc81cf18b83c7baacde"
+    },
+    {
+      "name": "browser-weekly-supplement",
+      "command": [
+        "make",
+        "browser-weekly-supplement"
+      ],
+      "exitCode": 0,
+      "seconds": 212.06,
+      "logSHA256": "a8055c4cb7729fa04297a3d3b181b6683edf708b8f52ce8d6aed4a20075866f7"
+    },
+    {
+      "name": "hygiene",
+      "command": [
+        "make",
+        "hygiene"
+      ],
+      "exitCode": 0,
+      "seconds": 16.94,
+      "logSHA256": "f0e2a13cee1a157ff7b12c474e76017f2375cc408742c010a837ac096fe737cd"
+    }
+  ],
+  "browserWeekly": {
+    "passed": 60,
+    "skipped": 5
+  },
+  "crossContractRepeat": {
+    "stats": {
+      "startTime": "2026-10-24T04:02:15.853Z",
+      "duration": 26847.584000000003,
+      "expected": 43,
+      "skipped": 5,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "skipped": [
+      {
+        "file": "opfs/persistence-activation.cross-browser.spec.ts",
+        "title": "activates and discards file and ZIP tasks before optional permission settles (true)",
+        "project": "webkit-short",
+        "reasons": [
+          "Current webkit test environment does not expose navigator.storage.getDirectory()"
+        ]
+      },
+      {
+        "file": "opfs/persistence-activation.cross-browser.spec.ts",
+        "title": "activates and discards file and ZIP tasks before optional permission settles (false)",
+        "project": "webkit-short",
+        "reasons": [
+          "Current webkit test environment does not expose navigator.storage.getDirectory()"
+        ]
+      },
+      {
+        "file": "opfs/persistence-activation.cross-browser.spec.ts",
+        "title": "native persistence does not own workspace activation or cancellation",
+        "project": "webkit-short",
+        "reasons": [
+          "Current webkit test environment does not expose navigator.storage.getDirectory()"
+        ]
+      },
+      {
+        "file": "opfs-native.cross-browser.spec.ts",
+        "title": "recovers a real Worker ZIP cut and finalizes offline without staging another payload object",
+        "project": "webkit-short",
+        "reasons": [
+          "Current webkit test environment does not expose navigator.storage.getDirectory()"
+        ]
+      },
+      {
+        "file": "opfs-native.cross-browser.spec.ts",
+        "title": "defers cross-tab cleanup until the active artifact reader releases ownership",
+        "project": "webkit-short",
+        "reasons": [
+          "Current webkit test environment does not expose navigator.storage.getDirectory()"
+        ]
+      }
+    ],
+    "reportSHA256": "eb3ec205d12a6528f0a46435d3c63b0158c8da98d8c0d86cbbd28a20760f4cd6"
+  },
+  "browserStudy": {
+    "invocations": 45,
+    "transfers": 47,
+    "failures": [],
+    "evidenceErrors": []
+  },
+  "nativeStudy": [
+    {
+      "direction": "forward",
+      "transfers": 2,
+      "reportSHA256": "2bfe82b0f8b85d85d436ec6c39ac967df6e6dde58cb9fdf88715d9e08fdf7aa4"
+    },
+    {
+      "direction": "reverse",
+      "transfers": 2,
+      "reportSHA256": "14f1d8d0839b720f06c397c9203cac718803108e5d70d1649f6577e4cf97ab84"
+    }
+  ],
+  "remoteCleanup": {
+    "checkedPaths": 47,
+    "remainingPaths": [],
+    "remainingProcesses": []
+  },
+  "sourceVerification": {
+    "changedSinceSnapshot": [
+      "docs/plans/webrtc-throughput.md"
+    ],
+    "indexUnchanged": true
+  },
+  "publicationPrivacy": {
+    "regressionTests": 6,
+    "status": "passed",
+    "originalConnectionIdentitiesChecked": 81,
+    "unredactedFindings": 0,
+    "numericBrowserEvidenceMatchesPrivateReport": true
+  }
+}

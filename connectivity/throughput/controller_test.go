@@ -17,8 +17,10 @@ func TestSharedThroughputDecisions(t *testing.T) {
 		MaximumPaths int
 		Samples      []struct {
 			Observation
-			At       int64
-			Expected Action
+			At                int64
+			Expected          Action
+			ExpectedReason    string
+			ExpectedLaneEpoch uint32
 		}
 	}
 	if err := json.Unmarshal(data, &cases); err != nil {
@@ -29,7 +31,10 @@ func TestSharedThroughputDecisions(t *testing.T) {
 			var controller Controller
 			for _, sample := range test.Samples {
 				decision := controller.Step(time.Unix(1, 0).Add(time.Duration(sample.At)*time.Millisecond), sample.Observation, test.MaximumPaths)
-				if decision.Action != sample.Expected {
+				if sample.ExpectedLaneEpoch != 0 && decision.Path.LaneEpoch != sample.ExpectedLaneEpoch {
+					t.Fatalf("retirement targeted the wrong generation: %+v", decision.Path)
+				}
+				if decision.Action != sample.Expected || (sample.ExpectedReason != "" && decision.Reason != sample.ExpectedReason) {
 					t.Fatalf("at %d: %+v, want %s", sample.At, decision, sample.Expected)
 				}
 			}

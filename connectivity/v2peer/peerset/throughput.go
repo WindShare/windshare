@@ -1,6 +1,9 @@
 package peerset
 
 import (
+	"encoding/hex"
+	"slices"
+
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/throughput"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -27,70 +30,101 @@ func (s *ReceiverSession) runThroughput(lanes *transferlanes.Set) {
 			s.mu.Unlock()
 			return
 		}
-		paths, pending, optional, totalPaths := s.throughputPaths()
+		paths, targets, pending, total := s.throughputPaths(lanes)
 		if s.config.Demand != ContentDemand {
-			demand.QueuedBytes = 0
 			demand.NetworkWaitingBytes = 0
 			demand.UnfinishedBytes = 0
 		}
 		observation := throughput.Observation{
-			InFlightBytes: demand.InFlightBytes,
-			QueuedBytes:   demand.QueuedBytes, UnfinishedBytes: demand.UnfinishedBytes, CapacityWaitingBytes: demand.CapacityWaitingBytes,
-			NetworkWaitingBytes: demand.NetworkWaitingBytes,
-			UsefulBytes:         demand.UsefulBytes, OutputBytes: demand.OutputBytes, RemainingBytes: demand.RemainingBytes, RemainingKnown: demand.RemainingKnown,
-			Paths: paths, OptionalPaths: len(optional), Pending: pending,
+			InFlightBytes: demand.InFlightBytes, QueuedBytes: demand.QueuedBytes,
+			UnfinishedBytes: demand.UnfinishedBytes, CapacityWaitingBytes: demand.CapacityWaitingBytes,
+			NetworkWaitingBytes: demand.NetworkWaitingBytes, UsefulBytes: demand.UsefulBytes,
+			OutputBytes: demand.OutputBytes, RemainingBytes: demand.RemainingBytes, RemainingKnown: demand.RemainingKnown,
+			Paths: paths, Pending: pending,
 		}
 		decision := controller.Step(s.owner.config.Clock.Now(), observation, peerslot.Count-1)
 		var retire *Path
-		if decision.Action == throughput.Explore && totalPaths < peerslot.Count-1 {
-			config := s.config
-			config.Purpose, config.Demand = v2signal.ThroughputExploration, ContentDemand
-			path, err := s.owner.openDirect(s.ctx, config)
-			if err == nil {
-				s.watchPath(path)
+		target := targets[decision.Path]
+		identity := transferlanes.Identity{ID: decision.Path.LaneID, Epoch: decision.Path.LaneEpoch}
+		switch decision.Action {
+		case throughput.Explore:
+			if total < peerslot.Count-1 {
+				config := s.config
+				config.Purpose, config.Demand = v2signal.ThroughputExploration, ContentDemand
+				if path, err := s.owner.openDirect(s.ctx, config); err == nil {
+					s.watchPath(path)
+				}
 			}
-		} else if decision.Action == throughput.Retire && len(optional) > 0 {
-			retire = newestOptionalPath(optional)
+		case throughput.Sample:
+			if target != nil {
+				lanes.SampleLane(identity)
+			}
+		case throughput.Retire, throughput.Keep, throughput.Abandon:
+			lanes.StopSampling(identity)
+			if decision.Action == throughput.Retire && target != nil && target.config.Purpose == v2signal.ThroughputExploration {
+				retire = target
+			}
 		}
 		if decision.Action != throughput.Hold {
 			s.direct.config.Native.ObserveParallelism(nativepeer.Subject{ProtocolSessionID: s.direct.key.session, PeerPathID: s.direct.key.path}, decision, observation)
 		}
 		s.mu.Unlock()
 		if retire != nil {
-			_ = retire.Close()
+			retireThroughputGeneration(retire, identity)
 		}
 	}
 }
 
-func (s *ReceiverSession) throughputPaths() (live int, pending bool, optional []*Path, total int) {
+func (s *ReceiverSession) throughputPaths(lanes *transferlanes.Set) ([]throughput.PathObservation, map[throughput.PathIdentity]*Path, bool, int) {
 	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
+	ordered := make([]*Path, 0, len(s.owner.paths))
 	for _, path := range s.owner.paths {
+		ordered = append(ordered, path)
+	}
+	s.owner.mu.Unlock()
+	slices.SortFunc(ordered, func(a, b *Path) int {
+		if a.sequence < b.sequence {
+			return -1
+		}
+		if a.sequence > b.sequence {
+			return 1
+		}
+		return 0
+	})
+	observations := make([]throughput.PathObservation, 0, len(ordered))
+	targets := make(map[throughput.PathIdentity]*Path)
+	pending := false
+	for _, path := range ordered {
 		if _, relayed := path.config.ICE.Relay(); relayed {
 			continue
 		}
-		if _, admitted := path.Lane(); admitted {
-			live++
-		} else {
+		lane, admitted := path.Lane()
+		if !admitted {
 			pending = true
+			continue
 		}
-		if path.config.Purpose == v2signal.ThroughputExploration {
-			optional = append(optional, path)
+		work, live := lanes.SamplingEvidence(transferlanes.Identity{ID: lane.ID, Epoch: lane.Epoch})
+		if !live {
+			pending = true
+			continue
 		}
+		identity := throughput.PathIdentity{PathID: hex.EncodeToString(path.key.path[:]), LaneID: lane.ID, LaneEpoch: lane.Epoch}
+		observations = append(observations, throughput.PathObservation{Identity: identity, Optional: path.config.Purpose == v2signal.ThroughputExploration, Work: work})
+		targets[identity] = path
 	}
-	return live, pending, optional, len(s.owner.paths)
+	return observations, targets, pending, len(ordered)
 }
 
-func newestOptionalPath(paths []*Path) *Path {
-	// Map iteration must not decide which established connection survives an
-	// inconclusive trial; the newest expansion owns the experiment.
-	newest := paths[0]
-	for _, path := range paths[1:] {
-		if path.sequence > newest.sequence {
-			newest = path
-		}
+// Retirement must not close a replacement admitted after the policy snapshot.
+func retireThroughputGeneration(path *Path, identity transferlanes.Identity) {
+	path.mu.Lock()
+	if path.lane.ID != identity.ID || path.lane.Epoch != identity.Epoch {
+		path.mu.Unlock()
+		return
 	}
-	return newest
+	path.cancel()
+	path.mu.Unlock()
+	<-path.done
 }
 
 func (s *ReceiverSession) watchPath(path *Path) {

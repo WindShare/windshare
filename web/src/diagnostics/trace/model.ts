@@ -319,7 +319,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     file_id: string
     block_index: string
     route: 'application-relay' | 'direct' | 'turn'
-    purpose: 'content' | 'probe' | 'rescue'
+    purpose: 'content' | 'probe' | 'sample' | 'rescue'
     expected_ms: number
     pending_bytes: string
     bytes_per_second: number
@@ -403,7 +403,10 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     | Readonly<{ stage: 'parallelism'; action: string; reason: string; paths: number;
         network_waiting_bytes: string; in_flight_bytes: string; remaining_bytes: string; remaining_known: boolean;
         queued_bytes: string; unfinished_bytes: string; capacity_waiting_bytes: string;
-        useful_rate: number; output_rate: number; baseline_useful_rate: number; baseline_output_rate: number }>
+        useful_rate: number; output_rate: number; baseline_useful_rate: number; baseline_output_rate: number;
+        trial_path?: Readonly<{ path_id: string; lane_id: number; lane_epoch: number }>;
+        trial_work?: Readonly<{ offered_bytes: string; settled_bytes: string; completed_bytes: string;
+          completed_attempts: string; failed_attempts: string; superseded_attempts: string; cancelled_attempts: string; busy_ms: string }> }>
     | Readonly<{
         stage: 'wave_started' | 'wave_rearmed'
         wave_ordinal: string

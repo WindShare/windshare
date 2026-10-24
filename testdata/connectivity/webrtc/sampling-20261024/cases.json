@@ -1,0 +1,251 @@
+{
+  "large": [
+    {
+      "name": "before-large-1",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "current-large-1",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "fixed-three-1",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "current-large-2",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "before-large-2",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "fixed-three-2",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "before-large-3",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "current-large-3",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    },
+    {
+      "name": "fixed-three-3",
+      "paths": 3,
+      "sizeMiB": 1024,
+      "fixture": "fixture-1gib.bin"
+    }
+  ],
+  "medium": [
+    {
+      "name": "before-medium-1",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    },
+    {
+      "name": "current-medium-1",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    },
+    {
+      "name": "current-medium-2",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    },
+    {
+      "name": "before-medium-2",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    },
+    {
+      "name": "before-medium-3",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    },
+    {
+      "name": "current-medium-3",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    }
+  ],
+  "experience": [
+    {
+      "name": "before-short-1",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "current-short-1",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "current-short-2",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "before-short-2",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "before-short-3",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "current-short-3",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 0.125
+    },
+    {
+      "name": "before-pressure-1",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 64,
+      "slowWriteMs": 125
+    },
+    {
+      "name": "before-pressure-2",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 64,
+      "slowWriteMs": 125
+    },
+    {
+      "name": "before-zip",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 64,
+      "workflow": "zip"
+    },
+    {
+      "name": "before-competition",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 128,
+      "receivers": 2
+    },
+    {
+      "name": "before-preview",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256,
+      "interaction": "preview"
+    },
+    {
+      "name": "before-cancel-preview",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256,
+      "interaction": "cancel-preview"
+    },
+    {
+      "name": "current-pressure-1",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 64,
+      "slowWriteMs": 125
+    },
+    {
+      "name": "current-pressure-2",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 64,
+      "slowWriteMs": 125
+    },
+    {
+      "name": "current-zip",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 64,
+      "workflow": "zip"
+    },
+    {
+      "name": "current-competition",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 128,
+      "receivers": 2
+    },
+    {
+      "name": "current-preview",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256,
+      "interaction": "preview"
+    },
+    {
+      "name": "current-cancel-preview",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256,
+      "interaction": "cancel-preview"
+    },
+    {
+      "name": "current-retire-1",
+      "sizeMiB": 256,
+      "fault": "retire"
+    },
+    {
+      "name": "current-slow-1",
+      "sizeMiB": 256,
+      "fault": "slow"
+    },
+    {
+      "name": "current-retire-2",
+      "sizeMiB": 256,
+      "fault": "retire"
+    },
+    {
+      "name": "current-slow-2",
+      "sizeMiB": 256,
+      "fault": "slow"
+    },
+    {
+      "name": "current-four-mib-blocks",
+      "sizeMiB": 256,
+      "blockMiB": 4
+    }
+  ],
+  "medium-confirmation": [
+    {
+      "name": "current-medium-4",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    },
+    {
+      "name": "before-medium-4",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    },
+    {
+      "name": "before-medium-5",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    },
+    {
+      "name": "current-medium-5",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    },
+    {
+      "name": "current-medium-6",
+      "build": "webrtc-sampling-stress-20261024",
+      "sizeMiB": 256
+    },
+    {
+      "name": "before-medium-6",
+      "build": "webrtc-sampling-stress-20261024-before",
+      "sizeMiB": 256
+    }
+  ]
+}

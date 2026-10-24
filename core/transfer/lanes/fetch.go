@@ -210,7 +210,12 @@ func (s *Set) fetchLane(
 	state := admission.laneState
 	defer admission.releaseCapacity()
 	if purpose != lanescheduling.Content {
-		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
+		defer func() {
+			s.mu.Lock()
+			s.exploration.Release(purpose)
+			s.notifyAdmissionChangedLocked()
+			s.mu.Unlock()
+		}()
 	}
 	started := admission.started
 	bytes := blockDemandBytes(demand)
@@ -266,6 +271,20 @@ func (s *Set) fetchLane(
 	if canceled && decision.winner != nil && decision.winner != state {
 		s.mu.Lock()
 		state.performance.Superseded(bytes, elapsed)
+		s.mu.Unlock()
+	}
+	if purpose != lanescheduling.Rescue {
+		outcome := lanescheduling.SampleCompleted
+		switch {
+		case canceled && decision.winner != nil && decision.winner != state:
+			outcome = lanescheduling.SampleSuperseded
+		case canceled || notAdmitted:
+			outcome = lanescheduling.SampleCancelled
+		case fetchErr != nil:
+			outcome = lanescheduling.SampleFailed
+		}
+		s.mu.Lock()
+		state.sampling.Settled(bytes, s.now(), outcome)
 		s.mu.Unlock()
 	}
 	s.finish(state, record, fetchErr, canceled, decision.winner == state)
