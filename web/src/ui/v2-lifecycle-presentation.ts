@@ -1,12 +1,9 @@
+import { availableReceiveActions, receiveLifecycleCategory, newReceiveOperationKind, type ReceiveActionFacts } from '../application/receive/policy'
+import type { LifecycleUserAction, PersistentWriterOpenPauseFact, V2ActiveReceiveControl, ReceiveSettlementWait, WorkspaceUsage } from '../application/receive/actions'
 import { artifactRequestedName } from '../output/planning'
 import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
 import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
-import type {
-  PreservingWriterCapacityPurpose,
-  PreservingWriterCost,
-} from '../output/persistent-tree/contracts'
 import {
-  isTerminalLifecycleState,
   type ReceiveLifecycleState,
 } from '../output/workspace'
 import type {
@@ -19,13 +16,7 @@ import {
   type CompatibleNameRepairPresentation,
 } from './compatible-name-repair-presentation'
 import { formatBytes } from './v2-progress-presentation'
-import { browserDeliveryLocalActions } from '../output/browser-delivery/recovery/local-actions'
-import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
-
-export interface WorkspaceUsage {
-  readonly ownedBytes: bigint
-  readonly maximumBytes?: bigint
-}
+import type { V2DirectZipProgressSnapshot } from '../application/receive/contracts'
 
 export const SOURCE_INVALIDATED_DESCRIPTION =
   'The source file changed and this download cannot continue. Ask the sender to share it again and open the new link. You can discard this task to remove its retained data.'
@@ -35,26 +26,6 @@ export interface WorkspaceUsagePresentation {
   readonly maximumBytes?: bigint
   readonly label: string
 }
-
-export type LifecycleUserAction =
-  | 'pause'
-  | 'stop'
-  | 'continue'
-  | 'save'
-  | 'save-staged-files'
-  | 'cleanup-staging'
-  | 'discard-incomplete-staging'
-  | 'redownload'
-  | 'change-location'
-  | 'discard'
-  | 'delete'
-
-export type V2ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
-
-export type V2ReceiveInterruptionPresentation = Readonly<{
-  readonly operation: V2ActiveReceiveControl | 'finish'
-  readonly phase: 'waiting' | 'background'
-}>
 
 export interface LifecycleActionPresentation {
   readonly kind: LifecycleUserAction
@@ -76,7 +47,8 @@ export function presentNewReceiveOperation(input: Readonly<{
 }>): NewReceiveOperationPresentation | null {
   const { lifecycle, plan } = input
   if (lifecycle === null || plan === null) return null
-  if (plan.kind === 'direct-tree' && isTerminalLifecycleState(lifecycle)) {
+  const kind = newReceiveOperationKind(lifecycle, plan)
+  if (kind === 'direct-tree-to-zip') {
     return Object.freeze({
       kind: 'direct-tree-to-zip',
       ariaLabel: 'Receive again as ZIP',
@@ -85,8 +57,7 @@ export function presentNewReceiveOperation(input: Readonly<{
       actionLabel: 'Choose a ZIP route for a new operation',
     })
   }
-  if (plan.kind === 'direct-resumable-zip' && lifecycle.kind === 'restart-required' &&
-      lifecycle.reason === 'target-deleted') {
+  if (kind === 'deleted-direct-zip-target') {
     return Object.freeze({
       kind: 'deleted-direct-zip-target',
       ariaLabel: 'Start a new receive operation',
@@ -98,15 +69,10 @@ export function presentNewReceiveOperation(input: Readonly<{
   return null
 }
 
-export {
-  hasValidatedTerminalCompatibleNameRepair,
-  presentCompatibleNameRepair,
-} from './compatible-name-repair-presentation'
-export type {
-  CompatibleNameRepairActionMode,
-  CompatibleNameRepairPresentation,
-  CompatibleNameRepairPresentationContext,
-} from './compatible-name-repair-presentation'
+export { presentCompatibleNameRepair } from './compatible-name-repair-presentation'
+export { hasValidatedTerminalCompatibleNameRepair } from '../application/receive/repair'
+export type { CompatibleNameRepairPresentation, CompatibleNameRepairPresentationContext } from './compatible-name-repair-presentation'
+export type { CompatibleNameRepairActionMode } from '../application/receive/repair'
 
 export interface ReceiveLifecyclePresentation {
   readonly stateKind: ReceiveLifecycleState['kind']
@@ -118,12 +84,6 @@ export interface ReceiveLifecyclePresentation {
   readonly actions: readonly LifecycleActionPresentation[]
   readonly compatibleNameRepair: CompatibleNameRepairPresentation | null
   readonly writerOpenPause: PersistentWriterOpenPausePresentation | null
-}
-
-export interface PersistentWriterOpenPauseFact {
-  readonly materializationRelativePath: readonly string[]
-  readonly cost: PreservingWriterCost
-  readonly purpose: PreservingWriterCapacityPurpose
 }
 
 export interface PersistentWriterOpenPausePresentation {
@@ -138,7 +98,7 @@ export function presentReceiveLifecycle(input: Readonly<{
   plan: MaterializationPlan
   workspaceUsage?: WorkspaceUsage | null
   activeControls?: readonly V2ActiveReceiveControl[]
-  interruption?: V2ReceiveInterruptionPresentation | null
+  interruption?: ReceiveSettlementWait | null
   repairSummary?: CompatibleNameRepairSummary | null
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
@@ -158,11 +118,11 @@ export function presentReceiveLifecycle(input: Readonly<{
         input.recoverySummary ?? null,
       )
     : interruptionCopy(input.interruption)
-  const actions = presentedLifecycleActions(input)
+  const actions = Object.freeze(availableReceiveActions(input).map(kind => presentLifecycleAction(kind, input)))
   const writerOpenPause = presentPersistentWriterOpenPause(input)
   return Object.freeze({
     stateKind: input.state.kind,
-    category: lifecycleCategory(input.state),
+    category: receiveLifecycleCategory(input.state),
     title: copy.title,
     description: copy.description,
     tone: copy.tone,
@@ -196,7 +156,7 @@ function presentPersistentWriterOpenPause(input: Readonly<{
 }
 
 function interruptionCopy(
-  interruption: V2ReceiveInterruptionPresentation,
+  interruption: ReceiveSettlementWait,
 ): Readonly<{
   title: string
   description: string
@@ -233,48 +193,6 @@ function interruptionCopy(
         'The wait was detached, but WindShare still owns the save location until native writes and task records finish.',
         'warning',
       )
-}
-
-function presentedLifecycleActions(
-  input: Readonly<{
-    state: ReceiveLifecycleState
-    artifact: ArtifactSpec
-    plan: MaterializationPlan
-    activeControls?: readonly V2ActiveReceiveControl[]
-    interruption?: V2ReceiveInterruptionPresentation | null
-    recoverySummary?: RecoverySummary | null
-    browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
-  }>,
-): readonly LifecycleActionPresentation[] {
-  if (input.interruption != null) return Object.freeze([])
-  if (input.activeControls !== undefined && input.activeControls.length > 0) {
-    // The durable cut can settle before its writer drains. Recovery actions
-    // remain unavailable until execution settlement releases the active controls.
-    if (lifecycleCategory(input.state) !== 'active') return Object.freeze([])
-    return activeControlActions(input.state, input.activeControls, input.plan.kind)
-  }
-  const localActions = input.plan.kind === 'direct-tree'
-    ? browserFolderLocalActions(input.state, input.browserDelivery) : []
-  if (input.state.kind === 'resumable-receive' &&
-      input.state.payloadKind === 'file-set' &&
-      input.plan.kind === 'direct-tree' &&
-      (input.recoverySummary === undefined || input.recoverySummary === null)) {
-    return localActions
-  }
-  return Object.freeze([...localActions, ...lifecycleActions(input.state, input.artifact, input.plan.kind)])
-}
-
-function browserFolderLocalActions(
-  state: ReceiveLifecycleState,
-  summary: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null | undefined,
-): readonly LifecycleActionPresentation[] {
-  return Object.freeze(browserDeliveryLocalActions(state, summary).map(kind => {
-    switch (kind) {
-      case 'save-staged-files': return { kind, label: 'Save received files to folder', destructive: false }
-      case 'cleanup-staging': return { kind, label: 'Retry staging cleanup', destructive: false }
-      case 'discard-incomplete-staging': return { kind, label: 'Discard incomplete browser data', destructive: true }
-    }
-  }))
 }
 
 function lifecycleCopy(
@@ -466,94 +384,50 @@ function resumableReceiveCopy(
   )
 }
 
-function lifecycleActions(
-  state: ReceiveLifecycleState,
-  artifact: ArtifactSpec,
-  planKind: MaterializationPlan['kind'],
-): readonly LifecycleActionPresentation[] {
+function presentLifecycleAction(kind: LifecycleUserAction, input: ReceiveActionFacts & { readonly artifact: ArtifactSpec }): LifecycleActionPresentation {
+  const { state, plan, artifact } = input
+  switch (kind) {
+    case 'pause': return action(kind, 'Pause and keep verified progress')
+    case 'stop': return plan.kind === 'direct-resumable-zip'
+      ? action(kind, 'Stop and retain the unfinished ZIP') : action(kind, 'Stop receiving', true)
+    case 'continue': return action(kind, continueActionLabel(state, artifact, plan.kind))
+    case 'save': return action(kind, 'Save ' + browserArtifactName(artifact))
+    case 'save-staged-files': return action(kind, 'Save received files to folder')
+    case 'cleanup-staging': return action(kind, 'Retry staging cleanup')
+    case 'discard-incomplete-staging': return action(kind, 'Discard incomplete browser data', true)
+    case 'redownload': return state.kind === 'resumable-receive'
+      ? action(kind, 'Restart incomplete files', true) : action(kind, 'Download again')
+    case 'change-location': return action(kind, 'Change save location')
+    case 'discard': return action(kind, discardActionLabel(state), true)
+    case 'delete': return action(kind, deleteActionLabel(state), true)
+  }
+}
+
+function continueActionLabel(state: ReceiveLifecycleState, artifact: ArtifactSpec, plan: MaterializationPlan['kind']): string {
   switch (state.kind) {
-    case 'resumable-start':
-      return Object.freeze([action('continue', state.reason === 'paused' ? 'Continue' : 'Retry download'),
-        action('discard', 'Discard download', true)])
+    case 'resumable-start': return state.reason === 'paused' ? 'Continue' : 'Retry download'
     case 'resumable-receive':
-      if (state.payloadKind === 'direct-zip') {
-        return Object.freeze([
-          action('continue', 'Continue ZIP'),
-          action('delete', 'Delete only after ownership is verified', true),
-        ])
-      }
-      return planKind === 'workspace-then-publish'
-        ? Object.freeze([
-            action('continue', 'Continue receiving'),
-            action('discard', 'Discard task and clean unfinished content', true),
-          ])
-        : Object.freeze([
-            action('continue', 'Continue and preserve partial files'),
-            action('redownload', 'Restart incomplete files', true),
-          ])
-    case 'resumable-package':
-      return Object.freeze([
-        action('continue', artifact.kind === 'zip-archive' ? 'Continue generating ZIP' : 'Continue preparing file'),
-        action('discard', 'Discard task and delete retained content', true),
-      ])
-    case 'waiting-to-save':
-      return Object.freeze([
-        action('save', `Save ${browserArtifactName(artifact)}`),
-        action('delete', 'Delete retained result', true),
-      ])
-    case 'download-started':
-      return state.attemptKind === 'workspace'
-        ? Object.freeze([
-            action('redownload', 'Download again'),
-            action('delete', 'Delete retained result', true),
-          ])
-        : Object.freeze([])
-    case 'restart-required':
-      return Object.freeze([])
-    case 'source-invalidated':
-      return Object.freeze([action('discard', 'Discard task and delete retained content', true)])
-    case 'authorization-required':
-      return Object.freeze([
-        action('continue', 'Authorize and continue'),
-        action('delete', 'Verify ownership and delete unfinished ZIP', true),
-      ])
-    case 'target-verification-required':
-      return Object.freeze([
-        action('continue', 'Verify target and continue'),
-        action('delete', 'Verify ownership and delete unfinished ZIP', true),
-      ])
-    case 'destination-space-required':
-      return Object.freeze([
-        action('continue', 'Retry after freeing space'),
-        action('delete', 'Verify ownership and delete unfinished ZIP', true),
-      ])
-    default:
-      return Object.freeze([])
+      if (state.payloadKind === 'direct-zip') return 'Continue ZIP'
+      return plan === 'workspace-then-publish' ? 'Continue receiving' : 'Continue and preserve partial files'
+    case 'resumable-package': return artifact.kind === 'zip-archive' ? 'Continue generating ZIP' : 'Continue preparing file'
+    case 'authorization-required': return 'Authorize and continue'
+    case 'target-verification-required': return 'Verify target and continue'
+    case 'destination-space-required': return 'Retry after freeing space'
+    default: return 'Continue'
   }
 }
 
-function activeControlActions(
-  state: ReceiveLifecycleState,
-  controls: readonly V2ActiveReceiveControl[],
-  planKind: MaterializationPlan['kind'],
-): readonly LifecycleActionPresentation[] {
-  if (lifecycleCategory(state) !== 'active') {
-    throw new TypeError('active receive controls require an active lifecycle state')
-  }
-  if (new Set(controls).size !== controls.length) {
-    throw new TypeError('active receive controls contain a duplicate action')
-  }
-  return Object.freeze(controls.map(control => activeControlAction(control, planKind)))
+function discardActionLabel(state: ReceiveLifecycleState): string {
+  if (state.kind === 'resumable-start') return 'Discard download'
+  if (state.kind === 'resumable-receive') return 'Discard task and clean unfinished content'
+  return 'Discard task and delete retained content'
 }
 
-function activeControlAction(
-  control: V2ActiveReceiveControl,
-  planKind: MaterializationPlan['kind'],
-): LifecycleActionPresentation {
-  if (control === 'pause') return action('pause', 'Pause and keep verified progress')
-  return planKind === 'direct-resumable-zip'
-    ? action('stop', 'Stop and retain the unfinished ZIP')
-    : action('stop', 'Stop receiving', true)
+function deleteActionLabel(state: ReceiveLifecycleState): string {
+  if (state.kind === 'resumable-receive') return 'Delete only after ownership is verified'
+  if (state.kind === 'authorization-required' || state.kind === 'target-verification-required' ||
+      state.kind === 'destination-space-required') return 'Verify ownership and delete unfinished ZIP'
+  return 'Delete retained result'
 }
 
 function action(
@@ -590,18 +464,6 @@ function lifecycleOwnsWorkspaceData(state: ReceiveLifecycleState): boolean {
       state.kind === 'restart-required') return false
   if (state.kind === 'published') return state.cleanupState === 'cleanup-pending'
   return state.kind !== 'download-started' || state.attemptKind === 'workspace'
-}
-
-function lifecycleCategory(state: ReceiveLifecycleState): ReceiveLifecyclePresentation['category'] {
-  if (state.kind === 'resumable-start' || state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
-      state.kind === 'waiting-to-save' || state.kind === 'authorization-required' ||
-      state.kind === 'target-verification-required' || state.kind === 'destination-space-required' ||
-      (state.kind === 'download-started' && state.attemptKind === 'workspace')) return 'retained'
-  if (state.kind === 'published' || state.kind === 'partial-directory' ||
-      state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
-      state.kind === 'needs-attention' ||
-      state.kind === 'download-started') return 'terminal'
-  return 'active'
 }
 
 function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan): string {

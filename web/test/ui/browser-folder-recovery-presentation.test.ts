@@ -5,8 +5,8 @@ import { taskFixture } from '../../src/ui/tasks/fixtures'
 import { deliveryFixture } from '../output/browser-delivery-fixture'
 import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
 import { planningFixture } from './fsa-route-activation-fixture'
-import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
-import { retainedPresentationActions } from '../../src/ui/controller/retained-inventory-presentation'
+import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import { retainedBrowserDeliveryActions } from '../../src/ui/browser-receive/fsa/retained-delivery'
 
@@ -53,7 +53,7 @@ describe('folder receiving and local saving presentation', () => {
       lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'restoration-available',
       actions: ['save-staged-files', 'cleanup-staging', 'discard-incomplete-staging', 'catch-up'] }
     const summary = { terminalSettlement: 'pending' } as CompatibleNameRepairSummary
-    expect(retainedPresentationActions(operation, summary)).toEqual(['cleanup-staging', 'discard-incomplete-staging', 'catch-up'])
+    expect(retainedReceiveActions(operation, summary)).toEqual(['cleanup-staging', 'discard-incomplete-staging', 'catch-up'])
   })
 
   it('offers save and cleanup independently and never removes a history record with child obligations', () => {

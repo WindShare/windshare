@@ -1,27 +1,23 @@
-import type { ReceiveOperationDisplay } from '../output/workspace/operation-display'
-import type { FailureFact } from '../diagnostics/incident'
+import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { FailureFact } from '../../diagnostics/incident'
 import type {
   OutputFailureBindingLease,
   OutputFailureSinks,
-} from '../output/diagnostics'
+} from '../../output/diagnostics'
 import type {
   BoundReceiveIntent,
   CandidateMaterializationBinding,
   EnvironmentOffers,
   OfferedArtifactChoice,
   ResolvedArtifactAction,
-} from '../output/planning'
-import type { ReceiveOperationContinuation } from '../output/resume/descriptor'
-import type { ReceiveLifecycleState } from '../output/workspace'
-import type { CompatibleNameRepairProjectionSource } from '../output/file-system-access/compatible-name/coordinator'
-import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
-import type { ArtifactChoiceID, ReceiveIntent } from '../transfer/intent'
-import type { V2PlanExecutionAuthority } from '../transfer/output-session'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-  WorkspaceUsage,
-} from './v2-lifecycle-presentation'
+} from '../../output/planning'
+import type { ReceiveOperationContinuation } from '../../output/resume/descriptor'
+import type { ReceiveLifecycleState } from '../../output/workspace'
+import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
+import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
+import type { ArtifactChoiceID, ReceiveIntent } from '../../transfer/intent'
+import type { V2PlanExecutionAuthority } from '../../transfer/output-session'
+import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from './actions'
 
 export type V2PresentationSourceOutcome =
   | 'picker_refused'
@@ -68,7 +64,7 @@ export interface V2BoundReceiveOperation {
   subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
   readonly activeControls: readonly V2ActiveReceiveControl[]
   readonly outputProgress?: V2DirectZipProgressSource | V2BrowserFolderProgressSource
-  readonly observeCheckpoint?: NonNullable<import('../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
+  readonly observeCheckpoint?: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
   subscribeRepairProjectionActivation?(
@@ -185,8 +181,8 @@ export interface V2RetainedReceiveOperation {
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
   readonly actions: readonly V2RetainedReceiveAction[]
-  readonly sourceRevisionFailures?: import('../output/resume/source-revision-failures').SourceRevisionFailures
-  readonly browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary
+  readonly sourceRevisionFailures?: import('../../output/resume/source-revision-failures').SourceRevisionFailures
+  readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }
@@ -217,7 +213,7 @@ export interface V2RetainedReceiveInventoryPort {
   readRepairSummary?(
     operationId: string,
     signal: AbortSignal,
-  ): PromiseLike<import('../output/file-system-access/compatible-name/model').CompatibleNameRepairSummary | undefined>
+  ): PromiseLike<import('../../output/file-system-access/compatible-name/model').CompatibleNameRepairSummary | undefined>
 }
 
 export interface V2ReceiveCompositionPort {
@@ -231,7 +227,7 @@ export interface V2ReceiveCompositionPort {
     preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
     display?: ReceiveOperationDisplay,
-    recoveryPreference?: import('../output/browser-delivery/model').BrowserRecoveryPreference,
+    recoveryPreference?: import('../../output/browser-delivery/model').BrowserRecoveryPreference,
   ): V2ArtifactPresentationAuthority
 }
 
@@ -239,7 +235,7 @@ export interface V2BrowserFolderProgressSnapshot {
   readonly kind: 'browser-folder'
   readonly operationId: string
   readonly generation: bigint
-  readonly summary: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary
+  readonly summary: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary
 }
 
 export interface V2BrowserFolderProgressSource {

@@ -32,8 +32,8 @@ import type {
   V2BoundReceiveOperation,
   V2DirectZipProgressSnapshot,
   V2LifecycleMutation,
-} from '../../v2-receive-runtime'
-import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../v2-lifecycle-presentation'
+} from '../../../application/receive/contracts'
+import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../../application/receive/actions'
 import { operationDigest } from '../shared'
 import { BrowserDirectZipJournal } from './journal'
 import { traceDirectZipMemberRollback } from './member-rollback-trace'

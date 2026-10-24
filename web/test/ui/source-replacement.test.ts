@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { findReplacementFile } from '../../src/ui/source-replacement/selection'
-import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import { V2JoinedBrowserShare, type V2BrowsePage } from '../../src/ui/v2-gateway'
 import { FakeJoinedShare, identityText } from './v2-receiver-orchestration-fixture'
 

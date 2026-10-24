@@ -13,7 +13,7 @@ import { createBrowserReceiveOperationMutationPort } from '../../src/output/resu
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { presentCompatibleNameRepair } from '../../src/ui/compatible-name-repair-presentation'
 import { listBrowserRetainedOperations } from '../../src/ui/browser-receive/retained'
-import { retainedPresentationActions } from '../../src/ui/controller/retained-inventory-presentation'
+import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
 import { installNativeLookupInterceptor } from './fsa-namespace-atomicity-harness'
 import { createCompatibleNameRecoveryCut, reopenCompatibleNameRecovery, type CompatibleNameRecoveryFixture } from './durable-recovery-harness'
 
@@ -222,7 +222,7 @@ async function retainedActions(fixture: CompatibleNameRecoveryFixture) {
     const operation = inventory.operations.find(value => value.operationId === fixture.operationId)
     if (operation === undefined) throw new TypeError('abandoned receiving operation disappeared from inventory')
     const summary = await ledger.readRepairSummary(fixture.operationId)
-    return retainedPresentationActions(operation, summary)
+    return retainedReceiveActions(operation, summary)
   } finally {
     inventory.close()
     ledger.close()

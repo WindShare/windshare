@@ -6,18 +6,19 @@ import {
   type FailureStage,
   type PresentationExclusionReason,
   type PresentationOutcome,
-} from '../../diagnostics/incident'
-import type { ReceiveLifecycleState } from '../../output/workspace'
-import { TransferPauseRequestedError } from '../../transfer/output-session'
-import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
+} from '../../../diagnostics/incident'
+import type { ReceiveLifecycleState } from '../../../output/workspace'
+import { TransferPauseRequestedError } from '../../../transfer/output-session'
+import { V2TransferFailureSettlementError } from '../../../transfer/settlement/v2-output'
 import {
   classificationForTransferFailure,
   materializeClassifiedTransferFailure,
   type ClassifiedTransferFailure,
-} from '../../transfer/job/failures'
-import type { LifecycleUserAction } from '../v2-lifecycle-presentation'
-import type { V2ReceiverControllerOptions, V2ReceiverTraceEvent } from './contracts'
-import { V2PresentationAttempt } from './presentation-attempt'
+} from '../../../transfer/job/failures'
+import type { LifecycleUserAction } from '../actions'
+import type { ReceiveObservationOptions } from '../observation/contracts'
+import type { V2ReceiverTraceEvent } from '../observation/contracts'
+import { V2PresentationAttempt } from '../observation/attempt'
 
 export type ReceiveFailureTrigger = ClassifiedTransferFailure | FailureFactRef
 
@@ -34,10 +35,10 @@ export class V2ReceivePresentationAttempt extends V2PresentationAttempt {
  * result; this module never starts, cancels, or mutates receive authority.
  */
 export class ActiveReceiveObservability {
-  readonly #incidents: V2ReceiverControllerOptions['incidents']
-  readonly #traceSource: V2ReceiverControllerOptions['trace']
+  readonly #incidents: ReceiveObservationOptions['incidents']
+  readonly #traceSource: ReceiveObservationOptions['trace']
 
-  constructor(options: Pick<V2ReceiverControllerOptions, 'incidents' | 'trace'>) {
+  constructor(options: Pick<ReceiveObservationOptions, 'incidents' | 'trace'>) {
     this.#incidents = options.incidents
     this.#traceSource = options.trace
   }

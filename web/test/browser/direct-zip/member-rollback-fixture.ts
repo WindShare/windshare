@@ -8,7 +8,7 @@ import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contr
 import { createBrowserDirectZipComposition } from '../../../src/ui/browser-receive/direct-zip/production'
 import { readEnvelope } from '../../../src/ui/browser-receive/direct-zip/resources'
 import { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-receive-composition'
-import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import { prepareProductionDirectZipActivation } from './production-activation'
 import { memberRollbackSource, MEMBER_ROLLBACK_PAUSE, type MemberRollbackRevisionMode } from './member-rollback-source'
 

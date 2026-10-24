@@ -1,7 +1,7 @@
 import type { V2CatalogEntry } from '../../catalog/v2-records'
 import type { SourceRevisionFailure } from '../../output/resume/source-revision-failures'
 import type { V2BrowseDirectory, V2BrowsePage, V2JoinedBrowserShare } from '../v2-gateway'
-import type { V2RetainedReceiveOperation } from '../v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../application/receive/contracts'
 
 type ReplacementShare = Pick<V2JoinedBrowserShare, 'descriptor' | 'rootDirectory' | 'childDirectory' | 'page'>
 

@@ -1,44 +1,41 @@
-import { encodeBase64Url } from '../../crypto/bytes'
+import { encodeBase64Url } from '../../../crypto/bytes'
 import type {
   ArtifactChoiceReconcileOutcome,
   MaterializationRouteIdentity,
   OfferedArtifactChoice,
   ResolvedArtifactAction,
-} from '../../output/planning'
-import type { ReceiveIntent } from '../../transfer/intent'
-import type { ArtifactChoiceID } from '../../transfer/intent'
-import type { ProjectionEpoch } from '../../transfer/projection'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
+} from '../../../output/planning'
+import type { ReceiveIntent } from '../../../transfer/intent'
+import type { ArtifactChoiceID } from '../../../transfer/intent'
+import type { ProjectionEpoch } from '../../../transfer/projection'
+import type { ReceivePlanningShare } from '../joined-share'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
-} from '../v2-receive-runtime'
-import type { ActiveReceiveCoordinator } from './active-receive'
+} from '../contracts'
+import type { ActiveReceiveCoordinator } from '../active/coordinator'
 import type {
   V2AuthorityActivationSnapshot,
   V2ActivationCleanupStage,
   V2AuthorityActivationTerminalOutcome,
   V2LiveAuthorityActivationSnapshot,
-} from './activation-model'
+} from './model'
 import {
   advanceActivationCleanup,
   type ActivationCleanupOwner,
   type AuthorityCommitTransaction,
   type ReceiveIntentBinder,
-} from './authority-commit'
-import type {
-  V2AuthorityActivationTraceEvent,
-  V2ControllerWorkflowTraceEvent,
-} from './contracts'
-import type { V2ControllerObservability } from './controller-observability'
-import type { V2PresentationAttempt } from './presentation-attempt'
-import type { V2ActiveProjection } from './projection-observation'
+} from './commit'
+import type { V2AuthorityActivationTraceEvent, V2ControllerWorkflowTraceEvent } from '../observation/contracts'
+import type { V2ControllerObservability } from '../observation/coordinator'
+import type { V2PresentationAttempt } from '../observation/attempt'
+import type { V2ActiveProjection } from '../discovery'
 import type {
   ArtifactChoiceReconciler,
   ArtifactOfferPlanner,
   V2AuthorityProjectionPublication,
-} from './authority-planning'
+} from './planning'
 
 const ACTIVATION_ID_BYTES = 16
 
@@ -47,7 +44,7 @@ export interface AuthorityActivationOptions {
   readonly activeReceive: Pick<ActiveReceiveCoordinator, 'prepareAdoption'>
   readonly observability: V2ControllerObservability
   readonly currentProjection: () => V2ActiveProjection | undefined
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
+  readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly choiceBlocked: () => boolean
   readonly retryProjection: (projection: V2ActiveProjection) => void
   readonly publishProjection: (publication: V2AuthorityProjectionPublication) => void
@@ -80,7 +77,7 @@ export interface AuthorityActivationRecord {
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly controller: AbortController
   readonly attempt: V2PresentationAttempt
-  joined: V2JoinedBrowserShare
+  joined: ReceivePlanningShare
   observationRevision: number
   protocolSessionId: string
   projectionEpoch: ProjectionEpoch
@@ -121,7 +118,7 @@ export interface ActivationCleanupHooks {
 
 export function createAuthorityActivationRecord(input: Readonly<{
   activationId: string
-  joined: V2JoinedBrowserShare
+  joined: ReceivePlanningShare
   choice: OfferedArtifactChoice['choice']
   installedRoute: MaterializationRouteIdentity
   preClickRanking: readonly ArtifactChoiceID[]
@@ -146,7 +143,7 @@ export function createAuthorityActivationRecord(input: Readonly<{
 export function observationMatchesActivation(
   record: AuthorityActivationRecord,
   active: V2ActiveProjection | undefined,
-  joined: V2JoinedBrowserShare | undefined,
+  joined: ReceivePlanningShare | undefined,
 ): active is V2ActiveProjection {
   return active !== undefined && joined !== undefined && active.joined === record.joined &&
     joined === record.joined &&

@@ -5,31 +5,31 @@ import {
   type ArtifactActionsOffer,
   type ArtifactChoice,
   type OfferedArtifactChoice,
-} from '../../output/planning'
-import type { ArtifactChoiceID, ReceiveIntent, SelectionSpec } from '../../transfer/intent'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
-import type { V2BoundReceiveOperation } from '../v2-receive-runtime'
-import type { ActiveReceiveAdoption } from './active-receive'
-import { V2ActivationStateContractError } from './activation-model'
+} from '../../../output/planning'
+import type { ArtifactChoiceID, ReceiveIntent, SelectionSpec } from '../../../transfer/intent'
+import type { ReceivePlanningShare } from '../joined-share'
+import type { V2BoundReceiveOperation } from '../contracts'
+import type { ActiveReceiveAdoption } from '../active/coordinator'
+import { V2ActivationStateContractError } from './model'
 import {
   AuthorityCommitTransaction,
   type AuthorityCommitOutcome,
   type ReceiveIntentBinder,
-} from './authority-commit'
+} from './commit'
 import {
   createAuthorityActivationRecord,
   observationMatchesActivation,
   type AuthorityActivationRecord,
-} from './authority-lifecycle'
-import { planningSubject, type AuthorityPlanningPipeline } from './authority-planning'
-import { StaleReceiveBoundaryError } from './contracts'
-import type { V2ActiveProjection } from './projection-observation'
-import type { V2PresentationAttempt } from './presentation-attempt'
+} from './lifecycle'
+import { planningSubject, type AuthorityPlanningPipeline } from './planning'
+import { StaleReceiveBoundaryError } from '../observation/contracts'
+import type { V2ActiveProjection } from '../discovery'
+import type { V2PresentationAttempt } from '../observation/attempt'
 
 export interface FrozenAuthorityCommitContext {
   readonly currentActivation: () => AuthorityActivationRecord | undefined
   readonly currentProjection: () => V2ActiveProjection | undefined
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
+  readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly joinSuspended: () => boolean
   readonly planning: AuthorityPlanningPipeline
   readonly binder?: ReceiveIntentBinder
@@ -66,7 +66,7 @@ export function createProvisionalAuthorityActivation(input: Readonly<{
 }
 
 /** Snapshots exactly the ranking visible for the selected artifact before trusted UI work. */
-export function displayedArtifactChoiceRanking(
+export function offeredArtifactChoiceRanking(
   offers: ArtifactActionsOffer,
   selected: ArtifactChoice,
 ): readonly ArtifactChoiceID[] {

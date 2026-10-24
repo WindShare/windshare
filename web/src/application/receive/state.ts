@@ -1,0 +1,638 @@
+import { activationOwnsChoice } from './activation/model'
+import { sameReceiveLifecycleState } from '../../output/workspace/lifecycle/observation'
+import {
+  sameArtifactChoiceSemantics,
+  type ArtifactChoice,
+  type ArtifactSizeProjection,
+  type ArtifactOffers,
+  type OfferedArtifactChoice,
+  type ResolvedArtifactAction,
+} from '../../output/planning'
+import {
+  compatibleNameRepairSummary,
+  type CompatibleNameRepairSummary,
+} from '../../output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
+import {
+  isTerminalLifecycleState,
+  type ReceiveLifecycleState,
+} from '../../output/workspace'
+import type {
+  ArtifactSpec,
+  MaterializationPlan,
+  ReceiveIntent,
+} from '../../transfer/intent'
+import type { SelectionProjectionState } from '../../transfer/projection'
+import type { TransferJobResult } from '../../transfer/job/contract'
+import { PersistentWriterOpenPauseRequestedError } from '../../transfer/settlement/persistent-file-transaction'
+import type { V2AuthorityActivationSnapshot } from './activation/model'
+import { type V2ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
+import type { V2DirectZipProgressSnapshot } from './contracts'
+
+const INACTIVE_ACTIVATION: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
+
+export interface ReceiveRuntimeSnapshot {
+  readonly transferResult: TransferResultProjection | null
+  readonly activeOfferedChoice: OfferedArtifactChoice | null
+  readonly projectionRevision: number | null
+  readonly projection: SelectionProjectionState | null
+  readonly offers: ArtifactOffers | null
+  readonly activation: V2AuthorityActivationSnapshot
+  readonly chosenChoice: ArtifactChoice | null
+  readonly chosenSizeProjection: ArtifactSizeProjection | null
+  readonly resolvedArtifact: ArtifactSpec | null
+  readonly receiveIntent: ReceiveIntent | null
+  readonly plan: MaterializationPlan | null
+  readonly lifecycle: ReceiveLifecycleState | null
+  readonly repairSummary: CompatibleNameRepairSummary | null
+  readonly recoverySummary: RecoverySummary | null
+  readonly writerOpenPause: PersistentWriterOpenPauseFact | null
+  readonly workspaceUsage: WorkspaceUsage | null
+  readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly receiveInterruption: ReceiveSettlementWait | null
+  readonly browserFolderProgress?: import('./contracts').V2BrowserFolderProgressSnapshot | null
+  readonly directZipProgress: V2DirectZipProgressSnapshot | null
+}
+
+export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
+  transferResult: null,
+  activeOfferedChoice: null,
+  projectionRevision: null,
+  projection: null,
+  offers: null,
+  activation: INACTIVE_ACTIVATION,
+  chosenChoice: null,
+  chosenSizeProjection: null,
+  resolvedArtifact: null,
+  receiveIntent: null,
+  plan: null,
+  lifecycle: null,
+  repairSummary: null,
+  recoverySummary: null,
+  writerOpenPause: null,
+  workspaceUsage: null,
+  activeControls: Object.freeze([]),
+  receiveInterruption: null,
+  directZipProgress: null,
+      browserFolderProgress: null,
+})
+
+export type TransferResultProjection = Pick<
+  TransferJobResult,
+  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary' | 'recoverySummary' |
+    'abortReason'
+>
+
+/**
+ * Owns the observed task facts and their generation fences. Durable transitions
+ * still belong to output providers; rendering is a passive subscriber.
+ */
+export class ReceiveRuntimeState {
+  readonly #listeners = new Set<() => void>()
+  #snapshot = EMPTY_RECEIVE_RUNTIME
+  #activeOfferedChoice: OfferedArtifactChoice | null = null
+  #resolvedAction: ResolvedArtifactAction | null = null
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  readonly getSnapshot = (): ReceiveRuntimeSnapshot => this.#snapshot
+
+  updateProjection(
+    revision: number,
+    state: SelectionProjectionState,
+    offers: ArtifactOffers,
+  ): boolean {
+    assertObservationRevision(revision)
+    const currentRevision = this.#snapshot.projectionRevision
+    if (currentRevision !== null && revision <= currentRevision) return false
+    assertOffersBelongToProjection(state, offers)
+
+    if (activationOwnsChoice(this.#snapshot.activation)) {
+      this.#activeOfferedChoice =
+        findOfferedChoice(offers, this.#snapshot.activation.choice) ?? this.#activeOfferedChoice
+    }
+
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      activeOfferedChoice: this.#activeOfferedChoice,
+      projectionRevision: revision,
+      projection: state,
+      offers,
+    }))
+    return true
+  }
+
+  updateActivation(activation: V2AuthorityActivationSnapshot): void {
+    const previous = this.#snapshot.activation
+    if (activationOwnsChoice(activation)) {
+      const activationChanged = !activationOwnsChoice(previous) ||
+        previous.activationId !== activation.activationId
+      if (activationChanged) {
+        this.#activeOfferedChoice = findOfferedChoice(this.#snapshot.offers, activation.choice)
+      } else {
+        this.#activeOfferedChoice =
+          findOfferedChoice(this.#snapshot.offers, activation.choice) ?? this.#activeOfferedChoice
+      }
+    } else {
+      this.#activeOfferedChoice = null
+    }
+
+    const resolvedAction = resolvedActionFromActivation(activation)
+    if (resolvedAction !== null) {
+      this.#resolvedAction = resolvedAction
+    } else if (activation.kind !== 'terminal' || activation.outcome.kind !== 'bound-operation') {
+      this.#resolvedAction = null
+    }
+    const choicePresented = activationOwnsChoice(activation) ||
+      (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
+    let chosenChoice = this.#snapshot.chosenChoice
+    let chosenSizeProjection = this.#snapshot.chosenSizeProjection
+    if (this.#snapshot.receiveIntent === null) {
+      chosenChoice = choicePresented ? activation.choice : null
+      chosenSizeProjection = choicePresented
+        ? this.#activeOfferedChoice?.sizeProjection ?? chosenSizeProjection : null
+    }
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      activation,
+      activeOfferedChoice: this.#activeOfferedChoice,
+      chosenChoice,
+      chosenSizeProjection,
+      resolvedArtifact: this.#snapshot.receiveIntent?.artifact ?? this.#resolvedAction?.artifact ?? null,
+    }))
+  }
+
+  adoptReceiveIntent(
+    choice: ArtifactChoice,
+    intent: ReceiveIntent,
+    lifecycle?: ReceiveLifecycleState,
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
+  ): boolean {
+    return this.adoptReceiveIntentAtomically(
+      choice,
+      intent,
+      () => undefined,
+      lifecycle,
+      workspaceUsage,
+      activeControls,
+      repairSummary,
+    )
+  }
+
+  adoptReceiveIntentAtomically(
+    choice: ArtifactChoice,
+    intent: ReceiveIntent,
+    commitOwnership: () => void,
+    lifecycle?: ReceiveLifecycleState,
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
+  ): boolean {
+    const activation = this.#snapshot.activation
+    if (activation.kind === 'inactive' ||
+        !sameArtifactChoiceSemantics(activation.choice, choice)) return false
+    assertIntentMatchesChoice(choice, intent)
+    if (this.#resolvedAction !== null &&
+        (!sameArtifactChoiceSemantics(this.#resolvedAction.choice, choice) ||
+         this.#resolvedAction.artifact.digest !== intent.artifact.digest)) {
+      throw new TypeError('bound receive intent does not match the coordinator-owned resolved action')
+    }
+    const snapshot = this.#buildLifecycleSnapshot({
+      ...this.#snapshot,
+      chosenChoice: choice,
+      resolvedArtifact: intent.artifact,
+      receiveIntent: intent,
+      transferResult: null,
+      plan: intent.plan,
+      directZipProgress: null,
+      browserFolderProgress: null,
+      repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      recoverySummary: null,
+      writerOpenPause: null,
+      activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
+    }, lifecycle ?? null, workspaceUsage)
+    this.#publishWithOwnership(snapshot, commitOwnership)
+    return true
+  }
+
+  adoptRetainedReceiveIntent(
+    intent: ReceiveIntent,
+    lifecycle: ReceiveLifecycleState,
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
+  ): void {
+    this.adoptRetainedReceiveIntentAtomically(
+      intent,
+      lifecycle,
+      () => undefined,
+      workspaceUsage,
+      activeControls,
+      repairSummary,
+    )
+  }
+
+  adoptRetainedReceiveIntentAtomically(
+    intent: ReceiveIntent,
+    lifecycle: ReceiveLifecycleState,
+    commitOwnership: () => void,
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
+  ): void {
+    if (lifecycle.operationId !== intent.operationId ||
+        lifecycle.receiveIntentDigest !== intent.digest) {
+      throw new TypeError('retained lifecycle does not belong to its validated receive intent')
+    }
+    const snapshot = this.#buildLifecycleSnapshot({
+      ...this.#snapshot,
+      activation: INACTIVE_ACTIVATION,
+      activeOfferedChoice: null,
+      chosenChoice: null,
+      chosenSizeProjection: null,
+      resolvedArtifact: intent.artifact,
+      receiveIntent: intent,
+      transferResult: null,
+      plan: intent.plan,
+      directZipProgress: null,
+      browserFolderProgress: null,
+      repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      recoverySummary: null,
+      writerOpenPause: null,
+      activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
+    }, lifecycle, workspaceUsage)
+    this.#activeOfferedChoice = null
+    this.#resolvedAction = null
+    this.#publishWithOwnership(snapshot, commitOwnership)
+  }
+
+  observeLifecycle(state: ReceiveLifecycleState): boolean {
+    const intent = this.#snapshot.receiveIntent
+    const current = this.#snapshot.lifecycle
+    if (intent === null || state.operationId !== intent.operationId ||
+        state.receiveIntentDigest !== intent.digest ||
+        (current !== null && state.generation <= current.generation)) return false
+    // A committed state is a durable observation, not permission to clear interruption
+    // controls or release the still-running writer and its connectivity lease.
+    this.#publishLifecycleSnapshot(this.#snapshot, state, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  settleLifecycle(
+    state: ReceiveLifecycleState,
+    workspaceUsage?: WorkspaceUsage | null,
+    activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary | null,
+    recoverySummary?: RecoverySummary | null,
+  ): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || state.operationId !== intent.operationId ||
+        state.receiveIntentDigest !== intent.digest) return false
+    const current = this.#snapshot.lifecycle
+    if (current !== null && (state.generation < current.generation ||
+        (state.generation === current.generation && !sameReceiveLifecycleState(state, current)))) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      repairSummary: nextCompatibleNameRepair(
+        this.#snapshot.repairSummary,
+        repairSummary,
+      ),
+      // Recovery costs authenticate one exact stable generation and cannot flow
+      // through a later lifecycle observation without a new checkpoint snapshot.
+      recoverySummary: recoverySummary ?? null,
+      writerOpenPause: null,
+      activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
+    }, state, workspaceUsage)
+    return true
+  }
+
+  updateActiveControls(controls: readonly V2ActiveReceiveControl[]): boolean {
+    const lifecycle = this.#snapshot.lifecycle
+    if (lifecycle === null) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      activeControls: Object.freeze([...controls]),
+    }, lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateReceiveInterruption(interruption: ReceiveSettlementWait | null): boolean {
+    const lifecycle = this.#snapshot.lifecycle
+    if (lifecycle === null) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      receiveInterruption: interruption === null ? null : Object.freeze({ ...interruption }),
+    }, lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateBrowserFolderProgress(progress: import('./contracts').V2BrowserFolderProgressSnapshot): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.plan.kind !== 'direct-tree' ||
+        progress.operationId !== intent.operationId ||
+        progress.summary.policy.operationId !== intent.operationId ||
+        progress.summary.policy.receiveIntentDigest !== intent.digest) return false
+    const current = this.#snapshot.browserFolderProgress
+    if (current != null && progress.generation <= current.generation) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot, browserFolderProgress: Object.freeze({ ...progress }),
+    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateDirectZipProgress(progress: V2DirectZipProgressSnapshot): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.plan.kind !== 'direct-resumable-zip' ||
+        progress.operationId !== intent.operationId) return false
+    requireDirectZipProgress(progress)
+    const current = this.#snapshot.directZipProgress
+    if (current !== null && progress.generation <= current.generation) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      directZipProgress: Object.freeze({ ...progress }),
+    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateRepairSummary(
+    operationId: string,
+    summary: CompatibleNameRepairSummary,
+  ): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.operationId !== operationId) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      repairSummary: nextCompatibleNameRepair(this.#snapshot.repairSummary, summary),
+    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  adoptTransferResult(result: TransferResultProjection): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || result.intent.operationId !== intent.operationId ||
+        result.intent.digest !== intent.digest ||
+        result.lifecycle.operationId !== intent.operationId ||
+        result.lifecycle.receiveIntentDigest !== intent.digest) return false
+    const currentLifecycle = this.#snapshot.lifecycle
+    if (currentLifecycle !== null && result.lifecycle.generation < currentLifecycle.generation) {
+      return false
+    }
+    // An absent terminal summary is authoritative only after the output layer has
+    // verified and removed an empty repair pair. Carrying the earlier live notice
+    // would falsely qualify an ordinary terminal result.
+    const terminalRepairSummary = result.repairSummary ??
+      (isTerminalLifecycleState(result.lifecycle) ? null : undefined)
+    const repairSummary = nextCompatibleNameRepair(
+      this.#snapshot.repairSummary,
+      terminalRepairSummary,
+    )
+    const recoverySummary = result.recoverySummary ?? null
+    const writerOpenPause = persistentWriterOpenPauseFact(result.abortReason)
+    const snapshot = this.#buildLifecycleSnapshot({
+      ...this.#snapshot,
+      repairSummary,
+      recoverySummary,
+      writerOpenPause,
+      receiveInterruption: null,
+    }, result.lifecycle, this.#snapshot.workspaceUsage)
+    this.#publish(Object.freeze({
+      ...snapshot,
+      transferResult: Object.freeze({ ...result }),
+    }))
+    return true
+  }
+
+  clearTask(): void {
+    const { projectionRevision, projection, offers } = this.#snapshot
+    this.#activeOfferedChoice = null
+    this.#resolvedAction = null
+    this.#publish(Object.freeze({ ...EMPTY_RECEIVE_RUNTIME,
+      projectionRevision, projection, offers }))
+  }
+
+  resetDraft(): void {
+    // A replaceable catalog estimate owns no committed output or progress.
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      projectionRevision: null,
+      projection: null,
+      offers: null,
+    }))
+  }
+
+  reset(): void {
+    this.#activeOfferedChoice = null
+    this.#resolvedAction = null
+    this.#publish(EMPTY_RECEIVE_RUNTIME)
+  }
+
+  close(): void {
+    this.reset()
+    this.#listeners.clear()
+  }
+
+  #publishLifecycleSnapshot(
+    base: ReceiveRuntimeSnapshot,
+    lifecycle: ReceiveLifecycleState | null,
+    workspaceUsage: WorkspaceUsage | null | undefined,
+  ): void {
+    this.#publish(this.#buildLifecycleSnapshot(base, lifecycle, workspaceUsage))
+  }
+
+  #buildLifecycleSnapshot(
+    base: ReceiveRuntimeSnapshot,
+    lifecycle: ReceiveLifecycleState | null,
+    workspaceUsage: WorkspaceUsage | null | undefined,
+  ): ReceiveRuntimeSnapshot {
+    const artifact = base.resolvedArtifact
+    const plan = base.plan
+    if (lifecycle === null) {
+      return Object.freeze({
+        ...base,
+        lifecycle: null,
+        recoverySummary: null,
+        writerOpenPause: null,
+        workspaceUsage: null,
+        activeControls: Object.freeze([]),
+        receiveInterruption: null,
+      })
+    }
+    if (artifact === null || plan === null) {
+      throw new TypeError('lifecycle facts require a bound artifact and plan')
+    }
+    return Object.freeze({
+      ...base,
+      lifecycle,
+      recoverySummary: matchingRecoverySummary(lifecycle, base.recoverySummary),
+      workspaceUsage: workspaceUsage ?? null,
+    })
+  }
+
+  #publishWithOwnership(snapshot: ReceiveRuntimeSnapshot, commitOwnership: () => void): void {
+    // Ownership is installed before observers can see the corresponding intent.
+    commitOwnership()
+    this.#publish(snapshot)
+  }
+
+  #publish(snapshot: ReceiveRuntimeSnapshot): void {
+    this.#snapshot = snapshot
+    for (const listener of this.#listeners) {
+      try { listener() } catch {
+        // A view or diagnostics subscriber cannot invalidate accepted task facts.
+      }
+    }
+  }
+}
+
+function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPauseFact | null {
+  if (!(reason instanceof PersistentWriterOpenPauseRequestedError)) return null
+  return Object.freeze({
+    materializationRelativePath: Object.freeze([...reason.materializationRelativePath]),
+    cost: Object.freeze({ ...reason.cost }),
+    purpose: reason.purpose,
+  })
+}
+
+function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
+  if (progress.operationId.length === 0 || progress.generation < 0n ||
+      progress.receivedSelectedBytes < 0n || progress.writtenSelectedBytes < 0n ||
+      progress.safeResumeBytes < 0n || progress.safeResumeBytes > progress.writtenSelectedBytes ||
+      progress.writtenSelectedBytes > progress.receivedSelectedBytes ||
+      (progress.resumeTemporarySpaceUpperBound !== undefined &&
+       progress.resumeTemporarySpaceUpperBound < 0n)) {
+    throw new TypeError('direct ZIP progress snapshot is invalid')
+  }
+}
+
+function matchingRecoverySummary(
+  lifecycle: ReceiveLifecycleState,
+  summary: RecoverySummary | null,
+): RecoverySummary | null {
+  if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set') return null
+  if (summary === null) return null
+  if (summary.lifecycleGeneration !== lifecycle.generation ||
+      summary.checkpointSetDigest !== lifecycle.checkpointSetDigest ||
+      summary.completedFileCount !== lifecycle.completedFileCount ||
+      summary.completedBytes !== lifecycle.completedBytes) {
+    throw new TypeError('recovery summary escaped its lifecycle generation')
+  }
+  return summary
+}
+
+function assertObservationRevision(revision: number): void {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new TypeError('projection observation revision must be a non-negative safe integer')
+  }
+}
+
+function assertOffersBelongToProjection(
+  state: SelectionProjectionState,
+  offers: ArtifactOffers,
+): void {
+  if (offers.projectionEpoch !== state.projection.epoch ||
+      offers.selectionDigest !== state.projection.selectionDigest) {
+    throw new TypeError('artifact offers do not belong to the supplied projection observation')
+  }
+}
+
+function assertIntentMatchesChoice(choice: ArtifactChoice, intent: ReceiveIntent): void {
+  if (choice.artifactKind !== intent.artifact.kind || choice.plan.kind !== intent.plan.kind) {
+    throw new TypeError('bound receive intent does not match the coordinator-owned artifact choice')
+  }
+}
+
+function findOfferedChoice(
+  offers: ArtifactOffers | null,
+  choice: ArtifactChoice,
+): OfferedArtifactChoice | null {
+  if (offers?.kind !== 'artifact-actions') return null
+  return [offers.primary, ...offers.alternatives].find((candidate) =>
+    sameArtifactChoiceSemantics(candidate.choice, choice)) ?? null
+}
+
+function snapshotCompatibleNameRepair(
+  summary: CompatibleNameRepairSummary | undefined,
+): CompatibleNameRepairSummary | null {
+  return summary === undefined ? null : compatibleNameRepairSummary(summary)
+}
+
+function nextCompatibleNameRepair(
+  current: CompatibleNameRepairSummary | null,
+  next: CompatibleNameRepairSummary | null | undefined,
+): CompatibleNameRepairSummary | null {
+  if (next === undefined) return current
+  if (next === null) return null
+  const snapshot = compatibleNameRepairSummary(next)
+  if (current !== null) assertCompatibleNameRepairProgression(current, snapshot)
+  return snapshot
+}
+
+function assertCompatibleNameRepairProgression(
+  current: CompatibleNameRepairSummary,
+  next: CompatibleNameRepairSummary,
+): void {
+  if (next.committedCount < current.committedCount) {
+    throw new TypeError('compatible-name repair count cannot move backward')
+  }
+  if (next.placement !== current.placement ||
+      next.pairDisplayNames.script !== current.pairDisplayNames.script ||
+      next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar) {
+    throw new TypeError('compatible-name restoration identity cannot change')
+  }
+  for (let index = 0; index < current.logicalPathSample.length; index += 1) {
+    if (!sameLogicalPath(current.logicalPathSample[index], next.logicalPathSample[index])) {
+      throw new TypeError('compatible-name logical path sample cannot be rewritten')
+    }
+  }
+  const currentFooter = current.latestObservedFooter
+  const nextFooter = next.latestObservedFooter
+  if (currentFooter === undefined) return
+  if (nextFooter === undefined || nextFooter.committedCount < currentFooter.committedCount) {
+    throw new TypeError('compatible-name sidecar checkpoint cannot move backward')
+  }
+  if (currentFooter.state !== 'active' &&
+      (nextFooter.state !== currentFooter.state ||
+       nextFooter.committedCount !== currentFooter.committedCount ||
+       next.committedCount !== current.committedCount ||
+       next.logicalPathSample.length !== current.logicalPathSample.length)) {
+    throw new TypeError('compatible-name terminal sidecar checkpoint is immutable')
+  }
+  if (current.terminalSettlement === 'complete' && next.terminalSettlement !== 'complete') {
+    throw new TypeError('completed compatible-name catch-up cannot become pending')
+  }
+}
+
+function sameLogicalPath(
+  first: readonly string[] | undefined,
+  second: readonly string[] | undefined,
+): boolean {
+  return first !== undefined && second !== undefined && first.length === second.length &&
+    first.every((component, index) => component === second[index])
+}
+
+function resolvedActionFromActivation(
+  activation: V2AuthorityActivationSnapshot,
+): ResolvedArtifactAction | null {
+  switch (activation.kind) {
+    case 'waiting-authority':
+      return activation.resolution.kind === 'resolved'
+        ? activation.resolution.action
+        : null
+    case 'committing':
+      return activation.action
+    case 'inactive':
+    case 'waiting-resolution':
+    case 'retry-required':
+    case 'cleanup-required':
+    case 'terminal':
+      return null
+  }
+}

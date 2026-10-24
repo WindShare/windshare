@@ -1,14 +1,9 @@
+import { receiveRepairMode, terminalRepairLifecycle, type CompatibleNameRepairActionMode } from '../application/receive/repair'
 import {
   compatibleNameRepairSummary,
   type CompatibleNameRepairSummary,
 } from '../output/file-system-access/compatible-name/model'
 import type { ReceiveLifecycleState } from '../output/workspace'
-
-export type CompatibleNameRepairActionMode =
-  | 'receiving-notice'
-  | 'abnormal-stop-recovery'
-  | 'catch-up-required'
-  | 'routine-restoration'
 
 export type CompatibleNameRepairPresentationContext =
   | 'receive-lifecycle'
@@ -43,7 +38,8 @@ export function presentCompatibleNameRepair(input: Readonly<{
      input.state.kind === 'finalizing-tree' || input.state.kind === 'committing-atomic' ||
      input.state.kind === 'preparing' || input.state.kind === 'intent-frozen')
   const terminal = input.state !== null && terminalRepairLifecycle(input.state)
-  const actionMode = compatibleNameRepairActionMode(live, terminal, summary)
+  const actionMode = receiveRepairMode(input.state, summary,
+    input.context === 'retained-operation' ? 'retained-operation' : 'live-operation')
   const logicalPathSample = Object.freeze(summary.logicalPathSample.map(path => path.join('/')))
   const commandAvailable = summary.committedCount > 0 &&
     (actionMode === 'abnormal-stop-recovery' || actionMode === 'routine-restoration')
@@ -72,38 +68,6 @@ export function presentCompatibleNameRepair(input: Readonly<{
     actionTitle: repairActionTitle(actionMode),
     actionDescription: repairActionDescription(actionMode),
   })
-}
-
-export function hasValidatedTerminalCompatibleNameRepair(
-  summary: CompatibleNameRepairSummary,
-): boolean {
-  const footer = summary.latestObservedFooter
-  return summary.committedCount > 0 && summary.sidecarSync === 'current' &&
-    summary.terminalSettlement === 'complete' &&
-    footer !== undefined && footer.state !== 'active' &&
-    footer.committedCount === summary.committedCount
-}
-
-function compatibleNameRepairActionMode(
-  live: boolean,
-  terminal: boolean,
-  summary: CompatibleNameRepairSummary,
-): CompatibleNameRepairActionMode {
-  if (live) return 'receiving-notice'
-  if (summary.sidecarSync === 'pending' || summary.terminalSettlement === 'pending') {
-    return 'catch-up-required'
-  }
-  if (!terminal) return 'abnormal-stop-recovery'
-  return hasValidatedTerminalCompatibleNameRepair(summary)
-    ? 'routine-restoration'
-    : 'catch-up-required'
-}
-
-function terminalRepairLifecycle(state: ReceiveLifecycleState): boolean {
-  return state.kind === 'published' || state.kind === 'partial-directory' ||
-    state.kind === 'restart-required' || state.kind === 'discarded' ||
-    state.kind === 'needs-attention' ||
-    state.kind === 'download-started'
 }
 
 function repairActionTitle(mode: CompatibleNameRepairActionMode): string {

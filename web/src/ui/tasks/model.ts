@@ -1,11 +1,11 @@
 import type { ReceiveLifecycleState } from '../../output/workspace'
 import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
-import type { LifecycleUserAction } from '../v2-lifecycle-presentation'
+import type { LifecycleUserAction } from '../../application/receive/actions'
 import type { V2ReceiverProgress } from '../v2-model'
-import type { V2DirectZipProgressSnapshot, V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../v2-receive-runtime'
+import type { V2DirectZipProgressSnapshot, V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../application/receive/contracts'
 
-export type TaskRecoveryReadiness = import('../controller/retained-readiness').RetainedContinuationReadiness
+export type TaskRecoveryReadiness = import('../../application/receive/retained/readiness').RetainedContinuationReadiness
 
 export interface TaskBlocking {
   readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'share-ended' | 'storage'

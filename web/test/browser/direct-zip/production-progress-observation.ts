@@ -1,4 +1,4 @@
-import type { V2BoundReceiveOperation, V2DirectZipProgressSnapshot } from '../../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation, V2DirectZipProgressSnapshot } from '../../../src/application/receive/contracts'
 import { presentDirectZipProgress } from '../../../src/ui/v2-progress-presentation'
 import { presentReceiveLifecycle } from '../../../src/ui/v2-lifecycle-presentation'
 import type { ReceiveLifecycleState } from '../../../src/output/workspace/state'

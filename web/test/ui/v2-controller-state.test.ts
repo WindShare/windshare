@@ -12,13 +12,13 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { ArtifactPlanningContractError } from '../../src/output/planning'
-import { V2ActivationStateContractError } from '../../src/ui/controller/activation-model'
-import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
-import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
-import { V2PresentationAttempt } from '../../src/ui/controller/presentation-attempt'
+import { V2ActivationStateContractError } from '../../src/application/receive/activation/model'
+import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import type { V2ReceiverIncidentPort } from '../../src/application/receive/observation/contracts'
+import { V2PresentationAttempt } from '../../src/application/receive/observation/attempt'
 import { projectBrowsePage } from '../../src/ui/v2-controller-state'
 import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
-import type { V2RouteCommitResult } from '../../src/ui/v2-receive-runtime'
+import type { V2RouteCommitResult } from '../../src/application/receive/contracts'
 
 describe('v2 browse page presentation', () => {
   it('reports only visible selection facts and leaves artifact semantics to projection', () => {

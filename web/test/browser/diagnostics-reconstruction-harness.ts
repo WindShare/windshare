@@ -32,14 +32,14 @@ import {
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import { FSAReceiveOperation } from '../../src/ui/browser-receive/fsa'
-import { RetainedInventoryCoordinator } from '../../src/ui/controller/retained-inventory'
+import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
 import type { V2ReceiverDiagnosticSnapshot } from '../../src/ui/v2-model'
 import type {
   V2ReceiveCompositionPort,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import {
   createOutputTraceSource,
   createProtocolTraceSource,

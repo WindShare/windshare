@@ -1,6 +1,6 @@
 import type { OutputDiagnosticsPorts } from '../../output/diagnostics'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../output/resume/reopen-authority'
-import type { V2RetainedReceiveActionResult } from '../v2-receive-runtime'
+import type { V2RetainedReceiveActionResult } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import { WorkspaceReceiveOperation } from './workspace-operation'
 import { handoffRetainedWorkspacePackage } from './workspace-publication'

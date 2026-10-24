@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { V2ReceiverTraceEvent } from '../../src/ui/controller/contracts'
+import type { V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import {
   FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT, controllerFor,
   identityText, next, resetOrchestrationTestEnvironment, stableLifecycle, startTransfer, turns, waitFor,

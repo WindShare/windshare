@@ -1,7 +1,7 @@
 import { TargetOwnershipUnknownError } from '../../output/persistent-tree/errors'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
-import type { WorkspaceUsage } from '../v2-lifecycle-presentation'
-import type { V2LifecycleMutation } from '../v2-receive-runtime'
+import type { WorkspaceUsage } from '../../application/receive/actions'
+import type { V2LifecycleMutation } from '../../application/receive/contracts'
 import { isWorkspaceTerminal } from './shared'
 
 export type WorkspaceReceiveAdmission =

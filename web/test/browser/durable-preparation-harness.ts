@@ -45,7 +45,7 @@ import {
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import {
   WorkspaceOperationStages,
   type WorkspaceStageTraceEvent,

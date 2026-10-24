@@ -1,13 +1,5 @@
-import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
+import type { V2RetainedReceiveInventorySnapshot } from '../application/receive/retained/model'
 import type { V2OutputPresentationSnapshot } from './v2-output'
-import type {
-  V2RetainedReceiveAction,
-  V2RetainedReceiveOperation,
-} from './v2-receive-runtime'
-
-export type V2RetainedReceivePresentationOperation = Readonly<
-  V2RetainedReceiveOperation & { readonly repairSummary?: CompatibleNameRepairSummary }
->
 
 /** Shell navigation is separate from the receive lifecycle owned by W2-E. */
 export type V2ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
@@ -84,31 +76,6 @@ export type V2PreviewSnapshot =
       readonly name: string
       readonly message: string
     }
-
-export interface V2PendingRetainedReceiveActionSnapshot {
-  readonly operationId: string
-  readonly action: V2RetainedReceiveAction
-}
-
-export type V2RetainedReceiveInventorySnapshot =
-  | Readonly<{
-      kind: 'loading'
-      operations: readonly V2RetainedReceivePresentationOperation[]
-      error: null
-      pending: null
-    }>
-  | Readonly<{
-      kind: 'ready'
-      operations: readonly V2RetainedReceivePresentationOperation[]
-      error: null
-      pending: V2PendingRetainedReceiveActionSnapshot | null
-    }>
-  | Readonly<{
-      kind: 'failed'
-      operations: readonly V2RetainedReceivePresentationOperation[]
-      error: string
-      pending: null
-    }>
 
 export interface V2ControllerDiagnosticSnapshot {
   readonly generation: bigint
@@ -195,13 +162,6 @@ export interface V2ReceiverSnapshot {
   readonly output: V2OutputPresentationSnapshot
   readonly retained: V2RetainedReceiveInventorySnapshot
 }
-
-export const EMPTY_V2_RETAINED_INVENTORY: V2RetainedReceiveInventorySnapshot = Object.freeze({
-  kind: 'loading',
-  operations: Object.freeze([]),
-  error: null,
-  pending: null,
-})
 
 export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   phase: 'receiving',

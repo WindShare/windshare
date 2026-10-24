@@ -35,8 +35,8 @@ import type {
   V2ReceiveCompositionPort,
   V2RouteCommitInput,
   V2RouteCommitResult,
-} from './v2-receive-runtime'
-import { V2PresentationSourceError } from './v2-receive-runtime'
+} from '../application/receive/contracts'
+import { V2PresentationSourceError } from '../application/receive/contracts'
 import type { BrowserReceiveWindow } from './browser-receive/contracts'
 import { FSAArtifactPresentationAuthority } from './browser-receive/fsa-route'
 import { BrowserFolderDeliveryProgress } from './browser-receive/fsa/folder-delivery'

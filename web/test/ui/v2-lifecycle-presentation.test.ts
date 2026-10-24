@@ -11,7 +11,7 @@ import {
   presentNewReceiveOperation,
   presentReceiveLifecycle,
 } from '../../src/ui/v2-lifecycle-presentation'
-import type { V2DirectZipProgressSnapshot } from '../../src/ui/v2-receive-runtime'
+import type { V2DirectZipProgressSnapshot } from '../../src/application/receive/contracts'
 
 const ORIGINAL = { kind: 'original-file', suggestedName: 'report.txt' } as ArtifactSpec
 const ZIP = { kind: 'zip-archive', suggestedName: 'photos.zip' } as ArtifactSpec

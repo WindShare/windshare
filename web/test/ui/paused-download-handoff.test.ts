@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { composeTasks } from '../../src/ui/experience/task-composition'
-import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import {
   FakeReceiveComposition, FakeJoinedShare, WORKSPACE_ENVIRONMENT, controllerFor,
   startTransfer, next, identityText, waitFor, turns, deferred, resetOrchestrationTestEnvironment,

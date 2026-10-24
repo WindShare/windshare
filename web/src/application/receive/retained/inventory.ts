@@ -1,16 +1,14 @@
-import type { V2RetainedReceivePresentationOperation } from '../v2-model'
-import type { V2RetainedCompatibleNameRepairSource } from './contracts'
-import { compatibleNameRepairSummary, type CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
-import {
-  hasValidatedTerminalCompatibleNameRepair,
-} from '../compatible-name-repair-presentation'
+import type { RetainedReceiveOperationSnapshot } from './model'
+import type { V2RetainedCompatibleNameRepairSource } from '../observation/contracts'
+import { compatibleNameRepairSummary, type CompatibleNameRepairSummary } from '../../../output/file-system-access/compatible-name/model'
+import { hasValidatedTerminalCompatibleNameRepair } from '../repair'
 import type {
   V2RetainedReceiveInventory,
   V2RetainedReceiveAction,
   V2RetainedReceiveOperation,
-} from '../v2-receive-runtime'
+} from '../contracts'
 
-export function retainedPresentationActions(
+export function retainedReceiveActions(
   operation: V2RetainedReceiveOperation,
   summary: CompatibleNameRepairSummary | undefined,
 ): readonly V2RetainedReceiveAction[] {
@@ -32,7 +30,7 @@ export function sameRetainedActions(
   return left.length === right.length && left.every((action, index) => action === right[index])
 }
 
-export function retainedPresentationContinuation(
+export function retainedReceiveContinuation(
   operation: V2RetainedReceiveOperation,
   summary: CompatibleNameRepairSummary | undefined,
 ): V2RetainedReceiveOperation['continuation'] {
@@ -48,21 +46,21 @@ export function retainedPresentationContinuation(
     : operation.continuation
 }
 
-export interface PresentedRetainedInventory {
+export interface ResolvedRetainedInventory {
   readonly source: V2RetainedReceiveInventory
-  readonly operations: readonly V2RetainedReceivePresentationOperation[]
+  readonly operations: readonly RetainedReceiveOperationSnapshot[]
   readonly sourceOperations: ReadonlyMap<
-    V2RetainedReceivePresentationOperation,
+    RetainedReceiveOperationSnapshot,
     V2RetainedReceiveOperation
   >
 }
 
 
-export async function presentRetainedInventory(
+export async function resolveRetainedInventory(
   loaded: V2RetainedReceiveInventory,
   signal: AbortSignal,
   repairSource: V2RetainedCompatibleNameRepairSource | undefined,
-): Promise<PresentedRetainedInventory> {
+): Promise<ResolvedRetainedInventory> {
   const summaries = repairSource === undefined
     ? loaded.operations.map(() => undefined)
     : await Promise.all(loaded.operations.map(operation =>
@@ -72,21 +70,21 @@ export async function presentRetainedInventory(
   signal.throwIfAborted()
 
   const sourceOperations = new Map<
-    V2RetainedReceivePresentationOperation,
+    RetainedReceiveOperationSnapshot,
     V2RetainedReceiveOperation
   >()
-  const operations: V2RetainedReceivePresentationOperation[] = []
+  const operations: RetainedReceiveOperationSnapshot[] = []
   loaded.operations.forEach((operation, index) => {
     const summary = summaries[index]
     const durableSummary = summary === undefined
       ? undefined
       : compatibleNameRepairSummary(summary)
-    const actions = retainedPresentationActions(
+    const actions = retainedReceiveActions(
       operation,
       durableSummary,
     )
-    const continuation = retainedPresentationContinuation(operation, durableSummary)
-    let presented: V2RetainedReceivePresentationOperation
+    const continuation = retainedReceiveContinuation(operation, durableSummary)
+    let presented: RetainedReceiveOperationSnapshot
     if (durableSummary === undefined && continuation === operation.continuation &&
         sameRetainedActions(actions, operation.actions)) {
       presented = operation

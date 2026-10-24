@@ -37,11 +37,11 @@ import {
   type PortableExecution,
   type V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
-import type { V2ActiveReceiveControl } from '../v2-lifecycle-presentation'
+import type { V2ActiveReceiveControl } from '../../application/receive/actions'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-} from '../v2-receive-runtime'
+} from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import {
   operationDigest,

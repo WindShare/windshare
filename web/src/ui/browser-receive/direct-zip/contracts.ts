@@ -11,7 +11,7 @@ import type { OutputFailureSinks } from '../../../output/diagnostics'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
-} from '../../v2-receive-runtime'
+} from '../../../application/receive/contracts'
 
 export interface BrowserDirectZipCapabilitySource {
   read(signal: AbortSignal): Promise<Readonly<{

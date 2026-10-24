@@ -1,3 +1,4 @@
+import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it } from 'vitest'
 
@@ -34,20 +35,15 @@ import {
   type TransferWorkerSettlement,
 } from '../../src/transfer/outcome'
 import type { TransferJobResult } from '../../src/transfer/v2-job'
-import {
-  ActiveReceiveCoordinator,
-  type ActiveReceiveJoinedShare,
-} from '../../src/ui/controller/active-receive'
-import type { V2ActiveCompatibleNameRepairProjection } from '../../src/ui/controller/contracts'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-} from '../../src/ui/v2-lifecycle-presentation'
+import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'
+import { type ActiveReceiveJoinedShare } from '../../src/application/receive/joined-share'
+import type { V2ActiveCompatibleNameRepairProjection } from '../../src/application/receive/observation/contracts'
+import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../src/application/receive/actions'
 import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-} from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
   environment,
@@ -253,6 +249,7 @@ async function resultAdoptionFixture(
   enableLateRepairActivation = false,
 ): Promise<Readonly<{
   outputs: V2OutputPresentationController
+  receiveState: ReceiveRuntimeState
   failures: unknown[]
   settle: (outcome: TransferFileOutcome) => void
   settleResult: (result: TransferJobResult) => void
@@ -261,22 +258,22 @@ async function resultAdoptionFixture(
   runtime: ResultRuntime
   close: () => Promise<void>
 }>> {
-  const { outputs, intent, choice } = await preparedOutput()
+  const { outputs, receiveState, intent, choice } = await preparedOutput()
   const lifecycle = initialReceiveLifecycleState({
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
   })
   if (mode === 'live') {
-    expect(outputs.adoptReceiveIntent(choice, intent, lifecycle)).toBe(true)
+    expect(receiveState.adoptReceiveIntent(choice, intent, lifecycle)).toBe(true)
   } else {
-    outputs.adoptRetainedReceiveIntent(intent, lifecycle)
+    receiveState.adoptRetainedReceiveIntent(intent, lifecycle)
   }
 
   const runtime = new ResultRuntime(intent, lifecycle, enableLateRepairActivation)
   const share = new ResultShare(intent)
   const failures: unknown[] = []
   const coordinator = new ActiveReceiveCoordinator({
-    outputs,
+    state: receiveState,
     ownsJoinedShare: candidate => candidate === share,
     onProgress: () => undefined,
     onActionError: error => failures.push(error),
@@ -291,6 +288,7 @@ async function resultAdoptionFixture(
 
   return Object.freeze({
     outputs,
+    receiveState,
     failures,
     intent,
     initialLifecycle: lifecycle,
@@ -311,6 +309,7 @@ async function resultAdoptionFixture(
 
 async function preparedOutput(): Promise<Readonly<{
   outputs: V2OutputPresentationController
+  receiveState: ReceiveRuntimeState
   intent: ReceiveIntent
   choice: ArtifactChoice
 }>> {
@@ -358,9 +357,10 @@ async function preparedOutput(): Promise<Readonly<{
     artifact,
     plan,
   })
-  const outputs = new V2OutputPresentationController()
-  outputs.updateProjection(1, state, offers)
-  outputs.updateActivation(Object.freeze({
+  const receiveState = new ReceiveRuntimeState()
+  const outputs = new V2OutputPresentationController(receiveState)
+  receiveState.updateProjection(1, state, offers)
+  receiveState.updateActivation(Object.freeze({
     kind: 'terminal',
     activationId: identity(13),
     authenticatedShareInstanceId: selection.shareInstance,
@@ -377,6 +377,7 @@ async function preparedOutput(): Promise<Readonly<{
   }))
   return Object.freeze({
     outputs,
+    receiveState,
     intent,
     choice: offered.choice,
   })

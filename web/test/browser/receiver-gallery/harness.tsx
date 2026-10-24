@@ -9,7 +9,7 @@ import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDown
 import { syntheticVideo } from './video'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import type { ReceiveLifecycleState } from '../../../src/output/workspace'
-import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { V2RetainedReceiveAction, V2RetainedReceiveOperation } from '../../../src/application/receive/contracts'
 import '../../../src/index.css'
 import '../../../src/App.css'
 

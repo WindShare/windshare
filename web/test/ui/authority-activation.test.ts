@@ -15,23 +15,19 @@ import type { SelectionProjectionState } from '../../src/transfer/projection'
 import {
   V2AuthorityActivationCoordinator,
   type AuthorityActivationOptions,
-} from '../../src/ui/controller/authority-activation'
-import type { V2AuthorityProjectionPublication } from '../../src/ui/controller/authority-planning'
-import type { V2ActiveProjection } from '../../src/ui/controller/projection-observation'
-import type { ActiveReceiveAdoption } from '../../src/ui/controller/active-receive'
-import {
-  StaleReceiveBoundaryError,
-  type V2ControllerWorkflowTraceEvent,
-  type V2ReceiverTraceEvent,
-} from '../../src/ui/controller/contracts'
-import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
+} from '../../src/application/receive/activation/coordinator'
+import type { V2AuthorityProjectionPublication } from '../../src/application/receive/activation/planning'
+import type { V2ActiveProjection } from '../../src/application/receive/discovery'
+import type { ActiveReceiveAdoption } from '../../src/application/receive/active/coordinator'
+import { StaleReceiveBoundaryError, type V2ControllerWorkflowTraceEvent, type V2ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
+import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
   V2OwnedActivationAuthority,
-} from '../../src/ui/v2-receive-runtime'
-import { V2PresentationSourceError } from '../../src/ui/v2-receive-runtime'
+} from '../../src/application/receive/contracts'
+import { V2PresentationSourceError } from '../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY,
   projection,

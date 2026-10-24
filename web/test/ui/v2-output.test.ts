@@ -1,3 +1,4 @@
+import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
@@ -23,12 +24,12 @@ import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
   V2AuthorityActivationSnapshot,
   V2LiveAuthorityActivationSnapshot,
-} from '../../src/ui/controller/activation-model'
+} from '../../src/application/receive/activation/model'
 import {
   activationLocksSelection,
   presentArtifactOffers,
 } from '../../src/ui/v2-artifact-presentation'
-import { ActiveReceiveSettlementPresentation } from '../../src/ui/controller/active-receive-settlement-presentation'
+import { ReceiveSettlementDeadline } from '../../src/application/receive/active/settlement-wait'
 import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import {
   COMPLETE_DISCOVERY,
@@ -157,12 +158,13 @@ describe('derived output presentation', () => {
   it('applies only increasing owner revisions and never runs planning itself', async () => {
     const first = await singleFileObservation(1n)
     const second = await singleFileObservation(2n)
-    const outputs = new V2OutputPresentationController()
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
     const listener = vi.fn()
     outputs.subscribe(listener)
 
-    expect(outputs.updateProjection(2, second.state, second.offers)).toBe(true)
-    expect(outputs.updateProjection(1, first.state, first.offers)).toBe(false)
+    expect(receiveState.updateProjection(2, second.state, second.offers)).toBe(true)
+    expect(receiveState.updateProjection(1, first.state, first.offers)).toBe(false)
 
     expect(outputs.getSnapshot()).toMatchObject({
       projectionRevision: 2,
@@ -183,13 +185,14 @@ describe('derived output presentation', () => {
       firstEnvironment,
     )
     const offered = requireOfferedChoice(firstOffers)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(
       1,
       state(firstProjection, { kind: 'discovering' }),
       firstOffers,
     )
-    outputs.updateActivation(waitingResolution(offered, firstProjection, 1))
+    receiveState.updateActivation(waitingResolution(offered, firstProjection, 1))
 
     const replacementProjection = projection(selection, { kind: 'unknown' }, 0n, 2n)
     const replacementOffers = await offerArtifacts(
@@ -197,12 +200,12 @@ describe('derived output presentation', () => {
       { kind: 'discovering' },
       firstEnvironment,
     )
-    outputs.updateProjection(
+    receiveState.updateProjection(
       2,
       state(replacementProjection, { kind: 'discovering' }),
       replacementOffers,
     )
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateActivation(Object.freeze({
       ...waitingResolution(offered, firstProjection, 1),
       observation: Object.freeze({
         revision: 2,
@@ -227,15 +230,16 @@ describe('derived output presentation', () => {
 
   it('derives waiting, retry, commit, and lock state from coordinator snapshots', async () => {
     const observation = await singleFileObservation(4n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
 
     const waiting: V2AuthorityActivationSnapshot = Object.freeze({
       ...liveActivation(observation.offered, observation.action, 1),
       kind: 'waiting-authority',
       resolution: Object.freeze({ kind: 'resolved', action: observation.action }),
     })
-    outputs.updateActivation(waiting)
+    receiveState.updateActivation(waiting)
     expect(outputs.getSnapshot().activationPresentation).toMatchObject({
       kind: 'waiting',
       title: 'Waiting for the save location…',
@@ -243,7 +247,7 @@ describe('derived output presentation', () => {
     expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(true)
     expect(outputs.getSnapshot().resolvedArtifact?.digest).toBe(observation.action.artifact.digest)
 
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 2),
       kind: 'retry-required',
       authorityReady: true,
@@ -255,7 +259,7 @@ describe('derived output presentation', () => {
       choice: { operation: 'download-original' },
     })
 
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 3),
       kind: 'committing',
       action: observation.action,
@@ -265,7 +269,7 @@ describe('derived output presentation', () => {
       choice: { operation: 'download-original' },
     })
 
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 4),
       kind: 'cleanup-required',
       operationId: identity(71),
@@ -281,7 +285,7 @@ describe('derived output presentation', () => {
     })
     expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(true)
 
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 5),
       kind: 'terminal',
       outcome: Object.freeze({ kind: 'picker-refused' }),
@@ -290,14 +294,15 @@ describe('derived output presentation', () => {
     expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(false)
     expect(outputs.getSnapshot().offerPresentation?.interactive).toBe(true)
 
-    const boundOutputs = new V2OutputPresentationController()
-    boundOutputs.updateProjection(1, observation.state, observation.offers)
-    boundOutputs.updateActivation(Object.freeze({
+    const boundState = new ReceiveRuntimeState()
+    const boundOutputs = new V2OutputPresentationController(boundState)
+    boundState.updateProjection(1, observation.state, observation.offers)
+    boundState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 5),
       kind: 'committing',
       action: observation.action,
     }))
-    boundOutputs.updateActivation(Object.freeze({
+    boundState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 6),
       kind: 'terminal',
       outcome: Object.freeze({ kind: 'bound-operation', operationId: identity(72) }),
@@ -309,17 +314,18 @@ describe('derived output presentation', () => {
 
   it('adopts a matching coordinator choice across epoch and session replacement', async () => {
     const observation = await singleFileObservation(5n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(waitingResolution(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(waitingResolution(
       observation.offered,
       observation.state.projection,
       1,
     ))
 
     const replacement = await singleFileObservation(6n)
-    outputs.updateProjection(2, replacement.state, replacement.offers)
-    outputs.updateActivation(Object.freeze({
+    receiveState.updateProjection(2, replacement.state, replacement.offers)
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, replacement.action, 2),
       kind: 'committing',
       action: replacement.action,
@@ -331,7 +337,7 @@ describe('derived output presentation', () => {
     }))
 
     const intent = receiveIntent(observation.action)
-    expect(outputs.adoptReceiveIntent(observation.offered.choice, intent)).toBe(true)
+    expect(receiveState.adoptReceiveIntent(observation.offered.choice, intent)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       receiveIntent: { operationId: intent.operationId },
       resolvedArtifact: { digest: observation.action.artifact.digest },
@@ -342,20 +348,20 @@ describe('derived output presentation', () => {
       ...observation.offered.choice,
       operation: 'check-then-download',
     })
-    expect(outputs.adoptReceiveIntent(differentChoice, intent)).toBe(false)
+    expect(receiveState.adoptReceiveIntent(differentChoice, intent)).toBe(false)
 
     const mismatchedIntent = Object.freeze({
       ...intent,
       artifact: Object.freeze({ ...intent.artifact, kind: 'zip-archive' }),
     }) as ReceiveIntent
-    expect(() => outputs.adoptReceiveIntent(observation.offered.choice, mismatchedIntent))
+    expect(() => receiveState.adoptReceiveIntent(observation.offered.choice, mismatchedIntent))
       .toThrow(/does not match the coordinator-owned artifact choice/u)
 
     const mismatchedActionIntent = Object.freeze({
       ...intent,
       artifact: Object.freeze({ ...intent.artifact, digest: identity(91, 32) }),
     }) as ReceiveIntent
-    expect(() => outputs.adoptReceiveIntent(observation.offered.choice, mismatchedActionIntent))
+    expect(() => receiveState.adoptReceiveIntent(observation.offered.choice, mismatchedActionIntent))
       .toThrow(/does not match the coordinator-owned resolved action/u)
   })
 
@@ -366,13 +372,14 @@ describe('receive interruption presentation', () => {
     vi.useFakeTimers()
     try {
       const observation = await singleFileObservation(19n)
-      const outputs = new V2OutputPresentationController()
-      outputs.updateProjection(1, observation.state, observation.offers)
-      outputs.updateActivation(waitingResolution(observation.offered, observation.state.projection, 1))
+      const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+      receiveState.updateProjection(1, observation.state, observation.offers)
+      receiveState.updateActivation(waitingResolution(observation.offered, observation.state.projection, 1))
       const intent = receiveIntent(observation.action)
       const receiving = lifecycle(intent, 1n, { kind: 'receiving', activeLeaseId: 'lease' })
-      outputs.adoptReceiveIntent(observation.offered.choice, intent, receiving)
-      const presentation = new ActiveReceiveSettlementPresentation({ outputs, operationIsCurrent: () => true })
+      receiveState.adoptReceiveIntent(observation.offered.choice, intent, receiving)
+      const presentation = new ReceiveSettlementDeadline({ state: receiveState, operationIsCurrent: () => true })
       const deadline = presentation.schedule(25, () => {})
       await vi.advanceTimersByTimeAsync(25)
       expect(outputs.getSnapshot()).toMatchObject({
@@ -381,7 +388,7 @@ describe('receive interruption presentation', () => {
         receiveInterruption: { operation: 'finish', phase: 'background' },
       })
       deadline.cancel()
-      outputs.settleLifecycle(lifecycle(intent, 2n, { kind: 'waiting-to-save', packageDigest: identity(91, 32) }))
+      receiveState.settleLifecycle(lifecycle(intent, 2n, { kind: 'waiting-to-save', packageDigest: identity(91, 32) }))
       expect(outputs.getSnapshot().receiveInterruption).toBeNull()
     } finally {
       vi.useRealTimers()
@@ -399,9 +406,10 @@ describe('receive interruption presentation', () => {
     vi.useFakeTimers()
     try {
       const observation = await singleFileObservation(19n)
-      const outputs = new V2OutputPresentationController()
-      outputs.updateProjection(1, observation.state, observation.offers)
-      outputs.updateActivation(waitingResolution(
+      const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+      receiveState.updateProjection(1, observation.state, observation.offers)
+      receiveState.updateActivation(waitingResolution(
         observation.offered,
         observation.state.projection,
         1,
@@ -411,13 +419,13 @@ describe('receive interruption presentation', () => {
         kind: 'receiving',
         activeLeaseId: 'lease',
       })
-      expect(outputs.adoptReceiveIntent(
+      expect(receiveState.adoptReceiveIntent(
         observation.offered.choice,
         intent,
         receiving,
       )).toBe(true)
-      const presentation = new ActiveReceiveSettlementPresentation({
-        outputs,
+      const presentation = new ReceiveSettlementDeadline({
+        state: receiveState,
         operationIsCurrent: () => true,
       })
 
@@ -442,7 +450,7 @@ describe('receive interruption presentation', () => {
         kind: 'restart-required',
         reason: 'portable-aborted',
       })
-      expect(outputs.settleLifecycle(stable)).toBe(true)
+      expect(receiveState.settleLifecycle(stable)).toBe(true)
       expect(outputs.getSnapshot()).toMatchObject({
         lifecycle: { kind: 'restart-required', generation: 2n },
         lifecyclePresentation: { title: 'Start again required' },
@@ -457,9 +465,10 @@ describe('receive interruption presentation', () => {
 describe('derived output lifecycle and recovery presentation', () => {
   it('publishes the validated recovery summary from a live DirectTree pause result', async () => {
     const observation = await directTreeObservation(9n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(waitingResolution(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(waitingResolution(
       observation.offered,
       observation.state.projection,
       1,
@@ -480,13 +489,13 @@ describe('derived output lifecycle and recovery presentation', () => {
       }),
     })
     const recoverySummary = recoverySummaryFixture(2n, checkpointSetDigest)
-    expect(outputs.adoptReceiveIntent(
+    expect(receiveState.adoptReceiveIntent(
       observation.offered.choice,
       intent,
       paused,
     )).toBe(true)
 
-    expect(outputs.adoptTransferResult({
+    expect(receiveState.adoptTransferResult({
       worker: pausedWorker(),
       lifecycle: paused,
       intent,
@@ -507,9 +516,10 @@ describe('derived output lifecycle and recovery presentation', () => {
 
   it('retains the exact preserving-open failure and modeled cost in the paused presentation', async () => {
     const observation = await directTreeObservation(10n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(waitingResolution(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(waitingResolution(
       observation.offered,
       observation.state.projection,
       1,
@@ -529,7 +539,7 @@ describe('derived output lifecycle and recovery presentation', () => {
         discovery: 'complete',
       }),
     })
-    outputs.adoptReceiveIntent(observation.offered.choice, intent, paused)
+    receiveState.adoptReceiveIntent(observation.offered.choice, intent, paused)
     const abortReason = new PersistentWriterOpenPauseRequestedError(
       new PersistentPreservingWriterOpenError({
         materializationRelativePath: snapshotMaterializationRootRelativePath([
@@ -546,7 +556,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       }),
     )
 
-    expect(outputs.adoptTransferResult({
+    expect(receiveState.adoptTransferResult({
       worker: pausedWorker(),
       lifecycle: paused,
       intent,
@@ -575,9 +585,10 @@ describe('derived output lifecycle and recovery presentation', () => {
 
   it('keeps compatible-name repair separate, persistent, monotonic, and terminally qualified', async () => {
     const observation = await singleFileObservation(7n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(waitingResolution(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(waitingResolution(
       observation.offered,
       observation.state.projection,
       1,
@@ -587,15 +598,15 @@ describe('derived output lifecycle and recovery presentation', () => {
       kind: 'receiving',
       activeLeaseId: 'lease',
     })
-    expect(outputs.adoptReceiveIntent(
+    expect(receiveState.adoptReceiveIntent(
       observation.offered.choice,
       intent,
       receiving,
     )).toBe(true)
 
     const firstReplacement = repairSummary(0, [], 'active')
-    expect(outputs.updateRepairSummary('another-operation', firstReplacement)).toBe(false)
-    expect(outputs.updateRepairSummary(intent.operationId, firstReplacement)).toBe(true)
+    expect(receiveState.updateRepairSummary('another-operation', firstReplacement)).toBe(false)
+    expect(receiveState.updateRepairSummary(intent.operationId, firstReplacement)).toBe(true)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 0,
       actionMode: 'receiving-notice',
@@ -609,11 +620,11 @@ describe('derived output lifecycle and recovery presentation', () => {
       kind: 'receiving',
       activeLeaseId: 'lease',
     })
-    expect(outputs.settleLifecycle(receivingUpdate, null, [], committed)).toBe(true)
+    expect(receiveState.settleLifecycle(receivingUpdate, null, [], committed)).toBe(true)
     expect(outputs.getSnapshot().repairSummary?.committedCount).toBe(2)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
       .toMatchObject({ replacementCount: 2 })
-    expect(() => outputs.updateRepairSummary(intent.operationId, firstReplacement))
+    expect(() => receiveState.updateRepairSummary(intent.operationId, firstReplacement))
       .toThrow(/count cannot move backward/u)
 
     const terminalRepair = repairSummary(2, committed.logicalPathSample, 'completed')
@@ -622,7 +633,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(92, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.settleLifecycle(published, null, [], terminalRepair)).toBe(true)
+    expect(receiveState.settleLifecycle(published, null, [], terminalRepair)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       lifecycle: { kind: 'published' },
       lifecyclePresentation: {
@@ -630,7 +641,7 @@ describe('derived output lifecycle and recovery presentation', () => {
         compatibleNameRepair: { actionMode: 'routine-restoration' },
       },
     })
-    expect(outputs.adoptTransferResult({
+    expect(receiveState.adoptTransferResult({
       worker: successfulWorker(),
       lifecycle: published,
       intent,
@@ -640,15 +651,16 @@ describe('derived output lifecycle and recovery presentation', () => {
     expect(outputs.getSnapshot().transferResultPresentation?.title)
       .toBe('Completed with compatible names')
 
-    outputs.reset()
+    receiveState.reset()
     expect(outputs.getSnapshot().repairSummary).toBeNull()
   })
 
   it('treats an absent terminal repair summary as verified empty-cleanup authority', async () => {
     const observation = await singleFileObservation(8n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(waitingResolution(
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(waitingResolution(
       observation.offered,
       observation.state.projection,
       1,
@@ -658,12 +670,12 @@ describe('derived output lifecycle and recovery presentation', () => {
       kind: 'receiving',
       activeLeaseId: 'lease',
     })
-    expect(outputs.adoptReceiveIntent(
+    expect(receiveState.adoptReceiveIntent(
       observation.offered.choice,
       intent,
       receiving,
     )).toBe(true)
-    expect(outputs.updateRepairSummary(
+    expect(receiveState.updateRepairSummary(
       intent.operationId,
       repairSummary(0, [], 'active'),
     )).toBe(true)
@@ -675,7 +687,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(93, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.settleLifecycle(published, null, [], null)).toBe(true)
+    expect(receiveState.settleLifecycle(published, null, [], null)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       repairSummary: null,
       lifecyclePresentation: {
@@ -683,7 +695,7 @@ describe('derived output lifecycle and recovery presentation', () => {
         compatibleNameRepair: null,
       },
     })
-    expect(outputs.adoptTransferResult({
+    expect(receiveState.adoptTransferResult({
       worker: successfulWorker(),
       lifecycle: published,
       intent,
@@ -697,9 +709,10 @@ describe('derived output lifecycle and recovery presentation', () => {
 
   it('publishes a receive intent only after its prepared owner is installed', async () => {
     const observation = await singleFileObservation(7n)
-    const outputs = new V2OutputPresentationController()
-    outputs.updateProjection(1, observation.state, observation.offers)
-    outputs.updateActivation(Object.freeze({
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
+    receiveState.updateProjection(1, observation.state, observation.offers)
+    receiveState.updateActivation(Object.freeze({
       ...liveActivation(observation.offered, observation.action, 1),
       kind: 'committing',
       action: observation.action,
@@ -711,7 +724,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       if (outputs.getSnapshot().receiveIntent !== null) observedOwnership.push(owned)
     })
 
-    expect(outputs.adoptReceiveIntentAtomically(
+    expect(receiveState.adoptReceiveIntentAtomically(
       observation.offered.choice,
       intent,
       () => { owned = true },
@@ -721,13 +734,14 @@ describe('derived output lifecycle and recovery presentation', () => {
 
   it('rejects mismatched projection facts without mutating visible state', async () => {
     const observation = await singleFileObservation(8n)
-    const outputs = new V2OutputPresentationController()
+    const receiveState = new ReceiveRuntimeState()
+    const outputs = new V2OutputPresentationController(receiveState)
     const mismatched = Object.freeze({
       ...observation.offers,
       selectionDigest: identity(90, 32),
     }) as ArtifactOffers
 
-    expect(() => outputs.updateProjection(1, observation.state, mismatched))
+    expect(() => receiveState.updateProjection(1, observation.state, mismatched))
       .toThrow(/do not belong to the supplied projection observation/u)
     expect(outputs.getSnapshot()).toBe(outputs.getSnapshot())
     expect(outputs.getSnapshot().projection).toBeNull()

@@ -3,7 +3,7 @@ import { activeTaskFacts, compareTaskTransition, presentTask, retainedTaskFacts 
 import { taskFixture, TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
 import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../src/ui/v2-output'
 import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
-import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { TaskAction } from '../../src/ui/tasks'
 

@@ -4,7 +4,7 @@ import {
 import type { OutputTraceEvent } from '../../../src/output/diagnostics/trace'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import { WorkspaceArtifactPresentationAuthority } from '../../../src/ui/browser-receive/workspace-route'
-import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../../src/application/receive/contracts'
 import {
   COMPLETE_DISCOVERY, environment, handoffTarget, identity, projection,
   singleFileProof, treeProof, workspaceOffer,

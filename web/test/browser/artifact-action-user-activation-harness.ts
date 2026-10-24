@@ -9,9 +9,9 @@ import {
 import { presentArtifactChoice } from '../../src/ui/v2-artifact-presentation'
 import {
   V2AuthorityActivationCoordinator,
-} from '../../src/ui/controller/authority-activation'
-import type { V2ActiveProjection } from '../../src/ui/controller/projection-observation'
-import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
+} from '../../src/application/receive/activation/coordinator'
+import type { V2ActiveProjection } from '../../src/application/receive/discovery'
+import { V2ControllerObservability } from '../../src/application/receive/observation/coordinator'
 
 const ACTION_BUTTON_ID = 'windshare-artifact-action-activation'
 const ACTION_LABEL = 'Save using original folder hierarchy'

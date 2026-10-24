@@ -1,4 +1,4 @@
-import type { V2RetainedReceiveOperation } from '../v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../contracts'
 
 export type RetainedContinuationReadiness =
   | 'local'

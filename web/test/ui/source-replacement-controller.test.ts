@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY } from '../../src/transfer/outcome'
-import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import {
   FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT, controllerFor,
   FILE_ID, deferred, identityText, next, resetOrchestrationTestEnvironment, startTransfer, turns, waitFor,

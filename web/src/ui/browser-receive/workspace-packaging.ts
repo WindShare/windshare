@@ -23,12 +23,8 @@ import type {
 } from '../../transfer/output-session'
 import type { SuccessfulTransferWorkerSettlement } from '../../transfer/outcome'
 import type { PersistentWorkspaceInterruption } from '../../transfer/settlement/persistent-evidence'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-  WorkspaceUsage,
-} from '../v2-lifecycle-presentation'
-import type { V2LifecycleMutation } from '../v2-receive-runtime'
+import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../application/receive/actions'
+import type { V2LifecycleMutation } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import { NamespaceOnlyCleanupPort, handoffRetainedWorkspacePackage } from './workspace-publication'
 import { checkpointSetDigest, unavailableRoute } from './shared'

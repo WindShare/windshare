@@ -11,7 +11,7 @@ import { decodeStoredReceiveLifecycleState } from '../../../output/workspace/sta
 import type { ReceiveOperationRepository } from '../../../output/workspace/repository'
 import type { OutputDiagnosticsPorts } from '../../../output/diagnostics'
 import type { BrowserReceiveWindow } from '../contracts'
-import type { V2RetainedReceiveOperation } from '../../v2-receive-runtime'
+import type { V2RetainedReceiveOperation } from '../../../application/receive/contracts'
 import { inspectBrowserStagingStorage } from './staging-storage'
 import { browserFolderDeliveryTrace } from './delivery-trace'
 

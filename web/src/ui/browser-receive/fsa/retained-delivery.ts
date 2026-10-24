@@ -4,7 +4,7 @@ import { readBrowserDeliveryResumeSummary } from '../../../output/browser-delive
 import { hasBrowserDeliveryStaging, type BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
 import { browserDeliveryLocalActions } from '../../../output/browser-delivery/recovery/local-actions'
 import type { ReceiveLifecycleState } from '../../../output/workspace/state'
-import type { V2RetainedReceiveAction } from '../../v2-receive-runtime'
+import type { V2RetainedReceiveAction } from '../../../application/receive/contracts'
 
 export type BrowserDeliveryRepositoryFactory = () => Promise<BrowserDeliveryRepository>
 

@@ -1,4 +1,4 @@
-import type { V2BoundReceiveOperation } from '../v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../application/receive/contracts'
 import type {
   OutputFailureBinding,
   OutputDiagnosticBackend,

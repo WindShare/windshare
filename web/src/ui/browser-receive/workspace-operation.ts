@@ -42,12 +42,8 @@ import {
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
 } from '../../transfer/output-session'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-  WorkspaceUsage,
-} from '../v2-lifecycle-presentation'
-import type { V2BoundReceiveOperation, V2LifecycleMutation } from '../v2-receive-runtime'
+import type { LifecycleUserAction, V2ActiveReceiveControl, WorkspaceUsage } from '../../application/receive/actions'
+import type { V2BoundReceiveOperation, V2LifecycleMutation } from '../../application/receive/contracts'
 import type { BrowserReceiveWindow } from './contracts'
 import {
   WorkspaceExecutionAdmissionSettlement,

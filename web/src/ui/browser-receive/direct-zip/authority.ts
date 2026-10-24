@@ -3,7 +3,7 @@ import type { DirectZipRuntimeFactsV1 } from '../../../output/direct-zip/session
 import { sameRuntimeDirectZipSupport, type OfferedArtifactChoice } from '../../../output/planning'
 import type { BrowserReceiveWindow } from '../contracts'
 import { snapshotPreClickRanking, unavailableRoute } from '../shared'
-import type { V2ArtifactPresentationAuthority } from '../../v2-receive-runtime'
+import type { V2ArtifactPresentationAuthority } from '../../../application/receive/contracts'
 import {
   BROWSER_DIRECT_ZIP_TARGET_ROUTE_ID,
 } from './support'

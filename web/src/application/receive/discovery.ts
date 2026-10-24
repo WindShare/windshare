@@ -12,18 +12,16 @@ import {
   type SelectionProjectionState,
 } from '../../transfer/projection'
 import type { EnvironmentOffers } from '../../output/planning'
-import type { V2JoinedBrowserShare } from '../v2-gateway'
-import type { V2ReceiveCompositionPort } from '../v2-receive-runtime'
-import {
-  StaleReceiveBoundaryError,
-  type V2ReceiverControllerOptions,
-} from './contracts'
-import type { V2ControllerObservability } from './controller-observability'
+import type { ReceivePlanningShare } from './joined-share'
+import type { V2ReceiveCompositionPort } from './contracts'
+import type { ReceiveObservationOptions } from './observation/contracts'
+import { StaleReceiveBoundaryError } from './observation/contracts'
+import type { V2ControllerObservability } from './observation/coordinator'
 
 export interface V2ActiveProjection {
   /** Selection/projection replacements have distinct owner revisions. */
   readonly revision: number
-  readonly joined: V2JoinedBrowserShare
+  readonly joined: ReceivePlanningShare
   readonly selection: SelectionSpec
   readonly frozenSelection: V2FrozenSelectionPolicy
   readonly epoch: ProjectionEpoch
@@ -43,10 +41,10 @@ export interface SelectionProjectionRuntimeOptions {
   readonly receive: Pick<V2ReceiveCompositionPort, 'environment'>
   readonly authority: ProjectionObservationAuthority
   readonly observability: V2ControllerObservability
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
+  readonly currentJoinedShare: () => ReceivePlanningShare | undefined
   readonly isDisposed: () => boolean
   readonly onFailure: (error: unknown) => void
-  readonly trace?: V2ReceiverControllerOptions['trace']
+  readonly trace?: ReceiveObservationOptions['trace']
 }
 
 export type ProjectionReplacementKind = 'selection-change' | 'observation-replacement'
@@ -68,7 +66,7 @@ export class SelectionProjectionRuntime {
     return this.#active
   }
 
-  start(joined: V2JoinedBrowserShare, replacement: ProjectionReplacementKind): void {
+  start(joined: ReceivePlanningShare, replacement: ProjectionReplacementKind): void {
     const revision = ++this.#revision
     const reason = new StaleReceiveBoundaryError()
     if (replacement === 'observation-replacement') {
@@ -156,7 +154,7 @@ export class SelectionProjectionRuntime {
 
   async #startOwned(
     revision: number,
-    joined: V2JoinedBrowserShare,
+    joined: ReceivePlanningShare,
     frozenSelection: V2FrozenSelectionPolicy,
     controller: AbortController,
     environmentTask: Promise<EnvironmentOffers>,
@@ -223,7 +221,7 @@ export class SelectionProjectionRuntime {
       !controller.signal.aborted && this.#boundaryIsCurrent(active.revision, active.joined)
   }
 
-  #boundaryIsCurrent(revision: number, joined: V2JoinedBrowserShare): boolean {
+  #boundaryIsCurrent(revision: number, joined: ReceivePlanningShare): boolean {
     return revision === this.#revision && this.#options.currentJoinedShare() === joined &&
       !this.#options.isDisposed()
   }

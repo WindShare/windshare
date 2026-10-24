@@ -18,7 +18,7 @@ import type {
   BrowserReceiveWindow,
   BrowserRetainedContinuationExecutor,
 } from '../../src/ui/v2-browser-receive-composition'
-import type { V2BoundReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../../src/application/receive/contracts'
 
 type ResumableFileSetPayload = Extract<ReceiveLifecycleStatePayload, {
   kind: 'resumable-receive'
