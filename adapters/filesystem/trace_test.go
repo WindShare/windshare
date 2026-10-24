@@ -106,7 +106,7 @@ func TestFilesystemFailureClassificationProjectionIsExhaustive(t *testing.T) {
 		},
 	} {
 		_, err := ProjectFilesystemOutput(source)
-		var projection appobs.OutputDiagnosticError
+		var projection *appobs.OutputDiagnosticError
 		if !errors.As(err, &projection) || projection.Reason != appobs.ObserverLossUnknownEnum {
 			t.Fatalf("%s error=%v", name, err)
 		}
@@ -116,7 +116,7 @@ func TestFilesystemFailureClassificationProjectionIsExhaustive(t *testing.T) {
 		Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureDestinationBinding,
 		ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion, Failed: true,
 	})
-	var projection appobs.OutputDiagnosticError
+	var projection *appobs.OutputDiagnosticError
 	if !errors.As(err, &projection) || projection.Reason != appobs.ObserverLossInvalidStageFields {
 		t.Fatalf("invalid filesystem stage/step error=%v", err)
 	}

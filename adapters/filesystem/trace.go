@@ -294,7 +294,7 @@ func projectFilesystemNativeErrorClass(value osfs.FilesystemNativeErrorClass) (f
 }
 
 func invalidProjection(reason appobs.ObserverLossReason) error {
-	return appobs.OutputDiagnosticError{Reason: reason, Context: appobs.ObservationRejection{
+	return &appobs.OutputDiagnosticError{Reason: reason, Context: appobs.ObservationRejection{
 		Source: "filesystem", Event: "filesystem_output", Stage: "projection", Field: "event", Rule: "provider_contract",
 	}}
 }
