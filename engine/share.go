@@ -26,8 +26,6 @@ type ShareReady struct {
 type ShareObservationLoss = share.ObservationLoss
 type ShareObservationSource = share.ObservationSource
 type ShareMilestone = share.Milestone
-type SharePublicationError = share.PublicationError
-type SharePublicationStage = share.PublicationStage
 
 const (
 	ShareLossProtocol                     = share.ProtocolObservations
@@ -39,13 +37,10 @@ const (
 	ShareMilestoneSourceAcquiring         = share.SourceAcquiring
 	ShareMilestoneSourceAcquired          = share.SourceAcquired
 	ShareMilestoneSourceAcquisitionFailed = share.SourceAcquisitionFailed
-	ShareMilestoneActivated               = share.ShareActivated
+	ShareMilestoneReady                   = share.ShareReady
 	ShareMilestoneStopping                = share.ShareStopping
 	ShareMilestoneStopped                 = share.ShareStopped
 	ShareMilestoneSessionRetired          = share.SessionRetired
-	SharePublicationEncoding              = share.PublicationEncoding
-	SharePublicationOutput                = share.PublicationOutput
-	SharePublicationReadiness             = share.PublicationReadiness
 )
 
 type ShareTask struct {
@@ -83,6 +78,10 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	return &ShareTask{Task: current, controller: controller}, nil
 }
 
+// Ready waits for the first relay registration and local session admission to
+// start. No receiver, P2P connection, or directory scan is required. The retained
+// result is a startup milestone, not a live availability check; canceling this
+// wait does not stop the share. Call StopShare and Wait to stop and join its work.
 func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	value, err := current.controller.Ready(ctx)
 	if err != nil {
@@ -93,14 +92,6 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 		return ShareReady{}, err
 	}
 	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayAuthority: authority}, nil
-}
-
-func (current *ShareTask) Activate(publicationErr error) {
-	current.controller.Acknowledge(publicationErr)
-}
-
-func (current *ShareTask) Activated(ctx context.Context) error {
-	return current.controller.Activated(ctx)
 }
 
 func (current *ShareTask) StopShare() { current.current.Stop(task.ShareStopped) }

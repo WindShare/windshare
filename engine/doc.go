@@ -5,7 +5,7 @@
 // StartShare and StartReceive return tasks whose bounded observation streams
 // never control execution. Wait returns the durable final result only after the
 // workflow has stopped producers and released resources. Cancel stops one task;
-// ShareTask.StopShare explicitly stops an advertised share; Close stops all
+// ShareTask.StopShare explicitly stops a share; Close stops all
 // tasks and closes the instance's capacity owner.
 //
 // TaskResult and the finished LifecycleObservation share one Settlement containing
@@ -19,11 +19,10 @@
 // publication; clients own formatting and exit codes. Constructors accept small
 // capabilities so tests can supply connections and peers without native objects.
 //
-// Sharing exposes a durable Ready/Activate handshake. Clients publish the
-// capability returned by Ready, acknowledge publication through Activate, and
-// can await Activated before announcing that root prefetch has started. This
-// keeps slow presentation separate from transfer observation and preserves
-// capability publication before descendant discovery.
+// ShareTask.Ready retains first service readiness: at least one relay registered
+// and local session admission started. Clients own capability presentation and
+// stop the share if presentation fails. Directory prefetch follows readiness in
+// the background; relay availability and active sessions evolve independently.
 //
 // InspectRecovery returns listed operation identities after releasing filesystem
 // leases. RecoveryInventory.Discard reacquires output authority and rechecks those

@@ -27,7 +27,7 @@ const (
 	SourceAcquiring         Milestone = "source_acquiring"
 	SourceAcquisitionFailed Milestone = "source_acquisition_failed"
 	SourceAcquired          Milestone = "source_acquired"
-	ShareActivated          Milestone = "share_activated"
+	ShareReady              Milestone = "share_ready"
 	ShareStopping           Milestone = "share_stopping"
 	ShareStopped            Milestone = "share_stopped"
 	SessionRetired          Milestone = "session_retired"

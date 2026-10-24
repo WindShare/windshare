@@ -175,7 +175,7 @@ func (p workflowProjection) share(envelope task.Observation, value share.Observa
 		return p.publish(ShareLoss(*value.Loss))
 	case value.Milestone == share.SourceAcquiring || value.Milestone == share.SourceAcquired || value.Milestone == share.SourceAcquisitionFailed:
 		return p.emit(projectTask(p.workflow, envelope))
-	case value.Milestone == share.ShareActivated || value.Milestone == share.ShareStopping || value.Milestone == share.ShareStopped || value.Milestone == share.SessionRetired:
+	case value.Milestone == share.ShareReady || value.Milestone == share.ShareStopping || value.Milestone == share.ShareStopped || value.Milestone == share.SessionRetired:
 		// These milestones are application facts, not connection implementations.
 		return p.publish(ShareMilestone{Milestone: value.Milestone, Failed: value.Failure != nil})
 	default:

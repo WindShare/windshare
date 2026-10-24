@@ -9,7 +9,7 @@ wind share <path...>
 wind share <path...> --split-key
 ```
 
-After at least one relay confirms publication, `share` prints:
+After at least one relay confirms registration and local session admission starts, `share` prints:
 
 ```text
 Link: <link>
@@ -23,6 +23,10 @@ Key: <key>
 ```
 
 Links and keys go to stdout. Status and errors go to stderr.
+
+Link delivery does not wait for directory prefetch. If link
+encoding or output fails, the command stops the share and waits for cleanup before
+returning the output error; background work may already have started.
 
 If every relay is temporarily unreachable, `share` waits and retries until one is ready; Ctrl+C cancels waiting. Each relay recovers independently, including those unavailable at startup. Later outages retain the original share link. Status shows how many relays currently admit new receivers, ongoing recovery, and successful reconnection; healthy direct transfers can continue while relay access recovers. Stopping or exiting the sender ends the share.
 

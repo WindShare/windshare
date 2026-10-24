@@ -226,6 +226,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int, stopO
 }
 
 type cliShareRelays struct {
+	accepting      chan struct{}
 	stopped        chan struct{}
 	stopOnce       sync.Once
 	cleanupStarted chan context.Context
@@ -234,6 +235,9 @@ type cliShareRelays struct {
 }
 
 func (relays *cliShareRelays) Accept(ctx context.Context) (protocolsession.FrameChannel, error) {
+	if relays.accepting != nil {
+		close(relays.accepting)
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

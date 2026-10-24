@@ -56,10 +56,6 @@ func TestShareJoinsRelayCleanupEvenAfterFactoryTerminalWorkerReturned(t *testing
 	if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	f.dependencies.Controller.Acknowledge(nil)
-	if err := f.dependencies.Controller.Activated(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	stop(task.ErrShareStopped)
 	<-factory.returned
 	if slices.Contains(f.snapshot(), "source_closed") {

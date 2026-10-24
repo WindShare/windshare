@@ -11,22 +11,18 @@ import (
 
 func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.ShareResult], publicationErr error) int {
 	if publicationErr != nil {
-		code := shareExitCode(result.FailureClass)
-		if code == ExitOK {
-			code = ExitFailure
+		// The engine settles service shutdown separately. Its stop outcome and
+		// cleanup failures cannot turn an output error into success or usage error.
+		switch {
+		case errors.Is(publicationErr, errShareCapabilityEncoding):
+			emitShareKnownFailure(runtime, ExitUsage, appobs.FailureCapabilityInvalid)
+			return ExitUsage
+		case errors.Is(publicationErr, errShareCapabilityOutput):
+			emitShareKnownFailure(runtime, ExitFailure, appobs.FailurePublication)
+			return ExitFailure
 		}
-		if publication, ok := errors.AsType[*engine.SharePublicationError](publicationErr); ok {
-			switch publication.Stage {
-			case engine.SharePublicationEncoding:
-				emitShareKnownFailure(runtime, code, appobs.FailureCapabilityInvalid)
-				return code
-			case engine.SharePublicationOutput:
-				emitShareKnownFailure(runtime, code, appobs.FailurePublication)
-				return code
-			}
-		}
-		emitShareCommandFailure(runtime, code, publicationErr)
-		return code
+		emitShareCommandFailure(runtime, ExitFailure, publicationErr)
+		return ExitFailure
 	}
 	if !result.Value.Ready {
 		code := shareExitCode(result.FailureClass)

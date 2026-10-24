@@ -525,8 +525,8 @@ func (sender *PreparedSender) AuthorizeRegistration() error {
 }
 
 // StartRootPrefetch is intentionally separate from preparation and registration
-// authorization. The relay owner calls it only after REGISTERED and link
-// publication, so the ready path cannot observe a descendant.
+// authorization. The share owner schedules it after publishing service readiness,
+// so descendant scans cannot become a prerequisite for delivering the capability.
 func (sender *PreparedSender) StartRootPrefetch() {
 	if sender == nil {
 		return

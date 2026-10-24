@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"net/url"
 
 	"github.com/windshare/windshare/core/link"
+)
+
+var (
+	errShareCapabilityEncoding = errors.New("share capability encoding failed")
+	errShareCapabilityOutput   = errors.New("share capability output failed")
 )
 
 const (
