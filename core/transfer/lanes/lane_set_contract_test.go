@@ -419,6 +419,7 @@ func TestLaneSetResumeAndLifecycleWakeBlockedFetches(t *testing.T) {
 	lanes.Close()
 
 	empty, _ := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](36)})
+	_, _ = empty.ExpectRoute(RouteDirect)
 	closedResult := make(chan error, 1)
 	go func() {
 		_, fetchErr := empty.Fetch(context.Background(), Request{Demand: demand, Validate: validateTransferRecord(demand)})

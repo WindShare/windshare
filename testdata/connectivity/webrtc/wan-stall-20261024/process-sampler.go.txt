@@ -1,0 +1,25 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime/pprof"
+	"time"
+)
+
+func init() {
+	if os.Getenv("WS_WAN_DIAGNOSTICS") == "0" {
+		return
+	}
+	go func() {
+		started := time.Now()
+		for _, target := range []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second} {
+			time.Sleep(time.Until(started.Add(target)))
+			output, err := os.Create(fmt.Sprintf("research-goroutines-%s-%d.txt", os.Args[1], target/time.Second))
+			if err == nil {
+				_ = pprof.Lookup("goroutine").WriteTo(output, 2)
+				_ = output.Close()
+			}
+		}
+	}()
+}

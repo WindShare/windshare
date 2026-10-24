@@ -292,6 +292,7 @@ const (
 	TransferFileAdmitted
 	TransferFileFirstWrite
 	TransferFileSettled
+	TransferRevisionCleanupSettled
 	TransferCapacityRetryScheduled
 	TransferCapacityRetryReady
 	TransferCapacityRetrySucceeded
@@ -305,7 +306,7 @@ func (value TransferLifecycleStage) Name() (string, bool) {
 	names := [...]string{
 		"", "discovery_started", "generation_committed", "discovery_completed", "admission_started",
 		"admission_completed", "directory_admitted", "directory_finalized", "file_enqueued",
-		"file_started", "file_admitted", "file_first_write", "file_settled",
+		"file_started", "file_admitted", "file_first_write", "file_settled", "revision_cleanup_settled",
 		"capacity_retry_scheduled", "capacity_retry_ready", "capacity_retry_succeeded",
 		"capacity_budget_paused", "capacity_wait_canceled", "capacity_generation_ended", "job_settled",
 	}

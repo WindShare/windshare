@@ -1,0 +1,123 @@
+{
+  "revision": "c6419c5885c01a70e1c2d85d7732a8cef12c300c",
+  "frozenManifest": {
+    "path": ".tmp\\webrtc-wan-stall-20261024-current\\sources.json",
+    "sha256": "a99de4c1d8863fdebd33684a271beb78cb16279ab8401eba8e64b570d8cb8aa5"
+  },
+  "frozenFilesChecked": 4250,
+  "changedFrozenFiles": [
+    "testdata/connectivity/webrtc/adaptive-20261023/cross-host.py"
+  ],
+  "productionSourcesUnchanged": true,
+  "stagedDiffEmpty": true,
+  "indexByteHashUnchanged": true,
+  "counts": {
+    "attempts": 51,
+    "passed": 41,
+    "failed": 10,
+    "hashVerifiedPublications": 44,
+    "hashVerifiedDespiteFailedExit": 3
+  },
+  "allRemoteCleanupAcknowledged": true,
+  "remoteStudyWindProcessesRemaining": {
+    "lan": 0,
+    "public": 0
+  },
+  "checks": {
+    "startedAt": "2026-10-24T05:17:59.7384688Z",
+    "finishedAt": "2026-10-24T05:18:17.3096001Z",
+    "pythonSyntax": "passed",
+    "diagnosticGoFormat": "passed",
+    "hygieneExitCode": 0
+  },
+  "checkLog": {
+    "path": ".tmp\\wan-stall-tools\\validation.stdout",
+    "sha256": "d5a9f84315743503d70a92237489f48b6d76ecbcd9c97bd76f59c05d97249690"
+  },
+  "socketObserverLog": {
+    "path": ".tmp\\wan-stall-tools\\buffer-observer.stdout",
+    "sha256": "5b8c8a02c2b9f363bbac7b9664d45b7c78d3121373a28bd161dcd1fe3f747cec"
+  },
+  "diagnosticBuildIdentities": {
+    "current": {},
+    "diagnostic": {
+      "identity.json": {
+        "base": "webrtc-wan-stall-20261024-current",
+        "baseSourcesSHA256": "a99de4c1d8863fdebd33684a271beb78cb16279ab8401eba8e64b570d8cb8aa5",
+        "diagnostic": true,
+        "binaries": {
+          "relay-native.exe": "439c6ca5375a649e40e8f57700ad4bd41f6b96d51ee3c0467ef64f78faa0c487",
+          "wind-linux": "1381fae4166db60e55769dcb50aa1e3ede423ccbfdfdb52a8434a39b736cf892",
+          "wind.exe": "b410a9b5b5549adae9dc9ba06a557e17a72421fa45ae2daf98bc6b13cb726a96"
+        },
+        "overlays": {
+          "overlays\\cmd_wind_z_wan_research.go": "e77f73c7ec7ca854042eaedcb28cbe2d07d71b2b41c0cc98155c4d43127b72d4",
+          "overlays\\transport_webrtc_provider_z_wan_research.go": "d3fdaa39f233a9d0e58daaec7661f18726963736b84bc4c40b93e49f2602d4b6",
+          "overlays\\transport_webrtc_provider_connection.go": "6c03e42f376cf577f69853ffb5cdc96471c35a778776e824d7ea49cf3da5c913",
+          "overlays\\core_transfer_lanes_z_wan_research.go": "c1128488fc5b265ae045aab1e5a8e916f2c3d6c90f0755de7337033819717384",
+          "overlays\\core_transfer_lanes_set.go": "156225b549230972ed25d77f39685d43b74c7c4347f60fa3ee494e679ef5afe3",
+          "overlays\\third_party_pion_sctp_association.go": "70b00c98d955c7bbb8a2a7090bbe2e75e2070731d227e9875f09fd9fb21d7ac0",
+          "overlays\\third_party_pion_sctp_z_wan_research.go": "7bb5282cc08463976a098d617e274afd0a8fc6a8cd3a0c5de8a7dd45cdcc7685",
+          "overlays\\third_party_pion_webrtc_z_wan_research.go": "3a3187b4d4d492e78b8b762fed233f4042a36ebffe7f91bf9fa9a0339a8afe59",
+          "overlays\\third_party_pion_ice_addr.go": "5c9e6a1dab31d2b9a5d0b4926f5bb4f0ea65a415d2b90b2b415d281aa7bd69e3",
+          "overlays\\third_party_pion_ice_z_wan_research.go": "4bcd8e9056082ec7e83d3400859193ff946264ce054ffc075a388f2933ed54dd"
+        }
+      }
+    },
+    "interface": {
+      "identity.json": {
+        "base": "webrtc-wan-stall-20261024-current",
+        "baseSourcesSHA256": "a99de4c1d8863fdebd33684a271beb78cb16279ab8401eba8e64b570d8cb8aa5",
+        "diagnostic": true,
+        "binaries": {
+          "relay-native.exe": "439c6ca5375a649e40e8f57700ad4bd41f6b96d51ee3c0467ef64f78faa0c487",
+          "wind-linux": "95dc90f072e6307337847ef1f31789be3c596b19ed4743666a22e9d581bfbf6b",
+          "wind.exe": "cd5060571a276a01ac3371d99d08a2ca7d55008b7a6dc64c632edbb130cd0d3e"
+        },
+        "overlays": {
+          "overlays\\cmd_wind_z_wan_research.go": "e77f73c7ec7ca854042eaedcb28cbe2d07d71b2b41c0cc98155c4d43127b72d4",
+          "overlays\\transport_webrtc_provider_z_wan_research.go": "d3fdaa39f233a9d0e58daaec7661f18726963736b84bc4c40b93e49f2602d4b6",
+          "overlays\\transport_webrtc_provider_connection.go": "6c03e42f376cf577f69853ffb5cdc96471c35a778776e824d7ea49cf3da5c913",
+          "overlays\\core_transfer_lanes_z_wan_research.go": "c1128488fc5b265ae045aab1e5a8e916f2c3d6c90f0755de7337033819717384",
+          "overlays\\core_transfer_lanes_set.go": "156225b549230972ed25d77f39685d43b74c7c4347f60fa3ee494e679ef5afe3",
+          "overlays\\third_party_pion_sctp_association.go": "70b00c98d955c7bbb8a2a7090bbe2e75e2070731d227e9875f09fd9fb21d7ac0",
+          "overlays\\third_party_pion_sctp_z_wan_research.go": "7bb5282cc08463976a098d617e274afd0a8fc6a8cd3a0c5de8a7dd45cdcc7685",
+          "overlays\\third_party_pion_webrtc_z_wan_research.go": "3a3187b4d4d492e78b8b762fed233f4042a36ebffe7f91bf9fa9a0339a8afe59",
+          "overlays\\third_party_pion_ice_addr.go": "5c9e6a1dab31d2b9a5d0b4926f5bb4f0ea65a415d2b90b2b415d281aa7bd69e3",
+          "overlays\\third_party_pion_ice_z_wan_research.go": "4bcd8e9056082ec7e83d3400859193ff946264ce054ffc075a388f2933ed54dd",
+          "overlays\\connectivity_nativepeer_addresses.go": "458ffeed7bcabe972e57dcf92358a521179929cd763325ef0db05563bda62507",
+          "overlays\\connectivity_nativepeer_z_wan_interface.go": "84a665c6062ac0ba28661d9a71be72af1c6f9dc6ed978b09194a660bf01c2c80"
+        }
+      }
+    },
+    "buffer": {
+      "identity.json": {
+        "base": "webrtc-wan-stall-20261024-current",
+        "baseSourcesSHA256": "a99de4c1d8863fdebd33684a271beb78cb16279ab8401eba8e64b570d8cb8aa5",
+        "diagnostic": true,
+        "binaries": {
+          "relay-native.exe": "439c6ca5375a649e40e8f57700ad4bd41f6b96d51ee3c0467ef64f78faa0c487",
+          "wind-linux": "479fe455f0a1f973c5e21babd146b3230e0b7bc437190d26720a915812f34127",
+          "wind.exe": "55dcdfa246ba7705dcfc65e557b8cadf096773a375b4f98b7343367beb029aef"
+        },
+        "overlays": {
+          "overlays\\cmd_wind_z_wan_research.go": "e77f73c7ec7ca854042eaedcb28cbe2d07d71b2b41c0cc98155c4d43127b72d4",
+          "overlays\\transport_webrtc_provider_z_wan_research.go": "d3fdaa39f233a9d0e58daaec7661f18726963736b84bc4c40b93e49f2602d4b6",
+          "overlays\\transport_webrtc_provider_connection.go": "6c03e42f376cf577f69853ffb5cdc96471c35a778776e824d7ea49cf3da5c913",
+          "overlays\\core_transfer_lanes_z_wan_research.go": "c1128488fc5b265ae045aab1e5a8e916f2c3d6c90f0755de7337033819717384",
+          "overlays\\core_transfer_lanes_set.go": "156225b549230972ed25d77f39685d43b74c7c4347f60fa3ee494e679ef5afe3",
+          "overlays\\third_party_pion_sctp_association.go": "70b00c98d955c7bbb8a2a7090bbe2e75e2070731d227e9875f09fd9fb21d7ac0",
+          "overlays\\third_party_pion_sctp_z_wan_research.go": "7bb5282cc08463976a098d617e274afd0a8fc6a8cd3a0c5de8a7dd45cdcc7685",
+          "overlays\\third_party_pion_webrtc_z_wan_research.go": "3a3187b4d4d492e78b8b762fed233f4042a36ebffe7f91bf9fa9a0339a8afe59",
+          "overlays\\third_party_pion_ice_addr.go": "5c9e6a1dab31d2b9a5d0b4926f5bb4f0ea65a415d2b90b2b415d281aa7bd69e3",
+          "overlays\\third_party_pion_ice_z_wan_research.go": "4bcd8e9056082ec7e83d3400859193ff946264ce054ffc075a388f2933ed54dd",
+          "overlays\\connectivity_nativepeer_addresses.go": "458ffeed7bcabe972e57dcf92358a521179929cd763325ef0db05563bda62507",
+          "overlays\\connectivity_nativepeer_z_wan_interface.go": "84a665c6062ac0ba28661d9a71be72af1c6f9dc6ed978b09194a660bf01c2c80",
+          "overlays\\connectivity_socketauthority_authority.go": "84dd446be5b1742792b015c8dd36ce4df630c7019e6211090f04646771db9002",
+          "overlays\\connectivity_socketauthority_z_wan_buffer_linux.go": "ac120177bc599ae6bf69098abf96f821613fc86317349fd7b100d713fbe24fe1",
+          "overlays\\connectivity_socketauthority_z_wan_buffer_windows.go": "8eae97c5487f5dc937a0af008f0d7158f0a11fb3a9ed9c2affa8e07e099b20b7"
+        }
+      }
+    }
+  }
+}

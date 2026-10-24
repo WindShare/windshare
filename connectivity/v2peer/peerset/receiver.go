@@ -25,17 +25,6 @@ const (
 	UserRelayRoutes
 )
 
-func OpenReceiver(ctx context.Context, config Config, receiver ReceiverConfig) (*Path, error) {
-	if receiver.Factory == nil {
-		return nil, ErrConfig
-	}
-	owner, err := New(config)
-	if err != nil {
-		return nil, err
-	}
-	return owner.openDirect(ctx, receiver)
-}
-
 func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (*Path, error) {
 	var sessionID protocolsession.ProtocolSessionID
 	if session, ok := receiver.Lanes.(interface {
@@ -52,6 +41,9 @@ func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (
 		Start: func(ctx context.Context, binding v2signal.Binding) (Attempt, error) {
 			return receiver.Factory.StartBinding(ctx, receiver.Signaling, receiver.Lanes, binding)
 		},
+	}
+	if lanes, ok := receiver.Lanes.(ContentLaneOwner); ok {
+		pathConfig.Content = lanes
 	}
 	if receiver.Purpose == v2signal.ThroughputExploration {
 		pathConfig.Budget = NewBudget(owner.config.Clock.Now())

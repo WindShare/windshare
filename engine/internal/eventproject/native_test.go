@@ -36,6 +36,23 @@ func TestParallelismObservationPreservesDecisionAndOwnsFacts(t *testing.T) {
 	}
 }
 
+func TestContentRecoveryObservationRetainsAttemptCorrelation(t *testing.T) {
+	event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{
+		Subject: nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2},
+			AttemptID: [16]byte{3}, AttemptSequence: 7, NetworkGenerationID: 9, Side: nativepeer.SideReceiver},
+		Lifecycle: &nativepeer.LifecycleFacts{Kind: nativepeer.ContentRecoveryRequested, Content: true, Direct: true, At: time.Unix(42, 0)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := event.Facts()
+	if !facts.Session.Valid() || !facts.Path.Valid() || !facts.Attempt.Valid() || facts.AttemptSequence != 7 ||
+		facts.Kind != string(nativepeer.ContentRecoveryRequested) || facts.NetworkGeneration != 9 ||
+		facts.Lifecycle == nil || !facts.Lifecycle.Content || !facts.Lifecycle.Direct {
+		t.Fatalf("recovery lost its failed generation: %+v", facts)
+	}
+}
+
 func TestTURNRejectionsIdentifyFailedOperands(t *testing.T) {
 	for _, test := range []struct {
 		name               string

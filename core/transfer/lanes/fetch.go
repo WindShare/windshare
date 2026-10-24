@@ -74,6 +74,9 @@ func (s *Set) Fetch(
 			return Block{}, failurestate.BoundaryError(normalized, err)
 		}
 		if exhausted {
+			if failures.failure == nil {
+				failures = exhaustedRouteFailure()
+			}
 			return Block{}, failurestate.BoundaryError(failures.failure, failures.diagnostic)
 		}
 		// Reassignment is an admitted action, not an inference from a retryable

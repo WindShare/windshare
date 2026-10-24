@@ -116,3 +116,8 @@ func sourceUnavailableFailure(cause error) *failurestate.Failure {
 	value, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceUnavailable)
 	return failurestate.New(value, cause)
 }
+
+func exhaustedRouteFailure() laneFailureSet {
+	value, _ := fault.NewSession(fault.ScopeOutputPause, fault.SessionTransport)
+	return laneFailureSet{failurestate.New(value, ErrNoContentRoute), ErrNoContentRoute}
+}

@@ -1,0 +1,51 @@
+package socketauthority
+
+import (
+	"encoding/json"
+	"net"
+	"os"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+func researchSocketBuffer(packet net.PacketConn) {
+	conn, ok := packet.(*net.UDPConn)
+	if !ok {
+		return
+	}
+	requested, _ := strconv.Atoi(os.Getenv("WS_WAN_RCVBUF"))
+	var setError string
+	if requested > 0 {
+		if err := conn.SetReadBuffer(requested); err != nil {
+			setError = err.Error()
+		}
+	}
+	actual := 0
+	var readError string
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		readError = err.Error()
+	} else {
+		err = raw.Control(func(fd uintptr) {
+			value, queryErr := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF)
+			actual = value
+			if queryErr != nil {
+				readError = queryErr.Error()
+			}
+		})
+		if err != nil {
+			readError = err.Error()
+		}
+	}
+	// Linux may clamp and double requests; record the kernel's effective value.
+	record, _ := json.Marshal(map[string]any{
+		"timeMs": time.Now().UnixMilli(), "address": conn.LocalAddr().String(),
+		"requestedBytes": requested, "actualBytes": actual, "setError": setError, "readError": readError,
+	})
+	file, err := os.OpenFile("research-socket-buffer-"+os.Args[1]+".ndjson", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err == nil {
+		_, _ = file.Write(append(record, '\n'))
+		_ = file.Close()
+	}
+}

@@ -1,0 +1,45 @@
+package provider
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"github.com/pion/ice/v4"
+	pion "github.com/pion/webrtc/v4"
+)
+
+var researchPeerID atomic.Uint64
+
+func researchObserveSCTP(pc *pion.PeerConnection) {
+	if os.Getenv("WS_WAN_DIAGNOSTICS") == "0" {
+		return
+	}
+	id := researchPeerID.Add(1)
+	go func() {
+		output, err := os.Create(fmt.Sprintf("research-sctp-%s-%d.ndjson", os.Args[1], id))
+		if err != nil {
+			return
+		}
+		defer output.Close()
+		encoder := json.NewEncoder(output)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			state := pc.ConnectionState()
+			transport := pc.SCTP()
+			if transport != nil {
+				_ = encoder.Encode(map[string]any{
+					"timeMs": time.Now().UnixMilli(), "id": id, "state": state.String(),
+					"sctp": transport.Stats(), "queues": transport.ResearchQueues(),
+					"buffered": transport.BufferedAmount(), "udp": ice.ResearchUDPTiming(),
+				})
+			}
+			if state == pion.PeerConnectionStateClosed {
+				return
+			}
+		}
+	}()
+}

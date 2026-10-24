@@ -143,7 +143,7 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		transfer.TransferAdmissionCompleted, transfer.TransferDirectoryAdmitted,
 		transfer.TransferDirectoryFinalized, transfer.TransferFileEnqueued,
 		transfer.TransferFileStarted, transfer.TransferFileAdmitted,
-		transfer.TransferFileFirstWrite, transfer.TransferFileSettled,
+		transfer.TransferFileFirstWrite, transfer.TransferFileSettled, transfer.TransferRevisionCleanupSettled,
 		transfer.TransferCapacityRetryScheduled, transfer.TransferCapacityRetryReady,
 		transfer.TransferCapacityRetrySucceeded, transfer.TransferCapacityBudgetPaused,
 		transfer.TransferCapacityWaitCanceled, transfer.TransferCapacityGenerationEnded,

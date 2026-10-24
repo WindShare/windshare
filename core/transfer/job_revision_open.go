@@ -60,10 +60,8 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	if !opened.Handle.IsZero() {
 		// A capacity denial cannot grant a capability. Retiring it first keeps a
 		// broken adapter from leaking sender capacity while the job fails closed.
-		releaseErr := run.releaseRevision(ctx, opened.Handle)
-		return failurestate.JoinClosed(
-			failurestate.DependencyContract(ErrRevisionIdentity), failurestate.Require(releaseErr),
-		)
+		run.releaseRevision(ctx, attempt.plan, opened.Handle)
+		return failurestate.DependencyContract(ErrRevisionIdentity)
 	}
 	if run.job.revisionWait == nil {
 		return failurestate.DependencyContract(ErrRevisionWaitUnavailable)
@@ -146,20 +144,15 @@ func (r *jobRun) finishRevisionOpen(
 	if err == nil {
 		return r.validateOpenedRevision(ctx, plan, opened)
 	}
-	var releaseErr error
 	if !opened.Handle.IsZero() {
-		releaseErr = r.releaseRevision(ctx, opened.Handle)
+		r.releaseRevision(ctx, plan, opened.Handle)
 	}
 	if isJobTerminalError(err) {
-		return OpenedRevision{}, false, failurestate.Join(err, releaseErr)
+		return OpenedRevision{}, false, err
 	}
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionOpen, Cause: err,
-		LeaseReleaseFailure: releaseErr,
 	})
-	if isJobTerminalError(releaseErr) {
-		return OpenedRevision{}, false, releaseErr
-	}
 	return OpenedRevision{}, false, nil
 }
 
@@ -172,14 +165,11 @@ func (r *jobRun) validateOpenedRevision(
 		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
 	); err != nil {
 		err = sourceChangedFailure(err)
-		releaseErr := r.releaseRevision(ctx, opened.Handle)
+		r.releaseRevision(ctx, plan, opened.Handle)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionIdentity,
-			Cause: err, LeaseReleaseFailure: releaseErr,
+			Cause: err,
 		})
-		if releaseErr != nil && isJobTerminalError(releaseErr) {
-			return OpenedRevision{}, false, releaseErr
-		}
 		return OpenedRevision{}, false, nil
 	}
 	return opened, true, nil

@@ -1,0 +1,6097 @@
+{
+  "builds": [
+    {
+      "name": "webrtc-wan-stall-20261024-current",
+      "sources.json": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\sources.json",
+        "sha256": "a99de4c1d8863fdebd33684a271beb78cb16279ab8401eba8e64b570d8cb8aa5"
+      },
+      "binaries.json": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\binaries.json",
+        "sha256": "a9ea8bd017c4e22a5e5ab2e7a232d02f4fe74cea0cc5af2b571dbb0d0f7acb71"
+      },
+      "binaryHashes": {
+        "relay-native.exe": "439c6ca5375a649e40e8f57700ad4bd41f6b96d51ee3c0467ef64f78faa0c487",
+        "wind-linux": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "wind.exe": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f"
+      }
+    }
+  ],
+  "runs": [
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792815627198961200\\report.json",
+        "sha256": "93e7135d280a63dd115283a3f716a050fa3450cbe01bacb8b0f0b8230899dd34"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "forward",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815642177.445,
+            "receiverStartedMs": 1792815642364.8901,
+            "completionMs": 49202.99999999952,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 1.363918135073078
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-p9pnym7v",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 165.453369140625,
+          "roundTripMs": 91.297607421875
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792815627198961200\\receiver-0.ndjson",
+            "sha256": "eefcd09b7e3f5871b13a856b9bcc02634d6c6cd4b3967005d6a926e83bd2076f"
+          },
+          "firstVerifiedMs": 7237,
+          "lastVerifiedChangeMs": 48886,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 49052,
+          "longestNoVerifiedProgressMs": 8500,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [
+            {
+              "ms": 13246,
+              "correlation": {
+                "protocol_session_id": "identifier-1",
+                "protocol_operation_id": "oxaSrOthUO4AAAAAAAAAIg",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:20:55.84864368Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "2",
+              "operation_elapsed_ms": "81",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            },
+            {
+              "ms": 38802,
+              "correlation": {
+                "protocol_session_id": "identifier-1",
+                "protocol_operation_id": "oxaSrOthUO4AAAAAAAAAQw",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:21:21.404932Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "9",
+              "operation_elapsed_ms": "869",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            }
+          ],
+          "leaseReleaseOperations": [
+            {
+              "ms": 48886,
+              "correlation": {
+                "protocol_session_id": "identifier-1",
+                "protocol_operation_id": "oxaSrOthUO4AAAAAAAAAUA",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "request_scheduling": {
+                "expected_ms": "33",
+                "response_ms": "33",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:21:31.488709707Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "39",
+              "usable_lanes_at_selection": 2,
+              "usable_lanes_at_settlement": 2,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "327",
+              "time": "2026-10-24T04:21:31.654803878Z",
+              "elapsed_ms": "49052",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-11",
+              "payload": {
+                "engine_task_id": "aa97014e477d6bff4dadd3dea92a4745:1",
+                "observed_at": "2026-10-24T04:21:31.65478244Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "329",
+              "time": "2026-10-24T04:21:31.654809251Z",
+              "elapsed_ms": "49052",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-11",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "38f26971290b59187b6af66df06e128d",
+                  "first_direct_elapsed_ms": "1304",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "49052",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "0"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1256,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 9191,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 33197,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 236,
+              "bytes": 0
+            },
+            {
+              "ms": 737,
+              "bytes": 0
+            },
+            {
+              "ms": 1237,
+              "bytes": 0
+            },
+            {
+              "ms": 1737,
+              "bytes": 0
+            },
+            {
+              "ms": 2236,
+              "bytes": 0
+            },
+            {
+              "ms": 2736,
+              "bytes": 0
+            },
+            {
+              "ms": 3237,
+              "bytes": 0
+            },
+            {
+              "ms": 3737,
+              "bytes": 0
+            },
+            {
+              "ms": 4237,
+              "bytes": 0
+            },
+            {
+              "ms": 4737,
+              "bytes": 0
+            },
+            {
+              "ms": 5237,
+              "bytes": 0
+            },
+            {
+              "ms": 5736,
+              "bytes": 0
+            },
+            {
+              "ms": 6237,
+              "bytes": 0
+            },
+            {
+              "ms": 6736,
+              "bytes": 0
+            },
+            {
+              "ms": 7237,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7737,
+              "bytes": 8388608
+            },
+            {
+              "ms": 8237,
+              "bytes": 8388608
+            },
+            {
+              "ms": 8737,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9237,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9737,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10236,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10737,
+              "bytes": 16777216
+            },
+            {
+              "ms": 11237,
+              "bytes": 16777216
+            },
+            {
+              "ms": 11737,
+              "bytes": 16777216
+            },
+            {
+              "ms": 12236,
+              "bytes": 16777216
+            },
+            {
+              "ms": 12737,
+              "bytes": 16777216
+            },
+            {
+              "ms": 13237,
+              "bytes": 16777216
+            },
+            {
+              "ms": 13736,
+              "bytes": 16777216
+            },
+            {
+              "ms": 14237,
+              "bytes": 16777216
+            },
+            {
+              "ms": 14737,
+              "bytes": 16777216
+            },
+            {
+              "ms": 15237,
+              "bytes": 16777216
+            },
+            {
+              "ms": 15737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 16236,
+              "bytes": 25165824
+            },
+            {
+              "ms": 16740,
+              "bytes": 25165824
+            },
+            {
+              "ms": 17236,
+              "bytes": 25165824
+            },
+            {
+              "ms": 17737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 18237,
+              "bytes": 25165824
+            },
+            {
+              "ms": 18737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 19237,
+              "bytes": 25165824
+            },
+            {
+              "ms": 19736,
+              "bytes": 25165824
+            },
+            {
+              "ms": 20237,
+              "bytes": 25165824
+            },
+            {
+              "ms": 20737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 21237,
+              "bytes": 25165824
+            },
+            {
+              "ms": 21736,
+              "bytes": 25165824
+            },
+            {
+              "ms": 22236,
+              "bytes": 25165824
+            },
+            {
+              "ms": 22737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23236,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23737,
+              "bytes": 25165824
+            },
+            {
+              "ms": 24237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 24737,
+              "bytes": 33554432
+            },
+            {
+              "ms": 25237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 25736,
+              "bytes": 33554432
+            },
+            {
+              "ms": 26237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 26737,
+              "bytes": 33554432
+            },
+            {
+              "ms": 27237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 27737,
+              "bytes": 33554432
+            },
+            {
+              "ms": 28237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 28737,
+              "bytes": 33554432
+            },
+            {
+              "ms": 29237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 29736,
+              "bytes": 33554432
+            },
+            {
+              "ms": 30237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 30736,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31237,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31737,
+              "bytes": 33554432
+            },
+            {
+              "ms": 32237,
+              "bytes": 41943040
+            },
+            {
+              "ms": 32737,
+              "bytes": 41943040
+            },
+            {
+              "ms": 33237,
+              "bytes": 41943040
+            },
+            {
+              "ms": 33736,
+              "bytes": 41943040
+            },
+            {
+              "ms": 34236,
+              "bytes": 41943040
+            },
+            {
+              "ms": 34737,
+              "bytes": 41943040
+            },
+            {
+              "ms": 35237,
+              "bytes": 41943040
+            },
+            {
+              "ms": 35737,
+              "bytes": 41943040
+            },
+            {
+              "ms": 36237,
+              "bytes": 41943040
+            },
+            {
+              "ms": 36736,
+              "bytes": 41943040
+            },
+            {
+              "ms": 37237,
+              "bytes": 50331648
+            },
+            {
+              "ms": 37737,
+              "bytes": 50331648
+            },
+            {
+              "ms": 38237,
+              "bytes": 50331648
+            },
+            {
+              "ms": 38736,
+              "bytes": 50331648
+            },
+            {
+              "ms": 39237,
+              "bytes": 50331648
+            },
+            {
+              "ms": 39736,
+              "bytes": 50331648
+            },
+            {
+              "ms": 40236,
+              "bytes": 50331648
+            },
+            {
+              "ms": 40737,
+              "bytes": 50331648
+            },
+            {
+              "ms": 41237,
+              "bytes": 50331648
+            },
+            {
+              "ms": 41737,
+              "bytes": 50331648
+            },
+            {
+              "ms": 42237,
+              "bytes": 58720256
+            },
+            {
+              "ms": 42737,
+              "bytes": 58720256
+            },
+            {
+              "ms": 43237,
+              "bytes": 58720256
+            },
+            {
+              "ms": 43737,
+              "bytes": 58720256
+            },
+            {
+              "ms": 44237,
+              "bytes": 58720256
+            },
+            {
+              "ms": 44736,
+              "bytes": 58720256
+            },
+            {
+              "ms": 45236,
+              "bytes": 58720256
+            },
+            {
+              "ms": 45737,
+              "bytes": 58720256
+            },
+            {
+              "ms": 46236,
+              "bytes": 58720256
+            },
+            {
+              "ms": 46736,
+              "bytes": 58720256
+            },
+            {
+              "ms": 47236,
+              "bytes": 58720256
+            },
+            {
+              "ms": 47737,
+              "bytes": 58720256
+            },
+            {
+              "ms": 48237,
+              "bytes": 58720256
+            },
+            {
+              "ms": 48737,
+              "bytes": 58720256
+            },
+            {
+              "ms": 48886,
+              "bytes": 67108864
+            },
+            {
+              "ms": 49052,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792815692794461400\\report.json",
+        "sha256": "91873024e9b15b7f9f7ad220767dba64c03c2bbf72f6167240310772263a8597"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "forward",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815708839.6138,
+            "receiverStartedMs": 1792815709033.0872,
+            "completionMs": 56922.00000000048,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 1.1789618073855352
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-5ttgpgbk",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 171.9775390625,
+          "roundTripMs": 100.138916015625
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792815692794461400\\receiver-0.ndjson",
+            "sha256": "e9d4888dd1e51a50d1cd5ff819559cd7bdc52782c104ffc1301ea22a0a07f3a3"
+          },
+          "firstVerifiedMs": 8860,
+          "lastVerifiedChangeMs": 56521,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 56727,
+          "longestNoVerifiedProgressMs": 9501,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [
+            {
+              "ms": 19242,
+              "correlation": {
+                "protocol_session_id": "identifier-2",
+                "protocol_operation_id": "aFk83St6trsAAAAAAAAAIA",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:22:08.519070925Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "6",
+              "operation_elapsed_ms": "349",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            },
+            {
+              "ms": 46691,
+              "correlation": {
+                "protocol_session_id": "identifier-2",
+                "protocol_operation_id": "aFk83St6trsAAAAAAAAARg",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:22:35.968230297Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "6",
+              "operation_elapsed_ms": "943",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            }
+          ],
+          "leaseReleaseOperations": [
+            {
+              "ms": 56521,
+              "correlation": {
+                "protocol_session_id": "identifier-2",
+                "protocol_operation_id": "aFk83St6trsAAAAAAAAAUQ",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "request_scheduling": {
+                "expected_ms": "32",
+                "response_ms": "32",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:22:45.798542171Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "46",
+              "usable_lanes_at_selection": 2,
+              "usable_lanes_at_settlement": 2,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "346",
+              "time": "2026-10-24T04:22:46.004189802Z",
+              "elapsed_ms": "56727",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-12",
+              "payload": {
+                "engine_task_id": "e40b9fca50bfb3596ab0728dd5176c92:1",
+                "observed_at": "2026-10-24T04:22:46.004152275Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "348",
+              "time": "2026-10-24T04:22:46.004194756Z",
+              "elapsed_ms": "56727",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-12",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "f940a2992d9ab82f8cc23a05040fb134",
+                  "first_direct_elapsed_ms": "1207",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "56726",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "0"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1320,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 12191,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 42242,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 359,
+              "bytes": 0
+            },
+            {
+              "ms": 860,
+              "bytes": 0
+            },
+            {
+              "ms": 1360,
+              "bytes": 0
+            },
+            {
+              "ms": 1860,
+              "bytes": 0
+            },
+            {
+              "ms": 2360,
+              "bytes": 0
+            },
+            {
+              "ms": 2860,
+              "bytes": 0
+            },
+            {
+              "ms": 3368,
+              "bytes": 0
+            },
+            {
+              "ms": 3860,
+              "bytes": 0
+            },
+            {
+              "ms": 4360,
+              "bytes": 0
+            },
+            {
+              "ms": 4860,
+              "bytes": 0
+            },
+            {
+              "ms": 5360,
+              "bytes": 0
+            },
+            {
+              "ms": 5860,
+              "bytes": 0
+            },
+            {
+              "ms": 6360,
+              "bytes": 0
+            },
+            {
+              "ms": 6860,
+              "bytes": 0
+            },
+            {
+              "ms": 7360,
+              "bytes": 0
+            },
+            {
+              "ms": 7860,
+              "bytes": 0
+            },
+            {
+              "ms": 8359,
+              "bytes": 0
+            },
+            {
+              "ms": 8860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9859,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 11360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 11860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 12360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 12860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 13360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 13860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 14360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 14860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 15360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 15860,
+              "bytes": 8388608
+            },
+            {
+              "ms": 16360,
+              "bytes": 8388608
+            },
+            {
+              "ms": 16860,
+              "bytes": 16777216
+            },
+            {
+              "ms": 17360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 17860,
+              "bytes": 16777216
+            },
+            {
+              "ms": 18360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 18859,
+              "bytes": 16777216
+            },
+            {
+              "ms": 19360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 19860,
+              "bytes": 16777216
+            },
+            {
+              "ms": 20360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 20860,
+              "bytes": 16777216
+            },
+            {
+              "ms": 21360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 21859,
+              "bytes": 16777216
+            },
+            {
+              "ms": 22360,
+              "bytes": 16777216
+            },
+            {
+              "ms": 22860,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23860,
+              "bytes": 25165824
+            },
+            {
+              "ms": 24360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 24859,
+              "bytes": 25165824
+            },
+            {
+              "ms": 25360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 25860,
+              "bytes": 25165824
+            },
+            {
+              "ms": 26360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 26860,
+              "bytes": 25165824
+            },
+            {
+              "ms": 27360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 27860,
+              "bytes": 25165824
+            },
+            {
+              "ms": 28360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 28859,
+              "bytes": 25165824
+            },
+            {
+              "ms": 29360,
+              "bytes": 25165824
+            },
+            {
+              "ms": 29860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 30360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 30860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 32360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 32859,
+              "bytes": 33554432
+            },
+            {
+              "ms": 33360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 33860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 34360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 34860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 35360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 35859,
+              "bytes": 33554432
+            },
+            {
+              "ms": 36360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 36860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 37360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 37860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 38360,
+              "bytes": 33554432
+            },
+            {
+              "ms": 38860,
+              "bytes": 33554432
+            },
+            {
+              "ms": 39361,
+              "bytes": 41943040
+            },
+            {
+              "ms": 39860,
+              "bytes": 41943040
+            },
+            {
+              "ms": 40360,
+              "bytes": 41943040
+            },
+            {
+              "ms": 40860,
+              "bytes": 41943040
+            },
+            {
+              "ms": 41359,
+              "bytes": 41943040
+            },
+            {
+              "ms": 41860,
+              "bytes": 41943040
+            },
+            {
+              "ms": 42360,
+              "bytes": 41943040
+            },
+            {
+              "ms": 42859,
+              "bytes": 41943040
+            },
+            {
+              "ms": 43360,
+              "bytes": 41943040
+            },
+            {
+              "ms": 43860,
+              "bytes": 41943040
+            },
+            {
+              "ms": 44360,
+              "bytes": 50331648
+            },
+            {
+              "ms": 44860,
+              "bytes": 50331648
+            },
+            {
+              "ms": 45360,
+              "bytes": 50331648
+            },
+            {
+              "ms": 45860,
+              "bytes": 50331648
+            },
+            {
+              "ms": 46360,
+              "bytes": 50331648
+            },
+            {
+              "ms": 46860,
+              "bytes": 50331648
+            },
+            {
+              "ms": 47360,
+              "bytes": 50331648
+            },
+            {
+              "ms": 47860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 48360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 48860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 49360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 49860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 50360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 50860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 51360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 51860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 52360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 52860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 53359,
+              "bytes": 58720256
+            },
+            {
+              "ms": 53860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 54360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 54860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 55360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 55860,
+              "bytes": 58720256
+            },
+            {
+              "ms": 56360,
+              "bytes": 58720256
+            },
+            {
+              "ms": 56521,
+              "bytes": 67108864
+            },
+            {
+              "ms": 56727,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792816100180797400\\report.json",
+        "sha256": "aefe21c6e2c1f951e643b96501a32433b9685fa9abcda9261129161018716615"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "forward",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792816105266.1057,
+            "receiverStartedMs": 1792816105447.6482,
+            "completionMs": 44797.00000000048,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 1.4980660312074308
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-b4lkxtaa",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 188.566650390625,
+          "roundTripMs": 89.579833984375
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-forward-1792816100180797400\\receiver-0.ndjson",
+            "sha256": "ee1696a22cdf3e09869db6be957f5642c2a876c88db0245879850b13d1895cd0"
+          },
+          "firstVerifiedMs": 10255,
+          "lastVerifiedChangeMs": 44517,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 44639,
+          "longestNoVerifiedProgressMs": 10255,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [
+            {
+              "ms": 17185,
+              "correlation": {
+                "protocol_session_id": "identifier-3",
+                "protocol_operation_id": "0RXJfvqK4noAAAAAAAAAIQ",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:28:42.869404136Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "7",
+              "operation_elapsed_ms": "341",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            }
+          ],
+          "leaseReleaseOperations": [
+            {
+              "ms": 44517,
+              "correlation": {
+                "protocol_session_id": "identifier-3",
+                "protocol_operation_id": "0RXJfvqK4noAAAAAAAAAUw",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "request_scheduling": {
+                "expected_ms": "29",
+                "response_ms": "29",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:29:10.201673337Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "34",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 3,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "319",
+              "time": "2026-10-24T04:29:10.323999029Z",
+              "elapsed_ms": "44639",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-13",
+              "payload": {
+                "engine_task_id": "08af69075cd787d88b3612340a43c1a8:1",
+                "observed_at": "2026-10-24T04:29:10.323932191Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "321",
+              "time": "2026-10-24T04:29:10.324007528Z",
+              "elapsed_ms": "44639",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-13",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "33796cd7671aa0a2bfb031d093b6f691",
+                  "first_direct_elapsed_ms": "1310",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "44639",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "0"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1314,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 12142,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 34545,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 256,
+              "bytes": 0
+            },
+            {
+              "ms": 755,
+              "bytes": 0
+            },
+            {
+              "ms": 1254,
+              "bytes": 0
+            },
+            {
+              "ms": 1754,
+              "bytes": 0
+            },
+            {
+              "ms": 2255,
+              "bytes": 0
+            },
+            {
+              "ms": 2755,
+              "bytes": 0
+            },
+            {
+              "ms": 3255,
+              "bytes": 0
+            },
+            {
+              "ms": 3754,
+              "bytes": 0
+            },
+            {
+              "ms": 4255,
+              "bytes": 0
+            },
+            {
+              "ms": 4755,
+              "bytes": 0
+            },
+            {
+              "ms": 5255,
+              "bytes": 0
+            },
+            {
+              "ms": 5754,
+              "bytes": 0
+            },
+            {
+              "ms": 6255,
+              "bytes": 0
+            },
+            {
+              "ms": 6755,
+              "bytes": 0
+            },
+            {
+              "ms": 7255,
+              "bytes": 0
+            },
+            {
+              "ms": 7755,
+              "bytes": 0
+            },
+            {
+              "ms": 8255,
+              "bytes": 0
+            },
+            {
+              "ms": 8755,
+              "bytes": 0
+            },
+            {
+              "ms": 9254,
+              "bytes": 0
+            },
+            {
+              "ms": 9755,
+              "bytes": 0
+            },
+            {
+              "ms": 10255,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10754,
+              "bytes": 8388608
+            },
+            {
+              "ms": 11254,
+              "bytes": 8388608
+            },
+            {
+              "ms": 11755,
+              "bytes": 8388608
+            },
+            {
+              "ms": 12255,
+              "bytes": 8388608
+            },
+            {
+              "ms": 12754,
+              "bytes": 8388608
+            },
+            {
+              "ms": 13255,
+              "bytes": 8388608
+            },
+            {
+              "ms": 13755,
+              "bytes": 8388608
+            },
+            {
+              "ms": 14254,
+              "bytes": 8388608
+            },
+            {
+              "ms": 14754,
+              "bytes": 8388608
+            },
+            {
+              "ms": 15255,
+              "bytes": 8388608
+            },
+            {
+              "ms": 15754,
+              "bytes": 16777216
+            },
+            {
+              "ms": 16254,
+              "bytes": 16777216
+            },
+            {
+              "ms": 16755,
+              "bytes": 16777216
+            },
+            {
+              "ms": 17255,
+              "bytes": 16777216
+            },
+            {
+              "ms": 17755,
+              "bytes": 16777216
+            },
+            {
+              "ms": 18255,
+              "bytes": 16777216
+            },
+            {
+              "ms": 18755,
+              "bytes": 16777216
+            },
+            {
+              "ms": 19255,
+              "bytes": 16777216
+            },
+            {
+              "ms": 19755,
+              "bytes": 16777216
+            },
+            {
+              "ms": 20255,
+              "bytes": 16777216
+            },
+            {
+              "ms": 20755,
+              "bytes": 16777216
+            },
+            {
+              "ms": 21255,
+              "bytes": 16777216
+            },
+            {
+              "ms": 21754,
+              "bytes": 16777216
+            },
+            {
+              "ms": 22255,
+              "bytes": 25165824
+            },
+            {
+              "ms": 22755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23254,
+              "bytes": 25165824
+            },
+            {
+              "ms": 23755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 24254,
+              "bytes": 25165824
+            },
+            {
+              "ms": 24754,
+              "bytes": 25165824
+            },
+            {
+              "ms": 25254,
+              "bytes": 25165824
+            },
+            {
+              "ms": 25755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 26255,
+              "bytes": 25165824
+            },
+            {
+              "ms": 26754,
+              "bytes": 25165824
+            },
+            {
+              "ms": 27255,
+              "bytes": 25165824
+            },
+            {
+              "ms": 27755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 28255,
+              "bytes": 25165824
+            },
+            {
+              "ms": 28755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 29255,
+              "bytes": 25165824
+            },
+            {
+              "ms": 29755,
+              "bytes": 25165824
+            },
+            {
+              "ms": 30255,
+              "bytes": 33554432
+            },
+            {
+              "ms": 30755,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31255,
+              "bytes": 33554432
+            },
+            {
+              "ms": 31754,
+              "bytes": 33554432
+            },
+            {
+              "ms": 32255,
+              "bytes": 33554432
+            },
+            {
+              "ms": 32755,
+              "bytes": 33554432
+            },
+            {
+              "ms": 33255,
+              "bytes": 33554432
+            },
+            {
+              "ms": 33755,
+              "bytes": 33554432
+            },
+            {
+              "ms": 34254,
+              "bytes": 33554432
+            },
+            {
+              "ms": 34755,
+              "bytes": 33554432
+            },
+            {
+              "ms": 35254,
+              "bytes": 33554432
+            },
+            {
+              "ms": 35755,
+              "bytes": 41943040
+            },
+            {
+              "ms": 36255,
+              "bytes": 41943040
+            },
+            {
+              "ms": 36755,
+              "bytes": 41943040
+            },
+            {
+              "ms": 37254,
+              "bytes": 41943040
+            },
+            {
+              "ms": 37755,
+              "bytes": 41943040
+            },
+            {
+              "ms": 38255,
+              "bytes": 50331648
+            },
+            {
+              "ms": 38755,
+              "bytes": 50331648
+            },
+            {
+              "ms": 39255,
+              "bytes": 50331648
+            },
+            {
+              "ms": 39754,
+              "bytes": 50331648
+            },
+            {
+              "ms": 40255,
+              "bytes": 50331648
+            },
+            {
+              "ms": 40755,
+              "bytes": 50331648
+            },
+            {
+              "ms": 41255,
+              "bytes": 58720256
+            },
+            {
+              "ms": 41755,
+              "bytes": 58720256
+            },
+            {
+              "ms": 42255,
+              "bytes": 58720256
+            },
+            {
+              "ms": 42754,
+              "bytes": 58720256
+            },
+            {
+              "ms": 43255,
+              "bytes": 58720256
+            },
+            {
+              "ms": 43755,
+              "bytes": 58720256
+            },
+            {
+              "ms": 44255,
+              "bytes": 58720256
+            },
+            {
+              "ms": 44517,
+              "bytes": 67108864
+            },
+            {
+              "ms": 44639,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815463866949500\\report.json",
+        "sha256": "135d2349ff97e3d39da4dc6e7d8c04f9915d69f5b35f16412229551b7ac10b15"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815469786.4685,
+            "receiverStartedMs": 1792815470054.0725,
+            "completionMs": 30625.0,
+            "exitCode": 0,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 2.191309844897959
+          }
+        ],
+        "scope": "Complete native CLI workflow; SSH forwards localhost signaling, never content. p2p-only requires a real WebRTC content path. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-1r9hwa4g",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 159.658447265625,
+          "roundTripMs": 93.53369140625
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815463866949500\\receiver-0.ndjson",
+            "sha256": "92f980148a5ce487df5ce89715728ec857ea74d1fad1b2fbc40934f664d9551a"
+          },
+          "firstVerifiedMs": 4214,
+          "lastVerifiedChangeMs": 29391,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 29424,
+          "longestNoVerifiedProgressMs": 5500,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 29354,
+              "correlation": {
+                "protocol_session_id": "identifier-4",
+                "protocol_operation_id": "8XW9MsszZtQAAAAAAAAATQ",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "request_scheduling": {
+                "expected_ms": "31",
+                "response_ms": "31",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:18:20.5733856Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "31",
+              "usable_lanes_at_selection": 2,
+              "usable_lanes_at_settlement": 2,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "275",
+              "time": "2026-10-24T04:18:20.6439493Z",
+              "elapsed_ms": "29424",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-14",
+              "payload": {
+                "engine_task_id": "bacc7416eaf4b109edc2da182a4e95d6:1",
+                "observed_at": "2026-10-24T04:18:20.6439493Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "277",
+              "time": "2026-10-24T04:18:20.6439493Z",
+              "elapsed_ms": "29424",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-14",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "ca34e4a35b5e4e154fca8a1782bb4242",
+                  "first_direct_elapsed_ms": "1740",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "29422",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1308,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 9025,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 214,
+              "bytes": 0
+            },
+            {
+              "ms": 714,
+              "bytes": 0
+            },
+            {
+              "ms": 1214,
+              "bytes": 0
+            },
+            {
+              "ms": 1714,
+              "bytes": 0
+            },
+            {
+              "ms": 2214,
+              "bytes": 0
+            },
+            {
+              "ms": 2714,
+              "bytes": 0
+            },
+            {
+              "ms": 3214,
+              "bytes": 0
+            },
+            {
+              "ms": 3714,
+              "bytes": 0
+            },
+            {
+              "ms": 4214,
+              "bytes": 8388608
+            },
+            {
+              "ms": 4714,
+              "bytes": 8388608
+            },
+            {
+              "ms": 5214,
+              "bytes": 8388608
+            },
+            {
+              "ms": 5714,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6214,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6714,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7214,
+              "bytes": 16777216
+            },
+            {
+              "ms": 7714,
+              "bytes": 16777216
+            },
+            {
+              "ms": 8214,
+              "bytes": 16777216
+            },
+            {
+              "ms": 8714,
+              "bytes": 16777216
+            },
+            {
+              "ms": 9214,
+              "bytes": 16777216
+            },
+            {
+              "ms": 9714,
+              "bytes": 16777216
+            },
+            {
+              "ms": 10214,
+              "bytes": 16777216
+            },
+            {
+              "ms": 10714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 11214,
+              "bytes": 25165824
+            },
+            {
+              "ms": 11714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 12214,
+              "bytes": 25165824
+            },
+            {
+              "ms": 12714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 13214,
+              "bytes": 25165824
+            },
+            {
+              "ms": 13714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 14214,
+              "bytes": 25165824
+            },
+            {
+              "ms": 14714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 15214,
+              "bytes": 25165824
+            },
+            {
+              "ms": 15714,
+              "bytes": 25165824
+            },
+            {
+              "ms": 16214,
+              "bytes": 33554432
+            },
+            {
+              "ms": 16714,
+              "bytes": 33554432
+            },
+            {
+              "ms": 17214,
+              "bytes": 33554432
+            },
+            {
+              "ms": 17714,
+              "bytes": 33554432
+            },
+            {
+              "ms": 18214,
+              "bytes": 33554432
+            },
+            {
+              "ms": 18714,
+              "bytes": 33554432
+            },
+            {
+              "ms": 19214,
+              "bytes": 33554432
+            },
+            {
+              "ms": 19714,
+              "bytes": 33554432
+            },
+            {
+              "ms": 20214,
+              "bytes": 41943040
+            },
+            {
+              "ms": 20714,
+              "bytes": 41943040
+            },
+            {
+              "ms": 21214,
+              "bytes": 41943040
+            },
+            {
+              "ms": 21714,
+              "bytes": 41943040
+            },
+            {
+              "ms": 22214,
+              "bytes": 41943040
+            },
+            {
+              "ms": 22714,
+              "bytes": 41943040
+            },
+            {
+              "ms": 23214,
+              "bytes": 41943040
+            },
+            {
+              "ms": 23714,
+              "bytes": 50331648
+            },
+            {
+              "ms": 24214,
+              "bytes": 50331648
+            },
+            {
+              "ms": 24714,
+              "bytes": 50331648
+            },
+            {
+              "ms": 25214,
+              "bytes": 50331648
+            },
+            {
+              "ms": 25714,
+              "bytes": 50331648
+            },
+            {
+              "ms": 26214,
+              "bytes": 50331648
+            },
+            {
+              "ms": 26714,
+              "bytes": 58720256
+            },
+            {
+              "ms": 27214,
+              "bytes": 58720256
+            },
+            {
+              "ms": 27714,
+              "bytes": 58720256
+            },
+            {
+              "ms": 28214,
+              "bytes": 58720256
+            },
+            {
+              "ms": 28714,
+              "bytes": 58720256
+            },
+            {
+              "ms": 29214,
+              "bytes": 58720256
+            },
+            {
+              "ms": 29391,
+              "bytes": 67108864
+            },
+            {
+              "ms": 29424,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 67108864,
+          "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815463866949500\\output-0\\probe.bin",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815597406626100\\report.json",
+        "sha256": "64e1453655f1af88dcd2f52e529f8c6d584ee38476c65d3727014aeef6dc59d3"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815602560.5317,
+            "receiverStartedMs": 1792815602827.4062,
+            "completionMs": 23422.00000000048,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 2.8652063871573143
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-52ges2m9",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 159.091064453125,
+          "roundTripMs": 83.453125
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815597406626100\\receiver-0.ndjson",
+            "sha256": "a1e15246c2e59f4ff545e1670fb3ff85db5c987102370f7dc404aac5624e5a6d"
+          },
+          "firstVerifiedMs": 5718,
+          "lastVerifiedChangeMs": 23359,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 23385,
+          "longestNoVerifiedProgressMs": 5718,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 23332,
+              "correlation": {
+                "protocol_session_id": "identifier-5",
+                "protocol_operation_id": "zp60MPyNM9MAAAAAAAAAYA",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "request_scheduling": {
+                "expected_ms": "34",
+                "response_ms": "34",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:20:26.1901842Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "31",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 3,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "353",
+              "time": "2026-10-24T04:20:26.2430319Z",
+              "elapsed_ms": "23385",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-15",
+              "payload": {
+                "engine_task_id": "ff0ef0504194efbe0032ad70d1529404:1",
+                "observed_at": "2026-10-24T04:20:26.2430319Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "355",
+              "time": "2026-10-24T04:20:26.2430319Z",
+              "elapsed_ms": "23385",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-15",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "d8a75542e1feb6343b3e03c03802b58e",
+                  "first_direct_elapsed_ms": "1317",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "23384",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1273,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 9040,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 18346,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 218,
+              "bytes": 0
+            },
+            {
+              "ms": 718,
+              "bytes": 0
+            },
+            {
+              "ms": 1218,
+              "bytes": 0
+            },
+            {
+              "ms": 1718,
+              "bytes": 0
+            },
+            {
+              "ms": 2218,
+              "bytes": 0
+            },
+            {
+              "ms": 2718,
+              "bytes": 0
+            },
+            {
+              "ms": 3218,
+              "bytes": 0
+            },
+            {
+              "ms": 3718,
+              "bytes": 0
+            },
+            {
+              "ms": 4218,
+              "bytes": 0
+            },
+            {
+              "ms": 4718,
+              "bytes": 0
+            },
+            {
+              "ms": 5218,
+              "bytes": 0
+            },
+            {
+              "ms": 5718,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6218,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6718,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7218,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7718,
+              "bytes": 8388608
+            },
+            {
+              "ms": 8218,
+              "bytes": 8388608
+            },
+            {
+              "ms": 8718,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9218,
+              "bytes": 8388608
+            },
+            {
+              "ms": 9718,
+              "bytes": 8388608
+            },
+            {
+              "ms": 10218,
+              "bytes": 16777216
+            },
+            {
+              "ms": 10718,
+              "bytes": 16777216
+            },
+            {
+              "ms": 11218,
+              "bytes": 16777216
+            },
+            {
+              "ms": 11718,
+              "bytes": 16777216
+            },
+            {
+              "ms": 12218,
+              "bytes": 25165824
+            },
+            {
+              "ms": 12718,
+              "bytes": 25165824
+            },
+            {
+              "ms": 13218,
+              "bytes": 25165824
+            },
+            {
+              "ms": 13718,
+              "bytes": 33554432
+            },
+            {
+              "ms": 14218,
+              "bytes": 33554432
+            },
+            {
+              "ms": 14718,
+              "bytes": 33554432
+            },
+            {
+              "ms": 15218,
+              "bytes": 33554432
+            },
+            {
+              "ms": 15718,
+              "bytes": 41943040
+            },
+            {
+              "ms": 16218,
+              "bytes": 41943040
+            },
+            {
+              "ms": 16718,
+              "bytes": 41943040
+            },
+            {
+              "ms": 17218,
+              "bytes": 41943040
+            },
+            {
+              "ms": 17718,
+              "bytes": 41943040
+            },
+            {
+              "ms": 18218,
+              "bytes": 41943040
+            },
+            {
+              "ms": 18718,
+              "bytes": 50331648
+            },
+            {
+              "ms": 19218,
+              "bytes": 50331648
+            },
+            {
+              "ms": 19718,
+              "bytes": 50331648
+            },
+            {
+              "ms": 20218,
+              "bytes": 58720256
+            },
+            {
+              "ms": 20718,
+              "bytes": 58720256
+            },
+            {
+              "ms": 21218,
+              "bytes": 58720256
+            },
+            {
+              "ms": 21718,
+              "bytes": 58720256
+            },
+            {
+              "ms": 22218,
+              "bytes": 58720256
+            },
+            {
+              "ms": 22718,
+              "bytes": 58720256
+            },
+            {
+              "ms": 23218,
+              "bytes": 58720256
+            },
+            {
+              "ms": 23359,
+              "bytes": 67108864
+            },
+            {
+              "ms": 23385,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 67108864,
+          "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815597406626100\\output-0\\probe.bin",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815767133334600\\report.json",
+        "sha256": "4f6324dd398eeb7a1d0bf31cd48e28d36437714f218dfb2955929cf0c2fd264b"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815780878.9597,
+            "receiverStartedMs": 1792815781132.7344,
+            "completionMs": 19250.0,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 3.4861747532467535
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-fydxzw18",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 170.880126953125,
+          "roundTripMs": 86.970703125
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815767133334600\\receiver-0.ndjson",
+            "sha256": "917c4261d04c995372e68dd835787ec141672e50250b25e31ef57b9ca7e8ff82"
+          },
+          "firstVerifiedMs": 4720,
+          "lastVerifiedChangeMs": 19158,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 19189,
+          "longestNoVerifiedProgressMs": 4720,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 19121,
+              "correlation": {
+                "protocol_session_id": "identifier-6",
+                "protocol_operation_id": "DNkqb-aAtl0AAAAAAAAATg",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "request_scheduling": {
+                "expected_ms": "30",
+                "response_ms": "30",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:23:20.2937649Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "37",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 3,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "358",
+              "time": "2026-10-24T04:23:20.3626169Z",
+              "elapsed_ms": "19189",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-16",
+              "payload": {
+                "engine_task_id": "8632d6f8e7d3e489bafc94eab14144b2:1",
+                "observed_at": "2026-10-24T04:23:20.3626169Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "360",
+              "time": "2026-10-24T04:23:20.3626169Z",
+              "elapsed_ms": "19189",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-16",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "0d53bbddd0aa0420e6d17e09834ddc12",
+                  "first_direct_elapsed_ms": "1224",
+                  "direct_bytes": "67108864",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "19188",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1218,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 6304,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 14459,
+              "local_type": "srflx",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 220,
+              "bytes": 0
+            },
+            {
+              "ms": 720,
+              "bytes": 0
+            },
+            {
+              "ms": 1220,
+              "bytes": 0
+            },
+            {
+              "ms": 1720,
+              "bytes": 0
+            },
+            {
+              "ms": 2220,
+              "bytes": 0
+            },
+            {
+              "ms": 2720,
+              "bytes": 0
+            },
+            {
+              "ms": 3220,
+              "bytes": 0
+            },
+            {
+              "ms": 3720,
+              "bytes": 0
+            },
+            {
+              "ms": 4220,
+              "bytes": 0
+            },
+            {
+              "ms": 4720,
+              "bytes": 8388608
+            },
+            {
+              "ms": 5220,
+              "bytes": 8388608
+            },
+            {
+              "ms": 5720,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6220,
+              "bytes": 8388608
+            },
+            {
+              "ms": 6720,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7220,
+              "bytes": 8388608
+            },
+            {
+              "ms": 7720,
+              "bytes": 16777216
+            },
+            {
+              "ms": 8220,
+              "bytes": 16777216
+            },
+            {
+              "ms": 8721,
+              "bytes": 25165824
+            },
+            {
+              "ms": 9220,
+              "bytes": 25165824
+            },
+            {
+              "ms": 9720,
+              "bytes": 25165824
+            },
+            {
+              "ms": 10220,
+              "bytes": 25165824
+            },
+            {
+              "ms": 10720,
+              "bytes": 33554432
+            },
+            {
+              "ms": 11220,
+              "bytes": 33554432
+            },
+            {
+              "ms": 11720,
+              "bytes": 33554432
+            },
+            {
+              "ms": 12220,
+              "bytes": 33554432
+            },
+            {
+              "ms": 12720,
+              "bytes": 33554432
+            },
+            {
+              "ms": 13220,
+              "bytes": 41943040
+            },
+            {
+              "ms": 13720,
+              "bytes": 41943040
+            },
+            {
+              "ms": 14220,
+              "bytes": 41943040
+            },
+            {
+              "ms": 14720,
+              "bytes": 41943040
+            },
+            {
+              "ms": 15220,
+              "bytes": 41943040
+            },
+            {
+              "ms": 15720,
+              "bytes": 50331648
+            },
+            {
+              "ms": 16220,
+              "bytes": 50331648
+            },
+            {
+              "ms": 16720,
+              "bytes": 50331648
+            },
+            {
+              "ms": 17220,
+              "bytes": 50331648
+            },
+            {
+              "ms": 17720,
+              "bytes": 58720256
+            },
+            {
+              "ms": 18220,
+              "bytes": 58720256
+            },
+            {
+              "ms": 18720,
+              "bytes": 58720256
+            },
+            {
+              "ms": 19158,
+              "bytes": 67108864
+            },
+            {
+              "ms": 19189,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 67108864,
+          "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815767133334600\\output-0\\probe.bin",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815913477445900\\report.json",
+        "sha256": "f8b50d517ecfa817b943b6b496f7bea332c69557a1cda03640e29cb6e7528889"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815918889.0159,
+            "receiverStartedMs": 1792815919226.673,
+            "completionMs": 180000.0,
+            "exitCode": null,
+            "deadlineExceeded": true,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>"
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-958i8dy4",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 184.20361328125,
+          "roundTripMs": 103.443603515625
+        },
+        "status": "failed",
+        "error": "Native transfer failed: ",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792815913477445900\\receiver-0.ndjson",
+            "sha256": "4e532f7979a934f4d4b3fdbc779a86bba72b2cd907f84b8f2ac010dbbb8e32e7"
+          },
+          "firstVerifiedMs": null,
+          "lastVerifiedChangeMs": null,
+          "maxVerifiedBytes": 0,
+          "lastProgressMs": 179731,
+          "longestNoVerifiedProgressMs": 179731,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [],
+          "taskSettlements": [],
+          "transferSettlements": [],
+          "selectedPairs": [
+            {
+              "ms": 1603,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown",
+              "localAddressClass": "benchmark-range; Windows inventory identifies Mihomo"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 231,
+              "bytes": 0
+            },
+            {
+              "ms": 731,
+              "bytes": 0
+            },
+            {
+              "ms": 1231,
+              "bytes": 0
+            },
+            {
+              "ms": 1731,
+              "bytes": 0
+            },
+            {
+              "ms": 2231,
+              "bytes": 0
+            },
+            {
+              "ms": 2731,
+              "bytes": 0
+            },
+            {
+              "ms": 3231,
+              "bytes": 0
+            },
+            {
+              "ms": 3731,
+              "bytes": 0
+            },
+            {
+              "ms": 4231,
+              "bytes": 0
+            },
+            {
+              "ms": 4731,
+              "bytes": 0
+            },
+            {
+              "ms": 5231,
+              "bytes": 0
+            },
+            {
+              "ms": 5731,
+              "bytes": 0
+            },
+            {
+              "ms": 6231,
+              "bytes": 0
+            },
+            {
+              "ms": 6731,
+              "bytes": 0
+            },
+            {
+              "ms": 7231,
+              "bytes": 0
+            },
+            {
+              "ms": 7731,
+              "bytes": 0
+            },
+            {
+              "ms": 8231,
+              "bytes": 0
+            },
+            {
+              "ms": 8731,
+              "bytes": 0
+            },
+            {
+              "ms": 9231,
+              "bytes": 0
+            },
+            {
+              "ms": 9731,
+              "bytes": 0
+            },
+            {
+              "ms": 10231,
+              "bytes": 0
+            },
+            {
+              "ms": 10731,
+              "bytes": 0
+            },
+            {
+              "ms": 11231,
+              "bytes": 0
+            },
+            {
+              "ms": 11731,
+              "bytes": 0
+            },
+            {
+              "ms": 12231,
+              "bytes": 0
+            },
+            {
+              "ms": 12731,
+              "bytes": 0
+            },
+            {
+              "ms": 13231,
+              "bytes": 0
+            },
+            {
+              "ms": 13731,
+              "bytes": 0
+            },
+            {
+              "ms": 14231,
+              "bytes": 0
+            },
+            {
+              "ms": 14731,
+              "bytes": 0
+            },
+            {
+              "ms": 15231,
+              "bytes": 0
+            },
+            {
+              "ms": 15731,
+              "bytes": 0
+            },
+            {
+              "ms": 16231,
+              "bytes": 0
+            },
+            {
+              "ms": 16731,
+              "bytes": 0
+            },
+            {
+              "ms": 17231,
+              "bytes": 0
+            },
+            {
+              "ms": 17731,
+              "bytes": 0
+            },
+            {
+              "ms": 18231,
+              "bytes": 0
+            },
+            {
+              "ms": 18731,
+              "bytes": 0
+            },
+            {
+              "ms": 19231,
+              "bytes": 0
+            },
+            {
+              "ms": 19731,
+              "bytes": 0
+            },
+            {
+              "ms": 20231,
+              "bytes": 0
+            },
+            {
+              "ms": 20731,
+              "bytes": 0
+            },
+            {
+              "ms": 21231,
+              "bytes": 0
+            },
+            {
+              "ms": 21731,
+              "bytes": 0
+            },
+            {
+              "ms": 22231,
+              "bytes": 0
+            },
+            {
+              "ms": 22731,
+              "bytes": 0
+            },
+            {
+              "ms": 23231,
+              "bytes": 0
+            },
+            {
+              "ms": 23731,
+              "bytes": 0
+            },
+            {
+              "ms": 24231,
+              "bytes": 0
+            },
+            {
+              "ms": 24731,
+              "bytes": 0
+            },
+            {
+              "ms": 25231,
+              "bytes": 0
+            },
+            {
+              "ms": 25731,
+              "bytes": 0
+            },
+            {
+              "ms": 26231,
+              "bytes": 0
+            },
+            {
+              "ms": 26731,
+              "bytes": 0
+            },
+            {
+              "ms": 27231,
+              "bytes": 0
+            },
+            {
+              "ms": 27731,
+              "bytes": 0
+            },
+            {
+              "ms": 28231,
+              "bytes": 0
+            },
+            {
+              "ms": 28731,
+              "bytes": 0
+            },
+            {
+              "ms": 29231,
+              "bytes": 0
+            },
+            {
+              "ms": 29731,
+              "bytes": 0
+            },
+            {
+              "ms": 30231,
+              "bytes": 0
+            },
+            {
+              "ms": 30731,
+              "bytes": 0
+            },
+            {
+              "ms": 31231,
+              "bytes": 0
+            },
+            {
+              "ms": 31731,
+              "bytes": 0
+            },
+            {
+              "ms": 32231,
+              "bytes": 0
+            },
+            {
+              "ms": 32731,
+              "bytes": 0
+            },
+            {
+              "ms": 33231,
+              "bytes": 0
+            },
+            {
+              "ms": 33731,
+              "bytes": 0
+            },
+            {
+              "ms": 34231,
+              "bytes": 0
+            },
+            {
+              "ms": 34731,
+              "bytes": 0
+            },
+            {
+              "ms": 35231,
+              "bytes": 0
+            },
+            {
+              "ms": 35731,
+              "bytes": 0
+            },
+            {
+              "ms": 36231,
+              "bytes": 0
+            },
+            {
+              "ms": 36731,
+              "bytes": 0
+            },
+            {
+              "ms": 37231,
+              "bytes": 0
+            },
+            {
+              "ms": 37731,
+              "bytes": 0
+            },
+            {
+              "ms": 38231,
+              "bytes": 0
+            },
+            {
+              "ms": 38731,
+              "bytes": 0
+            },
+            {
+              "ms": 39231,
+              "bytes": 0
+            },
+            {
+              "ms": 39731,
+              "bytes": 0
+            },
+            {
+              "ms": 40231,
+              "bytes": 0
+            },
+            {
+              "ms": 40731,
+              "bytes": 0
+            },
+            {
+              "ms": 41231,
+              "bytes": 0
+            },
+            {
+              "ms": 41731,
+              "bytes": 0
+            },
+            {
+              "ms": 42231,
+              "bytes": 0
+            },
+            {
+              "ms": 42731,
+              "bytes": 0
+            },
+            {
+              "ms": 43231,
+              "bytes": 0
+            },
+            {
+              "ms": 43731,
+              "bytes": 0
+            },
+            {
+              "ms": 44231,
+              "bytes": 0
+            },
+            {
+              "ms": 44731,
+              "bytes": 0
+            },
+            {
+              "ms": 45231,
+              "bytes": 0
+            },
+            {
+              "ms": 45732,
+              "bytes": 0
+            },
+            {
+              "ms": 46231,
+              "bytes": 0
+            },
+            {
+              "ms": 46731,
+              "bytes": 0
+            },
+            {
+              "ms": 47231,
+              "bytes": 0
+            },
+            {
+              "ms": 47731,
+              "bytes": 0
+            },
+            {
+              "ms": 48231,
+              "bytes": 0
+            },
+            {
+              "ms": 48731,
+              "bytes": 0
+            },
+            {
+              "ms": 49231,
+              "bytes": 0
+            },
+            {
+              "ms": 49731,
+              "bytes": 0
+            },
+            {
+              "ms": 50231,
+              "bytes": 0
+            },
+            {
+              "ms": 50731,
+              "bytes": 0
+            },
+            {
+              "ms": 51231,
+              "bytes": 0
+            },
+            {
+              "ms": 51731,
+              "bytes": 0
+            },
+            {
+              "ms": 52231,
+              "bytes": 0
+            },
+            {
+              "ms": 52731,
+              "bytes": 0
+            },
+            {
+              "ms": 53231,
+              "bytes": 0
+            },
+            {
+              "ms": 53731,
+              "bytes": 0
+            },
+            {
+              "ms": 54231,
+              "bytes": 0
+            },
+            {
+              "ms": 54731,
+              "bytes": 0
+            },
+            {
+              "ms": 55231,
+              "bytes": 0
+            },
+            {
+              "ms": 55731,
+              "bytes": 0
+            },
+            {
+              "ms": 56231,
+              "bytes": 0
+            },
+            {
+              "ms": 56731,
+              "bytes": 0
+            },
+            {
+              "ms": 57231,
+              "bytes": 0
+            },
+            {
+              "ms": 57731,
+              "bytes": 0
+            },
+            {
+              "ms": 58231,
+              "bytes": 0
+            },
+            {
+              "ms": 58731,
+              "bytes": 0
+            },
+            {
+              "ms": 59231,
+              "bytes": 0
+            },
+            {
+              "ms": 59731,
+              "bytes": 0
+            },
+            {
+              "ms": 60231,
+              "bytes": 0
+            },
+            {
+              "ms": 60731,
+              "bytes": 0
+            },
+            {
+              "ms": 61231,
+              "bytes": 0
+            },
+            {
+              "ms": 61731,
+              "bytes": 0
+            },
+            {
+              "ms": 62231,
+              "bytes": 0
+            },
+            {
+              "ms": 62731,
+              "bytes": 0
+            },
+            {
+              "ms": 63231,
+              "bytes": 0
+            },
+            {
+              "ms": 63731,
+              "bytes": 0
+            },
+            {
+              "ms": 64231,
+              "bytes": 0
+            },
+            {
+              "ms": 64731,
+              "bytes": 0
+            },
+            {
+              "ms": 65231,
+              "bytes": 0
+            },
+            {
+              "ms": 65731,
+              "bytes": 0
+            },
+            {
+              "ms": 66231,
+              "bytes": 0
+            },
+            {
+              "ms": 66731,
+              "bytes": 0
+            },
+            {
+              "ms": 67231,
+              "bytes": 0
+            },
+            {
+              "ms": 67731,
+              "bytes": 0
+            },
+            {
+              "ms": 68231,
+              "bytes": 0
+            },
+            {
+              "ms": 68731,
+              "bytes": 0
+            },
+            {
+              "ms": 69231,
+              "bytes": 0
+            },
+            {
+              "ms": 69731,
+              "bytes": 0
+            },
+            {
+              "ms": 70231,
+              "bytes": 0
+            },
+            {
+              "ms": 70731,
+              "bytes": 0
+            },
+            {
+              "ms": 71231,
+              "bytes": 0
+            },
+            {
+              "ms": 71731,
+              "bytes": 0
+            },
+            {
+              "ms": 72231,
+              "bytes": 0
+            },
+            {
+              "ms": 72731,
+              "bytes": 0
+            },
+            {
+              "ms": 73231,
+              "bytes": 0
+            },
+            {
+              "ms": 73731,
+              "bytes": 0
+            },
+            {
+              "ms": 74231,
+              "bytes": 0
+            },
+            {
+              "ms": 74731,
+              "bytes": 0
+            },
+            {
+              "ms": 75231,
+              "bytes": 0
+            },
+            {
+              "ms": 75731,
+              "bytes": 0
+            },
+            {
+              "ms": 76231,
+              "bytes": 0
+            },
+            {
+              "ms": 76731,
+              "bytes": 0
+            },
+            {
+              "ms": 77231,
+              "bytes": 0
+            },
+            {
+              "ms": 77731,
+              "bytes": 0
+            },
+            {
+              "ms": 78231,
+              "bytes": 0
+            },
+            {
+              "ms": 78731,
+              "bytes": 0
+            },
+            {
+              "ms": 79231,
+              "bytes": 0
+            },
+            {
+              "ms": 79731,
+              "bytes": 0
+            },
+            {
+              "ms": 80231,
+              "bytes": 0
+            },
+            {
+              "ms": 80731,
+              "bytes": 0
+            },
+            {
+              "ms": 81231,
+              "bytes": 0
+            },
+            {
+              "ms": 81731,
+              "bytes": 0
+            },
+            {
+              "ms": 82231,
+              "bytes": 0
+            },
+            {
+              "ms": 82731,
+              "bytes": 0
+            },
+            {
+              "ms": 83231,
+              "bytes": 0
+            },
+            {
+              "ms": 83731,
+              "bytes": 0
+            },
+            {
+              "ms": 84231,
+              "bytes": 0
+            },
+            {
+              "ms": 84731,
+              "bytes": 0
+            },
+            {
+              "ms": 85231,
+              "bytes": 0
+            },
+            {
+              "ms": 85731,
+              "bytes": 0
+            },
+            {
+              "ms": 86231,
+              "bytes": 0
+            },
+            {
+              "ms": 86731,
+              "bytes": 0
+            },
+            {
+              "ms": 87231,
+              "bytes": 0
+            },
+            {
+              "ms": 87731,
+              "bytes": 0
+            },
+            {
+              "ms": 88231,
+              "bytes": 0
+            },
+            {
+              "ms": 88731,
+              "bytes": 0
+            },
+            {
+              "ms": 89231,
+              "bytes": 0
+            },
+            {
+              "ms": 89731,
+              "bytes": 0
+            },
+            {
+              "ms": 90231,
+              "bytes": 0
+            },
+            {
+              "ms": 90731,
+              "bytes": 0
+            },
+            {
+              "ms": 91231,
+              "bytes": 0
+            },
+            {
+              "ms": 91731,
+              "bytes": 0
+            },
+            {
+              "ms": 92231,
+              "bytes": 0
+            },
+            {
+              "ms": 92731,
+              "bytes": 0
+            },
+            {
+              "ms": 93231,
+              "bytes": 0
+            },
+            {
+              "ms": 93731,
+              "bytes": 0
+            },
+            {
+              "ms": 94231,
+              "bytes": 0
+            },
+            {
+              "ms": 94731,
+              "bytes": 0
+            },
+            {
+              "ms": 95231,
+              "bytes": 0
+            },
+            {
+              "ms": 95731,
+              "bytes": 0
+            },
+            {
+              "ms": 96231,
+              "bytes": 0
+            },
+            {
+              "ms": 96731,
+              "bytes": 0
+            },
+            {
+              "ms": 97231,
+              "bytes": 0
+            },
+            {
+              "ms": 97731,
+              "bytes": 0
+            },
+            {
+              "ms": 98231,
+              "bytes": 0
+            },
+            {
+              "ms": 98731,
+              "bytes": 0
+            },
+            {
+              "ms": 99231,
+              "bytes": 0
+            },
+            {
+              "ms": 99731,
+              "bytes": 0
+            },
+            {
+              "ms": 100231,
+              "bytes": 0
+            },
+            {
+              "ms": 100731,
+              "bytes": 0
+            },
+            {
+              "ms": 101231,
+              "bytes": 0
+            },
+            {
+              "ms": 101731,
+              "bytes": 0
+            },
+            {
+              "ms": 102231,
+              "bytes": 0
+            },
+            {
+              "ms": 102731,
+              "bytes": 0
+            },
+            {
+              "ms": 103231,
+              "bytes": 0
+            },
+            {
+              "ms": 103731,
+              "bytes": 0
+            },
+            {
+              "ms": 104231,
+              "bytes": 0
+            },
+            {
+              "ms": 104731,
+              "bytes": 0
+            },
+            {
+              "ms": 105231,
+              "bytes": 0
+            },
+            {
+              "ms": 105731,
+              "bytes": 0
+            },
+            {
+              "ms": 106231,
+              "bytes": 0
+            },
+            {
+              "ms": 106731,
+              "bytes": 0
+            },
+            {
+              "ms": 107231,
+              "bytes": 0
+            },
+            {
+              "ms": 107731,
+              "bytes": 0
+            },
+            {
+              "ms": 108231,
+              "bytes": 0
+            },
+            {
+              "ms": 108731,
+              "bytes": 0
+            },
+            {
+              "ms": 109231,
+              "bytes": 0
+            },
+            {
+              "ms": 109731,
+              "bytes": 0
+            },
+            {
+              "ms": 110231,
+              "bytes": 0
+            },
+            {
+              "ms": 110731,
+              "bytes": 0
+            },
+            {
+              "ms": 111231,
+              "bytes": 0
+            },
+            {
+              "ms": 111731,
+              "bytes": 0
+            },
+            {
+              "ms": 112231,
+              "bytes": 0
+            },
+            {
+              "ms": 112731,
+              "bytes": 0
+            },
+            {
+              "ms": 113231,
+              "bytes": 0
+            },
+            {
+              "ms": 113731,
+              "bytes": 0
+            },
+            {
+              "ms": 114231,
+              "bytes": 0
+            },
+            {
+              "ms": 114731,
+              "bytes": 0
+            },
+            {
+              "ms": 115231,
+              "bytes": 0
+            },
+            {
+              "ms": 115731,
+              "bytes": 0
+            },
+            {
+              "ms": 116231,
+              "bytes": 0
+            },
+            {
+              "ms": 116731,
+              "bytes": 0
+            },
+            {
+              "ms": 117231,
+              "bytes": 0
+            },
+            {
+              "ms": 117731,
+              "bytes": 0
+            },
+            {
+              "ms": 118231,
+              "bytes": 0
+            },
+            {
+              "ms": 118731,
+              "bytes": 0
+            },
+            {
+              "ms": 119231,
+              "bytes": 0
+            },
+            {
+              "ms": 119731,
+              "bytes": 0
+            },
+            {
+              "ms": 120231,
+              "bytes": 0
+            },
+            {
+              "ms": 120731,
+              "bytes": 0
+            },
+            {
+              "ms": 121231,
+              "bytes": 0
+            },
+            {
+              "ms": 121731,
+              "bytes": 0
+            },
+            {
+              "ms": 122231,
+              "bytes": 0
+            },
+            {
+              "ms": 122731,
+              "bytes": 0
+            },
+            {
+              "ms": 123231,
+              "bytes": 0
+            },
+            {
+              "ms": 123731,
+              "bytes": 0
+            },
+            {
+              "ms": 124231,
+              "bytes": 0
+            },
+            {
+              "ms": 124731,
+              "bytes": 0
+            },
+            {
+              "ms": 125231,
+              "bytes": 0
+            },
+            {
+              "ms": 125731,
+              "bytes": 0
+            },
+            {
+              "ms": 126231,
+              "bytes": 0
+            },
+            {
+              "ms": 126731,
+              "bytes": 0
+            },
+            {
+              "ms": 127231,
+              "bytes": 0
+            },
+            {
+              "ms": 127731,
+              "bytes": 0
+            },
+            {
+              "ms": 128231,
+              "bytes": 0
+            },
+            {
+              "ms": 128731,
+              "bytes": 0
+            },
+            {
+              "ms": 129231,
+              "bytes": 0
+            },
+            {
+              "ms": 129731,
+              "bytes": 0
+            },
+            {
+              "ms": 130231,
+              "bytes": 0
+            },
+            {
+              "ms": 130731,
+              "bytes": 0
+            },
+            {
+              "ms": 131231,
+              "bytes": 0
+            },
+            {
+              "ms": 131731,
+              "bytes": 0
+            },
+            {
+              "ms": 132231,
+              "bytes": 0
+            },
+            {
+              "ms": 132731,
+              "bytes": 0
+            },
+            {
+              "ms": 133231,
+              "bytes": 0
+            },
+            {
+              "ms": 133731,
+              "bytes": 0
+            },
+            {
+              "ms": 134231,
+              "bytes": 0
+            },
+            {
+              "ms": 134731,
+              "bytes": 0
+            },
+            {
+              "ms": 135231,
+              "bytes": 0
+            },
+            {
+              "ms": 135731,
+              "bytes": 0
+            },
+            {
+              "ms": 136231,
+              "bytes": 0
+            },
+            {
+              "ms": 136731,
+              "bytes": 0
+            },
+            {
+              "ms": 137231,
+              "bytes": 0
+            },
+            {
+              "ms": 137731,
+              "bytes": 0
+            },
+            {
+              "ms": 138231,
+              "bytes": 0
+            },
+            {
+              "ms": 138731,
+              "bytes": 0
+            },
+            {
+              "ms": 139231,
+              "bytes": 0
+            },
+            {
+              "ms": 139731,
+              "bytes": 0
+            },
+            {
+              "ms": 140231,
+              "bytes": 0
+            },
+            {
+              "ms": 140731,
+              "bytes": 0
+            },
+            {
+              "ms": 141231,
+              "bytes": 0
+            },
+            {
+              "ms": 141731,
+              "bytes": 0
+            },
+            {
+              "ms": 142231,
+              "bytes": 0
+            },
+            {
+              "ms": 142731,
+              "bytes": 0
+            },
+            {
+              "ms": 143231,
+              "bytes": 0
+            },
+            {
+              "ms": 143731,
+              "bytes": 0
+            },
+            {
+              "ms": 144231,
+              "bytes": 0
+            },
+            {
+              "ms": 144731,
+              "bytes": 0
+            },
+            {
+              "ms": 145231,
+              "bytes": 0
+            },
+            {
+              "ms": 145731,
+              "bytes": 0
+            },
+            {
+              "ms": 146231,
+              "bytes": 0
+            },
+            {
+              "ms": 146731,
+              "bytes": 0
+            },
+            {
+              "ms": 147231,
+              "bytes": 0
+            },
+            {
+              "ms": 147731,
+              "bytes": 0
+            },
+            {
+              "ms": 148231,
+              "bytes": 0
+            },
+            {
+              "ms": 148731,
+              "bytes": 0
+            },
+            {
+              "ms": 149231,
+              "bytes": 0
+            },
+            {
+              "ms": 149731,
+              "bytes": 0
+            },
+            {
+              "ms": 150231,
+              "bytes": 0
+            },
+            {
+              "ms": 150731,
+              "bytes": 0
+            },
+            {
+              "ms": 151231,
+              "bytes": 0
+            },
+            {
+              "ms": 151731,
+              "bytes": 0
+            },
+            {
+              "ms": 152231,
+              "bytes": 0
+            },
+            {
+              "ms": 152731,
+              "bytes": 0
+            },
+            {
+              "ms": 153231,
+              "bytes": 0
+            },
+            {
+              "ms": 153731,
+              "bytes": 0
+            },
+            {
+              "ms": 154231,
+              "bytes": 0
+            },
+            {
+              "ms": 154731,
+              "bytes": 0
+            },
+            {
+              "ms": 155231,
+              "bytes": 0
+            },
+            {
+              "ms": 155731,
+              "bytes": 0
+            },
+            {
+              "ms": 156231,
+              "bytes": 0
+            },
+            {
+              "ms": 156731,
+              "bytes": 0
+            },
+            {
+              "ms": 157231,
+              "bytes": 0
+            },
+            {
+              "ms": 157731,
+              "bytes": 0
+            },
+            {
+              "ms": 158231,
+              "bytes": 0
+            },
+            {
+              "ms": 158731,
+              "bytes": 0
+            },
+            {
+              "ms": 159231,
+              "bytes": 0
+            },
+            {
+              "ms": 159731,
+              "bytes": 0
+            },
+            {
+              "ms": 160231,
+              "bytes": 0
+            },
+            {
+              "ms": 160731,
+              "bytes": 0
+            },
+            {
+              "ms": 161231,
+              "bytes": 0
+            },
+            {
+              "ms": 161731,
+              "bytes": 0
+            },
+            {
+              "ms": 162231,
+              "bytes": 0
+            },
+            {
+              "ms": 162731,
+              "bytes": 0
+            },
+            {
+              "ms": 163231,
+              "bytes": 0
+            },
+            {
+              "ms": 163731,
+              "bytes": 0
+            },
+            {
+              "ms": 164231,
+              "bytes": 0
+            },
+            {
+              "ms": 164731,
+              "bytes": 0
+            },
+            {
+              "ms": 165231,
+              "bytes": 0
+            },
+            {
+              "ms": 165731,
+              "bytes": 0
+            },
+            {
+              "ms": 166231,
+              "bytes": 0
+            },
+            {
+              "ms": 166731,
+              "bytes": 0
+            },
+            {
+              "ms": 167231,
+              "bytes": 0
+            },
+            {
+              "ms": 167731,
+              "bytes": 0
+            },
+            {
+              "ms": 168231,
+              "bytes": 0
+            },
+            {
+              "ms": 168731,
+              "bytes": 0
+            },
+            {
+              "ms": 169231,
+              "bytes": 0
+            },
+            {
+              "ms": 169731,
+              "bytes": 0
+            },
+            {
+              "ms": 170231,
+              "bytes": 0
+            },
+            {
+              "ms": 170731,
+              "bytes": 0
+            },
+            {
+              "ms": 171231,
+              "bytes": 0
+            },
+            {
+              "ms": 171731,
+              "bytes": 0
+            },
+            {
+              "ms": 172231,
+              "bytes": 0
+            },
+            {
+              "ms": 172731,
+              "bytes": 0
+            },
+            {
+              "ms": 173231,
+              "bytes": 0
+            },
+            {
+              "ms": 173731,
+              "bytes": 0
+            },
+            {
+              "ms": 174232,
+              "bytes": 0
+            },
+            {
+              "ms": 174731,
+              "bytes": 0
+            },
+            {
+              "ms": 175231,
+              "bytes": 0
+            },
+            {
+              "ms": 175731,
+              "bytes": 0
+            },
+            {
+              "ms": 176231,
+              "bytes": 0
+            },
+            {
+              "ms": 176731,
+              "bytes": 0
+            },
+            {
+              "ms": 177231,
+              "bytes": 0
+            },
+            {
+              "ms": 177731,
+              "bytes": 0
+            },
+            {
+              "ms": 178231,
+              "bytes": 0
+            },
+            {
+              "ms": 178731,
+              "bytes": 0
+            },
+            {
+              "ms": 179231,
+              "bytes": 0
+            },
+            {
+              "ms": 179731,
+              "bytes": 0
+            }
+          ]
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816151652658300\\report.json",
+        "sha256": "d485cbdc24e3613b724d4943f769c97088fb238889177da11051c604a624785b"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792816156925.2217,
+            "receiverStartedMs": 1792816157244.676,
+            "completionMs": 5452.99999999952,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 12.306778653953037
+          }
+        ],
+        "connectivity": "auto",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-75yla7jc",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 194.91748046875,
+          "roundTripMs": 101.90576171875
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816151652658300\\receiver-0.ndjson",
+            "sha256": "d495c0dc0df5c44f4e75a3f8e825471bb53cc9f8da317d286b4e265d9eb7f3e7"
+          },
+          "firstVerifiedMs": 1267,
+          "lastVerifiedChangeMs": 5267,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 5406,
+          "longestNoVerifiedProgressMs": 1500,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 5349,
+              "correlation": {
+                "protocol_session_id": "identifier-7",
+                "protocol_operation_id": "2J3e4gJ9S5QAAAAAAAAAUQ",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "request_scheduling": {
+                "expected_ms": "31",
+                "response_ms": "31",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:29:22.6244266Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "286",
+              "usable_lanes_at_selection": 2,
+              "usable_lanes_at_settlement": 2,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "165",
+              "time": "2026-10-24T04:29:22.6813141Z",
+              "elapsed_ms": "5406",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-17",
+              "payload": {
+                "engine_task_id": "dd1af19d6af00590b500f1b9069db620:1",
+                "observed_at": "2026-10-24T04:29:22.6813141Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "167",
+              "time": "2026-10-24T04:29:22.6813141Z",
+              "elapsed_ms": "5406",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-17",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "fb231718dbb27936947a55d65115310b",
+                  "first_direct_elapsed_ms": "1206",
+                  "direct_bytes": "0",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "67108864",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 0,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "5404",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 1234,
+              "local_type": "host",
+              "remote_type": "srflx",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 267,
+              "bytes": 0
+            },
+            {
+              "ms": 768,
+              "bytes": 0
+            },
+            {
+              "ms": 1267,
+              "bytes": 8388608
+            },
+            {
+              "ms": 1767,
+              "bytes": 16777216
+            },
+            {
+              "ms": 2267,
+              "bytes": 25165824
+            },
+            {
+              "ms": 2767,
+              "bytes": 25165824
+            },
+            {
+              "ms": 3267,
+              "bytes": 25165824
+            },
+            {
+              "ms": 3767,
+              "bytes": 41943040
+            },
+            {
+              "ms": 4267,
+              "bytes": 50331648
+            },
+            {
+              "ms": 4767,
+              "bytes": 58720256
+            },
+            {
+              "ms": 5267,
+              "bytes": 67108864
+            },
+            {
+              "ms": 5383,
+              "bytes": 67108864
+            },
+            {
+              "ms": 5406,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 67108864,
+          "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816151652658300\\output-0\\probe.bin",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816163600109500\\report.json",
+        "sha256": "50174278b0224fcdda98af17f25324946e805d705592615fbb362367f62b911f"
+      },
+      "report": {
+        "endpoint": "<endpoint>",
+        "direction": "reverse",
+        "size": 67108864,
+        "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792816179260.693,
+            "receiverStartedMs": 1792816179574.037,
+            "completionMs": 4047.00000000048,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+            "MBpsIncludingStartup": 16.582373115886345
+          }
+        ],
+        "connectivity": "relay-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-e_kwo7wk",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 192.61865234375,
+          "roundTripMs": 95.719482421875
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816163600109500\\receiver-0.ndjson",
+            "sha256": "a5e0b1a4a5b70aabe87da357dd3344480c2971fa8f723ec6c1c4c1bcc46b2674"
+          },
+          "firstVerifiedMs": 1240,
+          "lastVerifiedChangeMs": 3970,
+          "maxVerifiedBytes": 67108864,
+          "lastProgressMs": 3999,
+          "longestNoVerifiedProgressMs": 1240,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 3933,
+              "correlation": {
+                "protocol_session_id": "identifier-8",
+                "protocol_operation_id": "8bl5f0M3p58AAAAAAAAARg",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "request_scheduling": {
+                "expected_ms": "43",
+                "response_ms": "43",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:29:43.5384259Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "37",
+              "usable_lanes_at_selection": 1,
+              "usable_lanes_at_settlement": 1,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "84",
+              "time": "2026-10-24T04:29:43.6042959Z",
+              "elapsed_ms": "3999",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-18",
+              "payload": {
+                "engine_task_id": "a2a6e990a3716949f103cd34f26b81ac:1",
+                "observed_at": "2026-10-24T04:29:43.6042959Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "86",
+              "time": "2026-10-24T04:29:43.6042959Z",
+              "elapsed_ms": "3999",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-18",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "450a24e658bb6d3513b7bb86d8999cab",
+                  "first_direct_elapsed_ms": null,
+                  "direct_bytes": "0",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "67108864",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 0,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "3997",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "67108864",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [],
+          "progress": [
+            {
+              "ms": 240,
+              "bytes": 0
+            },
+            {
+              "ms": 741,
+              "bytes": 0
+            },
+            {
+              "ms": 1240,
+              "bytes": 8388608
+            },
+            {
+              "ms": 1741,
+              "bytes": 16777216
+            },
+            {
+              "ms": 2241,
+              "bytes": 33554432
+            },
+            {
+              "ms": 2740,
+              "bytes": 41943040
+            },
+            {
+              "ms": 3240,
+              "bytes": 50331648
+            },
+            {
+              "ms": 3740,
+              "bytes": 58720256
+            },
+            {
+              "ms": 3970,
+              "bytes": 67108864
+            },
+            {
+              "ms": 3999,
+              "bytes": 67108864
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 67108864,
+          "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-<private-value>-reverse-1792816163600109500\\output-0\\probe.bin",
+            "sha256": "63373a20e46b71be4e525fb928641fbb112a1e661b80de6455f49d5a03e7b7fd"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-lan-forward-1792815849412643300\\report.json",
+        "sha256": "c3e30e5dd2e29be8b425448be138bc8049e2a4f5fd79fbf21d507695a3f63347"
+      },
+      "report": {
+        "endpoint": "lan",
+        "direction": "forward",
+        "size": 268435456,
+        "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815877190.501,
+            "receiverStartedMs": 1792815877336.57,
+            "completionMs": 35281.00000000086,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+            "MBpsIncludingStartup": 7.608499078824111
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-pxyclhic",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 176.369140625,
+          "roundTripMs": 54.385009765625
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-lan-forward-1792815849412643300\\receiver-0.ndjson",
+            "sha256": "d65a53305298ca5dafd89c4343136b00939b98e49e9e6ca0c4b51055e3d5decc"
+          },
+          "firstVerifiedMs": 2123,
+          "lastVerifiedChangeMs": 35112,
+          "maxVerifiedBytes": 268435456,
+          "lastProgressMs": 35115,
+          "longestNoVerifiedProgressMs": 2123,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [
+            {
+              "ms": 28136,
+              "correlation": {
+                "protocol_session_id": "identifier-9",
+                "protocol_operation_id": "zWL5Wdrj_roAAAAAAAAA4w",
+                "lane_id": 1,
+                "lane_epoch": 0
+              },
+              "observed_at": "2026-10-24T04:25:05.725168797Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "12",
+              "operation_elapsed_ms": "301",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            },
+            {
+              "ms": 28552,
+              "correlation": {
+                "protocol_session_id": "identifier-9",
+                "protocol_operation_id": "zWL5Wdrj_roAAAAAAAAA5Q",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "observed_at": "2026-10-24T04:25:06.14104231Z",
+              "role": "receiver",
+              "stage": "receiver_failed",
+              "request_kind": "request_blocks",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "12",
+              "operation_elapsed_ms": "528",
+              "usable_lanes_at_selection": 3,
+              "usable_lanes_at_settlement": 2,
+              "cause": "lane_unavailable"
+            }
+          ],
+          "leaseReleaseOperations": [
+            {
+              "ms": 35112,
+              "correlation": {
+                "protocol_session_id": "identifier-9",
+                "protocol_operation_id": "zWL5Wdrj_roAAAAAAAABGA",
+                "lane_id": 2,
+                "lane_epoch": 1
+              },
+              "request_scheduling": {
+                "expected_ms": "2",
+                "response_ms": "2",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:25:12.701507841Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "15",
+              "usable_lanes_at_selection": 2,
+              "usable_lanes_at_settlement": 2,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "379",
+              "time": "2026-10-24T04:25:12.704527117Z",
+              "elapsed_ms": "35115",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-19",
+              "payload": {
+                "engine_task_id": "670fb3bba24f5f485705757ca8d8944a:1",
+                "observed_at": "2026-10-24T04:25:12.704392777Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "381",
+              "time": "2026-10-24T04:25:12.704540077Z",
+              "elapsed_ms": "35115",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-19",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "e0963c02480c6abdb9ef935075e51a52",
+                  "first_direct_elapsed_ms": "502",
+                  "direct_bytes": "268435456",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "35115",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "0"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "268435456",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 560,
+              "local_type": "host",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv6",
+              "remote_family": "ipv6",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 4729,
+              "local_type": "srflx",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv6",
+              "remote_family": "ipv6",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 24476,
+              "local_type": "srflx",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 123,
+              "bytes": 0
+            },
+            {
+              "ms": 623,
+              "bytes": 0
+            },
+            {
+              "ms": 1124,
+              "bytes": 0
+            },
+            {
+              "ms": 1623,
+              "bytes": 0
+            },
+            {
+              "ms": 2123,
+              "bytes": 8388608
+            },
+            {
+              "ms": 2623,
+              "bytes": 16777216
+            },
+            {
+              "ms": 3123,
+              "bytes": 16777216
+            },
+            {
+              "ms": 3624,
+              "bytes": 25165824
+            },
+            {
+              "ms": 4124,
+              "bytes": 25165824
+            },
+            {
+              "ms": 4623,
+              "bytes": 33554432
+            },
+            {
+              "ms": 5123,
+              "bytes": 33554432
+            },
+            {
+              "ms": 5624,
+              "bytes": 41943040
+            },
+            {
+              "ms": 6123,
+              "bytes": 41943040
+            },
+            {
+              "ms": 6623,
+              "bytes": 41943040
+            },
+            {
+              "ms": 7123,
+              "bytes": 50331648
+            },
+            {
+              "ms": 7624,
+              "bytes": 50331648
+            },
+            {
+              "ms": 8123,
+              "bytes": 50331648
+            },
+            {
+              "ms": 8623,
+              "bytes": 58720256
+            },
+            {
+              "ms": 9124,
+              "bytes": 58720256
+            },
+            {
+              "ms": 9624,
+              "bytes": 67108864
+            },
+            {
+              "ms": 10123,
+              "bytes": 67108864
+            },
+            {
+              "ms": 10624,
+              "bytes": 75497472
+            },
+            {
+              "ms": 11124,
+              "bytes": 75497472
+            },
+            {
+              "ms": 11624,
+              "bytes": 83886080
+            },
+            {
+              "ms": 12124,
+              "bytes": 83886080
+            },
+            {
+              "ms": 12624,
+              "bytes": 83886080
+            },
+            {
+              "ms": 13123,
+              "bytes": 92274688
+            },
+            {
+              "ms": 13624,
+              "bytes": 92274688
+            },
+            {
+              "ms": 14123,
+              "bytes": 100663296
+            },
+            {
+              "ms": 14623,
+              "bytes": 100663296
+            },
+            {
+              "ms": 15123,
+              "bytes": 109051904
+            },
+            {
+              "ms": 15623,
+              "bytes": 109051904
+            },
+            {
+              "ms": 16124,
+              "bytes": 117440512
+            },
+            {
+              "ms": 16623,
+              "bytes": 117440512
+            },
+            {
+              "ms": 17124,
+              "bytes": 117440512
+            },
+            {
+              "ms": 17624,
+              "bytes": 125829120
+            },
+            {
+              "ms": 18124,
+              "bytes": 125829120
+            },
+            {
+              "ms": 18623,
+              "bytes": 134217728
+            },
+            {
+              "ms": 19124,
+              "bytes": 134217728
+            },
+            {
+              "ms": 19623,
+              "bytes": 142606336
+            },
+            {
+              "ms": 20124,
+              "bytes": 142606336
+            },
+            {
+              "ms": 20624,
+              "bytes": 150994944
+            },
+            {
+              "ms": 21123,
+              "bytes": 150994944
+            },
+            {
+              "ms": 21624,
+              "bytes": 150994944
+            },
+            {
+              "ms": 22123,
+              "bytes": 159383552
+            },
+            {
+              "ms": 22623,
+              "bytes": 159383552
+            },
+            {
+              "ms": 23124,
+              "bytes": 167772160
+            },
+            {
+              "ms": 23624,
+              "bytes": 167772160
+            },
+            {
+              "ms": 24123,
+              "bytes": 176160768
+            },
+            {
+              "ms": 24623,
+              "bytes": 176160768
+            },
+            {
+              "ms": 25123,
+              "bytes": 184549376
+            },
+            {
+              "ms": 25624,
+              "bytes": 184549376
+            },
+            {
+              "ms": 26124,
+              "bytes": 192937984
+            },
+            {
+              "ms": 26624,
+              "bytes": 192937984
+            },
+            {
+              "ms": 27124,
+              "bytes": 201326592
+            },
+            {
+              "ms": 27623,
+              "bytes": 209715200
+            },
+            {
+              "ms": 28123,
+              "bytes": 209715200
+            },
+            {
+              "ms": 28624,
+              "bytes": 209715200
+            },
+            {
+              "ms": 29124,
+              "bytes": 218103808
+            },
+            {
+              "ms": 29624,
+              "bytes": 218103808
+            },
+            {
+              "ms": 30124,
+              "bytes": 226492416
+            },
+            {
+              "ms": 30624,
+              "bytes": 226492416
+            },
+            {
+              "ms": 31124,
+              "bytes": 234881024
+            },
+            {
+              "ms": 31624,
+              "bytes": 234881024
+            },
+            {
+              "ms": 32124,
+              "bytes": 243269632
+            },
+            {
+              "ms": 32624,
+              "bytes": 243269632
+            },
+            {
+              "ms": 33124,
+              "bytes": 251658240
+            },
+            {
+              "ms": 33624,
+              "bytes": 251658240
+            },
+            {
+              "ms": 34124,
+              "bytes": 260046848
+            },
+            {
+              "ms": 34623,
+              "bytes": 260046848
+            },
+            {
+              "ms": 35112,
+              "bytes": 268435456
+            },
+            {
+              "ms": 35115,
+              "bytes": 268435456
+            }
+          ]
+        }
+      ],
+      "researchArtifacts": []
+    },
+    {
+      "build": "webrtc-wan-stall-20261024-current",
+      "source": {
+        "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-lan-reverse-1792815801490781100\\report.json",
+        "sha256": "ded4ba52bb8a7f5b4c6ec3547a8ab31a40f86a16cc1079a02669102f2431433d"
+      },
+      "report": {
+        "endpoint": "lan",
+        "direction": "reverse",
+        "size": 268435456,
+        "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+        "rounds": [
+          {
+            "repetition": 1,
+            "startedMs": 1792815830013.429,
+            "receiverStartedMs": 1792815830110.3586,
+            "completionMs": 18515.99999999962,
+            "exitCode": 0,
+            "deadlineExceeded": false,
+            "stdout": "<private-log>",
+            "stderr": "<private-log>",
+            "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+            "MBpsIncludingStartup": 14.497486282134666
+          }
+        ],
+        "connectivity": "p2p-only",
+        "deadlineSeconds": 180.0,
+        "blockSize": 1048576,
+        "scope": "Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.",
+        "windowsSHA256": "733dfd0772e74e33cff40472548c4d99ab15c93658848924d20ac315c5bff83f",
+        "diagnosticOverlay": false,
+        "remoteDirectory": "/tmp/windshare-throughput-7xictam3",
+        "linuxSHA256": "8e02a42f04f26690cc9200cf6e8011b6d5d4ba61764b098748f0541425a5a9b1",
+        "remoteClock": {
+          "offsetMs": 172.0458984375,
+          "roundTripMs": 46.6279296875
+        },
+        "status": "passed",
+        "remoteCleanup": "complete"
+      },
+      "diagnostics": [],
+      "traces": [
+        {
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-lan-reverse-1792815801490781100\\receiver-0.ndjson",
+            "sha256": "835a5beb315c7c0144586e3e9e852bfe7bc6455c570224fd23ec42c5a67a6fb5"
+          },
+          "firstVerifiedMs": 2075,
+          "lastVerifiedChangeMs": 18417,
+          "maxVerifiedBytes": 268435456,
+          "lastProgressMs": 18444,
+          "longestNoVerifiedProgressMs": 2075,
+          "completedBlockRequests": 0,
+          "failedBlockRequests": [],
+          "leaseReleaseOperations": [
+            {
+              "ms": 18390,
+              "correlation": {
+                "protocol_session_id": "identifier-10",
+                "protocol_operation_id": "LSJGTGEIu2oAAAAAAAABLw",
+                "lane_id": 4,
+                "lane_epoch": 3
+              },
+              "request_scheduling": {
+                "expected_ms": "7",
+                "response_ms": "7",
+                "queued_content_ms": "0",
+                "pending_requests": 0
+              },
+              "observed_at": "2026-10-24T04:24:08.538762Z",
+              "role": "receiver",
+              "stage": "receiver_completed",
+              "request_kind": "release_lease",
+              "response_kind": "operation_complete",
+              "send": {
+                "settled": true,
+                "admitted": true,
+                "outcome": "transport_confirmed"
+              },
+              "response_count": "1",
+              "deadline_remaining_ms": "5000",
+              "operation_elapsed_ms": "7",
+              "usable_lanes_at_selection": 4,
+              "usable_lanes_at_settlement": 4,
+              "cause": "none"
+            }
+          ],
+          "taskSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "451",
+              "time": "2026-10-24T04:24:08.5932457Z",
+              "elapsed_ms": "18444",
+              "level": "debug",
+              "event": "engine_task_observed",
+              "command": "get",
+              "runtime_run_id": "identifier-20",
+              "payload": {
+                "engine_task_id": "80138fcf5d888732893495b782dd44de:1",
+                "observed_at": "2026-10-24T04:24:08.5932457Z",
+                "stage": "task_settled",
+                "stop_reason": "none",
+                "outcome": "success",
+                "failure_class": "none"
+              }
+            }
+          ],
+          "transferSettlements": [
+            {
+              "schema_version": 4,
+              "sequence": "453",
+              "time": "2026-10-24T04:24:08.5932457Z",
+              "elapsed_ms": "18444",
+              "level": "info",
+              "event": "transfer_settled",
+              "command": "get",
+              "runtime_run_id": "identifier-20",
+              "payload": {
+                "download_connectivity": {
+                  "download_id": "efa42e6880ee496100fc27f8101a6a3e",
+                  "first_direct_elapsed_ms": "368",
+                  "direct_bytes": "268435456",
+                  "turn_bytes": "0",
+                  "application_relay_bytes": "0",
+                  "unknown_bytes": "0",
+                  "direct_fraction": 1,
+                  "fallback_stall_ms": "0",
+                  "incomplete": false,
+                  "final": true
+                },
+                "result_status": "success",
+                "exit_code": 0,
+                "drift": "none",
+                "result_elapsed_ms": "18443",
+                "destination_adjusted": false,
+                "file_outcomes": {
+                  "downloaded_files": "1",
+                  "previously_published_files": "0",
+                  "resumed_files": "0",
+                  "paused_files": "0",
+                  "collision_files": "0",
+                  "item_blocked_files": "0",
+                  "failed_files": "0",
+                  "modified_time_warnings": "1"
+                },
+                "directory_failures": "0",
+                "omitted_diagnostics": "0",
+                "published_bytes": "268435456",
+                "counters_exact": true
+              }
+            }
+          ],
+          "selectedPairs": [
+            {
+              "ms": 876,
+              "local_type": "srflx",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 4846,
+              "local_type": "host",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            },
+            {
+              "ms": 11936,
+              "local_type": "host",
+              "remote_type": "host",
+              "protocol": "udp",
+              "local_address": "<redacted>",
+              "remote_address": "<redacted>",
+              "local_port": "<redacted>",
+              "remote_port": "<redacted>",
+              "local_family": "ipv4",
+              "remote_family": "ipv4",
+              "pair_rtt_ms": "unknown",
+              "lifetime_ms": "unknown",
+              "switch_reason": "unknown"
+            }
+          ],
+          "progress": [
+            {
+              "ms": 575,
+              "bytes": 0
+            },
+            {
+              "ms": 1075,
+              "bytes": 0
+            },
+            {
+              "ms": 1575,
+              "bytes": 0
+            },
+            {
+              "ms": 2075,
+              "bytes": 8388608
+            },
+            {
+              "ms": 2575,
+              "bytes": 8388608
+            },
+            {
+              "ms": 3075,
+              "bytes": 8388608
+            },
+            {
+              "ms": 3575,
+              "bytes": 16777216
+            },
+            {
+              "ms": 4075,
+              "bytes": 16777216
+            },
+            {
+              "ms": 4575,
+              "bytes": 25165824
+            },
+            {
+              "ms": 5075,
+              "bytes": 25165824
+            },
+            {
+              "ms": 5575,
+              "bytes": 25165824
+            },
+            {
+              "ms": 6075,
+              "bytes": 33554432
+            },
+            {
+              "ms": 6575,
+              "bytes": 41943040
+            },
+            {
+              "ms": 7076,
+              "bytes": 50331648
+            },
+            {
+              "ms": 7576,
+              "bytes": 58720256
+            },
+            {
+              "ms": 8075,
+              "bytes": 67108864
+            },
+            {
+              "ms": 8575,
+              "bytes": 75497472
+            },
+            {
+              "ms": 9075,
+              "bytes": 83886080
+            },
+            {
+              "ms": 9575,
+              "bytes": 92274688
+            },
+            {
+              "ms": 10075,
+              "bytes": 100663296
+            },
+            {
+              "ms": 10575,
+              "bytes": 109051904
+            },
+            {
+              "ms": 11075,
+              "bytes": 117440512
+            },
+            {
+              "ms": 11575,
+              "bytes": 125829120
+            },
+            {
+              "ms": 12077,
+              "bytes": 134217728
+            },
+            {
+              "ms": 12575,
+              "bytes": 142606336
+            },
+            {
+              "ms": 13075,
+              "bytes": 150994944
+            },
+            {
+              "ms": 13575,
+              "bytes": 167772160
+            },
+            {
+              "ms": 14075,
+              "bytes": 176160768
+            },
+            {
+              "ms": 14575,
+              "bytes": 184549376
+            },
+            {
+              "ms": 15075,
+              "bytes": 201326592
+            },
+            {
+              "ms": 15575,
+              "bytes": 209715200
+            },
+            {
+              "ms": 16075,
+              "bytes": 218103808
+            },
+            {
+              "ms": 16575,
+              "bytes": 226492416
+            },
+            {
+              "ms": 17075,
+              "bytes": 234881024
+            },
+            {
+              "ms": 17575,
+              "bytes": 243269632
+            },
+            {
+              "ms": 18076,
+              "bytes": 260046848
+            },
+            {
+              "ms": 18417,
+              "bytes": 268435456
+            },
+            {
+              "ms": 18444,
+              "bytes": 268435456
+            }
+          ]
+        }
+      ],
+      "localPublishedOutputs": [
+        {
+          "round": 0,
+          "size": 268435456,
+          "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d",
+          "matchesExpected": true,
+          "source": {
+            "path": ".tmp\\webrtc-wan-stall-20261024-current\\native-lan-reverse-1792815801490781100\\output-0\\probe.bin",
+            "sha256": "63bdc78f78f533268f10f128a3367ed5e30cd2ba8cc81af49264615aee1ccd5d"
+          }
+        }
+      ],
+      "researchArtifacts": []
+    }
+  ]
+}

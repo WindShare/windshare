@@ -204,7 +204,7 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 		}
 	}
 	for _, file := range r.Files {
-		for _, f := range []transferfault.Fault{file.Fault, file.SettlementFault, file.LeaseReleaseFault} {
+		for _, f := range []transferfault.Fault{file.Fault, file.SettlementFault} {
 			if f.Valid() {
 				return Failure{Fault: f}
 			}

@@ -1,0 +1,34 @@
+[
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "connectivity": "auto"
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "connectivity": "auto",
+    "fault": "drop-large-once",
+    "deadlineSeconds": 70
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "connectivity": "auto"
+  },
+  {
+    "endpoint": "lan",
+    "direction": "reverse",
+    "sizeMiB": 64,
+    "windowsInterface": "WiFi",
+    "connectivity": "auto",
+    "fault": "drop-large-once",
+    "deadlineSeconds": 70
+  }
+]

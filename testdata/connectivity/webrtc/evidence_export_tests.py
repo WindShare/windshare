@@ -52,6 +52,29 @@ class PublicationTests(unittest.TestCase):
             "raw": ".tmp/native-private-lab-machine-forward/report.json"})
         self.assertNotIn("private-lab-machine", str(result))
 
+    def test_runtime_and_transfer_identifiers_share_stable_public_aliases(self):
+        raw = {"runtime_run_id": "synthetic-run", "payload": {
+            "receive_operation_id": "synthetic-operation", "transfer_job_id": "synthetic-job",
+            "output_session_id": "synthetic-output"}, "progress": {
+            "transferJobId": "synthetic-job", "outputSessionId": "synthetic-output"},
+            "operation_id": "synthetic-operation", "verifiedBytes": 1024}
+        result = PublicEvidence().project(raw)
+        self.assertNotIn("synthetic-", str(result))
+        self.assertEqual(result["payload"]["transfer_job_id"], result["progress"]["transferJobId"])
+        self.assertEqual(result["payload"]["output_session_id"], result["progress"]["outputSessionId"])
+        self.assertEqual(result["payload"]["receive_operation_id"], result["operation_id"])
+        self.assertEqual(result["verifiedBytes"], 1024)
+        self.assertEqual(PublicEvidence().project(result), result)
+
+    def test_reexport_cannot_collide_with_existing_public_aliases(self):
+        raw = {"runtime_run_id": "synthetic-run", "id": "identifier-9",
+               "transferJobId": "identifier-1"}
+        result = PublicEvidence().project(raw)
+        self.assertEqual(result["id"], "identifier-9")
+        self.assertEqual(result["transferJobId"], "identifier-1")
+        self.assertNotIn(result["runtime_run_id"], {"identifier-1", "identifier-9"})
+        self.assertEqual(PublicEvidence().project(result), result)
+
     def test_credentials_in_collections_and_error_text(self):
         result = PublicEvidence().project({"credentials": {"shared_secret": "synthetic-value"},
             "error": "request token=synthetic-token password=synthetic-password",

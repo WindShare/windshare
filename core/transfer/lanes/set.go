@@ -53,6 +53,7 @@ type Set struct {
 	closed             bool
 	lanes              map[uint32]*laneState
 	contentSuspensions map[uint32]*contentLaneSuspensionPolicy
+	routeSupplies      map[*RouteSupply]struct{}
 
 	exploration        lanescheduling.Exploration
 	admissionChanged   chan struct{}
@@ -95,6 +96,7 @@ func New(config Config) (*Set, error) {
 		sessionID:          config.ProtocolSessionID, now: config.Now, after: config.After,
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
 		contentSuspensions: make(map[uint32]*contentLaneSuspensionPolicy),
+		routeSupplies:      make(map[*RouteSupply]struct{}),
 		admissionChanged:   make(chan struct{}),
 		settlementProducer: settlementProducer,
 		settlementConsumer: settlementConsumer,

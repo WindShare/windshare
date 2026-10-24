@@ -2,6 +2,7 @@ package lanes
 
 type contentLaneSuspensionPolicy struct {
 	laneID  uint32
+	route   Route
 	resumed bool
 }
 
@@ -86,7 +87,7 @@ func (s *Set) SuspendContent(identity Identity) (*ContentSuspension, error) {
 	if _, exists := s.contentSuspensions[identity.ID]; exists {
 		return nil, ErrInvalid
 	}
-	policy := &contentLaneSuspensionPolicy{laneID: identity.ID}
+	policy := &contentLaneSuspensionPolicy{laneID: identity.ID, route: state.route}
 	s.contentSuspensions[identity.ID] = policy
 	s.notifyLaneAvailabilityLocked()
 	return &ContentSuspension{lanes: s, policy: policy}, nil

@@ -2,6 +2,7 @@ package peerset
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
@@ -69,11 +70,14 @@ func (p *Path) resourceDemand(direct bool) {
 	p.networkGeneration = p.config.Native.Generation([16]byte(p.key.session), p.key.path)
 	p.mu.Unlock()
 }
-func (p *Path) consumeRestart() bool {
+
+var errNetworkGenerationReplaced = errors.New("network generation replaced")
+
+func (p *Path) consumeRestart() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	requested := p.restartRequested
-	p.restartRequested = false
+	requested := p.restartCause
+	p.restartCause = nil
 	return requested
 }
 func (p *Path) consumeMapping() bool {
@@ -125,13 +129,13 @@ func (p *Path) handleNativeChange(ctx context.Context, change nativepeer.Change)
 	p.mu.Lock()
 	if change.Retired {
 		p.retired = true
-		p.restartRequested = true
+		p.restartCause = errNetworkGenerationReplaced
 	}
 	if change.MappingReady || change.RemoteNetworkChanged {
 		p.mappingPending = true
 	}
 	if change.NetworkGenerationID != 0 && p.networkGeneration != 0 && change.NetworkGenerationID != p.networkGeneration {
-		p.restartRequested = true
+		p.restartCause = errNetworkGenerationReplaced
 	}
 	if change.NetworkGenerationID != 0 {
 		p.networkGeneration = change.NetworkGenerationID

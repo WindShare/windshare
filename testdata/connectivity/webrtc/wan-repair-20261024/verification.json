@@ -1,0 +1,88 @@
+{
+  "sourceManifest": {
+    "path": ".tmp/webrtc-wan-repair-release-20261024/sources.json",
+    "sha256": "37f51b0f9f235aa72b7fa0a058603e9fd004a6e367d69f52c26205d678ce8ec5"
+  },
+  "sourceFilesVerified": 4255,
+  "sourceMismatches": [],
+  "postRetirementRuns": 10,
+  "correctOutputAndExit": 10,
+  "autoCleanupDeadlinesWithSuccess": 4,
+  "finalRecoveryTraceHasGenerationAndDirectContext": true,
+  "localCleanup": {
+    "remainingOwnedProcesses": 0
+  },
+  "remoteCleanup": {
+    "remainingOwnedProcesses": 0,
+    "remainingOwnedDirectories": 0
+  },
+  "gates": [
+    "short-go",
+    "hygiene",
+    "vectors",
+    "lint",
+    "vet",
+    "sloc",
+    "e2e"
+  ],
+  "finalTraceAdjustmentChecks": [
+    "targeted race tests",
+    "hygiene",
+    "lint",
+    "vet"
+  ],
+  "gateLogs": [
+    {
+      "path": ".tmp/wan-repair-final-gates.log",
+      "sha256": "b5883b91ec31c55370f26fc406f7f8db35212ed7c88d1bbc525076d7172f1596"
+    },
+    {
+      "path": ".tmp/wan-repair-e2e.log",
+      "sha256": "3547fbd4f6b972bf5ff46101f4a5659a94fa735df2af72044c66548131103cbe"
+    },
+    {
+      "path": ".tmp/wan-repair-observation.log",
+      "sha256": "703e60c89f9ab9b4f6da56e307b3234640c389cfa2e9979bd94dbcb82e9215f3"
+    },
+    {
+      "path": ".tmp/wan-repair-observation-gates.log",
+      "sha256": "d2c36cc191c4ddb0e1243dd8d710bb24040b474f42b0ff16e985afc2677c2677"
+    }
+  ],
+  "evidence": {
+    "path": "testdata/connectivity/webrtc/wan-repair-20261024/results.json",
+    "sha256": "7a7b9e8b78f9626295858ae22aa9aea88897554fee38a3a5623f6f15ab92e1cf"
+  },
+  "publicationPrivacy": {
+    "historyRevisionMapping": [
+      {
+        "original": "ed808967e5114e6e566eccfd714ea9972e41ad35",
+        "published": "947d494cd686bfa61c4eb508629b26ea4dc8700b",
+        "privacyOnlyPaths": [
+          "testdata/connectivity/webrtc/adaptive-20261023/results.json",
+          "testdata/connectivity/webrtc/bottleneck-20261024/results.json",
+          "testdata/connectivity/webrtc/preflight-20261023/results.json"
+        ]
+      },
+      {
+        "original": "c6419c5885c01a70e1c2d85d7732a8cef12c300c",
+        "published": "84b3d8f60d3134e9af824cdc4778c49f6bb74a45",
+        "privacyOnlyPaths": [
+          "testdata/connectivity/webrtc/adaptive-20261023/results.json",
+          "testdata/connectivity/webrtc/bottleneck-20261024/results.json",
+          "testdata/connectivity/webrtc/preflight-20261023/results.json"
+        ]
+      }
+    ],
+    "originalLabRevisionRetainedInMeasurements": true,
+    "productionGoFilesVerifiedAgainstFinalTestSnapshot": 1345,
+    "productionGoSourcesUnchanged": true,
+    "measurementsAndHashesPreserved": true,
+    "anonymizedFields": [
+      "runtime/operation/job/output identifiers",
+      "connection ports"
+    ],
+    "outgoingHistoryAndWorkingEvidenceAuditFindings": 0,
+    "exportRegressionTests": 8
+  }
+}

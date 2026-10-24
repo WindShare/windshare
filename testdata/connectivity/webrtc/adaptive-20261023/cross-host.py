@@ -1,4 +1,6 @@
-"""Native product transfer across SSH-owned endpoints; SSH carries signaling only.
+"""Native product transfer across SSH-owned endpoints.
+
+SSH carries signaling; auto/relay-only may also carry application-relay content.
 
 Run through the study terminal after the browser matrix, with paramiko installed.
 Public credentials are read from the existing named SSH MCP profile, never saved.
@@ -120,6 +122,39 @@ def remote_command(client, script):
     if stdout.channel.recv_exit_status(): raise RuntimeError(stderr.read().decode())
     return text
 
+def windows_udp_counters():
+    import ctypes
+
+    class UDPStatistics(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_uint32) for name in
+                    ("InDatagrams", "NoPorts", "InErrors", "OutDatagrams", "NumAddrs")]
+
+    result = {}
+    for name, family in [("ipv4", socket.AF_INET), ("ipv6", socket.AF_INET6)]:
+        value = UDPStatistics()
+        status = ctypes.windll.iphlpapi.GetUdpStatisticsEx(ctypes.byref(value), family)
+        result[name] = {key: getattr(value, key) for key, _ in value._fields_} if status == 0 else {"error": status}
+    return result
+
+
+def linux_udp_counters(client):
+    script = """import json
+from pathlib import Path
+result = {}
+lines = Path('/proc/net/snmp').read_text().splitlines()
+for index in range(0, len(lines)-1, 2):
+    names, values = lines[index].split(), lines[index+1].split()
+    if names[0] == 'Udp:':
+        result['ipv4'] = dict(zip(names[1:], map(int, values[1:])))
+path = Path('/proc/net/snmp6')
+if path.exists():
+    result['ipv6'] = {name[4:]: int(value) for name, value in
+                      (line.split() for line in path.read_text().splitlines()) if name.startswith('Udp6')}
+print(json.dumps(result))
+"""
+    return json.loads(remote_command(client, script))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('endpoint')
@@ -127,7 +162,15 @@ def main():
     parser.add_argument('--size-mib', type=float, default=256)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--direction', choices=['reverse', 'forward'], default='reverse')
+    parser.add_argument('--connectivity', choices=['p2p-only', 'auto', 'relay-only'], default='p2p-only')
+    parser.add_argument('--deadline-seconds', type=float, default=180)
+    parser.add_argument('--block-size', type=int, default=1048576)
+    parser.add_argument('--fault', choices=['none', 'drop-large-once'], default='none')
+    parser.add_argument('--receive-buffer', type=int, default=0)
+    parser.add_argument('--remote-interface', default='')
     args = parser.parse_args()
+    if args.deadline_seconds <= 0 or args.block_size <= 0:
+        parser.error('Deadline and block size must be positive')
     build = ROOT / '.tmp' / args.build
     windows_binary = Path(os.environ.get('WS_STUDY_WINDOWS_BINARY', build / 'binaries/wind.exe'))
     study = build / ('native-' + args.endpoint + '-' + args.direction + '-' + str(time.time_ns()))
@@ -137,9 +180,12 @@ def main():
     assert len(fixture) == size
     (study / 'probe.bin').write_bytes(fixture)
     (study / 'config.json').write_text('{"profiles":[],"active_relays":[]}')
-    report = dict(endpoint=args.endpoint, direction=args.direction, size=size, sha256=hashlib.sha256(fixture).hexdigest(), rounds=[], scope='Complete native CLI workflow; SSH forwards localhost signaling, never content. p2p-only requires a real WebRTC content path. Timing begins at receiver process launch; source preparation and post-publication hash excluded.')
+    report = dict(endpoint=args.endpoint, direction=args.direction, size=size, sha256=hashlib.sha256(fixture).hexdigest(), rounds=[], connectivity=args.connectivity, deadlineSeconds=args.deadline_seconds, blockSize=args.block_size, scope='Complete native CLI workflow. Direct WebRTC content bypasses SSH; application-relay content in auto/relay-only crosses the SSH signaling tunnel. Timing begins at receiver process launch; source preparation and post-publication hash excluded.')
     report['windowsSHA256'] = hashlib.sha256(windows_binary.read_bytes()).hexdigest()
-    report['diagnosticOverlay'] = 'WS_STUDY_WINDOWS_BINARY' in os.environ
+    report['diagnosticOverlay'] = 'WS_STUDY_WINDOWS_BINARY' in os.environ or (build / 'identity.json').exists()
+    report['fault'] = args.fault
+    report['remoteInterface'] = args.remote_interface
+    report['receiveBufferBytes'] = args.receive_buffer
     def save(): (study / 'report.json').write_text(json.dumps(report, indent=2))
     save()
     processes = []
@@ -174,12 +220,14 @@ def main():
         relay_url = 'ws://127.0.0.1:' + str(port)
         for repeat in range(args.repeats):
             row = dict(repetition=repeat + 1, startedMs=time.time() * 1000)
+            row['udpCountersBefore'] = {'windows': windows_udp_counters(), 'linux': linux_udp_counters(client)}
             report['rounds'].append(row); save()
             reverse = args.direction == 'reverse'
             sender_root, receiver_root = (remote, str(study)) if reverse else (str(study), remote)
             sender_binary = remote + '/wind' if reverse else str(windows_binary)
             receiver_binary = str(windows_binary) if reverse else remote + '/wind'
-            sender = Process([sender_binary, 'share', sender_root + '/probe.bin', '--relay', relay_url, '--front-url', 'http://127.0.0.1:9999', '--block-size', '1048576', '--split-key', '--trace', sender_root + f'/sender-{repeat}.ndjson'], sender_root, {'WINDSHARE_CONFIG': sender_root + '/config.json'}, client if reverse else None)
+            sender = Process([sender_binary, 'share', sender_root + '/probe.bin', '--relay', relay_url, '--front-url', 'http://127.0.0.1:9999', '--block-size', str(args.block_size), '--split-key', '--trace', sender_root + f'/sender-{repeat}.ndjson'], sender_root, {'WINDSHARE_CONFIG': sender_root + '/config.json', 'WS_WAN_FAULT': args.fault,
+                'WS_WAN_RCVBUF': str(args.receive_buffer), **({'WS_WAN_INTERFACE': args.remote_interface} if reverse else {})}, client if reverse else None)
             processes.append(sender)
             until(lambda: 'Key: ' in sender.text() and 'Bare link: ' in sender.text(), sender)
             link = next(line[11:] for line in sender.text().splitlines() if line.startswith('Bare link: '))
@@ -189,20 +237,26 @@ def main():
             else: remote_command(client, 'import os; os.mkdir(' + repr(output) + ')')
             started = time.monotonic()
             row['receiverStartedMs'] = time.time() * 1000
-            receiver = Process([receiver_binary, 'get', link, '--key', key, '-o', output, '--connectivity', 'p2p-only', '--wait-timeout', '35s', '--trace', receiver_root + f'/receiver-{repeat}.ndjson'], receiver_root, {'WINDSHARE_CONFIG': receiver_root + '/config.json'}, None if reverse else client)
+            receiver = Process([receiver_binary, 'get', link, '--key', key, '-o', output, '--connectivity', args.connectivity, '--wait-timeout', '35s', '--trace', receiver_root + f'/receiver-{repeat}.ndjson'], receiver_root, {'WINDSHARE_CONFIG': receiver_root + '/config.json', 'WS_WAN_RCVBUF': str(args.receive_buffer),
+                **({'WS_WAN_INTERFACE': args.remote_interface} if not reverse else {})}, None if reverse else client)
             processes.append(receiver)
-            deadline = started + 180
+            deadline = started + args.deadline_seconds
             while receiver.poll() is None and time.monotonic() < deadline: time.sleep(.02)
             row['completionMs'] = (time.monotonic() - started) * 1000
             row['exitCode'] = receiver.poll()
+            row['deadlineExceeded'] = row['exitCode'] is None
             row['stdout'] = receiver.text(); row['stderr'] = receiver.errors.decode(errors='replace')[-4000:]
             receiver.close(); sender.close()
+            row['udpCountersAfter'] = {'windows': windows_udp_counters(), 'linux': linux_udp_counters(client)}
             (study / f'receiver-{repeat}.stderr').write_bytes(receiver.errors)
             (study / f'sender-{repeat}.stderr').write_bytes(sender.errors)
             with client.open_sftp() as sftp:
                 for kind in ['sender', 'receiver']:
                     if (kind == 'sender') == reverse:
                         sftp.get(remote + f'/{kind}-{repeat}.ndjson', str(study / f'{kind}-{repeat}.ndjson'))
+                for name in sftp.listdir(remote):
+                    if name.startswith('research-'):
+                        sftp.get(remote + '/' + name, str(study / name))
             if row['exitCode'] != 0: raise RuntimeError('Native transfer failed: ' + row['stderr'])
             if reverse: received = hashlib.sha256((Path(output) / 'probe.bin').read_bytes()).hexdigest()
             else: received = remote_command(client, "import hashlib; print(hashlib.sha256(open(" + repr(output + '/probe.bin') + ",'rb').read()).hexdigest())").strip()

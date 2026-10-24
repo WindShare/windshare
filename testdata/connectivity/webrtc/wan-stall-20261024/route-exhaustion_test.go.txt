@@ -1,0 +1,69 @@
+package lanes
+
+import (
+	"context"
+	"errors"
+	"github.com/windshare/windshare/core/transfer/fault"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/session/protocolsession"
+)
+
+func TestResearchExhaustedDirectRouteDoesNotWaitForForbiddenRelay(t *testing.T) {
+	for _, includeRelay := range []bool{false, true} {
+		name := "direct-only"
+		if includeRelay {
+			name = "direct-with-policy-forbidden-relay"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				set, err := New(Config{ProtocolSessionID: protocolsession.ProtocolSessionID{1}, ContentRoutePolicy: ContentRouteDirectOnly})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer set.Close()
+				descriptor := transferDescriptor(t, 1)
+				demand := validDemand(t, descriptor, 0)
+				if err := set.Add(Identity{ID: 2, Epoch: 1}, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+					pause, _ := fault.NewSession(fault.ScopeOutputPause, fault.SessionTransport)
+					return records.BlockRecord{}, NewDemandReassignableAfterRetirement(fault.Wrap(pause, errors.New("block fragment inactivity")))
+				})); err != nil {
+					t.Fatal(err)
+				}
+				if includeRelay {
+					if err := set.Add(Identity{ID: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+						t.Error("permanently forbidden relay carried content")
+						return records.BlockRecord{}, nil
+					})); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := set.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
+					done <- err
+				}()
+				synctest.Wait()
+				time.Sleep(3 * time.Minute)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Error("exhausted route unexpectedly succeeded")
+					}
+					t.Logf("exhaustion surfaced: %v", err)
+				default:
+					t.Errorf("no result after three virtual minutes; demand=%+v", set.SchedulingDemand())
+					cancel()
+					synctest.Wait()
+					<-done
+				}
+			})
+		})
+	}
+}

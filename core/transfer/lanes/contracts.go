@@ -23,6 +23,7 @@ var (
 	ErrStale           = errors.New("transfer lane epoch is stale")
 	ErrBudget          = errors.New("transfer lane budget exceeded")
 	ErrClosed          = errors.New("transfer lane set is closed")
+	ErrNoContentRoute  = errors.New("no permitted content route remains")
 	errBlockSuperseded = errors.New("block attempt superseded by an authenticated winner")
 )
 

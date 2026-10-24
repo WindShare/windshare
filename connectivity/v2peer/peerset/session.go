@@ -56,7 +56,7 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		return nil, err
 	}
 	if lanes, ok := receiver.Lanes.(interface{ LaneSet() *transferlanes.Set }); ok {
-		s.work.Go(func() { s.runThroughput(lanes.LaneSet()) })
+		s.work.Go(func() { s.runContentControl(lanes.LaneSet()) })
 	}
 	go func() {
 		<-ctx.Done()
@@ -88,6 +88,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 		return
 	}
 	sessionID := controls.ProtocolSessionID()
+	content, _ := receiver.Lanes.(ContentLaneOwner)
 	serviceBudgets := make(map[string]*Budget)
 	s.turn = turnpath.NewReceiver(turnpath.ReceiverConfig{SessionID: [16]byte(sessionID), Now: s.owner.config.Clock.Now,
 		Send:    controls.SendTURNControl,
@@ -102,7 +103,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 				serviceBudgets[grant.Profile] = budget
 			}
 			path, err := s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
-				Budget: budget, Native: receiver.Factory.NativeConnectivity(), ICE: ice, Demand: ContentDemand,
+				Budget: budget, Native: receiver.Factory.NativeConnectivity(), ICE: ice, Demand: ContentDemand, Content: content,
 				Prepare: func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {
 					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
 						OnTURNRecovery: func(reason turncontrol.RecoveryReason) { s.turn.Recover(grant.PathID, reason) }})

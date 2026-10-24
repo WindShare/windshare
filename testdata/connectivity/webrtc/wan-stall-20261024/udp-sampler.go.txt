@@ -1,0 +1,52 @@
+package ice
+
+import (
+	"net"
+	"net/netip"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+const researchLargeDatagramBytes = 500
+const researchFaultAfterDatagrams = 64
+const researchBlackholeDuration = 25 * time.Second
+
+var researchUDPCount atomic.Uint64
+var researchUDPTime atomic.Uint64
+var researchUDPSlow atomic.Uint64
+var researchLargeCount atomic.Uint64
+var researchFaultStarted atomic.Int64
+var researchDropped atomic.Uint64
+
+func researchUDPWrite(conn *net.UDPConn, b []byte, addr netip.AddrPort) (int, error) {
+	// A bounded data blackhole preserves small ICE checks, reproducing a live
+	// connection whose content cannot complete. Only the diagnostic sender opts in.
+	if os.Getenv("WS_WAN_FAULT") == "drop-large-once" && len(b) > researchLargeDatagramBytes {
+		count := researchLargeCount.Add(1)
+		if count > researchFaultAfterDatagrams {
+			now := time.Now().UnixNano()
+			researchFaultStarted.CompareAndSwap(0, now)
+			if time.Duration(now-researchFaultStarted.Load()) < researchBlackholeDuration {
+				researchDropped.Add(1)
+				return len(b), nil
+			}
+		}
+	}
+	started := time.Now()
+	n, err := conn.WriteToUDPAddrPort(b, addr)
+	elapsed := time.Since(started)
+	researchUDPCount.Add(1)
+	researchUDPTime.Add(uint64(elapsed))
+	if elapsed >= time.Millisecond {
+		researchUDPSlow.Add(1)
+	}
+	return n, err
+}
+func ResearchUDPTiming() map[string]uint64 {
+	return map[string]uint64{
+		"writes": researchUDPCount.Load(), "nanoseconds": researchUDPTime.Load(),
+		"slowWrites": researchUDPSlow.Load(), "faultDropped": researchDropped.Load(),
+		"faultStartUnixNs": uint64(researchFaultStarted.Load()),
+	}
+}

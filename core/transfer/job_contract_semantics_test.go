@@ -244,9 +244,9 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
 		published := immediateDirectTreeSettlements(t, binding, checkpoint)["published"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, published)
-		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
-			run.job.Progress().PublishedFiles != 1 || len(run.files) != 1 ||
-			run.files[0].Stage != FailureLeaseRelease {
+		if err != nil || run.job.Progress().PublishedFiles != 1 || len(run.files) != 0 ||
+			len(run.revisionCleanupFailures) != 1 ||
+			run.revisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) {
 			t.Fatalf("terminal release result error=%v progress=%+v failures=%+v", err, run.job.Progress(), run.files)
 		}
 	})
@@ -257,8 +257,10 @@ func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *tes
 		run := immediateSettlementJobRun(binding.ShareInstance(), revisions)
 		collision := immediateDirectTreeSettlements(t, binding, checkpoint)["collision"]
 		err := run.handleImmediateSettlement(context.Background(), plan, opened, collision)
-		if normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) || len(run.files) != 1 ||
-			!errors.Is(run.files[0].Cause, ErrOutputPublishBlocked) {
+		if err != nil || len(run.files) != 1 ||
+			!errors.Is(run.files[0].Cause, ErrOutputPublishBlocked) ||
+			len(run.revisionCleanupFailures) != 1 ||
+			run.revisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) {
 			t.Fatalf("terminal collision release error=%v failures=%+v", err, run.files)
 		}
 	})
@@ -291,7 +293,7 @@ func TestTransferJobRejectsUnstartedFileWithoutLeakingRevisionLease(t *testing.T
 	)
 	if normalizedFault(err) != fault.DependencyContractFault() || len(revisions.released) != 1 ||
 		revisions.released[0] != lease || len(run.files) != 1 ||
-		run.files[0].LeaseReleaseFault != fault.DependencyContractFault() {
+		len(run.revisionCleanupFailures) != 1 || run.revisionCleanupFailures[0].Fault != fault.DependencyContractFault() {
 		t.Fatalf("unstarted file rejection error=%v released=%v failures=%+v", err, revisions.released, run.files)
 	}
 }
@@ -431,7 +433,10 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 			expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		}
 		_, ready, err := run.openSelectedRevision(context.Background(), plan)
-		if ready || normalizedFault(err) != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
+		if ready || err != nil || len(run.files) != 1 ||
+			run.files[0].Fault != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged) ||
+			len(run.revisionCleanupFailures) != 1 ||
+			run.revisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 			len(revisions.released) != 1 || revisions.released[0] != lease {
 			t.Fatalf("rejected revision ready=%v error=%v released=%v", ready, err, revisions.released)
 		}

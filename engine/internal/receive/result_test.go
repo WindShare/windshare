@@ -34,6 +34,10 @@ func TestReceiveSettlementPreservesOutcomeAndFailurePrecedence(t *testing.T) {
 		wantDrift  bool
 	}{
 		{"success", func(*SettlementInput) {}, task.OutcomeSuccess, task.FailureNone, false},
+		{"remote cleanup diagnostic preserves success", func(input *SettlementInput) {
+			input.Result.RevisionCleanupFailures = []transfer.RevisionCleanupFailure{{Cause: context.DeadlineExceeded, Interruption: transfer.TransferInterruptionDeadline}}
+			input.Result.OmittedRevisionCleanupFailures = 3
+		}, task.OutcomeSuccess, task.FailureNone, false},
 		{"nominal success invariant failure", func(input *SettlementInput) {
 			input.Result.Progress.PublishedBytes--
 		}, task.OutcomeFailed, task.FailureLocal, false},
