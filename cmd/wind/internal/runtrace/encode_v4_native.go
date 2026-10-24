@@ -29,6 +29,17 @@ type nativeConnectivityPayloadV4 struct {
 }
 
 type nativeParallelismPayloadV4 struct {
+	TrialPath            string  `json:"trial_path,omitempty"`
+	TrialLaneID          uint32  `json:"trial_lane_id,omitempty"`
+	TrialLaneEpoch       uint32  `json:"trial_lane_epoch,omitempty"`
+	OfferedBytes         string  `json:"offered_bytes"`
+	SettledBytes         string  `json:"settled_bytes"`
+	CompletedBytes       string  `json:"completed_bytes"`
+	CompletedAttempts    string  `json:"completed_attempts"`
+	FailedAttempts       string  `json:"failed_attempts"`
+	SupersededAttempts   string  `json:"superseded_attempts"`
+	CancelledAttempts    string  `json:"cancelled_attempts"`
+	BusyMilliseconds     string  `json:"busy_ms"`
 	NetworkWaitingBytes  string  `json:"network_waiting_bytes"`
 	InFlightBytes        string  `json:"in_flight_bytes"`
 	RemainingBytes       string  `json:"remaining_bytes"`
@@ -186,7 +197,11 @@ func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.N
 		payload.Parallelism = &nativeParallelismPayloadV4{Action: p.Action, Reason: p.Reason, Paths: decimal(p.Paths), OptionalPaths: decimal(p.OptionalPaths),
 			NetworkWaitingBytes: decimal(p.NetworkWaitingBytes), InFlightBytes: decimal(p.InFlightBytes), RemainingBytes: decimal(p.RemainingBytes), RemainingKnown: p.RemainingKnown,
 			QueuedBytes: decimal(p.QueuedBytes), UnfinishedBytes: decimal(p.UnfinishedBytes), CapacityWaitingBytes: decimal(p.CapacityWaitingBytes),
-			UsefulRate: p.UsefulRate, OutputRate: p.OutputRate, BaselineUsefulRate: p.BaselineUsefulRate, BaselineOutputRate: p.BaselineOutputRate}
+			UsefulRate: p.UsefulRate, OutputRate: p.OutputRate, BaselineUsefulRate: p.BaselineUsefulRate, BaselineOutputRate: p.BaselineOutputRate,
+			TrialPath: p.TrialPath, TrialLaneID: p.TrialLaneID, TrialLaneEpoch: p.TrialLaneEpoch,
+			OfferedBytes: decimal(p.OfferedBytes), SettledBytes: decimal(p.SettledBytes), CompletedBytes: decimal(p.CompletedBytes),
+			CompletedAttempts: decimal(p.CompletedAttempts), FailedAttempts: decimal(p.FailedAttempts),
+			SupersededAttempts: decimal(p.SupersededAttempts), CancelledAttempts: decimal(p.CancelledAttempts), BusyMilliseconds: decimal(p.BusyMilliseconds)}
 	}
 	if a := facts.Admission; a != nil {
 		payload.Admission = &nativeAdmissionPayloadV4{Purpose: a.Purpose, Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}

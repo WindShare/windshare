@@ -16,7 +16,7 @@ func TestParallelismObservationPreservesDecisionAndOwnsFacts(t *testing.T) {
 	source := nativepeer.ParallelismFacts{
 		At:       time.Unix(42, 0),
 		Decision: throughput.Decision{Action: throughput.Explore, Reason: "network_demand", UsefulRate: 12, OutputRate: 11, BaselineUsefulRate: 10, BaselineOutputRate: 9},
-		Demand:   throughput.Observation{Paths: 1, QueuedBytes: 32, UnfinishedBytes: 8, CapacityWaitingBytes: 4},
+		Demand:   throughput.Observation{Paths: []throughput.PathObservation{{Identity: throughput.PathIdentity{PathID: "first", LaneID: 1}}}, QueuedBytes: 32, UnfinishedBytes: 8, CapacityWaitingBytes: 4},
 	}
 	event, err := ProjectNativeObservation(appobs.WorkflowReceive, nativepeer.Observation{
 		Subject:     nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: nativepeer.SideReceiver},

@@ -2,14 +2,16 @@ import type { V2BlockDemand, V2BlockLane } from '../v2-lane-set'
 import type { BlockReceiveWindow } from './receive-window'
 import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
 import { LanePerformance } from './performance'
+import { LaneSampling } from './sampling'
 import { completionCost } from './completion'
-import { PROBE_INTERVAL_MILLISECONDS, type DispatchPurpose } from './exploration'
+import { PROBE_INTERVAL_MILLISECONDS, isExploratoryDispatch, type DispatchPurpose } from './exploration'
 
 export interface ContentLane {
   readonly lane: V2BlockLane
   readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
   readonly performance: LanePerformance
+  readonly sampling: LaneSampling
   readonly receive: BlockReceiveWindow
   readonly unsubscribeReceive: () => void
   inflight: number
@@ -61,6 +63,15 @@ export function orderedContentLanes(
     left.inflight - right.inflight || left.lane.id - right.lane.id)
 }
 
+function probeOpportunity(lane: ContentLane, item: ContentWork, priority: ContentPriority | undefined,
+  now: number, globalDue: number): { at: number; purpose: 'probe' | 'sample' } {
+  if (item.priority === priority && lane.sampling.available(demandBytes(item.demand), now)) {
+    return { at: now, purpose: 'sample' }
+  }
+  const laneDue = lane.performance.lastAttempt === undefined ? now : lane.performance.lastAttempt + PROBE_INTERVAL_MILLISECONDS
+  return { at: Math.max(globalDue, laneDue), purpose: 'probe' }
+}
+
 const PRIMARY_FRONTIER_RESERVE = 2
 
 function exploratoryWork<T extends ContentWork>(work: readonly T[], active: Iterable<ContentWork>): T[] {
@@ -101,7 +112,7 @@ export class ContentAllocation {
     work: readonly T[], lanes: readonly ContentLane[], now: number,
     eligible: (lane: ContentLane, work: T) => boolean,
   ): ContentSelection<T> {
-    if (lanes.length < 2 || [...this.#active.values()].includes('probe') || !lanes.some(lane => lane.inflight > 0)) {
+    if (lanes.length < 2 || [...this.#active.values()].some(isExploratoryDispatch) || !lanes.some(lane => lane.inflight > 0)) {
       return { kind: 'blocked' }
     }
     const globalDue = this.#lastProbe === undefined ? now : this.#lastProbe + PROBE_INTERVAL_MILLISECONDS
@@ -112,11 +123,9 @@ export class ContentAllocation {
         lane !== candidates[0] && !lane.failed && lane.performance.pendingBytes === 0)
         .sort((left, right) => (left.performance.lastAttempt ?? -Infinity) - (right.performance.lastAttempt ?? -Infinity))
       for (const lane of available) {
-        const laneDue = lane.performance.lastAttempt === undefined ? now
-          : lane.performance.lastAttempt + PROBE_INTERVAL_MILLISECONDS
-        const due = Math.max(globalDue, laneDue)
-        if (due <= now) return { kind: 'dispatch', assignment: { work: item, lane, purpose: 'probe' } }
-        nextDue = Math.min(nextDue, due)
+        const opportunity = probeOpportunity(lane, item, work[0]?.priority, now, globalDue)
+        if (opportunity.at <= now) return { kind: 'dispatch', assignment: { work: item, lane, purpose: opportunity.purpose } }
+        nextDue = Math.min(nextDue, opportunity.at)
       }
     }
     // Only time-blocked, otherwise eligible work needs a deadline. Capacity and
@@ -125,7 +134,7 @@ export class ContentAllocation {
   }
 
   started(work: ContentWork, purpose: DispatchPurpose, now: number): void {
-    if (purpose === 'probe') this.#lastProbe = now
+    if (isExploratoryDispatch(purpose)) this.#lastProbe = now
     this.#active.set(work, purpose)
   }
 

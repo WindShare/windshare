@@ -111,6 +111,7 @@ describe('v2 receiver LaneSet', () => {
     lanes.add(direct, 'direct', 2)
     const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
     for (let turn = 0; turn < 16; turn++) await Promise.resolve()
+    expect(lanes.samplingEvidence(1, 2)).toMatchObject({ offeredBytes: 1, settledBytes: 0 })
     lanes.remove(1)
     lanes.add(new ImmediateLane(1), 'turn', 3)
     direct.resolve(0)
@@ -118,9 +119,12 @@ describe('v2 receiver LaneSet', () => {
     expect(retiredRecord.data).toEqual(Uint8Array.of(1))
     expect(authenticatedBlockRoute(retiredRecord)).toBeUndefined()
     expect(observations).toEqual([])
+    expect(lanes.samplingEvidence(1, 2)).toBeUndefined()
+    expect(lanes.samplingEvidence(1, 3)).toMatchObject({ offeredBytes: 0, settledBytes: 0, completedBytes: 0 })
     const replacementRecord = await lanes.fetch(demand(1n), ALL_ROUTES, new AbortController().signal)
     expect(authenticatedBlockRoute(replacementRecord)).toBe('turn')
     expect(observations).toMatchObject([{ route: 'turn', laneEpoch: 3, usefulBytes: 1 }])
+    expect(lanes.samplingEvidence(1, 3)).toMatchObject({ offeredBytes: 1, settledBytes: 1, completedBytes: 1, completedAttempts: 1 })
     lanes.close()
   })
 
@@ -255,6 +259,7 @@ describe('v2 receiver LaneSet', () => {
     for (let turn = 0; turn < 16; turn++) await Promise.resolve()
     controller.abort(new DOMException('consumer left', 'AbortError'))
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
+    expect(lanes.samplingEvidence(1, 0)).toMatchObject({ offeredBytes: 1, settledBytes: 1, completedBytes: 0, cancelledAttempts: 1, failedAttempts: 0 })
 
     expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(1))
     lanes.remove(2)

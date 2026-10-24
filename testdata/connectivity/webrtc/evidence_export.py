@@ -14,7 +14,8 @@ _PRIVATE_FIELDS = {
     "credential", "credentials", "authorization", "accesstoken", "refreshtoken",
     "apikey", "sharekey", "readcapability", "username", "usernamefragment",
     "address", "localaddress", "remoteaddress", "hostname", "host", "publicip",
-    "ip", "fingerprint", "foundation", "certificate", "sdp",
+    "ip", "port", "localport", "remoteport",
+    "fingerprint", "foundation", "certificate", "sdp",
 }
 _PRIVATE_LOGS = {
     "stdout", "stderr", "serverevents", "servererrors", "firewall",
@@ -24,6 +25,7 @@ _ID_FIELDS = {
     "id", "localcandidateid", "remotecandidateid", "transportid",
     "selectedcandidatepairid", "protocolsessionid", "peerpathid", "peerattemptid",
     "networkgenerationid", "iceprofileid", "fileid", "shareid", "keyid",
+    "pathid", "trialpath",
 }
 _WINDOWS_PATH = re.compile(r"(?i)(?:file:///)?[a-z]:[\\/][^\r\n\t\"'<>|]*")
 _HOME_PATH = re.compile(r"/(?:home|Users)/[^\r\n\t\"'<>| ]+")

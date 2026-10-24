@@ -355,9 +355,21 @@ export function validatePeerRecovery(payload: UnknownRecord): void {
     case 'parallelism':
       exactKeys(payload, ['stage', 'action', 'reason', 'paths', 'queued_bytes', 'unfinished_bytes', 'capacity_waiting_bytes',
         'network_waiting_bytes', 'in_flight_bytes', 'remaining_bytes', 'remaining_known',
-        'useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate'], [], 'peer parallelism')
-      member(payload.action, ['explore', 'keep', 'retire'], 'parallelism action')
-      member(payload.reason, ['sustained-network-demand', 'aggregate-progress-improved', 'no-aggregate-gain', 'no-network-demand', 'consumer-pressure'], 'parallelism reason')
+        'useful_rate', 'output_rate', 'baseline_useful_rate', 'baseline_output_rate'], ['trial_path', 'trial_work'], 'peer parallelism')
+      member(payload.action, ['explore', 'sample', 'keep', 'retire', 'abandon'], 'parallelism action')
+      member(payload.reason, ['sustained-network-demand', 'aggregate-progress-improved', 'no-aggregate-gain', 'no-network-demand', 'consumer-pressure', 'path-sampling-started', 'connection-not-admitted', 'trial-path-replaced', 'trial-topology-changed', 'trial-demand-ended', 'trial-observation-reset', 'insufficient-scheduling-evidence'], 'parallelism reason')
+      if (payload.trial_path !== undefined) {
+        const path = recordValue(payload.trial_path, 'trial path')
+        exactKeys(path, ['path_id', 'lane_id', 'lane_epoch'], [], 'trial path')
+        canonicalIdentity(path.path_id, 'trial path ID')
+        uint32(path.lane_id, 'trial lane'); uint32(path.lane_epoch, 'trial epoch')
+      }
+      if (payload.trial_work !== undefined) {
+        const work = recordValue(payload.trial_work, 'trial work')
+        const fields = ['offered_bytes', 'settled_bytes', 'completed_bytes', 'completed_attempts', 'failed_attempts', 'superseded_attempts', 'cancelled_attempts', 'busy_ms']
+        exactKeys(work, fields, [], 'trial work')
+        decimalFields(work, fields, 'trial evidence')
+      }
       uint32(payload.paths, 'peer paths')
       decimalFields(payload, ['queued_bytes', 'unfinished_bytes', 'capacity_waiting_bytes', 'network_waiting_bytes', 'in_flight_bytes', 'remaining_bytes'], 'parallelism bytes')
       booleanValue(payload.remaining_known, 'remaining work knowledge')
@@ -493,7 +505,7 @@ export function validateContentScheduling(payload: UnknownRecord): void {
   decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
   canonicalIdentity(payload.file_id, 'content scheduling file')
   member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
-  member(payload.purpose, ['content', 'probe', 'rescue'], 'content scheduling purpose')
+  member(payload.purpose, ['content', 'probe', 'sample', 'rescue'], 'content scheduling purpose')
   integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
   integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
   if (payload.admission !== undefined) {

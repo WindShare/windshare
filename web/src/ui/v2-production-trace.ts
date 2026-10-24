@@ -500,7 +500,13 @@ function projectPeerRecoveryPayload(
         network_waiting_bytes: decimal(event.networkWaitingBytes), in_flight_bytes: decimal(event.inFlightBytes),
         remaining_bytes: decimal(event.remainingBytes), remaining_known: event.remainingKnown,
         queued_bytes: decimal(event.queuedBytes), unfinished_bytes: decimal(event.unfinishedBytes), capacity_waiting_bytes: decimal(event.capacityWaitingBytes),
-        useful_rate: event.usefulRate, output_rate: event.outputRate, baseline_useful_rate: event.baselineUsefulRate, baseline_output_rate: event.baselineOutputRate }
+        useful_rate: event.usefulRate, output_rate: event.outputRate, baseline_useful_rate: event.baselineUsefulRate, baseline_output_rate: event.baselineOutputRate,
+        ...(event.trialPath === undefined ? {} : { trial_path: { path_id: event.trialPath.pathId, lane_id: event.trialPath.laneId, lane_epoch: event.trialPath.laneEpoch } }),
+        ...(event.trialWork === undefined ? {} : { trial_work: {
+          offered_bytes: decimal(event.trialWork.offeredBytes), settled_bytes: decimal(event.trialWork.settledBytes), completed_bytes: decimal(event.trialWork.completedBytes),
+          completed_attempts: decimal(event.trialWork.completedAttempts), failed_attempts: decimal(event.trialWork.failedAttempts),
+          superseded_attempts: decimal(event.trialWork.supersededAttempts), cancelled_attempts: decimal(event.trialWork.cancelledAttempts), busy_ms: decimal(event.trialWork.busyMilliseconds),
+        } }) }
     case 'wave-started':
     case 'wave-rearmed':
       return {

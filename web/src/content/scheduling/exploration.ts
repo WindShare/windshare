@@ -2,7 +2,11 @@ export const PROBE_INTERVAL_MILLISECONDS = 5000
 export const MINIMUM_RESCUE_MILLISECONDS = 10
 const HEDGE_DELAY_FACTOR = 2
 export const MAXIMUM_SUPPLEMENTS = 2
-export type DispatchPurpose = 'content' | 'probe' | 'rescue'
+export type DispatchPurpose = 'content' | 'probe' | 'sample' | 'rescue'
+
+export function isExploratoryDispatch(purpose: DispatchPurpose): boolean {
+  return purpose === 'probe' || purpose === 'sample'
+}
 
 /** Rescue authority is independent of the budget for sampling unique queued work. */
 export class LaneRescues {

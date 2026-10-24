@@ -191,7 +191,7 @@ export type V2ContentSchedulingTraceEvent = Readonly<{
   fileId: string
   localBlockIndex: bigint
   route: 'application-relay' | 'direct' | 'turn'
-  purpose: 'content' | 'probe' | 'rescue'
+  purpose: 'content' | 'probe' | 'sample' | 'rescue'
   expectedMilliseconds: number
   pendingBytes: number
   bytesPerSecond: number

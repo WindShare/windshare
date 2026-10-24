@@ -48,7 +48,7 @@ import { turnRTCConfiguration, type TurnGrant } from './turn/control-codec'
 import type { ConnectionPurpose } from './v2-signaling-codec'
 import { PEER_CONTINUATION_SLOTS } from '../session/peer-slots/slots'
 import { PeerRecoveryTrace } from './peer-set/trace'
-import { ThroughputController, THROUGHPUT_SAMPLE_MS, type ThroughputDecision } from './peer-set/throughput'
+import { ThroughputController, THROUGHPUT_SAMPLE_MS, type ThroughputDecision, type ThroughputPath } from './peer-set/throughput'
 
 const MAXIMUM_THROUGHPUT_PATHS = PEER_CONTINUATION_SLOTS - 1
 
@@ -450,24 +450,41 @@ export class V2ReceiverConnectivity {
         await clock.sleep(THROUGHPUT_SAMPLE_MS, this.#lifetime.signal)
         if (this.#lifetime.signal.aborted) break
         const demand = this.#lanes.schedulingDemand()
-        const paths = [...this.#installedPeers.values()].filter(peer => peer.peer.pathRoute === 'direct').length
+        const paths = this.#throughputPaths()
         const pending = this.#peers.hasPendingPath
         const decision = controller.step(clock.now(), { ...demand, paths, pending,
           unfinishedBytes: this.#activations.size === 0 ? 0 : demand.unfinishedBytes,
-          networkWaitingBytes: this.#activations.size === 0 ? 0 : demand.networkWaitingBytes, optionalPaths: this.#optionalPaths.size }, MAXIMUM_THROUGHPUT_PATHS)
+          networkWaitingBytes: this.#activations.size === 0 ? 0 : demand.networkWaitingBytes }, MAXIMUM_THROUGHPUT_PATHS)
         await this.#applyParallelism(decision)
-        this.#traceParallelism(decision, demand, paths)
+        this.#traceParallelism(decision, demand, paths.length)
       }
     } catch (error) {
       if (!this.#lifetime.signal.aborted) throw error
     }
   }
 
+  #throughputPaths(): ThroughputPath[] {
+    const paths: ThroughputPath[] = []
+    for (const [pathId, peer] of this.#installedPeers) {
+      if (peer.peer.pathRoute !== 'direct') continue
+      const work = this.#lanes.samplingEvidence(peer.laneId, peer.laneEpoch)
+      if (work !== undefined) paths.push({ identity: { pathId, laneId: peer.laneId, laneEpoch: peer.laneEpoch },
+        optional: this.#optionalPaths.has(pathId), work })
+    }
+    return paths
+  }
+
   async #applyParallelism(decision: ThroughputDecision): Promise<void> {
     if (decision.action === 'explore' && this.#peers.size < MAXIMUM_THROUGHPUT_PATHS) this.#openOptional()
+    const target = decision.path
+    if (target === undefined) return
+    if (decision.action !== 'sample') this.#lanes.stopSampling(target.laneId, target.laneEpoch)
+    const peer = this.#installedPeers.get(target.pathId)
+    if (peer === undefined || peer.laneId !== target.laneId || peer.laneEpoch !== target.laneEpoch) return
+    if (decision.action === 'sample') this.#lanes.sampleLane(target.laneId, target.laneEpoch)
     if (decision.action === 'retire') {
-      const last = [...this.#optionalPaths.values()].at(-1)
-      if (last !== undefined) await this.#retireOptional(last.identity)
+      const entry = this.#optionalPaths.get(target.pathId)
+      if (entry !== undefined) await this.#retireOptional(entry.identity)
     }
   }
 
@@ -480,6 +497,8 @@ export class V2ReceiverConnectivity {
       queuedBytes: demand.queuedBytes, unfinishedBytes: demand.unfinishedBytes, capacityWaitingBytes: demand.capacityWaitingBytes,
       usefulRate: decision.usefulRate ?? 0, outputRate: decision.outputRate ?? 0,
       baselineUsefulRate: decision.baselineUsefulRate ?? 0, baselineOutputRate: decision.baselineOutputRate ?? 0,
+      ...(decision.path === undefined ? {} : { trialPath: decision.path }),
+      ...(decision.work === undefined ? {} : { trialWork: decision.work }),
     }))
   }
 

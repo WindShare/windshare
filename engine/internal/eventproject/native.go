@@ -70,14 +70,22 @@ func projectNativeObservation(workflow appobs.Workflow, value nativepeer.Observa
 	}
 	if parallelism := value.Parallelism; parallelism != nil {
 		d, o := parallelism.Decision, parallelism.Demand
-		if o.Paths < 0 || o.OptionalPaths < 0 {
-			return appobs.NativeConnectivityObserved{}, appobs.EventContractError{Field: "parallelism", Rule: "nonnegative_counts"}
+		var optional uint64
+		for _, path := range o.Paths {
+			if path.Optional {
+				optional++
+			}
 		}
 		spec.Kind, spec.At = "parallelism", parallelism.At
 		spec.Parallelism = &appobs.NativeParallelismFacts{Action: string(d.Action), Reason: d.Reason,
 			NetworkWaitingBytes: o.NetworkWaitingBytes, InFlightBytes: o.InFlightBytes, RemainingBytes: o.RemainingBytes, RemainingKnown: o.RemainingKnown,
-			Paths: uint64(o.Paths), OptionalPaths: uint64(o.OptionalPaths), QueuedBytes: o.QueuedBytes, UnfinishedBytes: o.UnfinishedBytes, CapacityWaitingBytes: o.CapacityWaitingBytes,
-			UsefulRate: d.UsefulRate, OutputRate: d.OutputRate, BaselineUsefulRate: d.BaselineUsefulRate, BaselineOutputRate: d.BaselineOutputRate}
+			Paths: uint64(len(o.Paths)), OptionalPaths: optional, QueuedBytes: o.QueuedBytes, UnfinishedBytes: o.UnfinishedBytes, CapacityWaitingBytes: o.CapacityWaitingBytes,
+			UsefulRate: d.UsefulRate, OutputRate: d.OutputRate, BaselineUsefulRate: d.BaselineUsefulRate, BaselineOutputRate: d.BaselineOutputRate,
+			TrialPath: d.Path.PathID, TrialLaneID: d.Path.LaneID, TrialLaneEpoch: d.Path.LaneEpoch,
+			OfferedBytes: d.Work.OfferedBytes, SettledBytes: d.Work.SettledBytes, CompletedBytes: d.Work.CompletedBytes,
+			CompletedAttempts: d.Work.CompletedAttempts, FailedAttempts: d.Work.FailedAttempts,
+			SupersededAttempts: d.Work.SupersededAttempts, CancelledAttempts: d.Work.CancelledAttempts,
+			BusyMilliseconds: uint64(max(0, d.Work.BusyMilliseconds))}
 	}
 	if admission := value.Admission; admission != nil {
 		if admission.Active < 0 || admission.Queued < 0 {

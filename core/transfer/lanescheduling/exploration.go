@@ -14,6 +14,7 @@ type Purpose string
 const (
 	Content Purpose = "content"
 	Probe   Purpose = "probe"
+	Sample  Purpose = "sample"
 	Rescue  Purpose = "rescue"
 )
 
@@ -30,7 +31,7 @@ func (e *Exploration) Acquire(purpose Purpose, now time.Time) bool {
 	if !e.Available(purpose, now) {
 		return false
 	}
-	if purpose == Probe {
+	if purpose == Probe || purpose == Sample {
 		e.probes++
 		e.lastProbe = now
 	}
@@ -42,8 +43,8 @@ func (e *Exploration) Available(purpose Purpose, now time.Time) bool {
 	if e.active >= MaximumSupplements {
 		return false
 	}
-	if purpose == Probe {
-		if e.probes != 0 || (!e.lastProbe.IsZero() && now.Sub(e.lastProbe) < ProbeInterval) {
+	if purpose == Probe || purpose == Sample {
+		if e.probes != 0 || (purpose == Probe && !e.lastProbe.IsZero() && now.Sub(e.lastProbe) < ProbeInterval) {
 			return false
 		}
 	}
@@ -54,7 +55,7 @@ func (e *Exploration) NextProbe() time.Time { return e.lastProbe.Add(ProbeInterv
 
 func (e *Exploration) Release(purpose Purpose) {
 	e.active--
-	if purpose == Probe {
+	if purpose == Probe || purpose == Sample {
 		e.probes--
 	}
 }

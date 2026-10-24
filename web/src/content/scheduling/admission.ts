@@ -1,6 +1,7 @@
 import { ContentAllocation, demandBytes, type ContentAssignment, type ContentLane, type ContentSelection, type ContentWork } from './selection'
 import type { BlockReceivePermit } from './receive-window'
 import type { DispatchPurpose } from './exploration'
+import type { SamplingOutcome } from './sampling'
 
 const PRIORITIES = ['preview', 'download', 'prefetch'] as const
 const PRIORITY_AGING_MILLISECONDS = 1000
@@ -17,7 +18,7 @@ export interface ContentAdmission {
   readonly permit: BlockReceivePermit
   readonly started: number
   readonly expectedMilliseconds: number
-  close(successful: boolean): void
+  close(outcome: SamplingOutcome): void
 }
 
 interface PendingAdmission extends ContentWork {
@@ -164,14 +165,16 @@ export class ContentAdmissions {
     const bytes = demandBytes(work.demand)
     const expectedMilliseconds = lane.performance.begin(started, bytes)
     lane.inflight++
+    if (purpose !== 'rescue') lane.sampling.offered(bytes, started)
     let closed = false
     return {
       lane, purpose, permit, started, expectedMilliseconds,
-      close: successful => {
+      close: outcome => {
         if (closed) return
         closed = true
         lane.inflight--
-        lane.performance.complete(this.#now(), bytes, successful)
+        lane.performance.complete(this.#now(), bytes, outcome === 'completed')
+        if (purpose !== 'rescue') lane.sampling.settled(bytes, this.#now(), outcome)
         this.#allocation.completed(work)
         permit.close()
         release?.()

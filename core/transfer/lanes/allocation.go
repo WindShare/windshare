@@ -150,7 +150,8 @@ func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
 		return
 	}
 	admission.purpose = purpose
-	if purpose == lanescheduling.Probe {
+	candidate.sampling.Offered(blockDemandBytes(pending.request.Demand), now)
+	if purpose == lanescheduling.Probe || purpose == lanescheduling.Sample {
 		s.exploration.Acquire(purpose, now)
 	}
 	s.attempts.Add(1)
@@ -209,6 +210,12 @@ func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneS
 	// frontier, while allowing independent readers and bounded read-ahead to learn.
 	if primary.performance.HasSuccessfulSample && active > 0 &&
 		(pending.order.Distance > 0 || (pending.order.Priority != Preview && active > 1)) {
+		for _, candidate := range ordered[1:] {
+			if candidate.failures == 0 && candidate.receive.Available() && candidate.performance.PendingBytes == 0 &&
+				candidate.sampling.Available(blockDemandBytes(pending.request.Demand), now) && s.exploration.Available(lanescheduling.Sample, now) {
+				return candidate, lanescheduling.Sample
+			}
+		}
 		probe := s.probeCandidateLocked(pending, ordered[1:], now)
 		if probe != nil && s.exploration.Available(lanescheduling.Probe, now) {
 			return probe, lanescheduling.Probe
