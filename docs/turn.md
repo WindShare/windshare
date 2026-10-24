@@ -1,198 +1,84 @@
-# TURN services
+# TURN Services
 
-TURN adds relayed WebRTC paths alongside direct connections and application
-relays. Recipients still open the link normally. Initial discovery, authentication
-and signaling require an application relay; existing authenticated lanes can
-carry subsequent credential replacement after that relay disconnects.
+> WindShare is in rapid development, and TURN support may change along with the implementation.
+> This page only outlines the TURN subsystem's shape and vocabulary. The code under [`engine/turn/`](../engine/turn/),
+> [`connectivity/turnpath/`](../connectivity/turnpath/), and [`core/session/turncontrol/`](../core/session/turncontrol/) is the source of truth for specifics.
 
-Each native Engine owns its TURN connection/socket capacity and peer-attempt
-admission budgets. All its shares, receives and reconnects share those limits;
-other Engines in the same process have independent capacity. These resource
-limits are separate from account byte budgets.
+TURN adds relayed WebRTC DataChannel paths alongside direct peer connections and application relays.
+An application relay still bootstraps discovery, session authentication, and initial signaling; once a
+session is authenticated, the sender acquires or derives TURN credentials on demand and delegates them to
+the receiver over encrypted [`TURN_CONTROL`](protocol.md#session-messages) messages so both peers allocate on the same service and transport.
 
-## Managed Cloudflare service
+## Maintenance
 
-The Cloudflare deployment workflow provisions TURN in both deployment modes.
-`wind relay onboard` saves the service reference automatically; approved devices
-request temporary credentials from the Worker. The deployment token stays in
-Actions, the TURN key secret stays in the Worker, and recipients receive only
-temporary credentials through encrypted session control. Managed credentials last
-up to one hour; the client derives their remaining lifetime from the issuer's HTTP
-Date, subtracting request time instead of comparing clocks across devices.
+- Keep only what is needed to understand the TURN subsystem's shape and vocabulary; added detail is a regression, not an improvement.
+- State current facts only: no recommendations, constraint rules, or plans.
+- Leave constants, limits, budgets, cooldowns, retry timing, and byte layouts to the code; link to it instead of copying.
+- When the shape or vocabulary changes, replace or delete the affected lines, and keep the page about its current size.
 
-Managed services follow the configured active relay selection even while an
-application relay is disconnected. Discovery refreshes in the background; timeout
-retains cached authority. Disable or device revocation withdraws it. Discovery
-does not acquire TURN credentials or delay link publication. Shares using the same
-relay share one discovery loop per Engine; the loop stops when its last share ends. Managed inventory
-uses no manual account slots; sessions admit a bounded mix of both sources.
+## Service sources
 
-The console enables or disables the service. Disable persists across deployments,
-stops issuance, and queues outstanding credentials for revocation. Pending,
-provider-confirmed and expired counts are distinct: recipients may reuse a
-credential until provider revocation or expiry. Cloudflare Realtime charges are
-separate from Worker charges; automatic scheduling does not force TURN traffic.
-Lease capacity includes unfinished issuance and unexpired credentials awaiting
-revocation; retained records of completed leases do not consume capacity. Managed
-requests reuse one lease ID across bounded retries. Uncertain results retain cleanup
-ownership until the issuer accepts cleanup or authority expires. Early cancellation
-blocks late issuance; shutdown reports unresolved cleanup. `TURNStatus()` separates
-active leases from pending cleanup.
+| Source | Configuration | Credential authority |
+|---|---|---|
+| Managed Cloudflare | Enrolled relay profile in `config.json` (`profiles`, `active_relays`) and optional `managed_turn_policies` | The Cloudflare Worker (`relay-cloudflare`) holds the TURN key secret, issues short-lived credentials to enrolled sender devices, and queues provider revocation when disabled or when a device is revoked. |
+| Manual | `turn.accounts` and `turn.profiles` in `config.json` | The sender holds the account credentials locally (`static`, `coturn`, or `cloudflare` issuer) and issues or derives session grants without placing issuer secrets in the capability link. |
 
-`managed_turn_policies[].local_budget_bytes` defaults to `0` (unlimited). A nonzero value
-limits the deployment identified by that entry's `relay_url` within one Engine, subject to the budget semantics
-below. It is not an account-wide spending cap. Optional console usage queries use
-the separate read-only `CLOUDFLARE_ANALYTICS_API_TOKEN` deployment secret and run
-only when requested; estimates cover the previous seven complete UTC days.
+- **Managed discovery**: the sender refreshes managed TURN capability (`service_id`, `enabled`) from active relay profiles in the background and caches observations under `config.json.state/turn/`. Discovery does not acquire TURN credentials or delay link publication.
+- **Manual issuers**:
 
-## Manual services
-
-Add `turn` to the [sharing configuration](cli.md), then run
-`wind config import config.json`. Import replaces the complete sharing settings.
-For example, retain your existing frontend/relay fields and add:
+| Issuer | `credentials` fields | Profile `urls` |
+|---|---|---|
+| `static` | `username`, `password`, optional `expires_at` | Required |
+| `coturn` | `shared_secret`, optional `lifetime_seconds` | Required |
+| `cloudflare` | `key_id`, `api_token`, optional `lifetime_seconds` | Optional (`turn:` / `turns:` subset override) |
 
 ```json
 {
+  "managed_turn_policies": [
+    { "relay_url": "https://your-site.example", "local_budget_bytes": 0 }
+  ],
   "turn": {
     "accounts": [{
       "id": "personal",
       "provider": "cloudflare",
       "issuer": "cloudflare",
-      "local_budget_bytes": 1073741824,
-      "credentials": {
-        "key_id": "YOUR_TURN_KEY_ID",
-        "api_token": "YOUR_TURN_KEY_SECRET",
-        "lifetime_seconds": 3600
-      }
+      "local_budget_bytes": 0,
+      "credentials": { "key_id": "TURN_KEY_ID", "api_token": "TURN_KEY_SECRET" }
     }],
     "profiles": [{ "id": "primary", "account": "personal", "urls": [] }]
   }
 }
 ```
 
-Accounts own credentials and budgets; profiles select endpoint alternatives.
-Profile and account IDs must be distinct within their respective lists, using
-letters, digits, `_`, `-` or `.`. A profile references one account. Cloudflare can
-supply its endpoints when `urls` is empty. Alternatively, select a subset such
-as `["turns:turn.cloudflare.com:443?transport=tcp"]`.
+## Session control (`TURN_CONTROL`)
 
-| Issuer | `credentials` fields | Profile URLs |
-| --- | --- | --- |
-| `static` | `username`, `password`, optional RFC 3339 `expires_at` | Required |
-| `coturn` | `shared_secret`, optional `lifetime_seconds` | Required |
-| `cloudflare` | `key_id`, `api_token`, optional `lifetime_seconds` | Optional |
+`TURN_CONTROL` coordinates TURN delegation between sender and receiver over any authenticated lane. Each message carries `Header {SessionID, OwnerPathID, Sequence}`.
 
-Use `turn:host:3478?transport=udp`, `turn:host:3478?transport=tcp`, or
-`turns:host:443?transport=tcp`. Native TURN allocations currently support IPv4.
-Several URLs in one profile are alternatives for the same service. Initial
-connections try TCP, then TLS, then UDP; each attempt delegates the same transport
-to both peers. Failed connections advance to the next configured transport.
-Issuers default to one hour; supported lifetimes are one minute through 48 hours.
-Static expiring credentials cannot be renewed automatically.
+| Message | Direction | Role |
+|---|---|---|
+| `Available` | Sender → Receiver | Publishes the sender's current TURN profile inventory. |
+| `Demand` | Receiver → Sender | Requests TURN capacity while preview or download demand is active. |
+| `Grant` | Sender → Receiver | Delegates `CredentialKind` (`Fixed` or `Expiring`), `Username`, `Password`, `ValidFor`, and `URLs` for a `PathID` (and optional `Replaces` predecessor). |
+| `Unavailable` | Sender → Receiver | Reports that a profile cannot issue a grant, with `RetryAfter` and `Reason`. |
+| `Ready` | Receiver → Sender | Confirms that `PathID` is attached to an authenticated session lane (`LaneID`, `LaneEpoch`). |
+| `Recover` | Receiver → Sender | Requests bounded replacement of `PathID` (`AllocationStateMismatch` or `ChannelUnavailable`). |
+| `Retire` | Either | Retires `PathID` (`Idle`, `Replaced`, `Expired`, `BudgetExhausted`, `ProviderRevoked`, or `Unhelpful`). |
+| `Report` | Receiver → Sender | Reports cumulative receiver-confirmed `UsefulBytes` delivered over `PathID`. |
+| `Quality` | Receiver → Sender | Reports per-lane-incarnation `ContentBytes`, `BusyMilliseconds`, and `PendingBytes` for transport evaluation. |
 
-Recipients receive TURN usernames and passwords through encrypted session
-control. They can reuse those credentials until provider expiry or confirmed
-revocation. **Fixed passwords have no WindShare-enforced expiry.** For manual
-services, the issuer secret stays on the owner's device and never enters the share link. Import
-explains this delegation once; protect the saved configuration like a password.
+## Path lifecycle, routing, and budgets
 
-Credentials are acquired only for preview/download demand. Sharing and browsing
-do not request credentials; managed capability discovery may run in the background.
-The session permits two services plus one temporary replacement path, reserving
-direct-attempt capacity. Readiness names an exact authenticated lane generation;
-the sender retires its predecessor only while that same local admission remains
-live. Failed renewal preserves a still-valid lane. Canceled or superseded requests
-do not impose a failure cooldown.
-Unhelpful sampled paths cool down before another attempt. Scheduling
-uses real content measurements; comparable paths prefer direct, then owner TURN,
-then application relays. `p2p-only` admits direct traffic only; `relay-only`
-creates no ICE connections. Process admission permits 16 ordinary TURN connections
-and one shared temporary handoff. The handoff admits both endpoints when sender
-and receiver share a process: at most two extra connections and 16 extra socket
-reservations beyond the ordinary 64. One route plan drives both gathering and
-admission: one initial OS-routed socket per URL, with at most two staggered
-source-bound backups on failure or stalled allocation. Backups acquire capacity
-only when started; failed and unselected routes release it. Proven exits are
-preferred within the current network generation.
+- **On-demand issuance**: sharing and catalog browsing do not allocate TURN credentials; issuance starts only when the receiver signals content transfer demand (`Demand`) and `--connectivity` permits relayed ICE paths (`auto`).
+- **Transport selection and trials**: profiles support `turn:...?transport=udp`, `turn:...?transport=tcp`, and `turns:...?transport=tcp`. Each attempt delegates a single transport to both peers, advances across configured transports on connection failure, and can trial an alternate transport under sustained content demand using `Quality` samples.
+- **Make-before-break replacement**: renewal of `Expiring` grants, transport trials, and `Recover` prepare a successor path alongside the serving lane. The sender retires the `Replaces` predecessor only after `Ready` confirms the replacement's exact `(LaneID, LaneEpoch)`.
+- **Engine capacity and local budgets**: each `Engine` instance owns independent TURN connection/socket admission pools, handoff reservations, and per-account or per-managed-policy `local_budget_bytes` counters. `TrafficUsage` tracks accepted payload, receiver-confirmed useful bytes, and local socket bytes separately; optional Cloudflare account `analytics` queries provider-sampled UTC day estimates out of band via `Engine.QueryTURNUsage`.
 
-Sustained content demand can evaluate one alternate transport using real queued
-content. Readiness alone never replaces a working path: a contender must show a
-sustained throughput improvement, scoped to the exact authenticated lanes and
-both network generations. Trials have time and sampled-content budgets, share
-the existing handoff capacity, yield to renewal/recovery, and cool down after completion. Idle or nearly
-drained queues skip exploration. Learned transport preferences remain within
-the session and network; transport selection does not change the configured exit.
+## Code
 
-Transient channel failures retry the same binding with bounded backoff. Only
-selected paths with active demand can trigger allocation replacement, including
-fixed credentials. Both ends must authenticate a healthy replacement before
-retirement. Efficiency recovery leaves usable indication traffic running;
-suspected allocation-state mismatch has a bounded recovery lifetime. Repeated
-recovery is capped until fresh demand, network change or stable useful progress.
-
-Cumulative reports coalesce per grant; lifecycle commands retain their order and
-apply cancellable backpressure when full. Local acceptance means retained ownership,
-not remote execution. Readiness retries after send failure and is idempotent for
-its lane generation; an ended attempt cannot authorize a later one.
-
-`local_budget_bytes: 0` disables the local limit. Nonzero limits share socket
-usage across all profiles, shares and recipients using that account in one
-Engine instance. Counters reset with the Engine. `ConfigureTURN(turn.Settings)`
-validates and publishes manual accounts and managed deployment policies together,
-preserving usage by account ID, including removal/re-import. Application settings
-project through `relayconfig.Config.TURNSettings()`; discovery observations remain
-separate. New requests use the latest settings; existing leases retain their issuing source.
-Unrelated settings/discovery preserve pending issuance and renewal ownership;
-changes to a profile's authority or endpoints invalidate only dependent requests.
-Removing an account/profile or lowering its limit below usage retires affected
-paths. Raising a limit permits new leases without reviving revoked ones.
-Exhaustion stops issuance and retires that account's paths, leaving other services
-available. Socket samples
-include local TURN/TLS framing and retries visible to the process, separately
-from receiver-confirmed useful content. Sampling, in-flight data, external
-credential reuse and other applications mean this is **not an account-wide
-zero-overage guarantee**.
-
-Connection details show the TURN service, health and useful received bytes.
-CLI traces associate route decisions, binding failures, issuance, replacement, retirement, selected pairs and
-socket counters with their service, session, path and available attempt IDs.
-Cleanup distinguishes local protocol completion from a forced deadline; neither
-claims remote deallocation acknowledgment.
-`engine/turn` exposes settings and observations; account budgets, discovery and provider
-assembly live in `engine/internal/turnruntime`. `connectivity/turnpath` owns session
-path replacement, with one preparing successor alongside a serving path.
-`connectivity/turnroute` owns egress planning and fallback scheduling;
-`connectivity/turncapacity` owns process admission and handoff reservations.
-The native provider executes these plans through resource capabilities and adapts
-Pion events; TURN protocol state remains in Pion. Engine callers inspect `TURNStatus()` and subscribe through
-`TURNDependencies.Observe`; `TURNDependencies.Cache` supplies optional discovery persistence.
-Local shutdown and provider-confirmed revocation are
-separate events. Cloudflare supports credential revocation; static and coturn
-credentials remain reusable until their own authority expires.
-
-Optional Cloudflare `analytics` on an account takes `account_id` and a separate
-`api_token` with Account Analytics permission. Call `Engine.QueryTURNUsage`
-explicitly with inclusive UTC dates. This uses the key's sampled provider usage,
-not an invoice or the local budget. Analytics never runs on the transfer path.
-
-Offline coverage uses a local TURN server, injected clocks/HTTP clients and
-shared Go/TypeScript vectors. Run `make vectors web short-go`; the full
-managed Worker discovery and native/browser renewal scenario (requires `worker-build`
-and the Worker package's `npm ci`) is
-`pnpm -C web exec playwright test v2-local-turn.network.spec.ts --config=playwright.network.config.ts --project=chromium`.
-The opt-in [Cloudflare trial runner](../web/scripts/browser-network-matrix/run-turn-trial.mjs)
-accepts `WINDSHARE_TURN_TRIAL_CONFIGURATION` pointing to an enrolled deployment's
-private configuration, or `WINDSHARE_TURN_TRIAL_KEY` pointing to a private JSON file
-with `uid` and `secret`. Positional arguments select `udp`, `tcp`, `tls`, or the full
-`profile`; `WINDSHARE_TURN_TRIAL_BYTES` sets payload size (default 512 KiB, maximum
-64 MiB). JSON reports handshake time, actual TURN control protocols, throughput and
-SCTP window samples; stderr streams progress even if a transfer fails. Compare the
-same transport and payload size; short transfers include congestion slow start.
-Raw output includes network addresses; sanitize it before publishing.
-Recorded evidence: [managed lifecycle](../testdata/connectivity/turn/managed-cloudflare-2026-10-20.json),
-[provider connectivity](../testdata/connectivity/turn/cloudflare-2026-10-20.json),
-[network throughput comparison](../testdata/connectivity/turn/network-throughput-2026-10-21.json).
-
-Provider references: [Cloudflare credentials](https://developers.cloudflare.com/realtime/turn/generate-credentials/),
-[Cloudflare analytics](https://developers.cloudflare.com/realtime/turn/analytics/),
-[coturn authentication](https://github.com/coturn/coturn/wiki/turnserver).
+| Topic | Go | Browser / Relay |
+|---|---|---|
+| Engine settings, status, budgets, discovery | [`engine/turn`](../engine/turn/), [`engine/turncache`](../engine/turncache/), [`engine/internal/turnruntime`](../engine/internal/turnruntime/), [`engine/relayconfig`](../engine/relayconfig/) | — |
+| `TURN_CONTROL` wire contract and vectors | [`core/session/turncontrol`](../core/session/turncontrol/), [`core/testvectors`](../core/testvectors/) | [`web/src/protocol/turn-control.ts`](../web/src/protocol/turn-control.ts) |
+| Path delegation, renewal, recovery, quality | [`connectivity/turnpath`](../connectivity/turnpath/) | [`web/src/connectivity/turn`](../web/src/connectivity/turn/) |
+| Route planning, capacity pools, ICE config | [`connectivity/turnroute`](../connectivity/turnroute/), [`connectivity/turncapacity`](../connectivity/turncapacity/), [`connectivity/iceconfig`](../connectivity/iceconfig/), [`transport/webrtc`](../transport/webrtc/) | [`web/src/connectivity/turn/rtc-configuration.ts`](../web/src/connectivity/turn/rtc-configuration.ts) |
+| Managed Cloudflare TURN provisioning and issuance | — | [`relay-rust/crates/relay-cloudflare`](../relay-rust/crates/relay-cloudflare/) |
