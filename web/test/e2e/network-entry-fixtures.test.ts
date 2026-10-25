@@ -8,6 +8,7 @@ import {
   HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
   HOT_SWITCH_TRANSFER_BLOCKS,
   hotSwitchTerminalEvidence,
+  type HotSwitchLaneObservation,
   type HotSwitchPageEvent,
 } from '../../e2e/fixtures/hot-switch-contract'
 import { EvidenceBridge, RelayCutEvidence } from '../../e2e/fixtures/hot-switch-page-evidence'
@@ -283,6 +284,39 @@ describe('direct weekly network fixtures', () => {
     expect(log.latestDispatchSequence()).toBe(7)
     expect(log.snapshot()).toHaveLength(2)
   })
+
+  it.each(['retained', 'live'] as const)(
+    'correlates %s renewal traffic with its exact lane incarnation and cut boundary',
+    async (arrival) => {
+      const log = new NetworkEventLog()
+      const cutBoundary = 27
+      const replacement = { laneId: 1, laneEpoch: 2, route: 'turn' } as const
+      const dispatch = (lane: HotSwitchLaneObservation, sequence: number) => ({
+        kind: 'dispatch' as const,
+        observation: { ...lane, dispatchSequence: sequence },
+      })
+      log.accept(dispatch(replacement, cutBoundary))
+      // The failing weekly run carried sequences 28 through 38 on the predecessor
+      // before sequence 39 proved that the renewed allocation carried content.
+      log.accept(dispatch({ laneId: 2, laneEpoch: 1, route: 'turn' }, 28))
+      log.accept(dispatch({ ...replacement, laneEpoch: 1 }, 38))
+      const renewed = dispatch(replacement, 39)
+      if (arrival === 'retained') log.accept(renewed)
+
+      const observed = vi.fn()
+      const waiting = log.waitForLaneDispatch(replacement, cutBoundary).then((event) => {
+        observed(event)
+        return event
+      })
+      if (arrival === 'live') {
+        await Promise.resolve()
+        expect(observed).not.toHaveBeenCalled()
+        log.accept(renewed)
+      }
+      await expect(waiting).resolves.toEqual(renewed)
+      expect(observed).toHaveBeenCalledExactlyOnceWith(renewed)
+    },
+  )
 
   it('rejects malformed bridge values before retaining them', () => {
     const log = new NetworkEventLog()
