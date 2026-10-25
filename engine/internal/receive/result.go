@@ -62,7 +62,6 @@ type Result struct {
 	DestinationAdjusted bool
 	Elapsed             time.Duration
 	Connectivity        downloadmetrics.Snapshot
-	ObservationLosses   []ObservationLoss
 }
 type SettlementInput struct {
 	Result                                                                    transfer.JobResult

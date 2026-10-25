@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -589,4 +590,71 @@ type DirectTreeSession interface {
 	// retains known operation ownership, including any destination reservation.
 	// Success additionally requires the intent's output root to be settled.
 	FinalizeTree(context.Context, DirectTreeOutcome) (DirectTreeSettlement, error)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value FileSettlementKind) DiagnosticName() string {
+	if value == 0 {
+		return "none"
+	}
+	switch value {
+	case FilePreviouslyPublished:
+		return "previously_published"
+	case FilePublished:
+		return "published"
+	case FilePaused:
+		return "paused"
+	case FileCollision:
+		return "collision"
+	case FileItemBlocked:
+		return "item_blocked"
+	case FileFailed:
+		return "failed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ItemBlockReason) DiagnosticName() string {
+	if value == 0 {
+		return "none"
+	}
+	switch value {
+	case ItemBlockStateCorrupt:
+		return "state_corrupt"
+	case ItemBlockOwnershipUnknown:
+		return "ownership_unknown"
+	case ItemBlockPublicationAmbiguous:
+		return "publication_ambiguous"
+	case ItemBlockRetirementUncertain:
+		return "retirement_uncertain"
+	case ItemBlockRevisionConflict:
+		return "revision_conflict"
+	case ItemBlockCheckpointInvalid:
+		return "checkpoint_invalid"
+	case ItemBlockOwnedObjectUnknown:
+		return "owned_object_unknown"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value DirectTreeSettlementKind) DiagnosticName() string {
+	if value == 0 {
+		return "none"
+	}
+	switch value {
+	case DirectTreeSettlementSuccess:
+		return "success"
+	case DirectTreeSettlementPartial:
+		return "partial"
+	case DirectTreeSettlementPaused:
+		return "paused"
+	case DirectTreeSettlementFailed:
+		return "failed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

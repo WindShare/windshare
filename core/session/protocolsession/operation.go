@@ -3,6 +3,7 @@ package protocolsession
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -578,4 +579,16 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 		}
 	}
 	return fmt.Errorf("%w: direction=%d kind=%d", ErrInvalidDirection, direction, kind)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value Role) DiagnosticName() string {
+	switch value {
+	case RoleReceiver:
+		return "receiver"
+	case RoleSender:
+		return "sender"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

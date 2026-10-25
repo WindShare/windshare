@@ -14,14 +14,16 @@ wind share <path> --verbose --trace trace.ndjson
 wind share <path> --verbose --trace-dir ./traces
 ```
 
-Traces are recorded in line-delimited JSON (NDJSON). Sensitive secrets (link keys, credentials, payload content) are excluded.
-The engine translates native events and failures into `engine/observation` facts once; the CLI owns formatting and exit codes. TURN, ICE and cleanup details remain available in the shared facts.
+Native traces use NDJSON schema 5. Typed product events in `engine/observation` describe readiness, progress, connectivity summaries and task settlement. Detailed diagnostics travel through an injected `core/diagnostics.Sink`, independently of product events; their source owns the event name and attributes. New diagnostic stages need no engine, wire or CLI registration.
+
+The sink is disabled by default and enabled by `--verbose` or trace capture. Its bounded queue never waits for presentation or disk writes. Hosts close the diagnostic stream after tasks stop; task results remain available through `Wait`, even if diagnostics are dropped or the sink closes.
 
 ### Event Correlation
 
 Correlate events across the session using:
 
-- `engine_task_id`: Native task identity linking source acquisition, session replacement, admission, and settlement.
+- `scope.engine_task_id` / `scope.engine_id`: Diagnostic ownership; matches the task ID in product lifecycle events.
+- `source_time`: Source observation time, or sink ingestion time when the source has no timestamp. `time` and `sequence` describe recording order.
 - `protocol_session_id`: Global ID linking sender and receiver protocol sessions.
 - `runtime_run_id`: Unique ID for a single process execution.
 - `protocol_operation_id` + `response_sequence`: Identifies an individual RPC or protocol operation.
@@ -29,7 +31,8 @@ Correlate events across the session using:
 
 ### Key Events
 
-- `engine_task_observed`: Native task lifecycle, source acquisition, session replacement, and content-admission decisions. Correlate share, receive-operation, job, and previous/current session identities. `task_settled` carries the authoritative `outcome` and `failure_class`; `failure` retains the selected reason, and `cleanup_failure` separately identifies resource-release faults. A stop request or finished lifecycle alone does not imply success.
+- `engine_task_observed`: Typed `task_started`, `task_stopping` and `task_settled`. Settlement carries `outcome`, `failure_class`, `failure` and separate `cleanup_failure`.
+- `share_workflow`, `receive_generation_changed`, `receive_admission_decision`, `receive_relay_content_claimed`: Source acquisition, session replacement and content-admission diagnostics. Join by task scope and `correlation` identities.
 - `protocol_operation` & `protocol_response_send_returned`: Operation lifecycle, lane selection, and send attempts.
 - `protocol_error_received`: Authenticated protocol errors (`scope`, `code`, `retryable`, `retry_after_ms`).
 - `sender_session_terminated`: Session shutdown reason, failing component (`source`), error cause chain (`nodes`), and stack trace (`capture_stack`).
@@ -37,13 +40,12 @@ Correlate events across the session using:
 - `relay_availability`: Current ready, configured, and terminal relay counts plus whether any relay was previously ready; separate from active download paths.
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
 - `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, timeout, and elapsed wait (round trip for an acknowledgement, inbound silence for a failure).
-- `filesystem_output`: Output ownership and settlement decisions. Runtime failures are located by `runtime_decision.component` and `runtime_decision.operation`; `failure.stage` is present only when a native filesystem stage is classified.
-- `capabilities.mode`: Filesystem capabilities (`live_only` vs restart-resumable).
+- `filesystem_output`: Output ownership, `runtime_component`, `runtime_operation`, `runtime_decision`, `failure_stage` and `native_error_class`; `capabilities.mode` distinguishes live-only and restart-resumable output.
 
 `Trace is incomplete` reports diagnostic loss, independently of transfer results.
 `trace_summary` separates `contract_rejected` from `lifecycle_dropped`, write/flush failures,
 and lost rejection evidence. Normal progress sampling does not make a trace incomplete.
-`observer_loss.rejection` identifies rejected events, fields, rules, and bounded source evidence.
+`diagnostic_loss` identifies source loss; final loss totals also survive a full diagnostic queue. `observer_loss.rejection` describes product-event contract errors. Unknown diagnostic names or attributes are preserved, never treated as contract errors. Diagnostic export is an evolving debugging format, separate from the product/RPC contract.
 
 Receiver peer and block operations publish their terminal `protocol_operation` after receive and cleanup join.
 Content race losers report `receiver_ended / superseded`; peer stops may retain `canceled` or `operation_closed`.

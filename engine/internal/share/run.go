@@ -19,6 +19,7 @@ const stoppedMessage = "Sender stopped"
 // Run returns only after every borrower has released source and key authority.
 func Run(ctx context.Context, request Request, dependencies Dependencies) task.Completion[Result] {
 	d := dependencies.normalized()
+	d.Control.Diagnostics = request.Diagnostics
 	if ctx == nil || d.Controller == nil || d.Control.Now == nil || d.Control.Random == nil || d.Control.CleanupContext == nil {
 		if d.Controller != nil {
 			d.Controller.finish(ErrConfiguration)
@@ -46,7 +47,7 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 			outcome = task.OutcomeCancelled
 		}
 	}
-	result := Result{Elapsed: max(d.Control.Now().Sub(started), 0), Ready: active.ready, ObservationLosses: o.lossSnapshot()}
+	result := Result{Elapsed: max(d.Control.Now().Sub(started), 0), Ready: active.ready}
 	finishErr := errors.Join(runErr, cleanupErr)
 	if finishErr == nil && !active.ready {
 		finishErr = context.Cause(ctx)
@@ -86,7 +87,7 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 		CatalogTracer: o, RootPrefetchTracer: o,
 		RevisionCapacity: d.RevisionCapacity, CatalogBudget: d.CatalogBudget, CacheBudget: d.CacheBudget,
 	}
-	if request.Diagnostics {
+	if d.Control.Diagnostics.Enabled() {
 		config.RevisionTracer = o
 		config.CapacityTracer = o
 	}
@@ -132,7 +133,7 @@ func (s *activeShare) start(ctx, resourceContext context.Context, request Reques
 	}
 	s.peers, err = d.Peers(nativeconnectivity.SenderConfig{
 		TURN: d.TURN, Capacity: d.Connectivity,
-		Now: d.Control.Now, Diagnostics: request.Diagnostics, TraceLifecycle: request.TraceLifecycle, ObserveChannel: o.attachChannel,
+		Now: d.Control.Now, Diagnostics: d.Control.Diagnostics.Enabled(), ObserveChannel: o.attachChannel,
 	})
 	if native, ok := s.peers.(nativePeers); ok {
 		o.attachPeers(native.Factory)

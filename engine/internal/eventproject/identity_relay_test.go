@@ -23,10 +23,6 @@ func TestDomainIdentityBridgesPreserveFullWidthsAndSemanticTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation, err := protocolsession.OperationIDFromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
 	job, err := transfer.TransferJobIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -41,10 +37,6 @@ func TestDomainIdentityBridgesPreserveFullWidthsAndSemanticTypes(t *testing.T) {
 		}},
 		{"session", func() ([]byte, string, error) {
 			id, err := ProtocolSessionID(session)
-			return id.Bytes(), id.Hex(), err
-		}},
-		{"protocol operation", func() ([]byte, string, error) {
-			id, err := ProtocolOperationID(operation)
 			return id.Bytes(), id.Hex(), err
 		}},
 		{"transfer job", func() ([]byte, string, error) {

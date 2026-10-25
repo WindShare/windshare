@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -246,4 +247,26 @@ func laneNonzero(value []byte) bool {
 		}
 	}
 	return false
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LaneRejectCode) DiagnosticName() string {
+	switch value {
+	case LaneRejectUnknownSession:
+		return "unknown-session"
+	case LaneRejectStaleEpoch:
+		return "stale-epoch"
+	case LaneRejectGrantConsumed:
+		return "grant-consumed"
+	case LaneRejectGrantExpired:
+		return "grant-expired"
+	case LaneRejectAdmissionLimited:
+		return "admission-limited"
+	case LaneRejectStopping:
+		return "stopping"
+	case LaneRejectGrantMismatch:
+		return "grant-mismatch"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

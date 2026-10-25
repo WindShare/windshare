@@ -235,3 +235,18 @@ func traceDroppedSummary(linkID uint64, dropped uint64) LifecycleTrace {
 		Dropped: dropped,
 	}
 }
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleStage) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleRetirementSource) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value LifecycleCause) DiagnosticName() string {
+	return string(value)
+}

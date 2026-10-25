@@ -4,24 +4,29 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
 	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
-// RunTraceRecord adds CLI recording metadata to the application wire payload.
-// Command results belong to the CLI; shared observation shapes belong to wire.
+// RunTraceRecord combines product events and source-owned diagnostics for export.
+// Scope distinguishes diagnostic records; their names and payloads are open.
+// The trace envelope version is independent of the typed product wire contract.
 type RunTraceRecord struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Sequence      string              `json:"sequence"`
-	Time          string              `json:"time"`
-	ElapsedMS     string              `json:"elapsed_ms"`
-	Level         string              `json:"level"`
-	Event         string              `json:"event"`
-	Command       string              `json:"command"`
-	RuntimeRunID  string              `json:"runtime_run_id"`
-	Correlation   *wire.CorrelationV1 `json:"correlation,omitempty"`
-	Payload       wire.Payload        `json:"payload"`
+	SourceTime    string             `json:"source_time,omitempty"`
+	Scope         *diagnostics.Scope `json:"scope,omitempty"`
+	SchemaVersion int                `json:"schema_version"`
+	Sequence      string             `json:"sequence"`
+	Time          string             `json:"time"`
+	ElapsedMS     string             `json:"elapsed_ms"`
+	Level         string             `json:"level"`
+	Event         string             `json:"event"`
+	Command       string             `json:"command"`
+	RuntimeRunID  string             `json:"runtime_run_id"`
+	Correlation   any                `json:"correlation,omitempty"`
+	Payload       any                `json:"payload"`
 }
 
 func baseRecord(

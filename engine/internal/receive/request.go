@@ -7,6 +7,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -28,7 +30,7 @@ type Request struct {
 	WaitTimeout  time.Duration
 	Output       OutputFactory
 	Destination  string
-	Diagnostics  bool
+	Diagnostics  diagnostics.Sink
 }
 
 type Clock interface {

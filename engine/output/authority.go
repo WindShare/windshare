@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/engine/observation"
 )
 
 var ErrContract = errors.New("receive output authority violated its contract")
@@ -74,7 +74,7 @@ type Authority interface {
 	Close() error
 }
 type Config struct {
-	Observe func(observation.OutputDiagnostic, error)
+	Diagnostics diagnostics.Sink
 }
 type Factory interface {
 	NewOutputAuthority(Config) (Authority, error)

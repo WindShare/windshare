@@ -3,10 +3,11 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/socketauthority"
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/windshare/windshare/connectivity/socketauthority"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -158,7 +159,7 @@ func TestPeerDiagnosticStreamIsCumulativeBoundedAndSaturating(t *testing.T) {
 	reporter.report(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
 	reporter.report(PeerDiagnosticSenderAttempt, PeerDiagnosticCleanupResidue)
 	completion := reporter.completeObservations()
-	if completion != (ObservationCompletion{Enqueued: 2, Loss: ObservationLoss{CapacityDropped: 1}}) {
+	if completion != (ObservationCompletion{Enqueued: 2, Loss: ObservationLoss{CapacityDropped: 1, SourceDropped: 3}}) {
 		t.Fatalf("diagnostic completion = %#v", completion)
 	}
 	first := <-reporter.observations()
@@ -173,7 +174,9 @@ func TestPeerDiagnosticStreamIsCumulativeBoundedAndSaturating(t *testing.T) {
 	}
 	reporter.reportCount(PeerDiagnosticReceiverTermination, PeerDiagnosticPathCapacity, math.MaxUint64)
 	reporter.report(PeerDiagnosticReceiverTermination, PeerDiagnosticPathCapacity)
-	reporter.completeObservations()
+	if cut := reporter.completeObservations(); cut.Loss.Total() != math.MaxUint64 || cut != reporter.completeObservations() {
+		t.Fatalf("unstable final loss: %+v", cut)
+	}
 	if observation := <-reporter.observations(); observation.Count != math.MaxUint64 {
 		t.Fatalf("saturating diagnostic = %#v", observation)
 	}

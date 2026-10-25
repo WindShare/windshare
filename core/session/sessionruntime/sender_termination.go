@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 
+	diag "github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -431,4 +433,15 @@ func errorTreeContainsOnly(err error, allowed ...error) bool {
 		}
 	}
 	return false
+}
+
+func (value SenderTerminalSendObserved) DiagnosticRecord() diag.Record {
+	return diag.New(terminalSendEventName, diag.Fields{"settled": diag.Bool(value.Settled), "transport_disposition": diag.Text(string(value.TransportDisposition)),
+		"outcome": diag.Text(string(value.Outcome)), "decision": diag.Text(string(value.Decision))}).Correlate(diag.Fields{
+		"protocol_session_id": diag.Identity(value.ProtocolSessionID[:]), "lane_id": diag.Number(float64(value.Lane.ID)), "lane_epoch": diag.Number(float64(value.Lane.Epoch))})
+}
+
+func (value SenderSessionTerminated) DiagnosticRecord() diag.Record {
+	return diag.New(sessionTerminatedEventName, diag.Fields{"trigger": diag.Text(string(value.Trigger)), "provenance": diag.Text(string(value.Provenance)),
+		"failure": diag.Failure(value.Failure)}).Correlate(diag.Fields{"protocol_session_id": diag.Identity(value.ProtocolSessionID[:])})
 }

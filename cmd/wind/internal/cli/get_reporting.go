@@ -5,7 +5,6 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
-	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -14,21 +13,13 @@ import (
 
 const observationCompletionTimeout = time.Second
 
-type getObservationState struct {
-	losses *observationbridge.CumulativeLosses[appobs.LossSource]
-}
 type getObservation struct {
-	runtime *commandRuntime
-	state   *getObservationState
+	runtime           *commandRuntime
+	deferFinalization bool
 }
 
 func newGetObservation(runtime *commandRuntime) getObservation {
-	state := &getObservationState{}
-	observation := getObservation{runtime: runtime, state: state}
-	if runtime != nil && runtime.detailedDiagnosticsEnabled() {
-		state.losses = observationbridge.NewCumulativeLosses[appobs.LossSource](runtime)
-	}
-	return observation
+	return getObservation{runtime: runtime, deferFinalization: true}
 }
 
 func (observation getObservation) observe(event clievent.Event) bool {
@@ -46,7 +37,7 @@ func (observation getObservation) stageTerminal(terminal clievent.TerminalEvent)
 	if observation.runtime == nil || terminal == nil {
 		return false
 	}
-	if observation.state == nil {
+	if !observation.deferFinalization {
 		return observation.runtime.Finalize(terminal)
 	}
 	return observation.runtime.StageFinalization(terminal)
@@ -59,7 +50,7 @@ func (observation getObservation) stageTransferTerminal(
 	if observation.runtime == nil {
 		return false
 	}
-	if observation.state == nil {
+	if !observation.deferFinalization {
 		return observation.runtime.PublishTransferFinalization(progress, terminal)
 	}
 	return observation.runtime.StageTransferFinalization(progress, terminal)
@@ -146,21 +137,6 @@ func (observation getObservation) warningFailure(failure appobs.Failure) {
 		return
 	}
 	observation.observe(event)
-}
-
-func (observation getObservation) reportCumulativeLoss(
-	source appobs.LossSource,
-	category appobs.ObserverLossCategory,
-	reason appobs.ObserverLossReason,
-	cumulative uint64,
-) {
-	if observation.state != nil && observation.state.losses != nil {
-		observation.state.losses.Report(source, category, reason, cumulative)
-		return
-	}
-	if observation.runtime != nil {
-		observation.runtime.ReportCumulativeObserverLoss(category, reason, cumulative)
-	}
 }
 
 func (observation getObservation) progress(

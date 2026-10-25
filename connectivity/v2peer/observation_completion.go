@@ -8,13 +8,15 @@ type ObservationCompletion struct {
 	Loss     ObservationLoss
 }
 
-// ObservationLoss contains only facts proved by bounded producer admission.
+// ObservationLoss separates queue overflow from evidence unavailable at its source.
 type ObservationLoss struct {
 	CapacityDropped uint64
+	// SourceDropped includes path evidence capacity and unfinished diagnostic cleanup.
+	SourceDropped uint64
 }
 
 func (loss ObservationLoss) Total() uint64 {
-	return loss.CapacityDropped
+	return saturatingAdd(loss.CapacityDropped, loss.SourceDropped)
 }
 
 type SenderObservationCompletion struct {

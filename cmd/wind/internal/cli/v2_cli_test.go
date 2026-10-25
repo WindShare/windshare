@@ -194,7 +194,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 		if lifecycle, ok := event.(appobs.EngineTaskObserved); ok {
 			facts := lifecycle.Facts()
 			stages[facts.Stage]++
-			if facts.Stage == appobs.EngineShareClosed && facts.Failure.Valid() != (cleanupError != nil) {
+			if facts.Stage == appobs.EngineTaskSettled && facts.CleanupFailure.Valid() != (cleanupError != nil) {
 				t.Fatalf("cleanup failure lost from observation: %+v", facts)
 			}
 		}
@@ -205,7 +205,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 			}
 		}
 	}
-	if stages[appobs.EngineShareStopping] != 1 || stages[appobs.EngineShareClosed] != 1 {
+	if stages[appobs.EngineTaskStopping] != 1 || stages[appobs.EngineTaskSettled] != 1 {
 		t.Fatalf("share cleanup stages=%v", stages)
 	}
 	if stoppedEvents != 1 {

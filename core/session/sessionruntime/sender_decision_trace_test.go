@@ -1,11 +1,12 @@
 package sessionruntime
 
 import (
+	"testing"
+
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"testing"
 )
 
 func TestSenderContentDecisionPreservesCorrelationAndHotPathFacts(t *testing.T) {

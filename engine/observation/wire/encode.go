@@ -1,6 +1,8 @@
 package wire
 
-import appobs "github.com/windshare/windshare/engine/observation"
+import (
+	appobs "github.com/windshare/windshare/engine/observation"
+)
 
 func nameOf(value namedValue) (string, error) {
 	name, ok := value.Name()
@@ -8,26 +10,6 @@ func nameOf(value namedValue) (string, error) {
 		return "", errInvalidSchemaEvent
 	}
 	return name, nil
-}
-
-func namedPointer(value namedValue) (*string, error) {
-	name, err := nameOf(value)
-	if err != nil {
-		return nil, err
-	}
-	return &name, nil
-}
-
-func namesOf[T namedValue](values []T) ([]string, error) {
-	names := make([]string, 0, len(values))
-	for _, value := range values {
-		name, err := nameOf(value)
-		if err != nil {
-			return nil, err
-		}
-		names = append(names, name)
-	}
-	return names, nil
 }
 
 func (enc *encoder) set(event string, correlation *CorrelationV1, payload Payload) {
@@ -69,17 +51,6 @@ func projectSessionCorrelation(
 	return projectEventCorrelation(
 		session, appobs.ProtocolOperationID{}, appobs.PeerPathID{},
 		appobs.PeerAttemptID{}, lane, hasLane,
-	)
-}
-
-func projectProtocolCorrelation(
-	session appobs.ProtocolSessionID,
-	operation appobs.ProtocolOperationID,
-	lane appobs.LaneIdentity,
-	hasLane bool,
-) (*CorrelationV1, error) {
-	return projectEventCorrelation(
-		session, operation, appobs.PeerPathID{}, appobs.PeerAttemptID{}, lane, hasLane,
 	)
 }
 
@@ -292,26 +263,5 @@ func (enc *encoder) encodeLaneAdopted(event appobs.LaneAdopted) error {
 		return err
 	}
 	enc.set("lane_adopted", correlation, LaneAdoptedPayload{Transport: transport})
-	return nil
-}
-
-// Loss snapshots retain the producer and cumulative semantics across transports;
-// treating a repeated sample as a delta would inflate reported loss.
-type LossSnapshotPayload struct {
-	Source          string `json:"source"`
-	Category        string `json:"category"`
-	Reason          string `json:"reason"`
-	CumulativeCount string `json:"cumulative_count"`
-}
-
-func (LossSnapshotPayload) ObservationPayload() {}
-
-func (enc *encoder) encodeLossSnapshot(event appobs.LossSnapshot) error {
-	source, _ := event.Source.Name()
-	category, _ := event.Category.Name()
-	reason, _ := event.Reason.Name()
-	enc.set("observation_loss_snapshot", nil, LossSnapshotPayload{
-		Source: source, Category: category, Reason: reason, CumulativeCount: decimal(event.Count),
-	})
 	return nil
 }

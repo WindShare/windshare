@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	diag "github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -543,3 +545,70 @@ func durationMilliseconds(value time.Duration) uint64 {
 	}
 	return uint64(value / time.Millisecond)
 }
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SenderAttemptStage) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SenderAttemptPhase) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SenderAdmissionDisposition) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SenderResponseDelivery) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value AttemptFailureScope) DiagnosticName() string {
+	return string(value)
+}
+
+func (value SenderAttemptObservation) DiagnosticRecord() diag.Record {
+	fields := diag.Fields{"stage": diag.Text(string(value.Stage)), "attempt_sequence": diag.Uint(value.SideSequence), "attempt_elapsed_ms": diag.Uint(value.AttemptElapsedMillis)}
+	correlation := diag.Fields{"protocol_session_id": diag.Identity(value.SessionID[:]), "peer_path_id": diag.Identity(value.PeerPathID[:]), "peer_attempt_id": diag.Identity(value.AttemptID[:])}
+	if value.Route != 0 {
+		fields["route"] = diag.Text(value.Route.DiagnosticName())
+	}
+	if value.Phase != "" {
+		fields["deadline"] = diag.Object(diag.Fields{"phase": diag.Text(string(value.Phase)), "deadline_ms": diag.Uint(value.DeadlineMillis)})
+	}
+	if counts := value.CandidateCounts; counts != nil {
+		fields["candidates"] = diag.Object(diag.Fields{"local_emitted": diag.Number(float64(counts.LocalEmitted)), "remote_accepted": diag.Number(float64(counts.RemoteAccepted))})
+	}
+	if !value.OfferOperationID.IsZero() {
+		fields["offer_operation_id"] = diag.Identity(value.OfferOperationID[:])
+	}
+	if !value.GrantOperationID.IsZero() {
+		fields["grant_operation_id"] = diag.Identity(value.GrantOperationID[:])
+	}
+	if lane := value.Lane; lane != nil {
+		correlation["lane_id"], correlation["lane_epoch"] = diag.Number(float64(lane.ID)), diag.Number(float64(lane.Epoch))
+	}
+	if value.AdmissionDisposition != "" {
+		fields["admission"] = diag.Object(diag.Fields{"disposition": diag.Text(string(value.AdmissionDisposition)), "response_delivery": diag.Text(string(value.ResponseDelivery))})
+	}
+	if rejection := value.Rejection; rejection != nil {
+		fields["rejection"] = diag.Object(diag.Fields{"code": diag.Text(rejection.Code.DiagnosticName()), "retry_after_ms": diag.Uint(rejection.RetryAfterMillis)})
+	}
+	if failure := value.Failure; failure != nil {
+		f := diag.Fields{"failed_at_stage": diag.Text(string(failure.FailedAtStage)), "scope": diag.Text(string(failure.Scope)),
+			"code": diag.Text(string(failure.TypedPeerErrorCode)), "message": diag.Text(failure.Message),
+			"summary": diag.Object(diag.Fields{"last_completed_stage": diag.Text(string(failure.LastCompletedStage)), "stage_elapsed_ms": diag.Uint(failure.StageElapsedMillis),
+				"deadline_expired": diag.Bool(failure.DeadlineExpired), "close_initiator": diag.Text(failure.Termination.Initiator), "cause": diag.Text(failure.Termination.Cause)})}
+		if operation := failure.Operation; operation != nil {
+			f["operation"] = diag.Object(diag.Fields{"code": diag.Number(float64(operation.Code)), "message": diag.Text(operation.Message)})
+		}
+		fields["failure"] = diag.Object(f)
+	}
+	return diag.New(attemptEventName, fields).Correlate(correlation)
+}
+
+const attemptEventName = "peer_attempt"

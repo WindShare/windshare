@@ -1,196 +1,127 @@
 package eventproject
 
 import (
-	"reflect"
 	"testing"
+	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/share"
+	"github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/transport/relayv2"
-	wsrtc "github.com/windshare/windshare/transport/webrtc"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
-func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) {
-	emitter := &workflowRecorder{detailed: true}
-	observations := newWorkflowRecorder(emitter)
-	authority, err := appobs.NewRelayAuthority(appobs.RelayWSS, "relay.example", 443)
-	if err != nil {
-		t.Fatal(err)
-	}
+type futureWorkflowEvent struct{}
 
-	observations.TraceCatalogStorage(liveshare.CatalogStorageTrace{
-		Operation: liveshare.CatalogStorageCreating,
-		Cause:     liveshare.CatalogStorageCauseNone,
-	})
-	observations.TraceRootPrefetch(liveshare.RootPrefetchTrace{
-		Decision: liveshare.RootPrefetchAttemptStarted,
-		Attempt:  1,
-	})
-	observations.TraceRelayLifecycle(relayv2.LifecycleTrace{
-		LinkID: 1, OperationID: 1,
-		Stage: relayv2.LifecycleLinkClosed, RetirementSource: relayv2.LifecycleRetirementLocalClose,
-		Cause: relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
-	})
-	observations.TraceWebRTCLifecycle(wsrtc.LifecycleTrace{
-		ChannelID:  2,
-		Operation:  wsrtc.LifecycleOperationChannel,
-		Transition: wsrtc.LifecycleTransitionClosedClean,
-		State:      framechannel.Closed,
-		Terminal:   wsrtc.LifecycleTerminalNone,
-		Cause:      wsrtc.LifecycleCauseNone,
-	})
-	observations.ObserveSenderAttempt(testShareAttemptObservation(t))
-	observations.ObserveSenderTerminalSend(sessionruntime.SenderTerminalSendObserved{
-		ProtocolSessionID:    testShareProtocolSessionID(t, 0x31),
-		Lane:                 sessionruntime.LaneIdentity{ID: 3, Epoch: 4},
-		Settled:              true,
-		TransportDisposition: sessionruntime.SenderTerminalSendTransportAccepted,
-		Outcome:              sessionruntime.SenderTerminalSendOutcomeDelivered,
-		Decision:             sessionruntime.SenderTerminalSendDecisionDelivered,
-	})
-	observations.ObserveSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
-		ProtocolSessionID: testShareProtocolSessionID(t, 0x31),
-		Trigger:           sessionruntime.SenderSessionTerminalTriggerGracefulStop,
-		Provenance:        sessionruntime.SenderSessionTerminalProvenanceNormalStop,
-	})
-	observations.ObserveRelayRecovery(authority, senderrelay.Attempt{
-		Number: 2,
-		State:  senderrelay.AttemptSucceeded,
-	})
+func (futureWorkflowEvent) EngineEvent() {}
 
-	wantTypes := []any{
-		appobs.CatalogStorageObserved{},
-		appobs.RootPrefetchObserved{},
-		appobs.RelayLifecycleObserved{},
-		appobs.WebRTCLifecycleObserved{},
-		appobs.PeerAttemptObserved{},
-		appobs.SenderTerminalSendObserved{},
-		appobs.SenderSessionTerminated{},
-		appobs.RelayRecovering{},
-	}
-	if len(emitter.events) != len(wantTypes) || emitter.lifecycleLoss != 0 {
-		t.Fatalf("events = %#v, lifecycle loss = %d", emitter.events, emitter.lifecycleLoss)
-	}
-	for index, want := range wantTypes {
-		if eventTypeName(emitter.events[index]) != eventTypeName(want) {
-			t.Fatalf("event %d type = %T, want %T", index, emitter.events[index], want)
+func TestWorkflowRejectsMalformedProductsWithoutPublishingSourceTypes(t *testing.T) {
+	for _, source := range []task.Event{
+		futureWorkflowEvent{}, share.Observation{}, receive.RelayConnected{},
+		receive.ContentPathObserved{}, receive.LaneAdopted{},
+	} {
+		envelope := task.Observation{TaskID: "application:42", At: time.Unix(10, 0), Event: source}
+		var published []task.Observation
+		if !Workflow(appobs.WorkflowReceive, envelope, func(value task.Observation) bool {
+			published = append(published, value)
+			return true
+		}) || len(published) != 1 {
+			t.Fatalf("%T: publication = %+v", source, published)
+		}
+		if _, ok := published[0].Event.(appobs.ObserverLossObserved); !ok ||
+			published[0].TaskID != envelope.TaskID || published[0].At != envelope.At {
+			t.Fatalf("%T: lost rejection or envelope identity: %+v", source, published[0])
 		}
 	}
 }
 
-func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *testing.T) {
-	emitter := &workflowRecorder{detailed: true}
-	observations := newWorkflowRecorder(emitter)
-	for range 2 {
-		observations.TraceRootPrefetch(liveshare.RootPrefetchTrace{
-			Decision: liveshare.RootPrefetchDecision(255),
-			Attempt:  1,
+func TestWorkflowRetainsConnectionSummaryAndPublisherBackpressure(t *testing.T) {
+	endpoint, err := v2.NormalizeRelayEndpoint("wss://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := protocolsession.ProtocolSessionID{1}
+	for _, source := range []task.Event{
+		receive.RelayConnected{Endpoint: endpoint},
+		receive.ContentPathObserved{Path: receive.ContentPathDirectAndRelay},
+		receive.FallbackObserved{Code: receive.FailurePeerNegotiation},
+		receive.LaneAdopted{Session: session, Lane: sessionruntime.LaneIdentity{ID: 7, Epoch: 2}},
+		receive.Warning{Code: receive.FailurePeerNegotiation},
+	} {
+		var published task.Event
+		accepted := Workflow(appobs.WorkflowReceive, task.Observation{Event: source}, func(value task.Observation) bool {
+			published = value.Event
+			return false
 		})
-	}
-	if emitter.lifecycleLoss != 2 || len(emitter.events) != 0 {
-		t.Fatalf("loss = %d events = %#v", emitter.lifecycleLoss, emitter.events)
-	}
-}
-
-func TestShareObservationsAcceptAuthenticatedLaneHello(t *testing.T) {
-	emitter := &workflowRecorder{detailed: true}
-	observations := newWorkflowRecorder(emitter)
-	observation := testShareAttemptObservation(t)
-	observation.Stage = v2peer.SenderAttemptLaneHelloAuthenticated
-	observation.Phase = v2peer.SenderAttemptPhaseAdmission
-	observation.GrantOperationID = testShareProtocolOperationID(t, 0x31)
-	observation.CandidateCounts = &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1}
-	observation.Lane = &sessionruntime.LaneIdentity{ID: 2, Epoch: 1}
-
-	observations.ObserveSenderAttempt(observation)
-
-	if emitter.lifecycleLoss != 0 || len(emitter.events) != 1 {
-		t.Fatalf("events = %#v, lifecycle loss = %d", emitter.events, emitter.lifecycleLoss)
-	}
-	event, ok := emitter.events[0].(appobs.PeerAttemptObserved)
-	if !ok || event.Stage() != appobs.PeerLaneHelloAuthenticated {
-		t.Fatalf("lane-admission event = %#v", emitter.events[0])
-	}
-	lane, ok := event.Lane()
-	if !ok || lane.ID() != 2 || lane.Epoch() != 1 {
-		t.Fatalf("lane-admission identity = %#v, present %t", lane, ok)
-	}
-}
-
-func TestShareRelayDropSummaryAndStreamCompletionRetainPreciseSources(t *testing.T) {
-	emitter := &workflowRecorder{detailed: true}
-	observations := newWorkflowRecorder(emitter)
-	dropped := relayv2.LifecycleTrace{
-		LinkID: 4, Stage: relayv2.LifecycleTraceDropped,
-		RetirementSource: relayv2.LifecycleRetirementNone,
-		Cause:            relayv2.LifecycleCauseNone, DrainCause: relayv2.LifecycleCauseNone,
-		Dropped: 6,
-	}
-	observations.TraceRelayLifecycle(dropped)
-	observations.share(share.Observation{
-		Loss: &share.ObservationLoss{Source: share.RelayObservations, Dropped: 6},
-	})
-	observations.TraceRelayLifecycle(dropped)
-
-	if len(emitter.events) != 2 {
-		t.Fatalf("safe lifecycle events=%#v", emitter.events)
-	}
-	for _, event := range emitter.events {
-		value, ok := event.(appobs.RelayLifecycleObserved)
-		if !ok || value.Stage() != appobs.RelayTraceDropped || value.Dropped() != 6 {
-			t.Fatalf("drop event=%#v", event)
+		if accepted {
+			t.Fatalf("%T: rejected publication reported accepted", source)
+		}
+		event, ok := published.(appobs.Event)
+		if !ok || event.Validate() != nil {
+			t.Fatalf("%T: invalid product %T", source, published)
+		}
+		switch value := published.(type) {
+		case appobs.RelayConnected:
+			want, _ := RelayAuthority(endpoint)
+			if value.Authority() != want {
+				t.Fatal("relay authority changed")
+			}
+		case appobs.ContentPathSelected:
+			if value.Path() != appobs.ContentPathDirectAndRelay {
+				t.Fatal("mixed path lost")
+			}
+		case appobs.Fallback:
+			if value.From() != appobs.TransportWebRTC || value.To() != appobs.TransportRelay {
+				t.Fatal("fallback direction changed")
+			}
+		case appobs.LaneAdopted:
+			want, _ := LaneIdentity(sessionruntime.LaneIdentity{ID: 7, Epoch: 2})
+			if value.Lane() != want {
+				t.Fatal("lane incarnation changed")
+			}
+		case appobs.Warning:
+		default:
+			t.Fatalf("%T: unexpected product %T", source, published)
 		}
 	}
-	if emitter.lifecycleLoss != 12 {
-		t.Fatalf("cumulative relay loss=%d", emitter.lifecycleLoss)
-	}
 }
 
-func testShareAttemptObservation(t *testing.T) v2peer.SenderAttemptObservation {
-	t.Helper()
-	var path v2signal.PeerPathID
-	var attempt v2signal.AttemptID
-	for index := range path {
-		path[index] = byte(index + 1)
-		attempt[index] = byte(index + 17)
+func TestWorkflowRecoveryRetainsUserVisibleWaitingAndRestoration(t *testing.T) {
+	for _, phase := range []relayset.ReceiverRecoveryPhase{
+		relayset.ReceiverRecoveryConnecting, relayset.ReceiverRecoveryWaiting,
+		relayset.ReceiverRecoveryRetrying, relayset.ReceiverRecoveryConnected, relayset.ReceiverRecoveryTerminal,
+	} {
+		source := relayset.ReceiverRecoveryObservation{
+			Endpoint: "wss://relay.example", Attempt: 2, Phase: phase,
+			ConnectionGeneration: 3, ProtocolSessionID: [16]byte{1}, Delay: time.Second,
+		}
+		var event appobs.RelayRecovering
+		accepted := Workflow(appobs.WorkflowReceive, task.Observation{Event: receive.RecoveryObserved{Value: source}}, func(value task.Observation) bool {
+			var ok bool
+			event, ok = value.Event.(appobs.RelayRecovering)
+			if !ok {
+				t.Fatalf("recovery became %T", value.Event)
+			}
+			return true
+		})
+		details, hasDetails := event.Details()
+		if !accepted || event.Validate() != nil || !hasDetails || event.Attempt() != 2 ||
+			details.Generation != 3 || details.NextDelay != time.Second || !details.ProtocolSessionID.Valid() ||
+			details.Slow != (phase == relayset.ReceiverRecoveryWaiting) ||
+			details.Terminal != (phase == relayset.ReceiverRecoveryTerminal) {
+			t.Fatalf("phase %v: recovery details = %+v", phase, details)
+		}
 	}
-	return v2peer.SenderAttemptObservation{
-		SessionID:            testShareProtocolSessionID(t, 0x21),
-		PeerPathID:           path,
-		AttemptID:            attempt,
-		SideSequence:         1,
-		AttemptElapsedMillis: 2,
-		Stage:                v2peer.SenderAttemptStarted,
+	firstConnection := receive.RecoveryObserved{Value: relayset.ReceiverRecoveryObservation{
+		Endpoint: "wss://relay.example", Attempt: 1, Phase: relayset.ReceiverRecoveryConnected,
+	}}
+	if !Workflow(appobs.WorkflowReceive, task.Observation{Event: firstConnection}, func(task.Observation) bool {
+		t.Fatal("initial connection incorrectly announced as recovered")
+		return false
+	}) {
+		t.Fatal("suppressed initial recovery rejected")
 	}
 }
-
-func testShareProtocolSessionID(t *testing.T, marker byte) protocolsession.ProtocolSessionID {
-	t.Helper()
-	raw := make([]byte, protocolsession.IdentityBytes)
-	raw[len(raw)-1] = marker
-	id, err := protocolsession.ProtocolSessionIDFromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func testShareProtocolOperationID(t *testing.T, marker byte) protocolsession.OperationID {
-	t.Helper()
-	raw := make([]byte, protocolsession.IdentityBytes)
-	raw[len(raw)-1] = marker
-	id, err := protocolsession.OperationIDFromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func eventTypeName(value any) string { return reflect.TypeOf(value).String() }

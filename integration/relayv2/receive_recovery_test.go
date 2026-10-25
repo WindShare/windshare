@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/adapters/filesystem"
-	fsobs "github.com/windshare/windshare/adapters/filesystem/diagnostic"
+	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
@@ -45,25 +45,39 @@ func (c *recoveryClock) Wait(ctx context.Context, d time.Duration) error {
 type countedAuthority struct {
 	engine.OutputAuthority
 	lookups, creates *atomic.Int32
+	afterWrite       func()
 }
 
 func (a countedAuthority) LookupActive(ctx context.Context, s transfer.SelectionSpec) (engine.OutputLookup, error) {
 	a.lookups.Add(1)
 	lookup, err := a.OutputAuthority.LookupActive(ctx, s)
 	if lookup.Reservation != nil {
-		lookup.Reservation = countedReservation{lookup.Reservation, a.creates}
+		lookup.Reservation = countedReservation{lookup.Reservation, a.creates, a.afterWrite}
 	}
 	return lookup, err
 }
 
 type countedReservation struct {
 	engine.OutputReservation
-	count *atomic.Int32
+	count      *atomic.Int32
+	afterWrite func()
 }
 
 func (r countedReservation) Create(ctx context.Context, s receivecontract.ArtifactSpec) (engine.OutputOperation, error) {
 	r.count.Add(1)
-	return r.OutputReservation.Create(ctx, s)
+	operation, err := r.OutputReservation.Create(ctx, s)
+	if err != nil {
+		return operation, err
+	}
+	materializer := operation.Materializer
+	operation.Materializer = transfer.DirectTreeMaterializerFunc(func(ctx context.Context, intent transfer.ReceiveIntent) (transfer.DirectTreeSession, error) {
+		session, err := materializer.OpenDirectTree(ctx, intent)
+		if err != nil {
+			return nil, err
+		}
+		return disconnectingTree{session, r.afterWrite}, nil
+	})
+	return operation, nil
 }
 
 func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) {
@@ -136,29 +150,18 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	var cut sync.Once
 	factory := engine.OutputFactoryFunc(func(config engine.OutputConfig) (engine.OutputAuthority, error) {
 		authorities.Add(1)
-		trace := config.Observe
-		config.Observe = func(value appobs.OutputDiagnostic, projectionErr error) {
-			if trace != nil {
-				trace(value, projectionErr)
-			}
-			// The callback runs at the write boundary, before queue consumption.
-			event, ok := value.(fsobs.FilesystemOutputObserved)
-			if !ok || projectionErr != nil {
-				return
-			}
-			_, operation, _, active := event.RuntimeDecision()
-			_, failed := event.Failure()
-			if active && operation == fsobs.FilesystemRuntimeWriteRange && !failed {
-				cut.Do(func() { connection := <-connections; _ = connection.Channel().Close() })
-			}
-		}
 		authority, err := (filesystem.FilesystemOutput{RootPath: root.RootPath, CreateRoot: true}).NewOutputAuthority(config)
 		if err != nil {
 			return nil, err
 		}
-		return countedAuthority{OutputAuthority: authority, lookups: &lookups, creates: &creates}, nil
+		return countedAuthority{OutputAuthority: authority, lookups: &lookups, creates: &creates, afterWrite: func() { cut.Do(func() { connection := <-connections; _ = connection.Channel().Close() }) }}, nil
 	})
-	receiver, err := application.StartReceive(ctx, engine.ReceiveRequest{Capability: ready.Capability, Connectivity: engine.ConnectivityRelayOnly, Output: factory, Destination: root.RootPath, Diagnostics: true})
+	diagnosticsStream, err := diagnostics.NewStream(4096, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnosticsStream.Close()
+	receiver, err := application.StartReceive(ctx, engine.ReceiveRequest{Capability: ready.Capability, Connectivity: engine.ConnectivityRelayOnly, Output: factory, Destination: root.RootPath, Diagnostics: diagnosticsStream.Sink()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,10 +181,7 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 			switch value := event.(type) {
 			case appobs.RelayRecovering, appobs.EngineTaskObserved:
 				t.Logf("%T: %+v", value, value)
-			case appobs.ProtocolObservationObserved:
-				t.Logf("protocol at=%s %T: %+v", value.ObservedAt().Format(time.RFC3339Nano), value.Fact(), value.Fact())
-			case appobs.TransferLifecycleObserved:
-				t.Logf("transfer session=%x job=%x stage=%v verified=%d published=%d", value.ProtocolSessionID().Bytes(), value.TransferJobID().Bytes(), value.Stage(), value.Progress().VerifiedBytes(), value.Progress().PublishedBytes())
+
 			}
 		}
 		t.Fatalf("outcome=%v failure=%v cause=%v test_context=%v progress=%+v wait=%v",
@@ -198,16 +198,21 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 		t.Fatalf("output bytes=%d err=%v", len(actual), err)
 	}
 	waited, restored := false, false
-	jobs := map[appobs.TransferJobID]bool{}
-	sessions := map[appobs.ProtocolSessionID]bool{}
+	jobs := map[string]bool{}
+	sessions := map[string]bool{}
 	for _, event := range events {
 		switch value := event.(type) {
 		case appobs.RelayRecovering:
 			waited = waited || value.State() == appobs.RelayRecoveryWaiting
 			restored = restored || (value.State() == appobs.RelayRecoverySucceeded && value.Attempt() > 1)
-		case appobs.TransferLifecycleObserved:
-			jobs[value.TransferJobID()] = true
-			sessions[value.ProtocolSessionID()] = true
+
+		}
+	}
+	diagnosticsStream.Close()
+	for record := range diagnosticsStream.Records() {
+		if record.Name() == "transfer_lifecycle" {
+			jobs[record.Correlation().Get("transfer_job_id").Text()] = true
+			sessions[record.Correlation().Get("protocol_session_id").Text()] = true
 		}
 	}
 	if !waited || !restored || len(jobs) != 1 || len(sessions) != 2 {
@@ -217,4 +222,36 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 		t.Fatalf("verified progress=%+v", result.Value.Transfer.Progress)
 	}
 	trace.RequireSuccess(t)
+}
+
+// Fault injection belongs at the output boundary; diagnostic consumers never
+// control the transfer or hold a producer goroutine open.
+type disconnectingTree struct {
+	transfer.DirectTreeSession
+	afterWrite func()
+}
+
+func (tree disconnectingTree) BeginFile(ctx context.Context, file transfer.MaterializationFile) (transfer.FileStart, error) {
+	start, err := tree.DirectTreeSession.BeginFile(ctx, file)
+	if err != nil {
+		return start, err
+	}
+	transaction, durable, active := start.Transaction()
+	if !active {
+		return start, nil
+	}
+	return transfer.NewFileTransactionStart(disconnectingTransaction{transaction, tree.afterWrite}, durable)
+}
+
+type disconnectingTransaction struct {
+	transfer.FileTransaction
+	afterWrite func()
+}
+
+func (transaction disconnectingTransaction) WriteRange(ctx context.Context, offset uint64, data []byte) error {
+	err := transaction.FileTransaction.WriteRange(ctx, offset, data)
+	if err == nil {
+		transaction.afterWrite()
+	}
+	return err
 }

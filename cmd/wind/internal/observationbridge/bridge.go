@@ -1,5 +1,4 @@
 // Package observationbridge owns CLI-side execution of bounded producer
-
 // observation streams. Producers retain only queue and completion authority;
 // projection, cancellation, and join accounting stay at the command boundary.
 package observationbridge
@@ -8,59 +7,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-
-	appobs "github.com/windshare/windshare/engine/observation"
 )
-
-type LossSink interface {
-	ReportObserverLoss(appobs.ObserverLossCategory, appobs.ObserverLossReason, uint64) bool
-}
-
-type cumulativeLossKey[Source comparable] struct {
-	source   Source
-	category appobs.ObserverLossCategory
-	reason   appobs.ObserverLossReason
-}
-
-// CumulativeLosses keeps producer identities distinct until the narrower CLI
-// loss schema. Turning snapshots into deltas here makes repeated completion
-// reports idempotent without coupling producer packages to command events.
-type CumulativeLosses[Source comparable] struct {
-	mu       sync.Mutex
-	sink     LossSink
-	reported map[cumulativeLossKey[Source]]uint64
-}
-
-func NewCumulativeLosses[Source comparable](sink LossSink) *CumulativeLosses[Source] {
-	if sink == nil {
-		return nil
-	}
-	return &CumulativeLosses[Source]{sink: sink}
-}
-
-func (losses *CumulativeLosses[Source]) Report(
-	source Source,
-	category appobs.ObserverLossCategory,
-	reason appobs.ObserverLossReason,
-	cumulative uint64,
-) {
-	if losses == nil || cumulative == 0 {
-		return
-	}
-	key := cumulativeLossKey[Source]{source: source, category: category, reason: reason}
-	losses.mu.Lock()
-	if losses.reported == nil {
-		losses.reported = make(map[cumulativeLossKey[Source]]uint64)
-	}
-	previous := losses.reported[key]
-	if cumulative <= previous {
-		losses.mu.Unlock()
-		return
-	}
-	losses.reported[key] = cumulative
-	losses.mu.Unlock()
-	losses.sink.ReportObserverLoss(category, reason, cumulative-previous)
-}
 
 // Status describes only facts knowable at the reader join cut. Joined=false
 // deliberately does not imply that cancellation terminated an active projector.

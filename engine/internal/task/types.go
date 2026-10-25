@@ -7,6 +7,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/core/observationstream"
 )
 
@@ -105,6 +107,7 @@ type Lifecycle struct {
 func (Lifecycle) EngineEvent() {}
 
 type Control struct {
+	Diagnostics    diagnostics.Sink
 	ID             ID
 	Now            func() time.Time
 	Random         io.Reader

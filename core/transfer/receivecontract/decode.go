@@ -410,14 +410,6 @@ func (cursor *contractDecoder) framedUint32() (uint32, error) {
 	return binary.BigEndian.Uint32(value), nil
 }
 
-func (cursor *contractDecoder) framedUint64() (uint64, error) {
-	value, err := cursor.fixedFrame(8)
-	if err != nil {
-		return 0, err
-	}
-	return binary.BigEndian.Uint64(value), nil
-}
-
 func firstDecodeError(errors ...error) error {
 	for _, err := range errors {
 		if err != nil {

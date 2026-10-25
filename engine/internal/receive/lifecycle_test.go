@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -90,8 +91,9 @@ func TestConcurrentGenerationCloseJoinsAdmissionAndMonitorOnce(t *testing.T) {
 
 func TestDetachedReceiveObserverPreservesExecutionAndDurableSourceLoss(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
+	stream, _ := diagnostics.NewStream(1, nil)
 	current, err := task.Start(context.Background(), task.Config[Result]{
-		ID: "receive-detached", Now: time.Now, Random: rand.Reader, CleanupTimeout: time.Second, ObservationCapacity: 1,
+		Diagnostics: stream.Sink(), ID: "receive-detached", Now: time.Now, Random: rand.Reader, CleanupTimeout: time.Second, ObservationCapacity: 1,
 		Run: func(ctx context.Context, control task.Control) task.Completion[Result] {
 			observation := newObservation(control, true, nil)
 			close(entered)
@@ -101,7 +103,7 @@ func TestDetachedReceiveObserverPreservesExecutionAndDurableSourceLoss(t *testin
 			}
 			observation.protocol.RecordDropped(5)
 			observation.complete()
-			return task.Completion[Result]{Value: Result{ObservationLosses: observation.lossSnapshot()}, Settlement: task.Settlement{Outcome: task.OutcomeSuccess, Err: ctx.Err()}}
+			return task.Completion[Result]{Settlement: task.Settlement{Outcome: task.OutcomeSuccess, Err: ctx.Err()}}
 		},
 	})
 	if err != nil {
@@ -118,7 +120,8 @@ func TestDetachedReceiveObserverPreservesExecutionAndDurableSourceLoss(t *testin
 	if err != nil || result.Err != nil || result.Outcome != task.OutcomeSuccess || result.Observations.CapacityDropped == 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if len(result.Value.ObservationLosses) != 1 || result.Value.ObservationLosses[0].Source != ObservationProtocol || result.Value.ObservationLosses[0].Count < 5 {
-		t.Fatalf("loss=%+v", result.Value.ObservationLosses)
+	if cut := stream.Close(); cut.CapacityDropped < 5 {
+		t.Fatalf("trace loss=%+v", cut)
 	}
+
 }

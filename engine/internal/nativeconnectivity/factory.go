@@ -19,7 +19,6 @@ type SenderConfig struct {
 	TURN           turnpath.Accounts
 	Now            func() time.Time
 	Diagnostics    bool
-	TraceLifecycle bool
 	ObserveChannel func(*wsrtc.Channel)
 }
 
@@ -47,7 +46,7 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		Now:           config.Now,
 		DataChannels:  channelAdapter(config.Diagnostics, config.ObserveChannel, config.Capacity.Sends()),
 	}
-	if config.Diagnostics || config.TraceLifecycle {
+	if config.Diagnostics {
 		result.SenderAttemptObservationCapacity = v2peer.DefaultSenderAttemptObservationCapacity
 	}
 	if config.Diagnostics {

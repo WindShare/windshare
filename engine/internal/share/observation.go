@@ -40,15 +40,20 @@ type RelayRecovery struct {
 	Attempt  senderrelay.Attempt
 }
 
-type ObservationSource uint8
+type ObservationSource string
 
 const (
-	ProtocolObservations ObservationSource = iota + 1
-	NativeObservations
-	RelayObservations
-	WebRTCObservations
-	SenderAttempts
-	PeerDiagnostics
+	ProtocolObservations ObservationSource = "protocol"
+
+	NativeObservations ObservationSource = "native"
+
+	RelayObservations ObservationSource = "relay"
+
+	WebRTCObservations ObservationSource = "webrtc"
+
+	SenderAttempts ObservationSource = "peer_attempt"
+
+	PeerDiagnostics ObservationSource = "peer_diagnostic"
 )
 
 type ObservationLoss struct {
@@ -61,21 +66,8 @@ type Observation struct {
 	ShareInstance     catalog.ShareInstance
 	Session           protocolsession.ProtocolSessionID
 	Failure           error
-	Catalog           *liveshare.CatalogStorageTrace
-	Prefetch          *liveshare.RootPrefetchTrace
-	Revision          *content.RevisionTrace
-	Capacity          *revisioncapacity.TraceEvent
 	RelayRecovery     *RelayRecovery
 	RelayAvailability *relayset.SenderAvailability
-	RelayLifecycle    *relayv2.LifecycleTrace
-	SenderAttempt     *v2peer.SenderAttemptObservation
-	PeerDiagnostic    *v2peer.PeerDiagnosticObservation
-	Native            *nativepeer.Observation
-	WebRTC            *wsrtc.LifecycleTrace
-	Protocol          *sessionruntime.ProtocolObservation
-	TerminalSend      *sessionruntime.SenderTerminalSendObserved
-	SessionTerminal   *sessionruntime.SenderSessionTerminated
-	Loss              *ObservationLoss
 }
 
 func (Observation) EngineEvent() {}
@@ -83,7 +75,6 @@ func (Observation) EngineEvent() {}
 type observations struct {
 	control    task.Control
 	detailed   bool
-	trace      bool
 	protocol   observationstream.Producer[sessionruntime.ProtocolObservation]
 	mu         sync.Mutex
 	completers []func()
@@ -92,11 +83,12 @@ type observations struct {
 }
 
 func newObservations(control task.Control, request Request) *observations {
-	o := &observations{control: control, detailed: request.Diagnostics, trace: request.TraceLifecycle}
-	if request.Diagnostics {
+	control.Diagnostics = request.Diagnostics
+	o := &observations{control: control, detailed: control.Diagnostics.Enabled()}
+	if o.detailed {
 		producer, consumer, _ := observationstream.New[sessionruntime.ProtocolObservation](protocolObservationCapacity)
 		o.protocol = producer
-		readObservations(o, consumer, func(value sessionruntime.ProtocolObservation) { o.emit(Observation{Protocol: &value}) })
+		readObservations(o, consumer, func(value sessionruntime.ProtocolObservation) { o.control.Diagnostics.Record(value) })
 	}
 	return o
 }
@@ -118,30 +110,34 @@ func (o *observations) sourceFactory(factory liveshare.FileSourceFactory) livesh
 }
 
 func (o *observations) emit(value Observation) {
+	if value.Milestone != "" {
+		o.control.Diagnostics.Record(value)
+		return
+	}
 	if o.control.Emit != nil {
 		o.control.Emit(value)
 	}
 }
 
 func (o *observations) TraceCatalogStorage(value liveshare.CatalogStorageTrace) {
-	o.emit(Observation{Catalog: &value})
+	o.control.Diagnostics.Record(value)
 }
 func (o *observations) TraceRootPrefetch(value liveshare.RootPrefetchTrace) {
-	o.emit(Observation{Prefetch: &value})
+	o.control.Diagnostics.Record(value)
 }
 func (o *observations) TraceRevision(value content.RevisionTrace) {
-	o.emit(Observation{Revision: &value})
+	o.control.Diagnostics.Record(value)
 }
 func (o *observations) ObserveSenderTerminalSend(value sessionruntime.SenderTerminalSendObserved) {
-	o.emit(Observation{TerminalSend: &value})
+	o.control.Diagnostics.Record(value)
 }
 func (o *observations) ObserveSenderSessionTerminated(value sessionruntime.SenderSessionTerminated) {
-	o.emit(Observation{SessionTerminal: &value})
+	o.control.Diagnostics.Record(value)
 }
 
 func (o *observations) runtimeConfig(relays Relays, peers sessionruntime.SenderPeerHandlerFactory) liveshare.RuntimeFactoryConfig {
 	config := liveshare.RuntimeFactoryConfig{TerminalConnectivity: relays, PeerHandlers: peers, ProtocolObservations: o.protocol}
-	if o.trace {
+	if o.detailed {
 		config.TerminalSendObserver, config.SessionTerminalObserver = o, o
 	}
 	return config
@@ -151,7 +147,7 @@ func (o *observations) attachRelay(connection senderrelay.Connection) func() {
 	if !o.detailed {
 		return func() {}
 	}
-	return readObservations(o, connection.LifecycleTrace(), func(value relayv2.LifecycleTrace) { o.emit(Observation{RelayLifecycle: &value}) })
+	return readObservations(o, connection.LifecycleTrace(), func(value relayv2.LifecycleTrace) { o.control.Diagnostics.Record(value) })
 }
 
 func (o *observations) registerRelay(relay Relay) {
@@ -162,17 +158,17 @@ func (o *observations) registerRelay(relay Relay) {
 }
 
 func (o *observations) attachPeers(peers *v2peer.Factory) {
-	readObservations(o, peers.SenderAttemptObservations(), func(value v2peer.SenderAttemptObservation) { o.emit(Observation{SenderAttempt: &value}) })
-	readObservations(o, peers.PeerDiagnostics(), func(value v2peer.PeerDiagnosticObservation) { o.emit(Observation{PeerDiagnostic: &value}) })
+	readObservations(o, peers.SenderAttemptObservations(), func(value v2peer.SenderAttemptObservation) { o.control.Diagnostics.Record(value) })
+	readObservations(o, peers.PeerDiagnostics(), func(value v2peer.PeerDiagnosticObservation) { o.control.Diagnostics.Record(value) })
 	native := peers.NativeConnectivity()
 	if native != nil {
-		readObservations(o, native.Observations(), func(value nativepeer.Observation) { o.emit(Observation{Native: &value}) })
+		readObservations(o, native.Observations(), func(value nativepeer.Observation) { o.control.Diagnostics.Record(value) })
 		o.registerCompletion(func() { o.loss(NativeObservations, native.CompleteObservations().CapacityDropped) })
 	}
 	o.registerCompletion(func() {
 		completion := peers.CompleteObservations()
 		o.loss(SenderAttempts, completion.Attempts.Loss.CapacityDropped)
-		o.loss(PeerDiagnostics, completion.Diagnostics.Loss.CapacityDropped)
+		o.loss(PeerDiagnostics, completion.Diagnostics.Loss.Total())
 	})
 }
 
@@ -182,7 +178,7 @@ func (o *observations) attachChannel(channel *wsrtc.Channel) {
 	if !o.detailed || channel == nil {
 		return
 	}
-	readObservations(o, channel.LifecycleTrace(), func(value wsrtc.LifecycleTrace) { o.emit(Observation{WebRTC: &value}) })
+	readObservations(o, channel.LifecycleTrace(), func(value wsrtc.LifecycleTrace) { o.control.Diagnostics.Record(value) })
 	o.registerCompletion(func() { o.loss(WebRTCObservations, channel.CompleteObservations().Loss.CapacityDropped) })
 }
 
@@ -218,10 +214,10 @@ func (o *observations) complete() {
 		finish()
 	}
 	o.readers.Wait()
-	// Readers may have emitted cumulative loss facts already. One aggregate cut
-	// per source lets consumers account for the remaining loss exactly once.
+	// Completion retains one aggregate loss delta per source even when its
+	// individual diagnostic records could not fit in the host queue.
 	for _, loss := range o.lossSnapshot() {
-		o.emit(Observation{Loss: &loss})
+		o.control.Diagnostics.Lost(string(loss.Source), loss.Dropped)
 	}
 }
 
@@ -237,7 +233,7 @@ func (o *observations) lossSnapshot() []ObservationLoss {
 	return result
 }
 
-// Readers only publish into the task's bounded queue. Presentation cannot hold
+// Readers only publish into the host's bounded trace queue. Presentation cannot hold
 // their joins open, and the producer owner always closes the stream first.
 func readObservations[T any](o *observations, stream <-chan T, emit func(T)) func() {
 	if stream == nil {
@@ -254,5 +250,5 @@ func readObservations[T any](o *observations, stream <-chan T, emit func(T)) fun
 }
 
 func (o *observations) TraceCapacity(value revisioncapacity.TraceEvent) {
-	o.emit(Observation{Capacity: &value})
+	o.control.Diagnostics.Record(value)
 }

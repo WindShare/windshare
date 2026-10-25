@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
@@ -82,16 +82,7 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 		t.Fatal(err)
 	}
 	dependencies := nativeDependencies(t)
-	var mu sync.Mutex
-	var facts []Observation
-	dependencies.Control.Emit = func(event task.Event) bool {
-		if fact, ok := event.(Observation); ok {
-			mu.Lock()
-			facts = append(facts, fact)
-			mu.Unlock()
-		}
-		return true
-	}
+	stream, _ := diagnostics.NewStream(256, nil)
 	endpoint := &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}
 	candidate := relayprofile.Candidate{PublicURL: "https://relay.example", AccessKey: "private-deployment-token"}
 	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
@@ -108,7 +99,7 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan task.Completion[Result], 1)
 	go func() {
-		done <- Run(ctx, Request{Source: nativeSource([]string{root}), Relays: []relayprofile.Candidate{candidate}, Diagnostics: true, TraceLifecycle: true}, dependencies)
+		done <- Run(ctx, Request{Source: nativeSource([]string{root}), Relays: []relayprofile.Candidate{candidate}, Diagnostics: stream.Sink()}, dependencies)
 	}()
 	ready, err := dependencies.Controller.Ready(context.Background())
 	if err != nil || ready.SelectedRootSummary.SelectedCount() != 1 {
@@ -117,44 +108,41 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 	if !slices.Equal(ready.Capability.Relays, []string{candidate.PublicURL}) {
 		t.Fatal("capability contains private relay configuration")
 	}
-	mu.Lock()
-	acquired := false
-	for _, fact := range facts {
-		acquired = acquired || fact.Milestone == SourceAcquired && !fact.ShareInstance.IsZero()
-	}
-	mu.Unlock()
-	if !acquired {
-		t.Fatal("source acquisition evidence missing")
-	}
 	cancel(task.ErrShareStopped)
 	result := awaitResult(t, done)
 	if result.Err != nil || result.CleanupError != nil || !endpoint.completed.Load() {
 		t.Fatalf("result=%+v endpointCompleted=%v", result, endpoint.completed.Load())
 	}
+	stream.Close()
+	acquired := false
+	for record := range stream.Records() {
+		acquired = acquired || record.Name() == "share_workflow" && record.Payload().Get("stage").Text() == string(SourceAcquired) && record.Correlation().Get("share_instance_id").Text() != ""
+	}
+	if !acquired {
+		t.Fatal("source acquisition evidence missing")
+	}
+
 }
 
 func TestNativeSourceAcquisitionFailureKeepsCorrelatedTypedEvidence(t *testing.T) {
 	dependencies := nativeDependencies(t)
 	failure := errors.New("permission revoked")
 	var acquired catalog.ShareInstance
-	var facts []Observation
-	dependencies.Control.Emit = func(event task.Event) bool {
-		if fact, ok := event.(Observation); ok {
-			facts = append(facts, fact)
-		}
-		return true
-	}
+	stream, _ := diagnostics.NewStream(64, nil)
 	source := liveshare.FileSourceFactoryFunc(func(_ context.Context, value liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		acquired = value.ShareInstance
 		return nil, failure
 	})
-	result := Run(context.Background(), Request{Source: source, Relays: []relayprofile.Candidate{{PublicURL: "https://relay.example"}}}, dependencies)
+	result := Run(context.Background(), Request{Diagnostics: stream.Sink(), Source: source, Relays: []relayprofile.Candidate{{PublicURL: "https://relay.example"}}}, dependencies)
 	if !errors.Is(result.Err, failure) || result.CleanupError != nil || acquired.IsZero() {
 		t.Fatalf("result=%+v", result)
 	}
 	found := false
-	for _, fact := range facts {
-		if fact.Milestone == SourceAcquisitionFailed && fact.ShareInstance == acquired && errors.Is(fact.Failure, failure) {
+	stream.Close()
+	for record := range stream.Records() {
+		if record.Payload().Get("stage").Text() == string(SourceAcquisitionFailed) &&
+			record.Correlation().Get("share_instance_id").Text() == diagnostics.Identity(acquired[:]).Text() &&
+			record.Payload().Get("failure").Text() == failure.Error() {
 			found = true
 		}
 	}

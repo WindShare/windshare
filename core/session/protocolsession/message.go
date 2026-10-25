@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/text/unicode/norm"
@@ -364,5 +365,49 @@ func (kind MessageKind) isFinal() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value MessageKind) DiagnosticName() string {
+	switch value {
+	case MessageListChildren:
+		return "list_children"
+	case MessageCatalogResult:
+		return "catalog_result"
+	case MessageOpenRevisions:
+		return "open_revisions"
+	case MessageOpenResults:
+		return "open_results"
+	case MessageRenewLease:
+		return "renew_lease"
+	case MessageReleaseLease:
+		return "release_lease"
+	case MessageRequestBlocks:
+		return "request_blocks"
+	case MessageBlockFragment:
+		return "block_fragment"
+	case MessageCancel:
+		return "cancel"
+	case MessageOperationError:
+		return "operation_error"
+	case MessageSessionTerminal:
+		return "session_terminal"
+	case MessageLaneAttach:
+		return "lane_attach"
+	case MessageScanProgress:
+		return "scan_progress"
+	case MessageOperationComplete:
+		return "operation_complete"
+	case MessageLeaseResult:
+		return "lease_result"
+	case MessagePeerOffer:
+		return "peer_offer"
+	case MessagePeerAnswer:
+		return "peer_answer"
+	case MessagePeerCandidate:
+		return "peer_candidate"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
 }

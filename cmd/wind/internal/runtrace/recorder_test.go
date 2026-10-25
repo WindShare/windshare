@@ -14,7 +14,6 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	appobs "github.com/windshare/windshare/engine/observation"
-	wire "github.com/windshare/windshare/engine/observation/wire"
 )
 
 var errInjected = errors.New("injected failure")
@@ -765,7 +764,7 @@ type decodedRecord struct {
 	Event           string
 	Command         string
 	RunID           string
-	Correlation     *wire.CorrelationV1
+	Correlation     json.RawMessage
 	Payload         json.RawMessage
 	VerifiedBytes   *string
 	TraceIncomplete *bool
@@ -776,16 +775,18 @@ type decodedRecord struct {
 
 func (record *decodedRecord) UnmarshalJSON(data []byte) error {
 	var envelope struct {
-		SchemaVersion int                 `json:"schema_version"`
-		Sequence      string              `json:"sequence"`
-		Time          string              `json:"time"`
-		ElapsedMS     string              `json:"elapsed_ms"`
-		Level         string              `json:"level"`
-		Event         string              `json:"event"`
-		Command       string              `json:"command"`
-		RuntimeRunID  string              `json:"runtime_run_id"`
-		Correlation   *wire.CorrelationV1 `json:"correlation,omitempty"`
-		Payload       json.RawMessage     `json:"payload"`
+		SourceTime    string          `json:"source_time,omitempty"`
+		Scope         json.RawMessage `json:"scope,omitempty"`
+		SchemaVersion int             `json:"schema_version"`
+		Sequence      string          `json:"sequence"`
+		Time          string          `json:"time"`
+		ElapsedMS     string          `json:"elapsed_ms"`
+		Level         string          `json:"level"`
+		Event         string          `json:"event"`
+		Command       string          `json:"command"`
+		RuntimeRunID  string          `json:"runtime_run_id"`
+		Correlation   json.RawMessage `json:"correlation,omitempty"`
+		Payload       json.RawMessage `json:"payload"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

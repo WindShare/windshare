@@ -21,12 +21,12 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
-	app.projectReceiveObservation(observation, engine.ReceiveObservationLoss{Source: engine.ReceiveObservationProtocol, Count: 3})
+	runtime.diagnosticSink().Lost("protocol", 5)
 	result := engine.TaskResult[engine.ReceiveResult]{
 		Observations: observationstream.Completion{CapacityDropped: 7},
 		Completion: engine.TaskCompletion[engine.ReceiveResult]{
 			Settlement: engine.TaskSettlement{Outcome: engine.OutcomeFailed, FailureClass: engine.FailureLocal, Err: engine.ReceiveFailure{Code: engine.ReceiveFailureInvalidInput}},
-			Value:      engine.ReceiveResult{ObservationLosses: []engine.ReceiveObservationLoss{{Source: engine.ReceiveObservationProtocol, Count: 5}}},
+			Value:      engine.ReceiveResult{},
 		},
 	}
 	if code := app.reportReceiveTask(result, observation); code != ExitFailure {
@@ -39,10 +39,10 @@ func TestReceiveTaskCompletionReportsDroppedObservationsBeforeTerminal(t *testin
 	for _, event := range recorder.recorded() {
 		switch event := event.(type) {
 		case appobs.ObserverLossObserved:
-			if terminal {
+			if terminal && event.Category() == appobs.ObserverLossEngineObservation {
 				t.Fatal("loss followed terminal result")
 			}
-			if event.Category() == appobs.ObserverLossProtocolOperation {
+			if event.Category() == appobs.ObserverLossCommandAdapter {
 				protocol += event.Count()
 			}
 			if event.Category() == appobs.ObserverLossEngineObservation {

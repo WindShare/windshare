@@ -3,6 +3,8 @@ package v2peer
 import (
 	"slices"
 
+	diag "github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -427,3 +429,48 @@ func (trace ReceiverTerminationTrace) PeerShutdownFailed() bool {
 func (trace ReceiverTerminationTrace) ChannelDrainFailed() bool {
 	return trace.channelDrainFailed
 }
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ReceiverTerminalOwner) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ReceiverAttemptDisposition) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ReceiverBenignCause) DiagnosticName() string {
+	return string(value)
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ReceiverCauseClass) DiagnosticName() string {
+	return string(value)
+}
+
+func (value ReceiverTerminationTrace) DiagnosticRecord() diag.Record {
+	fields := diag.Fields{"local_generation": diag.Uint(value.LocalGeneration()), "transition_authority": diag.Text(string(value.TransitionAuthority())),
+		"disposition": diag.Text(string(value.Disposition())), "transition_provenance": diag.Text(string(value.TransitionProvenance())),
+		"consequence_provenance": diag.Text(string(value.ConsequenceProvenance())), "diagnostics_truncated": diag.Bool(value.DiagnosticsTruncated()),
+		"peer_shutdown_failed": diag.Bool(value.PeerShutdownFailed()), "channel_drain_failed": diag.Bool(value.ChannelDrainFailed())}
+	fields["benign_components"] = diagnosticStrings(value.BenignComponents())
+	fields["retained_cause_classes"] = diagnosticStrings(value.RetainedCauseClasses())
+	fields["teardown_transitions"] = diagnosticStrings(value.TeardownTransitions())
+	record := diag.New(terminationEventName, fields)
+	if id := value.OperationID(); !id.IsZero() {
+		record = record.Correlate(diag.Fields{"protocol_operation_id": diag.Identity(id[:])})
+	}
+	return record
+}
+
+func diagnosticStrings[T ~string](values []T) diag.Value {
+	items := make([]diag.Value, 0, len(values))
+	for _, value := range values {
+		items = append(items, diag.Text(string(value)))
+	}
+	return diag.Array(items...)
+}
+
+const terminationEventName = "receiver_termination"

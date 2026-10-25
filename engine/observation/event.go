@@ -1,8 +1,8 @@
 package observation
 
 import (
-	"errors"
-	"time"
+	errors "errors"
+	time "time"
 )
 
 var ErrInvalidEvent = errors.New("engine observation is invalid")
@@ -270,9 +270,6 @@ func (value LaneAdopted) Transport() Transport { return value.transport }
 
 func (value LaneAdopted) Validate() error { return validateLaneAdopted(value) }
 
-// RelayAvailability concerns admission of new receivers, independently of any
-// already active direct transfer or the lifetime of the capability itself.
-
 type RelayAvailability struct {
 	available uint32
 	total     uint32
@@ -307,9 +304,6 @@ func (value RelayAvailability) Validate() error {
 	}
 	return nil
 }
-
-// RelayRecoveryDetails preserves the owner's decision context. A missing
-// protocol session is expected while establishing the first connection.
 
 type RelayRecoveryDetails struct {
 	ShareInstance     SharingInstanceID

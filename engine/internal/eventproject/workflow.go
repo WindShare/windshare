@@ -1,9 +1,9 @@
 package eventproject
 
 import (
-	"github.com/windshare/windshare/engine/internal/receive"
-	"github.com/windshare/windshare/engine/internal/share"
-	"github.com/windshare/windshare/engine/internal/task"
+	receive "github.com/windshare/windshare/engine/internal/receive"
+	share "github.com/windshare/windshare/engine/internal/share"
+	task "github.com/windshare/windshare/engine/internal/task"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -43,11 +43,11 @@ func (p workflowProjection) emit(value appobs.Event, err error) bool {
 func (p workflowProjection) observe(envelope task.Observation) bool {
 	switch value := envelope.Event.(type) {
 	case task.Lifecycle:
-		// Wait owns authoritative settlement; the stream carries one diagnostic
+		// Wait owns authoritative settlement; the stream carries a product
 		// representation of that result and may be dropped under pressure.
 		return p.emit(projectTask(p.workflow, envelope))
 	case share.Observation:
-		return p.share(envelope, value)
+		return p.share(value)
 	case receive.Warning:
 		return p.emit(appobs.NewWarning(p.workflow, receiveWarning(value.Code, value.Cause)))
 	case receive.RelayConnected:
@@ -62,44 +62,6 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 			return true
 		}
 		return p.project(appobs.ObserverLossRelayLifecycle, event, err)
-	case receive.RelayObserved:
-		event, err := ProjectRelayLifecycle(p.workflow, value.Value)
-		accepted := p.project(appobs.ObserverLossRelayLifecycle, event, err)
-		if err == nil && event.Stage() == appobs.RelayTraceDropped {
-			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
-		}
-		return accepted
-	case receive.WebRTCObserved:
-		event, err := ProjectWebRTCLifecycle(p.workflow, value.Value)
-		accepted := p.project(appobs.ObserverLossWebRTCLifecycle, event, err)
-		if err == nil && event.Transition() == appobs.WebRTCTraceDropped {
-			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
-		}
-		return accepted
-	case receive.OutputObserved:
-		err := value.Err
-		if err == nil {
-			if value.Value == nil || value.Value.Workflow() != appobs.WorkflowReceive || value.Value.Level() != appobs.LevelDebug {
-				err = appobs.ErrInvalidEvent
-			} else {
-				err = value.Value.Validate()
-			}
-		}
-		return p.project(appobs.ObserverLossOutputDiagnostic, value.Value, err)
-	case receive.TransferObserved:
-		event, err := ProjectTransferLifecycle(value.Value)
-		return p.project(appobs.ObserverLossTransferLifecycle, event, err)
-	case receive.ProtocolObserved:
-		event, err := ProjectProtocolObservation(p.workflow, value.Value)
-		return p.project(appobs.ObserverLossProtocolOperation, event, err)
-	case receive.LaneObserved:
-		event, err := ProjectLaneSettlement(value.Value)
-		return p.project(appobs.ObserverLossLaneSettlement, event, err)
-	case receive.NativeObserved:
-		event, err := ProjectNativeObservation(p.workflow, value.Value)
-		return p.project(appobs.ObserverLossNativeConnectivity, event, err)
-	case receive.PeerDiagnosticObserved:
-		return projectPeerLoss(p.workflow, value.Value, p.publish, p.emit)
 	case receive.PeerTerminated:
 		return p.receiverTermination(value)
 	case receive.ProgressObserved:
@@ -119,69 +81,18 @@ func (p workflowProjection) observe(envelope task.Observation) bool {
 			return p.emit(nil, err)
 		}
 		return p.emit(appobs.NewLaneAdopted(p.workflow, session, lane, appobs.TransportWebRTC))
-	case receive.ObservationLoss:
-		return p.publish(ReceiveLoss(value))
-	case receive.GenerationChanged, receive.AdmissionObserved, receive.RelayContentClaimed:
-		return p.emit(projectTask(p.workflow, envelope))
 	default:
 		return p.emit(nil, ErrInvalidProjection)
 	}
 }
 
-func (p workflowProjection) share(envelope task.Observation, value share.Observation) bool {
+func (p workflowProjection) share(value share.Observation) bool {
 	switch {
-	case value.Catalog != nil:
-		event, err := ProjectCatalogStorage(*value.Catalog)
-		return p.project(appobs.ObserverLossCatalogStorage, event, err)
-	case value.Prefetch != nil:
-		event, err := ProjectRootPrefetch(*value.Prefetch)
-		return p.project(appobs.ObserverLossRootPrefetch, event, err)
-	case value.Capacity != nil:
-		event, err := ProjectSenderCapacity(*value.Capacity)
-		return p.project(appobs.ObserverLossSenderCapacity, event, err)
-	case value.Revision != nil:
-		event, err := ProjectSenderRevision(*value.Revision)
-		return p.project(appobs.ObserverLossSenderRevision, event, err)
 	case value.RelayAvailability != nil:
 		v := value.RelayAvailability
 		return p.emit(appobs.NewRelayAvailability(v.Available, v.Total, v.Terminal, v.EverReady))
 	case value.RelayRecovery != nil:
 		return p.emit(projectSenderRecovery(*value.RelayRecovery))
-	case value.RelayLifecycle != nil:
-		event, err := ProjectRelayLifecycle(p.workflow, *value.RelayLifecycle)
-		accepted := p.project(appobs.ObserverLossRelayLifecycle, event, err)
-		if err == nil && event.Stage() == appobs.RelayTraceDropped {
-			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossRelayQueue, Category: appobs.ObserverLossRelayLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
-		}
-		return accepted
-	case value.SenderAttempt != nil:
-		event, err := ProjectSenderAttempt(p.workflow, *value.SenderAttempt)
-		return p.project(appobs.ObserverLossSenderAttempt, event, err)
-	case value.PeerDiagnostic != nil:
-		return projectPeerLoss(p.workflow, *value.PeerDiagnostic, p.publish, p.emit)
-	case value.Native != nil:
-		event, err := ProjectNativeObservation(p.workflow, *value.Native)
-		return p.project(appobs.ObserverLossNativeConnectivity, event, err)
-	case value.WebRTC != nil:
-		event, err := ProjectWebRTCLifecycle(p.workflow, *value.WebRTC)
-		accepted := p.project(appobs.ObserverLossWebRTCLifecycle, event, err)
-		if err == nil && event.Transition() == appobs.WebRTCTraceDropped {
-			p.publish(appobs.LossSnapshot{WorkflowKind: p.workflow, Source: appobs.LossWebRTCQueue, Category: appobs.ObserverLossWebRTCLifecycle, Reason: appobs.ObserverLossTraceQueue, Count: event.Dropped()})
-		}
-		return accepted
-	case value.Protocol != nil:
-		event, err := ProjectProtocolObservation(p.workflow, *value.Protocol)
-		return p.project(appobs.ObserverLossProtocolOperation, event, err)
-	case value.TerminalSend != nil:
-		event, err := ProjectSenderTerminalSend(*value.TerminalSend)
-		return p.project(appobs.ObserverLossSenderTerminalSend, event, err)
-	case value.SessionTerminal != nil:
-		event, err := ProjectSenderSessionTerminated(*value.SessionTerminal)
-		return p.project(appobs.ObserverLossSenderSessionTerminal, event, err)
-	case value.Loss != nil:
-		return p.publish(ShareLoss(*value.Loss))
-	case value.Milestone != "":
-		return p.emit(projectTask(p.workflow, envelope))
 	default:
 		return p.emit(nil, ErrInvalidProjection)
 	}
@@ -197,37 +108,17 @@ func receiveWarning(code receive.FailureCode, cause error) appobs.Failure {
 	return mustFailure(appobs.FailureUnexpected)
 }
 
-func projectLocalStop(value receive.ReceiverLocalStopReason) appobs.ReceiverLocalStopReason {
-	switch value {
-	case receive.ReceiverLocalStopCaller:
-		return appobs.ReceiverLocalStopCaller
-	case receive.ReceiverLocalStopOutputAdmission:
-		return appobs.ReceiverLocalStopOutputAdmission
-	case receive.ReceiverLocalStopRuntimeSessionFailure:
-		return appobs.ReceiverLocalStopRuntimeSessionFailure
-	case receive.ReceiverLocalStopNormalCompletion:
-		return appobs.ReceiverLocalStopNormalCompletion
-	default:
-		return appobs.ReceiverLocalStopNone
-	}
-}
-
 func (p workflowProjection) receiverTermination(value receive.PeerTerminated) bool {
-	event, err := ProjectReceiverTermination(value.Value, projectLocalStop(value.LocalStop))
-	accepted := p.project(appobs.ObserverLossReceiverTermination, event, err)
-	if err != nil {
-		return accepted
-	}
 	for _, cause := range value.Value.RetainedCauseClasses() {
 		if failure, ok := ProjectReceiverCauseClass(cause); ok {
-			p.emit(appobs.NewWarning(p.workflow, failure))
-			return accepted
+			return p.emit(appobs.NewWarning(p.workflow, failure))
 		}
 	}
 	if value.Value.PeerShutdownFailed() {
-		p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerShutdown)))
-	} else if value.Value.ChannelDrainFailed() {
-		p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerChannelDrain)))
+		return p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerShutdown)))
 	}
-	return accepted
+	if value.Value.ChannelDrainFailed() {
+		return p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerChannelDrain)))
+	}
+	return true
 }

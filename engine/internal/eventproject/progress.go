@@ -1,8 +1,8 @@
 package eventproject
 
 import (
-	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
+	transfer "github.com/windshare/windshare/core/transfer"
+	receivecontract "github.com/windshare/windshare/core/transfer/receivecontract"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 

@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"math"
+	"strconv"
 	"sync"
 
 	"github.com/windshare/windshare/core/content"
@@ -415,4 +416,18 @@ func (progress *fileTransferProgress) acceptPending(next VerifiedDurableRanges) 
 	progress.pending = content.Range{}
 	progress.hasPending = false
 	return delta
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value DiscoveryStatus) DiagnosticName() string {
+	switch value {
+	case DiscoveryOpen:
+		return "open"
+	case DiscoveryComplete:
+		return "complete"
+	case DiscoveryFailed:
+		return "failed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

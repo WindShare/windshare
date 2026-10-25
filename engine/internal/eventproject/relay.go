@@ -1,13 +1,13 @@
 package eventproject
 
 import (
-	"net/url"
-	"strconv"
-	"strings"
+	url "net/url"
+	strconv "strconv"
+	strings "strings"
 
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/engine/internal/share"
+	relayset "github.com/windshare/windshare/connectivity/relayset"
+	senderrelay "github.com/windshare/windshare/connectivity/senderrelay"
+	share "github.com/windshare/windshare/engine/internal/share"
 	appobs "github.com/windshare/windshare/engine/observation"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )

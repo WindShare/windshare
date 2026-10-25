@@ -1,16 +1,15 @@
 package cli
 
 import (
+	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/pionpeer"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func testShareBytes16(marker byte) []byte { data := make([]byte, 16); data[0] = marker; return data }
-func nativeFactSpec(workflow appobs.Workflow, kind string) appobs.NativeConnectivitySpec {
-	session, _ := appobs.NewProtocolSessionID(testShareBytes16(1))
-	path, _ := appobs.NewPeerPathID(testShareBytes16(2))
-	side := "sender"
+func nativeFactSpec(workflow appobs.Workflow, kind string) nativepeer.Observation {
+	side := nativepeer.SideSender
 	if workflow == appobs.WorkflowReceive {
-		side = "receiver"
+		side = nativepeer.SideReceiver
 	}
-	return appobs.NativeConnectivitySpec{Workflow: workflow, Session: session, Path: path, Side: side, Kind: kind, State: "unknown"}
+	return nativepeer.Observation{Subject: nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, Side: side}, Provider: &pionpeer.Event{Milestone: kind, State: "unknown"}}
 }

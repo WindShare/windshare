@@ -4,7 +4,11 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
@@ -89,20 +93,26 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 			stages[facts.Stage] = facts
 		}
 	}
-	for _, stage := range []appobs.EngineTaskStage{appobs.EngineTaskStarted, appobs.EngineSourceAcquiring, appobs.EngineSourceFailed, appobs.EngineTaskSettled} {
+	for _, stage := range []appobs.EngineTaskStage{appobs.EngineTaskStarted, appobs.EngineTaskSettled} {
 		if _, ok := stages[stage]; !ok {
 			t.Fatalf("missing engine ownership milestone %v", stage)
 		}
 	}
-	for _, stage := range []appobs.EngineTaskStage{appobs.EngineSourceFailed, appobs.EngineTaskSettled} {
+	for _, stage := range []appobs.EngineTaskStage{appobs.EngineTaskSettled} {
 		failure := stages[stage].Failure
 		path, located := failure.SourcePath()
 		if failure.Code() != appobs.FailureSourceMissing || !located || path.Text() != missing {
 			t.Fatalf("source failure lost its reason or selected path at %v: %+v", stage, failure)
 		}
 	}
-	if stages[appobs.EngineSourceAcquiring].ShareInstance != stages[appobs.EngineSourceFailed].ShareInstance ||
-		!stages[appobs.EngineSourceFailed].Failure.Valid() || !stages[appobs.EngineTaskSettled].Failure.Valid() {
-		t.Fatal("source failure lost its scope or final error")
+	sources := map[string]diagnostics.Record{}
+	for _, event := range trace.events {
+		if value, ok := event.(clievent.Diagnostic); ok && value.Record.Name() == "share_workflow" {
+			sources[value.Record.Payload().Get("stage").Text()] = value.Record
+		}
+	}
+	acquiring, failed := sources["source_acquiring"], sources["source_acquisition_failed"]
+	if !acquiring.Valid() || !failed.Valid() || failed.Scope().TaskID != taskID.String() || acquiring.Scope() != failed.Scope() || acquiring.Correlation().Get("share_instance_id").Text() != failed.Correlation().Get("share_instance_id").Text() || !strings.Contains(failed.Payload().Get("failure").Text(), strconv.Quote(missing)) {
+		t.Fatalf("source failure lost scope/details: %v", sources)
 	}
 }

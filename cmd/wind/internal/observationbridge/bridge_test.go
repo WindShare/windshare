@@ -4,52 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
-
-	appobs "github.com/windshare/windshare/engine/observation"
 )
-
-type recordedLoss struct {
-	category appobs.ObserverLossCategory
-	reason   appobs.ObserverLossReason
-	count    uint64
-}
-
-type recordingLossSink struct {
-	reported []recordedLoss
-}
-
-func (sink *recordingLossSink) ReportObserverLoss(
-	category appobs.ObserverLossCategory,
-	reason appobs.ObserverLossReason,
-	count uint64,
-) bool {
-	sink.reported = append(sink.reported, recordedLoss{category: category, reason: reason, count: count})
-	return true
-}
-
-func TestCumulativeLossesReportIndependentSnapshotDeltas(t *testing.T) {
-	var sink recordingLossSink
-	losses := NewCumulativeLosses[string](&sink)
-	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2)
-	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2)
-	losses.Report("relay", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 5)
-	losses.Report("webrtc", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1)
-	losses.Report("ignored", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 0)
-
-	want := []recordedLoss{
-		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 2},
-		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 3},
-		{appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1},
-	}
-	if !reflect.DeepEqual(sink.reported, want) {
-		t.Fatalf("reported losses = %#v, want %#v", sink.reported, want)
-	}
-	var nilLosses *CumulativeLosses[string]
-	nilLosses.Report("ignored", appobs.ObserverLossRelayLifecycle, appobs.ObserverLossStreamCapacity, 1)
-	if NewCumulativeLosses[string](nil) != nil {
-		t.Fatal("nil sink created cumulative loss accounting")
-	}
-}
 
 func TestReaderDrainsCompletedStreamInFIFOOrder(t *testing.T) {
 	stream := make(chan int, 3)

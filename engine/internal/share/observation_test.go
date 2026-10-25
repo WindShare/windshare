@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -17,17 +18,16 @@ func TestShareProtocolAndTerminalObservationAuthorityFollowsRequest(t *testing.T
 		request Request
 	}{
 		{"default", Request{}},
-		{"diagnostics", Request{Diagnostics: true}},
-		{"trace", Request{Diagnostics: true, TraceLifecycle: true}},
+		{"diagnostics", Request{Diagnostics: testDiagnosticSink(t)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := newShareFixture(t)
 			o := newObservations(f.dependencies.Control, test.request)
 			config := o.runtimeConfig(f.relays, nil)
-			if !config.ProtocolObservations.IsZero() != test.request.Diagnostics {
+			if !config.ProtocolObservations.IsZero() != test.request.Diagnostics.Enabled() {
 				t.Fatal("protocol producer ignored diagnostic authority")
 			}
-			if (config.TerminalSendObserver != nil) != test.request.TraceLifecycle || (config.SessionTerminalObserver != nil) != test.request.TraceLifecycle {
+			if (config.TerminalSendObserver != nil) != test.request.Diagnostics.Enabled() || (config.SessionTerminalObserver != nil) != test.request.Diagnostics.Enabled() {
 				t.Fatal("terminal observers ignored lifecycle trace authority")
 			}
 			o.complete()
@@ -45,7 +45,8 @@ func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *test
 		producer.RecordDropped(2)
 	}
 	ctx, stop := context.WithCancelCause(context.Background())
-	done := fixtureRun(f, ctx, Request{Diagnostics: true})
+	stream, _ := diagnostics.NewStream(256, nil)
+	done := fixtureRun(f, ctx, Request{Diagnostics: stream.Sink()})
 	if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -64,16 +65,17 @@ func TestShareFinalObservationCutWaitsForRuntimeAndPreservesUpstreamLoss(t *test
 	}
 	var protocols int
 	var lost uint64
-	for _, fact := range f.facts {
-		if fact.Protocol != nil {
+	cut := stream.Close()
+	for record := range stream.Records() {
+		if record.Name() == "protocol_operation" {
 			protocols++
 		}
-		if fact.Loss != nil && fact.Loss.Source == ProtocolObservations {
-			lost += fact.Loss.Dropped
+		if record.Name() == "diagnostic_loss" && record.Payload().Get("source").Text() == "protocol" {
+			lost += record.Payload().Get("count").Uint()
 		}
 	}
-	if len(result.Value.ObservationLosses) != 1 || result.Value.ObservationLosses[0].Source != ProtocolObservations || result.Value.ObservationLosses[0].Dropped != 2 {
-		t.Fatalf("durable observation loss=%+v", result.Value.ObservationLosses)
+	if cut.CapacityDropped != 2 {
+		t.Fatalf("retained trace loss: %+v", cut)
 	}
 	if protocols != 2 || lost != 2 {
 		t.Fatalf("protocol facts=%d dropped=%d", protocols, lost)
@@ -92,19 +94,31 @@ func TestShareDefaultDiagnosticsDoesNotRetainRetiredChannelGraphs(t *testing.T) 
 
 func TestShareLossCompletionAggregatesIndependentProducerQueues(t *testing.T) {
 	f := newShareFixture(t)
-	o := newObservations(f.dependencies.Control, Request{})
+	stream, _ := diagnostics.NewStream(32, nil)
+	o := newObservations(f.dependencies.Control, Request{Diagnostics: stream.Sink()})
 	o.loss(RelayObservations, 3)
 	o.loss(RelayObservations, 4)
 	o.loss(WebRTCObservations, ^uint64(0))
 	o.loss(WebRTCObservations, 1)
 	o.complete()
 	counts := make(map[ObservationSource]uint64)
-	for _, fact := range f.facts {
-		if fact.Loss != nil {
-			counts[fact.Loss.Source] = fact.Loss.Dropped
+	stream.Close()
+	for record := range stream.Records() {
+		if record.Name() == "diagnostic_loss" {
+			counts[ObservationSource(record.Payload().Get("source").Text())] = record.Payload().Get("count").Uint()
 		}
 	}
 	if counts[RelayObservations] != 7 || counts[WebRTCObservations] != ^uint64(0) {
 		t.Fatalf("loss cut=%v", counts)
 	}
+}
+
+func testDiagnosticSink(t *testing.T) diagnostics.Sink {
+	t.Helper()
+	stream, err := diagnostics.NewStream(256, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stream.Close() })
+	return stream.Sink()
 }

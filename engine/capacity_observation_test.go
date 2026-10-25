@@ -3,13 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/observation/wire"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -36,6 +37,7 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), shareStartupTestTimeout)
 	defer cancel()
+	stream, _ := diagnostics.NewStream(256, nil)
 	var tasks [2]*ShareTask
 	var stores [2]*revisioncapacity.StoreRegistration
 	var sessions [2]*revisioncapacity.SessionRegistration
@@ -55,7 +57,7 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 	})
 	var configs [2]liveshare.SenderConfig
 	for i := range tasks {
-		current, err := application.StartShare(ctx, ShareRequest{Diagnostics: true})
+		current, err := application.StartShare(ctx, ShareRequest{Diagnostics: stream.Sink()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,33 +147,39 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 	if _, err := tasks[1].Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for i, current := range tasks {
-		capacityFacts, rejections := 0, 0
-		for envelope := range current.Observations() {
-			if envelope.TaskID != current.ID() {
-				t.Fatalf("task attribution: %+v", envelope)
-			}
-			switch fact := envelope.Event.(type) {
-			case appobs.SenderCapacityObserved:
-				capacityFacts++
-				if fact.CapacityStoreID().String() != string(stores[i].StoreID()) || fact.CapacityShareID().String() != string(stores[i].ShareID()) {
-					t.Fatalf("capacity event crossed share ownership: %+v", fact)
-				}
-				encoded, err := wire.Encode(fact)
-				if err != nil {
-					t.Fatal(err)
-				}
-				payload := encoded.Payload.(wire.SenderCapacityPayload)
-				if payload.CapacityStoreID != string(stores[i].StoreID()) || payload.CapacityShareID != string(stores[i].ShareID()) {
-					t.Fatalf("serialized capacity lost owner: %+v", payload)
-				}
-			case appobs.ObserverLossObserved:
-				rejections++
+
+	stream.Close()
+	counts := map[string]int{}
+	for record := range stream.Records() {
+		if record.Name() != "sender_capacity" {
+			continue
+		}
+		counts[record.Scope().TaskID]++
+		index := -1
+		for i, current := range tasks {
+			if string(current.ID()) == record.Scope().TaskID {
+				index = i
 			}
 		}
-		if capacityFacts != i+1 || rejections != 0 {
-			t.Fatalf("share %d capacity=%d rejection=%d", i, capacityFacts, rejections)
+		if index < 0 {
+			t.Fatalf("unknown task: %+v", record.Scope())
+		}
+		f := record.Payload()
+		if f.Get("capacity_store_id").Text() != string(stores[index].StoreID()) || f.Get("capacity_share_id").Text() != string(stores[index].ShareID()) {
+			t.Fatal("capacity event crossed share ownership")
+		}
+		if _, err := json.Marshal(f); err != nil {
+			t.Fatal(err)
 		}
 	}
-
+	for i, current := range tasks {
+		if counts[string(current.ID())] != i+1 {
+			t.Fatalf("share %d diagnostic count: %v", i, counts)
+		}
+		for observation := range current.Observations() {
+			if _, ok := observation.Event.(appobs.ObserverLossObserved); ok {
+				t.Fatal("source diagnostic entered product projection")
+			}
+		}
+	}
 }

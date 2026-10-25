@@ -5,6 +5,7 @@ package framechannel
 import (
 	"context"
 	"errors"
+	"strconv"
 )
 
 const MaxFrameSize = 64 * 1024
@@ -98,4 +99,32 @@ type Channel interface {
 	Recv() <-chan Frame
 	State() ChannelState
 	Close() error
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendDisposition) DiagnosticName() string {
+	switch value {
+	case SendAccepted:
+		return "accepted"
+	case SendRejected:
+		return "rejected"
+	case SendRetired:
+		return "retired"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value ChannelState) DiagnosticName() string {
+	switch value {
+	case Connecting:
+		return "connecting"
+	case Open:
+		return "open"
+	case Closed:
+		return "closed"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
@@ -41,6 +43,9 @@ type queuedCommandEvent struct {
 }
 
 type commandRuntime struct {
+	diagnosticStream  *diagnostics.Stream
+	diagnosticRecords <-chan diagnostics.Record
+
 	command             clievent.Command
 	clock               commandClock
 	human               *humanoutput.Renderer
@@ -125,6 +130,16 @@ func (a *App) newCommandRuntime(
 		detailedDiagnostics: options.verbose || options.traceEnabled(),
 		canvas:              terminal.canvas, observerLifecycle: make([]queuedCommandEvent, capacity),
 		ready: make(chan struct{}, 1), closing: make(chan struct{}), done: make(chan struct{}),
+	}
+	if runtime.detailedDiagnostics {
+		runtime.diagnosticStream, err = diagnostics.NewStream(defaultCommandEventCapacity, terminal.clock.Now)
+		if err != nil {
+			if recorder != nil {
+				recorder.Close()
+			}
+			return nil, err
+		}
+		runtime.diagnosticRecords = runtime.diagnosticStream.Records()
 	}
 	go runtime.run()
 	if runtime.detailedDiagnostics && a.platformSetupStatus != nil {
@@ -438,6 +453,10 @@ func (runtime *commandRuntime) Close() {
 		return
 	}
 	runtime.closeOnce.Do(func() {
+		if runtime.diagnosticStream != nil {
+			completion := runtime.diagnosticStream.Close()
+			runtime.ReportObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossStreamCapacity, completion.CapacityDropped)
+		}
 		runtime.entryMu.Lock()
 		runtime.closed = true
 		close(runtime.closing)
@@ -456,6 +475,12 @@ func (runtime *commandRuntime) run() {
 			continue
 		}
 		select {
+		case record, open := <-runtime.diagnosticRecords:
+			if !open {
+				runtime.diagnosticRecords = nil
+				continue
+			}
+			runtime.dispatch(clievent.Diagnostic{Owner: runtime.command, Record: record})
 		case <-runtime.ready:
 			runtime.reportPendingLoss()
 		case event, open := <-health:
@@ -474,6 +499,7 @@ func (runtime *commandRuntime) run() {
 func (runtime *commandRuntime) dispatch(event clievent.Event) {
 	if terminal, ok := event.(clievent.TerminalEvent); ok {
 		runtime.presentationTerminal = terminal
+		return
 	} else {
 		_ = runtime.human.Render(event)
 	}
@@ -543,6 +569,14 @@ func (runtime *commandRuntime) takeNext() clievent.Event {
 }
 
 func (runtime *commandRuntime) drain() {
+	// Close freezes the bounded diagnostic stream before drain. Product events
+	// have their own queue; a diagnostic flood cannot displace their state.
+	if runtime.diagnosticStream != nil {
+		for record := range runtime.diagnosticStream.Records() {
+			runtime.dispatch(clievent.Diagnostic{Owner: runtime.command, Record: record})
+		}
+	}
+
 	for {
 		runtime.reportPendingLoss()
 		event := runtime.takeNext()
@@ -552,6 +586,9 @@ func (runtime *commandRuntime) drain() {
 		runtime.dispatch(event)
 	}
 	if runtime.trace != nil {
+		if runtime.presentationTerminal != nil {
+			runtime.trace.Record(runtime.presentationTerminal)
+		}
 		status := runtime.trace.Close()
 		runtime.drainTraceHealth()
 		if !status.Complete {
@@ -616,3 +653,10 @@ type systemCommandTicker struct{ ticker *time.Ticker }
 
 func (ticker systemCommandTicker) C() <-chan time.Time { return ticker.ticker.C }
 func (ticker systemCommandTicker) Stop()               { ticker.ticker.Stop() }
+
+func (runtime *commandRuntime) diagnosticSink() diagnostics.Sink {
+	if runtime == nil || runtime.diagnosticStream == nil {
+		return diagnostics.Sink{}
+	}
+	return runtime.diagnosticStream.Sink()
+}

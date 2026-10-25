@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
+
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/turnpath"
@@ -27,11 +29,10 @@ import (
 var ErrConfiguration = errors.New("invalid share workflow configuration")
 
 type Request struct {
-	Source         liveshare.FileSourceFactory
-	Relays         []relayprofile.Candidate
-	ChunkSize      uint32
-	Diagnostics    bool
-	TraceLifecycle bool
+	Source      liveshare.FileSourceFactory
+	Relays      []relayprofile.Candidate
+	ChunkSize   uint32
+	Diagnostics diagnostics.Sink
 }
 
 type Ready struct {
@@ -43,8 +44,7 @@ type Ready struct {
 type Result struct {
 	Elapsed time.Duration
 	// Ready records first service readiness, not availability at shutdown.
-	Ready             bool
-	ObservationLosses []ObservationLoss
+	Ready bool
 }
 
 // Prepared makes preparation and shutdown independently testable while the
