@@ -57,7 +57,7 @@ func TestSharedAllocationExploresDistinctQueuedBlocks(t *testing.T) {
 			return transferRecord(t, descriptor, demand.Index), nil
 		}))
 		bytes := blockDemandBytes(validDemand(t, descriptor, 0))
-		set.lanes[1].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 1000}
+		seedDelivery(set.lanes[1], bytes, time.Millisecond, set.now())
 		done := make(chan error, 1)
 		go func() {
 			demand := validDemand(t, descriptor, 0)
@@ -171,19 +171,21 @@ func TestSharedAllocationWaitsForFastLaneBeforeUsingSlowerIdleLane(t *testing.T)
 		_ = set.Add(Identity{ID: id}, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
 	}
 	fast, slow := set.lanes[1], set.lanes[2]
-	fast.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 100, PendingBytes: bytes}
-	slow.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes)}
-	permit := fast.receive.TryReserve(bytes, time.Now())
+	now := set.now()
+	seedDelivery(fast, bytes, 10*time.Millisecond, now)
+	seedDelivery(slow, bytes, 10*time.Second, now)
+	permit := fast.receive.TryReserve(bytes*100, now)
 	defer permit.Close()
 	pending := &pendingAdmission{request: Request{Demand: demand}, order: WorkOrder{}}
 	ordered := []*laneState{slow, fast}
 	set.orderLanesLocked(ordered, bytes)
-	if chosen, _ := set.pendingCandidateLocked(pending, ordered, time.Now()); chosen != nil {
+	if chosen, _ := set.pendingCandidateLocked(pending, ordered, now); chosen != nil {
 		t.Fatal("slow idle lane displaced a faster queued completion")
 	}
-	fast.performance.PendingBytes = bytes * 200
+	slow.receive = lanescheduling.ReceiveWindow{}
+	seedDelivery(slow, bytes, time.Millisecond, now)
 	set.orderLanesLocked(ordered, bytes)
-	if chosen, _ := set.pendingCandidateLocked(pending, ordered, time.Now()); chosen != slow {
+	if chosen, _ := set.pendingCandidateLocked(pending, ordered, now); chosen != slow {
 		t.Fatal("useful independent capacity was ignored")
 	}
 }

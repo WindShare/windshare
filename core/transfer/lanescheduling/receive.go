@@ -1,34 +1,39 @@
 package lanescheduling
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 const (
 	receiveAhead        = 250 * time.Millisecond
 	receiveSampleWindow = 250 * time.Millisecond
-	receiveIdleExpiry   = time.Second
 	receiveSampleWeight = 0.25
 )
 
 // ReceiveWindow owns unfinished responses, independently of authenticated
 // plaintext or output retention. Its caller serializes access with lane state.
 type ReceiveWindow struct {
-	active      uint32
-	receiving   uint32
-	remaining   uint64
-	rate        float64
-	response    time.Duration
-	sampleSince time.Time
-	sampleBytes uint64
-	lastReceipt time.Time
+	responses     []*ReceivePermit
+	streamingRate bool
+	active        uint32
+	receiving     uint32
+	remaining     uint64
+	rate          float64
+	response      time.Duration
+	sampleSince   time.Time
+	sampleBytes   uint64
+	lastReceipt   time.Time
 }
 
 type ReceivePermit struct {
-	window    *ReceiveWindow
-	started   time.Time
-	remaining uint64
-	first     bool
-	receiving bool
-	closed    bool
+	window      *ReceiveWindow
+	started     time.Time
+	lastReceipt time.Time
+	remaining   uint64
+	first       bool
+	receiving   bool
+	closed      bool
 }
 
 func (w *ReceiveWindow) UnfinishedBytes() uint64 { return w.remaining }
@@ -42,16 +47,20 @@ func (w *ReceiveWindow) TryReserve(bytes uint64, now time.Time) *ReceivePermit {
 	if bytes == 0 || !w.Available() {
 		return nil
 	}
+	// Silent active lanes also need fresh receipt before refilling a pipeline.
+	if w.Load(now).Evidence == DeliveryStale {
+		w.rate = 0
+		w.response = 0
+		w.streamingRate = false
+	}
 	if w.active == 0 {
-		if now.Sub(w.sampleSince) >= receiveIdleExpiry {
-			w.rate = 0
-			w.response = 0
-		}
 		w.sampleSince, w.sampleBytes = now, 0
 	}
 	w.active++
 	w.remaining += bytes
-	return &ReceivePermit{window: w, started: now, remaining: bytes, first: true}
+	permit := &ReceivePermit{window: w, started: now, remaining: bytes, first: true}
+	w.responses = append(w.responses, permit)
+	return permit
 }
 
 // Receive updates every fragment's supply estimate and reports a blocked-to-ready
@@ -63,6 +72,25 @@ func (p *ReceivePermit) Receive(bytes uint64, now time.Time) bool {
 	}
 	w := p.window
 	wasAvailable := w.Available()
+	received := min(bytes, p.remaining)
+	p.remaining -= received
+	if received > 0 {
+		p.lastReceipt = now
+	}
+	w.remaining -= received
+	w.sampleDelivery(p, bytes, now)
+	if p.remaining > 0 && !p.receiving {
+		p.receiving = true
+		w.receiving++
+	}
+	if p.remaining == 0 && p.receiving {
+		p.receiving = false
+		w.receiving--
+	}
+	return !wasAvailable && w.Available()
+}
+
+func (w *ReceiveWindow) sampleDelivery(p *ReceivePermit, bytes uint64, now time.Time) {
 	streaming := w.receiving > 0 || (!w.lastReceipt.IsZero() && now.Sub(w.lastReceipt) < w.response)
 	w.lastReceipt = now
 	if !streaming {
@@ -75,32 +103,26 @@ func (p *ReceivePermit) Receive(bytes uint64, now time.Time) bool {
 		}
 		p.first = false
 	}
-	received := min(bytes, p.remaining)
-	p.remaining -= received
-	w.remaining -= received
+	retainStreamingRate := !streaming && w.streamingRate && p.remaining > 0
+	w.streamingRate = streaming || retainStreamingRate
 	w.sampleBytes += bytes
 	elapsed := max(time.Millisecond, now.Sub(w.sampleSince))
 	rate := float64(w.sampleBytes) / elapsed.Seconds()
 	if !streaming {
 		rate = float64(bytes) / max(time.Millisecond, now.Sub(p.started)).Seconds()
 	}
-	if w.rate == 0 || rate < w.rate {
-		w.rate = rate
-	} else {
-		w.rate += receiveSampleWeight * (rate - w.rate)
+	// A first fragment mixes response latency with supply. Wait for a second
+	// fragment before replacing an established streaming-capacity observation.
+	if !retainStreamingRate {
+		if w.rate == 0 || rate < w.rate {
+			w.rate = rate
+		} else {
+			w.rate += receiveSampleWeight * (rate - w.rate)
+		}
 	}
 	if !streaming || elapsed >= receiveSampleWindow {
 		w.sampleSince, w.sampleBytes = now, 0
 	}
-	if p.remaining > 0 && !p.receiving {
-		p.receiving = true
-		w.receiving++
-	}
-	if p.remaining == 0 && p.receiving {
-		p.receiving = false
-		w.receiving--
-	}
-	return !wasAvailable && w.Available()
 }
 
 func (p *ReceivePermit) Complete(now time.Time) {
@@ -115,6 +137,7 @@ func (p *ReceivePermit) Close() {
 	}
 	p.closed = true
 	p.window.active--
+	p.window.responses = slices.DeleteFunc(p.window.responses, func(other *ReceivePermit) bool { return other == p })
 	p.window.remaining -= p.remaining
 	if p.receiving {
 		p.window.receiving--

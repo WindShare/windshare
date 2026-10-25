@@ -189,6 +189,8 @@ export type ContentSchedulingTraceEvent = Readonly<{
   localBlockIndex: bigint
   route: 'application-relay' | 'direct' | 'turn'
   purpose: 'content' | 'probe' | 'sample' | 'rescue'
+  deliveryEvidence?: 'unknown' | 'recent' | 'stale'
+  rescueReason?: import('../content/scheduling/exploration').RescueReason
   expectedMilliseconds: number
   pendingBytes: number
   bytesPerSecond: number

@@ -31,12 +31,12 @@ func TestLaneAdmissionFreezesEstimateBeforeReservation(t *testing.T) {
 		t.Fatalf("second admission: %v", err)
 	}
 	defer second.permit.Close()
-	if first.started != started || first.expected != 250*time.Millisecond || second.expected != 500*time.Millisecond {
+	if first.started != started || first.expected.Duration != 250*time.Millisecond || second.expected.Duration != 10*time.Millisecond {
 		t.Fatalf("admission estimates were computed after reservation: first=%v second=%v", first.expected, second.expected)
 	}
 	state.performance.Complete(now, blockBytes, true)
 	state.performance.Complete(now, blockBytes, false)
-	if first.expected != 250*time.Millisecond || second.expected != 500*time.Millisecond {
+	if first.expected.Duration != 250*time.Millisecond || second.expected.Duration != 10*time.Millisecond {
 		t.Fatal("settlement changed an admitted attempt's original estimate")
 	}
 }
@@ -143,22 +143,23 @@ func TestLaneSchedulingUsesMeasuredCompletionAndMarginalRelayCost(t *testing.T) 
 		}
 		_ = lanes.Add(Identity{ID: id}, route, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) { return records.BlockRecord{}, nil }))
 	}
-	// Selection tests use measured capacity without adding wall-clock delays.
-	lanes.lanes[1].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 100}
-	lanes.lanes[2].performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 10}
+	now := lanes.now()
+	seedDelivery(lanes.lanes[1], bytes, 10*time.Millisecond, now)
+	seedDelivery(lanes.lanes[2], bytes, 100*time.Millisecond, now)
 	chosen := []*laneState{lanes.lanes[1], lanes.lanes[2]}
 	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 1 {
 		t.Fatal("slow relay won over fast direct")
 	}
-	lanes.lanes[1].performance.PendingBytes = bytes * 20
+	backlog := lanes.lanes[1].receive.TryReserve(bytes*20, now)
+	defer backlog.Close()
 	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 2 {
 		t.Fatal("useful parallel relay capacity was ignored")
 	}
-	lanes.lanes[1].performance.PendingBytes = 0
-	lanes.lanes[2].performance.PendingBytes = 0
-	lanes.lanes[2].performance.BytesPerSecond = float64(bytes) * 1000
+	backlog.Close()
+	lanes.lanes[2].receive = lanescheduling.ReceiveWindow{}
+	seedDelivery(lanes.lanes[2], bytes, time.Millisecond, now)
 	lanes.orderLanesLocked(chosen, bytes)
 	if chosen[0].identity.ID != 2 {
 		t.Fatal("route label overrode measured completion")
@@ -181,8 +182,14 @@ func TestLaneSchedulingRescueRespectsRouteAndSuspension(t *testing.T) {
 	primary.performance.BytesPerSecond = float64(blockDemandBytes(input)) * 100
 	lanes.lanes[2].performance.LastAttempt = time.Now().Add(-time.Hour)
 	attempted := map[Identity]struct{}{{ID: 1}: {}}
+	original := &laneAdmission{laneState: primary,
+		permit:   primary.receive.TryReserve(blockDemandBytes(input), lanes.now().Add(-time.Hour)),
+		expected: lanescheduling.DeliveryEstimate{Evidence: lanescheduling.DeliveryRecent, Duration: time.Second}}
+	defer original.permit.Close()
+	pending := lanes.queueRescue(t.Context(), Request{Demand: input}, attempted, original)
+	defer lanes.withdrawRescue(pending)
 	lanes.contentRoutePolicy = ContentRouteDirectOnly
-	if lanes.rescue(input, attempted, time.Hour, time.Second, nil) != nil {
+	if selected, _, _ := lanes.takeRescue(pending); selected != nil {
 		t.Fatal("route permission bypassed")
 	}
 	lanes.contentRoutePolicy = ContentRouteAll
@@ -193,10 +200,13 @@ func TestLaneSchedulingRescueRespectsRouteAndSuspension(t *testing.T) {
 	if err := suspension.Resume(); err != nil {
 		t.Fatal(err)
 	}
-	selected := lanes.rescue(input, attempted, time.Hour, time.Second, nil)
+	selected, _, _ := lanes.takeRescue(pending)
 	if selected == nil || selected.identity.ID != 2 {
 		t.Fatal("eligible rescue path was not selected")
 	}
+	selected.permit.Close()
+	selected.performance.Complete(lanes.now(), blockDemandBytes(input), false)
+	selected.inflight--
 	lanes.exploration.Release(lanescheduling.Rescue)
 	lanes.attempts.Done()
 }
@@ -239,4 +249,11 @@ func TestLaneMeasurementRequiresAnIdleSampleAndUsefulAlternative(t *testing.T) {
 	if measurement := lanes.MeasureLane(slow.identity); measurement.Unhelpful || measurement.UsefulBytes != 123 {
 		t.Fatalf("useful route was retired: %+v", measurement)
 	}
+}
+
+// Real receipt evidence avoids manufacturing scheduling capacity from authentication counters.
+func seedDelivery(state *laneState, bytes uint64, elapsed time.Duration, now time.Time) {
+	permit := state.receive.TryReserve(bytes, now.Add(-elapsed))
+	permit.Receive(bytes, now)
+	permit.Close()
 }

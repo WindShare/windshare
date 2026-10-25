@@ -3,7 +3,7 @@ import type { BlockReceiveWindow } from './receive-window'
 import type { BlockRouteEligibility, BlockTransportRoute } from '../route-policy'
 import { LanePerformance } from './performance'
 import { LaneSampling } from './sampling'
-import { completionCost } from './completion'
+import { compareDelivery, completionCost, conservativeDeliveryMilliseconds, fitsReadAhead } from './completion'
 import { PROBE_INTERVAL_MILLISECONDS, isExploratoryDispatch, type DispatchPurpose } from './exploration'
 
 export interface ContentLane {
@@ -36,11 +36,13 @@ export interface ContentWork {
   /** Zero identifies a consumer's output frontier; positive distance is bounded read-ahead. */
   readonly distance: () => bigint
 }
-export interface ContentAssignment<T extends ContentWork> {
+export type ContentAssignment<T extends ContentWork> = {
   readonly work: T
   readonly lane: ContentLane
-  readonly purpose: DispatchPurpose
-}
+} & (
+  | { readonly purpose: Exclude<DispatchPurpose, 'rescue'> }
+  | { readonly purpose: 'rescue'; readonly reason: import('./exploration').RescueReason }
+)
 
 export type ContentSelection<T extends ContentWork> =
   | { readonly kind: 'dispatch'; readonly assignment: ContentAssignment<T> }
@@ -56,11 +58,14 @@ export function orderedContentLanes(
   lanes: readonly ContentLane[], work: ContentWork,
 ): ContentLane[] {
   const bytes = demandBytes(work.demand)
-  return lanes.filter(candidate => work.routes.allows(candidate.route)).sort((left, right) =>
-    Number(left.failed) - Number(right.failed) ||
-    completionCost(left.performance.estimateCompletionMilliseconds(bytes), left.route) -
-      completionCost(right.performance.estimateCompletionMilliseconds(bytes), right.route) ||
-    left.inflight - right.inflight || left.lane.id - right.lane.id)
+  return lanes.filter(candidate => work.routes.allows(candidate.route))
+    .map(lane => ({ lane, estimate: lane.receive.estimateCompletion(bytes) }))
+    .sort((left, right) => Number(left.lane.failed) - Number(right.lane.failed) ||
+      compareDelivery(left.estimate, right.estimate) ||
+      completionCost(conservativeDeliveryMilliseconds(left.estimate), left.lane.route) -
+        completionCost(conservativeDeliveryMilliseconds(right.estimate), right.lane.route) ||
+      left.lane.inflight - right.lane.inflight || left.lane.lane.id - right.lane.lane.id)
+    .map(candidate => candidate.lane)
 }
 
 function probeOpportunity(lane: ContentLane, item: ContentWork, priority: ContentPriority | undefined,
@@ -99,7 +104,17 @@ export class ContentAllocation {
     work: readonly T[], lanes: readonly ContentLane[], now: number,
     eligible: (lane: ContentLane, work: T) => boolean,
   ): ContentSelection<T> {
-    const primaryFor = (item: T) => orderedContentLanes(lanes, item).find(lane => eligible(lane, item))
+    const primaryFor = (item: T) => {
+      const ordered = orderedContentLanes(lanes, item).filter(lane => eligible(lane, item))
+      const primary = ordered[0]
+      if (primary === undefined || primary.receive.available || item.distance() === 0n) return primary
+      const aggregateRate = ordered.reduce((rate, lane) => {
+        const sample = lane.receive.load().sample
+        return rate + (sample.kind === 'recent' ? sample.bytesPerSecond : 0)
+      }, 0)
+      return ordered.find(lane => lane.receive.available &&
+        fitsReadAhead(lane.receive.estimateCompletion(demandBytes(item.demand)), demandBytes(item.demand), item.distance(), aggregateRate)) ?? primary
+    }
     const first = work.find(item => primaryFor(item)?.receive.available)
     const primary = first === undefined ? undefined : primaryFor(first)
     const probe = this.#probe(work, lanes, now, eligible)

@@ -30,12 +30,10 @@ Cross-runtime diagnostic contracts:
 
 Receiver-local contracts:
 
-- `content-scheduling-v1.json`: reviewed event sequences for completion estimates,
-  admission snapshots, sampling/cancellation, and rescue decisions. Millisecond
-  timestamps advance explicitly; expectations are authored independently of either
-  implementation and are not regenerated. `make vectors` runs Go; `make web` runs
-  TypeScript. Host wake cadence, route authority, capacity and work allocation remain
-  runtime-owned; these vectors freeze the shared estimation and rescue policy.
+- `content-scheduling-v1.json`: network delivery estimates, evidence age, bounded
+  read-ahead and frontier rescue decisions in milliseconds. Expectations are authored independently
+  of either implementation. `make vectors` runs Go; `make web` runs TypeScript.
+  Host wakeups, route authority, capacity and work allocation remain runtime-owned.
 
 - `name-collision-v1.json`: deterministic collision suffixes, extension preservation,
   and UTF-8 truncation for names at the component limit.

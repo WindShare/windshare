@@ -1,34 +1,28 @@
-import { estimateQueueMilliseconds, estimateCompletionMilliseconds, MINIMUM_SAMPLE_MILLISECONDS } from './completion'
+import { MINIMUM_SAMPLE_MILLISECONDS } from './completion'
 
 const SAMPLE_WEIGHT = 0.25
 const MEASUREMENT_WINDOW_MILLISECONDS = 1000
 
 /** Busy-interval payload throughput counts overlapping work only once. */
 export class LanePerformance {
+  /** Unsettled plaintext reservations; received fragments remain here until authentication/settlement. */
   pendingBytes = 0
   bytesPerSecond = 0
   hasSuccessfulSample = false
   lastAttempt: number | undefined
   #busySince = 0
   #completedBytes = 0
-  #pendingBlocks = 0
   #activeSince = 0
   #busyMilliseconds = 0
 
-  get pendingBlocks(): number { return this.#pendingBlocks }
-
-  /** Freeze the estimate before reserving; later work cannot move this attempt's deadline. */
-  begin(now: number, bytes: number): number {
-    const expectedMilliseconds = this.estimateCompletionMilliseconds(bytes)
+  begin(now: number, bytes: number): void {
     if (this.pendingBytes === 0) {
       this.#busySince = now
       this.#activeSince = now
       this.#completedBytes = 0
     }
-    this.#pendingBlocks += 1
     this.pendingBytes += bytes
     this.lastAttempt = now
-    return expectedMilliseconds
   }
 
   complete(now: number, bytes: number, successful: boolean): void {
@@ -38,7 +32,7 @@ export class LanePerformance {
       const elapsed = Math.max(now - this.#busySince, MINIMUM_SAMPLE_MILLISECONDS)
       if (!this.hasSuccessfulSample || elapsed >= MEASUREMENT_WINDOW_MILLISECONDS || bytes >= this.pendingBytes) {
         const sample = this.#completedBytes * 1000 / elapsed
-        // Reduce admission immediately on congestion, but smooth short capacity bursts.
+        // Keep completed-goodput diagnostics responsive to sustained drops while smoothing bursts.
         this.bytesPerSecond = this.bytesPerSecond === 0 || sample < this.bytesPerSecond
           ? sample
           : this.bytesPerSecond + SAMPLE_WEIGHT * (sample - this.bytesPerSecond)
@@ -49,7 +43,6 @@ export class LanePerformance {
         this.#completedBytes = 0
       }
     }
-    this.#pendingBlocks -= 1
     this.pendingBytes -= Math.min(this.pendingBytes, bytes)
     if (this.pendingBytes === 0 && wasBusy) {
       this.#busyMilliseconds += Math.max(0, now - this.#activeSince)
@@ -70,11 +63,4 @@ export class LanePerformance {
     }
   }
 
-  estimateQueueMilliseconds(): number {
-    return estimateQueueMilliseconds(this)
-  }
-
-  estimateCompletionMilliseconds(bytes: number): number {
-    return estimateCompletionMilliseconds(this, bytes)
-  }
 }
