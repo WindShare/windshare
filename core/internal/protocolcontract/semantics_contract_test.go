@@ -17,16 +17,3 @@ func TestExplicitStopHasAProtocolDistinctSessionCode(t *testing.T) {
 		t.Fatalf("sender-stopped code = %#x", sessionCodeSenderStopped)
 	}
 }
-
-func TestZipFailureAlwaysPreventsACompletedArtifact(t *testing.T) {
-	action, outcome := zipCompleteOnlyFailure()
-	if action != "abort-artifact" || outcome != "failed" {
-		t.Fatalf("complete-only ZIP failure = (%q, %q)", action, outcome)
-	}
-	for _, raw := range zipCompleteOnlyFailureCases() {
-		failure := raw.(map[string]any)
-		if failure["publicationAllowed"] != false || failure["partialResult"] != false {
-			t.Fatalf("ZIP failure permits an incomplete result: %v", failure)
-		}
-	}
-}

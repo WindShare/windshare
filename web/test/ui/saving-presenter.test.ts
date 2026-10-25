@@ -78,7 +78,7 @@ describe('saving action presenter over eligible offers', () => {
       environment({
         targets: [directZipTarget(), handoffTarget()], workspace: workspaceOffer(),
         directZipSupport: runtimeDirectZipSupport(),
-        zipRecommendationPolicy: { version: 1, kind: 'available', workspacePeakBytesThreshold: 1_000_000n, policyDigest: identity(89, 32) },
+        zipRecommendationPolicy: { kind: 'available', workspacePeakBytesThreshold: 1_000_000n },
       }),
     )
     const result = presentSavingActions({ offers })

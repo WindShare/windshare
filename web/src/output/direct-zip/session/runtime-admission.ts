@@ -3,9 +3,8 @@ import type {
   DirectZipRuntimeAuthorityContractV1,
   DirectZipSupportFacts,
   RuntimeDirectZipSupportFacts,
-  ZipRouteRecommendationPolicyV1,
+  ZipRouteRecommendationPolicy,
 } from '../../planning'
-import { zipRouteRecommendationPolicyDigestV1 } from '../../planning/zip-route-recommendation'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -78,7 +77,7 @@ export const DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1: DirectZipRuntimePolicyV1 = Ob
 
 export interface DirectZipRuntimeFactsV1 {
   readonly support: RuntimeDirectZipSupportFacts
-  readonly recommendationPolicy: ZipRouteRecommendationPolicyV1
+  readonly recommendationPolicy: ZipRouteRecommendationPolicy
   readonly automaticEpochPolicy: DirectZipAutomaticEpochPolicyV1
 }
 
@@ -135,19 +134,16 @@ export async function admitDirectZipRuntimeV1(input: Readonly<{
       epoch: await directZipEpochPolicyDigestV2(automaticEpochPolicy),
     }),
   })
-  const recommendationPolicy: ZipRouteRecommendationPolicyV1 =
+  const recommendationPolicy: ZipRouteRecommendationPolicy =
     workspacePeakBytesThreshold === null || !validOffset(workspacePeakBytesThreshold)
       ? Object.freeze({
-          version: 1,
           kind: 'unavailable',
           reason: workspacePeakBytesThreshold === null
-            ? 'workspace-threshold-unavailable' : 'policy-digest-unavailable',
+            ? 'workspace-threshold-unavailable' : 'invalid-workspace-threshold',
         })
       : Object.freeze({
-          version: 1,
           kind: 'available',
           workspacePeakBytesThreshold,
-          policyDigest: await zipRouteRecommendationPolicyDigestV1(workspacePeakBytesThreshold),
         })
   return Object.freeze({
     kind: 'available',

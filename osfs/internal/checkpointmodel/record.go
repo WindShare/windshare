@@ -296,7 +296,7 @@ func NewRecord(spec RecordSpec) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	canonical, err := canonicalCheckpointPath(spec.CanonicalPath, spec.MaterializerKind)
+	canonical, err := canonicalCheckpointPath(spec.CanonicalPath)
 	if err != nil {
 		return Record{}, err
 	}
@@ -348,15 +348,7 @@ func NewRecord(spec RecordSpec) (Record, error) {
 	return record, nil
 }
 
-func canonicalCheckpointPath(path string, materializer MaterializerKind) (string, error) {
-	// A named single-file FSA reservation is itself the materialization root.
-	// Its coordinate is empty; the retired logical-path FSA identity stays fenced out.
-	if path == "" {
-		if materializer == MaterializerFSATree {
-			return "", nil
-		}
-		return "", fmt.Errorf("%w: canonical path", ErrRecordBinding)
-	}
+func canonicalCheckpointPath(path string) (string, error) {
 	canonical, err := catalog.CanonicalPath(path)
 	if err != nil || canonical != path {
 		return "", fmt.Errorf("%w: canonical path", ErrRecordBinding)
@@ -496,7 +488,7 @@ func (record Record) validate() error {
 		record.exactSize > catalog.MaxFileSize || record.stateGeneration == 0 {
 		return fmt.Errorf("%w: identity or generation", ErrRecordBinding)
 	}
-	if _, err := canonicalCheckpointPath(record.canonicalPath, record.materializerKind); err != nil {
+	if _, err := canonicalCheckpointPath(record.canonicalPath); err != nil {
 		return err
 	}
 	if !record.phase.Valid() || !record.commitState.Valid() {

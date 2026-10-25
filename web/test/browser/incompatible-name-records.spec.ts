@@ -4,9 +4,9 @@ import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 test('obsolete restoration records stay cleanup-only and forgetting preserves downloaded files', async ({ page }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async () => {
-    const path = '/test/browser/compatible-name-legacy-cleanup-probe.ts'
-    const probe = await import(path) as typeof import('./compatible-name-legacy-cleanup-probe')
-    return probe.probeLegacyCompatibleNameCleanup('old-repair-' + crypto.randomUUID())
+    const path = '/test/browser/incompatible-name-records-probe.ts'
+    const probe = await import(path) as typeof import('./incompatible-name-records-probe')
+    return probe.probeIncompatibleNameCleanup('old-repair-' + crypto.randomUUID())
   })
   expect(result).toEqual({
     continuation: 'cleanup-incompatible',

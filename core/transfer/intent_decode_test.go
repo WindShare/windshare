@@ -72,7 +72,7 @@ func TestDecodeReceiveIntentRejectsMalformedNonCanonicalAndCrossBoundImages(t *t
 		}
 	}
 
-	pathIntent := fixtures["portable-path-selection"]
+	pathIntent := fixtures["direct-tree-path-selection"]
 	selection := pathIntent.SelectionSpec().CanonicalBytes()
 	firstPath, secondPath := selectionPathValueOffsets(t, selection)
 	selection[firstPath], selection[secondPath] = selection[secondPath], selection[firstPath]
@@ -159,19 +159,6 @@ func decodeReceiveIntentFixtures(t *testing.T) map[string]ReceiveIntent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspaceID, err := receivecontract.WorkspaceIDFromBytes(bytes.Repeat([]byte{88}, receivecontract.StableIdentityBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	repository, err := receivecontract.RepositoryRefFromBytes(bytes.Repeat([]byte{89}, receivecontract.AuthorityRefBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableID, err := receivecontract.PortablePlanIDFromBytes(bytes.Repeat([]byte{90}, receivecontract.StableIdentityBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	catalogTree := receivecontract.NewCatalogRootDirectoryTree()
 	rootReservation, err := receivecontract.NewNativeContainerRootReservation(
 		operation, reservationID, catalogTree, authority,
@@ -199,28 +186,6 @@ func decodeReceiveIntentFixtures(t *testing.T) map[string]ReceiveIntent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resultRoot := receivecontract.NewSyntheticSelectionResultRoot()
-	archive, err := receivecontract.NewZipArchiveArtifact(resultRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceBinding, err := receivecontract.NewWorkspaceBinding(operation, workspaceID, archive, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace, err := receivecontract.NewWorkspaceThenPublishPlan(archive, workspaceBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portableBinding, err := receivecontract.NewPortableBinding(operation, portableID, original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	portable, err := receivecontract.NewPortableHandoffPlan(original, portableBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	makeIntent := func(selection SelectionSpec, artifact receivecontract.ArtifactSpec, plan receivecontract.MaterializationPlan) ReceiveIntent {
 		intent, intentErr := NewReceiveIntent(selection, artifact, plan)
 		if intentErr != nil {
@@ -231,7 +196,6 @@ func decodeReceiveIntentFixtures(t *testing.T) map[string]ReceiveIntent {
 	return map[string]ReceiveIntent{
 		"direct-tree-node-selection": makeIntent(nodeSelection, catalogTree, directTree),
 		"direct-atomic-original":     makeIntent(nodeSelection, original, directAtomic),
-		"workspace-zip":              makeIntent(nodeSelection, archive, workspace),
-		"portable-path-selection":    makeIntent(pathSelection, original, portable),
+		"direct-tree-path-selection": makeIntent(pathSelection, catalogTree, directTree),
 	}
 }

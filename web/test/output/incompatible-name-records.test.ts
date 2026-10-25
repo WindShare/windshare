@@ -1,26 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { isLegacyCompatibleNameRecord } from '../../src/output/browser/indexeddb/compatible-name-legacy-cleanup'
+import { isIncompatibleNameRecord } from '../../src/output/browser/indexeddb/incompatible-name-records'
 import { COMPATIBLE_NAME_LEDGER_FORMAT_VERSION } from '../../src/output/file-system-access/compatible-name/model'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
 import { AuthorityOwnedReceiveOperationMutationPort } from '../../src/output/resume/reopen/cleanup'
 
-describe('obsolete compatible-name metadata authority', () => {
-  it('recognizes only operation-bound obsolete envelopes without interpreting pair claims', () => {
+describe('incompatible local name records', () => {
+  it('rejects every unknown format without interpreting its filesystem claims', () => {
     const row = { operationId: 'operation', formatVersion: 'compatible-name-ledger/v2', pair: 'opaque' }
-    expect(isLegacyCompatibleNameRecord(row, 'operation')).toBe(true)
-    expect(isLegacyCompatibleNameRecord(row, 'other')).toBe(false)
-    expect(isLegacyCompatibleNameRecord({ ...row, formatVersion: COMPATIBLE_NAME_LEDGER_FORMAT_VERSION }, 'operation')).toBe(false)
-    expect(isLegacyCompatibleNameRecord({ ...row, formatVersion: 'unknown' }, 'operation')).toBe(false)
-    expect(isLegacyCompatibleNameRecord(null, 'operation')).toBe(false)
+    expect(isIncompatibleNameRecord(row, 'operation')).toBe(true)
+    expect(isIncompatibleNameRecord(row, 'other')).toBe(false)
+    expect(isIncompatibleNameRecord({ ...row, formatVersion: COMPATIBLE_NAME_LEDGER_FORMAT_VERSION }, 'operation')).toBe(false)
+    expect(isIncompatibleNameRecord({ ...row, formatVersion: 'unknown' }, 'operation')).toBe(true)
+    expect(isIncompatibleNameRecord(null, 'operation')).toBe(false)
   })
 
   it('routes forgetting directly to metadata authority without reopening physical output', async () => {
     const reopen = vi.fn(async () => { throw new Error('physical reopen forbidden') })
     const cleanup = vi.fn(async () => { throw new Error('physical cleanup forbidden') })
-    const forgetLegacy = vi.fn(async () => ({ kind: 'record-forgotten' as const }))
+    const forgetIncompatible = vi.fn(async () => ({ kind: 'record-forgotten' as const }))
     const mutation = new AuthorityOwnedReceiveOperationMutationPort({
-      reopen: { reopen }, cleanup: { cleanup }, forgetLegacy,
+      reopen: { reopen }, cleanup: { cleanup }, forgetIncompatible,
     })
     const descriptor = {
       ...receiveOperationResumeDescriptor({
@@ -36,7 +36,7 @@ describe('obsolete compatible-name metadata authority', () => {
     await expect(mutation.cleanup(descriptor)).rejects.toThrow('no physical output authority')
     await expect(mutation.catchUp(descriptor)).rejects.toThrow('no physical output authority')
     await expect(mutation.discard(descriptor)).resolves.toEqual({ kind: 'record-forgotten' })
-    expect(forgetLegacy).toHaveBeenCalledWith(descriptor)
+    expect(forgetIncompatible).toHaveBeenCalledWith(descriptor)
     expect(reopen).not.toHaveBeenCalled()
     expect(cleanup).not.toHaveBeenCalled()
   })

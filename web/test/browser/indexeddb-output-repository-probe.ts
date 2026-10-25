@@ -1,14 +1,8 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  INDEXEDDB_BY_OPERATION_LINEAGE_INDEX,
-  INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
-  INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
-  INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX,
-  INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX,
-  INDEXEDDB_LEGACY_V5_STORES,
-  INDEXEDDB_V9_STORE_SCHEMAS,
-  INDEXEDDB_V10_STORE_SCHEMAS,
-  installIndexedDbV9Schema,
+  INDEXEDDB_OUTPUT_STORE_SCHEMAS,
+  OUTPUT_DATABASE_VERSION,
+  INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
@@ -37,9 +31,9 @@ import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
 import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 
-const MIGRATION_SENTINEL_BYTES = Uint8Array.of(91, 92, 93, 94)
-// The seeded rows use the retired v9 schema even when the current database advances.
-const LEGACY_METADATA_DATABASE_VERSION = 9
+const RESET_SENTINEL_BYTES = Uint8Array.of(91, 92, 93, 94)
+const INCOMPATIBLE_DATABASE_VERSION = OUTPUT_DATABASE_VERSION - 1
+const INCOMPATIBLE_STORE_NAMES = ['unknown-output-format', 'receive-operation-v2-records'] as const
 const CONCURRENT_FILE_COUNT = 8
 const PAGING_DIRECTORY_COUNT = 130
 
@@ -57,12 +51,13 @@ export interface IndexedDbOutputRepositoryProbeResult {
   readonly retiredRows: number
 }
 
-export interface IndexedDbOutputMigrationProbeResult {
+export interface IndexedDbOutputResetProbeResult {
   readonly oldRowsRemaining: number
   readonly storeCount: number
   readonly exactIndexesPresent: boolean
   readonly publishedSentinelBytes: readonly number[]
   readonly blockedUpgradeRejected: boolean
+  readonly currentRowsPreserved: boolean
 }
 
 export interface IndexedDbFinalRejectionProbeResult {
@@ -364,59 +359,64 @@ export async function probeIndexedDbOwnedFileRestart(
   }
 }
 
-export async function probeIndexedDbOutputMigration(
+export async function probeIndexedDbOutputReset(
   databaseName: string,
-): Promise<IndexedDbOutputMigrationProbeResult> {
+): Promise<IndexedDbOutputResetProbeResult> {
   const root = await navigator.storage.getDirectory()
-  const sentinelName = `migration-${databaseName}`
-  const writer = await (await root.getFileHandle(sentinelName, { create: true })).createWritable()
-  await writer.write(MIGRATION_SENTINEL_BYTES)
+  const sentinelName = `reset-${databaseName}`
+  const sentinelHandle = await root.getFileHandle(sentinelName, { create: true })
+  const writer = await sentinelHandle.createWritable()
+  await writer.write(RESET_SENTINEL_BYTES)
   await writer.close()
   try {
-    const legacy = await openDatabase(databaseName, LEGACY_METADATA_DATABASE_VERSION, request => {
-      installIndexedDbV9Schema(request.result, request.transaction ?? undefined, 0)
-      for (const name of INDEXEDDB_LEGACY_V5_STORES) {
-        request.result.createObjectStore(name, { keyPath: 'id' })
+    const incompatible = await openDatabase(databaseName, INCOMPATIBLE_DATABASE_VERSION, request => {
+      for (const name of INCOMPATIBLE_STORE_NAMES) {
+        request.result.createObjectStore(name, { keyPath: 'obsoleteKey' })
       }
     })
-    const legacyStoreNames = [
-      ...INDEXEDDB_V9_STORE_SCHEMAS.map(schema => schema.name),
-      ...INDEXEDDB_LEGACY_V5_STORES,
-    ]
-    const seed = legacy.transaction(legacyStoreNames, 'readwrite')
-    for (const schema of INDEXEDDB_V9_STORE_SCHEMAS) {
-      seed.objectStore(schema.name).put({ [schema.keyPath]: `old:${schema.name}` })
-    }
-    for (const name of INDEXEDDB_LEGACY_V5_STORES) {
-      seed.objectStore(name).put({ id: `old:${name}` })
+    const seed = incompatible.transaction([...INCOMPATIBLE_STORE_NAMES], 'readwrite')
+    for (const name of INCOMPATIBLE_STORE_NAMES) {
+      seed.objectStore(name).put({ obsoleteKey: name, handle: sentinelHandle })
     }
     await transactionCompletion(seed)
-    legacy.close()
+    incompatible.close()
 
     const upgraded = await openIndexedDbCheckpointDatabase(databaseName)
     const countsTransaction = upgraded.transaction(
-      INDEXEDDB_V9_STORE_SCHEMAS.map(schema => schema.name),
+      INDEXEDDB_OUTPUT_STORE_SCHEMAS.map(schema => schema.name),
       'readonly',
     )
-    const counts = await Promise.all(INDEXEDDB_V9_STORE_SCHEMAS.map(schema => requestResult(
+    const exactIndexesPresent = INDEXEDDB_OUTPUT_STORE_SCHEMAS.every(schema => {
+      const store = countsTransaction.objectStore(schema.name)
+      return JSON.stringify(store.keyPath) === JSON.stringify(schema.keyPath) &&
+        store.indexNames.length === schema.indexes.length && schema.indexes.every(expected => {
+          if (!store.indexNames.contains(expected.name)) return false
+          const index = store.index(expected.name)
+          return JSON.stringify(index.keyPath) === JSON.stringify(expected.keyPath) &&
+            index.unique === (expected.unique ?? false) && !index.multiEntry
+        })
+    })
+    const counts = await Promise.all(INDEXEDDB_OUTPUT_STORE_SCHEMAS.map(schema => requestResult(
       countsTransaction.objectStore(schema.name).count(),
     )))
     await transactionCompletion(countsTransaction)
-    const legacyStoresRemaining = INDEXEDDB_LEGACY_V5_STORES.filter(name =>
+    const legacyStoresRemaining = INCOMPATIBLE_STORE_NAMES.filter(name => name === 'unknown-output-format' &&
       upgraded.objectStoreNames.contains(name)).length
-    const exactIndexesPresent = [
-      INDEXEDDB_BY_OPERATION_LINEAGE_INDEX,
-      INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
-      INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
-      INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX,
-      INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX,
-    ].every(indexName => [...INDEXEDDB_V10_STORE_SCHEMAS]
-      .some(schema => schema.indexes.some(index => index.name === indexName)))
     const storeCount = upgraded.objectStoreNames.length
+    const currentWrite = upgraded.transaction(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, 'readwrite')
+    currentWrite.objectStore(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE).put({ id: 'current-record' })
+    await transactionCompletion(currentWrite)
     upgraded.close()
+    const reopened = await openIndexedDbCheckpointDatabase(databaseName)
+    const currentRead = reopened.transaction(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, 'readonly')
+    const currentRowsPreserved = await requestResult(
+      currentRead.objectStore(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE).count(),
+    ) === 1
+    await transactionCompletion(currentRead)
+    reopened.close()
 
-    const blocker = await openDatabase(`${databaseName}-blocked`, LEGACY_METADATA_DATABASE_VERSION,
-      request => installIndexedDbV9Schema(request.result, request.transaction ?? undefined, 0))
+    const blocker = await openDatabase(`${databaseName}-blocked`, INCOMPATIBLE_DATABASE_VERSION,
+      request => request.result.createObjectStore('unsupported-format'))
     const blockedUpgradeRejected = await openIndexedDbCheckpointDatabase(`${databaseName}-blocked`)
       .then(database => {
         database.close()
@@ -430,6 +430,7 @@ export async function probeIndexedDbOutputMigration(
       exactIndexesPresent,
       publishedSentinelBytes: [...new Uint8Array(await published.arrayBuffer())],
       blockedUpgradeRejected,
+      currentRowsPreserved,
     }
   } finally {
     await root.removeEntry(sentinelName).catch(() => undefined)

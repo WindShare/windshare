@@ -50,10 +50,6 @@ func TestCheckpointLineageCanonicalFramingSeparatesEveryCoordinate(t *testing.T)
 			spec.CanonicalPath = "folder/other.bin"
 			return spec
 		},
-		"materializer": func(spec CheckpointLineageSpec) CheckpointLineageSpec {
-			spec.MaterializerKind = MaterializerFSATree
-			return spec
-		},
 		"authority": func(spec CheckpointLineageSpec) CheckpointLineageSpec {
 			spec.AuthorityRef = changedAuthority
 			return spec

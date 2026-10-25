@@ -1,16 +1,8 @@
 package protocolcontract
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"fmt"
 	"testing"
-)
-
-const (
-	directZipAutomaticMinimumAdvanceBytes      uint64 = 64 << 20
-	zipWorkspaceRecommendationMaximumPeakBytes uint64 = 1_073_744_986
 )
 
 func legalOperationFinals() map[string][]string {
@@ -27,52 +19,6 @@ func operationFinalMatrix() []any {
 		map[string]any{"request": "renew-lease", "legalFinals": finals["renew-lease"]},
 		map[string]any{"request": "release-lease", "legalFinals": finals["release-lease"]},
 		map[string]any{"request": "request-blocks", "legalFinals": finals["request-blocks"]},
-	}
-}
-
-func zipCompleteOnlyFailure() (string, string) {
-	return "abort-artifact", "failed"
-}
-
-func zipCompleteOnlyFailureCases() []any {
-	action, outcome := zipCompleteOnlyFailure()
-	return []any{
-		map[string]any{"failure": "discovery", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
-		map[string]any{"failure": "member-before-header", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
-		map[string]any{"failure": "member-after-header", "action": action, "artifactOutcome": outcome, "publicationAllowed": false, "partialResult": false},
-	}
-}
-
-func directZipEpochPolicyDigestV2() string {
-	preimage := append([]byte("windshare/direct-zip-epoch-policy/v2\x00"), 2)
-	var frame [16]byte
-	binary.BigEndian.PutUint64(frame[:8], 8)
-	binary.BigEndian.PutUint64(frame[8:], directZipAutomaticMinimumAdvanceBytes)
-	digest := sha256.Sum256(append(preimage, frame[:]...))
-	return base64.RawURLEncoding.EncodeToString(digest[:])
-}
-
-func TestDirectZipEpochPolicyV2(t *testing.T) {
-	if got, want := directZipEpochPolicyDigestV2(), "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s"; got != want {
-		t.Fatalf("DirectZipEpochPolicyV2 digest = %q, want %q", got, want)
-	}
-}
-
-func zipRouteRecommendationPolicyDigestV1() string {
-	preimage := append([]byte("windshare/zip-route-recommendation-policy/v1\x00"), 1)
-	var frame [16]byte
-	binary.BigEndian.PutUint64(frame[:8], 8)
-	binary.BigEndian.PutUint64(frame[8:], zipWorkspaceRecommendationMaximumPeakBytes)
-	digest := sha256.Sum256(append(preimage, frame[:]...))
-	return base64.RawURLEncoding.EncodeToString(digest[:])
-}
-
-func TestZipRouteRecommendationPolicyV1(t *testing.T) {
-	if got, want := zipRouteRecommendationPolicyDigestV1(), "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI"; got != want {
-		t.Fatalf("ZipRouteRecommendationPolicyV1 digest = %q, want %q", got, want)
-	}
-	if got, want := zipWorkspaceRecommendationMaximumPeakBytes*2, uint64(2_147_489_972); got != want {
-		t.Fatalf("1 GiB raw modeled peak = %d, want %d", got, want)
 	}
 }
 
@@ -112,10 +58,8 @@ func semanticCases(t *testing.T) []any {
 		"senderCrashGraceSeconds": fmt.Sprint(senderCrashGraceSeconds), "relayChallengeSeconds": fmt.Sprint(relayChallengeSeconds),
 		"joinStartingSeconds": fmt.Sprint(joinStartingSeconds), "clientHelloReplaySeconds": fmt.Sprint(clientHelloReplaySeconds),
 		"operationTombstoneSeconds": fmt.Sprint(operationTombstoneSeconds), "applicationRelaySeconds": fmt.Sprint(applicationRelaySeconds),
-		"relaySessionTombstoneSeconds":        fmt.Sprint(relaySessionTombstoneSeconds),
-		"maxOpaqueCiphertextBytes":            fmt.Sprint(maxOpaqueCiphertextBytes),
-		"minimumOpfsQuotaReserve":             fmt.Sprint(minimumOPFSQuotaReserve),
-		"defaultPortableHandoffArtifactLimit": fmt.Sprint(defaultPortableArtifactLimit),
+		"relaySessionTombstoneSeconds": fmt.Sprint(relaySessionTombstoneSeconds),
+		"maxOpaqueCiphertextBytes":     fmt.Sprint(maxOpaqueCiphertextBytes),
 	}
 	connectionSizes := []any{
 		map[string]any{"files": "29", "bytes": fmt.Sprint((8 << 20) - 1), "terminal": true, "failed": false, "class": "small"},
@@ -126,14 +70,6 @@ func semanticCases(t *testing.T) []any {
 		map[string]any{"files": "0", "bytes": "0", "terminal": false, "failed": false, "class": "unknown"},
 		map[string]any{"files": "0", "bytes": "0", "terminal": true, "failed": true, "class": "unknown"},
 		map[string]any{"files": "0", "bytes": "0", "terminal": true, "failed": false, "class": "small"},
-	}
-	checkpointCuts := []any{
-		map[string]any{"cut": "after-data-write", "newGenerationSelectable": false},
-		map[string]any{"cut": "after-data-flush", "newGenerationSelectable": false},
-		map[string]any{"cut": "after-candidate-record-write", "newGenerationSelectable": false},
-		map[string]any{"cut": "after-candidate-record-flush", "newGenerationSelectable": false},
-		map[string]any{"cut": "after-verified-record-install", "newGenerationSelectable": false},
-		map[string]any{"cut": "after-reopen-verify", "newGenerationSelectable": true},
 	}
 	return []any{
 		map[string]any{"name": "frozen-limits", "values": limits},
@@ -184,14 +120,6 @@ func semanticCases(t *testing.T) []any {
 			"noneRequires":       []string{"complete-negative-evidence"}, "finalProofImmutable": true,
 		},
 		map[string]any{"name": "operation-final-matrix", "operations": operationFinalMatrix()},
-		map[string]any{"name": "artifact-action-picker-timing", "events": []any{
-			map[string]any{"event": "background-projection", "startsP2P": false, "picker": "forbidden"},
-			map[string]any{"event": "preview-click", "startsP2P": true, "picker": "none"},
-			map[string]any{"event": "final-artifact-action-without-picker", "startsP2P": true, "picker": "none"},
-			map[string]any{"event": "final-artifact-action-with-picker", "startsP2P": true, "picker": "synchronous-before-click-stack-unwinds"},
-		}, "p2pStartSeconds": "0", "applicationRelayDeadlineSeconds": fmt.Sprint(applicationRelaySeconds),
-			"backgroundCompletionCannotInvokeAction": true, "authorityValidationMayContinueAfterPickerStart": true,
-			"bindRechecks": []string{"projection-epoch", "shape-proof", "artifact-offer", "capability-facts"}},
 		map[string]any{"name": "strict-sequence", "cases": []any{
 			map[string]any{"epoch": uint32(0), "expected": "0", "candidate": "0", "accepted": true},
 			map[string]any{"epoch": uint32(0), "expected": "1", "candidate": "0", "accepted": false},
@@ -205,99 +133,6 @@ func semanticCases(t *testing.T) []any {
 			map[string]any{"lane": uint32(1), "lastAccepted": uint32(5), "candidate": uint32(4), "accepted": false},
 			map[string]any{"lane": uint32(2), "lastAccepted": nil, "candidate": uint32(4), "otherLaneLast": uint32(7), "accepted": true},
 		}},
-		map[string]any{
-			"name": "file-checkpoint-v2-crash-cuts", "ownershipMarker": "windshare/file-checkpoint/v2",
-			"namespace": ".windshare-output/checkpoints-v2", "selectionAuthority": "highest-reopened-verified-generation",
-			"order": []string{"data-write", "data-flush", "candidate-record-write", "candidate-record-flush", "verified-record-install", "reopen-verify"},
-			"cuts":  checkpointCuts,
-		},
-		map[string]any{"name": "artifact-plan-guarantee-matrix", "rows": []any{
-			map[string]any{"artifact": "directory-tree", "layout": "single-file-or-result-root", "plan": "direct-tree", "binding": "named-container-entry", "guaranteeProfiles": []string{"native-tree", "fsa-tree"}, "preparation": "none", "completion": "prefix-visible-partial-legal"},
-			map[string]any{"artifact": "directory-tree", "layout": "catalog-root", "plan": "direct-tree", "binding": "container-root", "guaranteeProfiles": []string{"native-tree"}, "preparation": "none", "completion": "prefix-visible"},
-			map[string]any{"artifact": "original-file", "layout": "single-file-proof", "plan": "direct-atomic", "binding": "atomic-target", "guaranteeProfiles": []string{"managed-atomic"}, "preparation": "none", "completion": "published-after-verified-commit"},
-			map[string]any{
-				"artifact": "zip-archive", "layout": "result-root", "plan": "direct-resumable-zip",
-				"binding": "fsa-owned-file", "guaranteeProfiles": []string{"fsa-owned-file"},
-				"preparation": "none", "completion": "verified-complete-only",
-				"targetVisibility":     "operation-owned-incomplete-file-visible",
-				"artifactAvailability": "verified-complete-only",
-				"cleanupAuthority":     "ownership-proof-required",
-			},
-			map[string]any{"artifact": "original-file", "layout": "single-file-proof", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "none", "completion": "sealed-then-waiting-to-save"},
-			map[string]any{"artifact": "zip-archive", "layout": "result-root", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "none", "completion": "complete-only-sealed-then-waiting-to-save"},
-			map[string]any{"artifact": "original-file-or-zip-archive", "layout": "explicit-artifact", "plan": "portable-handoff", "binding": "portable", "guaranteeProfiles": []string{"browser-handoff"}, "preparation": "exact-artifact", "completion": "download-started-only"},
-		}},
-		map[string]any{
-			"name":        "workspace-budget-v1",
-			"components":  []string{"uniqueRawBytes", "durableMetadataBytes"},
-			"derivedPeak": "checked-sum-components", "ownedObjectCountedOnce": true, "quotaEstimateIsReservation": false,
-			"limits": map[string]string{
-				"MINIMUM_OPFS_QUOTA_RESERVE":              fmt.Sprint(minimumOPFSQuotaReserve),
-				"DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT": fmt.Sprint(defaultPortableArtifactLimit),
-			},
-			"admissionChecks":  []string{"durable-metadata-at-activation", "object-high-water-growth", "cross-tab-outstanding-growth", "quota-minus-usage-minus-reserve"},
-			"quotaUnavailable": "optimistic-incremental-admission",
-			"evidence":         map[string]int{"single-file": 1, "progressive-zip": 3},
-		},
-		map[string]any{"name": "zip-complete-only", "encoding": "store", "completeness": "complete-only", "cases": zipCompleteOnlyFailureCases()},
-		map[string]any{
-			"name": "receive-lifecycle-v2", "domain": "windshare/receive-lifecycle-state/v2", "schemaVersion": 2,
-			"terminalStates": []any{
-				map[string]any{"state": "published", "byte": 14, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "direct-resumable-zip"}},
-				map[string]any{"state": "partial-directory", "byte": 16, "plans": []string{"direct-tree"}},
-				map[string]any{"state": "restart-required", "byte": 17, "plans": []string{"direct-atomic", "portable-handoff", "direct-resumable-zip"}},
-				map[string]any{"state": "discarded", "byte": 18, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "portable-handoff", "direct-resumable-zip"}},
-				map[string]any{"state": "needs-attention", "byte": 20, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "direct-resumable-zip"}},
-			},
-			"nonterminalRecoveryStates": []any{
-				map[string]any{"state": "download-started", "byte": 15, "plans": []string{"workspace-then-publish", "portable-handoff"}},
-				map[string]any{"state": "authorization-required", "byte": 21},
-				map[string]any{"state": "target-verification-required", "byte": 22},
-				map[string]any{"state": "destination-space-required", "byte": 23},
-			},
-			"restartReasons": map[string]int{
-				"direct-atomic-rolled-back": 1, "portable-aborted": 2, "source-revision-changed": 3,
-				"preparation-invalidated": 4, "content-session-ended": 5, "target-deleted": 6,
-			},
-			"resumableReceivePayloadKinds": map[string]int{"file-set": 1, "direct-zip": 2, "opfs-zip": 3},
-			"directZipByteSemantics": map[string]string{
-				"receivedBytes":          "selected-source-payload-bytes-received-in-live-attempt",
-				"safeResumeBytes":        "selected-source-payload-bytes-covered-by-verified-checkpoint",
-				"committedArchiveLength": "verified-target-prefix-bytes",
-			},
-			"publishedCleanupPendingRemains": "published", "handoffNeverMeans": "published",
-			"completeArtifactsExclude": []string{"partial-directory"},
-		},
-		map[string]any{
-			"name": "direct-zip-contract-policy-v1", "routeSupport": "available-exact-reviewed-platform-only",
-			"ownershipExtraFormat": map[string]any{
-				"domain": "windshare/direct-zip-ownership-extra/v1", "availability": "frozen",
-				"digest": "hnFdK_xeDeYInsyhv5i4YdU57UUcWeAGUYLTakWaZQw",
-			},
-			"choiceIdentity": map[string]any{
-				"domain": "windshare/artifact-choice/v1", "materializationByte": 5,
-				"directZipArtifactChoiceId":    "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
-				"workspaceZipArtifactChoiceId": "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k",
-			},
-			"policies": []any{
-				map[string]any{"name": "zip-encoding-v2", "domain": "windshare/zip-encoding/v2-store-data-descriptor-owned-marker", "availability": "frozen", "digest": "LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc"},
-				map[string]any{"name": "direct-zip-layout-v2", "domain": "windshare/zip-layout/v2-paged-owned-marker", "availability": "frozen", "digest": "VSV-D1TwhzhxuCZYgx1-ZEE26oFu-mHXA4oWELOgGH4"},
-				map[string]any{"name": "direct-zip-checkpoint-v1", "domain": "windshare/direct-zip-checkpoint-policy/v1", "availability": "frozen"},
-				map[string]any{"name": "direct-zip-journal-budget-v1", "domain": "windshare/direct-zip-journal-budget/v1", "availability": "frozen"},
-				map[string]any{
-					"name": "direct-zip-epoch-v2", "domain": "windshare/direct-zip-epoch-policy/v2", "availability": "frozen",
-					"automaticMinimumAdvanceBytes": fmt.Sprint(directZipAutomaticMinimumAdvanceBytes),
-					"requiredAdvance":              "max(minimum-advance,durable-archive-prefix)",
-					"units":                        "archive-bytes", "boundary": "inclusive", "digest": directZipEpochPolicyDigestV2(),
-				},
-				map[string]any{
-					"name": "zip-route-recommendation-v1", "domain": "windshare/zip-route-recommendation-policy/v1", "availability": "frozen",
-					"boundary": "inclusive", "exactWorkspaceRecommendationBudget": fmt.Sprint(zipWorkspaceRecommendationMaximumPeakBytes),
-					"digest": zipRouteRecommendationPolicyDigestV1(), "semantics": "display-ranking-only",
-				},
-			},
-			"processRestart": "reviewed-exact-platform-only",
-		},
 		map[string]any{"name": "catalog-transaction", "publishOnlyAfter": []string{"pages", "node-records", "terminal", "budget-charge", "spill-flush", "atomic-commit"}, "preCommitCrashVisible": false},
 		map[string]any{"name": "stable-source-platforms", "platforms": []any{
 			map[string]any{"platform": "windows-local-ntfs-refs", "mechanism": "deny-share-write-handle+volume-file-id", "supported": true},

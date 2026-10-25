@@ -28,7 +28,6 @@ const (
 	DirectoryAdmissionTreeSingleFile DirectoryAdmissionLayout = iota + 1
 	DirectoryAdmissionTreeResultRoot
 	DirectoryAdmissionTreeCatalogRoot
-	DirectoryAdmissionZipResultRoot
 )
 
 const (
@@ -94,7 +93,7 @@ func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, 
 			if !ok {
 				return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 			}
-			root = directoryAdmissionResultRootExpectation(intent, plan, resultRoot)
+			root = directoryAdmissionResultRootExpectation(intent, resultRoot)
 		case receivecontract.DirectoryTreeCatalogRoot:
 			layout = DirectoryAdmissionTreeCatalogRoot
 			root = DirectoryAdmissionRootExpectation{
@@ -103,13 +102,6 @@ func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, 
 		default:
 			return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 		}
-	case receivecontract.PlanDirectResumableZIP:
-		zip, ok := artifact.ZipArchive()
-		if !ok {
-			return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
-		}
-		layout = DirectoryAdmissionZipResultRoot
-		root = directoryAdmissionArchiveRootExpectation(intent, zip.Layout)
 	default:
 		return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 	}
@@ -125,28 +117,15 @@ func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, 
 
 func directoryAdmissionResultRootExpectation(
 	intent ReceiveIntent,
-	plan receivecontract.MaterializationPlan,
-	root receivecontract.ResultRootLayout,
-) DirectoryAdmissionRootExpectation {
-	expectation := directoryAdmissionArchiveRootExpectation(intent, root)
-	if reservation, ok := plan.DestinationReservation(); ok &&
-		reservation.AuthorityKind() != receivecontract.AuthorityFSAContainer {
-		expectation.path = root.Name()
-	}
-	return expectation
-}
-
-func directoryAdmissionArchiveRootExpectation(
-	intent ReceiveIntent,
 	root receivecontract.ResultRootLayout,
 ) DirectoryAdmissionRootExpectation {
 	if root.AnchorKind() == receivecontract.ResultRootDirectoryAnchor {
 		return DirectoryAdmissionRootExpectation{
-			kind: DirectoryAdmissionDirectoryAnchor, directory: root.DirectoryID(),
+			kind: DirectoryAdmissionDirectoryAnchor, directory: root.DirectoryID(), path: root.Name(),
 		}
 	}
 	return DirectoryAdmissionRootExpectation{
-		kind: DirectoryAdmissionSyntheticRoot, directory: intent.SyntheticRoot(),
+		kind: DirectoryAdmissionSyntheticRoot, directory: intent.SyntheticRoot(), path: root.Name(),
 	}
 }
 
@@ -165,7 +144,7 @@ func (root DirectoryAdmissionRootExpectation) Path() string { return root.path }
 
 func (scope DirectoryAdmissionScope) valid() bool {
 	return !scope.intent.IsZero() && scope.layoutVersion == DirectoryAdmissionLayoutV2 &&
-		scope.layout >= DirectoryAdmissionTreeSingleFile && scope.layout <= DirectoryAdmissionZipResultRoot &&
+		scope.layout >= DirectoryAdmissionTreeSingleFile && scope.layout <= DirectoryAdmissionTreeCatalogRoot &&
 		scope.root.valid()
 }
 
@@ -366,7 +345,7 @@ func immediateDirectoryChild(parent, child string) bool {
 func (admission DirectoryAdmission) validSnapshot() bool {
 	if admission.version != DirectoryAdmissionV2 || admission.intent.IsZero() || admission.IsZero() ||
 		admission.layoutVersion != DirectoryAdmissionLayoutV2 ||
-		admission.layout < DirectoryAdmissionTreeSingleFile || admission.layout > DirectoryAdmissionZipResultRoot ||
+		admission.layout < DirectoryAdmissionTreeSingleFile || admission.layout > DirectoryAdmissionTreeCatalogRoot ||
 		admission.directory.IsZero() || admission.generation.IsZero() {
 		return false
 	}

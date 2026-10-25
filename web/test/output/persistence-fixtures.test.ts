@@ -72,19 +72,19 @@ import {
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const receiveIntentVectors = loadVectorFile(
-  new URL('../../../core/testvectors/receive-intent-v4.json', import.meta.url),
+  new URL('../fixtures/output/receive-intent-v4.json', import.meta.url),
 )
 const artifactChoiceVectors = loadVectorFile(
-  new URL('../../../core/testvectors/artifact-choice-v1.json', import.meta.url),
+  new URL('../fixtures/output/artifact-choice-v1.json', import.meta.url),
 )
 const admissionVectors = loadVectorFile(
-  new URL('../../../core/testvectors/directory-admission-v2.json', import.meta.url),
+  new URL('../fixtures/output/directory-admission-v2.json', import.meta.url),
 )
 const checkpointVectors = loadVectorFile(
-  new URL('../../../core/testvectors/file-checkpoint-v2.json', import.meta.url),
+  new URL('../fixtures/output/file-checkpoint-v2.json', import.meta.url),
 )
 
-describe('Go↔TypeScript ArtifactChoiceIdentityV1 vectors', () => {
+describe('Browser-local ArtifactChoiceIdentityV1 vectors', () => {
   for (const vector of artifactChoiceVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       const input = requiredRecord(vector.input, 'artifact choice input')
@@ -108,7 +108,6 @@ describe('Go↔TypeScript ArtifactChoiceIdentityV1 vectors', () => {
         const policy = requiredRecord(vector.policyAvailability, 'direct ZIP policy availability')
         expect(policy).toMatchObject({
           directZipEpochPolicyDigest: 'cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s',
-          zipRouteRecommendationPolicyDigest: 'zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI',
           reason: 'exact-reviewed-runtime-required',
         })
       }
@@ -116,7 +115,7 @@ describe('Go↔TypeScript ArtifactChoiceIdentityV1 vectors', () => {
   }
 })
 
-describe('Go↔TypeScript ReceiveIntentV4 vectors', () => {
+describe('Browser-local ReceiveIntentV4 vectors', () => {
   for (const vector of receiveIntentVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       await replayReceiveIntent(vector)
@@ -124,7 +123,7 @@ describe('Go↔TypeScript ReceiveIntentV4 vectors', () => {
   }
 })
 
-describe('Go↔TypeScript DirectoryAdmissionV2 vectors', () => {
+describe('Browser-local DirectoryAdmissionV2 vectors', () => {
   for (const vector of admissionVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       const intentVector = receiveIntentCase(requiredString(vector.receiveIntentCase, 'receive intent case'))
@@ -153,7 +152,7 @@ describe('Go↔TypeScript DirectoryAdmissionV2 vectors', () => {
   }
 })
 
-describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
+describe('Browser-local FileCheckpointV2 vectors', () => {
   it('replays canonical bindings and storage envelopes', async () => {
     const names = [
       'candidate',

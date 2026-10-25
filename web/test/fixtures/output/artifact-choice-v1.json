@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "artifact-choice-v1",
-  "description": "Stable ArtifactChoiceIdentityV1 tuples, including direct-resumable ZIP whose positive route support remains confined to the exact reviewed runtime and policy evidence tuple.",
+  "description": "Browser-owned artifact-choice-v1 persistence examples. Updated with the browser codec; not a Go interoperability contract.",
   "cases": [
     {
       "expected": {
@@ -152,8 +152,7 @@
       "name": "zip-direct-resumable",
       "policyAvailability": {
         "directZipEpochPolicyDigest": "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s",
-        "reason": "exact-reviewed-runtime-required",
-        "zipRouteRecommendationPolicyDigest": "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI"
+        "reason": "exact-reviewed-runtime-required"
       },
       "routeSupport": "available-exact-reviewed-platform-only"
     }

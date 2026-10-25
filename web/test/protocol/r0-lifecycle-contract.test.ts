@@ -368,15 +368,6 @@ describe('R0 receive recovery and lifecycle contract', () => {
           boundary: 'inclusive',
           digest: 'cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s',
         },
-        {
-          name: 'zip-route-recommendation-v1',
-          domain: 'windshare/zip-route-recommendation-policy/v1',
-          availability: 'frozen',
-          boundary: 'inclusive',
-          exactWorkspaceRecommendationBudget: '1073744986',
-          digest: 'zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI',
-          semantics: 'display-ranking-only',
-        },
       ],
     })
   })

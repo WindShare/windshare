@@ -61,9 +61,6 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 		"operation": func(value *RecordSpec) { value.OperationID = foreignOperation },
 		"intent":    func(value *RecordSpec) { value.ReceiveIntentDigest = foreignIntent },
 		"authority": func(value *RecordSpec) { value.AuthorityRef = bytes.Repeat([]byte{0xe3}, sha256.Size) },
-		"materializer": func(value *RecordSpec) {
-			value.MaterializerKind = MaterializerAtomicFile
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			foreign := spec

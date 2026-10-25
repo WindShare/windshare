@@ -35,17 +35,12 @@ var (
 
 type MaterializerKind uint8
 
-const (
-	MaterializerNativeTree MaterializerKind = iota + 1
-	MaterializerLegacyFSATree
-	MaterializerOriginPrivate
-	MaterializerAtomicFile
-	// A distinct identity fences legacy logical-root paths from the current reserved-root coordinate.
-	MaterializerFSATree
-)
+// Native records describe only the filesystem materializer implemented here.
+// Browser storage identities are owned by web/output.
+const MaterializerNativeTree MaterializerKind = 1
 
 func (kind MaterializerKind) Valid() bool {
-	return kind >= MaterializerNativeTree && kind <= MaterializerFSATree
+	return kind == MaterializerNativeTree
 }
 
 type CertificationID string

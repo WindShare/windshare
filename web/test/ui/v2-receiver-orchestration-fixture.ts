@@ -102,10 +102,8 @@ export const DIRECT_ZIP_ENVIRONMENT = environment({
   targets: [directZipTarget()],
   directZipSupport: DIRECT_ZIP_SUPPORT,
   zipRecommendationPolicy: {
-    version: 1,
     kind: 'available',
     workspacePeakBytesThreshold: 0n,
-    policyDigest: identityText(89, 32),
   },
 })
 

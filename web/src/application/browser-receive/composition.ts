@@ -26,7 +26,7 @@ import type {
   OfferedArtifactChoice,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
-  ZipRouteRecommendationPolicyV1,
+  ZipRouteRecommendationPolicy,
 } from '../../output/planning'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import type { ArtifactChoiceID } from '../../transfer/intent'
@@ -73,7 +73,7 @@ interface InstalledBrowserRouteRegistry {
   readonly portableOffer: PortableEnvironmentOffer | null
   readonly directZipTarget: EnvironmentTargetOfferInput | null
   readonly directZipSupport: DirectZipSupportFacts
-  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicyV1 | null
+  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicy | null
   readonly installedDirectZip: InstalledBrowserDirectZipRoute | undefined
 }
 

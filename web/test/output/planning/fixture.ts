@@ -27,7 +27,7 @@ import type {
   DirectZipSupportFacts,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
-  ZipRouteRecommendationPolicyV1,
+  ZipRouteRecommendationPolicy,
 } from '../../../src/output/planning'
 
 export const TEST_JOB_WORKSPACE_LIMIT = 8_589_934_592n
@@ -162,7 +162,7 @@ export function environment(input: Readonly<{
   workspace?: WorkspaceEnvironmentOffer | null
   portable?: PortableEnvironmentOffer | null
   directZipSupport?: DirectZipSupportFacts
-  zipRecommendationPolicy?: ZipRouteRecommendationPolicyV1
+  zipRecommendationPolicy?: ZipRouteRecommendationPolicy
 }> = {}): EnvironmentOffers {
   return createEnvironmentOffers({
     targets: input.targets ?? [],

@@ -130,10 +130,8 @@ describe('receive intent binding', () => {
       targets: [directZipTarget()],
       directZipSupport: support,
       zipRecommendationPolicy: {
-        version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: 0n,
-        policyDigest: identity(89, 32),
       },
     })
     const currentProjection = projection(selection, treeProof(), 10n)

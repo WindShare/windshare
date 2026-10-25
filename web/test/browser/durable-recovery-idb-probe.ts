@@ -2,7 +2,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-  INDEXEDDB_V9_STORE_SCHEMAS,
+  INDEXEDDB_OUTPUT_STORE_SCHEMAS,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 import {
@@ -32,7 +32,7 @@ export interface IndexedDbV9Probe {
   readonly blockedRequestClosedLate: boolean
   readonly versionChange: string
   readonly schemaVersion: number
-  readonly v9StoresPresent: boolean
+  readonly currentStoresPresent: boolean
   readonly legacyStoreRetainedForCleanup: boolean
   readonly legacyRowsVisibleToV9: boolean
 }
@@ -337,7 +337,7 @@ async function probeVersionChange(): Promise<string> {
 async function probeReplacement(): Promise<Pick<
   IndexedDbV9Probe,
   | 'schemaVersion'
-  | 'v9StoresPresent'
+  | 'currentStoresPresent'
   | 'legacyStoreRetainedForCleanup'
   | 'legacyRowsVisibleToV9'
 >> {
@@ -358,7 +358,7 @@ async function probeReplacement(): Promise<Pick<
   const names = new Set(Array.from(raw.objectStoreNames))
   const result = Object.freeze({
     schemaVersion: raw.version,
-    v9StoresPresent: INDEXEDDB_V9_STORE_SCHEMAS.every((schema) => names.has(schema.name)),
+    currentStoresPresent: INDEXEDDB_OUTPUT_STORE_SCHEMAS.every((schema) => names.has(schema.name)),
     legacyStoreRetainedForCleanup: names.has(LEGACY_PAUSED_STORE),
     legacyRowsVisibleToV9: (await repository.listRecords(operationId)).length !== 0,
   })

@@ -1,6 +1,6 @@
 import { forgetReceiveOperationHistory } from '../operation-history'
 import type { ReceiveOperationHandleInventoryRepository } from '../../workspace/repository'
-import { forgetLegacyCompatibleNameRecord } from '../../browser/indexeddb/compatible-name-legacy-cleanup'
+import { forgetIncompatibleNameRecord } from '../../browser/indexeddb/incompatible-name-records'
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-repository'
 import {
   recordOutputException,
@@ -216,17 +216,17 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
   readonly #reopen: PersistedReceiveOperationReopenPort
   readonly #cleanup: ReceiveOperationOwnedCleanupExecutor
   readonly #forgetHistory: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<void>) | undefined
-  readonly #forgetLegacy: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>) | undefined
+  readonly #forgetIncompatible: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>) | undefined
 
   constructor(input: {
     readonly reopen: PersistedReceiveOperationReopenPort
     readonly cleanup: ReceiveOperationOwnedCleanupExecutor
     readonly forgetHistory?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<void>
-    readonly forgetLegacy?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>
+    readonly forgetIncompatible?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>
   }) {
     this.#reopen = input.reopen
     this.#cleanup = input.cleanup
-    this.#forgetLegacy = input.forgetLegacy
+    this.#forgetIncompatible = input.forgetIncompatible
     this.#forgetHistory = input.forgetHistory
   }
 
@@ -274,10 +274,10 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
     if (descriptor.continuation === 'cleanup-incompatible') {
-      if (this.#forgetLegacy === undefined) {
+      if (this.#forgetIncompatible === undefined) {
         throw new DOMException('Saved-record cleanup is unavailable', 'NotSupportedError')
       }
-      return this.#forgetLegacy(descriptor)
+      return this.#forgetIncompatible(descriptor)
     }
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
@@ -353,7 +353,7 @@ export function createPersistedReceiveOperationMutationPort(
         repository.close()
       }
     },
-    forgetLegacy: descriptor => forgetLegacyCompatibleNameRecord(descriptor, {
+    forgetIncompatible: descriptor => forgetIncompatibleNameRecord(descriptor, {
       ...(options.checkpointDatabaseName === undefined ? {} : { databaseName: options.checkpointDatabaseName }),
     }),
   })

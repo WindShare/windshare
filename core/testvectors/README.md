@@ -1,89 +1,34 @@
-# Cross-runtime contracts
+# Shared runtime contracts
 
-This directory freezes protocol and behavior contracts shared by Go and TypeScript, with the Rust
-relay also consuming the sender-signature acceptance and relay control contracts. Go is the generation authority
-for generated protocol vectors; Web tests reconstruct them through public TypeScript codecs.
+This directory contains contracts implemented by multiple runtimes: wire messages,
+sealed sender objects, capability links, canonical paths and shared scheduling or
+naming algorithms. Go generates the protocol vectors; TypeScript and Rust consume
+the relevant cases through their own implementations.
+
+Browser output bindings, persistence records and UI policies belong to `web/`.
+Their fixtures live in `web/test/fixtures/output/`; native checkpoint behavior is
+tested in `osfs/`. ZIP reader interoperability belongs to `integration/outputformat/`.
 
 ## Generate and verify
 
-From the repository root, intentionally rewrite generated vectors once with:
+Run `make vectors-update` to regenerate shared vectors, then `make vectors` for
+non-mutating verification. `inventory.txt` is the exact, sorted JSON allowlist.
+Web consumers run under `make web`; Rust consumers run under `make rust`.
 
-```sh
-make vectors-update
-```
+## Contract families
 
-Use `make vectors` for non-mutating verification. `inventory.txt` is the exact,
-sorted JSON allowlist, and Go tests reject missing or extra files.
+- `v2-*`: sender objects, links, sessions, authenticated content and protocol semantics.
+- `ed25519-acceptance.json`: independent public-key and signature acceptance decisions
+  shared by Go, TypeScript and Rust.
+- `diagnostic-correlation-v1.json`: protocol/session/path/lane identities and their
+  canonical diagnostic projections.
+- `content-scheduling-v1.json`: shared delivery estimates, evidence age, read-ahead
+  and frontier rescue decisions. Host scheduling and resource ownership stay local.
+- `name-collision-v1.json`: deterministic suffixes, extension preservation and UTF-8
+  truncation at component limits.
+- Signaling, TURN, portable-path and envelope fixtures cover their shared codecs
+  and algorithm boundaries.
 
-## Inventory
-
-Sender authentication:
-
-- `ed25519-acceptance.json`: independent public-key and signature acceptance decisions,
-  including noncanonical, small-order and mixed-order inputs. Go and browser tests and
-  `make rust` consume the same file; Rust checks key construction separately from signatures.
-
-Cross-runtime diagnostic contracts:
-
-- `diagnostic-correlation-v1.json`: typed protocol/session/path/lane identities,
-  canonical unpadded base64url projection, and safe numeric/text boundaries.
-
-Receiver-local contracts:
-
-- `content-scheduling-v1.json`: network delivery estimates, evidence age, bounded
-  read-ahead and frontier rescue decisions in milliseconds. Expectations are authored independently
-  of either implementation. `make vectors` runs Go; `make web` runs TypeScript.
-  Host wakeups, route authority, capacity and work allocation remain runtime-owned.
-
-- `name-collision-v1.json`: deterministic collision suffixes, extension preservation,
-  and UTF-8 truncation for names at the component limit.
-
-- `artifact-choice-v1.json`: stable semantic choice identities and IDs. Direct
-  resumable ZIP is positive only for an exact reviewed runtime and policy-evidence tuple.
-- `receive-intent-v3.json`: SelectionSpec, ArtifactSpec, binding, V3 plan, and
-  ReceiveIntent bytes and digests for every currently activatable plan family.
-  It contains no fabricated direct-ZIP binding because exact runtime support is
-  receiver-local rather than cross-runtime vector authority.
-- `directory-admission-v2.json`: ReceiveIntent-bound layout, generation,
-  ancestry, path, modified-time, HMAC, and settlement cases.
-- `file-checkpoint-v2.json`: operation/intent/binding authority, owned object,
-  lifecycle, checksum, envelope, transition, and verified crash-cut cases. Its
-  `checkpointLineageId` rows isolate operation, intent, binding, file, canonical
-  path segment, materializer, and authority axes while proving revision, size,
-  owned object, ranges, lifecycle, and generations do not affect this receiver-local
-  lookup index. Lineage is not `RecordID`, persisted checkpoint, or wire identity.
-- `v2-semantics.json`: connection sizing, shape proof, strict V3 artifact/plan/
-  guarantee rows, lifecycle V2, WorkspaceBudget, picker timing, complete-only
-  ZIP, checkpoint crash cuts, and receiver terminal projections alongside
-  preserved protocol rules. Direct ZIP records its exact-runtime-only support
-  classification and the two reviewed policy decisions without making the Go
-  vectors a broader platform authority.
-
-Other generated v2 files retain sender objects, sessions, fragmentation,
-identity, and peer signaling. `v2-identity.json` also checks compact link generation
-and origin-based relay resolution against the browser parser. `v2-session.json` includes relay connection probes,
-per-share upgrade URLs (`v2-relay-share-routing`, including query conflicts and unchanged relay identity),
-acknowledgements, stale resume errors, and independent frame/byte credit deltas for
-both relay directions alongside registration and session bytes. Its relay control cases list
-every decoder refusal for REGISTER, RESUME, STOP and JOIN, and every proof-authentication boundary
-for REGISTER, RESUME and STOP. Go, browser and Rust decoders share the frame decisions; Go and
-Rust relays share the proof decisions. `relay-delivery-consumed` freezes the staged
-32-byte cumulative `WS2B` contract across all three runtimes, including exact u64
-totals, complete-envelope bounds and malformed framing. The active receive-credit
-delta contract remains separate until the coordinated runtime cutover.
-The staged `relay-capacity-*` families pin REGISTER/RESUME/JOIN declarations,
-capacity-bound signatures and strict framing. Rust uses these handshake vectors;
-Go/browser expose separate delivery-handshake codecs pending runtime activation.
-`relay-settlement-notice` and `relay-settlement-ack` pin distinct `WS2N`/`WS2S`
-headers, cumulative u64 totals and cross-message rejection in all three languages.
-Peer signaling schema 2 includes monotonic attempt
-sequences, the closed peer reason-to-recovery-scope mapping, and signed
-session-bound path controls. Path-control schema 2 also binds an opaque provider
-profile; its capability semantics stay in connectivity. `path-policy.json`, `portable-path-vectors.json`,
-and `envelope-sample.json` remain focused language-neutral fixtures.
-
-Canonical receiver-contract identities and byte fields use unpadded base64url.
-Older unrelated vector families may still use padded standard base64; each
-consumer follows its file's established representation. Integers that may
-exceed JavaScript's safe range use decimal strings. The top-level `version` is
-the vector-envelope version, while each `kind` names the contract generation.
+Byte representations follow each file's established encoding. Integers beyond
+JavaScript's safe range use decimal strings. The envelope `version` describes the
+fixture format; each case's `kind` identifies the contract.
