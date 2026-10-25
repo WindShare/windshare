@@ -507,6 +507,50 @@ describe('File System Access compatible-name traversal recovery', () => {
     expect(root.directoryNames()).toContain(mapping!.physicalComponent)
     await session.close()
   })
+
+  it('maps a directory whose creation the browser write policy refuses', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const ledger = new MemoryCompatibleNameLedger(repository)
+    const session = await bindTask({
+      parent,
+      repository,
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await resultRootArtifact(),
+      operationSeed: 36,
+      openCompatibleNameLedger: async () => ledger,
+    })
+    const root = await parent.getDirectoryHandle(
+      session.reservation.physicalName,
+    ) as unknown as MemoryDirectory
+    await session.ensureDirectory(['.git'])
+    const git = await root.getDirectoryHandle('.git') as unknown as MemoryDirectory
+    // Edge 156 applies Chromium's `*/.git/hooks` write policy when the directory is created, after
+    // the non-creating lookup already proved the component absent.
+    git.onEntryLookup = lookup => {
+      if (lookup.kind === 'directory' && lookup.name === 'hooks' && lookup.create) {
+        throw new DOMException(
+          'An attempt was made to break through the security policy of the user agent.',
+          'SecurityError',
+        )
+      }
+    }
+
+    const created = await session.ensureDirectory(['.git', 'hooks'])
+    expect(created.created).toBe(true)
+    const mapping = [...ledger.mappings.values()].find(value =>
+      value.entryKind === 'directory' && value.logicalPath.join('/') === '.git/hooks')
+    expect(mapping).toMatchObject({
+      entryKind: 'directory',
+      logicalPath: ['.git', 'hooks'],
+      commitState: 'committed',
+    })
+    expect(mapping!.physicalComponent).toMatch(/^hooks\.windshare-[a-z2-7]{6}$/)
+    expect(git.directoryNames()).toContain(mapping!.physicalComponent)
+    expect(git.directoryNames()).not.toContain('hooks')
+    await session.close()
+  })
 })
 
 describe('File System Access compatible-name terminal cut', () => {

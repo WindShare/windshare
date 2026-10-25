@@ -1,5 +1,8 @@
 import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
-import { inspectFileSystemComponent } from '../../browser/filesystem-component-inspection'
+import {
+  descendantInspectionStage,
+  inspectFileSystemComponent,
+} from '../../browser/filesystem-component-inspection'
 import { createOwnedObjectId, requireOwnedObjectId } from '../../browser/filesystem-file-record'
 import {
   readFSACompatibleNamePairHandle,
@@ -167,7 +170,7 @@ export class CompatibleNameCoordinator {
       claims,
       membership: input.namespaceClaims.membership(input.rejected.artifactPath.slice(0, -1)),
       physicalName: candidate => candidate.physicalComponent,
-      diagnosticStage: input.rejected.rejection.stage,
+      diagnosticStage: descendantInspectionStage(input.rejected.entryKind),
     })
     const pair = await allocateRestorationPair({
       parent: input.rejected.pairParent,
@@ -288,7 +291,7 @@ export class CompatibleNameCoordinator {
       resolver: this.resolver,
       membership: namespaceClaims.membership(input.artifactPath.slice(0, -1)),
       physicalName: value => value.physicalComponent,
-      diagnosticStage: input.rejection.stage,
+      diagnosticStage: descendantInspectionStage(input.entryKind),
     })
     const claimed = await this.#ledger.claimMapping({
       operationId: this.resolver.operationId,

@@ -19,6 +19,7 @@ import {
 } from './indexeddb-root-binding'
 import {
   PathComponentRejectedError,
+  classifyDirectoryCreationRefusal,
   inspectFileSystemComponent,
 } from './filesystem-component-inspection'
 import { requireOwnedObjectId } from './filesystem-file-record'
@@ -195,11 +196,18 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
       if (inspection === 'occupied') {
         throw new TargetOwnershipUnknownError('namespace-create', input.operationId)
       }
-      const created = await runPersistentOutputStage(
-        input.stageScope,
-        'fsa.directory.entry.create',
-        () => input.parent.handle.getDirectoryHandle(input.name, { create: true }),
-      )
+      let created: FileSystemDirectoryHandle
+      try {
+        created = await runPersistentOutputStage(
+          input.stageScope,
+          'fsa.directory.entry.create',
+          () => input.parent.handle.getDirectoryHandle(input.name, { create: true }),
+        )
+      } catch (error) {
+        const rejection = classifyDirectoryCreationRefusal(error, input.name)
+        if (rejection === undefined) throw error
+        return Object.freeze({ kind: 'rejected', rejection })
+      }
       await input.recordCompatibleTargetCreated()
       const ownedObjectId = requireOwnedObjectId(input.randomOwnedObjectId())
       const ownedScope = input.stageScope?.withCorrelation({ ownedObjectId })

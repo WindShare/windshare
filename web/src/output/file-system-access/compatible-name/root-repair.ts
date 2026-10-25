@@ -2,6 +2,7 @@ import { catalogNameCollisionKey } from '../../../catalog/path-policy'
 import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import {
   PathComponentRejectedError,
+  descendantInspectionStage,
   inspectFileSystemComponent,
 } from '../../browser/filesystem-component-inspection'
 import { createOwnedObjectId, requireOwnedObjectId } from '../../browser/filesystem-file-record'
@@ -178,6 +179,7 @@ export function selectMatchingTemplate(
 
 function assertRootRejection(input: CompatibleNameRootRepairRequest): void {
   if (!(input.rejection instanceof PathComponentRejectedError) || !input.rejection.preMutation ||
+      input.rejection.evidenceKind !== 'non-creating-lookup' ||
       input.rejection.stage !== 'fsa.root.entry.inspect' ||
       input.rejection.canonicalComponent !== input.logicalReservedName ||
       input.rejection.expectedKind !== input.entryKind) {
@@ -186,16 +188,27 @@ function assertRootRejection(input: CompatibleNameRootRepairRequest): void {
 }
 
 export function assertDescendantRejection(input: CompatibleNameRejectedComponentInput): void {
-  const expectedStage = input.entryKind === 'directory'
-    ? 'fsa.directory.entry.inspect'
-    : 'fsa.file.entry.inspect'
   const canonicalPath = snapshotMaterializationRootRelativePath(input.artifactPath)
   if (!(input.rejection instanceof PathComponentRejectedError) || !input.rejection.preMutation ||
-      input.rejection.stage !== expectedStage ||
+      !descendantEvidenceMatches(input.rejection, input.entryKind) ||
       input.rejection.canonicalComponent !== canonicalPath.at(-1) ||
       input.rejection.expectedKind !== input.entryKind) {
     throw new TypeError('compatible-name descendant repair requires the exact classified refusal')
   }
+}
+
+/**
+ * Only directory creation has a Chromium write-path policy; file creation and writes are
+ * unrestricted. A file refusal must therefore still come from the non-creating lookup.
+ */
+function descendantEvidenceMatches(
+  rejection: PathComponentRejectedError,
+  entryKind: CompatibleNameEntryKind,
+): boolean {
+  if (rejection.evidenceKind === 'non-creating-lookup') {
+    return rejection.stage === descendantInspectionStage(entryKind)
+  }
+  return entryKind === 'directory' && rejection.stage === 'fsa.directory.entry.create'
 }
 
 export function assertPreparedSnapshot(

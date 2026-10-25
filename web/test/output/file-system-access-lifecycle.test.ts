@@ -5,6 +5,7 @@ import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { directoryId } from '../../src/catalog/model'
 import {
+  classifyDirectoryCreationRefusal,
   inspectFileSystemComponent,
   PathComponentRejectedError,
   type FileSystemComponentKind,
@@ -216,6 +217,31 @@ describe('native FSA component inspection boundary', () => {
       mode: 'classify-rejection',
     })).rejects.toBe(secondaryFailure)
     expect(lookups).toEqual(['file', 'directory'])
+  })
+
+  it('classifies only the directory-create SecurityError as a pre-mutation refusal', () => {
+    const refusal = new DOMException(
+      'An attempt was made to break through the security policy of the user agent.',
+      'SecurityError',
+    )
+
+    expect(classifyDirectoryCreationRefusal(refusal, 'hooks')).toMatchObject({
+      name: 'PathComponentRejectedError',
+      cause: refusal,
+      canonicalComponent: 'hooks',
+      expectedKind: 'directory',
+      evidenceKind: 'write-policy-refusal',
+      stage: 'fsa.directory.entry.create',
+      preMutation: true,
+    })
+    expect(classifyDirectoryCreationRefusal(
+      new DOMException('permission denied', 'NotAllowedError'),
+      'hooks',
+    )).toBeUndefined()
+    expect(classifyDirectoryCreationRefusal(
+      new TypeError('Name is not allowed'),
+      'hooks',
+    )).toBeUndefined()
   })
 
   it('keeps diagnostic call ordering without manufacturing a rejection trigger', async () => {
