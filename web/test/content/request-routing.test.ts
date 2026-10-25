@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { LaneRequests, type LaneRequestKind, type RequestSchedulingObservation } from '../../src/content/scheduling/requests'
-import { LanePerformance } from '../../src/content/scheduling/performance'
+import { BlockReceiveWindow } from '../../src/content/scheduling/receive-window'
 import { SessionRuntimeError } from '../../src/session/runtime-types'
 import type { BlockRouteEligibility } from '../../src/content/route-policy'
 
@@ -51,29 +51,30 @@ describe('latency-sensitive request routing', () => {
   it.each<LaneRequestKind>(['open_revisions', 'list_children', 'renew_lease', 'release_lease'])(
     'prices one cold content block as one reservation for %s', async kind => {
       const observed: RequestSchedulingObservation[] = []
-      const content = new LanePerformance()
-      content.begin(0, CONTENT_BLOCK_BYTES)
+      const content = new BlockReceiveWindow(Date.now)
+      const permit = content.tryAcquire(CONTENT_BLOCK_BYTES)!
       const requests = new LaneRequests({ now: Date.now, observe: value => observed.push(value) })
       requests.add({ id: DIRECT_ID, epoch: 0, route: 'direct', content })
       await requests.run({ kind }, async () => undefined)
       expect(observed[0]?.expectedMilliseconds).toBe(275)
+      permit.close()
       requests.close()
     },
   )
 
-  it('keeps a cold content queue competitive with a measured slower relay', async () => {
-    const requests = new LaneRequests({ now: Date.now })
-    requests.add({ id: RELAY_ID, epoch: 0, route: 'application-relay' })
-    const relaySample = requests.run({ kind: 'open_revisions' }, () =>
-      new Promise(resolve => setTimeout(resolve, 400)))
-    await vi.advanceTimersByTimeAsync(400)
-    await relaySample
-    const content = new LanePerformance()
-    content.begin(Date.now(), CONTENT_BLOCK_BYTES)
+  it('prices only unreceived bytes while authentication is pending', async () => {
+    const observed: RequestSchedulingObservation[] = []
+    const content = new BlockReceiveWindow(Date.now)
+    const permit = content.tryAcquire(CONTENT_BLOCK_BYTES)!
+    const requests = new LaneRequests({ now: Date.now, observe: value => observed.push(value) })
     requests.add({ id: DIRECT_ID, epoch: 0, route: 'direct', content })
-    expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(DIRECT_ID)
-    content.begin(Date.now(), CONTENT_BLOCK_BYTES)
-    expect(await requests.run({ kind: 'open_revisions' }, async route => route.laneId)).toBe(RELAY_ID)
+    await requests.run({ kind: 'open_revisions' }, async () => undefined)
+    expect(observed[0]?.expectedMilliseconds).toBe(275)
+    await vi.advanceTimersByTimeAsync(10)
+    permit.receive(CONTENT_BLOCK_BYTES)
+    await requests.run({ kind: 'list_children' }, async () => undefined)
+    expect(observed.filter(event => event.transition === 'dispatched')[1]?.expectedMilliseconds).toBe(25)
+    permit.close()
     requests.close()
   })
 

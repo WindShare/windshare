@@ -133,5 +133,5 @@ func (s *Set) EstimateQueuedContent(identity Identity) time.Duration {
 	if state == nil || state.identity != identity || state.retired {
 		return 0
 	}
-	return state.performance.EstimateQueue()
+	return state.receive.EstimateQueue(s.now())
 }

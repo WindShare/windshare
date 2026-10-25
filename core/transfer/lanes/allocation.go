@@ -15,6 +15,8 @@ type pendingAdmission struct {
 	ctx             context.Context
 	request         Request
 	attempted       map[Identity]struct{}
+	rescueOf        *laneAdmission
+	resolved        chan struct{}
 	queuedAt        time.Time
 	sequence        uint64
 	order           WorkOrder
@@ -81,12 +83,28 @@ func (s *Set) allocatePendingLocked() {
 	}
 	slices.SortStableFunc(s.pending, func(left, right *pendingAdmission) int { return comparePending(left, right, now) })
 	changed := false
+	// A missing frontier takes the next useful credit before ordinary read-ahead
+	// can refill the same lane. Waiting rescues hold no physical reservation.
 	for _, pending := range s.pending {
-		if pending.done {
+		if !pending.done && pending.rescueOf != nil {
+			s.allocateRescueLocked(pending, now)
+			changed = changed || pending.done
+		}
+	}
+	for _, pending := range s.pending {
+		if pending.done || pending.rescueOf != nil {
 			continue
 		}
 		s.allocateOneLocked(pending, now)
 		changed = changed || pending.done
+	}
+	// Active rounds need only their own intent's completion, not every shared
+	// credit edge; waking all of them would amplify fast-path receipt traffic.
+	for _, pending := range s.pending {
+		if pending.done && pending.resolved != nil {
+			close(pending.resolved)
+			pending.resolved = nil
+		}
 	}
 	if changed {
 		s.notifyAdmissionChangedLocked()
@@ -196,18 +214,26 @@ func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission) ([]*laneStat
 }
 
 func (s *Set) orderLanesLocked(ordered []*laneState, bytes uint64) {
+	now := s.now()
 	slices.SortFunc(ordered, func(left, right *laneState) int {
-		if order := cmp.Compare(left.failures, right.failures); order != 0 {
-			return order
-		}
-		if order := cmp.Compare(laneCompletionCost(left, bytes), laneCompletionCost(right, bytes)); order != 0 {
-			return order
-		}
-		if order := cmp.Compare(left.inflight, right.inflight); order != 0 {
-			return order
-		}
-		return cmp.Compare(left.identity.ID, right.identity.ID)
+		return compareLaneDelivery(left, right, bytes, now)
 	})
+}
+
+func compareLaneDelivery(left, right *laneState, bytes uint64, now time.Time) int {
+	if order := cmp.Compare(left.failures, right.failures); order != 0 {
+		return order
+	}
+	if order := lanescheduling.CompareDelivery(left.receive.EstimateCompletion(bytes, now), right.receive.EstimateCompletion(bytes, now)); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(laneCompletionCost(left, bytes, now), laneCompletionCost(right, bytes, now)); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.inflight, right.inflight); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.identity.ID, right.identity.ID)
 }
 
 func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneState, now time.Time) (*laneState, lanescheduling.Purpose) {
@@ -218,7 +244,7 @@ func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneS
 	}
 	// Exploration owns a distinct queued block. Protect a lone interactive
 	// frontier, while allowing independent readers and bounded read-ahead to learn.
-	if primary.performance.HasSuccessfulSample && active > 0 &&
+	if primary.receive.Load(now).Evidence == lanescheduling.DeliveryRecent && active > 0 &&
 		(pending.order.Distance > 0 || (pending.order.Priority != Preview && active > 1)) {
 		for _, candidate := range ordered[1:] {
 			if candidate.failures == 0 && candidate.receive.Available() && candidate.performance.PendingBytes == 0 &&
@@ -233,6 +259,19 @@ func (s *Set) pendingCandidateLocked(pending *pendingAdmission, ordered []*laneS
 	}
 	if primary.receive.Available() {
 		return primary, lanescheduling.Content
+	}
+	var aggregateRate float64
+	for _, lane := range ordered {
+		load := lane.receive.Load(now)
+		if load.Evidence == lanescheduling.DeliveryRecent {
+			aggregateRate += load.BytesPerSecond
+		}
+	}
+	bytes := blockDemandBytes(pending.request.Demand)
+	for _, lane := range ordered[1:] {
+		if lane.receive.Available() && lanescheduling.FitsReadAhead(lane.receive.EstimateCompletion(bytes, now), bytes, pending.order.Distance, aggregateRate) {
+			return lane, lanescheduling.Content
+		}
 	}
 	return nil, lanescheduling.Content
 }
@@ -318,7 +357,7 @@ func (s *Set) SchedulingDemand() SchedulingDemand {
 	var result SchedulingDemand
 	result.OutputBytes = s.outputBytes
 	for _, pending := range s.pending {
-		if pending.done || pending.ctx.Err() != nil {
+		if pending.done || pending.ctx.Err() != nil || pending.rescueOf != nil {
 			continue
 		}
 		bytes := blockDemandBytes(pending.request.Demand)

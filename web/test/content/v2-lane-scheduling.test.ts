@@ -6,7 +6,7 @@ import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/reco
 import type { BlockRouteEligibility } from '../../src/content/route-policy'
 import { LanePerformance } from '../../src/content/scheduling/performance'
 import { completionCost } from '../../src/content/scheduling/completion'
-import { LaneRescues, PROBE_INTERVAL_MILLISECONDS, rescueDue } from '../../src/content/scheduling/exploration'
+import { LaneRescues, PROBE_INTERVAL_MILLISECONDS } from '../../src/content/scheduling/exploration'
 import { SessionRuntimeError } from '../../src/session/runtime-types'
 
 const BLOCK_BYTES = 1024
@@ -198,39 +198,6 @@ describe('independent file allocation', () => {
   })
 })
 
-describe('lane completion estimates', () => {
-  it('charges each cold reservation independently of the next block size and releases cancellations', () => {
-    const performance = new LanePerformance()
-    const largerBlock = BLOCK_BYTES * 64
-    performance.begin(0, BLOCK_BYTES)
-    performance.begin(0, largerBlock)
-    expect(performance.estimateQueueMilliseconds()).toBe(500)
-    expect(performance.estimateCompletionMilliseconds(1)).toBe(750)
-    expect(performance.estimateCompletionMilliseconds(largerBlock)).toBe(750)
-    expect(performance.bytesPerSecond).toBe(0)
-    performance.complete(100, largerBlock, false)
-    expect(performance.estimateQueueMilliseconds()).toBe(250)
-    performance.complete(100, BLOCK_BYTES, false)
-    expect(performance.estimateQueueMilliseconds()).toBe(0)
-    expect(performance.estimateCompletionMilliseconds(BLOCK_BYTES)).toBe(250)
-  })
-
-  it('uses observed bandwidth for queued bytes while pricing the new block separately', () => {
-    const performance = new LanePerformance()
-    performance.begin(0, BLOCK_BYTES)
-    performance.complete(10, BLOCK_BYTES, true)
-    performance.begin(20, BLOCK_BYTES * 3)
-    performance.begin(20, BLOCK_BYTES)
-    expect(performance.estimateQueueMilliseconds()).toBe(40)
-    expect(performance.estimateCompletionMilliseconds(BLOCK_BYTES)).toBe(50)
-    performance.complete(25, BLOCK_BYTES, false)
-    expect(performance.estimateQueueMilliseconds()).toBe(30)
-    performance.complete(50, BLOCK_BYTES * 3, true)
-    expect(performance.estimateQueueMilliseconds()).toBe(0)
-    expect(performance.estimateCompletionMilliseconds(BLOCK_BYTES)).toBe(10)
-  })
-})
-
 describe('receiver content allocation', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0) })
   afterEach(() => vi.useRealTimers())
@@ -385,7 +352,7 @@ describe('receiver content allocation', () => {
     performance.begin(0, BLOCK_BYTES)
     performance.complete(1000, BLOCK_BYTES, true)
     expect(performance.bytesPerSecond).toBe(BLOCK_BYTES)
-    expect(performance.estimateCompletionMilliseconds(BLOCK_BYTES)).toBe(2000)
+    expect(performance.pendingBytes).toBe(BLOCK_BYTES)
     performance.complete(2000, BLOCK_BYTES, true)
     performance.begin(1_000_000, BLOCK_BYTES)
     performance.complete(1_001_000, BLOCK_BYTES, false)
@@ -402,7 +369,5 @@ describe('receiver content allocation', () => {
     expect(budget.acquire()).toBe(false)
     budget.release()
     expect(budget.acquire()).toBe(true)
-    expect(rescueDue(9, 1000, 1)).toBe(false)
-    expect(rescueDue(10, 1000, 1)).toBe(true)
   })
 })

@@ -1,141 +1,457 @@
 {
   "version": 1,
   "kind": "content-scheduling-v1",
-  "description": "Reviewed event sequences for completion evidence, admission snapshots, and rescue decisions. Time is milliseconds; bytes are plaintext. Rescue events query eligibility without dispatching a duplicate. Hosts retain capacity, route, exploration, and wake ownership.",
+  "description": "Shared network delivery forecasts and frontier rescue decisions. Receipt is not authenticated output. All times are milliseconds. Host admission owns capacity, route authority, exploration, and wakeups.",
   "cases": [
     {
-      "name": "cold-mixed-blocks-and-cancellation",
-      "events": [
-        {"event":"inspect","atMs":0,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":0}},
-        {"event":"admit","atMs":0,"lane":"a","attempt":"small","bytes":1048576,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"a","attempt":"large","bytes":67108864,"expectedMs":500},
-        {"event":"inspect","atMs":100,"lane":"a","bytes":1,"expected":{"pendingBytes":68157440,"pendingBlocks":2,"queueMs":500,"completionMs":750,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
-        {"event":"inspect","atMs":100,"lane":"a","bytes":67108864,"expected":{"pendingBytes":68157440,"pendingBlocks":2,"queueMs":500,"completionMs":750,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
-        {"event":"settle","atMs":100,"attempt":"large","outcome":"cancelled"},
-        {"event":"inspect","atMs":100,"lane":"a","bytes":1,"expected":{"pendingBytes":1048576,"pendingBlocks":1,"queueMs":250,"completionMs":500,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
-        {"event":"settle","atMs":100,"attempt":"small","outcome":"cancelled"},
-        {"event":"inspect","atMs":500,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}}
-      ]
+      "name": "cold-empty-is-a-bootstrap-not-capacity",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 0,
+        "pendingResponses": 0,
+        "sample": {
+          "kind": "unknown"
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 0,
+      "expected": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      }
     },
     {
-      "name": "overlapping-samples-idle-and-smoothed-growth",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"first","bytes":1000,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"a","attempt":"second","bytes":1000,"expectedMs":500},
-        {"event":"settle","atMs":1000,"attempt":"first","outcome":"success"},
-        {"event":"inspect","atMs":1000,"lane":"a","bytes":1000,"expected":{"pendingBytes":1000,"pendingBlocks":1,"queueMs":1000,"completionMs":2000,"bytesPerSecond":1000,"hasSuccessfulSample":true,"busyMs":1000}},
-        {"event":"settle","atMs":2000,"attempt":"second","outcome":"success"},
-        {"event":"inspect","atMs":5000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":1000,"bytesPerSecond":1000,"hasSuccessfulSample":true,"busyMs":2000}},
-        {"event":"admit","atMs":5000,"lane":"a","attempt":"third","bytes":1000,"expectedMs":1000},
-        {"event":"settle","atMs":5500,"attempt":"third","outcome":"success"},
-        {"event":"inspect","atMs":9000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":800,"bytesPerSecond":1250,"hasSuccessfulSample":true,"busyMs":2500}}
-      ]
+      "name": "cold-queue-counts-unreceived-responses",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 5000,
+        "pendingResponses": 2,
+        "sample": {
+          "kind": "unknown"
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 500,
+      "expected": {
+        "evidence": "unknown",
+        "milliseconds": 750
+      }
     },
     {
-      "name": "congestion-reduces-rate-without-lifetime-averaging",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"first","bytes":1000,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"a","attempt":"second","bytes":1000,"expectedMs":500},
-        {"event":"settle","atMs":1000,"attempt":"first","outcome":"success"},
-        {"event":"admit","atMs":1000,"lane":"a","attempt":"third","bytes":1000,"expectedMs":2000},
-        {"event":"settle","atMs":11000,"attempt":"second","outcome":"success"},
-        {"event":"inspect","atMs":11000,"lane":"a","bytes":1000,"expected":{"pendingBytes":1000,"pendingBlocks":1,"queueMs":10000,"completionMs":20000,"bytesPerSecond":100,"hasSuccessfulSample":true,"busyMs":11000}},
-        {"event":"settle","atMs":11000,"attempt":"third","outcome":"cancelled"},
-        {"event":"inspect","atMs":12000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":10000,"bytesPerSecond":100,"hasSuccessfulSample":true,"busyMs":11000}}
-      ]
+      "name": "receipt-reduces-remaining-network-work",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 1000,
+        "pendingResponses": 2,
+        "sample": {
+          "kind": "recent",
+          "bytesPerSecond": 5000,
+          "startupMilliseconds": 100
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 200,
+      "expected": {
+        "evidence": "recent",
+        "milliseconds": 400
+      }
     },
     {
-      "name": "caller-cancellation-and-lost-race-have-different-evidence",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"cancelled","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":100,"attempt":"cancelled","outcome":"cancelled"},
-        {"event":"inspect","atMs":100,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":250,"bytesPerSecond":0,"hasSuccessfulSample":false,"busyMs":100}},
-        {"event":"admit","atMs":1000,"lane":"a","attempt":"lost","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":1100,"attempt":"lost","outcome":"superseded"},
-        {"event":"inspect","atMs":2000,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100,"bytesPerSecond":10000,"hasSuccessfulSample":false,"busyMs":200}},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"cancel-again","bytes":1000,"expectedMs":100},
-        {"event":"settle","atMs":2010,"attempt":"cancel-again","outcome":"cancelled"},
-        {"event":"inspect","atMs":2010,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100,"bytesPerSecond":10000,"hasSuccessfulSample":false,"busyMs":210}},
-        {"event":"admit","atMs":3000,"lane":"a","attempt":"lost-slowly","bytes":1000,"expectedMs":100},
-        {"event":"settle","atMs":3500,"attempt":"lost-slowly","outcome":"superseded"},
-        {"event":"inspect","atMs":3500,"lane":"a","bytes":1000,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":500,"bytesPerSecond":2000,"hasSuccessfulSample":false,"busyMs":710}}
-      ]
+      "name": "high-latency-startup-overlaps-short-queue",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 1000,
+        "pendingResponses": 1,
+        "sample": {
+          "kind": "recent",
+          "bytesPerSecond": 10000,
+          "startupMilliseconds": 200
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 100,
+      "expected": {
+        "evidence": "recent",
+        "milliseconds": 300
+      }
     },
     {
-      "name": "very-slow-measured-work-remains-bounded",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"sample","bytes":1,"expectedMs":250},
-        {"event":"settle","atMs":100000,"attempt":"sample","outcome":"success"},
-        {"event":"admit","atMs":100000,"lane":"a","attempt":"large","bytes":1048576,"expectedMs":3600000},
-        {"event":"inspect","atMs":100010,"lane":"a","bytes":1,"expected":{"pendingBytes":1048576,"pendingBlocks":1,"queueMs":3600000,"completionMs":3600000,"bytesPerSecond":0.01,"hasSuccessfulSample":true,"busyMs":100010}},
-        {"event":"settle","atMs":100010,"attempt":"large","outcome":"cancelled"},
-        {"event":"inspect","atMs":100010,"lane":"a","bytes":1,"expected":{"pendingBytes":0,"pendingBlocks":0,"queueMs":0,"completionMs":100000,"bytesPerSecond":0.01,"hasSuccessfulSample":true,"busyMs":100010}}
-      ]
+      "name": "queued-transmission-hides-response-latency",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 5000,
+        "pendingResponses": 5,
+        "sample": {
+          "kind": "recent",
+          "bytesPerSecond": 10000,
+          "startupMilliseconds": 200
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 500,
+      "expected": {
+        "evidence": "recent",
+        "milliseconds": 600
+      }
     },
     {
-      "name": "rescue-deadline-uses-admission-snapshot",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"b","attempt":"warm","bytes":1048576,"expectedMs":250},
-        {"event":"settle","atMs":1000,"attempt":"warm","outcome":"success"},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1048576,"expectedMs":250},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"later","bytes":1048576,"expectedMs":500},
-        {"event":"rescue","atMs":2499,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"rescue"},
-        {"event":"settle","atMs":2500,"attempt":"later","outcome":"cancelled"},
-        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"rescue"}
-      ]
+      "name": "authentication-does-not-occupy-network-queue",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 0,
+        "pendingResponses": 0,
+        "sample": {
+          "kind": "recent",
+          "bytesPerSecond": 10000,
+          "startupMilliseconds": 200
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 0,
+      "expected": {
+        "evidence": "recent",
+        "milliseconds": 300
+      }
     },
     {
-      "name": "faster-alternative-respects-minimum-delay",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":200,"attempt":"warm-b","outcome":"success"},
-        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":1000},
-        {"event":"rescue","atMs":2009,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":2010,"attempt":"primary","alternative":"b","decision":"rescue"}
-      ]
+      "name": "stale-sample-keeps-an-explicit-evidence-state",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 0,
+        "pendingResponses": 0,
+        "sample": {
+          "kind": "stale",
+          "bytesPerSecond": 1000,
+          "startupMilliseconds": 0
+        }
+      },
+      "bytes": 1000,
+      "queueMs": 0,
+      "expected": {
+        "evidence": "stale",
+        "milliseconds": 1000
+      }
     },
     {
-      "name": "faster-alternative-must-be-strictly-better-than-remaining-work",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":200,"attempt":"warm-b","outcome":"success"},
-        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":1000},
-        {"event":"rescue","atMs":2599,"attempt":"primary","alternative":"b","decision":"rescue"},
-        {"event":"rescue","atMs":2600,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":3999,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":4000,"attempt":"primary","alternative":"b","decision":"rescue"}
-      ]
+      "name": "very-slow-estimates-remain-bounded",
+      "kind": "estimate",
+      "load": {
+        "remainingBytes": 1048576,
+        "pendingResponses": 1,
+        "sample": {
+          "kind": "recent",
+          "bytesPerSecond": 1e-06,
+          "startupMilliseconds": 0
+        }
+      },
+      "bytes": 1,
+      "queueMs": 3600000,
+      "expected": {
+        "evidence": "recent",
+        "milliseconds": 3600000
+      }
     },
     {
-      "name": "expected-queue-residence-is-not-a-stall",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"warm-a","bytes":1000,"expectedMs":250},
-        {"event":"admit","atMs":0,"lane":"b","attempt":"warm-b","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":1000,"attempt":"warm-a","outcome":"success"},
-        {"event":"settle","atMs":1000,"attempt":"warm-b","outcome":"success"},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"ahead","bytes":1000,"expectedMs":1000},
-        {"event":"admit","atMs":2000,"lane":"a","attempt":"primary","bytes":1000,"expectedMs":2000},
-        {"event":"rescue","atMs":2500,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":4000,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":5999,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":6000,"attempt":"primary","alternative":"b","decision":"rescue"}
-      ]
+      "name": "rescue-respects-minimum-delay",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 9,
+        "silentMilliseconds": 9,
+        "remaining": {
+          "evidence": "unknown",
+          "milliseconds": 250
+        }
+      },
+      "initial": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 1
+      },
+      "reason": ""
     },
     {
-      "name": "short-overdue-attempt-still-respects-minimum-delay",
-      "events": [
-        {"event":"admit","atMs":0,"lane":"a","attempt":"warm","bytes":1000,"expectedMs":250},
-        {"event":"settle","atMs":1,"attempt":"warm","outcome":"success"},
-        {"event":"admit","atMs":100,"lane":"a","attempt":"primary","bytes":1,"expectedMs":1},
-        {"event":"rescue","atMs":102,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":109,"attempt":"primary","alternative":"b","decision":"wait"},
-        {"event":"rescue","atMs":110,"attempt":"primary","alternative":"b","decision":"rescue"}
-      ]
+      "name": "measured-alternative-can-help-before-bootstrap-deadline",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 10,
+        "silentMilliseconds": 10,
+        "remaining": {
+          "evidence": "unknown",
+          "milliseconds": 250
+        }
+      },
+      "initial": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 1
+      },
+      "reason": "faster-delivery"
+    },
+    {
+      "name": "ongoing-receipt-can-outlive-the-initial-forecast",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 10,
+        "elapsedMilliseconds": 10000,
+        "silentMilliseconds": 10,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 20
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 100
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 100
+      },
+      "reason": ""
+    },
+    {
+      "name": "fully-received-block-is-not-a-network-straggler",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 0,
+        "elapsedMilliseconds": 5000,
+        "silentMilliseconds": 1000,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 1
+        }
+      },
+      "initial": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 20
+      },
+      "reason": ""
+    },
+    {
+      "name": "silent-frontier-does-not-wait-for-double-old-estimate",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 131072,
+        "elapsedMilliseconds": 8824,
+        "silentMilliseconds": 8824,
+        "remaining": {
+          "evidence": "stale",
+          "milliseconds": 250
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 5056
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 439
+      },
+      "reason": "no-progress"
+    },
+    {
+      "name": "unknown-rescue-cannot-win-by-its-bootstrap-score",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 499,
+        "silentMilliseconds": 499,
+        "remaining": {
+          "evidence": "unknown",
+          "milliseconds": 250
+        }
+      },
+      "initial": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "alternative": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "reason": ""
+    },
+    {
+      "name": "unknown-rescue-preserves-bounded-cold-start-liveness",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 500,
+        "silentMilliseconds": 500,
+        "remaining": {
+          "evidence": "unknown",
+          "milliseconds": 250
+        }
+      },
+      "initial": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "alternative": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "reason": "bootstrap-overdue"
+    },
+    {
+      "name": "fresh-progress-prevents-an-unmeasured-rescue",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 100,
+        "elapsedMilliseconds": 300,
+        "silentMilliseconds": 0,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 100
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 100
+      },
+      "alternative": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "reason": ""
+    },
+    {
+      "name": "startup-observation-precedes-speculative-duplication",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 99,
+        "silentMilliseconds": 99,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 1000
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 1000
+      },
+      "alternative": {
+        "evidence": "recent",
+        "milliseconds": 100
+      },
+      "reason": ""
+    },
+    {
+      "name": "old-fast-sample-can-revalidate-a-slow-frontier",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 400,
+        "silentMilliseconds": 5,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 1000
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 1000
+      },
+      "alternative": {
+        "evidence": "stale",
+        "milliseconds": 100
+      },
+      "reason": "faster-delivery"
+    },
+    {
+      "name": "stale-speed-is-not-counted-at-face-value",
+      "kind": "rescue",
+      "progress": {
+        "remainingBytes": 1000,
+        "elapsedMilliseconds": 400,
+        "silentMilliseconds": 5,
+        "remaining": {
+          "evidence": "recent",
+          "milliseconds": 300
+        }
+      },
+      "initial": {
+        "evidence": "recent",
+        "milliseconds": 1000
+      },
+      "alternative": {
+        "evidence": "stale",
+        "milliseconds": 100
+      },
+      "reason": ""
+    },
+    {
+      "name": "frontier-never-spends-read-ahead-slack",
+      "kind": "read-ahead",
+      "estimate": {
+        "evidence": "recent",
+        "milliseconds": 100
+      },
+      "bytes": 1000,
+      "distance": 0,
+      "aggregateRate": 5000,
+      "fits": false
+    },
+    {
+      "name": "independent-capacity-can-finish-within-read-ahead",
+      "kind": "read-ahead",
+      "estimate": {
+        "evidence": "recent",
+        "milliseconds": 500
+      },
+      "bytes": 1000,
+      "distance": 4,
+      "aggregateRate": 5000,
+      "fits": true
+    },
+    {
+      "name": "slow-spare-lane-cannot-create-the-next-output-hole",
+      "kind": "read-ahead",
+      "estimate": {
+        "evidence": "recent",
+        "milliseconds": 500
+      },
+      "bytes": 1000,
+      "distance": 1,
+      "aggregateRate": 5000,
+      "fits": false
+    },
+    {
+      "name": "bootstrap-is-not-proven-spare-capacity",
+      "kind": "read-ahead",
+      "estimate": {
+        "evidence": "unknown",
+        "milliseconds": 250
+      },
+      "bytes": 1000,
+      "distance": 4,
+      "aggregateRate": 5000,
+      "fits": false
+    },
+    {
+      "name": "old-capacity-cannot-fill-read-ahead",
+      "kind": "read-ahead",
+      "estimate": {
+        "evidence": "stale",
+        "milliseconds": 100
+      },
+      "bytes": 1000,
+      "distance": 4,
+      "aggregateRate": 5000,
+      "fits": false
     }
   ]
 }

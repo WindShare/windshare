@@ -29,8 +29,16 @@ function lane(id: number, route: ContentLane['route'], rate: number): ContentLan
   performance.bytesPerSecond = rate
   performance.hasSuccessfulSample = true
   performance.lastAttempt = Date.now()
+  // Hold network evidence time fixed: these tests exercise timer/capacity wake
+  // ownership, while receipt aging has its own deterministic coverage.
+  let evidenceTime = -BLOCK_BYTES * 1000 / rate
+  const receive = new BlockReceiveWindow(() => evidenceTime)
+  const warm = receive.tryAcquire(BLOCK_BYTES)!
+  evidenceTime = 0
+  warm.receive(BLOCK_BYTES); warm.close()
+  if (id === 1) receive.tryAcquire(BLOCK_BYTES * 3)
   return { lane: { id, fetchBlock: async () => { throw new Error('Admission cannot fetch content') } },
-    laneEpoch: 0, route, performance, sampling: new LaneSampling(), receive: new BlockReceiveWindow(Date.now),
+    laneEpoch: 0, route, performance, sampling: new LaneSampling(), receive,
     unsubscribeReceive() {}, inflight: 0, failed: false }
 }
 async function flush() { for (let step = 0; step < 8; step++) await Promise.resolve() }

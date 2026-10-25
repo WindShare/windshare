@@ -1,4 +1,4 @@
-// Package lanescheduling owns content completion estimates and bounded exploration.
+// Package lanescheduling owns network supply estimates, authenticated delivery evidence, and bounded exploration.
 // Route permission and transport liveness remain with their existing owners.
 package lanescheduling
 
@@ -16,26 +16,21 @@ type Performance struct {
 	BytesPerSecond      float64
 	HasSuccessfulSample bool
 	LastAttempt         time.Time
-	pendingBlocks       uint32
 	busySince           time.Time
 	completedBytes      uint64
 	activeSince         time.Time
 	busyTime            time.Duration
 }
 
-// Begin freezes this attempt's completion estimate before adding its reservation.
-// Later admissions and completions must not change the original rescue deadline.
-func (p *Performance) Begin(now time.Time, bytes uint64) time.Duration {
-	expected := p.EstimateCompletion(bytes)
+// Begin accounts for unsettled plaintext, independently of remaining network bytes.
+func (p *Performance) Begin(now time.Time, bytes uint64) {
 	if p.PendingBytes == 0 {
 		p.busySince = now
 		p.activeSince = now
 		p.completedBytes = 0
 	}
-	p.pendingBlocks++
 	p.PendingBytes += bytes
 	p.LastAttempt = now
-	return expected
 }
 
 func (p *Performance) Complete(now time.Time, bytes uint64, successful bool) {
@@ -43,7 +38,6 @@ func (p *Performance) Complete(now time.Time, bytes uint64, successful bool) {
 	if successful && bytes != 0 {
 		p.recordAuthenticated(now, bytes)
 	}
-	p.pendingBlocks--
 	p.PendingBytes -= min(p.PendingBytes, bytes)
 	if p.PendingBytes == 0 && wasBusy {
 		p.busyTime += max(now.Sub(p.activeSince), 0)
@@ -65,7 +59,7 @@ func (p *Performance) recordAuthenticated(now time.Time, bytes uint64) {
 	elapsed := max(now.Sub(p.busySince), MinimumSampleTime)
 	if !p.HasSuccessfulSample || elapsed >= MeasurementWindow || bytes >= p.PendingBytes {
 		sample := float64(p.completedBytes) / elapsed.Seconds()
-		// Congestion should immediately reduce admission. Capacity growth is
+		// Completed-goodput diagnostics reflect sustained drops immediately; growth is
 		// smoothed so a short burst cannot flood a path with new prefix blocks.
 		if p.BytesPerSecond == 0 || sample < p.BytesPerSecond {
 			p.BytesPerSecond = sample
@@ -90,16 +84,4 @@ func (p *Performance) Superseded(bytes uint64, elapsed time.Duration) {
 	if p.BytesPerSecond == 0 || upperBound < p.BytesPerSecond {
 		p.BytesPerSecond = upperBound
 	}
-}
-
-func (p *Performance) Load() CompletionLoad {
-	return CompletionLoad{PendingBytes: p.PendingBytes, PendingBlocks: p.pendingBlocks, BytesPerSecond: p.BytesPerSecond}
-}
-
-func (p *Performance) EstimateQueue() time.Duration {
-	return EstimateQueue(p.Load())
-}
-
-func (p *Performance) EstimateCompletion(bytes uint64) time.Duration {
-	return EstimateCompletion(p.Load(), bytes)
 }

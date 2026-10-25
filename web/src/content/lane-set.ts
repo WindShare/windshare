@@ -5,7 +5,7 @@ import { BlockReceiveWindow, type BlockReceiveAdmission } from './scheduling/rec
 import { ContentAdmissions, type ContentAdmission } from './scheduling/admission'
 import { LaneRequests, type RequestSchedulingObservation } from './scheduling/requests'
 import { orderedContentLanes, demandBytes, type ContentLane, type ContentWork } from './scheduling/selection'
-import { LaneRescues, rescueDue, type DispatchPurpose } from './scheduling/exploration'
+import { LaneRescues, rescueDecision, type RescueReason, type DispatchPurpose } from './scheduling/exploration'
 import { ContentRaceWon, ContentRaceFailures, raceContent } from './scheduling/race'
 import { SessionRuntimeError } from '../session/runtime-types'
 import type { BlockRecord, FileRevisionDescriptor } from './records'
@@ -85,6 +85,8 @@ export interface BlockSchedulingObservation extends BlockDispatchObservation {
   readonly admission?: BlockReceiveAdmission
   readonly purpose: DispatchPurpose
   readonly expectedMilliseconds: number
+  readonly deliveryEvidence?: 'unknown' | 'recent' | 'stale'
+  readonly rescueReason?: RescueReason
   readonly pendingBytes: number
   readonly bytesPerSecond: number
 }
@@ -151,7 +153,7 @@ export class LaneSet {
     const unsubscribeReceive = receive.subscribeAvailable(() => this.wakeContent())
     this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance, sampling: new LaneSampling(), receive, unsubscribeReceive })
     this.#useful.set(lane.id, { bytes: 0, admittedAt: this.#now(), lastAt: undefined })
-    this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: performance })
+    this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: receive })
     this.#wakeWaiters()
   }
 
@@ -273,15 +275,13 @@ export class LaneSet {
       const admission = await this.#admit(work, signal, attempted, failures)
       const state = admission.lane
       attempted.add(state)
-      const started = admission.started
-      const estimate = admission.expectedMilliseconds
       try {
         const winner = await raceContent(
           signal,
           attemptSignal => this.#fetchAttempt(admission, demand, attemptSignal, work.onReceive),
           attemptSignal => {
             if (supplemented) return undefined
-            const rescue = this.#rescue(work, attempted, started, estimate, attemptSignal)
+            const rescue = this.#rescue(work, attempted, admission, attemptSignal)
             supplemented = rescue !== undefined
             return rescue
           },
@@ -311,19 +311,31 @@ export class LaneSet {
   }
 
   #rescue(
-    work: ContentWork, attempted: Set<LaneState>, started: number, estimate: number, signal: AbortSignal,
-  ): Promise<FetchedBlock> | undefined {
+    work: ContentWork, attempted: Set<LaneState>, primary: ContentAdmission, signal: AbortSignal,
+  ): Promise<() => Promise<FetchedBlock>> | undefined {
     if (work.distance() > 0n) return undefined
     work.routes.assertActive()
     const candidate = orderedContentLanes([...this.#lanes.values()], work).find(lane => !attempted.has(lane))
-    if (candidate === undefined ||
-      !rescueDue(this.#now() - started, estimate, candidate.performance.estimateCompletionMilliseconds(demandBytes(work.demand))) ||
-      !this.#rescues.acquire()) return undefined
-    return this.#admissions.request(work, signal, lane => !attempted.has(lane), 'rescue')
-      .then(admission => {
+    const decide = (lane: ContentLane) => work.distance() > 0n ? undefined
+      : rescueDecision(primary.permit.progress(), primary.expected, lane.receive.estimateCompletion(demandBytes(work.demand)))
+    if (candidate === undefined || decide(candidate) === undefined) return undefined
+    const base = work.capacity
+    const rescueWork: ContentWork = { ...work, capacity: {
+      lastServed: () => base?.lastServed() ?? 0,
+      readiness: () => this.#rescues.available ? base?.readiness() ?? 'ready' : 'network',
+      acquire: () => {
+        if (!this.#rescues.acquire()) return undefined
+        let release: (() => void) | undefined
+        try { release = base?.acquire() } catch (error) { this.#rescues.release(); throw error }
+        if (base !== undefined && release === undefined) { this.#rescues.release(); return undefined }
+        return () => { release?.(); this.#rescues.release() }
+      },
+    } }
+    return this.#admissions.requestRescue(rescueWork, signal, lane => !attempted.has(lane), decide)
+      .then(admission => () => {
         attempted.add(admission.lane)
         return this.#fetchAttempt(admission, work.demand, signal, work.onReceive)
-      }).finally(() => this.#rescues.release())
+      })
   }
 
   waitForLeaseIdle(leaseId: Uint8Array): Promise<void> {
@@ -336,7 +348,8 @@ export class LaneSet {
     signal: AbortSignal,
     onReceive?: (objectBytes: number) => void,
   ): Promise<FetchedBlock> {
-    const { lane: state, purpose, started, expectedMilliseconds, permit } = admission
+    const { lane: state, purpose, started, expected, permit, rescueReason } = admission
+    const expectedMilliseconds = expected.milliseconds
     const bytes = demandBytes(demand)
     const observation = Object.freeze({
       dispatchSequence: this.#dispatchSequence.next(),
@@ -352,7 +365,8 @@ export class LaneSet {
     } catch { /* Diagnostics cannot redirect authenticated work. */ }
     try {
       this.#onBlockScheduled?.(Object.freeze({
-        ...observation, purpose, expectedMilliseconds, admission: permit.admission,
+        ...observation, purpose, expectedMilliseconds, deliveryEvidence: expected.evidence,
+        ...(rescueReason === undefined ? {} : { rescueReason }), admission: permit.admission,
         pendingBytes: state.performance.pendingBytes,
         bytesPerSecond: state.performance.bytesPerSecond,
       }))
@@ -365,7 +379,8 @@ export class LaneSet {
         received: bytes => { received += bytes; permit.receive(bytes); onReceive?.(bytes) },
         admitted: admission => {
           try {
-            this.#onBlockScheduled?.({ ...observation, purpose, expectedMilliseconds, admission,
+            this.#onBlockScheduled?.({ ...observation, purpose, expectedMilliseconds, deliveryEvidence: expected.evidence,
+              ...(rescueReason === undefined ? {} : { rescueReason }), admission,
               pendingBytes: state.performance.pendingBytes, bytesPerSecond: state.performance.bytesPerSecond })
           } catch { /* Admission evidence cannot redirect content. */ }
         },

@@ -1,6 +1,5 @@
 import { OperationCancellationError, OPERATION_CANCEL_REASON } from '../../session/runtime-types'
-// Host wake cadence is independent of the shared rescue eligibility rule.
-const RESCUE_POLL_MILLISECONDS = 10
+import { RESCUE_POLL_MILLISECONDS } from './exploration'
 
 export class ContentRaceWon extends OperationCancellationError {
   constructor() { super(OPERATION_CANCEL_REASON.laneRace, 'Another authenticated content attempt won') }
@@ -13,7 +12,7 @@ export class ContentRaceFailures extends AggregateError {
 export function raceContent<T>(
   signal: AbortSignal,
   primary: (signal: AbortSignal) => Promise<T>,
-  rescue: (signal: AbortSignal) => Promise<T> | undefined,
+  rescue: (signal: AbortSignal) => Promise<() => Promise<T>> | undefined,
   retryable: (error: unknown) => boolean,
 ): Promise<T> {
   signal.throwIfAborted()
@@ -21,6 +20,7 @@ export function raceContent<T>(
     const controller = new AbortController()
     const errors: unknown[] = []
     let active = 0
+    let awaitingAdmission = false
     let settled = false
     let supplemented = false
     let pendingFailure: { reason: unknown } | undefined
@@ -30,7 +30,7 @@ export function raceContent<T>(
       signal.removeEventListener('abort', abort)
     }
     const finishFailure = () => {
-      if (active === 0 && pendingFailure !== undefined) reject(pendingFailure.reason)
+      if (active === 0 && !awaitingAdmission && pendingFailure !== undefined) reject(pendingFailure.reason)
     }
     const fail = (reason: unknown) => {
       if (settled) return
@@ -68,7 +68,19 @@ export function raceContent<T>(
           if (promise === undefined) return
           supplemented = true
           clearInterval(timer)
-          start(promise)
+          // A queued rescue owns no live attempt. A failed primary must cancel
+          // that intent and retry, even if its old progress no longer justifies a hedge.
+          awaitingAdmission = true
+          promise.then(attempt => {
+            awaitingAdmission = false
+            // An admitted reservation still needs settlement if cancellation won
+            // the microtask race; the attempt observes the already-aborted signal.
+            try { start(attempt()) } catch (error) { fail(error); finishFailure() }
+          }, (error: unknown) => {
+            awaitingAdmission = false
+            if (settled) { finishFailure(); return }
+            fail(error)
+          })
         } catch (error) { fail(error) }
       }, RESCUE_POLL_MILLISECONDS)
     } catch (error) { fail(error) }

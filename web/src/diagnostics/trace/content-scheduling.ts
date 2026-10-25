@@ -17,6 +17,8 @@ export function traceContentScheduling(
     fileId: fact.fileId, localBlockIndex: fact.localBlockIndex,
     route: fact.route, purpose: fact.purpose,
     expectedMilliseconds: fact.expectedMilliseconds,
+    ...(fact.deliveryEvidence === undefined ? {} : { deliveryEvidence: fact.deliveryEvidence }),
+    ...(fact.rescueReason === undefined ? {} : { rescueReason: fact.rescueReason }),
     pendingBytes: fact.pendingBytes, bytesPerSecond: fact.bytesPerSecond,
     ...(fact.admission === undefined ? {} : { admission: fact.admission }),
   })
@@ -33,6 +35,8 @@ export function projectContentScheduling(event: ContentSchedulingTraceEvent): Tr
       file_id: event.fileId, block_index: String(event.localBlockIndex),
       route: event.route, purpose: event.purpose,
       expected_ms: durationMilliseconds(event.expectedMilliseconds),
+      ...(event.deliveryEvidence === undefined ? {} : { delivery_evidence: event.deliveryEvidence }),
+      ...(event.rescueReason === undefined ? {} : { rescue_reason: event.rescueReason }),
       pending_bytes: String(event.pendingBytes),
       bytes_per_second: Math.round(event.bytesPerSecond),
       ...(event.admission === undefined ? {} : { admission: Object.freeze({

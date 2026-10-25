@@ -25,7 +25,9 @@ func TestSamplingOpportunityPreservesFrontierAndGeneration(t *testing.T) {
 	fast.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes) * 100, PendingBytes: bytes}
 	fast.inflight = 1
 	slow.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: float64(bytes), LastAttempt: now}
-	permit := fast.receive.TryReserve(bytes, now)
+	seedDelivery(fast, bytes, 10*time.Millisecond, now)
+	seedDelivery(slow, bytes, time.Second, now)
+	permit := fast.receive.TryReserve(bytes*30, now)
 	defer permit.Close()
 	pending := &pendingAdmission{request: Request{Demand: demand}, order: WorkOrder{Distance: 1}}
 	ordered := []*laneState{fast, slow}

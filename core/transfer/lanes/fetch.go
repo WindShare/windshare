@@ -48,7 +48,7 @@ func (s *Set) Fetch(
 	ctx context.Context,
 	request Request,
 ) (Block, error) {
-	demand, validate := request.Demand, request.Validate
+	validate := request.Validate
 	if err := ctx.Err(); err != nil {
 		return Block{}, err
 	}
@@ -86,7 +86,7 @@ func (s *Set) Fetch(
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
-		round := s.runLaneRound(ctx, demand, validate, candidates, attempted, &supplemented, request.Claim)
+		round := s.runLaneRound(ctx, request, candidates, attempted, &supplemented)
 		switch round.kind {
 		case laneRoundSucceeded:
 			return round.record, nil
@@ -118,16 +118,16 @@ func (s *Set) beginFetch() bool {
 
 func (s *Set) runLaneRound(
 	ctx context.Context,
-	demand Demand,
-	validate func(records.BlockRecord) error,
+	request Request,
 	candidates []*laneAdmission,
 	attempted map[Identity]struct{},
 	supplemented *bool,
-	claim CapacityClaim,
 ) laneRoundResult {
+	demand, validate := request.Demand, request.Validate
 	raceContext, cancel := context.WithCancelCause(ctx)
 	stopLifecycle := context.AfterFunc(s.lifecycle, func() { cancel(ErrClosed) })
 	decision := &laneRoundDecision{done: make(chan struct{})}
+	var pendingRescue *pendingAdmission
 	defer func() {
 		close(decision.done)
 		stopLifecycle()
@@ -136,21 +136,33 @@ func (s *Set) runLaneRound(
 		} else {
 			cancel(nil)
 		}
+		s.withdrawRescue(pendingRescue)
 	}()
 	results := make(chan laneResult, MaxDemandAttempts)
 	for _, state := range candidates {
 		go s.fetchLane(raceContext, demand, validate, state, decision, results, state.purpose)
 	}
-	started, estimate := candidates[0].started, candidates[0].expected
 	active := len(candidates)
+	var rescueChanged <-chan struct{}
 	startRescue := func() {
 		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
 			return
 		}
-		state := s.rescue(demand, attempted, s.now().Sub(started), estimate, claim)
+		if pendingRescue == nil {
+			pendingRescue = s.queueRescue(raceContext, request, attempted, candidates[0])
+		}
+		if pendingRescue == nil {
+			return
+		}
+		state, changed, done := s.takeRescue(pendingRescue)
+		rescueChanged = changed
+		if done {
+			pendingRescue = nil
+		}
 		if state == nil {
 			return
 		}
+		attempted[state.identity] = struct{}{}
 		*supplemented = true
 		active++
 		go s.fetchLane(raceContext, demand, validate, state, decision, results, lanescheduling.Rescue)
@@ -158,12 +170,17 @@ func (s *Set) runLaneRound(
 	rescue := s.after(rescuePollInterval)
 	failures := make([]laneResult, 0, active)
 	for active > 0 {
+		startRescue()
 		select {
 		case <-raceContext.Done():
 			return interruptedLaneRound(ctx)
+		case <-rescueChanged:
 		case <-rescue:
-			startRescue()
-			rescue = s.after(rescuePollInterval)
+			if !*supplemented {
+				rescue = s.after(rescuePollInterval)
+			} else {
+				rescue = nil
+			}
 		case result := <-results:
 			// Cancellation and its lane result can become ready together. The
 			// demand owner determines the outcome, not select's ready-case choice.
@@ -229,7 +246,9 @@ func (s *Set) fetchLane(
 		slog.DebugContext(ctx, "content lane dispatched",
 			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID, "lane_epoch", state.identity.Epoch,
 			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
-			"purpose", purpose, "expected_ms", admission.expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
+			"purpose", purpose, "expected_ms", admission.expected.Duration.Milliseconds(),
+			"delivery_evidence", admission.expected.Evidence, "rescue_reason", admission.rescueReason,
+			"pending_bytes", queued, "bytes_per_second", rate)
 	}
 	var record records.BlockRecord
 	fetchErr := ctx.Err()
